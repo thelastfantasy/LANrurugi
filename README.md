@@ -48,6 +48,11 @@ docker build -t lanrurugi .
 docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
 ```
 
+A fresh instance (or one migrated from a legacy install that never changed its password) starts
+with legacy LANraragi's own default admin password still in place. **Change it immediately after
+first login** via the Settings page — don't leave a default-password instance reachable from
+outside your local network.
+
 ### CLI subcommands
 
 - `lanrurugi serve` — runs the HTTP API, static frontend, file watcher, and plugin pool in one
