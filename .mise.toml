@@ -4,7 +4,13 @@
 # 2026-07-06 (constitution's "verify at implementation time" rule); bump deliberately, not by
 # copying an older pin from memory.
 [tools]
-rust = "1.96.0"
+# `components` pulls in `rustfmt`/`clippy` alongside the toolchain itself — mise's rust backend
+# otherwise installs rustup's `minimal` profile (rustc/rust-std/cargo only), which is missing both,
+# breaking `cargo fmt`/`cargo clippy` for every contributor and CI run alike ("'cargo-fmt' is not
+# installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
+# contributor machine that already had a system-wide Rust install with these components wouldn't
+# surface the gap).
+rust = { version = "1.96.0", components = "rustfmt,clippy" }
 node = "24.18.0"
 deno = "2.9.1"
 pnpm = "11.10.0"
