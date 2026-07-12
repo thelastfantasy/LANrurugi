@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>lanrurugi-plugin-converter</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+  h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+  p.subtitle { color: #888; margin-top: 0; margin-bottom: 1.25rem; }
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    height: 70vh;
+  }
+  .column {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  textarea, pre {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    box-sizing: border-box;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 13px;
+    padding: 0.75rem;
+    border-radius: 6px;
+    border: 1px solid #999;
+  }
+  pre {
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    background: #1111110a;
+  }
+  .toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; flex: 0 0 auto; }
+  button, label.file-button {
+    padding: 0.5rem 1.25rem;
+    border-radius: 6px;
+    border: 1px solid #666;
+    cursor: pointer;
+    font-size: 0.95rem;
+    display: inline-block;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input[type="file"] { display: none; }
+  .filename { font-size: 0.85rem; color: #888; }
+  .status { font-size: 0.9rem; }
+  .status.error { color: #c0392b; }
+  .warnings {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: #a66a00;
+  }
+  .warnings ul { margin: 0.25rem 0 0 1.2rem; padding: 0; }
+</style>
+</head>
+<body>
+  <h1>lanrurugi-plugin-converter</h1>
+  <p class="subtitle">
+    Paste a legacy LANraragi plugin's <code>.pm</code> source below. This is a best-effort
+    assist tool, not a compiler — check every <code>TODO(perl-convert)</code> marker before
+    trusting the output.
+  </p>
+
+  <div class="toolbar">
+    <label class="file-button" for="file-picker">Choose .pm file…</label>
+    <input type="file" id="file-picker" accept=".pm,.pl,.plx,.pod,.t,text/plain">
+    <span id="filename" class="filename"></span>
+    <button id="convert">Convert →</button>
+    <span id="status" class="status"></span>
+    <span style="flex: 1 1 auto;"></span>
+    <button id="copy" disabled>Copy</button>
+    <button id="save" disabled>Save .ts…</button>
+    <span id="copy-status" class="status"></span>
+  </div>
+
+  <div class="columns">
+    <div class="column">
+      <textarea id="input" placeholder="package LANraragi::Plugin::Metadata::Example;&#10;...&#10;sub plugin_info { ... }&#10;sub get_tags { ... }&#10;&#10;(or use &quot;Choose .pm file…&quot; above to load one from disk)"></textarea>
+    </div>
+    <div class="column">
+      <pre id="output"></pre>
+    </div>
+  </div>
+
+  <div id="warnings" class="warnings"></div>
+
+<script>
+const input = document.getElementById('input');
+const output = document.getElementById('output');
+const status = document.getElementById('status');
+const warningsBox = document.getElementById('warnings');
+const button = document.getElementById('convert');
+const filePicker = document.getElementById('file-picker');
+const filenameLabel = document.getElementById('filename');
+const copyButton = document.getElementById('copy');
+const saveButton = document.getElementById('save');
+const copyStatus = document.getElementById('copy-status');
+let lastOutputFilename = 'converted.ts';
+
+async function loadFile(file) {
+  if (!file) return;
+  input.value = await file.text();
+  filenameLabel.textContent = file.name;
+  lastOutputFilename = file.name.replace(/\.[^.]+$/, '') + '.ts';
+  status.textContent = '';
+  status.className = 'status';
+}
+
+filePicker.addEventListener('change', () => loadFile(filePicker.files[0]));
+
+input.addEventListener('dragover', (e) => e.preventDefault());
+input.addEventListener('drop', (e) => {
+  e.preventDefault();
+  loadFile(e.dataTransfer.files[0]);
+});
+
+async function convert() {
+  button.disabled = true;
+  status.textContent = 'Converting…';
+  status.className = 'status';
+  warningsBox.innerHTML = '';
+  output.textContent = '';
+  copyButton.disabled = true;
+  saveButton.disabled = true;
+  copyStatus.textContent = '';
+
+  try {
+    const response = await fetch('/api/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: input.value }),
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      status.textContent = data.error || `Request failed with ${response.status}`;
+      status.className = 'status error';
+      return;
+    }
+
+    output.textContent = data.ts;
+    status.textContent = 'Done.';
+    copyButton.disabled = false;
+    saveButton.disabled = false;
+
+    if (data.warnings && data.warnings.length > 0) {
+      const list = data.warnings.map((w) => `<li>${w.replace(/</g, '&lt;')}</li>`).join('');
+      warningsBox.innerHTML = `${data.warnings.length} conversion warning(s):<ul>${list}</ul>`;
+    }
+  } catch (e) {
+    status.textContent = String(e);
+    status.className = 'status error';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+button.addEventListener('click', convert);
+input.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') convert();
+});
+
+copyButton.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(output.textContent);
+    copyStatus.textContent = 'Copied.';
+    copyStatus.className = 'status';
+  } catch (e) {
+    copyStatus.textContent = `Copy failed: ${e}`;
+    copyStatus.className = 'status error';
+  }
+});
+
+saveButton.addEventListener('click', () => {
+  const blob = new Blob([output.textContent], { type: 'text/typescript' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = lastOutputFilename;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>

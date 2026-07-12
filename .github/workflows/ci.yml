@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  RUSTC_WRAPPER: sccache
+
+jobs:
+  rust:
+    name: Rust (check, fmt, clippy, test)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      LANRURUGI_TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      # Caches ~/.cargo and target/ across runs (constitution Technology Stack Constraints:
+      # "Rust build acceleration"). Complements, not replaces, sccache below.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: sccache stats
+        run: sccache --show-stats
+
+  frontend:
+    name: Frontend (eslint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: eslint
+        run: pnpm run lint
+
+      - name: build (includes tsc type-check)
+        run: pnpm run build

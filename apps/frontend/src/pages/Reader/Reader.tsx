@@ -1,0 +1,874 @@
+import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useNavigate, useParams } from 'react-router-dom'
+
+import {
+  fetchRandomArchiveId,
+  useArchiveMetadata,
+  useArchivePages,
+  useBookmarkLink,
+  useCategories,
+  useGenerateThumbnails,
+  useLoginStatus,
+  useSettings,
+  useUpdateProgress,
+} from '../../api/hooks'
+import Footer from '../../components/Footer'
+import { useApplyTheme } from '../../theme'
+import { toast } from '../../toast'
+import ArchiveOverviewOverlay from './ArchiveOverviewOverlay'
+import {
+  type ArchiveNavState,
+  resolveAdjacentArchive,
+  setupArchiveNavigation,
+} from './crossArchiveNav'
+import MarkerLayer from './MarkerLayer'
+import SettingsOverlay from './SettingsOverlay'
+import { clamp, computeNextPage, computeSpread } from './useReaderNavigation'
+import { useReaderSettings } from './useReaderSettings'
+
+// Faithful port of legacy's reader page (`~/LANraragi/templates/reader.html.tt2` +
+// `~/LANraragi/public/js/reader.js`) — real DOM structure (`#i1`-`#i7`) and CSS classnames from
+// `/legacy/lrr.css`, not Tailwind.
+
+type OverlayKind = 'archive' | 'settings' | 'help' | null
+
+interface WakeLockSentinelLike {
+  release(): Promise<void>
+  addEventListener(type: 'release', listener: () => void): void
+}
+
+export default function Reader() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { archiveId = null } = useParams<{ archiveId: string }>()
+  useApplyTheme()
+
+  const metadata = useArchiveMetadata(archiveId)
+  const pages = useArchivePages(archiveId)
+  const settings = useSettings()
+  const loginStatus = useLoginStatus()
+  const categories = useCategories()
+  const bookmarkLink = useBookmarkLink()
+  const updateProgress = useUpdateProgress(archiveId)
+  const generateThumbnails = useGenerateThumbnails(archiveId ?? '')
+  const [readerSettings, updateReaderSettings] = useReaderSettings()
+
+  const totalPages = pages.data?.pages.length ?? 0
+  const loggedIn = loginStatus.data?.logged_in ?? false
+
+  const params = new URLSearchParams(window.location.search)
+  const startPage = Number(params.get('p')) || null
+
+  const [pageOverride, setPageOverride] = useState<number | null>(startPage)
+  const [overlay, setOverlay] = useState<OverlayKind>(
+    readerSettings.showOverlayByDefault ? 'archive' : null,
+  )
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [widespreads, setWidespreads] = useState<Record<number, boolean>>({})
+  const [pageDimensions, setPageDimensions] = useState<Record<number, { width: number; height: number }>>({})
+  const [pageSizesKb, setPageSizesKb] = useState<Record<number, number>>({})
+  const [markerPlacementMode, setMarkerPlacementMode] = useState(false)
+  const [navState, setNavState] = useState<ArchiveNavState>({ ids: [], index: -1 })
+  // Resuming a slideshow across an archive boundary (legacy stashes this in `sessionStorage`
+  // before navigating away — see `readAdjacentArchive` below — and the next reader page picks it
+  // back up here) is a pure read of already-set-before-mount state, not a derived side effect, so
+  // it belongs in the initializer, not a `useEffect` calling `setState`.
+  const [autoNextActive, setAutoNextActive] = useState(
+    () => sessionStorage.getItem('autoNextPage') === 'true',
+  )
+  const [autoNextCountdown, setAutoNextCountdown] = useState(
+    () => Math.trunc(readerSettings.autoNextPageInterval) || 10,
+  )
+  const containerRef = useRef<HTMLDivElement>(null)
+  const leftImgRef = useRef<HTMLImageElement>(null)
+  const wakeLockRef = useRef<WakeLockSentinelLike | null>(null)
+  const infiniteScrollRootRef = useRef<HTMLDivElement>(null)
+  const infiniteScrollObserverPage = useRef<number | null>(null)
+
+  const currentPage = clamp(
+    pageOverride ?? Math.max(metadata.data?.progress ?? 1, 1),
+    1,
+    totalPages || 1,
+  )
+
+  const spread = readerSettings.infiniteScroll
+    ? { left: currentPage, right: null }
+    : computeSpread(
+        currentPage,
+        totalPages,
+        readerSettings.doublePageMode,
+        readerSettings.mangaMode,
+        (page) => widespreads[page],
+      )
+
+  // Mirrors legacy's `#i3.loading` toggle exactly (`changePage` adds the class before the new
+  // page's image starts loading; `updateMetadata` — which in double-page mode reads *both*
+  // images' `naturalWidth`/`naturalHeight` before doing anything else — removes it once decoded;
+  // reader.js lines 710/1290/1334 remove, 1404 add). `.loading`'s CSS (`min-height: 75vh`) exists
+  // so the page doesn't visually collapse to zero height while blank/loading; keeping the class
+  // after the image(s) have actually finished loading, as an unconditional `'loading'` className
+  // would, left that `75vh` floor in effect forever — dead whitespace below any image shorter
+  // than 75% of the viewport height, not present in legacy, which drops the class right away.
+  // `pageDimensions` already only gets an entry once `onImageLoad` has fired for that page, so
+  // it doubles as the "has this page's image finished loading" set without extra state; both
+  // `spread.left` and (if present) `spread.right` must have an entry, matching legacy waiting on
+  // both images in double-page mode rather than removing the class as soon as the first resolves.
+  const currentSpreadLoaded =
+    pageDimensions[spread.left] !== undefined &&
+    (spread.right === null || pageDimensions[spread.right] !== undefined)
+
+  // Legacy toggles infinite-scroll mode via `$("body").addClass("infinite-scroll")`
+  // (`initInfiniteScrollView`, reader.js:674) — a body-level class, not on `#i1` — since
+  // `lrr.css`'s hide rules for `#i2`/`.sn`/etc. are all scoped `body.infinite-scroll #selector`.
+  useEffect(() => {
+    document.body.classList.toggle('infinite-scroll', readerSettings.infiniteScroll)
+    return () => document.body.classList.remove('infinite-scroll')
+  }, [readerSettings.infiniteScroll])
+
+  // Progress persistence decision tree (verified against legacy's `updateProgress`):
+  // authprogress+logged_in -> server; localprogress -> localStorage; neither -> server anyway.
+  useEffect(() => {
+    if (!archiveId || totalPages === 0) return
+    if (settings.data?.localprogress && !(settings.data?.authprogress && loggedIn)) {
+      localStorage.setItem(`${archiveId}-reader`, String(currentPage))
+    } else {
+      updateProgress.mutate(currentPage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archiveId, currentPage, totalPages])
+
+  // Sets up cross-archive `,`/`.` navigation once per archive open (legacy's
+  // `setupArchiveNavigation`, called from `initializeAll`) — resolves whether this reader session
+  // arrived from a same-origin index search, and if so prefetches the adjacent results page.
+  useEffect(() => {
+    if (!archiveId) return
+    let cancelled = false
+    void setupArchiveNavigation(archiveId).then((nav) => {
+      if (!cancelled) setNavState(nav)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [archiveId])
+
+  function goTo(target: Parameters<typeof computeNextPage>[0]) {
+    const isSpread = spread.right !== null
+    const next = computeNextPage(
+      target,
+      currentPage,
+      totalPages || 1,
+      readerSettings.mangaMode,
+      readerSettings.doublePageMode,
+      isSpread,
+    )
+    // At an archive boundary, step into the adjacent archive instead of clamping in place —
+    // mirrors legacy's `changePage` calling `readPreviousArchive`/`readNextArchive` when the
+    // destination would fall outside [1, totalPages].
+    if (next === currentPage) {
+      const goingForward = readerSettings.mangaMode ? target === 'prev' : target === 'next'
+      if ((target === 'next' || target === 'prev') && (currentPage === 1 || currentPage === totalPages)) {
+        void readAdjacentArchive(goingForward ? 'next' : 'prev')
+        return
+      }
+    }
+    setPageOverride(next)
+  }
+
+  async function readAdjacentArchive(direction: 'prev' | 'next') {
+    if (document.fullscreenElement) {
+      console.warn('Archive navigation not supported in fullscreen mode.')
+      return
+    }
+    const adjacentId = resolveAdjacentArchive(navState, direction)
+    if (!adjacentId) {
+      toast({
+        text:
+          direction === 'prev'
+            ? (t('This is the first archive') ?? undefined)
+            : (t('This is the last archive') ?? undefined),
+      })
+      return
+    }
+    if (autoNextActive) sessionStorage.setItem('autoNextPage', 'true')
+    window.location.assign(`/reader/${adjacentId}`)
+  }
+
+  function selectPage(page: number) {
+    setPageOverride(clamp(page, 1, totalPages || 1))
+    setOverlay(null)
+    if (readerSettings.infiniteScroll) {
+      document.querySelector(`[data-page="${page}"]`)?.scrollIntoView({ block: 'start' })
+    }
+  }
+
+  function onImageLoad(page: number, e: React.SyntheticEvent<HTMLImageElement>) {
+    const img = e.currentTarget
+    const isWide = img.naturalWidth > img.naturalHeight
+    setWidespreads((prev) => (prev[page] === isWide ? prev : { ...prev, [page]: isWide }))
+    setPageDimensions((prev) => ({
+      ...prev,
+      [page]: { width: img.naturalWidth, height: img.naturalHeight },
+    }))
+    if (pageSizesKb[page] === undefined) {
+      fetch(img.src, { method: 'HEAD' })
+        .then((res) => {
+          const bytes = Number(res.headers.get('Content-Length'))
+          if (!Number.isNaN(bytes)) {
+            setPageSizesKb((prev) => ({ ...prev, [page]: Math.floor(bytes / 1024) }))
+          }
+        })
+        .catch(() => undefined)
+    }
+  }
+
+  /** Legacy's `.file-info` (`updateMetadata`, reader.js:1281): "filename :: WxH :: sizeKB", and
+   * "fileA - fileB :: (WA+WB)xH :: (sizeA+sizeB)KB" for a double-page spread. */
+  function fileInfoText(): string {
+    if (!pages.data) return ''
+    const leftUrl = pages.data.pages[spread.left - 1]
+    const leftName = leftUrl ? new URL(leftUrl, window.location.origin).searchParams.get('path') ?? '' : ''
+    const leftDim = pageDimensions[spread.left]
+    const leftSize = pageSizesKb[spread.left]
+
+    if (spread.right === null) {
+      if (!leftDim || leftSize === undefined) return leftName
+      return `${leftName} :: ${leftDim.width} x ${leftDim.height} :: ${leftSize} KB`
+    }
+
+    const rightUrl = pages.data.pages[spread.right - 1]
+    const rightName = rightUrl ? new URL(rightUrl, window.location.origin).searchParams.get('path') ?? '' : ''
+    const rightDim = pageDimensions[spread.right]
+    const rightSize = pageSizesKb[spread.right]
+    if (!leftDim || !rightDim || leftSize === undefined || rightSize === undefined) {
+      return `${leftName} - ${rightName}`
+    }
+    return `${leftName} - ${rightName} :: ${leftDim.width + rightDim.width} x ${leftDim.height} :: ${leftSize + rightSize} KB`
+  }
+
+  function toggleFullScreen() {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen?.().catch(() => undefined)
+    } else {
+      document.exitFullscreen?.().catch(() => undefined)
+    }
+  }
+
+  useEffect(() => {
+    function onFullscreenChange() {
+      setIsFullscreen(document.fullscreenElement !== null)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [])
+
+  async function goRandom() {
+    const id = await fetchRandomArchiveId()
+    if (id) navigate(`/reader/${id}`)
+  }
+
+  function cleanCache() {
+    generateThumbnails.mutate()
+    window.location.reload()
+  }
+
+  // Screen Wake Lock — kept alive only while a slideshow is actively running, matching legacy's
+  // `requestWakeLock`/`releaseWakeLock` (reader.js:2293) exactly: no point dimming/sleeping the
+  // screen mid-slideshow, and no reason to hold the lock any other time.
+  async function acquireWakeLock() {
+    if (wakeLockRef.current) return
+    const nav = navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> } }
+    if (!nav.wakeLock) return
+    try {
+      const sentinel = await nav.wakeLock.request('screen')
+      sentinel.addEventListener('release', () => {
+        wakeLockRef.current = null
+      })
+      wakeLockRef.current = sentinel
+    } catch {
+      // Wake lock is a nice-to-have; a denial (e.g. backgrounded tab) shouldn't break the slideshow.
+    }
+  }
+
+  function releaseWakeLock() {
+    wakeLockRef.current?.release().catch(() => undefined)
+    wakeLockRef.current = null
+  }
+
+  function stopAutoNextPage() {
+    setAutoNextActive(false)
+    releaseWakeLock()
+  }
+
+  function startAutoNextPage() {
+    if (readerSettings.autoNextPageInterval <= 0) {
+      toast({
+        heading: t('Starting auto next page failed!') ?? undefined,
+        text: t('Please set the auto next page interval to a positive number.') ?? undefined,
+        icon: 'error',
+        hideAfter: 5000,
+      })
+      return
+    }
+    setAutoNextCountdown(Math.trunc(readerSettings.autoNextPageInterval))
+    setAutoNextActive(true)
+    void acquireWakeLock()
+  }
+
+  function toggleAutoNextPage() {
+    if (autoNextActive) stopAutoNextPage()
+    else startAutoNextPage()
+  }
+
+  // The countdown/advance loop itself — a single interval tied to `autoNextActive`, matching
+  // legacy's `startAutoNextPage`'s own `setInterval` (reader.js:1590), just expressed as a React
+  // effect instead of manually re-arming a fresh `setInterval` after every tick.
+  useEffect(() => {
+    if (!autoNextActive) return
+    const id = window.setInterval(() => {
+      setAutoNextCountdown((prev) => {
+        if (prev > 1) return prev - 1
+        const atLastPage = readerSettings.mangaMode ? currentPage === 1 : currentPage === totalPages
+        if (atLastPage) {
+          if (navState.ids.length > 0) {
+            void readAdjacentArchive(readerSettings.mangaMode ? 'prev' : 'next')
+          }
+          setAutoNextActive(false)
+          releaseWakeLock()
+        } else {
+          goTo(readerSettings.mangaMode ? 'prev' : 'next')
+        }
+        return Math.trunc(readerSettings.autoNextPageInterval)
+      })
+    }, 1000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoNextActive, currentPage, totalPages, readerSettings.mangaMode, readerSettings.autoNextPageInterval])
+
+  // `autoNextActive`'s initializer above already read the resume flag; this effect only handles
+  // the side effects that go with it (clearing the flag so a manual stop+reload doesn't re-arm,
+  // and acquiring the wake lock) once pages are actually available to advance through.
+  useEffect(() => {
+    if (!autoNextActive || totalPages === 0) return
+    sessionStorage.removeItem('autoNextPage')
+    void acquireWakeLock()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archiveId, totalPages])
+
+  useEffect(() => releaseWakeLock, [])
+
+  const bookmarkCategoryId = bookmarkLink.data?.category_id || null
+  const isBookmarked = Boolean(
+    bookmarkCategoryId &&
+      categories.data?.find((c) => c.id === bookmarkCategoryId)?.archives.includes(archiveId ?? ''),
+  )
+
+  async function toggleBookmark() {
+    if (!bookmarkCategoryId) {
+      console.error('No bookmark category ID found!')
+      return
+    }
+    if (!loggedIn) {
+      const template = t("<a href='\\${url}'>Login</a> to toggle bookmark feature.") ?? ''
+      toast({
+        text: template.replace('${url}', '/login'),
+        icon: 'warning',
+        hideAfter: 5000,
+      })
+      return
+    }
+    if (!archiveId) return
+    const method = isBookmarked ? 'DELETE' : 'PUT'
+    await fetch(`/api/categories/${bookmarkCategoryId}/${archiveId}`, { method })
+    await categories.refetch()
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT') return
+
+      if (e.key === ',') {
+        void readAdjacentArchive('prev')
+        return
+      }
+      if (e.key === '.') {
+        void readAdjacentArchive('next')
+        return
+      }
+
+      switch (e.key) {
+        case 'Backspace':
+          navigate('/')
+          return
+        case 'Escape':
+          setOverlay(null)
+          return
+        case ' ':
+          window.scrollBy({ top: window.innerHeight * 0.8, behavior: 'smooth' })
+          return
+        case 'ArrowLeft':
+        case 'a':
+          goTo(e.shiftKey ? 'first' : 'prev')
+          return
+        case 'ArrowRight':
+        case 'd':
+          goTo(e.shiftKey ? 'last' : 'next')
+          return
+        case 'b':
+          void toggleBookmark()
+          return
+        case 'f':
+          toggleFullScreen()
+          return
+        case 'g': {
+          const value = window.prompt(t('Go to page:') ?? undefined)
+          const page = value ? parseInt(value, 10) : NaN
+          if (!Number.isNaN(page)) selectPage(page)
+          return
+        }
+        case 'h':
+          setOverlay((prev) => (prev === 'help' ? null : 'help'))
+          return
+        case 'm':
+          updateReaderSettings({ mangaMode: !readerSettings.mangaMode })
+          return
+        case 'n':
+          toggleAutoNextPage()
+          return
+        case 'o':
+          setOverlay((prev) => (prev === 'settings' ? null : 'settings'))
+          return
+        case 'p':
+          updateReaderSettings({ doublePageMode: !readerSettings.doublePageMode })
+          return
+        case 'q':
+          setOverlay((prev) => (prev === 'archive' ? null : 'archive'))
+          return
+        case 'r':
+          void goRandom()
+          return
+        case 's':
+          if (!readerSettings.infiniteScroll) setMarkerPlacementMode(true)
+          return
+        default:
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentPage,
+    totalPages,
+    readerSettings.mangaMode,
+    readerSettings.doublePageMode,
+    readerSettings.infiniteScroll,
+    navState,
+    autoNextActive,
+    isBookmarked,
+    bookmarkCategoryId,
+    loggedIn,
+  ])
+
+  // Infinite scroll: tracks which mounted page is nearest the viewport center and treats that as
+  // "current" for progress purposes — legacy's own `IntersectionObserver`-per-image approach
+  // (reader.js:684), reimplemented as one observer watching every page `<img>` at once.
+  useEffect(() => {
+    if (!readerSettings.infiniteScroll || totalPages === 0) return
+    const root = infiniteScrollRootRef.current
+    if (!root) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          const page = Number((entry.target as HTMLElement).dataset.page)
+          if (!Number.isNaN(page) && infiniteScrollObserverPage.current !== page) {
+            infiniteScrollObserverPage.current = page
+            setPageOverride(page)
+          }
+        }
+      },
+      { threshold: 0.5 },
+    )
+    const images = root.querySelectorAll<HTMLElement>('[data-page]')
+    images.forEach((img) => observer.observe(img))
+    return () => observer.disconnect()
+  }, [readerSettings.infiniteScroll, totalPages, pages.data])
+
+  if (metadata.isLoading || pages.isLoading) {
+    return (
+      <div className="loading">
+        <div className="loading-overlay">
+          <p className="loading-spinner">
+            <i className="fas fa-fan fa-spin"></i>
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (metadata.isError || pages.isError || !pages.data || !metadata.data) {
+    return (
+      <div className="ido">
+        <p>
+          {t('Failed to load archives: {{error}}', {
+            error: String(metadata.error ?? pages.error),
+          })}
+        </p>
+        <a onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+          {t('Return to Library')}
+        </a>
+      </div>
+    )
+  }
+
+  const leftUrl = pages.data.pages[spread.left - 1]
+  const rightUrl = spread.right !== null ? pages.data.pages[spread.right - 1] : null
+
+  // Mirrors legacy's `applyContainerWidth` (reader.js:1502) exactly: fit mode drives two
+  // *different* styles on two *different* elements — `.reader-image` (each `<img>`) and `.sni`
+  // (the outermost `#i1` container, not some intermediate wrapper) — not a single style applied
+  // to one shared box, which is why "Width" and "Container" modes previously looked identical.
+  const isSpreadShowing = spread.right !== null
+  const imageStyle: React.CSSProperties = {}
+  const outerStyle: React.CSSProperties = {}
+  // Legacy applies none of this while in fullscreen (`applyContainerWidth`'s own
+  // `if (fscreen.inFullscreen()) return`) — the browser's native fullscreen presentation should
+  // decide sizing there, not these fit-mode rules.
+  if (!isFullscreen) {
+    if (readerSettings.fitMode === 'fit-height') {
+      const heightVh = readerSettings.hideHeader || readerSettings.infiniteScroll ? 98 : 90
+      imageStyle.maxHeight = `${heightVh}vh`
+      outerStyle.width = 'fit-content'
+    } else if (readerSettings.fitMode === 'fit-width') {
+      imageStyle.width = '100%'
+      outerStyle.maxWidth = '98%'
+    } else if (readerSettings.containerWidth) {
+      outerStyle.maxWidth = readerSettings.containerWidth
+      imageStyle.width = '100%'
+    } else if (isSpreadShowing) {
+      outerStyle.maxWidth = '90%'
+    } else {
+      outerStyle.maxWidth = '1200px'
+    }
+  }
+
+  const bookmarkLinkConfigured = Boolean(bookmarkCategoryId)
+
+  const pagesel = (
+    <>
+      {/* Each `<a>` gets an explicit `marginRight` matching what legacy gets "for free": its own
+          template has these as separate lines of hand-indented HTML
+          (`~/LANraragi/templates/reader.html.tt2`), and adjacent `inline-block` elements collapse
+          the whitespace *between* them into a visible gap (~3px at this font-size) — something
+          JSX's compiled output never produces, since React never inserts whitespace text nodes
+          between sibling elements. Without this, the icons render flush against each other. */}
+      <div className="absolute-options absolute-left">
+        <a
+          className="fas fa-cog fa-2x"
+          href="#"
+          title={t('Reader Options') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            setOverlay((prev) => (prev === 'settings' ? null : 'settings'))
+          }}
+        />
+        <a
+          className="fas fa-question-circle fa-2x"
+          href="#"
+          title={t('Help') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            setOverlay((prev) => (prev === 'help' ? null : 'help'))
+          }}
+        />
+        {bookmarkLinkConfigured && (
+          <a
+            className={`${isBookmarked ? 'fas' : 'far'} fa-bookmark fa-2x toggle-bookmark${loggedIn ? '' : ' disabled'}`}
+            href="#"
+            title={t('Toggle Bookmark') ?? undefined}
+            style={loggedIn ? { marginRight: 3 } : { marginRight: 3, opacity: 0.5, cursor: 'not-allowed' }}
+            onClick={(e) => {
+              e.preventDefault()
+              void toggleBookmark()
+            }}
+          />
+        )}
+      </div>
+      <div className="absolute-options absolute-right">
+        <a
+          className={`fas ${readerSettings.mangaMode ? 'fa-arrow-left' : 'fa-arrow-right'} fa-2x reading-direction`}
+          href="#"
+          title={t('Reading Direction') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            updateReaderSettings({ mangaMode: !readerSettings.mangaMode })
+          }}
+        />
+        <a
+          className="fas fa-stopwatch fa-2x toggle-auto-next-page"
+          href="#"
+          title={t('Auto Next Page') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            toggleAutoNextPage()
+          }}
+        >
+          {autoNextActive ? autoNextCountdown : ''}
+        </a>
+        <a
+          className="fas fa-th fa-2x"
+          href="#"
+          title={t('Archive Overview') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            setOverlay((prev) => (prev === 'archive' ? null : 'archive'))
+          }}
+        />
+        <a
+          className={`fas ${isFullscreen ? 'fa-compress' : 'fa-expand'} fa-2x`}
+          href="#"
+          title={t('FullScreen') ?? undefined}
+          style={{ marginRight: 3 }}
+          onClick={(e) => {
+            e.preventDefault()
+            toggleFullScreen()
+          }}
+        />
+      </div>
+    </>
+  )
+
+  const arrows = (
+    <div className="sn paginator">
+      <a
+        className="fas fa-backward-step page-link archive-nav-link"
+        style={{ fontSize: '1.5em', display: navState.ids.length > 0 ? undefined : 'none' }}
+        onClick={() => void readAdjacentArchive('prev')}
+      />
+      <a
+        className="fas fa-angle-double-left page-link"
+        style={{ fontSize: '1.5em' }}
+        onClick={() => goTo('first')}
+      />
+      <a
+        className="fas fa-angle-left page-link"
+        style={{ fontSize: '1.5em' }}
+        onClick={() => goTo('prev')}
+      />
+      <div className="pagecount">
+        <span className="current-page">{currentPage}</span> / <span className="max-page">{totalPages}</span>
+      </div>
+      <a
+        className="fas fa-angle-right page-link"
+        style={{ fontSize: '1.5em' }}
+        onClick={() => goTo('next')}
+      />
+      <a
+        className="fas fa-angle-double-right page-link"
+        style={{ fontSize: '1.5em' }}
+        onClick={() => goTo('last')}
+      />
+      <a
+        className="fas fa-forward-step page-link archive-nav-link"
+        style={{ fontSize: '1.5em', display: navState.ids.length > 0 ? undefined : 'none' }}
+        onClick={() => void readAdjacentArchive('next')}
+      />
+    </div>
+  )
+
+  const currentFileInfo = fileInfoText()
+  const fileinfo = (
+    <div className="file-info" title={currentFileInfo}>
+      {currentFileInfo}
+    </div>
+  )
+
+  return (
+    <>
+    <div id="i1" className="sni" ref={containerRef} style={outerStyle}>
+      {!readerSettings.hideHeader && (
+        <div id="i2">
+          <h1 id="archive-title">{metadata.data.title}</h1>
+          {pagesel}
+          {arrows}
+          {fileinfo}
+        </div>
+      )}
+
+      <div id="i3" className={!readerSettings.infiniteScroll && !currentSpreadLoaded ? 'loading' : undefined}>
+        {readerSettings.infiniteScroll ? (
+          <div id="display" ref={infiniteScrollRootRef}>
+            {pages.data.pages.map((url, i) => (
+              <img
+                key={url}
+                data-page={i + 1}
+                className="reader-image"
+                src={url}
+                alt={`${t('Page')} ${i + 1}`}
+                loading="lazy"
+                draggable={false}
+                style={imageStyle}
+                onClick={(e) => {
+                  const isLeftHalf = e.clientX < window.innerWidth / 2
+                  goTo(isLeftHalf ? 'prev' : 'next')
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div id="display">
+            <a
+              id="imgLink"
+              href={leftUrl}
+              onClick={(e) => {
+                const x = e.clientX
+                const isLeftHalf = x < window.innerWidth / 2
+                e.preventDefault()
+                goTo(isLeftHalf ? 'prev' : 'next')
+              }}
+              style={{ position: 'relative', display: 'inline-flex' }}
+            >
+              <img
+                id="img"
+                ref={leftImgRef}
+                className="reader-image"
+                src={leftUrl}
+                alt={`${t('Page')} ${spread.left}`}
+                fetchPriority="high"
+                onLoad={(e) => onImageLoad(spread.left, e)}
+                draggable={false}
+                style={imageStyle}
+              />
+              {rightUrl && (
+                <img
+                  id="img_doublepage"
+                  className="reader-image"
+                  src={rightUrl}
+                  alt={`${t('Page')} ${spread.right}`}
+                  fetchPriority="high"
+                  onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
+                  draggable={false}
+                  style={imageStyle}
+                />
+              )}
+            </a>
+            {archiveId && (
+              <MarkerLayer
+                archiveId={archiveId}
+                page={spread.left}
+                imageRef={leftImgRef}
+                visible={readerSettings.markersVisible}
+                placementMode={markerPlacementMode}
+                onPlaced={() => setMarkerPlacementMode(false)}
+              />
+            )}
+          </div>
+        )}
+      </div>
+
+      <div id="i4">
+        {fileinfo}
+        {pagesel}
+        {arrows}
+      </div>
+
+      <div id="i5">
+        <div className="sb">
+          <a
+            id="return-to-index"
+            style={{ cursor: 'pointer' }}
+            title={t('Done reading? Go back to Archive Index') ?? undefined}
+            onClick={() => navigate('/')}
+          >
+            <i className="fas fa-angle-down fa-3x"></i>
+          </a>
+        </div>
+      </div>
+
+      <div id="i7" className="if">
+        <i className="fas fa-caret-right fa-lg"></i>
+        <a href={leftUrl} target="_blank" rel="noreferrer">
+          {t('View full-size image')}
+        </a>
+        <i className="fas fa-caret-right fa-lg"></i>
+        <a style={{ cursor: 'pointer' }} onClick={() => void goRandom()}>
+          {t('Switch to another random archive')}
+        </a>
+        {loggedIn && (
+          <>
+            <i className="fas fa-caret-right fa-lg"></i>
+            <a style={{ cursor: 'pointer' }} onClick={cleanCache}>
+              {t('Clean Archive Cache')}
+            </a>
+          </>
+        )}
+      </div>
+
+      {overlay === 'archive' && (
+        <ArchiveOverviewOverlay
+          archive={metadata.data}
+          categories={categories.data}
+          loggedIn={loggedIn}
+          onClose={() => setOverlay(null)}
+          onSelectPage={selectPage}
+        />
+      )}
+
+      {overlay === 'settings' && (
+        <SettingsOverlay
+          settings={readerSettings}
+          update={updateReaderSettings}
+          onClose={() => setOverlay(null)}
+        />
+      )}
+
+      {overlay === 'help' && (
+        <>
+          {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
+              opaque black, so content behind the shade stays faintly visible. */}
+          <div id="overlay-shade" style={{ display: 'block', opacity: 0.6 }} onClick={() => setOverlay(null)} />
+          <div id="reader-help" className="id1 base-overlay small-overlay">
+            <div className="navigation-help-toast">
+              {t('You can navigate between pages using:')}
+              <ul>
+                <li>{t('The arrow icons')}</li>
+                <li>{t('The a/d keys')}</li>
+                <li>{t('Your keyboard arrows (and the spacebar)')}</li>
+                <li>{t('Touching the left/right side of the image.')}</li>
+              </ul>
+              {t('When reading an archive from search results, you can also navigate between archives using:')}
+              <ul>
+                <li>{t('The , and . keys')}</li>
+                <li>{t('Reading past the first/last page')}</li>
+              </ul>
+              <br />
+              {t('Other keyboard shortcuts:')}
+              <ul>
+                <li>{t('M: toggle manga mode (right-to-left reading)')}</li>
+                <li>{t('O: show advanced reader options.')}</li>
+                <li>{t('P: toggle double page mode')}</li>
+                <li>{t('Q: bring up the thumbnail index and archive options.')}</li>
+                <li>{t('R: open a random archive.')}</li>
+                <li>{t('F: toggle fullscreen mode')}</li>
+                <li>{t('B: toggle bookmark')}</li>
+                <li>{t('N: toggle auto next page')}</li>
+                <li>{t('G: go to page number')}</li>
+                <li>{t('S: set a Stamp')}</li>
+              </ul>
+              <br />
+              {t('To return to the archive index, touch the arrow pointing down or use Backspace.')}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+    <Footer />
+    </>
+  )
+}

@@ -1,0 +1,5 @@
+# Rust build acceleration (constitution Technology Stack Constraints): mold as the linker on
+# Linux. `RUSTC_WRAPPER=sccache` (set in .mise.toml) handles compilation-object caching; this
+# handles the separate link step, which matters for a workspace with this many member crates.
+[target.'cfg(all(target_os = "linux", not(target_env = "musl")))']
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

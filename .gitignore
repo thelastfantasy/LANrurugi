@@ -1,0 +1,34 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Node / frontend
+node_modules/
+apps/frontend/dist/
+apps/frontend/node_modules/
+apps/frontend/.vite/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# mise local state (installs live outside the repo; this is just local override files)
+.mise.local.toml
+
+# Scratch fixtures (images, archives, etc.) for manual local testing — never committed
+testdata/
+.convert-out/
+
+# Local runtime data — bind-mount target for `docker run -v`/`podman run -v` (library archives,
+# thumbnails, temp cache, logs, sideloaded custom plugins). Never committed; this is real user
+# library content, not source.
+/data/

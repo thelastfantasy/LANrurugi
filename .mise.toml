@@ -1,0 +1,78 @@
+# Pinned toolchain versions (constitution Technology Stack Constraints: "Toolchain version
+# management"). Contributors and CI must not rely on whatever happens to be preinstalled — `mise
+# install` reproduces this exact set. Versions below were the latest stable release as of
+# 2026-07-06 (constitution's "verify at implementation time" rule); bump deliberately, not by
+# copying an older pin from memory.
+[tools]
+rust = "1.96.0"
+node = "24.18.0"
+deno = "2.9.1"
+pnpm = "11.10.0"
+# Rust build acceleration (constitution Technology Stack Constraints: "Rust build acceleration").
+sccache = "0.16.0"
+mold = "2.41.0"
+# Local pre-commit quality gate (constitution Engineering Workflow & Quality Gates); see
+# `lefthook.yml`. `mise install` + `lefthook install` wires the actual git hook.
+lefthook = "2.1.9"
+
+[env]
+# `cargo`/`rustc` pick these up automatically; see also `.cargo/config.toml` for the mold linker
+# wiring, which needs a target-triple-scoped rustflag rather than an env var.
+RUSTC_WRAPPER = "sccache"
+
+# ── Podman dev/CI tasks ──────────────────────────────────────────────────────
+# `lanrurugi-scanner` depends on `libarchive2-sys`, which builds the bundled libarchive C source
+# via CMake + generates bindings via bindgen (libclang) — build deps the host may lack and that the
+# constitution/memo prefer to keep out of the host (build inside a container). These tasks run the
+# Rust workspace commands inside the `Dockerfile.build` image (`lanrurugi-dev`), mounting the repo
+# so cargo's `target/` cache persists across runs. Requires `podman` (or `docker`) on PATH; runs
+# rootless. Run `mise run ci-image` once first to build the image.
+
+[tasks.ci-image]
+description = "Build the Dockerfile.build dev image (lanrurugi-dev) — run once before the other tasks"
+run = "podman build -f Dockerfile.build -t lanrurugi-dev ."
+
+[tasks.test]
+description = "cargo test --workspace inside the dev container"
+run = """
+cmd="$(command -v podman || command -v docker)"
+[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
+"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo test --workspace
+"""
+
+[tasks.clippy]
+description = "cargo clippy --workspace inside the dev container"
+run = """
+cmd="$(command -v podman || command -v docker)"
+[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
+"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo clippy --workspace --all-targets -- -D warnings
+"""
+
+[tasks.fmt-check]
+description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook)"
+run = """
+cmd="$(command -v podman || command -v docker)"
+[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
+"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo fmt --all --check
+"""
+
+[tasks.build]
+description = "cargo build --workspace inside the dev container"
+run = """
+cmd="$(command -v podman || command -v docker)"
+[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
+"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo build --workspace
+"""
+
+[tasks.convert-plugins]
+description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
+run = "scripts/convert-plugins.sh \"$@\""
+
+[tasks.plugin-sdk-docs]
+description = "Generate the plugin-authoring SDK reference (deno doc --html) into target/plugin-sdk-docs/"
+run = """
+deno doc --html --name="LANrurugi Plugin SDK" --output=target/plugin-sdk-docs \
+  crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts \
+  crates/lanrurugi-plugin/dispatcher/dispatcher.ts
+echo "Open target/plugin-sdk-docs/index.html"
+"""

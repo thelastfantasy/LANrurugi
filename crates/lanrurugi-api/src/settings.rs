@@ -1,0 +1,237 @@
+//! `settings` endpoint group — additive, no legacy REST contract equivalent (legacy's `/config`
+//! page is a server-rendered HTML form posting back to itself, verified via
+//! `~/LANraragi/public/js/mod/server.js::saveFormData`, not part of `tools/openapi.yaml`).
+//!
+//! Backed by the **same** `LRR_CONFIG` hash on the config logical DB that legacy itself reads and
+//! writes (`Model/Config.pm::get_redis_conf`), so a value already set through legacy's own
+//! settings page (e.g. `theme`) is read correctly here with zero migration step (Principle I),
+//! and a value written here is equally visible to a legacy instance sharing the same Redis.
+//!
+//! `password` is deliberately excluded from the generic get/put here — it needs bcrypt hashing on
+//! the way in (see [`change_password`]) and must never be echoed back out in plaintext-hash form
+//! to a settings-page GET, so it gets its own dedicated endpoint instead.
+
+use std::collections::HashMap;
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use deadpool_redis::redis::AsyncCommands;
+use lanrurugi_core::password;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::common::error;
+use crate::AppState;
+
+const CONFIG_KEY: &str = "LRR_CONFIG";
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/settings", get(get_settings).put(put_settings))
+        .route("/settings/password", post(change_password))
+}
+
+/// `(field, default)` pairs for every `LRR_CONFIG` value the Settings page's Global/Security/
+/// Files/Tags sections read or write, verified against `Model/Config.pm`'s `get_redis_conf`
+/// calls. Excludes `password` (see module docs) and `theme` (already had its own default before
+/// this table existed, kept as a named constant below for that reason).
+const STRING_FIELDS: &[(&str, &str)] = &[
+    ("theme", "modern.css"),
+    ("language", "auto"),
+    ("htmltitle", "LANrurugi"),
+    ("motd", "Welcome to this Library running LANrurugi!"),
+    ("apikey", ""),
+    ("excludednamespaces", "source, date_added"),
+    ("tagrules", "-already uploaded;-forbidden content;-incomplete;-ongoing;-complete;-various;-digital;-translated;-russian;-chinese;-portuguese;-french;-spanish;-italian;-vietnamese;-german;-indonesian"),
+];
+
+const NUMBER_FIELDS: &[(&str, i64)] = &[
+    ("pagesize", 100),
+    ("tempmaxsize", 500),
+    ("sizethreshold", 1000),
+    ("readerquality", 50),
+    ("webpquality", 85),
+];
+
+const BOOL_FIELDS: &[(&str, bool)] = &[
+    ("enablepass", true),
+    ("nofunmode", false),
+    ("enablecors", false),
+    ("localprogress", false),
+    ("authprogress", false),
+    ("enableresize", false),
+    ("hqthumbpages", false),
+    ("enablewebp", true),
+    ("replacedupe", false),
+    ("tagruleson", true),
+];
+
+async fn get_settings(State(state): State<AppState>) -> Response {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_settings",
+                e.to_string(),
+            )
+        }
+    };
+    let fields: HashMap<String, String> = match conn.hgetall(CONFIG_KEY).await {
+        Ok(f) => f,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_settings",
+                e.to_string(),
+            )
+        }
+    };
+
+    let mut body = serde_json::Map::new();
+    for (key, default) in STRING_FIELDS {
+        body.insert(
+            (*key).to_string(),
+            json!(fields
+                .get(*key)
+                .cloned()
+                .unwrap_or_else(|| default.to_string())),
+        );
+    }
+    for (key, default) in NUMBER_FIELDS {
+        let value = fields
+            .get(*key)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(*default);
+        body.insert((*key).to_string(), json!(value));
+    }
+    for (key, default) in BOOL_FIELDS {
+        let value = fields.get(*key).map(|v| v != "0").unwrap_or(*default);
+        body.insert((*key).to_string(), json!(value));
+    }
+
+    axum::Json(Value::Object(body)).into_response()
+}
+
+async fn put_settings(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    let Value::Object(fields) = body else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "put_settings",
+            "Expected a JSON object.",
+        );
+    };
+
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "put_settings",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Captured before `fields` is consumed by the write loop below — used afterwards to decide
+    // whether this request actually flips the thumbnail format (`enablewebp`), which needs a full
+    // regen so the library stays in one uniform format rather than a jpg/webp mix. A quality-only
+    // change (`webpquality`/`hqthumbpages`) intentionally does *not* trigger this — it only
+    // affects thumbnails generated from here on.
+    let new_enablewebp = fields.get("enablewebp").and_then(Value::as_bool);
+    let previous_enablewebp = conn
+        .hget::<_, _, Option<String>>(CONFIG_KEY, "enablewebp")
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true);
+
+    for (key, value) in fields {
+        if key == "password" || key == "session_secret" {
+            // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
+            continue;
+        }
+        let stored = match &value {
+            Value::String(s) => s.clone(),
+            Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+            Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
+            Ok(v) => v,
+            Err(e) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "put_settings",
+                    e.to_string(),
+                )
+            }
+        };
+    }
+
+    if new_enablewebp.is_some_and(|v| v != previous_enablewebp) {
+        let thumb_settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
+        if let Ok(archives) = state.repos.archives.list_all().await {
+            crate::archives::spawn_regen_thumbnails_job(&state, archives, thumb_settings, true)
+                .await;
+        }
+    }
+
+    axum::Json(json!({ "operation": "put_settings", "success": 1 })).into_response()
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordForm {
+    password: String,
+}
+
+/// Sets a new admin password, hashed the same way legacy stores one (`{CRYPT}$2a$...` — see
+/// `lanrurugi_core::password`) so a legacy instance sharing this Redis keeps accepting it too. An
+/// empty string clears password protection's practical effect the same way legacy's own
+/// config-page "leave blank to keep current password" convention does *not* work here — this
+/// endpoint always sets whatever was submitted, so the frontend must not submit an empty field
+/// unless the user explicitly means to set an empty password.
+async fn change_password(
+    State(state): State<AppState>,
+    axum::Form(form): axum::Form<ChangePasswordForm>,
+) -> Response {
+    let hashed = match password::hash_password(&form.password) {
+        Ok(h) => h,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "change_password",
+                e.to_string(),
+            )
+        }
+    };
+
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "change_password",
+                e.to_string(),
+            )
+        }
+    };
+    let result: Result<(), _> = conn.hset(CONFIG_KEY, "password", hashed).await;
+    match result {
+        Ok(()) => {
+            axum::Json(json!({ "operation": "change_password", "success": 1 })).into_response()
+        }
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "change_password",
+            e.to_string(),
+        ),
+    }
+}

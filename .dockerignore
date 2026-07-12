@@ -1,0 +1,9 @@
+target/
+node_modules/
+apps/frontend/dist/
+apps/frontend/node_modules/
+.git/
+.github/
+specs/
+*.log
+.env*

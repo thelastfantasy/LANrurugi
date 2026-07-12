@@ -1,12 +1,12 @@
 <!--
 Sync Impact Report
 ===================
-Version change: 1.0.0 → 1.6.0 (MINOR — materially expanded, non-negotiable tooling/architecture
-constraints)
+Version change: 1.0.0 → 1.7.0 (MINOR — materially expanded, non-negotiable tooling/architecture
+constraints, plus one new governance/process rule)
 Modified principles: III retitled "Resource-Conscious, Genuinely Concurrent Single-Process
 Architecture" (was "Resource-Conscious, Single-Process Architecture") and expanded with a
 concurrency-model bullet; no prior wording removed or weakened, purely additive.
-Added sections/content (across six amendments, 2026-07-05 to 2026-07-06):
+Added sections/content (across seven amendments, 2026-07-05 to 2026-07-07):
   - Technology Stack Constraints: toolchain version management (mise), git hook management
     (lefthook), Docker runtime base image decision (Debian slim, not Ubuntu/Alpine), CJK font
     bundling (fonts-noto-cjk) for server-side text rasterization, concurrency model
@@ -26,6 +26,12 @@ Added sections/content (across six amendments, 2026-07-05 to 2026-07-06):
   - Principle III: new bullet mandating Phase 1 concurrency planning + a benchmark suite
     comparing bulk-operation throughput against the previous system (mirrors the new
     concurrency-benchmarking user story added to specs/001-lanrurugi-full-rewrite/spec.md)
+  - Governance: new "Agent communication language" rule (2026-07-07) — spec-kit workflow chat
+    replies/reports/summaries MUST be in Chinese (matching CLAUDE.md), but spec-kit artifact files
+    (spec.md/plan.md/research.md/data-model.md/contracts/tasks.md/quickstart.md) explicitly stay in
+    English, matching existing 001/002/003 artifacts — added after an explicit user request during
+    002-job-console's task planning, with scope confirmed via a clarifying question rather than
+    assumed
 Removed sections: none
 Templates requiring updates:
   - .specify/templates/plan-template.md ✅ reviewed — "Constitution Check" gate is generic
@@ -199,7 +205,7 @@ This project is explicitly split into two phases, and specs/plans MUST respect t
   independent of, and compatible with, the licenses of dependencies chosen elsewhere in this
   document — Apache-2.0 dependencies (e.g. `oar-ocr`, kha-white's `manga-ocr`) are freely usable
   from an MIT project with no copyleft interaction; GPL-3.0 code (e.g. Koharu, deliberately
-  avoided as a dependency per `specs/002-ocr-manga-translation/research.md` §1) would not be,
+  avoided as a dependency per `specs/003-ocr-manga-translation/research.md` §1) would not be,
   which is one more concrete reason that avoidance decision was correct, not just cautious.
 - **Backend**: Rust, Tokio async runtime, Axum web framework.
 - **Concurrency model**: `tokio` for all I/O-bound async work (HTTP handling, Redis access,
@@ -323,4 +329,15 @@ the current version of this file; every `/speckit-specify` output touching data 
 API surface, or Phase 1/Phase 2 boundaries MUST be reviewed against Principles I, II, and VI before
 being marked ready for planning.
 
-**Version**: 1.6.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-06
+**Agent communication language**: For all spec-kit workflows (`/speckit-specify`, `/speckit-clarify`,
+`/speckit-plan`, `/speckit-tasks`, `/speckit-implement`, `/speckit-constitution`, and any other
+spec-kit command), the AI agent's conversational responses to the user — chat replies, completion
+reports, clarification questions, and summaries — MUST be in Chinese (Simplified), matching this
+project's standing `CLAUDE.md` instruction. This does **NOT** extend to the spec-kit artifact files
+themselves: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/`, `tasks.md`, and
+`quickstart.md` remain in English, matching this project's existing technical-documentation
+convention and the language already used throughout the `001`/`002`/`003` artifacts — these are
+technical design documents, not chat communication, and English keeps them consistent with the
+Rust/TypeScript code, comments, and commit history they describe.
+
+**Version**: 1.7.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-07

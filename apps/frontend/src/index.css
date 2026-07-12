@@ -1,0 +1,74 @@
+/* `@import "tailwindcss"` (theme + Preflight + utilities) is intentionally NOT used here:
+   Preflight resets things this app depends on the browser's real defaults for everywhere it's
+   styled against legacy's own raw HTML/CSS (`h1`-`h6` font-size/weight, `box-sizing: content-box`,
+   `ul`/`ol` list-style and margin, `img` inline layout used for centering via a parent's
+   `text-align`, table spacing, form-control font inheritance, ...) — legacy's CSS was written
+   assuming those browser defaults exist and never resets them itself. Importing only `theme` +
+   `utilities` keeps Tailwind's utility classes (still used for a handful of flex/gap layouts)
+   without silently fighting legacy's pixel-fidelity everywhere else. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "@fortawesome/fontawesome-free/css/all.min.css";
+@import "react-toastify/dist/ReactToastify.css";
+
+/* Legacy's own structural stylesheet (`~/LANraragi/public/css/lrr.css`, copied verbatim to
+   `public/legacy/lrr.css`) and each theme's own colour stylesheet (`public/legacy/themes/*.css`,
+   also copied verbatim) are linked in at runtime by `theme.ts`'s `useApplyTheme` — components
+   being migrated to pixel-match legacy (`Layout`, `Library` so far) are written directly against
+   legacy's own classnames (`.id1`/`.id2`/`.stdbtn`/`.favtag-btn`/etc.) and colours come from those
+   real stylesheets, not from a hand-approximated parallel palette.
+
+   The `--theme-*` variables below are a **transitional fallback only**, kept solely for
+   components not yet migrated to legacy's own classnames (so they don't render with undefined/
+   black-on-black colours in the meantime) — remove a theme's block here once every component
+   that used to read its variables has been rewritten against the real legacy CSS instead. */
+:root,
+[data-theme="modern.css"] {
+  --theme-bg: #34353b;
+  --theme-fg: #dddddd;
+  --theme-surface: #3f4046;
+  --theme-border: #4a4b52;
+  --theme-accent: #5b7cfa;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #9a9aa0;
+}
+
+[data-theme="modern_red.css"] {
+  --theme-bg: #2b2226;
+  --theme-fg: #f2dde2;
+  --theme-surface: #3a2e33;
+  --theme-border: #4f3d43;
+  --theme-accent: #d83b66;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #b98d98;
+}
+
+[data-theme="modern_clear.css"] {
+  --theme-bg: #ecf0f1;
+  --theme-fg: #2c3e50;
+  --theme-surface: #ffffff;
+  --theme-border: #d7dbdd;
+  --theme-accent: #34495e;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #7f8c8d;
+}
+
+[data-theme="g.css"] {
+  --theme-bg: #1c1013;
+  --theme-fg: #f0d9de;
+  --theme-surface: #2a171c;
+  --theme-border: #40232a;
+  --theme-accent: #5f0d1f;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #a8798a;
+}
+
+[data-theme="ex.css"] {
+  --theme-bg: #2c2d31;
+  --theme-fg: #e6e6e6;
+  --theme-surface: #37383d;
+  --theme-border: #46474d;
+  --theme-accent: #43464e;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #9b9ba1;
+}
