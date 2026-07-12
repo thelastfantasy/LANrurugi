@@ -36,6 +36,17 @@ jobs:
       # "Rust build acceleration"). Complements, not replaces, sccache below.
       - uses: Swatinem/rust-cache@v2
 
+      # Same set `Dockerfile.build`'s dev image installs (see that file's own comment) —
+      # `libarchive2-sys` bundles and statically links libarchive's C source, which itself links
+      # against these at build time. `ubuntu-latest` doesn't ship them, so linking failed with
+      # "mold: fatal: library not found: bz2" (first library alphabetically probed; the others
+      # would have failed the same way one at a time without this).
+      - name: Install libarchive build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev
+
       - name: cargo check
         run: cargo check --workspace
 
