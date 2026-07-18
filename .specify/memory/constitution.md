@@ -205,7 +205,7 @@ This project is explicitly split into two phases, and specs/plans MUST respect t
   independent of, and compatible with, the licenses of dependencies chosen elsewhere in this
   document — Apache-2.0 dependencies (e.g. `oar-ocr`, kha-white's `manga-ocr`) are freely usable
   from an MIT project with no copyleft interaction; GPL-3.0 code (e.g. Koharu, deliberately
-  avoided as a dependency per `specs/003-ocr-manga-translation/research.md` §1) would not be,
+  avoided as a dependency per `specs/004-ocr-manga-translation/research.md` §1) would not be,
   which is one more concrete reason that avoidance decision was correct, not just cautious.
 - **Backend**: Rust, Tokio async runtime, Axum web framework.
 - **Concurrency model**: `tokio` for all I/O-bound async work (HTTP handling, Redis access,

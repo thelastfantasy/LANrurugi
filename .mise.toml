@@ -82,3 +82,15 @@ deno doc --html --name="LANrurugi Plugin SDK" --output=target/plugin-sdk-docs \
   crates/lanrurugi-plugin/dispatcher/dispatcher.ts
 echo "Open target/plugin-sdk-docs/index.html"
 """
+
+# ── 003-ui-test-automation ───────────────────────────────────────────────────
+[tasks.test-frontend-unit]
+description = "Run the frontend's fast unit-level test layer (Vitest + Testing Library, no backend required)"
+run = "pnpm -C apps/frontend run test:unit"
+
+[tasks.test-frontend-e2e]
+description = "Run the frontend's end-to-end test layer (Playwright, real backend + Redis). Set KEEP=1 to skip teardown for this run only (inspect a failed run's environment afterward)."
+run = """
+cargo build -p lanrurugi-server
+pnpm -C apps/frontend run test:e2e
+"""

@@ -5,7 +5,7 @@ description: "Task list for On-Page Manga Translation (Phase 2)"
 
 # Tasks: On-Page Manga Translation (Phase 2)
 
-**Input**: Design documents from `/specs/003-ocr-manga-translation/`
+**Input**: Design documents from `/specs/004-ocr-manga-translation/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md (all present)
 
 **Tests**: Not explicitly requested in spec.md (no TDD mandate). Each story ends with a task that

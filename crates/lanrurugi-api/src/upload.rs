@@ -97,7 +97,24 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
     }
 
     let dest = state.library.archive_dir.join(&file_name);
-    if let Err(e) = tokio::fs::write(&dest, &bytes).await {
+
+    // Written to `temp_dir` (never watched — `crate::watcher::watch` only recurses
+    // `archive_dir`) and ingested *there* first, mirroring legacy's own `handle_incoming_file`
+    // (`~/LANraragi/lib/LANraragi/Model/Upload.pm`): legacy computes the ID and registers the
+    // archive in Redis *before* moving the file into the watched content folder, specifically
+    // "so Shinobu doesn't do it" (its own comment). Doing it the other way around — write
+    // straight into `archive_dir`, ingest afterward — raced against this project's own
+    // notify-based watcher picking up the same just-written file and cataloguing it first via
+    // its own `ingest_file` call: the upload handler's *own* explicit call then saw the ID as
+    // already tracked and returned a spurious 409 "already exists" for what was genuinely a
+    // first-time upload. Reproduced directly against a real running backend during
+    // 003-ui-test-automation's implementation (confirmed by disabling the watcher via
+    // `--no-watch`, which made the race disappear) before this fix.
+    let staging_path = state
+        .library
+        .temp_dir
+        .join(format!("upload-{}", uuid::Uuid::new_v4().simple()));
+    if let Err(e) = tokio::fs::write(&staging_path, &bytes).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string());
     }
 
@@ -106,13 +123,14 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         &state.redis.config,
         &state.redis.search,
         &state.library.thumb_dir,
-        &dest,
+        &staging_path,
     )
     .await;
 
     let id = match outcome {
         Ok(IngestOutcome::Catalogued { id }) => id,
         Ok(IngestOutcome::Unchanged { id }) => {
+            let _ = tokio::fs::remove_file(&staging_path).await;
             return (
                 StatusCode::CONFLICT,
                 axum::Json(json!({
@@ -126,10 +144,38 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         }
         Ok(IngestOutcome::Rekeyed { new_id, .. }) => new_id,
         Err(e) => {
-            let _ = tokio::fs::remove_file(&dest).await;
+            let _ = tokio::fs::remove_file(&staging_path).await;
             return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string());
         }
     };
+
+    // Now move the ingested file into its real, watched location and fix up the Archive record
+    // (and filemap entry) to point at that final path instead of the temp staging path used only
+    // for hashing/cataloguing above. Falls back to copy+remove if `rename` fails at all (most
+    // commonly a cross-filesystem `EXDEV`, e.g. `temp_dir`/`archive_dir` mounted as separate
+    // volumes) — matching legacy's own `move_path` portability behavior (Perl's `File::Copy::move`
+    // does the same fallback internally) rather than assuming same-filesystem in every deployment.
+    if tokio::fs::rename(&staging_path, &dest).await.is_err() {
+        if let Err(copy_err) = tokio::fs::copy(&staging_path, &dest).await {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "upload",
+                copy_err.to_string(),
+            );
+        }
+        let _ = tokio::fs::remove_file(&staging_path).await;
+    }
+    if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {
+        archive.file = dest.to_string_lossy().to_string();
+        let _ = state.repos.archives.save(&archive).await;
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        use deadpool_redis::redis::AsyncCommands;
+        let staging_str = staging_path.to_string_lossy().to_string();
+        let dest_str = dest.to_string_lossy().to_string();
+        let _: Result<(), _> = conn.hdel("LRR_FILEMAP", &staging_str).await;
+        let _: Result<(), _> = conn.hset("LRR_FILEMAP", &dest_str, &id).await;
+    }
 
     if title.is_some() || summary.is_some() || tags.is_some() {
         if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {

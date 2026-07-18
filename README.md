@@ -9,8 +9,9 @@ defect and adding genuine multi-core concurrency where the legacy Perl implement
 (library continuity, non-merging ingestion, third-party API compatibility, plugin metadata
 enrichment, backup/export, duplicate repair, UI localization, and a concurrency benchmark against
 the legacy system) are done; see `specs/001-lanrurugi-full-rewrite/tasks.md` for the full
-breakdown. Phase 2 (`specs/003-ocr-manga-translation/`), on-page manga translation, has a plan but
-no implementation yet.
+breakdown. `specs/003-ui-test-automation/` (additive to Phase 1) adds automated Vitest/Playwright
+frontend test coverage. Phase 2 (`specs/004-ocr-manga-translation/`), on-page manga translation,
+has a plan but no implementation yet.
 
 ## Stack
 
@@ -74,12 +75,29 @@ LANRURUGI_TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --workspace
 Redis-backed tests are skipped gracefully if `LANRURUGI_TEST_REDIS_URL` is unset; point it at a
 scratch Redis instance (e.g. `docker run -d --rm -p 16379:6379 redis:7-alpine`) to run them.
 
+### Frontend tests (`specs/003-ui-test-automation/`)
+
+```sh
+mise run test-frontend-unit   # Vitest + React Testing Library — fast, no backend required
+mise run test-frontend-e2e    # Playwright — real backend + Redis, Chromium + Firefox
+```
+
+`test-frontend-e2e` builds the backend, then starts its own isolated Redis instance, backend
+process, and frontend preview server per test worker (see `apps/frontend/tests/e2e/fixtures.ts`),
+always starting from a clean state. Set `KEEP=1 mise run test-frontend-e2e` to skip teardown for
+one run and inspect its environment afterward (Redis/library state) — this never persists past
+that single run. See `specs/003-ui-test-automation/quickstart.md` for the full validation guide.
+
 ## Documentation
 
 - [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) — Phase 1 spec, plan,
   research decisions, data model, API contracts, and `quickstart.md` (end-to-end validation steps
   for all eight user stories).
-- [`specs/003-ocr-manga-translation/`](./specs/003-ocr-manga-translation/) — Phase 2 (depends on
+- [`specs/002-job-console/`](./specs/002-job-console/) — Phase 1 addendum (additive, planned):
+  background job management console surfacing the existing in-process job registry.
+- [`specs/003-ui-test-automation/`](./specs/003-ui-test-automation/) — Phase 1 addendum (additive,
+  implemented): Vitest + Playwright automated frontend test coverage — see `## Testing` above.
+- [`specs/004-ocr-manga-translation/`](./specs/004-ocr-manga-translation/) — Phase 2 (depends on
   Phase 1, does not block it): optional on-page manga translation via OCR detection/recognition,
   a user-selectable translation backend (cloud or locally-hosted), and volume-level font matching.
 - [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) — project governance,

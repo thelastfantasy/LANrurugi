@@ -84,3 +84,62 @@ jobs:
 
       - name: build (includes tsc type-check)
         run: pnpm run build
+
+      - name: vitest (unit)
+        run: pnpm run test:unit
+
+  e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libarchive build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev
+
+      - name: Build backend (debug)
+        run: cargo build -p lanrurugi-server
+
+      - name: pnpm install
+        working-directory: apps/frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: apps/frontend
+        run: pnpm exec playwright install --with-deps chromium firefox
+
+      - name: Build frontend
+        working-directory: apps/frontend
+        run: pnpm run build
+
+      - name: playwright test
+        working-directory: apps/frontend
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/frontend/playwright-report/
+          retention-days: 7

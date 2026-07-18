@@ -401,7 +401,7 @@ mod tests {
     // exists to catch a libarchive-level regression in 7z entry-name handling generally, not to
     // re-test `decode_archive_name`'s CJK-encoding-guessing itself, which the zip-based tests
     // above already cover thoroughly).
-    const CJK_NAMES_7Z: &[u8] = include_bytes!("../tests-fixtures/cjk-names.7z");
+    const CJK_NAMES_7Z: &[u8] = include_bytes!("../../../test-fixtures/archives/cjk-names.7z");
 
     fn write_fixture(bytes: &[u8], suffix: &str) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(suffix).unwrap();

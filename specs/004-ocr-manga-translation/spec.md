@@ -1,6 +1,6 @@
 # Feature Specification: On-Page Manga Translation (Phase 2)
 
-**Feature Branch**: `003-ocr-manga-translation`
+**Feature Branch**: `004-ocr-manga-translation`
 
 **Created**: 2026-07-06
 

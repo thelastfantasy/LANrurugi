@@ -1,8 +1,8 @@
 # Implementation Plan: On-Page Manga Translation (Phase 2)
 
-**Branch**: `003-ocr-manga-translation` | **Date**: 2026-07-06 | **Spec**: [spec.md](./spec.md)
+**Branch**: `004-ocr-manga-translation` | **Date**: 2026-07-06 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `/specs/003-ocr-manga-translation/spec.md`
+**Input**: Feature specification from `/specs/004-ocr-manga-translation/spec.md`
 
 ## Summary
 
@@ -75,7 +75,7 @@ unreachable backend adds no perceptible delay to reading).
 rayon/spawn_blocking bridge, not block the async reactor); Principle V (the core constraint this
 feature is built around — cloud credentials server-side only, local-backend traffic
 browser-originated with graceful PNA degradation); Principle VI (this plan and its eventual tasks
-must stay in `specs/003-ocr-manga-translation/`, must not modify `specs/001-lanrurugi-full-rewrite`
+must stay in `specs/004-ocr-manga-translation/`, must not modify `specs/001-lanrurugi-full-rewrite`
 plan/tasks, and must not gate Phase 1).
 
 **Scale/Scope**: Operates over the same library scale Phase 1 targets (up to ~100,000 archives,
@@ -94,7 +94,7 @@ requirements, 7 success criteria (all from spec.md).
 | III. Resource-Conscious, Genuinely Concurrent Architecture | OCR/font-classification (CPU/GPU-bound) must use the established rayon+spawn_blocking bridge, not run inline on an async worker thread | **PASS** — research.md's OCR/batching decision explicitly reuses Phase 1's bridging pattern rather than inventing a new concurrency model |
 | IV. Sandboxed, Language-Agnostic Plugin Extensibility | N/A — this feature does not introduce or modify plugins | **PASS (not applicable)** — LLM provider adapters are a distinct subsystem from the Deno plugin runtime and must not be conflated with it |
 | V. Secrets & Network Trust Boundaries | Cloud credentials server-side only; local-backend traffic browser-originated; graceful degradation on PNA failure | **PASS** — this is the principle this plan is built around; data-model.md and contracts/ implement the server/client storage and call-path split exactly as specified |
-| VI. Phased Scope Discipline | Must not modify `specs/001-lanrurugi-full-rewrite`'s plan.md/tasks.md; must not block Phase 1 | **PASS** — this plan lives entirely under `specs/003-ocr-manga-translation/`; no Phase 1 artifact is touched |
+| VI. Phased Scope Discipline | Must not modify `specs/001-lanrurugi-full-rewrite`'s plan.md/tasks.md; must not block Phase 1 | **PASS** — this plan lives entirely under `specs/004-ocr-manga-translation/`; no Phase 1 artifact is touched |
 
 No violations requiring justification — **Complexity Tracking is empty.**
 
@@ -113,7 +113,7 @@ trust-boundary split exactly, including graceful PNA degradation (V); nothing he
 ### Documentation (this feature)
 
 ```text
-specs/003-ocr-manga-translation/
+specs/004-ocr-manga-translation/
 ├── plan.md              # This file (/speckit-plan command output)
 ├── research.md          # Phase 0 output (/speckit-plan command)
 ├── data-model.md         # Phase 1 output (/speckit-plan command)

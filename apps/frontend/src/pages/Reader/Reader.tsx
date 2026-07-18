@@ -22,6 +22,7 @@ import {
   resolveAdjacentArchive,
   setupArchiveNavigation,
 } from './crossArchiveNav'
+import { fileInfoText } from './fileInfoText'
 import MarkerLayer from './MarkerLayer'
 import SettingsOverlay from './SettingsOverlay'
 import { clamp, computeNextPage, computeSpread } from './useReaderNavigation'
@@ -220,30 +221,6 @@ export default function Reader() {
         })
         .catch(() => undefined)
     }
-  }
-
-  /** Legacy's `.file-info` (`updateMetadata`, reader.js:1281): "filename :: WxH :: sizeKB", and
-   * "fileA - fileB :: (WA+WB)xH :: (sizeA+sizeB)KB" for a double-page spread. */
-  function fileInfoText(): string {
-    if (!pages.data) return ''
-    const leftUrl = pages.data.pages[spread.left - 1]
-    const leftName = leftUrl ? new URL(leftUrl, window.location.origin).searchParams.get('path') ?? '' : ''
-    const leftDim = pageDimensions[spread.left]
-    const leftSize = pageSizesKb[spread.left]
-
-    if (spread.right === null) {
-      if (!leftDim || leftSize === undefined) return leftName
-      return `${leftName} :: ${leftDim.width} x ${leftDim.height} :: ${leftSize} KB`
-    }
-
-    const rightUrl = pages.data.pages[spread.right - 1]
-    const rightName = rightUrl ? new URL(rightUrl, window.location.origin).searchParams.get('path') ?? '' : ''
-    const rightDim = pageDimensions[spread.right]
-    const rightSize = pageSizesKb[spread.right]
-    if (!leftDim || !rightDim || leftSize === undefined || rightSize === undefined) {
-      return `${leftName} - ${rightName}`
-    }
-    return `${leftName} - ${rightName} :: ${leftDim.width + rightDim.width} x ${leftDim.height} :: ${leftSize + rightSize} KB`
   }
 
   function toggleFullScreen() {
@@ -682,7 +659,9 @@ export default function Reader() {
     </div>
   )
 
-  const currentFileInfo = fileInfoText()
+  const currentFileInfo = pages.data
+    ? fileInfoText(pages.data.pages, spread, pageDimensions, pageSizesKb, window.location.origin)
+    : ''
   const fileinfo = (
     <div className="file-info" title={currentFileInfo}>
       {currentFileInfo}

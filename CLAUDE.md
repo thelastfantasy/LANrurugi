@@ -1,5 +1,6 @@
 <!-- SPECKIT START -->
-Three feature specs exist; implementation has not started on 002 or 003 yet.
+Four feature specs exist. Phase 1 (001) is implemented; 002, 003, and 004 are planned but not yet
+implemented.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -16,13 +17,26 @@ Minion-admin-console equivalent) surfacing the existing in-process job registry
 Retry is explicitly out of scope. Design artifacts:
 `specs/002-job-console/{research.md,data-model.md,contracts/,quickstart.md}` (no `tasks.md` yet).
 
-**Phase 2 — `003-ocr-manga-translation`** (depends on Phase 1; independent plan, must not block
+**Phase 1 addendum — `003-ui-test-automation`** (additive to Phase 1, planned but not yet
+implemented): plan at `specs/003-ui-test-automation/plan.md`. Two-layer automated frontend test
+coverage the Phase 1 plan called for but never implemented — Vitest + React Testing Library for
+fast unit-level logic (reader settings/navigation hooks, cross-archive navigation resolution,
+metadata formatting/decoding helpers), and Playwright (Chromium + Firefox) for end-to-end coverage
+of key user journeys, reproducing specific defects already found and fixed once through manual
+QA (category pinned-field save failure, upload body-size limit, archive-delete orphaned
+search-index entries, reader icon-spacing/dead-whitespace layout bugs), plus systematic fixture-
+archive coverage across every format `lanrurugi-scanner` supports and higher-risk shapes
+(multi-volume, encrypted, non-ASCII filenames). Both layers run automatically in CI. Design
+artifacts: `specs/003-ui-test-automation/{research.md,data-model.md,quickstart.md,tasks.md}` (no
+`contracts/` — this feature adds no new external interface).
+
+**Phase 2 — `004-ocr-manga-translation`** (depends on Phase 1; independent plan, must not block
 or be blocked by it — constitution Principle VI): plan at
-`specs/003-ocr-manga-translation/plan.md`. On-page manga translation — OCR detection/merging,
+`specs/004-ocr-manga-translation/plan.md`. On-page manga translation — OCR detection/merging,
 user-selectable translation backend (cloud, proxied server-side, vs. locally-hosted, browser-
 originated), volume-level font-matching cache, sliding-window prefetch with cost-aware budgeting.
 Design artifacts:
-`specs/003-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md}` (no
+`specs/004-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md}` (no
 `tasks.md` yet).
 
 Stack: Rust (Tokio/Axum/Rayon) backend as a Cargo workspace under `crates/` producing one binary
