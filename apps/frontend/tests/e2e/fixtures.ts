@@ -65,17 +65,73 @@ function spawnTracked(command: string, args: string[], opts: Parameters<typeof s
   const proc = spawn(command, args, { ...opts, stdio: 'ignore' })
   spawnedChildren.add(proc)
   proc.once('exit', () => spawnedChildren.delete(proc))
+  // `spawn` failing outright (command not found, exec permission denied, etc.) fires an 'error'
+  // event asynchronously rather than throwing — with no listener, Node treats that as an uncaught
+  // exception, and this was previously silently swallowed by `stdio: 'ignore'` leaving no trace at
+  // all in CI logs (a real failure here surfaced only as a generic 30s Playwright fixture-setup
+  // timeout with zero indication of which of the three spawned processes never actually started).
+  proc.on('error', (err) => {
+    console.error(`[fixtures.ts] failed to spawn "${command}": ${err.message}`)
+  })
   return proc
 }
 
 // Best-effort: if a previous run's process on this exact port was orphaned (e.g. the whole worker
 // was SIGKILLed before even the safety net above could run), refuse to silently reuse it — kill
 // whatever's listening there first, so this run never talks to stale state from a different run.
+//
+// `fuser` (the obvious choice) is NOT installed on either this project's local dev container or
+// GitHub's own `ubuntu-latest` runner image (confirmed directly against both — neither ships
+// `psmisc`), so `fuser -k` silently failed with "command not found" every single time, and the
+// surrounding try/catch swallowed that, meaning this cleanup step has never actually run. Uses
+// `/proc/net/tcp{,6}` + `/proc/<pid>/fd` directly instead — no external tool dependency at all,
+// works on any Linux without needing anything beyond what's already guaranteed to exist.
 function killWhateverIsListeningOn(port: number) {
-  try {
-    execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' })
-  } catch {
-    // nothing was listening — fine
+  const hexPort = port.toString(16).toUpperCase().padStart(4, '0')
+  const inodes = new Set<string>()
+  for (const procFile of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let contents: string
+    try {
+      contents = fs.readFileSync(procFile, 'utf8')
+    } catch {
+      continue
+    }
+    for (const line of contents.split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/)
+      const localAddress = fields[1]
+      const inode = fields[9]
+      if (!localAddress || !inode || inode === '0') continue
+      const [, portHex] = localAddress.split(':')
+      if (portHex === hexPort) inodes.add(inode)
+    }
+  }
+  if (inodes.size === 0) return
+
+  for (const pidDir of fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
+    const fdDir = `/proc/${pidDir}/fd`
+    let fds: string[]
+    try {
+      fds = fs.readdirSync(fdDir)
+    } catch {
+      continue // process exited, or we don't have permission — skip
+    }
+    for (const fd of fds) {
+      let link: string
+      try {
+        link = fs.readlinkSync(`${fdDir}/${fd}`)
+      } catch {
+        continue
+      }
+      const match = /^socket:\[(\d+)\]$/.exec(link)
+      if (match && inodes.has(match[1])) {
+        try {
+          process.kill(Number(pidDir), 'SIGKILL')
+        } catch {
+          // already gone — fine
+        }
+        break
+      }
+    }
   }
 }
 
@@ -109,8 +165,25 @@ export const test = base.extend<object, { workerBaseURL: string }>({
         ['--port', String(redisPort), '--daemonize', 'no', '--save', ''],
         { cwd: redisDir },
       )
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      execSync(`redis-cli -p ${redisPort} PING`, { stdio: 'ignore' })
+      // A fixed 300ms sleep before the first PING worked reliably in local testing but was too
+      // optimistic for a real CI runner (confirmed: this exact spot is where CI first started
+      // failing — a single un-retried `execSync` PING threw an uncaught ECONNREFUSED that
+      // Playwright only ever surfaced as a generic 30s fixture-setup timeout, not the real
+      // connection-refused error). Poll instead of sleeping a fixed guess.
+      {
+        const deadline = Date.now() + 10_000
+        for (;;) {
+          try {
+            execSync(`redis-cli -p ${redisPort} PING`, { stdio: 'ignore' })
+            break
+          } catch {
+            if (Date.now() > deadline) {
+              throw new Error(`redis-server on port ${redisPort} did not respond to PING within 10s`)
+            }
+            await new Promise((resolve) => setTimeout(resolve, 100))
+          }
+        }
+      }
       execSync(`redis-cli -p ${redisPort} FLUSHALL`, { stdio: 'ignore' })
 
       const backend = spawnTracked(
@@ -139,9 +212,23 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       // preview -- --port 5299 --strictPort` fell through to Vite's own "port in use, trying
       // another one" fallback-port behavior instead of failing, so the port this fixture computed
       // and the port Vite actually bound could silently diverge).
+      //
+      // `--host 127.0.0.1` (not the default, which resolves "localhost" to whichever address
+      // family the OS prefers) matters here for a second, independently-confirmed reason:
+      // `--strictPort` itself does NOT strictly enforce port exclusivity the way its name implies
+      // — verified directly by starting a listener on a port first, then launching `vite preview
+      // --port <same> --strictPort` against it: Vite printed "Port ... is in use on a wildcard
+      // address, but localhost:... is available" and bound successfully anyway, rather than
+      // erroring. Under repeated worker restarts (e.g. a flaky CI runner triggering retries),
+      // this let a `vite preview` process silently coexist on a port a previous, still-orphaned
+      // instance already held on a different address scope — the new instance never actually
+      // became reachable at the exact `127.0.0.1:<port>` address this fixture's own
+      // `waitForHealthy` probes, hanging until the 30s Playwright fixture-setup timeout with zero
+      // indication of why. Binding explicitly to `127.0.0.1` removes the address-scope ambiguity
+      // `--strictPort` alone doesn't close.
       const frontend = spawnTracked(
         'pnpm',
-        ['exec', 'vite', 'preview', '--port', String(frontendPort), '--strictPort'],
+        ['exec', 'vite', 'preview', '--port', String(frontendPort), '--strictPort', '--host', '127.0.0.1'],
         {
           cwd: FRONTEND_ROOT,
           env: { ...process.env, LANRURUGI_E2E_BACKEND_PORT: String(backendPort) },

@@ -33,8 +33,13 @@ jobs:
           cache: true
 
       # Caches ~/.cargo and target/ across runs (constitution Technology Stack Constraints:
-      # "Rust build acceleration"). Complements, not replaces, sccache below.
+      # "Rust build acceleration"). Complements, not replaces, sccache below. `shared-key`
+      # matches the `e2e` job's own so both converge on one cache entry instead of each
+      # recompiling the same dependency graph from scratch — this job's `cargo test --workspace`
+      # and `e2e`'s `cargo build -p lanrurugi-server` overlap heavily.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
 
       # Same set `Dockerfile.build`'s dev image installs (see that file's own comment) —
       # `libarchive2-sys` bundles and statically links libarchive's C source, which itself links
@@ -99,7 +104,14 @@ jobs:
           install: true
           cache: true
 
+      # Shares the `rust` job's own cache (default `add-job-id-key: true` would otherwise give
+      # each job an entirely separate cache entry, even though this job's `cargo build -p
+      # lanrurugi-server` recompiles most of the same dependency graph the `rust` job's `cargo
+      # test --workspace` already built) — a real, avoidable duplicate-compile cost, not
+      # inherent to needing two jobs.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
 
       - name: Install libarchive build dependencies + redis-server
         run: |
@@ -115,9 +127,26 @@ jobs:
         working-directory: apps/frontend
         run: pnpm install --frozen-lockfile
 
+      # Playwright's own browser downloads (~300MB combined for Chromium+Firefox) are the single
+      # largest fixed cost in this job and don't change between runs unless the pinned
+      # @playwright/test version does — cache them keyed on that version so most runs skip the
+      # download entirely. System-level --with-deps packages are cheap apt installs, not worth
+      # caching separately.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('apps/frontend/pnpm-lock.yaml') }}
+
       - name: Install Playwright browsers
         working-directory: apps/frontend
-        run: pnpm exec playwright install --with-deps chromium firefox
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm exec playwright install-deps chromium firefox
+          else
+            pnpm exec playwright install --with-deps chromium firefox
+          fi
 
       - name: Build frontend
         working-directory: apps/frontend
