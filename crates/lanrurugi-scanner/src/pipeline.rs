@@ -210,7 +210,14 @@ async fn catalogue_new_archive(
 mod tests {
     use super::*;
 
-    fn test_pools() -> Option<(
+    // See full_scan.rs's own identical helper for why this takes a db offset — both modules'
+    // tests hit the same global `LRR_FILEMAP` key, so `cargo test`'s default parallel-by-thread
+    // execution let one test's `hset`/`hdel` interleave with another's read, a real (if rare)
+    // source of CI flakiness. This module's two tests use offsets disjoint from full_scan.rs's
+    // three (which claim 0-8), so no two tests across either module ever share a Redis DB.
+    fn test_pools(
+        db_offset: u8,
+    ) -> Option<(
         deadpool_redis::Pool,
         deadpool_redis::Pool,
         deadpool_redis::Pool,
@@ -220,7 +227,11 @@ mod tests {
             deadpool_redis::Config::from_url(format!("{}/{db}", base.trim_end_matches('/')))
                 .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         };
-        Some((mk(0).ok()?, mk(2).ok()?, mk(3).ok()?))
+        Some((
+            mk(db_offset).ok()?,
+            mk(db_offset + 1).ok()?,
+            mk(db_offset + 2).ok()?,
+        ))
     }
 
     fn make_zip_with_pages(dir: &Path, name: &str, n_pages: usize) -> PathBuf {
@@ -239,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_file_is_catalogued_and_filemap_updated() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(9) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -287,7 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn changed_file_content_rekeys_existing_archive() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(12) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

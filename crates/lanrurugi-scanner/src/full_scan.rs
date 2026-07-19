@@ -168,7 +168,20 @@ mod tests {
     use super::*;
     use lanrurugi_core::entities::Archive;
 
-    fn test_pools() -> Option<(
+    // `cargo test`'s default parallel-by-thread execution means every test in this module (and
+    // in pipeline.rs's own test module, which used the exact same hardcoded db indices) ran
+    // concurrently against the very same Redis databases — and both modules' tests read/write the
+    // single global `LRR_FILEMAP` key, so one test's `hset`/`hdel` could interleave with another
+    // test's `hkeys` scan mid-flight. This surfaced as a genuinely intermittent CI failure (not
+    // reproducible locally under lighter load): `already_tracked_paths_are_skipped_without_rehashing`
+    // asserting `already_known == 1` but observing `0`, meaning some other concurrently-running
+    // test's `hdel`/fresh-db-state won the race against this test's own `hset` before `full_scan`'s
+    // `hkeys` read it back. `db_offset` gives each of this module's 3 tests (and, by a
+    // pre-arranged split with pipeline.rs's 2 tests, that module's own tests) a disjoint slice of
+    // Redis's 16 logical databases, so no two tests ever share a `LRR_FILEMAP` key at all.
+    fn test_pools(
+        db_offset: u8,
+    ) -> Option<(
         deadpool_redis::Pool,
         deadpool_redis::Pool,
         deadpool_redis::Pool,
@@ -178,7 +191,11 @@ mod tests {
             deadpool_redis::Config::from_url(format!("{}/{db}", base.trim_end_matches('/')))
                 .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         };
-        Some((mk(0).ok()?, mk(2).ok()?, mk(3).ok()?))
+        Some((
+            mk(db_offset).ok()?,
+            mk(db_offset + 1).ok()?,
+            mk(db_offset + 2).ok()?,
+        ))
     }
 
     /// End-to-end demonstration of User Story 6: a historically false-merged pair (both files
@@ -189,7 +206,7 @@ mod tests {
     /// Clarifications rule for the previously-untracked file.
     #[tokio::test]
     async fn rebuild_then_scan_splits_a_historically_merged_pair() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(0) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -313,7 +330,7 @@ mod tests {
     /// already a filemap-known path.
     #[tokio::test]
     async fn already_tracked_paths_are_skipped_without_rehashing() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(3) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -377,7 +394,7 @@ mod tests {
     /// disk is pruned, matching legacy's own `@deletedfiles` cleanup.
     #[tokio::test]
     async fn stale_filemap_entries_for_deleted_files_are_pruned() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(6) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
