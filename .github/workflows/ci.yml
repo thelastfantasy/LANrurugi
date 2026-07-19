@@ -91,16 +91,6 @@ jobs:
   e2e:
     name: Frontend E2E (Playwright)
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6380:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -111,11 +101,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install libarchive build dependencies
+      - name: Install libarchive build dependencies + redis-server
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            redis-server
 
       - name: Build backend (debug)
         run: cargo build -p lanrurugi-server
