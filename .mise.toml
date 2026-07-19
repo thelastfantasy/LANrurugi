@@ -94,3 +94,18 @@ run = """
 cargo build -p lanrurugi-server
 pnpm -C apps/frontend run test:e2e
 """
+
+# ── Local CI reproduction (act) ──────────────────────────────────────────────
+# Runs .github/workflows/ci.yml locally via `act` + podman/docker, so a CI failure can be
+# iterated on in seconds instead of minutes per push, with real stdout/stderr and the ability to
+# `podman exec` into a still-running job container to inspect it directly. Found and fixed four
+# real bugs this way in one session (CI's missing redis-server binary, vite preview --strictPort
+# not actually being strict, the missing fuser dependency, and a flaky Rust test) that would have
+# taken many round-trips to debug from GitHub's own log output alone.
+[tasks.ci-local-image]
+description = "Build the local act-runner image (adds cmake/libclang-dev act's own ubuntu-latest image lacks) — run once before test-ci-local"
+run = "podman build -f Dockerfile.act-runner -t lanrurugi-act-runner ."
+
+[tasks.test-ci-local]
+description = "Run a CI job locally via act — usage: mise run test-ci-local -- -j <job-id> (job ids: rust, frontend, e2e; see .github/workflows/ci.yml)"
+run = "act"
