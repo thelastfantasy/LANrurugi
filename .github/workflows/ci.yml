@@ -33,13 +33,25 @@ jobs:
           cache: true
 
       # Caches ~/.cargo and target/ across runs (constitution Technology Stack Constraints:
-      # "Rust build acceleration"). Complements, not replaces, sccache below. `shared-key`
-      # matches the `e2e` job's own so both converge on one cache entry instead of each
-      # recompiling the same dependency graph from scratch — this job's `cargo test --workspace`
-      # and `e2e`'s `cargo build -p lanrurugi-server` overlap heavily.
+      # "Rust build acceleration"). `shared-key` matches the `e2e` job's own so both converge on
+      # one cache entry instead of each recompiling the same dependency graph from scratch — this
+      # job's `cargo test --workspace` and `e2e`'s `cargo build -p lanrurugi-server` overlap
+      # heavily.
+      #
+      # `cache-directories` additionally persists sccache's own object cache
+      # (~/.cache/sccache). Without this, sccache had a 0.00% hit rate on Rust objects on every
+      # observed run (confirmed via `sccache --show-stats` on runs 29195223998/29195590947/
+      # 29671404959) — each run got a brand-new runner VM with an empty sccache dir, so
+      # RUSTC_WRAPPER=sccache was pure overhead (a wrapper process per rustc invocation) with zero
+      # payoff. rust-cache's default directory set doesn't include it since sccache isn't
+      # rust-cache's concern.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace
+          cache-directories: /home/runner/.cache/sccache
+
+      - name: Zero sccache stats (isolate this run's hit rate from cache-restore noise)
+        run: sccache --zero-stats
 
       # Same set `Dockerfile.build`'s dev image installs (see that file's own comment) —
       # `libarchive2-sys` bundles and statically links libarchive's C source, which itself links
@@ -65,7 +77,8 @@ jobs:
         run: cargo test --workspace
 
       - name: sccache stats
-        run: sccache --show-stats
+        if: always()
+        run: scripts/sccache-summary.sh
 
   frontend:
     name: Frontend (eslint, build)
@@ -108,10 +121,16 @@ jobs:
       # each job an entirely separate cache entry, even though this job's `cargo build -p
       # lanrurugi-server` recompiles most of the same dependency graph the `rust` job's `cargo
       # test --workspace` already built) — a real, avoidable duplicate-compile cost, not
-      # inherent to needing two jobs.
+      # inherent to needing two jobs. `cache-directories` shares the same sccache object cache too
+      # (see the `rust` job's own comment on this) — this job also compiles Rust
+      # (`cargo build -p lanrurugi-server`) under the same `RUSTC_WRAPPER=sccache`.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace
+          cache-directories: /home/runner/.cache/sccache
+
+      - name: Zero sccache stats (isolate this run's hit rate from cache-restore noise)
+        run: sccache --zero-stats
 
       - name: Install libarchive build dependencies + redis-server
         run: |
@@ -122,6 +141,10 @@ jobs:
 
       - name: Build backend (debug)
         run: cargo build -p lanrurugi-server
+
+      - name: sccache stats
+        if: always()
+        run: scripts/sccache-summary.sh
 
       - name: pnpm install
         working-directory: apps/frontend
