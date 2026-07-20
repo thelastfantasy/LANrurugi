@@ -64,8 +64,16 @@ jobs:
       # `full_scan.rs`) — `redis-server`'s own default of 16 databases (0-15) isn't enough. Same
       # real-binary approach the `e2e` job already uses (see its own comment: a service container
       # can't be given the extra flags a real binary can).
+      #
+      # `apt-get install redis-server`'s own postinst script starts a systemd-managed instance
+      # immediately, bound to :6379 with the package's default 16-database config — confirmed via
+      # a real failed run (29731953500) where `redis-cli ping` came back instantly (too fast to be
+      # our own `--daemonize yes` instance actually starting) and `cargo test` still hit the exact
+      # same "DB index is out of range" error. Must stop that one first, or our own invocation
+      # below either fails to bind :6379 or simply loses the race to which process gets it.
       - name: Start redis-server with extra logical databases
         run: |
+          sudo systemctl stop redis-server || true
           redis-server --daemonize yes --databases 64 --save "" --appendonly no
           for i in $(seq 1 10); do
             redis-cli ping && break
