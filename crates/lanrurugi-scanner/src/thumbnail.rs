@@ -69,12 +69,18 @@ pub struct ThumbSettings {
 /// thumbnail generated without a server restart. Missing/unparsable values fall back to the same
 /// defaults `settings::get_settings` reports (`enablewebp = true`, `webpquality = 85`,
 /// `hqthumbpages = false`).
+/// `lanrurugi-api::settings::DEFAULT_WEBP_QUALITY`'s own value — duplicated here (rather than
+/// imported) since `lanrurugi-scanner` can't depend on `lanrurugi-api` (the dependency runs the
+/// other way), but the two must still be kept in sync by hand if the Settings page's own default
+/// ever changes.
+const DEFAULT_WEBP_QUALITY: u8 = 85;
+
 pub async fn read_settings<C>(conn: &mut C) -> ThumbSettings
 where
     C: deadpool_redis::redis::aio::ConnectionLike + Send + Sync,
 {
     use deadpool_redis::redis::AsyncCommands;
-    const CONFIG_KEY: &str = "LRR_CONFIG";
+    use lanrurugi_storage::keys::CONFIG_KEY;
 
     let fields: std::collections::HashMap<String, String> =
         conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
@@ -86,7 +92,7 @@ where
     let webpquality: u8 = fields
         .get("webpquality")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(85);
+        .unwrap_or(DEFAULT_WEBP_QUALITY);
 
     if enablewebp {
         ThumbSettings {

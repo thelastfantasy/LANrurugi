@@ -12,6 +12,8 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use thiserror::Error;
 
+use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_KEY, UNTAGGED_KEY};
+
 #[derive(Debug, Error)]
 pub enum IndexerError {
     #[error("Redis error: {0}")]
@@ -55,10 +57,10 @@ pub async fn index_new_archive(search_pool: &Pool, id: &str, title: &str) -> Res
     let title_key = format!("{}\0{}", title.to_lowercase(), id);
     let _: () = deadpool_redis::redis::pipe()
         .atomic()
-        .zadd("LRR_TITLES", title_key, 0)
-        .sadd("LRR_UNTAGGED", id)
-        .sadd("LRR_TANKGROUPED", id)
-        .sadd("LRR_NEW", id)
+        .zadd(TITLES_KEY, title_key, 0)
+        .sadd(UNTAGGED_KEY, id)
+        .sadd(TANKGROUPED_KEY, id)
+        .sadd(NEW_KEY, id)
         .query_async(&mut conn)
         .await?;
     Ok(())
@@ -85,10 +87,10 @@ pub async fn remove_archive_index(
     let title_key = format!("{}\0{}", title.to_lowercase(), id);
     let mut pipe = deadpool_redis::redis::pipe();
     pipe.atomic()
-        .zrem("LRR_TITLES", title_key)
-        .srem("LRR_UNTAGGED", id)
-        .srem("LRR_TANKGROUPED", id)
-        .srem("LRR_NEW", id);
+        .zrem(TITLES_KEY, title_key)
+        .srem(UNTAGGED_KEY, id)
+        .srem(TANKGROUPED_KEY, id)
+        .srem(NEW_KEY, id);
     for tag in tags.split(',') {
         let tag = tag.trim().to_ascii_lowercase();
         if !tag.is_empty() {
@@ -112,8 +114,8 @@ pub async fn update_title_index(
     let mut conn = search_pool.get().await?;
     let old_key = format!("{}\0{}", old_title.to_lowercase(), id);
     let new_key = format!("{}\0{}", new_title.to_lowercase(), id);
-    let _: () = conn.zrem("LRR_TITLES", old_key).await?;
-    let _: () = conn.zadd("LRR_TITLES", new_key, 0).await?;
+    let _: () = conn.zrem(TITLES_KEY, old_key).await?;
+    let _: () = conn.zadd(TITLES_KEY, new_key, 0).await?;
     Ok(())
 }
 
@@ -143,9 +145,9 @@ pub async fn update_tag_indexes(
     }
 
     if has_meaningful_tags(new_tags) {
-        let _: () = conn.srem("LRR_UNTAGGED", id).await?;
+        let _: () = conn.srem(UNTAGGED_KEY, id).await?;
     } else {
-        let _: () = conn.sadd("LRR_UNTAGGED", id).await?;
+        let _: () = conn.sadd(UNTAGGED_KEY, id).await?;
     }
     Ok(())
 }
@@ -154,9 +156,9 @@ pub async fn update_tag_indexes(
 pub async fn set_isnew_index(search_pool: &Pool, id: &str, isnew: bool) -> Result<()> {
     let mut conn = search_pool.get().await?;
     if isnew {
-        let _: () = conn.sadd("LRR_NEW", id).await?;
+        let _: () = conn.sadd(NEW_KEY, id).await?;
     } else {
-        let _: () = conn.srem("LRR_NEW", id).await?;
+        let _: () = conn.srem(NEW_KEY, id).await?;
     }
     Ok(())
 }
@@ -182,18 +184,18 @@ mod tests {
         index_new_archive(&pool, &id, "My Title").await.unwrap();
 
         let mut conn = pool.get().await.unwrap();
-        let untagged: bool = conn.sismember("LRR_UNTAGGED", &id).await.unwrap();
-        let is_new: bool = conn.sismember("LRR_NEW", &id).await.unwrap();
-        let ungrouped: bool = conn.sismember("LRR_TANKGROUPED", &id).await.unwrap();
+        let untagged: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
+        let is_new: bool = conn.sismember(NEW_KEY, &id).await.unwrap();
+        let ungrouped: bool = conn.sismember(TANKGROUPED_KEY, &id).await.unwrap();
         assert!(untagged);
         assert!(is_new);
         assert!(ungrouped);
 
-        let _: () = conn.srem("LRR_UNTAGGED", &id).await.unwrap();
-        let _: () = conn.srem("LRR_NEW", &id).await.unwrap();
-        let _: () = conn.srem("LRR_TANKGROUPED", &id).await.unwrap();
+        let _: () = conn.srem(UNTAGGED_KEY, &id).await.unwrap();
+        let _: () = conn.srem(NEW_KEY, &id).await.unwrap();
+        let _: () = conn.srem(TANKGROUPED_KEY, &id).await.unwrap();
         let _: () = conn
-            .zrem("LRR_TITLES", format!("my title\0{id}"))
+            .zrem(TITLES_KEY, format!("my title\0{id}"))
             .await
             .unwrap();
     }
@@ -215,12 +217,12 @@ mod tests {
             .unwrap();
 
         let mut conn = pool.get().await.unwrap();
-        let untagged: bool = conn.sismember("LRR_UNTAGGED", &id).await.unwrap();
-        let is_new: bool = conn.sismember("LRR_NEW", &id).await.unwrap();
-        let ungrouped: bool = conn.sismember("LRR_TANKGROUPED", &id).await.unwrap();
+        let untagged: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
+        let is_new: bool = conn.sismember(NEW_KEY, &id).await.unwrap();
+        let ungrouped: bool = conn.sismember(TANKGROUPED_KEY, &id).await.unwrap();
         let in_tag_index: bool = conn.sismember("INDEX_artist:jane", &id).await.unwrap();
         let title_score: Option<f64> = conn
-            .zscore("LRR_TITLES", format!("ghost title\0{id}"))
+            .zscore(TITLES_KEY, format!("ghost title\0{id}"))
             .await
             .unwrap();
         assert!(
@@ -241,13 +243,13 @@ mod tests {
         };
         let id = "e".repeat(40);
         let mut conn = pool.get().await.unwrap();
-        let _: () = conn.sadd("LRR_UNTAGGED", &id).await.unwrap();
+        let _: () = conn.sadd(UNTAGGED_KEY, &id).await.unwrap();
 
         update_tag_indexes(&pool, &id, "", "adventure,artist:jane")
             .await
             .unwrap();
 
-        let untagged: bool = conn.sismember("LRR_UNTAGGED", &id).await.unwrap();
+        let untagged: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
         let in_adventure: bool = conn.sismember("INDEX_adventure", &id).await.unwrap();
         assert!(
             !untagged,
@@ -258,7 +260,7 @@ mod tests {
         update_tag_indexes(&pool, &id, "adventure,artist:jane", "artist:jane")
             .await
             .unwrap();
-        let untagged_again: bool = conn.sismember("LRR_UNTAGGED", &id).await.unwrap();
+        let untagged_again: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
         let still_in_adventure: bool = conn.sismember("INDEX_adventure", &id).await.unwrap();
         assert!(
             untagged_again,
@@ -267,6 +269,6 @@ mod tests {
         assert!(!still_in_adventure);
 
         let _: () = conn.srem("INDEX_artist:jane", &id).await.unwrap();
-        let _: () = conn.srem("LRR_UNTAGGED", &id).await.unwrap();
+        let _: () = conn.srem(UNTAGGED_KEY, &id).await.unwrap();
     }
 }

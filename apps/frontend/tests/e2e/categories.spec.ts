@@ -23,7 +23,7 @@ test.describe('categories', { tag: '@categories' }, () => {
 
   test('pinned-field save persists across reload', async ({ page }) => {
     await createStaticCategory(page, 'Pinned Regression Test')
-    await page.goto('/categories')
+    await page.goto('/config/categories')
 
     await page.selectOption('select.favtag-btn', { label: 'Pinned Regression Test' })
     const pinnedCheckbox = page.locator('#pinned')
@@ -42,7 +42,7 @@ test.describe('categories', { tag: '@categories' }, () => {
 
   test('name and predicate autosave via real typing and blur', async ({ page }) => {
     const id = await createStaticCategory(page, 'Autosave Field Test')
-    await page.goto('/categories')
+    await page.goto('/config/categories')
     await page.selectOption('select.favtag-btn', { label: 'Autosave Field Test' })
 
     const nameInput = page.locator('tr.tag-options input').first()

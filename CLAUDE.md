@@ -1,6 +1,6 @@
 <!-- SPECKIT START -->
-Four feature specs exist. Phase 1 (001) is implemented; 002, 003, and 004 are planned but not yet
-implemented.
+Five feature specs exist. Phase 1 (001) is implemented; 002, 003, 004, and 005 are planned but not
+yet implemented.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -37,6 +37,24 @@ user-selectable translation backend (cloud, proxied server-side, vs. locally-hos
 originated), volume-level font-matching cache, sliding-window prefetch with cost-aware budgeting.
 Design artifacts:
 `specs/004-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md}` (no
+`tasks.md` yet).
+
+**Phase 1 addendum — `005-download-plugin-progress`** (additive to Phase 1, planned but not yet
+implemented): plan at `specs/005-download-plugin-progress/plan.md`. Moves the download-plugin
+pipeline's actual byte-level HTTP transfer (currently performed nowhere — `execDownload`'s
+`download_url` result is stored as-is and never fetched) into Rust itself via streaming `reqwest`,
+which is what makes real progress reporting, per-domain concurrency limiting, and rate limiting
+possible at all. `execDownload`'s contract gains `downloads: {url, method?, headers?,
+filename_hint?}[]` (one element = single-file download; more = a multi-resource download, e.g.
+Pixiv's per-page images, optionally bundled into one archive by Rust rather than the plugin's own
+Deno-side zipping); a new, parallel `pluginOptions()` export lets a plugin declare its own default
+per-domain concurrency/rate-limit rules (LastPass-style exact/wildcard matching, exact taking
+precedence) and multi-resource bundling preference, user-overridable and persisted in Redis via
+new `/api/plugins/{namespace}/options` endpoints. `JobStatus` gains `downloaded_bytes`/
+`total_bytes`, rendered as a real progress bar on the existing Jobs page. Three existing
+hand-written plugins (`chaika.ts`, `ehentai.ts`, `pixiv.ts`) are migrated to the new contract as
+part of this feature. Design artifacts:
+`specs/005-download-plugin-progress/{research.md,data-model.md,contracts/,quickstart.md}` (no
 `tasks.md` yet).
 
 Stack: Rust (Tokio/Axum/Rayon) backend as a Cargo workspace under `crates/` producing one binary

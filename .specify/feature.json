@@ -1,1 +1,3 @@
-{"feature_directory":"specs/003-ui-test-automation"}
+{
+  "feature_directory": "specs/005-download-plugin-progress"
+}

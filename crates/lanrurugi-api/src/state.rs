@@ -1,13 +1,19 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
+use lanrurugi_storage::download_queue::DownloadQueueRepository;
+use lanrurugi_storage::plugin_options::PluginOptionsRepository;
 use lanrurugi_storage::redis::RedisDbs;
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, StampRepository,
 };
+use tokio::sync::Mutex;
+
+use crate::download_manager::DownloadManager;
 
 /// API-key auth configuration. Mirrors legacy `LRR_CONF`'s `apikey`/`enable_pass` semantics
 /// (verified: `~/LANraragi/lib/LANraragi/Utils/Login.pm::is_logged_in_api`) — see
@@ -70,4 +76,19 @@ pub struct AppState {
     /// Directory of installed plugin `.ts` files (one per namespace), scanned by
     /// `GET /plugins/{type}` to discover what's available.
     pub plugins_dir: PathBuf,
+    /// One [`DownloadManager`] per download-plugin namespace (`specs/005-download-plugin-progress`)
+    /// — separate instances because different plugins' domain-concurrency/rate-limit rules are
+    /// independent of one another (spec Assumptions: "settings changes apply per-plugin, not
+    /// globally"); a shared instance would incorrectly pool e.g. two different plugins' downloads
+    /// from the same CDN hostname under one concurrency limit. Created lazily on first use per
+    /// namespace (`plugins::download_manager_for`).
+    pub download_managers: Arc<Mutex<HashMap<String, Arc<DownloadManager>>>>,
+    /// Persisted user overrides of a download plugin's `pluginOptions()` defaults
+    /// (`specs/005-download-plugin-progress`), on the `config` logical DB alongside the rest of
+    /// LANrurugi's own (non-legacy) settings.
+    pub plugin_options: Arc<PluginOptionsRepository>,
+    /// Persistent, plugin-grouped download queue backing the Upload page's right-hand panel — so
+    /// a queued/in-progress download survives a page refresh or a different browser tab. Also on
+    /// the `config` logical DB, same placement as `plugin_options`.
+    pub download_queue: Arc<DownloadQueueRepository>,
 }

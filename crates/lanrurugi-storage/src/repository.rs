@@ -75,6 +75,21 @@ impl ArchiveRepository {
         Ok(archives)
     }
 
+    /// Finds the archive whose stored `file` path has `filename` as its basename, if any. No
+    /// indexed lookup exists for this (legacy has none either — `file` is not a secondary Redis
+    /// index anywhere) so this is a full `list_all` scan; acceptable given this project's existing
+    /// library-size assumptions (`list_all` is already called unconditionally by, e.g., full-library
+    /// search-index rebuilds).
+    pub async fn find_by_filename(&self, filename: &str) -> Result<Option<Archive>> {
+        let archives = self.list_all().await?;
+        Ok(archives.into_iter().find(|a| {
+            std::path::Path::new(&a.file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                == Some(filename)
+        }))
+    }
+
     /// Creates or fully overwrites an archive record's hash fields.
     pub async fn save(&self, archive: &Archive) -> Result<()> {
         let mut conn = self.pool.get().await?;

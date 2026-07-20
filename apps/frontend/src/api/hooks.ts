@@ -1,16 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchJson, fetchText, sendForm, sendJson } from './client'
+import { ApiError, fetchJson, fetchText, sendForm, sendJson } from './client'
 import type {
+  AddToQueueItem,
+  AddToQueueResponse,
   ArchiveFilesResponse,
   ArchiveMetadata,
   BookmarkLinkResponse,
   CategoryMetadata,
+  DownloadQueueItem,
+  DownloadQueueListResponse,
   DuplicateGroup,
   JobRecord,
   JobsResponse,
   LoginStatus,
   PluginInfo,
+  PluginOptions,
+  PluginOptionsUpdate,
+  PluginSettings,
+  PluginSettingsUpdate,
   RandomArchivesResponse,
   SearchResponse,
   ServerInfo,
@@ -21,7 +29,18 @@ import type {
   StatTag,
   TankoubonListResponse,
   TankoubonMetadata,
+  UpdateQueueItemBody,
 } from './types'
+
+/** Standard polling frequency for anything that needs "close to live" freshness without a
+ * push/SSE mechanism (Shinobu status, log tail, the job registry) — shared so all three agree on
+ * the same cadence rather than each hardcoding its own copy of "5 seconds". */
+const POLL_INTERVAL_MS = 5000
+/** The Upload page's download queue polls faster than the shared default above while its panel is
+ * the primary thing the user is watching (an in-progress download's byte progress feels laggy at
+ * the slower cadence). */
+const DOWNLOAD_QUEUE_POLL_INTERVAL_MS = 3000
+const UPDATE_CHECK_STALE_TIME_MS = 60 * 60 * 1000
 
 export function useArchives() {
   return useQuery({
@@ -63,6 +82,62 @@ export function usePlugins(kind: string = 'all') {
   return useQuery({
     queryKey: ['plugins', kind],
     queryFn: () => fetchJson<PluginInfo[]>(`/plugins/${kind}`),
+  })
+}
+
+/** `null` (not an error state) when the plugin declares no `pluginOptions()` at all (spec FR-015
+ * — a `404` from the endpoint means exactly this, not a real failure) — callers use this to decide
+ * whether to render a settings affordance for a given download plugin at all. Pass `''` for a
+ * non-download plugin to skip the request entirely (`enabled: false`) rather than firing a
+ * guaranteed-404 call with an empty namespace. */
+export function usePluginOptions(namespace: string) {
+  return useQuery({
+    queryKey: ['plugin-options', namespace],
+    enabled: namespace !== '',
+    queryFn: async () => {
+      try {
+        return await fetchJson<PluginOptions>(`/plugins/options?namespace=${encodeURIComponent(namespace)}`)
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null
+        throw e
+      }
+    },
+  })
+}
+
+export function useUpdatePluginOptions(namespace: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (update: PluginOptionsUpdate) =>
+      sendJson<PluginOptions>('PUT', `/plugins/options?namespace=${encodeURIComponent(namespace)}`, update),
+    onSuccess: (data) => queryClient.setQueryData(['plugin-options', namespace], data),
+  })
+}
+
+export function useResetPluginOptions(namespace: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<PluginOptions>('DELETE', `/plugins/options?namespace=${encodeURIComponent(namespace)}`),
+    onSuccess: (data) => queryClient.setQueryData(['plugin-options', namespace], data),
+  })
+}
+
+/** A plugin's own persisted custom-parameter values (e.g. E-Hentai login's cookie fields) — see
+ * `PluginSettings`'s own docs. Distinct from `usePluginOptions` above (download-specific
+ * concurrency/rate-limit/bundling settings). */
+export function usePluginSettings(namespace: string) {
+  return useQuery({
+    queryKey: ['plugin-settings', namespace],
+    queryFn: () => fetchJson<PluginSettings>(`/plugins/settings?namespace=${encodeURIComponent(namespace)}`),
+  })
+}
+
+export function useUpdatePluginSettings(namespace: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (update: PluginSettingsUpdate) =>
+      sendJson<void>('PUT', `/plugins/settings?namespace=${encodeURIComponent(namespace)}`, update),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['plugin-settings', namespace] }),
   })
 }
 
@@ -256,7 +331,7 @@ export function useUpdateCheck(currentVersion: string | undefined, debugMode: bo
       return { latestVersion: data.tag_name, releaseUrl: data.html_url }
     },
     enabled: !debugMode && !!currentVersion,
-    staleTime: 60 * 60 * 1000,
+    staleTime: UPDATE_CHECK_STALE_TIME_MS,
     retry: false,
   })
 }
@@ -294,7 +369,7 @@ export function useShinobuStatus() {
   return useQuery({
     queryKey: ['shinobu'],
     queryFn: () => fetchJson<ShinobuStatus>('/shinobu'),
-    refetchInterval: 5000,
+    refetchInterval: POLL_INTERVAL_MS,
   })
 }
 
@@ -468,7 +543,7 @@ export function useLogLines(category: LogCategory, lines = 100) {
   return useQuery({
     queryKey: ['logs', category, lines],
     queryFn: () => fetchText(`/logs/${category}?lines=${lines}`),
-    refetchInterval: 5000,
+    refetchInterval: POLL_INTERVAL_MS,
   })
 }
 
@@ -483,7 +558,7 @@ export function useJobs() {
     queryFn: () => fetchJson<JobsResponse>('/jobs'),
     // `select` unwraps the `{ jobs: [...] }` envelope so consumers get the array directly.
     select: (data) => data.jobs as JobRecord[],
-    refetchInterval: 5000,
+    refetchInterval: POLL_INTERVAL_MS,
   })
 }
 
@@ -521,5 +596,88 @@ export function useClearFinishedJobs() {
   return useMutation({
     mutationFn: () => sendJson<{ cleared: number }>('DELETE', '/jobs?state=finished'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+}
+
+// --- Upload page's persistent download queue ----------------------------------------------------
+// Additive `/download_queue*` endpoints (no legacy equivalent) — see `DownloadQueueItem`'s own
+// docs. Polled at a shorter interval than `useJobs()` since the Upload page is this data's primary
+// consumer while open, and the queue itself (not just the underlying job) is what needs to feel
+// live (item state transitions, not just byte progress).
+
+export function useDownloadQueue() {
+  return useQuery({
+    queryKey: ['download-queue'],
+    queryFn: () => fetchJson<DownloadQueueListResponse>('/download_queue'),
+    select: (data) => data.items,
+    refetchInterval: DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
+  })
+}
+
+export function useAddToQueue() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (items: AddToQueueItem[]) =>
+      sendJson<AddToQueueResponse>('POST', '/download_queue', { items }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+  })
+}
+
+export function useUpdateQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...update }: UpdateQueueItemBody & { id: string }) =>
+      sendJson<{ item: DownloadQueueItem }>('PATCH', `/download_queue/${encodeURIComponent(id)}`, update),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+  })
+}
+
+export function useDeleteQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => sendJson('DELETE', `/download_queue/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+  })
+}
+
+export function useStartQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ job: string }>('POST', `/download_queue/${encodeURIComponent(id)}/start`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useStartAllQueue() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson('POST', '/download_queue/start_all'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useStartSelectedQueue() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) => sendJson('POST', '/download_queue/start_selected', { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useClearCompletedQueue() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<{ cleared: number }>('POST', '/download_queue/clear_completed'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
   })
 }

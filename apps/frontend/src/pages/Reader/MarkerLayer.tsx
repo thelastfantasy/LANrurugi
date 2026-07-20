@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
 // `renderMarkers`/`loadStamps` + `.marker` in `lrr.css`): click-to-place a pin at a %-based
@@ -139,10 +140,10 @@ export default function MarkerLayer({
 
       {menu && (
         <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 1000 }} onClick={() => setMenu(null)} />
+          <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setMenu(null)} />
           <div
             className="id1 marker-context-menu"
-            style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: 1001, width: 180 }}
+            style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT, width: 180 }}
           >
             <ul style={{ listStyle: 'none', margin: 0, padding: '6px 0' }}>
               <li

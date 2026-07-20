@@ -15,6 +15,7 @@ use deadpool_redis::redis::AsyncCommands;
 use rand::RngExt;
 
 use crate::state::AppState;
+use lanrurugi_storage::keys::CONFIG_KEY;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthConfigError {
@@ -24,7 +25,6 @@ pub enum AuthConfigError {
     Redis(#[from] deadpool_redis::redis::RedisError),
 }
 
-const CONFIG_KEY: &str = "LRR_CONFIG";
 const SESSION_SECRET_FIELD: &str = "session_secret";
 
 /// Legacy's own default (`Model/Config.pm::get_password`) — the bcrypt hash for "kamimamita",

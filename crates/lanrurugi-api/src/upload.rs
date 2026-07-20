@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::delete;
 use axum::Router;
-use lanrurugi_scanner::pipeline::{ingest_file, IngestOutcome};
+use lanrurugi_scanner::pipeline::{ingest_file_with_policy, DuplicatePolicy, IngestOutcome};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 
@@ -118,12 +118,14 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string());
     }
 
-    let outcome = ingest_file(
+    let outcome = ingest_file_with_policy(
         &state.repos.archives,
         &state.redis.config,
         &state.redis.search,
         &state.library.thumb_dir,
         &staging_path,
+        DuplicatePolicy::Reject,
+        Some(&file_name),
     )
     .await;
 
@@ -138,6 +140,19 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
                     "error": "This file already exists in the Library.",
                     "success": 0,
                     "id": id,
+                })),
+            )
+                .into_response();
+        }
+        Ok(IngestOutcome::Rejected { existing_id, .. }) => {
+            let _ = tokio::fs::remove_file(&staging_path).await;
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(json!({
+                    "operation": "upload",
+                    "error": "A file with this name already exists in the Library.",
+                    "success": 0,
+                    "id": existing_id,
                 })),
             )
                 .into_response();
@@ -171,10 +186,11 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
     }
     if let Ok(mut conn) = state.redis.config.get().await {
         use deadpool_redis::redis::AsyncCommands;
+        use lanrurugi_storage::keys::FILEMAP_KEY;
         let staging_str = staging_path.to_string_lossy().to_string();
         let dest_str = dest.to_string_lossy().to_string();
-        let _: Result<(), _> = conn.hdel("LRR_FILEMAP", &staging_str).await;
-        let _: Result<(), _> = conn.hset("LRR_FILEMAP", &dest_str, &id).await;
+        let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &staging_str).await;
+        let _: Result<(), _> = conn.hset(FILEMAP_KEY, &dest_str, &id).await;
     }
 
     if title.is_some() || summary.is_some() || tags.is_some() {

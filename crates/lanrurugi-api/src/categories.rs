@@ -15,8 +15,8 @@ use serde_json::json;
 
 use crate::common::{error, not_found};
 use crate::AppState;
+use lanrurugi_storage::keys::CONFIG_KEY;
 
-const CONFIG_KEY: &str = "LRR_CONFIG";
 const BOOKMARK_LINK_FIELD: &str = "bookmark_link";
 
 fn category_json(c: &Category) -> serde_json::Value {
@@ -302,57 +302,76 @@ async fn add_to_category(
     State(state): State<AppState>,
     Path((id, archive)): Path<(String, String)>,
 ) -> Response {
-    let mut category = match state.repos.categories.get(&id).await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            return not_found(
-                "add_to_category",
-                format!("{id} doesn't exist in the database!"),
-            )
+    match add_archive_to_category(&state, &id, &archive).await {
+        Ok(()) => {
+            axum::Json(json!({ "operation": "add_to_category", "success": 1 })).into_response()
         }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "add_to_category",
-                e.to_string(),
-            )
-        }
-    };
-    if category.is_dynamic() {
-        return error(
+        Err(AddToCategoryError::CategoryNotFound) => not_found(
+            "add_to_category",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Err(AddToCategoryError::Dynamic) => error(
             StatusCode::BAD_REQUEST,
             "add_to_category",
             format!("{id} is a favorite search/dynamic category, can't add archives to it."),
-        );
+        ),
+        Err(AddToCategoryError::ArchiveNotFound) => error(
+            StatusCode::BAD_REQUEST,
+            "add_to_category",
+            format!("{archive} does not exist in the database."),
+        ),
+        Err(AddToCategoryError::Storage(e)) => {
+            error(StatusCode::INTERNAL_SERVER_ERROR, "add_to_category", e)
+        }
+    }
+}
+
+pub enum AddToCategoryError {
+    CategoryNotFound,
+    Dynamic,
+    ArchiveNotFound,
+    Storage(String),
+}
+
+/// The read-modify-write "add this archive to this category, unless it's already a member"
+/// operation itself (spec FR-018: downloaded, un-bundled multi-resource archives all join the
+/// same user-selected category) — factored out of [`add_to_category`]'s HTTP handler so
+/// `plugins::run_managed_downloads` can call the exact same logic instead of duplicating it.
+pub async fn add_archive_to_category(
+    state: &AppState,
+    catid: &str,
+    archive: &str,
+) -> Result<(), AddToCategoryError> {
+    let mut category = state
+        .repos
+        .categories
+        .get(catid)
+        .await
+        .map_err(|e| AddToCategoryError::Storage(e.to_string()))?
+        .ok_or(AddToCategoryError::CategoryNotFound)?;
+    if category.is_dynamic() {
+        return Err(AddToCategoryError::Dynamic);
     }
     if state
         .repos
         .archives
-        .get(&archive)
+        .get(archive)
         .await
         .ok()
         .flatten()
         .is_none()
     {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "add_to_category",
-            format!("{archive} does not exist in the database."),
-        );
+        return Err(AddToCategoryError::ArchiveNotFound);
     }
-    if !category.archives.contains(&archive) {
-        category.archives.push(archive);
+    if !category.archives.contains(&archive.to_string()) {
+        category.archives.push(archive.to_string());
     }
-    match state.repos.categories.save(&category).await {
-        Ok(()) => {
-            axum::Json(json!({ "operation": "add_to_category", "success": 1 })).into_response()
-        }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "add_to_category",
-            e.to_string(),
-        ),
-    }
+    state
+        .repos
+        .categories
+        .save(&category)
+        .await
+        .map_err(|e| AddToCategoryError::Storage(e.to_string()))
 }
 
 async fn remove_from_category(

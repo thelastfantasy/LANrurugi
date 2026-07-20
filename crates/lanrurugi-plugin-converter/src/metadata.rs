@@ -32,8 +32,10 @@ pub struct ConvertedMetadata {
     /// login at all.
     pub login_from: Option<String>,
     pub parameters: Vec<ConvertedParameter>,
-    /// Heuristic hint, not a hard fact — see [`crate::permissions::guess`].
+    /// Heuristic hint, not a hard fact — see [`crate::permissions::guess_network_usage`].
     pub likely_makes_network_requests: bool,
+    /// Heuristic hint, not a hard fact — see [`crate::permissions::guess_filesystem_write`].
+    pub likely_writes_files: bool,
     /// Sidecar metadata filenames this plugin reads out of the archive it's processing —
     /// auto-detected from every `is_file_in_archive($archive, "name.ext")` call found in the
     /// source (`LANraragi::Utils::Archive`'s real-file-open idiom; see
@@ -148,6 +150,7 @@ pub fn convert(fields: &[(String, PerlValue)], source: &str) -> ConvertedMetadat
         login_from: get_opt_str("login_from"),
         parameters,
         likely_makes_network_requests: crate::permissions::guess_network_usage(source),
+        likely_writes_files: crate::permissions::guess_filesystem_write(source),
         sidecar_files: detect_sidecar_files(source),
     }
 }
@@ -168,15 +171,24 @@ pub fn render(meta: &ConvertedMetadata) -> String {
         ));
     }
     out.push_str("    ],\n");
+    let write_field = if meta.likely_writes_files {
+        "true"
+    } else {
+        "false"
+    };
     if meta.likely_makes_network_requests {
         out.push_str(
             "    // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — \n\
              \x20   // fill in the actual host(s) this plugin needs so Deno's --allow-net grant \n\
              \x20   // stays as narrow as possible (constitution Principle IV).\n",
         );
-        out.push_str("    declared_permissions: { net: [/* TODO: host(s) */], read: false, write: false },\n");
+        out.push_str(&format!(
+            "    declared_permissions: {{ net: [/* TODO: host(s) */], read: false, write: {write_field} }},\n"
+        ));
     } else {
-        out.push_str("    declared_permissions: { net: [], read: false, write: false },\n");
+        out.push_str(&format!(
+            "    declared_permissions: {{ net: [], read: false, write: {write_field} }},\n"
+        ));
     }
     out.push_str(&format!("    name: {:?},\n", meta.name));
     out.push_str(&format!(
@@ -306,6 +318,7 @@ mod tests {
             login_from: None,
             parameters: vec![],
             likely_makes_network_requests: false,
+            likely_writes_files: false,
             sidecar_files: vec![],
         };
         let rendered = render(&meta);

@@ -3,12 +3,15 @@ import { useNavigate } from 'react-router-dom'
 
 import { useArchives, useServerInfo, useStats } from '../api/hooks'
 import CollapsibleSection from '../components/CollapsibleSection'
-import { useApplyTheme } from '../theme'
+import { FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
 // Mirrors legacy's `~/LANraragi/templates/stats.html.tt2` — `#stats` icon+counter lines, then a
 // `.collapsible.extensible.with-right-caret` > `.option-flyout` flyout for the detailed tag list
 // (same accordion classes as the nav/carousel). Doesn't reproduce jqCloud's tag-cloud rendering.
+
+const STAT_VALUE_FONT_SIZE = 20
+
 export default function Stats() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -31,19 +34,19 @@ export default function Stats() {
 
       <div id="stats">
         <p>
-          <i className="fa fa-book fa-2x"></i> <span style={{ fontSize: 20 }}>{archiveCount}</span>{' '}
+          <i className="fa fa-book fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{archiveCount}</span>{' '}
           {t('Archives on record')}
         </p>
         <p>
-          <i className="fa fa-tags fa-2x"></i> <span style={{ fontSize: 20 }}>{tagCount}</span>{' '}
+          <i className="fa fa-tags fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{tagCount}</span>{' '}
           {t('Different tags existing')}
         </p>
         <p>
           <i className="fa fa-folder-open fa-2x"></i>{' '}
-          <span style={{ fontSize: 20 }}>{contentSizeGb.toFixed(2)} GB</span> {t('in content folder')}
+          <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{contentSizeGb.toFixed(2)} GB</span> {t('in content folder')}
         </p>
         <p>
-          <i className="fa fa-book-reader fa-2x"></i> <span style={{ fontSize: 20 }}>{pagesRead}</span>{' '}
+          <i className="fa fa-book-reader fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{pagesRead}</span>{' '}
           {t('pages read')}
         </p>
       </div>
@@ -72,7 +75,7 @@ export default function Stats() {
         </CollapsibleSection>
       </ul>
 
-      <p style={{ fontSize: '9pt' }}>
+      <p style={{ fontSize: FONT_SIZE_10PT }}>
         {t('(These statistics only show tags that appear at least twice in your database.)')}
       </p>
 

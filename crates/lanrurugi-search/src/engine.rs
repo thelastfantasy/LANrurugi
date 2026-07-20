@@ -13,6 +13,7 @@ use lanrurugi_core::entities::Category;
 use thiserror::Error;
 
 use crate::grammar::{compute_search_filter, Token};
+use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_KEY, UNTAGGED_KEY};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -45,6 +46,10 @@ pub struct SearchResult {
 
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
+/// `hidecompleted`'s own "counts as finished" threshold — matches legacy's
+/// `Model/Search.pm::search_uncached` (`$progress / $pagecount > 0.85`), not a Phase-1 invention.
+const HIDE_COMPLETED_THRESHOLD: f64 = 0.85;
+
 pub async fn search(
     archive_pool: &Pool,
     search_pool: &Pool,
@@ -55,7 +60,7 @@ pub async fn search(
 
     let mut filtered: HashSet<String> = if params.groupby_tanks {
         search_conn
-            .smembers::<_, Vec<String>>("LRR_TANKGROUPED")
+            .smembers::<_, Vec<String>>(TANKGROUPED_KEY)
             .await?
             .into_iter()
             .collect()
@@ -80,7 +85,7 @@ pub async fn search(
 
     if params.untaggedonly {
         let untagged: HashSet<String> = search_conn
-            .smembers::<_, Vec<String>>("LRR_UNTAGGED")
+            .smembers::<_, Vec<String>>(UNTAGGED_KEY)
             .await?
             .into_iter()
             .collect();
@@ -89,7 +94,7 @@ pub async fn search(
 
     if params.newonly {
         let new_set: HashSet<String> = search_conn
-            .smembers::<_, Vec<String>>("LRR_NEW")
+            .smembers::<_, Vec<String>>(NEW_KEY)
             .await?
             .into_iter()
             .collect();
@@ -105,7 +110,8 @@ pub async fn search(
             }
             let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
             let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
-            let completed = pagecount > 0 && (progress as f64 / pagecount as f64) > 0.85;
+            let completed =
+                pagecount > 0 && (progress as f64 / pagecount as f64) > HIDE_COMPLETED_THRESHOLD;
             if !completed {
                 keep.insert(id.clone());
             }
@@ -130,13 +136,13 @@ pub async fn search(
     }
 
     let total: i64 = if params.groupby_tanks {
-        search_conn.scard("LRR_TANKGROUPED").await?
+        search_conn.scard(TANKGROUPED_KEY).await?
     } else {
         let tank_count: i64 = archive_conn
             .keys::<_, Vec<String>>("TANK_??????????")
             .await?
             .len() as i64;
-        let title_count: i64 = search_conn.zcard("LRR_TITLES").await?;
+        let title_count: i64 = search_conn.zcard(TITLES_KEY).await?;
         title_count - tank_count
     };
 
@@ -213,7 +219,7 @@ async fn token_matches(
         format!("*{}*", token.tag)
     };
     let title_members: Vec<String> = search_conn
-        .zrangebyscore("LRR_TITLES", "-inf", "+inf")
+        .zrangebyscore(TITLES_KEY, "-inf", "+inf")
         .await
         .unwrap_or_default();
     for member in title_members {
@@ -267,7 +273,7 @@ async fn sort_ids(
 ) -> Result<Vec<String>> {
     if sortkey == "title" {
         let ordered: Vec<String> = search_conn
-            .zrangebyscore("LRR_TITLES", "-inf", "+inf")
+            .zrangebyscore(TITLES_KEY, "-inf", "+inf")
             .await?;
         let mut result = Vec::new();
         for member in ordered {
@@ -400,12 +406,12 @@ mod tests {
         let mut sconn = search_pool.get().await.unwrap();
         let _: () = sconn.del("INDEX_artist:jane").await.unwrap();
         let _: () = sconn.del("INDEX_artist:bob").await.unwrap();
-        let _: () = sconn.del("LRR_UNTAGGED").await.unwrap();
-        let _: () = sconn.del("LRR_NEW").await.unwrap();
-        let _: () = sconn.del("LRR_TANKGROUPED").await.unwrap();
+        let _: () = sconn.del(UNTAGGED_KEY).await.unwrap();
+        let _: () = sconn.del(NEW_KEY).await.unwrap();
+        let _: () = sconn.del(TANKGROUPED_KEY).await.unwrap();
         let _: () = sconn
             .zrem(
-                "LRR_TITLES",
+                TITLES_KEY,
                 vec![
                     "book a\0".to_string() + &id_a,
                     "book b\0".to_string() + &id_b,

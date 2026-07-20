@@ -1,0 +1,196 @@
+//! Rust-side download-plugin pipeline: real streaming HTTP downloads (a download plugin no
+//! longer performs its own byte-level fetch — see `contracts/plugin-download-protocol.md` under
+//! `specs/005-download-plugin-progress/`), per-domain concurrency limiting, and per-domain rate
+//! limiting. Progress is reported into `lanrurugi_core::jobs::JobRegistry` as the transfer
+//! proceeds, which the existing `GET /api/jobs` polling endpoint already surfaces to the frontend.
+
+pub mod bundle;
+pub mod domain_rules;
+pub mod ingest;
+pub mod rate_limit;
+pub mod settings;
+pub mod stream;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::{Mutex, Semaphore};
+
+use domain_rules::{resolve, resolved_key, DomainRule};
+use rate_limit::RateLimiterMap;
+
+/// A semaphore together with the capacity it was actually constructed with — `Semaphore` itself
+/// never exposes this once permits start being acquired/released (`available_permits()` reflects
+/// current availability, not original capacity, and dips below it for perfectly ordinary reasons:
+/// an in-flight download holding a permit), so it must be tracked alongside the `Arc` rather than
+/// inferred from it.
+struct SizedSemaphore {
+    semaphore: Arc<Semaphore>,
+    capacity: usize,
+}
+
+/// Holds the per-domain concurrency (`Semaphore`) and rate-limit (`governor::RateLimiter`) state
+/// shared across every download this process performs. One instance lives in `AppState` (per
+/// plugin, keyed by namespace — see `plugins.rs`'s wiring), since different plugins' domain rules
+/// are independent (spec Assumptions: "settings changes apply per-plugin, not globally").
+#[derive(Default)]
+pub struct DownloadManager {
+    /// Keyed by [`domain_rules::resolved_key`] (the *matching rule's own pattern*, not the raw
+    /// hostname) so two different subdomains matching the same wildcard rule correctly share one
+    /// limit (spec US2 Acceptance Scenario 2) — `tokio::sync::Mutex<HashMap<...>>`, not
+    /// `dashmap`, to avoid a new dependency for what's a low-contention map (one lock per download
+    /// *start*, not per byte).
+    semaphores: Mutex<HashMap<String, SizedSemaphore>>,
+    rate_limiters: RateLimiterMap,
+}
+
+/// A concurrency permit plus (optionally) a rate limiter reference, resolved once at the moment a
+/// download starts and held for that download's entire lifetime — spec FR-016: a mid-download
+/// settings change must not retroactively alter an already-in-progress download. Dropping this
+/// releases the concurrency permit.
+pub struct DownloadPermit {
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    pub max_bytes_per_sec: Option<u64>,
+}
+
+impl DownloadManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Resolves `hostname` against `rules`, acquires a concurrency permit for however many
+    /// simultaneous downloads that resolved domain currently allows (waiting if the limit is
+    /// already reached — spec US2 Acceptance Scenario 1: "the rest wait their turn rather than
+    /// failing outright"), and returns a [`DownloadPermit`] snapshotting both the permit and the
+    /// resolved rate limit for this one download's use.
+    ///
+    /// **FR-006 correctness**: `Semaphore`'s capacity is fixed at construction. If `rules`'
+    /// resolved `max_concurrent` for this domain differs from the *originally declared* capacity
+    /// of the existing semaphore for this resolved key (a user changed the setting since the last
+    /// download to this domain), the stale semaphore is replaced with a freshly constructed one at
+    /// the new capacity — never resized in place (`tokio::sync::Semaphore` has no such API), and
+    /// never based on the misleading `available_permits()` (which legitimately dips below original
+    /// capacity while downloads are in flight and must not be mistaken for a capacity change —
+    /// see [`SizedSemaphore`]). Replacing the map entry doesn't affect a permit some other
+    /// in-flight download already acquired from the old `Arc` (each holds its own clone, which
+    /// stays valid independently of the map), so a settings change only ever governs downloads
+    /// started after it, per FR-016.
+    pub async fn acquire(&self, hostname: &str, rules: &[DomainRule]) -> DownloadPermit {
+        let resolved = resolve(rules, hostname);
+        let key = resolved_key(rules, hostname);
+
+        let permit = if let Some(max_concurrent) = resolved.max_concurrent {
+            let max_concurrent = max_concurrent.max(1) as usize;
+            let sem = {
+                let mut semaphores = self.semaphores.lock().await;
+                let entry = semaphores.entry(key).or_insert_with(|| SizedSemaphore {
+                    semaphore: Arc::new(Semaphore::new(max_concurrent)),
+                    capacity: max_concurrent,
+                });
+                if entry.capacity != max_concurrent {
+                    *entry = SizedSemaphore {
+                        semaphore: Arc::new(Semaphore::new(max_concurrent)),
+                        capacity: max_concurrent,
+                    };
+                }
+                entry.semaphore.clone()
+            };
+            Some(
+                sem.acquire_owned()
+                    .await
+                    .expect("semaphore is never closed"),
+            )
+        } else {
+            None
+        };
+
+        DownloadPermit {
+            _permit: permit,
+            max_bytes_per_sec: resolved.max_bytes_per_sec,
+        }
+    }
+
+    pub fn rate_limiters(&self) -> &RateLimiterMap {
+        &self.rate_limiters
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain_rules::DomainRule;
+
+    fn rule(pattern: &str, max_concurrent: u32) -> DomainRule {
+        DomainRule {
+            pattern: Some(pattern.to_string()),
+            max_concurrent: Some(max_concurrent),
+            max_bytes_per_sec: None,
+            description: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn no_matching_rule_grants_an_unmanaged_permit_immediately() {
+        let mgr = DownloadManager::new();
+        let permit = mgr.acquire("unrelated.com", &[]).await;
+        assert!(permit._permit.is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrency_limit_gates_simultaneous_acquisition() {
+        let mgr = Arc::new(DownloadManager::new());
+        let rules = vec![rule("example.com", 1)];
+
+        // First permit acquires immediately.
+        let first = mgr.acquire("example.com", &rules).await;
+
+        // A second acquire against the same (capacity-1) domain must not complete until the
+        // first is dropped — proven by racing it against a short timeout.
+        let mgr2 = mgr.clone();
+        let rules2 = rules.clone();
+        let second = tokio::spawn(async move { mgr2.acquire("example.com", &rules2).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !second.is_finished(),
+            "second acquire must still be waiting while the first permit is held"
+        );
+
+        drop(first);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .expect("second acquire must complete once the first permit is released")
+            .expect("task must not panic");
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn capacity_change_takes_effect_for_subsequent_acquires_without_disturbing_in_flight_ones(
+    ) {
+        let mgr = DownloadManager::new();
+        let narrow = vec![rule("example.com", 1)];
+        let wide = vec![rule("example.com", 5)];
+
+        // Acquire under the narrow (capacity-1) rule and hold it — simulates an in-flight
+        // download that started before a settings change.
+        let held = mgr.acquire("example.com", &narrow).await;
+
+        // A user now changes the setting to allow 5 concurrent downloads (FR-006). Multiple new
+        // acquires against the *new* rule set must all succeed without waiting for `held` to be
+        // dropped — proving the capacity change took effect for new downloads (FR-006) without
+        // retroactively disturbing the one already in flight (FR-016).
+        let mut new_permits = Vec::new();
+        for _ in 0..4 {
+            let permit = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                mgr.acquire("example.com", &wide),
+            )
+            .await
+            .expect("new capacity must admit additional concurrent downloads immediately");
+            new_permits.push(permit);
+        }
+
+        drop(held);
+        drop(new_permits);
+    }
+}

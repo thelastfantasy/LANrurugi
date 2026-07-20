@@ -78,7 +78,8 @@ async fn shinobu_rescan(State(state): State<AppState>) -> Response {
         }
     };
     use deadpool_redis::redis::AsyncCommands;
-    let _: Result<(), _> = conn.del("LRR_FILEMAP").await;
+    use lanrurugi_storage::keys::FILEMAP_KEY;
+    let _: Result<(), _> = conn.del(FILEMAP_KEY).await;
 
     let result = state
         .scanner

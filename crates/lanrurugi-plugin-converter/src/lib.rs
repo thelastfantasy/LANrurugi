@@ -98,6 +98,7 @@ fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutpu
     // helper sub that only becomes async on the very last iteration (e.g. because it calls
     // another helper that itself only became async that same iteration) would compile correctly
     // itself, but the entry point's call *to* it would still be missing its `await`.
+    let imported_external_modules = render::collect_external_module_names(&top_level);
     let mut known_async_subs: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         let (_, _, async_this_pass) = render_all_subs(
@@ -107,6 +108,7 @@ fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutpu
             has_info_hash,
             &converted_metadata.name,
             known_async_subs.clone(),
+            imported_external_modules.clone(),
         );
         if async_this_pass.is_subset(&known_async_subs) {
             break;
@@ -120,6 +122,7 @@ fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutpu
         has_info_hash,
         &converted_metadata.name,
         known_async_subs,
+        imported_external_modules,
     );
 
     // Package-scope `my $x = ...;`/`my %x = (...);` declarations — sitting directly in the file,
@@ -206,10 +209,12 @@ fn render_all_subs(
     has_info_hash: bool,
     plugin_name: &str,
     known_async_subs: std::collections::HashSet<String>,
+    imported_external_modules: std::collections::HashSet<String>,
 ) -> (render::Renderer, String, std::collections::HashSet<String>) {
     let mut renderer = render::Renderer::new();
     renderer.plugin_name = Some(plugin_name.to_string());
     renderer.known_async_subs = known_async_subs;
+    renderer.imported_external_modules = imported_external_modules;
     let mut sub_ts = String::new();
     let mut async_this_pass = std::collections::HashSet::new();
     for found in subs {

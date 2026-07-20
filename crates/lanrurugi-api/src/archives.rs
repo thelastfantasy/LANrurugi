@@ -23,9 +23,10 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::common::{error, not_found, ok};
+use crate::settings::{DEFAULT_READER_QUALITY, DEFAULT_SIZE_THRESHOLD};
 use crate::AppState;
-
-const CONFIG_KEY: &str = "LRR_CONFIG";
+use lanrurugi_storage::id::ARCHIVE_ID_LEN;
+use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
 const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
 
@@ -34,7 +35,7 @@ const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
 /// containing `/`, `\`, or `.`) cannot be a real ID and must never be used to build a filesystem
 /// path.
 fn is_valid_archive_id(id: &str) -> bool {
-    id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit())
+    id.len() == ARCHIVE_ID_LEN && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Serialize)]
@@ -474,7 +475,7 @@ async fn update_progress(
             // — incremented unconditionally on every successful call, not just forward progress.
             if let Ok(mut conn) = state.redis.config.get().await {
                 let _: Result<i64, _> =
-                    deadpool_redis::redis::AsyncCommands::incr(&mut conn, "LRR_TOTALPAGESTAT", 1)
+                    deadpool_redis::redis::AsyncCommands::incr(&mut conn, TOTAL_PAGES_STAT_KEY, 1)
                         .await;
             }
             axum::Json(json!({
@@ -783,11 +784,11 @@ async fn get_page(
     let threshold: i64 = fields
         .get("sizethreshold")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1000);
+        .unwrap_or(DEFAULT_SIZE_THRESHOLD);
     let quality: i64 = fields
         .get("readerquality")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
+        .unwrap_or(DEFAULT_READER_QUALITY);
 
     let cache_path = resize_cache_path(
         &state.library.temp_dir,

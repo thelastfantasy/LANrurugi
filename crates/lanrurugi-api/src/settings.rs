@@ -25,8 +25,15 @@ use serde_json::{json, Value};
 
 use crate::common::error;
 use crate::AppState;
+use lanrurugi_storage::keys::CONFIG_KEY;
 
-const CONFIG_KEY: &str = "LRR_CONFIG";
+/// `NUMBER_FIELDS`' own defaults, re-exported so other modules' fallbacks (when a value is missing
+/// from `LRR_CONFIG` entirely, e.g. a fresh install before the Settings page's own defaulting
+/// logic below has ever run) can't drift out of sync with the one true default declared here.
+pub(crate) const DEFAULT_PAGE_SIZE: i64 = 100;
+pub(crate) const DEFAULT_SIZE_THRESHOLD: i64 = 1000;
+pub(crate) const DEFAULT_READER_QUALITY: i64 = 50;
+pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -49,11 +56,11 @@ const STRING_FIELDS: &[(&str, &str)] = &[
 ];
 
 const NUMBER_FIELDS: &[(&str, i64)] = &[
-    ("pagesize", 100),
+    ("pagesize", DEFAULT_PAGE_SIZE),
     ("tempmaxsize", 500),
-    ("sizethreshold", 1000),
-    ("readerquality", 50),
-    ("webpquality", 85),
+    ("sizethreshold", DEFAULT_SIZE_THRESHOLD),
+    ("readerquality", DEFAULT_READER_QUALITY),
+    ("webpquality", DEFAULT_WEBP_QUALITY),
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
@@ -67,6 +74,12 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("enablewebp", true),
     ("replacedupe", false),
     ("tagruleson", true),
+    // `Model/Config.pm::enable_dateadded`/`use_lastmodified` — consumed by
+    // `lanrurugi_scanner::pipeline::catalogue_new_archive` to auto-tag newly catalogued archives
+    // with a `date_added:<unix timestamp>` tag, and by `plugins/metadata/dateadded.ts` for the
+    // same tag as a manual, per-archive re-run.
+    ("usedateadded", true),
+    ("usedatemodified", false),
 ];
 
 async fn get_settings(State(state): State<AppState>) -> Response {

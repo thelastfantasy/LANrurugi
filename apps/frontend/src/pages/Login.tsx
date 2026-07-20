@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useLogin } from '../api/hooks'
 import Footer from '../components/Footer'
-import { useApplyTheme } from '../theme'
+import { FONT_SIZE_8PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
 // Mirrors legacy's `~/LANraragi/templates/login.html.tt2` line-for-line: a plain centered `.ido`
@@ -37,7 +37,7 @@ export default function Login() {
         <p>{t('This page requires you to log on.')}</p>
 
         <form onSubmit={handleSubmit} name="loginForm" method="post">
-          <table style={{ margin: 'auto', textAlign: 'left', fontSize: '8pt' }}>
+          <table style={{ margin: 'auto', textAlign: 'left', fontSize: FONT_SIZE_8PT }}>
             <tbody>
               <tr>
                 <td>{t('Admin Password:')}</td>

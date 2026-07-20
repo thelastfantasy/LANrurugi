@@ -153,6 +153,13 @@ pub async fn full_scan(
             Ok(IngestOutcome::Catalogued { .. }) => summary.catalogued += 1,
             Ok(IngestOutcome::Rekeyed { .. }) => summary.rekeyed += 1,
             Ok(IngestOutcome::Unchanged { .. }) => summary.unchanged += 1,
+            // `full_scan`/the watcher's own `run()` always call with `DuplicatePolicy::Reject,
+            // None` (no filename check), so this arm is only reachable via a content-hash
+            // collision — under the size-aware ID algorithm that means genuinely byte-identical
+            // content, i.e. the same case `Unchanged` already covers when the path itself was
+            // already tracked. Counted alongside `unchanged` rather than `errors`: nothing went
+            // wrong, there's just nothing new to catalogue.
+            Ok(IngestOutcome::Rejected { .. }) => summary.unchanged += 1,
             Err(e) => {
                 tracing::warn!(?path, error = %e, "full_scan: failed to ingest file");
                 summary.errors += 1;
@@ -295,9 +302,11 @@ mod tests {
         );
 
         // A is "revealed as new" — no pre-existing metadata (Clarifications Q2), not recovered
-        // with B's tags.
+        // with B's tags. It does get a fresh `date_added:` tag (`usedateadded` defaults to on,
+        // same as legacy) since it's genuinely new — that's the one tag a brand-new archive is
+        // expected to carry, not evidence of an accidental merge with B's own real metadata.
         let a_record = archives.get(&expected_id_for_a).await.unwrap().unwrap();
-        assert_eq!(a_record.tags, "");
+        assert!(!a_record.tags.contains("artist:legacy"));
         assert!(a_record.isnew);
 
         // B's originally-tracked metadata is untouched by the scan.

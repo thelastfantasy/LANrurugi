@@ -10,6 +10,10 @@ use lanrurugi_server::{app, telemetry};
 use lanrurugi_storage::bootstrap::bootstrap;
 use lanrurugi_storage::redis::RedisDbs;
 
+/// Default `redis_url` for every subcommand that takes one — the standard local Redis default
+/// port, matching legacy's own out-of-the-box deployment assumption.
+const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1:6379";
+
 /// LANrurugi: a Rust + React rewrite of LANraragi. One binary, three modes (constitution
 /// Principle III) — no separate watcher/worker processes.
 #[derive(Parser)]
@@ -38,7 +42,7 @@ struct ServeArgs {
     #[arg(
         long,
         env = "LANRURUGI_REDIS_URL",
-        default_value = "redis://127.0.0.1:6379"
+        default_value = DEFAULT_REDIS_URL
     )]
     redis_url: String,
 
@@ -105,7 +109,7 @@ struct RebuildIndexArgs {
     #[arg(
         long,
         env = "LANRURUGI_REDIS_URL",
-        default_value = "redis://127.0.0.1:6379"
+        default_value = DEFAULT_REDIS_URL
     )]
     redis_url: String,
 
@@ -131,7 +135,7 @@ struct BenchArgs {
     #[arg(
         long,
         env = "LANRURUGI_BENCH_REDIS_URL",
-        default_value = "redis://127.0.0.1:6379"
+        default_value = DEFAULT_REDIS_URL
     )]
     redis_url: String,
 
@@ -273,6 +277,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    let plugin_options = Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
+
     let state = AppState {
         redis,
         repos,
@@ -290,6 +301,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         scanner,
         plugins,
         plugins_dir: args.plugins_dir,
+        download_managers: Default::default(),
+        plugin_options,
+        download_queue,
     };
 
     let app = app::build_app(state, args.static_dir, args.docs_dir);

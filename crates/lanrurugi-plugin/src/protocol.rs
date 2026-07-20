@@ -76,6 +76,12 @@ pub struct PluginInfo {
     pub icon: Option<String>,
     #[serde(default)]
     pub oneshot_arg: Option<String>,
+    /// A regex (source only, no delimiters) matched case-insensitively against a full candidate
+    /// URL to decide whether this plugin should handle it — display-only on the host side
+    /// (`lanrurugi-api::plugins::list_plugins` just echoes it back); the actual matching happens
+    /// entirely client-side (Upload page URL-queue grouping, metadata-preview-by-URL routing).
+    #[serde(default)]
+    pub url_pattern: Option<String>,
     /// Sidecar metadata filenames (basename suffixes, e.g. `"api.json"`, `"ComicInfo.xml"`) this
     /// plugin wants read out of the archive it's currently processing — `lanrurugi-plugin-converter`
     /// populates this automatically from every `is_file_in_archive(...)` call it finds in a
@@ -98,4 +104,46 @@ pub struct MetadataResult {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+}
+
+/// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `DomainRule` field-for-field —
+/// a plugin's own declared default (`pluginOptions()`) for one domain pattern's concurrency/
+/// rate-limit caps (`specs/005-download-plugin-progress/data-model.md`'s `Domain Rule`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DomainRule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_sec: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Mirrors `plugin-sdk.ts`'s `PluginOptionsResult.bundle_as_archive` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BundleAsArchiveOption {
+    pub default: bool,
+    pub description: String,
+}
+
+/// Mirrors `plugin-sdk.ts`'s `PluginOptionsResult.overwrite_on_duplicate` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OverwriteOnDuplicateOption {
+    pub default: bool,
+    pub description: String,
+}
+
+/// A download plugin's `pluginOptions()` response (spec FR-015) — absent/`null` when the plugin
+/// exports no such function (the common case: every non-download plugin, and a download plugin
+/// with nothing to configure). Mirrors `plugin-sdk.ts`'s `PluginOptionsResult` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PluginOptionsResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain_rules: Vec<DomainRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_as_archive: Option<BundleAsArchiveOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite_on_duplicate: Option<OverwriteOnDuplicateOption>,
 }

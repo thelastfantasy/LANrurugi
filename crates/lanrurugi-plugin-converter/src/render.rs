@@ -101,6 +101,238 @@ pub fn find_subs<'a>(top_level: &'a [PpiNode], exclude: &[&str]) -> Vec<FoundSub
     found
 }
 
+/// Scans the document's top-level `use Foo;` / `use Foo qw(...);` statements (`PPI::Statement::
+/// Include`) and returns every externally-referenced module name — i.e. excluding Perl's own
+/// pragmas (`strict`/`warnings`/`utf8`/`feature`/a bare version number like `v5.36`, none of
+/// which name a real module a plugin body could reference as a bareword) and this project's own
+/// `LANraragi::*` internal namespace (already routed through the pre-existing `::`-in-name
+/// detection in `render_token`/`try_match_call`, which — unlike this scan — also catches a
+/// package-qualified reference that was never `use`d by its short name at all, e.g. a fully
+/// spelled-out `LANraragi::Utils::Database::get_tags(...)` call with no corresponding `use`
+/// line). Feeds `Renderer::imported_external_modules`, which lets `render_token` warn about a
+/// single-segment external module name (`URI`, no `::` in it at all) the same way it already
+/// does for a `Foo::Bar`-shaped one — see that field's own docs for the real corpus bug
+/// (`Download/EHentai.pm`'s `use URI;` + `URI->new(...)`) this exists to catch.
+pub fn collect_external_module_names(top_level: &[PpiNode]) -> std::collections::HashSet<String> {
+    const PRAGMAS: &[&str] = &[
+        "strict", "warnings", "utf8", "feature", "parent", "base", "lib",
+    ];
+    let mut names = std::collections::HashSet::new();
+    for node in top_level {
+        if node.class != "PPI::Statement::Include" {
+            continue;
+        }
+        let module_name = node
+            .children()
+            .iter()
+            .find(|c| c.class == "PPI::Token::Word" && c.content.as_deref() != Some("use"))
+            .and_then(|c| c.content.as_deref());
+        let Some(module_name) = module_name else {
+            continue; // e.g. `use v5.36;` — a `PPI::Token::Number::Version`, not a module name.
+        };
+        if PRAGMAS.contains(&module_name) || module_name.starts_with("LANraragi::") {
+            continue;
+        }
+        names.insert(module_name.to_string());
+    }
+    names
+}
+
+/// Scans an entry sub's body for every static-key access on its info-hash parameter (`$name->
+/// {url}`, `$name->{"user_agent"}`, ...) and returns the set of keys found — feeds
+/// `render_entry_sub`'s decision to emit a real, narrow interface for that parameter instead of
+/// the blanket `Record<string, any>` escape hatch (see that call site's own docs for why `any`
+/// was the pre-existing default: Perl hashes are freely-extensible and the converter can't
+/// otherwise know what shape a given hash has). Returns `None` — meaning "give up, fall back to
+/// `any`" — the moment a *dynamic* key access is found (`$name->{$some_var}`): a real key wasn't
+/// spelled out in the source at all in that case, so there is no complete, safe key list this
+/// scan could ever produce, and emitting a narrow interface anyway would silently reject a
+/// legitimate access the source actually performs.
+///
+/// Recurses into every child unconditionally (`if`/`while`/nested blocks, string-interpolated
+/// subscripts, etc. — a real corpus access is not guaranteed to sit at the sub's top level) rather
+/// than only scanning direct statement children, since a hash access can appear arbitrarily deep.
+fn collect_static_hash_keys(block: &PpiNode, var_name: &str) -> Option<Vec<String>> {
+    let mut keys = Vec::new();
+    if !collect_static_hash_keys_into(block, var_name, &mut keys) {
+        return None;
+    }
+    // Stable, de-duplicated order (first-seen) rather than whatever `HashSet` iteration would
+    // give — keeps the generated interface's field order deterministic across runs, and matches
+    // the order a reader scanning the source top-to-bottom would expect.
+    let mut seen = std::collections::HashSet::new();
+    keys.retain(|k: &String| seen.insert(k.clone()));
+    Some(keys)
+}
+
+/// `true` on success (every subscript found on `var_name` was a static key, collected into `out`);
+/// `false` the moment a dynamic one is found (caller must then discard everything and fall back
+/// to `any` — see `collect_static_hash_keys`'s own docs).
+fn collect_static_hash_keys_into(node: &PpiNode, var_name: &str, out: &mut Vec<String>) -> bool {
+    let children = node.children();
+    let mut i = 0;
+    while i < children.len() {
+        let child = &children[i];
+        let is_target_symbol = child.class == "PPI::Token::Symbol"
+            && child
+                .content
+                .as_deref()
+                .is_some_and(|c| strip_sigil(c) == var_name);
+        if is_target_symbol {
+            // `$name->{key}` (explicit arrow) or `$name{key}` (arrow-less sugar, PPI still emits
+            // a `Structure::Subscript` immediately after the symbol either way) — look past an
+            // optional `->` for the subscript.
+            let mut j = i + 1;
+            if children.get(j).is_some_and(|t| {
+                t.class == "PPI::Token::Operator" && t.content.as_deref() == Some("->")
+            }) {
+                j += 1;
+            }
+            if let Some(subscript) = children.get(j) {
+                if subscript.class == "PPI::Structure::Subscript" {
+                    let inner: Vec<&PpiNode> = subscript
+                        .children()
+                        .iter()
+                        .flat_map(|c| {
+                            if c.class == "PPI::Statement"
+                                || c.class == "PPI::Statement::Expression"
+                            {
+                                c.children().iter().collect::<Vec<_>>()
+                            } else {
+                                vec![c]
+                            }
+                        })
+                        .filter(|c| c.class != "PPI::Token::Whitespace")
+                        .collect();
+                    match inner.as_slice() {
+                        [tok] if tok.class == "PPI::Token::Word" => {
+                            out.push(tok.content.clone().unwrap_or_default());
+                        }
+                        [tok]
+                            if tok.class == "PPI::Token::Quote::Single"
+                                || tok.class == "PPI::Token::Quote::Double" =>
+                        {
+                            let quote = if tok.class == "PPI::Token::Quote::Single" {
+                                '\''
+                            } else {
+                                '"'
+                            };
+                            out.push(strip_quotes(tok.content.as_deref().unwrap_or(""), quote));
+                        }
+                        _ => return false, // dynamic key ($var, an expression, ...) — bail out entirely.
+                    }
+                }
+            }
+        }
+        if !collect_static_hash_keys_into(child, var_name, out) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Finds the entry sub's own info-hash variable name. Two real corpus shapes bind it (matching
+/// the two branches `render_variable_statement`/`render_entry_destructure` already handle):
+///
+/// - `my $lrr_info = shift;` — a lone symbol shifted off `@_` one at a time.
+/// - `my ($lrr_info, %params) = @_;` — destructured directly, always with the info hash first
+///   (real corpus case: `Download/EHentai.pm`'s `provide_url`, preceded by a discarded `shift;`
+///   for the invocant). The name itself is never assumed in either shape — only its position.
+///
+/// Only looks at the block's direct top-level statements (not nested inside an `if`/loop/etc.)
+/// since this binding is always the very first thing an entry sub does in every real corpus file
+/// — a matching statement found deeper in the body would be a different variable entirely, not
+/// this one.
+fn find_info_hash_var_name(block: &PpiNode) -> Option<String> {
+    for child in block.children() {
+        if child.class != "PPI::Statement::Variable" {
+            continue;
+        }
+        // Excludes both whitespace and the statement's own trailing `;` (a `PPI::Token::
+        // Structure`) — without this, every real statement here has one token more than the
+        // patterns below expect (verified via real `perl -MPPI::Dumper` output: `my $lrr_info =
+        // shift;` is 5 tokens including the semicolon, not the 4 an earlier version of this
+        // function assumed, which meant neither pattern below ever matched anything at all).
+        let tokens: Vec<&PpiNode> = child
+            .children()
+            .iter()
+            .filter(|t| t.class != "PPI::Token::Whitespace" && t.class != "PPI::Token::Structure")
+            .collect();
+        match tokens.as_slice() {
+            [my_kw, symbol, op, shift_kw]
+                if is_word(my_kw, "my")
+                    && symbol.class == "PPI::Token::Symbol"
+                    && is_operator(op, "=")
+                    && is_word(shift_kw, "shift") =>
+            {
+                return Some(strip_sigil(symbol.content.as_deref().unwrap_or("")));
+            }
+            [my_kw, list, op, magic]
+                if is_word(my_kw, "my")
+                    && list.class == "PPI::Structure::List"
+                    && is_operator(op, "=")
+                    && magic.class == "PPI::Token::Magic"
+                    && magic.content.as_deref() == Some("@_") =>
+            {
+                let first_symbol = list
+                    .children()
+                    .iter()
+                    .flat_map(|c| {
+                        if c.class == "PPI::Statement" || c.class == "PPI::Statement::Expression" {
+                            c.children().iter().collect::<Vec<_>>()
+                        } else {
+                            vec![c]
+                        }
+                    })
+                    .find(|t| t.class == "PPI::Token::Symbol");
+                if let Some(symbol) = first_symbol {
+                    return Some(strip_sigil(symbol.content.as_deref().unwrap_or("")));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Deterministic, collision-free interface name for a given entry sub's info-hash parameter —
+/// derived from the export name (`execDownload` → `ExecDownloadInfo`) rather than a fixed
+/// constant, since a file could in principle (not seen in the real corpus, but not ruled out
+/// either) end up needing more than one of these if this scanning were ever extended to helper
+/// subs too.
+fn info_hash_interface_name(export_name: &str) -> String {
+    let mut chars = export_name.chars();
+    let capitalized = match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    format!("{capitalized}Info")
+}
+
+/// Renders the `interface NAME { ... }` declaration for a generated info-hash parameter type —
+/// always includes `user_agent`/`user_agent_cookies` (see `render_user_agent_hydration_preamble`'s
+/// own docs: the host unconditionally injects both into the info hash before the plugin's own
+/// code ever runs, regardless of whether the plugin's own source happens to read them back), plus
+/// every key `collect_static_hash_keys` found actually being read. Every field's value type is
+/// `string` — a deliberate simplification: `$lrr_info->{key}` values in the real legacy corpus are
+/// overwhelmingly plain strings (URLs, IDs, titles), and this generated type only needs to be
+/// permissive enough that real accesses in the source still type-check, not a perfect model of
+/// every possible caller-supplied value.
+fn render_info_hash_interface(iface_name: &str, keys: &[String]) -> String {
+    let mut out = format!("  interface {iface_name} {{\n");
+    out.push_str("    user_agent: PerlUserAgent;\n");
+    out.push_str("    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];\n");
+    for key in keys {
+        if key == "user_agent" || key == "user_agent_cookies" {
+            continue; // already emitted above, unconditionally.
+        }
+        out.push_str(&format!("    {key}: string;\n"));
+    }
+    out.push_str("  }\n");
+    out
+}
+
 /// Extracts parameter names from a `PPI::Structure::Signature` node — its children are a single
 /// `PPI::Statement::Expression` wrapping a comma-separated run of `PPI::Token::Symbol`s, each
 /// optionally followed by `= <default expr>` (verified against real `perl -MPPI::Dumper` output
@@ -225,6 +457,13 @@ struct EntryContext {
     /// every subsequent shift/@_-derived binding is instead the plugin's one custom value
     /// (`hostArgs.arg`).
     info_hash_bound: bool,
+    /// The name + field list of a real interface generated for this sub's info-hash parameter
+    /// (see `render_entry_sub`'s own docs on why/how this gets computed), used in place of the
+    /// blanket `Record<string, any>` when every key access on that parameter was statically
+    /// known. `None` when no such interface could be generated (a dynamic key access was found,
+    /// or the sub doesn't bind an info hash at all), in which case the pre-existing `Record<string,
+    /// any>` fallback is used unchanged.
+    info_hash_interface: Option<(String, Vec<String>)>,
 }
 
 pub struct Renderer {
@@ -269,6 +508,33 @@ pub struct Renderer {
     /// e.g. sub A calling newly-async sub B might make A itself newly async for sub C's next
     /// pass). Empty on the first pass, by construction — nothing can be "already known" yet.
     pub known_async_subs: std::collections::HashSet<String>,
+    /// Module names collected from this file's own `use Foo;` statements (`lib.rs::
+    /// convert_source_with_path` populates this before rendering any subs) — excludes Perl
+    /// pragmas (`strict`/`warnings`/`utf8`/`feature`/bare version numbers) and this project's own
+    /// `LANraragi::*` internal namespace (routed through the existing `::`-in-name detection in
+    /// `render_token`/`try_match_call` instead, which also catches package-qualified references
+    /// to those modules that were never `use`d by name in the first place).
+    ///
+    /// Exists because the pre-existing "external module, no JS equivalent" detection only ever
+    /// triggered for a name containing `::` (`Mojo::UserAgent`, `Data::Dumper::Dumper`, ...) — a
+    /// single-segment module name like `URI` (real corpus case: `Download/EHentai.pm`'s `use
+    /// URI;` + `URI->new(...)`) has no `::` in it at all, so it fell through every existing check
+    /// silently and rendered as a bare, undeclared `URI.new()` reference — a real `deno check`
+    /// failure (`Cannot find name 'URI'`) with zero warning ever surfaced about it, unlike every
+    /// other external-module case in the corpus.
+    pub imported_external_modules: std::collections::HashSet<String>,
+    /// Names of variables assigned a `URI->new(...)`/`URI->new()` result (see
+    /// `try_match_legacy_http_constructor`'s own docs on the `URI`→`URL` mapping) — real corpus
+    /// values are `URL | undefined`, not `string`, so a later comparison against `""` (Perl's
+    /// `$var eq ""`, verified real corpus case: `Download/EHentai.pm`'s `if ($@ || $finalURL eq
+    /// "")`) needs its `""` rewritten to `undefined` or `deno check` rejects the comparison
+    /// outright (`URL | undefined` and `string` have no overlap at all, unlike Perl, which is
+    /// perfectly happy comparing an object reference against a string — always `false`, same as
+    /// the rewritten `undefined` comparison, so this preserves that pre-existing behavior rather
+    /// than changing it). Populated by `render_variable_statement`/`render_expr_sequence`'s
+    /// assignment-rendering paths whenever their RHS rendering used the `URI`→`URL` mapping;
+    /// consulted by `render_expr_sequence`'s own `EXPR eq ""` window match.
+    uri_typed_vars: std::collections::HashSet<String>,
 }
 
 impl Renderer {
@@ -282,6 +548,8 @@ impl Renderer {
             warnings: Vec::new(),
             known_async_subs: std::collections::HashSet::new(),
             uses_perl_compat: false,
+            imported_external_modules: std::collections::HashSet::new(),
+            uri_typed_vars: std::collections::HashSet::new(),
         }
     }
 
@@ -374,9 +642,27 @@ impl Renderer {
         self.shift_cursor = 0;
         self.used_await = false;
         self.uses_regex_match = false;
+        // See `EntryContext::info_hash_interface`'s own docs. Computed *before* rendering the
+        // body (rather than discovered as a side effect of it, the way `used_await`/
+        // `uses_regex_match` are) because the interface declaration itself — if one can be
+        // generated — needs to be emitted ahead of the function that references it, and because
+        // `render_variable_statement`'s `hostArgs as Record<string, any>` call site needs to know
+        // the answer at the exact moment it renders that line, not after the fact.
+        let info_hash_interface = if has_info_hash {
+            find_info_hash_var_name(found.block).and_then(|var_name| {
+                collect_static_hash_keys(found.block, &var_name)
+                    .map(|keys| (info_hash_interface_name(export_name), keys))
+            })
+        } else {
+            None
+        };
+        if let Some((iface_name, keys)) = &info_hash_interface {
+            out.push_str(&render_info_hash_interface(iface_name, keys));
+        }
         self.entry = Some(EntryContext {
             first_param_name: first_param_name.map(str::to_string),
             info_hash_bound: !has_info_hash,
+            info_hash_interface,
         });
         let body = self.render_statement_list(found.block.children());
         out.push_str(&self.with_match_decl(body));
@@ -419,25 +705,51 @@ impl Renderer {
 
     fn render_statement_list(&mut self, nodes: &[PpiNode]) -> String {
         let mut out = String::new();
-        for node in nodes {
-            match node.class.as_str() {
-                "PPI::Token::Whitespace" => continue,
-                "PPI::Token::Comment" => {
-                    out.push_str("  //");
-                    out.push_str(node.content.as_deref().unwrap_or(""));
+        let real: Vec<&PpiNode> = nodes
+            .iter()
+            .filter(|n| n.class != "PPI::Token::Whitespace")
+            .collect();
+        let mut i = 0;
+        while i < real.len() {
+            let node = real[i];
+            if node.class == "PPI::Token::Comment" {
+                out.push_str("  //");
+                out.push_str(node.content.as_deref().unwrap_or(""));
+                out.push('\n');
+                i += 1;
+                continue;
+            }
+            // `open my $fh, '>'|'>>', PATH or die ...; print $fh CONTENT; close $fh;` — Perl's
+            // file-*write* idiom (the mirror image of `try_render_open_file_statement`'s file-
+            // *read* one), always exactly these three consecutive statements in the real corpus
+            // (`Download/Pixiv.pm`'s `image_res_to_zip`: writes a downloaded image to a temp path
+            // before handing it to `Archive::Zip`). Unlike the read-file idiom (where the host
+            // pre-resolves `PATH_EXPR` to file *content* before the plugin ever runs, so "opening"
+            // it is just a variable read), a write genuinely needs a real filesystem call here —
+            // `declared_permissions.write` is a real, honored permission
+            // (`crates/lanrurugi-plugin/src/permissions.rs` turns it into a real `--allow-write`
+            // Deno flag), so this maps onto a real `Deno.writeTextFile(...)` call rather than
+            // anything host-resolved. Checked as a 3-statement window (not per-statement, unlike
+            // every other `try_render_*` in this renderer) since the write only has anywhere to
+            // put its content once the `print` statement is known too.
+            if let Some((rendered, consumed)) = self.try_render_write_file_statements(&real[i..]) {
+                for line in rendered.lines() {
+                    out.push_str("  ");
+                    out.push_str(line);
                     out.push('\n');
                 }
-                _ => {
-                    let rendered = self.render_statement(node);
-                    if !rendered.trim().is_empty() {
-                        for line in rendered.lines() {
-                            out.push_str("  ");
-                            out.push_str(line);
-                            out.push('\n');
-                        }
-                    }
+                i += consumed;
+                continue;
+            }
+            let rendered = self.render_statement(node);
+            if !rendered.trim().is_empty() {
+                for line in rendered.lines() {
+                    out.push_str("  ");
+                    out.push_str(line);
+                    out.push('\n');
                 }
             }
+            i += 1;
         }
         out
     }
@@ -471,6 +783,32 @@ impl Renderer {
                 }
                 if let Some(rendered) = self.try_render_list_assignment(node) {
                     return rendered;
+                }
+                // `$x = URI->new(...)|URI->new;` (no `my`) — tracks whether this reassigns a
+                // variable `try_match_legacy_http_constructor`'s `URI`→`URL` mapping already
+                // applies to (see `uri_typed_vars`'s own docs for why this needs tracking at all:
+                // a later `$x eq ""` comparison needs its `""` rewritten to `undefined` once `$x`'s
+                // real type is `URL | undefined`, not `string`). Checked as a *pre-rendering*
+                // token-shape match (not by rendering the RHS and inspecting the result) since
+                // `render_expr_sequence` has side effects (`used_await`, `uses_regex_match`, etc.)
+                // that must fire exactly once per real render — calling it here just to peek at
+                // its output, then calling it again via `render_children_expr` below for the real
+                // render, would double-apply all of them.
+                if real_children.len() >= 2
+                    && real_children[0].class == "PPI::Token::Symbol"
+                    && is_operator(real_children[1], "=")
+                    && real_children.get(2).map(|t| t.content.as_deref()) == Some(Some("URI"))
+                    && real_children
+                        .get(3)
+                        .map(|t| is_operator(t, "->"))
+                        .unwrap_or(false)
+                    && real_children
+                        .get(4)
+                        .map(|t| is_word(t, "new"))
+                        .unwrap_or(false)
+                {
+                    let name = strip_sigil(real_children[0].content.as_deref().unwrap_or(""));
+                    self.uri_typed_vars.insert(name);
                 }
                 let expr = self.render_children_expr(node);
                 if expr.trim().is_empty() {
@@ -602,7 +940,12 @@ impl Renderer {
                 if let Some(ctx) = &mut self.entry {
                     if !ctx.info_hash_bound {
                         ctx.info_hash_bound = true;
-                        return format!("let {name} = hostArgs as Record<string, any>;");
+                        return match &ctx.info_hash_interface {
+                            Some((iface_name, _)) => {
+                                format!("let {name} = hostArgs as unknown as {iface_name};")
+                            }
+                            None => format!("let {name} = hostArgs as Record<string, any>;"),
+                        };
                     }
                     return format!("let {name} = hostArgs.arg as string;");
                 }
@@ -640,6 +983,7 @@ impl Renderer {
                 }
             }
             let expr = self.render_expr_sequence(&rhs_no_semi);
+            self.track_uri_typed_var(&name, &expr);
             return format!("let {name} = {expr};");
         }
 
@@ -862,6 +1206,31 @@ impl Renderer {
         let list = children.iter().find(|c| c.class == "PPI::Structure::List");
         let block = children.iter().find(|c| c.class == "PPI::Structure::Block");
 
+        // `foreach my $i (START .. END) { ... }` — Perl's range operator, tokenized (verified via
+        // `perl -MPPI::Dumper`) as a `PPI::Structure::List` wrapping exactly one `PPI::Statement`
+        // of the shape `START Operator("..") END` (`END` is very often a `PPI::Token::ArrayIndex`
+        // like `$#pages`, which `render_children_expr` already turns into `(name.length - 1)` —
+        // real corpus case: `Download/Pixiv.pm`'s `for (0 .. $#pages)`). JS has no range literal,
+        // so this can't go through the generic `for...of` template below at all — left to fall
+        // through, `render_operator`'s catch-all emits `..` completely unchanged (it's not one of
+        // that function's mapped operators), producing `for (let i of 0 .. (pages.length - 1))`,
+        // which isn't valid JS/TS syntax and fails even to parse. Rendered instead as a classic
+        // counting loop, the only faithful JS equivalent of an inclusive integer range.
+        if let Some(range) = list.and_then(|l| self.try_render_range_list(l)) {
+            let (start_expr, end_expr) = range;
+            let mut out = match &loop_var {
+                Some(var) => {
+                    format!("for (let {var} = {start_expr}; {var} <= {end_expr}; {var}++) {{\n")
+                }
+                None => format!("for (let it = {start_expr}; it <= {end_expr}; it++) {{\n"),
+            };
+            if let Some(block) = block {
+                out.push_str(&self.render_statement_list(block.children()));
+            }
+            out.push('}');
+            return out;
+        }
+
         let list_expr = list
             .map(|l| self.render_children_expr(l))
             .unwrap_or_default();
@@ -881,6 +1250,31 @@ impl Renderer {
         }
         out.push('}');
         out
+    }
+
+    /// Detects a `PPI::Structure::List` whose sole content is `START .. END` (Perl's range
+    /// operator) and renders each side to a JS expression — see `render_foreach`'s call site for
+    /// why this needs its own counting-loop template rather than the generic `for...of`. Returns
+    /// `None` for every other list shape (a real element list, a function call's arguments, etc.),
+    /// so callers fall back to the pre-existing generic rendering unchanged.
+    fn try_render_range_list(&mut self, list: &PpiNode) -> Option<(String, String)> {
+        let inner = self.real_children(list.children());
+        let stmt = match inner.as_slice() {
+            [stmt] if stmt.class == "PPI::Statement" => stmt,
+            _ => return None,
+        };
+        let tokens = self.real_children(stmt.children());
+        let dotdot_idx = tokens.iter().position(|t| {
+            t.class == "PPI::Token::Operator" && t.content.as_deref() == Some("..")
+        })?;
+        let start_tokens = &tokens[..dotdot_idx];
+        let end_tokens = &tokens[dotdot_idx + 1..];
+        if start_tokens.is_empty() || end_tokens.is_empty() {
+            return None;
+        }
+        let start_expr = self.render_expr_sequence(start_tokens);
+        let end_expr = self.render_expr_sequence(end_tokens);
+        Some((start_expr, end_expr))
     }
 
     /// `eval { BLOCK };` — Perl's exception-trapping block, tokenized as a plain `PPI::Statement`
@@ -1070,6 +1464,130 @@ impl Renderer {
             ));
         }
         Some(out)
+    }
+
+    /// `open my $fh, '>'|'>>', PATH or die ...; print $fh CONTENT; close $fh;` — see this
+    /// function's call site in `render_statement_list` for the full rationale (the file-*write*
+    /// mirror of `try_render_open_file_statement`'s file-*read* idiom, needing a real
+    /// `Deno.writeTextFile`/`Deno.writeFile` call rather than anything host-pre-resolved). Returns
+    /// `(rendered, statements_consumed)` — `statements_consumed` is always 3 on a match (the
+    /// `close` is required, not optional: without it, this couldn't be distinguished from some
+    /// other, unrelated three-statement sequence that merely happens to start with an `open`
+    /// this function doesn't recognize, e.g. a real read-mode `open` already handled by
+    /// `try_render_open_file_statement`, which runs its own, narrower single-statement match
+    /// first and never reaches here for that case).
+    ///
+    /// `CONTENT`'s own shape decides which Deno call this becomes: a real corpus case
+    /// (`Download/Pixiv.pm`) writes `$img_res->body` (an HTTP response body — could be binary, so
+    /// this can't assume text) rather than a plain string literal, so this always renders
+    /// `Deno.writeFile` with a `TextEncoder`-wrapped fallback for whatever isn't already binary —
+    /// safe for both cases, unlike assuming `writeTextFile` and being wrong for a binary body.
+    fn try_render_write_file_statements(&mut self, stmts: &[&PpiNode]) -> Option<(String, usize)> {
+        let [open_stmt, print_stmt, close_stmt] = stmts.first_chunk::<3>()?;
+        if open_stmt.class != "PPI::Statement"
+            || print_stmt.class != "PPI::Statement"
+            || close_stmt.class != "PPI::Statement"
+        {
+            return None;
+        }
+
+        // `open my $fh, MODE, PATH or die ...;` — unlike the parenthesized read-mode idiom
+        // `try_render_open_file_statement` handles (`open(my $fh, MODE, PATH)`, where `my $fh`
+        // sits inside a `Structure::List` and PPI nests it as its own `Statement::Variable`), this
+        // *unparenthesized* form has no such nesting at all — `open`, `my`, `$fh`, and everything
+        // after are all flat, equal-depth tokens in the same statement (verified via real
+        // `perl -MPPI::Dumper` output on `Download/Pixiv.pm`'s own `image_res_to_zip`; an earlier
+        // version of this function wrongly assumed the same nested shape the read-mode idiom has
+        // and so never matched anything at all).
+        let open_children = self.real_children(open_stmt.children());
+        if !is_word(*open_children.first()?, "open") {
+            return None;
+        }
+        if !is_word(*open_children.get(1)?, "my") {
+            return None;
+        }
+        let fh_symbol = *open_children.get(2)?;
+        if fh_symbol.class != "PPI::Token::Symbol" {
+            return None;
+        }
+        let fh_name = strip_sigil(fh_symbol.content.as_deref().unwrap_or(""));
+        let comma_positions: Vec<usize> = open_children
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| is_operator(t, ","))
+            .map(|(idx, _)| idx)
+            .collect();
+        let mode_start = *comma_positions.first()? + 1;
+        let mode_end = *comma_positions.get(1)?;
+        let mode_tokens = &open_children[mode_start..mode_end];
+        let [mode_tok] = mode_tokens else { return None };
+        let mode = match mode_tok.class.as_str() {
+            "PPI::Token::Quote::Single" => strip_quotes(mode_tok.content.as_deref()?, '\''),
+            "PPI::Token::Quote::Double" => strip_quotes(mode_tok.content.as_deref()?, '"'),
+            _ => return None,
+        };
+        if mode != ">" && mode != ">>" {
+            return None; // some other open mode this converter doesn't specifically handle.
+        }
+        // `PATH` runs up to (not including) an ` or die ...` tail, if present — same reasoning as
+        // `try_render_open_file_statement`'s own `or`/`die` handling, just without needing to
+        // preserve a die message here (see this function's own doc comment on why `close`'s
+        // presence, not a `die` message, is what confirms this is really the write idiom).
+        let after_mode = &open_children[mode_end + 1..];
+        let or_idx = after_mode.iter().position(|t| is_operator(t, "or"));
+        let path_tokens = match or_idx {
+            Some(idx) => &after_mode[..idx],
+            None => after_mode,
+        };
+        let path_expr = self.render_expr_sequence(path_tokens);
+
+        // `print $fh CONTENT;`
+        let print_children = self.real_children(print_stmt.children());
+        if !is_word(*print_children.first()?, "print") {
+            return None;
+        }
+        let print_fh = print_children.get(1)?;
+        if print_fh.class != "PPI::Token::Symbol"
+            || strip_sigil(print_fh.content.as_deref().unwrap_or("")) != fh_name
+        {
+            return None; // printing to some other filehandle, not this one.
+        }
+        let content_tokens: Vec<&PpiNode> = print_children[2..]
+            .iter()
+            .copied()
+            .filter(|c| !(c.class == "PPI::Token::Structure" && c.content.as_deref() == Some(";")))
+            .collect();
+        if content_tokens.is_empty() {
+            return None;
+        }
+        let content_expr = self.render_expr_sequence(&content_tokens);
+
+        // `close $fh;` — required to be sure this really is the write idiom's closing statement
+        // (see this function's own docs), but Deno's `writeFile` needs no explicit close of its
+        // own, so nothing from it is used beyond checking its shape matches.
+        let close_children = self.real_children(close_stmt.children());
+        if !is_word(*close_children.first()?, "close") {
+            return None;
+        }
+        let close_fh = close_children.get(1)?;
+        if close_fh.class != "PPI::Token::Symbol"
+            || strip_sigil(close_fh.content.as_deref().unwrap_or("")) != fh_name
+        {
+            return None;
+        }
+
+        let flag = if mode == ">>" {
+            ", { append: true }"
+        } else {
+            ""
+        };
+        self.used_await = true;
+        Some((
+            format!(
+                "await Deno.writeFile({path_expr}, typeof {content_expr} === \"string\" ? new TextEncoder().encode({content_expr}) : {content_expr}{flag});"
+            ),
+            3,
+        ))
     }
 
     /// Postfix statement modifiers — `EXPR unless COND;` / `EXPR if COND;` — which PPI leaves as
@@ -1277,7 +1795,17 @@ impl Renderer {
                 .map(|ctx| ctx.info_hash_bound)
                 .unwrap_or(false);
             if !already_bound {
-                lines.push(format!("let {name} = hostArgs as Record<string, any>;"));
+                let iface_name = self
+                    .entry
+                    .as_ref()
+                    .and_then(|ctx| ctx.info_hash_interface.as_ref())
+                    .map(|(iface_name, _)| iface_name.clone());
+                lines.push(match iface_name {
+                    Some(iface_name) => {
+                        format!("let {name} = hostArgs as unknown as {iface_name};")
+                    }
+                    None => format!("let {name} = hostArgs as Record<string, any>;"),
+                });
                 if let Some(ctx) = &mut self.entry {
                     ctx.info_hash_bound = true;
                 }
@@ -1472,8 +2000,68 @@ impl Renderer {
             // unrelated bareword named `to_string` elsewhere is never mistaken for this.
             if is_word(tokens[i], "to_string") && parts.last().map(|p| p == ".").unwrap_or(false) {
                 parts.pop();
-                parts.push(".toString()".to_string());
+                parts.push(format!("{NO_SPACE_BEFORE}.toString()"));
                 i += 1;
+                continue;
+            }
+            // `EXPR->as_string` — `URI`'s no-parens stringification method (see
+            // `try_match_legacy_http_constructor`'s own docs on the `URI`→`URL` mapping this
+            // belongs to). Same reasoning and shape as the `to_string` case just above (Perl
+            // doesn't require parens on a zero-arg method call, so without this it would render as
+            // a property access on a name that doesn't exist on `URL` at all) — `URL`'s own
+            // equivalent is `.href` (a getter, still no parens needed, unlike `toString()`).
+            if is_word(tokens[i], "as_string") && parts.last().map(|p| p == ".").unwrap_or(false) {
+                parts.pop();
+                parts.push(format!("{NO_SPACE_BEFORE}.href"));
+                i += 1;
+                continue;
+            }
+            // `EXPR->query("start=1")` — `URI`'s query-string setter. `URL`'s own equivalent
+            // (`.search`) is a plain assignable property, not a method — this rewrites the whole
+            // `->query(ARG)` call into a `.search = ARG` assignment rather than emitting an
+            // (invalid, `URL` has no `query()` method) call.
+            if is_word(tokens[i], "query")
+                && parts.last().map(|p| p == ".").unwrap_or(false)
+                && tokens.get(i + 1).map(|t| t.class.as_str()) == Some("PPI::Structure::List")
+            {
+                let args = self.render_call_args(tokens[i + 1]);
+                if args.len() == 1 {
+                    parts.pop();
+                    parts.push(format!("{NO_SPACE_BEFORE}.search = {}", args[0]));
+                    i += 2;
+                    continue;
+                }
+            }
+            // `$uri_typed_var eq ""` — real corpus case: `Download/EHentai.pm`'s `if ($@ ||
+            // $finalURL eq "")`, checking whether a `URI->new()`-initialized variable was ever
+            // reassigned a real value (see `uri_typed_vars`'s own docs). Once that variable's
+            // mapped JS type is `URL | undefined` (not `string`), comparing it against `""`
+            // directly is a `deno check` error (`URL | undefined` and `string` share no values at
+            // all, unlike Perl, which lets any value compare against any string) — rewritten to
+            // compare against `undefined` instead, which is exactly as always-`false` as the
+            // original Perl comparison was (a real `URI` object reference is never `eq` an empty
+            // string either), so this changes nothing about the actual runtime behavior, only
+            // what makes it type-check.
+            if tokens[i].class == "PPI::Token::Symbol"
+                && self
+                    .uri_typed_vars
+                    .contains(&strip_sigil(tokens[i].content.as_deref().unwrap_or("")))
+                && tokens
+                    .get(i + 1)
+                    .map(|t| is_operator(t, "eq"))
+                    .unwrap_or(false)
+                && matches!(
+                    tokens.get(i + 2).map(|t| t.class.as_str()),
+                    Some("PPI::Token::Quote::Single" | "PPI::Token::Quote::Double")
+                )
+                && tokens
+                    .get(i + 2)
+                    .and_then(|t| t.content.as_deref())
+                    .is_some_and(|c| c == "''" || c == "\"\"")
+            {
+                let var_name = strip_sigil(tokens[i].content.as_deref().unwrap_or(""));
+                parts.push(format!("{var_name} === undefined"));
+                i += 3;
                 continue;
             }
             // `split(/pattern/, LIST)` / `split(qr/.../ , LIST)` — a regex literal used as a
@@ -1935,6 +2523,18 @@ impl Renderer {
         self.render_children_expr(block)
     }
 
+    /// Records `name` in `uri_typed_vars` if `rendered_rhs` is exactly what
+    /// `try_match_legacy_http_constructor`'s `URI`→`URL` mapping produces (`"undefined"` or a
+    /// `"new URL(...)"` call) — see that field's own docs for why this tracking exists at all.
+    /// Takes the *already-rendered* RHS string (not raw tokens) since every call site here already
+    /// has one in hand from its own real render, avoiding a second, side-effecting
+    /// `render_expr_sequence` call just to check.
+    fn track_uri_typed_var(&mut self, name: &str, rendered_rhs: &str) {
+        if rendered_rhs == "undefined" || rendered_rhs.starts_with("new URL(") {
+            self.uri_typed_vars.insert(name.to_string());
+        }
+    }
+
     /// `Mojo::UserAgent->new` / `Mojo::UserAgent->new()` and `Mojo::Cookie::Response->new(k => v,
     /// ...)` — the two legacy-plugin-corpus idioms that aren't just vocabulary substitution:
     /// `Mojo::UserAgent` is a real CPAN HTTP client with no JS equivalent at all (routed through
@@ -1956,7 +2556,11 @@ impl Renderer {
             return None;
         }
         let name = word.content.as_deref()?;
-        if name != "Mojo::UserAgent" && name != "Mojo::Cookie::Response" && name != "Mojo::DOM" {
+        if name != "Mojo::UserAgent"
+            && name != "Mojo::Cookie::Response"
+            && name != "Mojo::DOM"
+            && name != "URI"
+        {
             return None;
         }
         if !is_operator(tokens.get(i + 1)?, "->") {
@@ -1971,6 +2575,45 @@ impl Renderer {
             self.uses_perl_compat = true;
             let consumed = if has_list { 4 } else { 3 };
             return Some(("perlCompat.userAgent()".to_string(), consumed));
+        }
+
+        // `URI->new()` (bare placeholder, real corpus case: `Download/EHentai.pm`'s `my $finalURL
+        // = URI->new();`, immediately overwritten by a real `URI->new($1)` a few lines later once
+        // a URL is actually known — never used bare beyond that point) / `URI->new($expr)` (a
+        // real, immediately-usable URL) — `URI` is a real CPAN module with a genuine, if partial,
+        // JS equivalent (the standard `URL` class), unlike `Mojo::UserAgent`, which has none at
+        // all. But `new URL()` with *no* argument throws (`TypeError: Invalid URL`) rather than
+        // constructing an empty placeholder the way Perl's bare `URI->new()` does — so the
+        // zero-arg call maps to `undefined` instead (matching every later comparison against it
+        // in the real corpus, e.g. `$finalURL eq ""`: a real `URI` object reference is never
+        // `eq` to the empty string either, so both `undefined === ""` here and Perl's own
+        // `eq ""` there are equally always-false checks — this preserves that pre-existing
+        // legacy behavior rather than "fixing" it). `URI->new(EXPR)` maps directly to `new
+        // URL(EXPR)`. Any further method call on the result (`->query(...)`, `->as_string`) needs
+        // its own separate mapping — see `try_match_uri_method_call`, since those happen at a
+        // different token position (after this whole `->new(...)` chain has already been
+        // consumed here).
+        if name == "URI" {
+            let consumed = if has_list { 4 } else { 3 };
+            // `has_list` alone doesn't distinguish `URI->new()` (empty parens — still a real
+            // `Structure::List` node, just with nothing inside it) from `URI->new` (no parens at
+            // all) — both need the same `undefined` treatment, so this checks the list's actual
+            // contents rather than just whether a list node is present at all (an earlier version
+            // of this match wrongly treated `URI->new()`'s empty list the same as a real
+            // one-argument call, fell through to the one-argument check below, found zero
+            // arguments instead of one, and silently returned `None` — leaving `URI->new()`
+            // completely unhandled and unwarned-about despite this whole match supposedly
+            // covering it).
+            let args = if has_list {
+                self.render_call_args(tokens[i + 3])
+            } else {
+                Vec::new()
+            };
+            return match args.as_slice() {
+                [] => Some(("undefined".to_string(), consumed)),
+                [arg] => Some((format!("new URL({arg})"), consumed)),
+                _ => None, // some other arg shape this converter doesn't specifically handle.
+            };
         }
 
         // `Mojo::DOM->new(html)` (parses immediately) / `Mojo::DOM->new->xml(1)->parse(xml_str)`
@@ -2444,6 +3087,30 @@ impl Renderer {
                     "external Perl module reference has no JS equivalent: {raw}"
                 ));
                 raw.replace("::", "_")
+            }
+            // A single-segment external module name (`URI`, `JSON`, ...) referenced bare — same
+            // "no JS equivalent" situation as the `::`-containing case just above, just without
+            // the `::` that case keys off. Only the *name itself* is checked (not, say, that it's
+            // immediately followed by `->`) — `imported_external_modules` was built from this
+            // exact file's own `use` statements, so a bareword matching one of them is already
+            // about as reliable a signal as the pre-existing `::` check right above, which makes
+            // the same trade-off (see real corpus case: `Download/EHentai.pm`'s `use URI;` +
+            // `URI->new(...)`, previously rendered as a silently-undeclared `URI.new()` with zero
+            // warning at all — `imported_external_modules`'s own docs have the full story). Left
+            // as-is (not sanitized like the `::` case) since a bare word with no `::` in it is
+            // already a syntactically valid JS identifier, just an unresolved one — the same
+            // "manual attention needed" category, without needing the `::` case's extra rewrite.
+            "PPI::Token::Word"
+                if node
+                    .content
+                    .as_deref()
+                    .is_some_and(|c| self.imported_external_modules.contains(c)) =>
+            {
+                let raw = node.content.as_deref().unwrap();
+                self.warnings.push(format!(
+                    "external Perl module reference has no JS equivalent: {raw}"
+                ));
+                raw.to_string()
             }
             "PPI::Token::Word" => render_word(node.content.as_deref().unwrap_or("")),
             "PPI::Token::QuoteLike::Words" => render_qw(node.content.as_deref().unwrap_or("")),
@@ -3905,10 +4572,15 @@ mod tests {
             ),
             "got: {out}"
         );
+        // No `$lrr_info->{...}` access at all appears in this body, so `collect_static_hash_keys`
+        // finds zero *dynamic* keys (vacuously "safe") and a real interface gets generated —
+        // narrower than the `Record<string, any>` fallback, which only kicks in when a dynamic
+        // key access makes a complete key list impossible to know.
         assert!(
-            out.contains("let lrr_info = hostArgs as Record<string, any>;"),
+            out.contains("let lrr_info = hostArgs as unknown as ExecMetadataInfo;"),
             "got: {out}"
         );
+        assert!(out.contains("interface ExecMetadataInfo"), "got: {out}");
         assert!(
             out.contains("let tagstocopy = hostArgs.arg as string;"),
             "got: {out}"
@@ -3966,10 +4638,14 @@ mod tests {
             ),
             "got: {out}"
         );
+        // Same reasoning as `render_entry_sub_exports_under_the_host_name_and_binds_two_separate_shifts`'s
+        // own updated assertion — no hash-key access in this body either, so a real interface
+        // (rather than the `any` fallback) gets generated.
         assert!(
-            out.contains("let lrr_info = hostArgs as Record<string, any>;"),
+            out.contains("let lrr_info = hostArgs as unknown as ExecDownloadInfo;"),
             "got: {out}"
         );
+        assert!(out.contains("interface ExecDownloadInfo"), "got: {out}");
         assert!(
             out.contains("let params = { forceresampled: hostArgs.arg as string };"),
             "got: {out}"

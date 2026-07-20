@@ -32,6 +32,14 @@ import { useReaderSettings } from './useReaderSettings'
 // `~/LANraragi/public/js/reader.js`) — real DOM structure (`#i1`-`#i7`) and CSS classnames from
 // `/legacy/lrr.css`, not Tailwind.
 
+/** Uniform icon size for every paginator (prev/next-archive, prev/next-page) nav link. */
+const PAGINATOR_ICON_FONT_SIZE = '1.5em'
+/** How long an ephemeral reader toast (bookmark-link save confirmation, etc.) stays visible before
+ * auto-dismissing — matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default; specified explicitly
+ * here rather than omitted, to make clear this reader-specific case is deliberately using that
+ * same duration, not just inheriting it incidentally. */
+const TOAST_DURATION_MS = 5000
+
 type OverlayKind = 'archive' | 'settings' | 'help' | null
 
 interface WakeLockSentinelLike {
@@ -283,7 +291,7 @@ export default function Reader() {
         heading: t('Starting auto next page failed!') ?? undefined,
         text: t('Please set the auto next page interval to a positive number.') ?? undefined,
         icon: 'error',
-        hideAfter: 5000,
+        hideAfter: TOAST_DURATION_MS,
       })
       return
     }
@@ -350,7 +358,7 @@ export default function Reader() {
       toast({
         text: template.replace('${url}', '/login'),
         icon: 'warning',
-        hideAfter: 5000,
+        hideAfter: TOAST_DURATION_MS,
       })
       return
     }
@@ -625,17 +633,17 @@ export default function Reader() {
     <div className="sn paginator">
       <a
         className="fas fa-backward-step page-link archive-nav-link"
-        style={{ fontSize: '1.5em', display: navState.ids.length > 0 ? undefined : 'none' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE, display: navState.ids.length > 0 ? undefined : 'none' }}
         onClick={() => void readAdjacentArchive('prev')}
       />
       <a
         className="fas fa-angle-double-left page-link"
-        style={{ fontSize: '1.5em' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo('first')}
       />
       <a
         className="fas fa-angle-left page-link"
-        style={{ fontSize: '1.5em' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo('prev')}
       />
       <div className="pagecount">
@@ -643,17 +651,17 @@ export default function Reader() {
       </div>
       <a
         className="fas fa-angle-right page-link"
-        style={{ fontSize: '1.5em' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo('next')}
       />
       <a
         className="fas fa-angle-double-right page-link"
-        style={{ fontSize: '1.5em' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo('last')}
       />
       <a
         className="fas fa-forward-step page-link archive-nav-link"
-        style={{ fontSize: '1.5em', display: navState.ids.length > 0 ? undefined : 'none' }}
+        style={{ fontSize: PAGINATOR_ICON_FONT_SIZE, display: navState.ids.length > 0 ? undefined : 'none' }}
         onClick={() => void readAdjacentArchive('next')}
       />
     </div>

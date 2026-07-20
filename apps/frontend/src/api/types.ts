@@ -68,6 +68,8 @@ export interface Settings {
   enablewebp: boolean
   replacedupe: boolean
   tagruleson: boolean
+  usedateadded: boolean
+  usedatemodified: boolean
 }
 
 export interface ServerInfo {
@@ -106,14 +108,88 @@ export type DuplicateGroup = DuplicateArchive[]
 
 export interface PluginInfo {
   namespace: string
-  type: 'metadata' | 'login' | 'download'
+  type: 'metadata' | 'login' | 'download' | 'script'
   name: string
   author: string
   description: string
   version: string
   icon: string | null
   oneshot_arg: string | null
+  login_from: string | null
+  // Case-insensitive regex (source only, no delimiters) matched against a full candidate URL —
+  // used by the Upload page's URL queue to group pasted URLs by download plugin, and (for a
+  // metadata plugin) to find the one applicable plugin for a metadata-preview-by-URL action.
+  // `null` when this plugin has no meaningful URL-based routing.
+  url_pattern: string | null
   parameters: Array<{ name: string; desc: string }>
+}
+
+// `GET/PUT /api/plugins/settings?namespace=...` — a plugin's own persisted custom-parameter
+// values (e.g. E-Hentai login's cookie fields), positionally matching `PluginInfo.parameters`,
+// plus (metadata plugins only) legacy's "Run Automatically" toggle. Distinct from the
+// download-specific `PluginOptions` below (concurrency/rate-limit/bundling).
+export interface PluginSettings {
+  customargs: string[]
+  enabled: boolean
+}
+
+// `PUT`'s own body is a genuine partial update — an absent field leaves that stored value
+// untouched, so toggling "Run Automatically" doesn't require resending the current parameter
+// values just to avoid clobbering them (and vice versa).
+export interface PluginSettingsUpdate {
+  customargs?: string[]
+  enabled?: boolean
+}
+
+// `GET/PUT/DELETE /api/plugins/options?namespace=...` (specs/005-download-plugin-progress,
+// contracts/download-settings-api.md) — a download plugin's effective concurrency/rate-limit/
+// bundling settings (its own `pluginOptions()` declared defaults merged with any persisted user
+// override). `source` on each field distinguishes an inherited default from a user customization.
+export type PluginOptionsSource = 'plugin_default' | 'user_override'
+
+export interface EffectiveDomainRule {
+  pattern?: string
+  max_concurrent?: number
+  max_bytes_per_sec?: number
+  description?: string
+  source: PluginOptionsSource
+}
+
+export interface EffectiveBundleAsArchive {
+  value: boolean
+  default: boolean
+  description: string
+  source: PluginOptionsSource
+}
+
+export interface EffectiveOverwriteOnDuplicate {
+  value: boolean
+  default: boolean
+  description: string
+  source: PluginOptionsSource
+}
+
+export interface PluginOptions {
+  namespace: string
+  domain_rules: EffectiveDomainRule[]
+  // Absent entirely for a single-resource-only plugin (contract: "only meaningful for a plugin
+  // whose execDownload can return more than one downloads[] element").
+  bundle_as_archive?: EffectiveBundleAsArchive
+  // Absent when this plugin declares no opinion on overwrite-on-duplicate — the effective
+  // behavior then falls back to the global `Settings.replacedupe` value.
+  overwrite_on_duplicate?: EffectiveOverwriteOnDuplicate
+}
+
+// `PUT /api/plugins/options`'s request body — a partial update; an omitted field leaves that
+// setting at its current effective value (plugin default, or a previously-set override).
+export interface PluginOptionsUpdate {
+  domain_rules?: Array<{
+    pattern?: string
+    max_concurrent?: number
+    max_bytes_per_sec?: number
+  }>
+  bundle_as_archive?: boolean
+  overwrite_on_duplicate?: boolean
 }
 
 export interface StatTag {
@@ -139,12 +215,70 @@ export interface JobRecord {
   name: string
   state: JobRecordState
   progress: number
+  // Present only for a real download-type job once its byte transfer has actually started
+  // (specs/005-download-plugin-progress) — genuinely absent from the JSON response, not `null`,
+  // for every other job and before that point (contracts/download-settings-api.md's extended job
+  // shape). `total_bytes` may stay absent even once `downloaded_bytes` is present (the server
+  // didn't report a size) — render an indeterminate indicator in that case, not a 0/NaN percentage.
+  downloaded_bytes?: number
+  total_bytes?: number
   result: unknown | null
   error: string | null
 }
 
 export interface JobsResponse {
   jobs: JobRecord[]
+}
+
+// Upload page's persistent, plugin-grouped download queue (additive, no legacy equivalent) —
+// mirrors `lanrurugi_storage::download_queue::DownloadQueueItem` field-for-field. Backed by
+// Redis so a queued/in-progress item survives a page refresh or a different browser tab; the
+// actual download itself is a `JobRecord` (`job_id` below links the two once started).
+export type DownloadQueueState = 'queued' | 'starting' | 'downloading' | 'done' | 'error'
+
+export interface DownloadQueueItem {
+  id: string
+  url: string
+  // Resolved once, client-side, at add-to-queue time and fixed from then on — not re-resolved at
+  // start time.
+  plugin_namespace: string
+  category: string | null
+  auto_fetch_metadata: boolean
+  overwrite_on_duplicate: boolean
+  state: DownloadQueueState
+  job_id: string | null
+  title: string | null
+  // The metadata plugin's full `execMetadata` response (`{tags?, title?, summary?}`, per
+  // `lanrurugi_plugin::protocol::MetadataResult`), set by the "Fetch metadata" preview action —
+  // untyped since every plugin's `tags` string uses its own namespace vocabulary (E-Hentai's
+  // `artist:`/`uploader:`/`category:`/`timestamp:` mean nothing to a different site's plugin).
+  metadata_preview: Record<string, unknown> | null
+  error: string | null
+  created_at: number
+}
+
+export interface DownloadQueueListResponse {
+  items: DownloadQueueItem[]
+}
+
+export interface AddToQueueItem {
+  url: string
+  plugin_namespace: string
+  category?: string
+  auto_fetch_metadata: boolean
+  overwrite_on_duplicate: boolean
+}
+
+export interface AddToQueueResponse {
+  added: DownloadQueueItem[]
+  rejected: Array<{ url: string; reason: string }>
+}
+
+export interface UpdateQueueItemBody {
+  title?: string
+  metadata_preview?: Record<string, unknown>
+  auto_fetch_metadata?: boolean
+  overwrite_on_duplicate?: boolean
 }
 
 export interface ArchiveFilesResponse {

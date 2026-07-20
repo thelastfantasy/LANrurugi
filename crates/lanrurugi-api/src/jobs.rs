@@ -100,7 +100,12 @@ async fn queue_job(State(state): State<AppState>, Path(jobname): Path<String>) -
     }
 }
 
-/// `GET /jobs` — every tracked job, most-recently-created first (T003/T004).
+/// `GET /jobs` — every tracked job, most-recently-created first (T003/T004). `JobStatus`'s own
+/// `Serialize` impl already omits `downloaded_bytes`/`total_bytes` entirely when absent
+/// (`#[serde(skip_serializing_if = "Option::is_none")]` — `lanrurugi_core::jobs::JobStatus`), so
+/// this handler needs no changes for `specs/005-download-plugin-progress`'s extended job shape
+/// (`contracts/download-settings-api.md`) — it was already forwarding whatever `JobStatus` itself
+/// serializes to.
 async fn list_jobs(State(state): State<AppState>) -> Response {
     let jobs = state.jobs.list_all().await;
     axum::Json(json!({ "jobs": jobs })).into_response()

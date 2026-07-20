@@ -21,7 +21,7 @@ export default function Layout() {
     { to: '/upload', label: t('Add Archives') },
     { to: '/duplicates', label: t('Duplicate Detection') },
     { to: '/config', label: t('Settings') },
-    { to: '/categories', label: t('Modify Categories') },
+    { to: '/config/categories', label: t('Modify Categories') },
     { to: '/stats', label: t('Statistics') },
     { to: '/logs', label: t('Logs') },
   ]

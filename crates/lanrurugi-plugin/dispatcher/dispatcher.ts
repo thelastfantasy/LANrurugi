@@ -741,6 +741,11 @@ async function handleRequest(req: PluginRequest) {
       case "plugin_info":
         result = await mod.pluginInfo();
         break;
+      case "plugin_options":
+        // Unlike `pluginInfo`, `pluginOptions` is optional (spec FR-015) — most plugins declare
+        // no configurable settings at all, so its absence is normal, not an error.
+        result = typeof mod.pluginOptions === "function" ? await mod.pluginOptions() : null;
+        break;
       case "exec_metadata":
         result = await mod.execMetadata(req.args);
         break;

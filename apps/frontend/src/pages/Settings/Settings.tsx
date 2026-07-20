@@ -21,7 +21,14 @@ import type { Settings as SettingsType } from '../../api/types'
 import CollapsibleSection from '../../components/CollapsibleSection'
 import LanguageSelector from '../../components/LanguageSelector'
 import { SUPPORTED_LANGUAGES } from '../../i18n'
-import { DEFAULT_THEME_ID, ensureLink, removeLink, THEMES, useApplyTheme } from '../../theme'
+import {
+  DEFAULT_THEME_ID,
+  ensureLink,
+  FONT_SIZE_10PT,
+  removeLink,
+  THEMES,
+  useApplyTheme,
+} from '../../theme'
 import { useDocumentTitle } from '../../useDocumentTitle'
 
 const CONFIG_CSS_ID = 'legacy-config-css'
@@ -98,6 +105,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [excludednamespaces, setExcludednamespaces] = useState(settings.excludednamespaces)
   const [tagruleson, setTagruleson] = useState(settings.tagruleson)
   const [tagrules, setTagrules] = useState(settings.tagrules)
+  const [usedateadded, setUsedateadded] = useState(settings.usedateadded)
+  const [usedatemodified, setUsedatemodified] = useState(settings.usedatemodified)
 
   const [status, setStatus] = useState('')
 
@@ -133,6 +142,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       excludednamespaces,
       tagruleson,
       tagrules,
+      usedateadded,
+      usedatemodified,
     })
     setStatus(t('Settings saved!') ?? '')
   }
@@ -167,7 +178,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           className="stdbtn"
           type="button"
           value={t('Plugin Configuration') ?? undefined}
-          onClick={() => navigate('/plugins')}
+          onClick={() => navigate('/config/plugins')}
         />{' '}
         <input
           id="backup"
@@ -181,7 +192,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <br />
         <input id="return" className="stdbtn" type="button" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
 
-        {status && <p style={{ fontSize: '9pt' }}>{status}</p>}
+        {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
 
         {/* Not part of legacy's own left-column (legacy has no visible logout affordance — its
             session just expires — and only one site-wide language, set below in Global
@@ -194,7 +205,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       <form className="right-column" onSubmit={(e) => e.preventDefault()}>
         <ul className="collapsible extensible with-right-caret">
           <CollapsibleSection icon="fa-cubes" title={t('Global Settings')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <Row label={t('Site Title')}>
                     <input className="stdinput" style={{ width: '100%' }} maxLength={255} value={htmltitle} onChange={(e) => setHtmltitle(e.target.value)} type="text" />
@@ -323,7 +334,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <CollapsibleSection icon="fa-paint-brush" title={t('Theme')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <tr>
                     <td></td>
@@ -374,7 +385,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <CollapsibleSection icon="fa-shield-alt" title={t('Security')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <CheckboxRow id="enablepass" checked={enablepass} onChange={setEnablepass} label={t('Enable Password')}>
                     {t("If enabled, everything that isn't reading will require a password.")}
@@ -431,7 +442,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <CollapsibleSection icon="fa-file-archive" title={t('Archive Files')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <ActionRow
                     id="rescan-button"
@@ -504,7 +515,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <CollapsibleSection icon="fa-tags" title={t('Tags and Thumbnails')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t('Use high-quality thumbnails for pages')}>
                     {t('LANraragi generates lower-quality thumbnails for archive pages for performance reasons.')}
@@ -553,6 +564,24 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                   >
                     {t('Regenerate all thumbnails. This might take a while!')}
                   </ActionRow>
+                  <CheckboxRow
+                    id="usedateadded"
+                    checked={usedateadded}
+                    onChange={setUsedateadded}
+                    label={t('Add Timestamp Tag')}
+                  >
+                    {t('If enabled, LANrurugi will add the UNIX timestamp of the current time as a tag under the "date_added" namespace to newly added archives.')}
+                  </CheckboxRow>
+                  {usedateadded && (
+                    <CheckboxRow
+                      id="usedatemodified"
+                      checked={usedatemodified}
+                      onChange={setUsedatemodified}
+                      label={t('Use "Last modified" Time')}
+                    >
+                      {t('Enabling this will use file modified time instead of current time when setting "date_added" timestamps.')}
+                    </CheckboxRow>
+                  )}
                   <Row label={t('Excluded Namespaces')}>
                     <input
                       className="stdinput"
@@ -604,7 +633,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <CollapsibleSection icon="fa-satellite" title={t('Background Workers')}>
-              <table style={{ margin: 'auto', fontSize: '9pt' }}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <tr>
                     <td className="option-td">

@@ -14,8 +14,7 @@ use deadpool_redis::redis::AsyncCommands;
 use serde_json::json;
 
 use crate::AppState;
-
-const CONFIG_KEY: &str = "LRR_CONFIG";
+use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/info", get(server_info))
@@ -41,7 +40,7 @@ async fn server_info(State(state): State<AppState>) -> Response {
         }
     };
     let fields: HashMap<String, String> = conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
-    let total_pages_read: i64 = conn.get("LRR_TOTALPAGESTAT").await.unwrap_or(0);
+    let total_pages_read: i64 = conn.get(TOTAL_PAGES_STAT_KEY).await.unwrap_or(0);
 
     let field = |key: &str, default: &str| fields.get(key).cloned().unwrap_or(default.to_string());
     let flag = |key: &str, default: &str| field(key, default) != "0";

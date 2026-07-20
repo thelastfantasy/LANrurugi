@@ -1,5 +1,8 @@
 pub mod bootstrap;
+pub mod download_queue;
 pub mod id;
+pub mod keys;
+pub mod plugin_options;
 pub mod rebuild;
 pub mod redis;
 pub mod repository;

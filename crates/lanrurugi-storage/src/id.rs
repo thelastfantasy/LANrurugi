@@ -18,6 +18,12 @@ use thiserror::Error;
 /// `512 * 1024`.
 pub const SAMPLE_SIZE: usize = 512_000;
 
+/// Length of a legitimate archive ID: a lowercase-hex SHA-1 digest, always exactly this many
+/// characters (`legacy_id`/`size_aware_id` below both produce one). Shared so every ID-format
+/// validity check across crates (`lanrurugi-api::archives::is_valid_archive_id`,
+/// `lanrurugi-api::plugins::extract_archive_id`) agrees on the same value.
+pub const ARCHIVE_ID_LEN: usize = 40;
+
 #[derive(Debug, Error)]
 pub enum IdError {
     #[error("I/O error reading file for archive ID computation: {0}")]

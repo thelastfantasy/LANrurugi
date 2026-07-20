@@ -19,6 +19,24 @@ export const THEMES = [
 
 export const DEFAULT_THEME_ID = 'modern.css'
 
+// `lrr.css`/`allcollapsible.css` hardcode several rules in `pt` (some `!important`) — these are
+// the `rem` equivalents used throughout the app instead (16px root font size assumed), so a
+// pt-sized legacy rule and our own inline styles agree on the same rendered size. Naming reflects
+// the legacy pt value they replace, not the rem number, since that's the meaningful constant here
+// (a change to the base font size would change the rem value but not which legacy rule it matches).
+export const FONT_SIZE_8PT = '0.667rem'
+
+export const FONT_SIZE_9PT = '0.833rem'
+
+export const FONT_SIZE_10PT = '0.75rem'
+
+// Shared full-screen-overlay layering: a fixed, click-to-dismiss backdrop behind a floating menu/
+// tooltip/popup — used by Library's/the Reader's own context menus and Tooltip. `CONTENT` is
+// exactly one level above `BACKDROP` so the popup itself always wins the stacking order.
+export const Z_OVERLAY_BACKDROP = 1000
+
+export const Z_OVERLAY_CONTENT = 1001
+
 const LEGACY_STRUCTURAL_CSS_ID = 'legacy-structural-css'
 const LEGACY_THEME_CSS_ID = 'legacy-theme-css'
 const LEGACY_FILEUPLOAD_CSS_ID = 'legacy-fileupload-css'

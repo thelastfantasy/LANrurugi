@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
 import { useArchives, useCategories } from '../api/hooks'
-import { useApplyTheme } from '../theme'
+import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { toast } from '../toast'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -171,7 +171,7 @@ export default function Categories() {
       <br />
       <br />
       <div style={{ marginLeft: 'auto', marginRight: 'auto' }}>
-        <div className="left-column" style={{ textAlign: 'left', fontSize: '9pt', width: 400 }}>
+        <div className="left-column" style={{ textAlign: 'left', fontSize: FONT_SIZE_10PT, width: 400 }}>
           {t('Categories appear at the top of your window when browsing the Library.')}
           <br />
           {t('There are two distinct kinds:')}
@@ -302,7 +302,7 @@ export default function Categories() {
                   </tr>
                   <tr className="tag-options">
                     <td></td>
-                    <td id="status" style={{ fontSize: '10pt' }}>
+                    <td id="status" style={{ fontSize: FONT_SIZE_9PT }}>
                       {status === 'saving' && (
                         <>
                           <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t('Saving your modifications...')}

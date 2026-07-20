@@ -30,10 +30,10 @@ function App() {
           <Route path="/" element={<Library />} />
           <Route path="/edit/:archiveId" element={<Edit />} />
           <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
-          <Route path="/categories" element={<Categories />} />
+          <Route path="/config/categories" element={<Categories />} />
           <Route path="/batch" element={<Batch />} />
           <Route path="/upload" element={<Upload />} />
-          <Route path="/plugins" element={<Plugins />} />
+          <Route path="/config/plugins" element={<Plugins />} />
           <Route path="/duplicates" element={<Duplicates />} />
           <Route path="/stats" element={<Stats />} />
           <Route path="/backup" element={<Backup />} />

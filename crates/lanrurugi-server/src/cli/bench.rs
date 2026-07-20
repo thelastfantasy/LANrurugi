@@ -69,6 +69,12 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     // both the "full scan" and "reindex" comparison operations is driven entirely through
     // `POST /database/rebuild-index`, exactly like `measure_new_rebuild_index` expects.
     let scanner = ScannerHandle::new();
+    let plugin_options = Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
 
     let state = AppState {
         redis,
@@ -87,6 +93,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         scanner,
         plugins,
         plugins_dir,
+        download_managers: Default::default(),
+        plugin_options,
+        download_queue,
     };
 
     let app = crate::app::build_app(state, None, None);

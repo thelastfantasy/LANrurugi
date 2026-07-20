@@ -24,7 +24,7 @@ use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::permissions::build_flags;
-use crate::protocol::{PluginInfo, Request, Response};
+use crate::protocol::{PluginInfo, PluginOptionsResult, Request, Response};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -218,6 +218,39 @@ impl PluginPool {
         response_to_result(response).and_then(|v| Ok(serde_json::from_value(v)?))
     }
 
+    /// Queries a download plugin's optional `pluginOptions()` declaration via the same kind of
+    /// throwaway, zero-permission subprocess as [`plugin_info`](Self::plugin_info) — cheap,
+    /// side-effect-free, safe to call on every settings-page load. Returns `Ok(None)` (not an
+    /// error) when the plugin exports no `pluginOptions()` at all (spec FR-015), which the
+    /// dispatcher signals by returning `null`.
+    pub async fn plugin_options(&self, namespace: &str) -> Result<Option<PluginOptionsResult>> {
+        if !is_safe_namespace(namespace) {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
+        let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
+        if !plugin_module.is_file() {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
+        let mut worker = Worker::spawn(
+            &self.deno_binary,
+            &self.dispatcher_path,
+            &self.plugins_dir,
+            namespace,
+            &[],
+            false,
+        )
+        .await?;
+        let response = worker
+            .call(namespace, "plugin_options", serde_json::json!({}))
+            .await?;
+        let value = response_to_result(response)?;
+        if value.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(serde_json::from_value(value)?))
+        }
+    }
+
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
     /// declared permissions) on first use.
     pub async fn execute(
@@ -340,6 +373,41 @@ mod tests {
         );
         assert!(!info.declared_permissions.read);
         assert!(!info.declared_permissions.write);
+    }
+
+    #[tokio::test]
+    async fn plugin_options_returns_none_when_the_plugin_exports_none() {
+        let Some((dispatcher, samples)) = samples_and_dispatcher() else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        let pool = PluginPool::new("deno", dispatcher, samples);
+        let options = pool.plugin_options("sample-metadata-plugin").await.unwrap();
+        assert!(options.is_none());
+    }
+
+    #[tokio::test]
+    async fn plugin_options_matches_sample_download_plugins_declaration() {
+        let Some((dispatcher, samples)) = samples_and_dispatcher() else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        let pool = PluginPool::new("deno", dispatcher, samples);
+        let options = pool
+            .plugin_options("sample-download-plugin")
+            .await
+            .unwrap()
+            .expect("sample-download-plugin declares pluginOptions()");
+        assert_eq!(options.domain_rules.len(), 1);
+        assert_eq!(
+            options.domain_rules[0].pattern.as_deref(),
+            Some("*.download.example.invalid")
+        );
+        assert_eq!(options.domain_rules[0].max_concurrent, Some(2));
+        let bundle = options
+            .bundle_as_archive
+            .expect("sample-download-plugin declares bundle_as_archive");
+        assert!(bundle.default);
     }
 
     #[tokio::test]

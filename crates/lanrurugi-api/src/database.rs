@@ -15,6 +15,7 @@ use serde_json::json;
 
 use crate::common::{error, not_found};
 use crate::AppState;
+use lanrurugi_storage::keys::CONFIG_KEY;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -63,7 +64,7 @@ async fn stats(State(state): State<AppState>, Query(params): Query<StatsParams>)
             }
         };
         let raw: String = conn
-            .hget("LRR_CONFIG", "excludednamespaces")
+            .hget(CONFIG_KEY, "excludednamespaces")
             .await
             .unwrap_or_else(|_| "source, date_added".to_string());
         raw.split(',').map(|s| s.trim().to_string()).collect()

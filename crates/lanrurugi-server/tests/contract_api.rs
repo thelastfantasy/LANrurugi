@@ -25,6 +25,12 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
     let redis = RedisDbs::connect(&base).ok()?;
     let repos = Repositories::new(&redis);
+    let plugin_options = std::sync::Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = std::sync::Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -46,6 +52,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
             PathBuf::from("/tmp/plugins"),
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
+        download_managers: Default::default(),
+        plugin_options: plugin_options.clone(),
+        download_queue: download_queue.clone(),
     };
     Some((lanrurugi_server::app::build_app(state, None, None), redis))
 }
@@ -234,6 +243,12 @@ async fn static_frontend_is_served_with_spa_fallback() {
     };
     let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
+    let plugin_options = std::sync::Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = std::sync::Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -255,6 +270,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
             PathBuf::from("/tmp/plugins"),
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
+        download_managers: Default::default(),
+        plugin_options: plugin_options.clone(),
+        download_queue: download_queue.clone(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -328,6 +346,12 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     };
     let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
+    let plugin_options = std::sync::Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = std::sync::Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -349,6 +373,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
             PathBuf::from("/tmp/plugins"),
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
+        download_managers: Default::default(),
+        plugin_options: plugin_options.clone(),
+        download_queue: download_queue.clone(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -515,6 +542,12 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     };
     let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
+    let plugin_options = std::sync::Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = std::sync::Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
 
     let library_dir = tempfile::tempdir().unwrap();
     let subfolder = library_dir.path().join("My Series");
@@ -565,6 +598,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             PathBuf::from("/tmp/plugins"),
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
+        download_managers: Default::default(),
+        plugin_options: plugin_options.clone(),
+        download_queue: download_queue.clone(),
     };
     let app = lanrurugi_server::app::build_app(state, None, None);
 

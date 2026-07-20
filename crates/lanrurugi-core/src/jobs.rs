@@ -34,6 +34,20 @@ pub struct JobStatus {
     pub state: JobState,
     /// 0.0-1.0, best-effort; jobs that can't report granular progress just jump 0 -> 1.
     pub progress: f32,
+    /// Bytes transferred so far for a real download job (`specs/005-download-plugin-progress/
+    /// data-model.md`'s `Download Job` extension), updated incrementally as the Rust-side
+    /// streaming download proceeds. `None` — genuinely absent from JSON, not a `0`/`null`
+    /// sentinel (`skip_serializing_if` below) — until the download has actually started
+    /// transferring bytes, and for every non-download job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloaded_bytes: Option<u64>,
+    /// Total expected size for a real download job, taken from the response's `Content-Length`
+    /// when present. `None` when the server doesn't report a size (spec FR-002) — the frontend
+    /// renders an indeterminate indicator in that case rather than treating `None` as zero. For a
+    /// multi-resource download, this is the sum across all resources once each one's size becomes
+    /// known (spec FR-003: one combined indicator per job, not per-resource).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
 }
@@ -45,6 +59,8 @@ impl JobStatus {
             name: name.to_string(),
             state: JobState::Queued,
             progress: 0.0,
+            downloaded_bytes: None,
+            total_bytes: None,
             result: None,
             error: None,
         }
@@ -130,6 +146,22 @@ impl JobRegistry {
     pub async fn set_progress(&self, id: &str, progress: f32) {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.progress = progress.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Sibling to [`Self::set_progress`] for a real byte-level download (`specs/
+    /// 005-download-plugin-progress`'s US1) — called by the download-manager on each streamed
+    /// chunk (or at a throttled interval, to avoid excessive lock contention on very fast
+    /// transfers). Also keeps the plain `progress: f32` fraction in sync when `total` is known, so
+    /// any existing non-download-aware UI still gets a sane fraction rather than being stuck at
+    /// its last value.
+    pub async fn set_download_progress(&self, id: &str, downloaded: u64, total: Option<u64>) {
+        if let Some(job) = self.jobs.write().await.get_mut(id) {
+            job.downloaded_bytes = Some(downloaded);
+            job.total_bytes = total;
+            if let Some(total) = total.filter(|&t| t > 0) {
+                job.progress = (downloaded as f32 / total as f32).clamp(0.0, 1.0);
+            }
         }
     }
 
@@ -221,6 +253,58 @@ impl JobRegistry {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn download_progress_fields_are_absent_until_set() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        let job = reg.get(&id).await.unwrap();
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(
+            value.get("downloaded_bytes").is_none(),
+            "downloaded_bytes must be genuinely absent from JSON, not null, until a download \
+             actually starts transferring bytes — got: {value}"
+        );
+        assert!(value.get("total_bytes").is_none());
+    }
+
+    #[tokio::test]
+    async fn set_download_progress_populates_both_fields_and_keeps_progress_in_sync() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.set_download_progress(&id, 50, Some(200)).await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.downloaded_bytes, Some(50));
+        assert_eq!(job.total_bytes, Some(200));
+        assert_eq!(job.progress, 0.25, "plain progress fraction stays in sync");
+
+        let value = serde_json::to_value(&job).unwrap();
+        assert_eq!(value["downloaded_bytes"], json!(50));
+        assert_eq!(value["total_bytes"], json!(200));
+    }
+
+    #[tokio::test]
+    async fn set_download_progress_with_no_total_leaves_progress_fraction_alone() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.set_download_progress(&id, 12345, None).await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.downloaded_bytes, Some(12345));
+        assert_eq!(job.total_bytes, None);
+        assert_eq!(
+            job.progress, 0.0,
+            "no total means no sane fraction to compute — plain progress is left untouched"
+        );
+
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(
+            value.get("total_bytes").is_none(),
+            "an unknown total must stay genuinely absent from JSON (indeterminate progress), \
+             not null — got: {value}"
+        );
+    }
 
     #[tokio::test]
     async fn list_all_returns_most_recently_created_first() {

@@ -9,6 +9,18 @@ export class ApiError extends Error {
   }
 }
 
+/** A `422` field-level validation failure (spec FR-014, e.g. `PUT /plugins/options` rejecting a
+ * non-positive `max_concurrent`/`max_bytes_per_sec`) — carries which field failed and why, so a
+ * settings form can show an inline error next to the exact input instead of a generic message. */
+export class ValidationError extends ApiError {
+  field: string
+
+  constructor(message: string, field: string) {
+    super(422, message)
+    this.field = field
+  }
+}
+
 /** `/login` and `/logout` handle their own 401s (a wrong password, not a stale session) — only
  * every other endpoint's 401 means "you need to (re-)authenticate", so only those redirect. */
 function handleUnauthorized(path: string) {
@@ -39,9 +51,9 @@ export async function fetchText(path: string): Promise<string> {
   return response.text()
 }
 
-/** JSON body mutation (PUT/POST/DELETE with a JSON-encoded body). */
+/** JSON body mutation (PUT/POST/PATCH/DELETE with a JSON-encoded body). */
 export async function sendJson<T>(
-  method: 'PUT' | 'POST' | 'DELETE',
+  method: 'PUT' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -53,6 +65,10 @@ export async function sendJson<T>(
 
   if (!response.ok) {
     if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 422) {
+      const body = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
+      if (body?.error && body.field) throw new ValidationError(body.error, body.field)
+    }
     throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
   }
 
@@ -90,10 +106,12 @@ export function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+const JOB_POLL_INTERVAL_MS = 400
+
 export async function waitForJob(jobId: string): Promise<JobStatus> {
   let status = await pollJob(jobId)
   while (status.state === 'inactive' || status.state === 'active') {
-    await sleep(400)
+    await sleep(JOB_POLL_INTERVAL_MS)
     status = await pollJob(jobId)
   }
   return status

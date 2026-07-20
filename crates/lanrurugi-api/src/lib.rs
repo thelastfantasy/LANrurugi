@@ -4,6 +4,8 @@ pub mod bench;
 pub mod categories;
 pub mod common;
 pub mod database;
+pub mod download_manager;
+pub mod download_queue;
 pub mod duplicates;
 pub mod jobs;
 pub mod login;
@@ -44,6 +46,7 @@ pub fn router() -> Router<AppState> {
         .merge(opds::router())
         .merge(plugins::router())
         .merge(database::router())
+        .merge(download_queue::router())
         .merge(duplicates::router())
         .merge(jobs::router())
         .merge(settings::router())

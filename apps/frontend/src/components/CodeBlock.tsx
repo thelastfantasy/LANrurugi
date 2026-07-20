@@ -1,5 +1,7 @@
 import { Highlight, themes } from 'prism-react-renderer'
 
+import { FONT_SIZE_10PT } from '../theme'
+
 /** Syntax-highlighted code block for the job detail view (finished jobs' JSON `result`).
  *
  * Uses `prism-react-renderer` (Prism) — the closest thing to a "source-mapped code highlighter"
@@ -23,7 +25,7 @@ export default function CodeBlock({
             ...style,
             margin: 0,
             padding: '8px 12px',
-            fontSize: '9pt',
+            fontSize: FONT_SIZE_10PT,
             lineHeight: 1.4,
             overflow: 'auto',
             borderRadius: 4,

@@ -12,6 +12,8 @@ import {
   useTankoubons,
 } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
+import { MSM_SELECTION_KEY } from '../storageKeys'
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../theme'
 import { toast } from '../toast'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { recordSearchNavigation } from './Reader/crossArchiveNav'
@@ -136,14 +138,14 @@ function ArchiveContextMenu({
     <>
       {/* Full-viewport transparent overlay — the standard "click outside to dismiss" pattern for
           a positioned popup, cheaper than a document-level listener + ref check. */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 1000 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
+      <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
       <div
         className="id1"
         style={{
           position: 'fixed',
           top: y,
           left: x,
-          zIndex: 1001,
+          zIndex: Z_OVERLAY_CONTENT,
           width: 220,
           padding: '6px 0',
           textAlign: 'left',
@@ -270,7 +272,7 @@ export default function Library() {
     // Matches legacy's own hand-off exactly (`~/LANraragi/public/js/mod/index.js`'s
     // `openBatchOnSelection`/`updateSelectionCount`): stash the selection in `localStorage` under
     // the same key, open `/batch` in a new tab to read (and immediately clear) it.
-    localStorage.setItem('msmSelection', JSON.stringify([...selectedIds]))
+    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify([...selectedIds]))
     window.open('/batch', '_blank')
   }
 

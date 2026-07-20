@@ -11,6 +11,13 @@ const PREV_IDS_KEY = 'previousArchiveIds'
 const NEXT_IDS_KEY = 'nextArchiveIds'
 const DT_PAGE_KEY = 'currDatatablesPage'
 const NAV_STATE_KEY = 'navigationState' // sessionStorage, not localStorage — legacy's own choice
+const CURRENT_SEARCH_KEY = 'currentSearch'
+const SELECTED_CATEGORY_KEY = 'selectedCategory'
+const INDEX_SORT_KEY = 'indexSort'
+const INDEX_ORDER_KEY = 'indexOrder'
+const DT_PAGE_SIZE_KEY = 'datatablesPageSize'
+const GROUP_TANKS_KEY = 'grouptanks'
+const HIDE_COMPLETED_KEY = 'hidecompleted'
 
 export interface IndexSearchState {
   filter: string
@@ -28,13 +35,13 @@ export interface IndexSearchState {
 export function recordSearchNavigation(ids: string[], datatablesPage: number, state: IndexSearchState) {
   localStorage.setItem(SEARCH_IDS_KEY, JSON.stringify(ids))
   localStorage.setItem(DT_PAGE_KEY, String(datatablesPage))
-  localStorage.setItem('currentSearch', state.filter)
-  localStorage.setItem('selectedCategory', state.category)
-  localStorage.setItem('indexSort', state.sortby)
-  localStorage.setItem('indexOrder', state.order)
-  localStorage.setItem('datatablesPageSize', String(state.pageSize))
-  localStorage.setItem('grouptanks', String(state.groupbyTanks))
-  localStorage.setItem('hidecompleted', String(state.hidecompleted))
+  localStorage.setItem(CURRENT_SEARCH_KEY, state.filter)
+  localStorage.setItem(SELECTED_CATEGORY_KEY, state.category)
+  localStorage.setItem(INDEX_SORT_KEY, state.sortby)
+  localStorage.setItem(INDEX_ORDER_KEY, state.order)
+  localStorage.setItem(DT_PAGE_SIZE_KEY, String(state.pageSize))
+  localStorage.setItem(GROUP_TANKS_KEY, String(state.groupbyTanks))
+  localStorage.setItem(HIDE_COMPLETED_KEY, String(state.hidecompleted))
   // Cached adjacent-page ID lists are now stale for a *new* search — clear them so the reader
   // re-fetches instead of cross-linking two different searches' results.
   localStorage.removeItem(PREV_IDS_KEY)
@@ -44,13 +51,13 @@ export function recordSearchNavigation(ids: string[], datatablesPage: number, st
 
 function readIndexSearchState(): IndexSearchState {
   return {
-    filter: localStorage.getItem('currentSearch') ?? '',
-    category: localStorage.getItem('selectedCategory') ?? '',
-    sortby: localStorage.getItem('indexSort') ?? 'title',
-    order: localStorage.getItem('indexOrder') === 'desc' ? 'desc' : 'asc',
-    pageSize: Number(localStorage.getItem('datatablesPageSize')) || 100,
-    groupbyTanks: localStorage.getItem('grouptanks') !== 'false',
-    hidecompleted: localStorage.getItem('hidecompleted') === 'true',
+    filter: localStorage.getItem(CURRENT_SEARCH_KEY) ?? '',
+    category: localStorage.getItem(SELECTED_CATEGORY_KEY) ?? '',
+    sortby: localStorage.getItem(INDEX_SORT_KEY) ?? 'title',
+    order: localStorage.getItem(INDEX_ORDER_KEY) === 'desc' ? 'desc' : 'asc',
+    pageSize: Number(localStorage.getItem(DT_PAGE_SIZE_KEY)) || 100,
+    groupbyTanks: localStorage.getItem(GROUP_TANKS_KEY) !== 'false',
+    hidecompleted: localStorage.getItem(HIDE_COMPLETED_KEY) === 'true',
   }
 }
 

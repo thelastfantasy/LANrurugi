@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { sleep } from '../api/client'
 import { useArchives, useCategories, usePlugins } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
+import { MSM_SELECTION_KEY } from '../storageKeys'
 import { useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -38,8 +39,8 @@ function formatProgress(t: (key: string) => string, done: number, total: number)
  * the selection) are left as-is rather than expanded to their constituent archives — a real,
  * documented simplification versus legacy's own fetch-and-expand behavior. */
 function takePremadeSelection(): string[] {
-  const raw = localStorage.getItem('msmSelection')
-  localStorage.removeItem('msmSelection')
+  const raw = localStorage.getItem(MSM_SELECTION_KEY)
+  localStorage.removeItem(MSM_SELECTION_KEY)
   if (!raw) return []
   try {
     const ids = JSON.parse(raw) as unknown
@@ -297,7 +298,7 @@ export default function Batch() {
         </div>
       </div>
 
-      <input type="button" id="plugin-config" className="stdbtn" value={t('Plugin Configuration') ?? undefined} onClick={() => navigate('/plugins')} />
+      <input type="button" id="plugin-config" className="stdbtn" value={t('Plugin Configuration') ?? undefined} onClick={() => navigate('/config/plugins')} />
       <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/config')} />
     </div>
   )

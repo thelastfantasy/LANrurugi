@@ -72,3 +72,20 @@
   --theme-accent-fg: #ffffff;
   --theme-muted: #9b9ba1;
 }
+
+/* Additive to `public/legacy/allcollapsible.css`'s own `.caret-right`/`.caret` glyph pairs (both
+ * verified against that real vendor file — see `CollapsibleSection`'s own docs) — not a class
+ * that file defines. `.caret-right`'s pair is ▼ closed / ▲ open; `.caret`'s pair (▶ closed / ▼
+ * open, the one this project's own callers actually want per-page) uses the opposite
+ * `float: left` layout. This keeps `.caret`'s exact glyph characters but on the right-hand-side
+ * layout `.caret-right` uses, since every real page's title row already has its icon/badge on the
+ * right and switching to a left-floated caret would visually collide with that. */
+.caret-right-down:after {
+  content: '\025BA';
+  font-weight: bold;
+  float: right;
+  margin-left: 1rem;
+}
+.caret-right-down.active:after {
+  content: '\025BC';
+}

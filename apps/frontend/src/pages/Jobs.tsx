@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { useClearFinishedJobs, useClearJobs, useJobs } from '../api/hooks'
 import type { JobRecord, JobRecordState } from '../api/types'
 import CodeBlock from '../components/CodeBlock'
-import { useApplyTheme } from '../theme'
+import { JobProgressBar, STATE_COLOR } from '../components/JobProgress'
+import { FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
 // Background Job Console (specs/002-job-console). Surfaces the existing in-process
@@ -21,6 +22,7 @@ import { useDocumentTitle } from '../useDocumentTitle'
 // spec Assumptions).
 
 const PAGE_SIZES = [10, 20, 50, 100]
+const DEFAULT_PAGE_SIZE = 50
 
 /** Render order for states in the stat bar + filter. */
 const STATE_ORDER: JobRecordState[] = ['active', 'queued', 'finished', 'failed']
@@ -31,14 +33,6 @@ const STATE_LABEL_KEYS: Record<JobRecordState, string> = {
   active: 'Active',
   finished: 'Finished',
   failed: 'Failed',
-}
-
-/** State → inline badge color, reusing the green/red the ported Settings page already uses. */
-const STATE_COLOR: Record<JobRecordState, string> = {
-  queued: 'rgb(66, 133, 244)',
-  active: 'rgb(26, 165, 26)',
-  finished: 'rgb(120, 120, 120)',
-  failed: 'rgb(207, 37, 37)',
 }
 
 const isTerminal = (s: JobRecordState) => s === 'finished' || s === 'failed'
@@ -67,7 +61,7 @@ export default function Jobs() {
   const [stateFilter, setStateFilter] = useState<JobRecordState | 'all'>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState(50)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [status, setStatus] = useState('')
 
@@ -156,7 +150,7 @@ export default function Jobs() {
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12 }}>
       <h1 className="ih">{t('Background Jobs')}</h1>
-      <p style={{ fontSize: '9pt' }}>
+      <p style={{ fontSize: FONT_SIZE_10PT }}>
         {t('The background job console shows currently running and recently concluded tasks.')}
       </p>
 
@@ -230,7 +224,7 @@ export default function Jobs() {
         />
       </div>
 
-      {status && <p style={{ fontSize: '9pt' }}>{status}</p>}
+      {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
 
       {jobs.isLoading && (
         <div id="processing">
@@ -243,7 +237,7 @@ export default function Jobs() {
         <div id="nojobs" style={{ textAlign: 'center', margin: '24px 0' }}>
           <i className="fa fa-3x fa-inbox"></i>
           <p>{t('No background jobs yet.')}</p>
-          <p style={{ fontSize: '9pt' }}>
+          <p style={{ fontSize: FONT_SIZE_10PT }}>
             {t(
               'Jobs will appear here as you trigger thumbnail regeneration, backups, restores, duplicate scans, and other background work.',
             )}
@@ -310,7 +304,7 @@ export default function Jobs() {
             >
               {t('Previous')}
             </button>
-            <span style={{ fontSize: '9pt' }}>
+            <span style={{ fontSize: FONT_SIZE_10PT }}>
               {t('Page {{n}} of {{total}}', { n: safePage + 1, total: pageCount })}
             </span>
             <button
@@ -321,7 +315,7 @@ export default function Jobs() {
             >
               {t('Next')}
             </button>
-            <label style={{ fontSize: '9pt' }}>
+            <label style={{ fontSize: FONT_SIZE_10PT }}>
               {t('per page')}
               <select
                 className="stdinput"
@@ -361,7 +355,6 @@ function JobRow({
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const selectable = isTerminal(job.state)
-  const pct = Math.round(job.progress * 100)
 
   return (
     <>
@@ -387,20 +380,7 @@ function JobRow({
           </span>
         </td>
         <td>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div
-              style={{
-                flex: 1,
-                height: 8,
-                background: 'rgba(128,128,128,0.25)',
-                borderRadius: 4,
-                overflow: 'hidden',
-              }}
-            >
-              <div style={{ width: `${pct}%`, height: '100%', background: STATE_COLOR[job.state] }} />
-            </div>
-            <span style={{ fontSize: '9pt', minWidth: 34, textAlign: 'right' }}>{pct}%</span>
-          </div>
+          <JobProgressBar job={job} color={STATE_COLOR[job.state]} />
         </td>
         <td
           style={{ textAlign: 'center', cursor: 'pointer' }}
@@ -428,7 +408,7 @@ function JobDetail({ job }: { job: JobRecord }) {
   const { t } = useTranslation()
   if (job.state === 'failed') {
     return (
-      <div style={{ fontSize: '9pt' }}>
+      <div style={{ fontSize: FONT_SIZE_10PT }}>
         <strong style={{ color: STATE_COLOR.failed }}>{t('Error')}: </strong>
         <pre
           style={{
@@ -455,7 +435,7 @@ function JobDetail({ job }: { job: JobRecord }) {
           ? job.result
           : JSON.stringify(job.result, null, 2)
     return (
-      <div style={{ fontSize: '9pt' }}>
+      <div style={{ fontSize: FONT_SIZE_10PT }}>
         <strong>{t('Result')}: </strong>
         <div style={{ marginTop: 4 }}>
           <CodeBlock code={code} language="json" />
@@ -464,7 +444,7 @@ function JobDetail({ job }: { job: JobRecord }) {
     )
   }
   return (
-    <div style={{ fontSize: '9pt', color: 'rgb(120,120,120)' }}>
+    <div style={{ fontSize: FONT_SIZE_10PT, color: STATE_COLOR.finished }}>
       {t('This job is still running — no result yet.')}
     </div>
   )

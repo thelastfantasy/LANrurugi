@@ -28,6 +28,11 @@
  *      third-party script plugin uploaded via `POST /plugins/upload` would still be dispatched
  *      through this same generic path, though.
  *
+ * A `"download"`-type plugin MAY additionally export `pluginOptions(): {@linkcode
+ * PluginOptionsResult}` — synchronous, no side effects, same zero-permission-subprocess call
+ * pattern as `pluginInfo()`. Omit it entirely if the plugin has no configurable
+ * concurrency/rate-limit/bundling defaults to declare.
+ *
  * `lanrurugi-plugin-converter` generates both from a legacy `.pm` file's `plugin_info`/
  * `get_tags`/`do_login`/`provide_url` subs automatically — see
  * `crates/lanrurugi-plugin-converter/src/render.rs`'s own docs, or just run
@@ -49,12 +54,14 @@
 export type PluginKind = "metadata" | "login" | "download" | "script";
 
 /** One entry in {@linkcode PluginInfoResult.parameters} — a user-configurable setting shown in
- * the plugin's settings UI. Only the *first* declared parameter is currently wired up: the host
- * passes exactly one generic string value per call (`hostArgs.arg`, see
- * {@linkcode MetadataHostArgs.arg}) — a plugin declaring more than one parameter gets every extra
- * one bound to that same single value (`lanrurugi-plugin-converter` flags this with a conversion
- * warning; `lanrurugi-api::plugins::plugin_settings_key` is the storage side of the one value that
- * does work). */
+ * the plugin's settings UI. The host persists one value per declared parameter (`GET`/
+ * `PUT /plugins/settings?namespace=...`, `lanrurugi-api::plugins::plugin_settings_key`, Redis
+ * field `customargs` — matches legacy's own `LRR_PLUGIN_<NS>` hash and JSON-array encoding
+ * exactly) and passes the whole array back on every call, positionally matching this array
+ * (`parameters[0]`'s saved value is `hostArgs.customargs[0]`, etc. — see
+ * {@linkcode MetadataHostArgs.customargs}). Distinct from {@linkcode
+ * PluginInfoResult.oneshot_arg}, which is a single value typed fresh into a "run once" dialog each
+ * time, not persisted here. */
 export interface PluginParameter {
   name: string;
   description: string;
@@ -107,6 +114,14 @@ export interface PluginInfoResult {
    * gallery ID for a one-shot "copy tags from this other archive" action. Omit if this plugin has
    * no such one-shot action. */
   oneshot_arg?: string;
+  /** A regex (JS `RegExp` source, no delimiters, e.g. `"pixiv\\.net"`) matched case-insensitively
+   * against a full candidate URL to decide whether this plugin should handle it — used by the
+   * Upload page's URL queue to group pasted URLs by download plugin, and, for a metadata plugin,
+   * to find the one matching plugin for a "fetch metadata preview" action against a bare URL
+   * (before any archive exists). Evaluated entirely client-side; the host never matches against
+   * this itself. Omit if this plugin has no meaningful URL-based routing (e.g. a script/login
+   * plugin, or a metadata/download plugin with no single well-known source domain). */
+  url_pattern?: string;
   /** Sidecar metadata filenames this plugin wants read out of the archive it's currently
    * processing (basename suffixes, e.g. `"ComicInfo.xml"`, `"info.json"`) — `lanrurugi-
    * plugin-converter` populates this automatically from every `is_file_in_archive(...)` call it
@@ -135,13 +150,34 @@ export interface MetadataHostArgs {
   /** Present when the call was made against a real archive (`GET /plugins/use_plugin?id=...`);
    * absent for a settings-page "test this plugin" dry run. */
   archive_id?: string;
-  /** The plugin's *one* configurable value — see {@linkcode PluginParameter}'s own docs on why
-   * only the first declared parameter is ever actually reachable here. */
-  arg: string;
+  /** The single free-text "run once" value (see {@linkcode PluginInfoResult.oneshot_arg}) —
+   * `undefined`/absent for any call that isn't a manual one-shot run. Distinct from {@linkcode
+   * customargs}. */
+  arg?: string;
+  /** This plugin's own persisted per-{@linkcode PluginParameter} values, positionally matching
+   * {@linkcode PluginInfoResult.parameters} (`customargs[0]` is `parameters[0]`'s saved value,
+   * etc.) — always present, one entry per declared parameter, `""` for any never configured. */
+  customargs: string[];
   /** The archive's on-disk path — fetched by the host once per call
    * (`lanrurugi-api::plugins::use_plugin_sync`) so a filename-deriving plugin (e.g. "Filename
    * Parsing") doesn't need its own round trip back into the API just to resolve an ID to a path. */
   file_path?: string;
+  /** `file_path`'s own last-modified time (Unix seconds) — resolved host-side (a plain `stat`
+   * call) alongside `file_path` itself so a plugin needing this (currently only
+   * `plugins/metadata/dateadded.ts`) doesn't need its own filesystem read permission just for
+   * this one call. Absent when `file_path` itself is absent, or the `stat` call failed. */
+  file_modified_time?: number;
+  /** A small, deliberately narrow subset of the server's global settings (`LRR_CONFIG`) a
+   * metadata plugin might need to consult — currently just `usedateadded`/`usedatemodified`
+   * (`plugins/metadata/dateadded.ts`'s own settings-driven defaults). Not the *entire* settings
+   * hash (constitution Principle IV: no broader access than a plugin actually needs). */
+  settings?: { usedateadded: boolean; usedatemodified: boolean };
+  /** Another archive's stored `tags` string, resolved host-side by extracting a 40-character
+   * archive ID out of this call's own {@linkcode arg} — currently only computed (and only
+   * non-null) for `plugins/metadata/copyarchivetags.ts`, which has no other way to read a
+   * *different* archive's metadata from inside the Deno sandbox (no direct storage access).
+   * `null` when `arg` contains no valid ID, or that ID doesn't resolve to a real archive. */
+  other_archive_tags?: string | null;
   /** Content of every file listed in this plugin's own {@linkcode
    * PluginInfoResult.sidecar_files}, keyed by that same filename — present (possibly empty) only
    * when `sidecar_files` was non-empty; a missing/unreadable/non-UTF-8 file is just absent from
@@ -182,11 +218,14 @@ export interface MetadataResult {
   error?: string;
 }
 
-/** `hostArgs` for `execLogin` — always just the plugin's own one configurable value (credentials,
- * typically), never an `archive_id`/`file_path` (a login plugin never runs against a specific
- * archive). */
+/** `hostArgs` for `execLogin` — the plugin's own persisted parameter values (credentials,
+ * typically — see {@linkcode MetadataHostArgs.customargs}'s own docs, same shape), never an
+ * `archive_id`/`file_path` (a login plugin never runs against a specific archive). Re-sent on
+ * *every* call to whatever declares this plugin as its `login_from` (never a cached session —
+ * see {@linkcode PluginInfoResult.login_from}), so credentials always reflect the current saved
+ * settings. */
 export interface LoginHostArgs {
-  arg: string;
+  customargs: string[];
 }
 
 /** `execLogin`'s return shape. Only `cookies` is ever read by the host
@@ -206,18 +245,103 @@ export interface LoginResult {
  * `archive_id`/`file_path`: nothing has been catalogued yet at this point, that's the whole job
  * this entry point exists to do. */
 export interface DownloadHostArgs {
-  arg: string;
+  /** Mirrors legacy's own `%infohash` shape (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:171-175`,
+   * `url => $input`) — every real download plugin in this corpus reads `hostArgs.url`. */
+  url: string;
   category?: string;
   user_agent_cookies?: PerlCookieLike[];
 }
 
+/** One resource to fetch, as part of {@linkcode DownloadResult.downloads} — see that field's own
+ * docs. `specs/005-download-plugin-progress/contracts/plugin-download-protocol.md` is the wire
+ * contract this mirrors field-for-field. */
+export interface DownloadRequest {
+  /** The real, directly-fetchable resource URL. */
+  url: string;
+  /** Defaults to `"GET"` when absent — every real corpus plugin (and legacy LANraragi's own
+   * `Model::Upload.pm::download_url`) only ever uses GET, but other methods remain representable
+   * for a future plugin that needs one. */
+  method?: string;
+  /** Extra request headers for this specific resource (e.g. Pixiv's anti-hotlink `Referer`
+   * header) — absent means no extra headers beyond whatever the host's own downloader sends by
+   * default. */
+  headers?: Record<string, string>;
+  /** A plugin-suggested filename, used only as a fallback when the real HTTP response has no
+   * (or an unparseable) `Content-Disposition` header. */
+  filename_hint?: string;
+}
+
 /** `execDownload`'s return shape — verified against every real legacy `Download/*.pm`'s own
- * `provide_url` sub, all of which return exactly `(download_url => ...)` on success or
- * `(error => ...)` on failure. The host currently just stores this as an opaque background-job
- * result (`lanrurugi-api::plugins`'s `use_plugin_async`-style `tokio::spawn` + `jobs.finish`) — no
- * `Download/*.pm` file has been converted yet (`mise run convert-plugins -- <legacy-checkout>
- * download` does this). */
+ * `provide_url` sub. The host performs the real byte-level HTTP transfer itself now (Rust-side
+ * streaming download — see `specs/005-download-plugin-progress/plan.md`'s Summary for why: this
+ * is what makes real progress reporting, per-domain concurrency limiting, and rate limiting
+ * possible at all), rather than treating a plugin's result as an opaque already-downloaded blob.
+ *
+ * Exactly one of {@linkcode downloads}, {@linkcode file_path}, or {@linkcode error} is present in
+ * a given result; a `downloads` array, if present, has at least one element. */
 export interface DownloadResult {
-  download_url?: string;
+  /** One element = a single-file download (e.g. Chaika/EHentai-style plugins, which resolve one
+   * real download URL); more than one element = a multi-resource download (e.g. Pixiv's per-page
+   * images), assembled per the plugin's {@linkcode PluginOptionsResult.bundle_as_archive}
+   * setting. */
+  downloads?: DownloadRequest[];
+  /** Pre-existing fallback escape hatch: a plugin that already downloaded/wrote a file itself and
+   * hands back a local path. Mutually exclusive with {@linkcode downloads}; does not receive
+   * progress/concurrency/rate-limit treatment since the transfer already happened entirely inside
+   * the plugin process by the time this returns. */
+  file_path?: string;
   error?: string;
+}
+
+/** One per-domain concurrency/rate-limit rule, as declared by a plugin's own {@linkcode
+ * PluginOptionsResult.domain_rules} default, or as a user's persisted override
+ * (`GET`/`PUT /api/plugins/{namespace}/options`) — `specs/005-download-plugin-progress/
+ * data-model.md`'s `Domain Rule`. */
+export interface DomainRule {
+  /** An exact hostname (`"example.com"`) or a wildcard covering subdomains (`"*.example.com"`).
+   * Case-insensitive; no port/scheme component. Omit entirely (or use `"*"`) for a general,
+   * non-domain-specific fallback rule. An exact-hostname match always takes precedence over a
+   * wildcard match, which always takes precedence over the general fallback. */
+  pattern?: string;
+  /** Maximum simultaneous downloads permitted against a domain matching `pattern`. Absent = no
+   * concurrency limit from this rule. */
+  max_concurrent?: number;
+  /** Maximum transfer speed (bytes/sec) permitted against a domain matching `pattern`. Absent =
+   * no rate limit from this rule. */
+  max_bytes_per_sec?: number;
+  /** Human-readable explanation shown in the settings UI. */
+  description?: string;
+}
+
+/** `pluginOptions()`'s return shape — a plain additional `export function`, parallel to the
+ * mandatory `pluginInfo()` (see this module's own top-level docs). Omitting `pluginOptions()`
+ * entirely is valid, and is the expected shape for every non-download plugin, and for a download
+ * plugin with nothing to configure — the host then shows no settings UI for that plugin at all
+ * (spec FR-015). `specs/005-download-plugin-progress/contracts/plugin-download-protocol.md` is the
+ * wire contract this mirrors field-for-field. */
+export interface PluginOptionsResult {
+  /** The plugin's own declared default {@linkcode DomainRule}s for the domain(s) it targets.
+   * Absent/empty means the plugin declares no concurrency/rate-limit defaults of its own — that
+   * domain is unmanaged (unlimited) unless a user override exists (spec FR-017: the system itself
+   * imposes no default). */
+  domain_rules?: DomainRule[];
+  /** Only meaningful for a plugin whose `execDownload` can return more than one
+   * {@linkcode DownloadResult.downloads} element. Absent for a single-resource-only plugin (no
+   * such setting shown at all). */
+  bundle_as_archive?: {
+    /** The plugin's own declared default (e.g. Pixiv: `true` — its multi-page downloads must ship
+     * as one manga archive, not one archive per page). */
+    default: boolean;
+    /** Human-readable explanation shown in the settings UI. */
+    description: string;
+  };
+  /** Whether starting a download for a URL this plugin handles should overwrite an existing
+   * archive that collides by content hash or destination filename, rather than the default safe
+   * behavior (reject the new file, keep the existing archive untouched). Omit if this plugin has
+   * no opinion — the effective value then falls back to the global `replacedupe` setting. */
+  overwrite_on_duplicate?: {
+    default: boolean;
+    /** Human-readable explanation shown in the settings UI. */
+    description: string;
+  };
 }
