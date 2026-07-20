@@ -82,25 +82,58 @@ declare global {
   };
 }
 
+/** Legacy's own `${PLUGIN_TAG_NS}` namespace (`"parsed:"`) for non-standard captured tags —
+ * hoisted above `pluginInfo()` (unlike the converter's original ordering, which put it after and
+ * left the two parameter descriptions below referencing it as a dead, non-interpolating
+ * `"${PLUGIN_TAG_NS}"` literal string instead of a real template literal). */
+const PLUGIN_TAG_NS = "parsed:";
+
 export function pluginInfo() {
   return {
     namespace: "regexplugin",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "If the filename ends with a pair of curly braces, return the contents inside them as a list of simple tags, without the \"${PLUGIN_TAG_NS}\" namespace", required: false },
-      { name: "param2", description: "Capture everything you find between a pair of parentheses and make it available under the \"${PLUGIN_TAG_NS}\" namespace<BR />", required: false },
+      { name: "param1", description: `If the filename ends with a pair of curly braces, return the contents inside them as a list of simple tags, without the "${PLUGIN_TAG_NS}" namespace`, required: false },
+      { name: "param2", description: `Capture everything you find between a pair of parentheses and make it available under the "${PLUGIN_TAG_NS}" namespace<BR />`, required: false },
       { name: "param3", description: "Regex to use for parsing", required: false },
     ],
     declared_permissions: { net: [], read: false, write: false },
     name: "Filename Parsing",
     author: "thelastfantasy",
-    description: "Derive tags from the filename of the given archive.<br><br>",
+    // Verified verbatim against `~/LANraragi/lib/LANraragi/Plugin/Metadata/RegexParse.pm`'s own
+    // `description =>` string-concatenation chain — the converter had originally only kept the
+    // first fragment ("Derive tags..."), silently dropping the naming-convention explanation, the
+    // full default regex breakdown, each capture group's meaning, the custom-named-capture-group
+    // rules, and the non-standard-tag/Tag-Rules guidance that follow it in the real source.
+    description:
+      "Derive tags from the filename of the given archive.<br><br>" +
+      'By default it follows the doujinshi naming standard "(Event) [Artist] TITLE (Series) [Language]".<br><br>' +
+      "The default regex is:<br>" +
+      "<code>(\\((?&lt;event&gt;[^([]+)\\))?\\s*(\\[(?&lt;artist&gt;[^]]+)\\])?\\s*(?&lt;title&gt;[^([]+)\\s*(\\((?&lt;series&gt;[^([)]+)\\))?\\s*(\\[(?&lt;language&gt;[^]]+)\\])?(?&lt;tail&gt;.*)?</code><br><br>" +
+      "<code>()?</code> indicates the field is optional<br>" +
+      "<code>(\\((?&lt;event&gt;[^([]+)\\))?</code> returns the content of (Event). Optional.<br>" +
+      "<code>(\\[(?&lt;artist&gt;[^]]+)\\])?</code> returns the content of [Artist]. Optional.<br>" +
+      "<code>(?&lt;title&gt;[^([]+)</code> returns the title. Mandatory.<br>" +
+      "<code>(\\((?&lt;series&gt;[^([)]+)\\))?</code> returns the content of (Series). Optional.<br>" +
+      "<code>(\\[(?&lt;language&gt;[^]]+)\\])?</code> returns the content of [Language]. Optional.<br>" +
+      "<code>(?&lt;tail&gt;.*)?</code> returns everything that is out of E-Hentai standard for further processing. Optional.<br>" +
+      "<code>\\s*</code> indicates zero or more whitespaces.<br><br>" +
+      "You can provide a custom regex using named capture groups. The group name determines the tag namespace:<br>" +
+      '&bull; <code>(?&lt;artist&gt;...)</code> &rarr; <code>artist:</code> (also extracts <code>group:</code> from "Circle (Artist)" format)<br>' +
+      "&bull; <code>(?&lt;series&gt;...)</code> &rarr; <code>series:</code><br>" +
+      "&bull; <code>(?&lt;tag&gt;...)</code> &rarr; simple tag (no namespace)<br>" +
+      "&bull; <code>(?&lt;anyname&gt;...)</code> &rarr; <code>anyname:</code><br>" +
+      "Use numbered suffixes for multiple groups of the same type: <code>(?&lt;artist2&gt;...)</code>, <code>(?&lt;tag3&gt;...)</code>, etc.<br>" +
+      "Special groups: <code>title</code> sets the archive title, <code>tail</code> is used for trailing tag processing.<br><br>" +
+      "By activating the plugin settings below, you can extend the capture to the content of each bracket in" +
+      " the filename, even if it does not belong to the standard naming format.<br>" +
+      `Non-standard tags will be made available to you associated with the "<i>${PLUGIN_TAG_NS}</i>" namespace so` +
+      " you can manage them as you please by creating your own set of Tag Rules.<br>" +
+      `My only suggestion is that you should place the rule "<i>-${PLUGIN_TAG_NS}*</i>" as your last rule to cleanup all the unnecessary elements.`,
     version: "1.2",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAL1JREFUOI1jZMABpNbH/sclx8DAwPAscDEjNnEMQUIGETIYhUOqYdgMhTPINQzdUEZqGIZsKBM1DEIGTOiuexqwCKdidDl0vtT62P9kuZCJEWuKYWBgYGBgRHbh04BFDNIb4jAUbbSrZTARUkURg6lD10OUC/0PNaMYgs1Skgwk1jCSDCQWoBg46dYmhite0+D8pwGLCMY6uotRDOy8toZBkI2HIhcO/pxCm8KBUkOxFl/kGoq3gCXFYFxVAACeoU/8xSNybwAAAABJRU5ErkJggg==",
   };
 }
-
-const PLUGIN_TAG_NS = "parsed:";
 const COMMON_EXTRANEOUS_VALUES = new Set([
   "uncensored", "decensored", "ongoing", "pixiv", "twitter", "fanbox", "cosplay", "digital",
 ]);

@@ -83,7 +83,9 @@ export function pluginInfo() {
     declared_permissions: { net: ["api.e-hentai.org"], read: false, write: false },
     name: "Mayriad's EH Master Script",
     author: "thelastfantasy",
-    description: "Accurately retrieves metadata from e-hentai.org using the identifiers appeneded to the ",
+    description:
+      "Accurately retrieves metadata from e-hentai.org using the identifiers appeneded to the " +
+      "filenames of archives downloaded by Mayriad's EH Master Script.",
     version: "1.2",
     icon: "data:image/png;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAAAAAAAAAAAAAA",
     oneshot_arg: "Enter a valid EH gallery URL to copy metadata from this EH gallery to this LANraragi archive",

@@ -24,7 +24,7 @@ export default function PluginParametersForm({
   return (
     <>
       <div
-        className={`collapsible-title${open ? ' active' : ''}`}
+        className={`collapsible-title caret-right${open ? ' active' : ''}`}
         style={{ padding: '5px 0 0 5px', cursor: 'pointer' }}
         onClick={() => setOpen((o) => !o)}
       >
