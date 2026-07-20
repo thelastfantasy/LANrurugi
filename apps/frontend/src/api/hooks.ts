@@ -85,6 +85,18 @@ export function usePlugins(kind: string = 'all') {
   })
 }
 
+/** Persists a drag-and-drop reorder of one plugin `type` group (`POST /plugins/priority`) —
+ * invalidates every cached `usePlugins(...)` variant (`'all'`, the reordered type, and any other
+ * already-fetched type) since `'all'`'s own cached list also needs the new order reflected. */
+export function useReorderPlugins() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { type: PluginInfo['type']; order: string[] }) =>
+      sendJson('POST', '/plugins/priority', body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+  })
+}
+
 /** `null` (not an error state) when the plugin declares no `pluginOptions()` at all (spec FR-015
  * — a `404` from the endpoint means exactly this, not a real failure) — callers use this to decide
  * whether to render a settings affordance for a given download plugin at all. Pass `''` for a

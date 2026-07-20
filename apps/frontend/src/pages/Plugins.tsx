@@ -1,9 +1,32 @@
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
-import { usePluginOptions, usePlugins, usePluginSettings, useUpdatePluginSettings } from '../api/hooks'
+import {
+  usePluginOptions,
+  usePlugins,
+  usePluginSettings,
+  useReorderPlugins,
+  useUpdatePluginSettings,
+} from '../api/hooks'
 import type { PluginInfo } from '../api/types'
 import CollapsibleSection from '../components/CollapsibleSection'
 import { useApplyTheme } from '../theme'
@@ -82,10 +105,11 @@ export default function Plugins() {
     const groupPlugins = plugins.data?.filter((p) => p.type === group.type) ?? []
     return (
       <CollapsibleSection icon={group.icon} title={t(group.label)} key={group.type}>
-        {groupPlugins.length === 0 && <p>{t('No plugins installed.')}</p>}
-        {groupPlugins.map((p) => (
-          <PluginCard key={p.namespace} plugin={p} />
-        ))}
+        {groupPlugins.length === 0 ? (
+          <p>{t('No plugins installed.')}</p>
+        ) : (
+          <SortablePluginGroup type={group.type} plugins={groupPlugins} />
+        )}
       </CollapsibleSection>
     )
   }
@@ -196,6 +220,97 @@ export default function Plugins() {
   )
 }
 
+/** One `type` group's drag-to-reorder plugin list (additive — no legacy equivalent; legacy has no
+ * concept of plugin priority at all). Local `order` state is the array of namespaces actually
+ * rendered — seeded from (and re-synced with) the server's own already-priority-sorted list, so a
+ * drag reorders instantly without waiting on the round trip, and a background refetch (e.g. after
+ * another browser tab's own reorder) doesn't fight the in-progress drag. On drop, persists the
+ * complete new order via `useReorderPlugins` (see its own docs — full list, not a single-item
+ * delta) — this matters for "why multiple metadata plugins can both claim the same
+ * `url_pattern`": `findMatchingPlugin` (Upload.tsx) picks the first match in this exact order, so
+ * dragging FAKKU above Chaika.moe here is what makes FAKKU the one actually used for a URL both
+ * could handle. */
+function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plugins: PluginInfo[] }) {
+  const reorder = useReorderPlugins()
+  const serverOrder = plugins.map((p) => p.namespace)
+  const serverOrderKey = serverOrder.join(',')
+  const byNamespace = new Map(plugins.map((p) => [p.namespace, p]))
+
+  // Local `order` state only exists to reflect an in-progress/just-finished drag ahead of the
+  // server round trip — reset during render (React's own documented pattern for "adjust state
+  // when a prop changes", not a `useEffect`, which would cause an extra render pass here) whenever
+  // the server's own list changes for a reason other than this component's own drag (a different
+  // plugin installed/removed, another tab's reorder, etc.). Skipped while a drag-triggered
+  // mutation is still in flight, so the just-dropped order doesn't visibly snap back to the
+  // pre-drag server value for the moment before the mutation's own refetch lands.
+  const [order, setOrder] = useState(serverOrder)
+  const [syncedKey, setSyncedKey] = useState(serverOrderKey)
+  if (serverOrderKey !== syncedKey && !reorder.isPending) {
+    setOrder(serverOrder)
+    setSyncedKey(serverOrderKey)
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setOrder((current) => {
+      const oldIndex = current.indexOf(String(active.id))
+      const newIndex = current.indexOf(String(over.id))
+      const next = arrayMove(current, oldIndex, newIndex)
+      reorder.mutate({ type, order: next })
+      return next
+    })
+  }
+
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <SortableContext items={order} strategy={verticalListSortingStrategy}>
+        {order.map((namespace) => {
+          const plugin = byNamespace.get(namespace)
+          return plugin && <SortablePluginCard key={namespace} plugin={plugin} />
+        })}
+      </SortableContext>
+    </DndContext>
+  )
+}
+
+/** Drag handle + `PluginCard` — the handle is a separate small grip icon rather than making the
+ * whole card draggable, so clicking anywhere in a card's own controls (checkboxes, buttons, the
+ * script-arg input) doesn't fight `PointerSensor`'s own activation constraint. */
+function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: plugin.namespace,
+  })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 4,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{ cursor: 'grab', padding: '4px 2px', touchAction: 'none', flexShrink: 0 }}
+      >
+        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <PluginCard plugin={plugin} />
+      </div>
+    </div>
+  )
+}
+
 // Per-plugin card, mirroring legacy's exact `pluginlist` markup (`plugins.html.tt2` lines
 // 121-215): an inline-block `<span>` at 80% width with a bottom-border separator between entries,
 // name/version/author inline, "Run Automatically"/"depends on login plugin" floated right, then
@@ -286,7 +401,10 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
         </div>
 
         <br />
-        {plugin.description}
+        {/* Plugin-declared static HTML (`<br/>`, `<i class="fa ...">`, etc. — verified against
+            every shipped plugin's own `description` literal, not user input) — legacy's own
+            template (`plugins.html.tt2`) renders this the same way, unescaped. */}
+        <span dangerouslySetInnerHTML={{ __html: plugin.description }} />
         <br />
 
         {plugin.type === 'script' && (
@@ -295,7 +413,7 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
               {plugin.oneshot_arg && (
                 <tr>
                   <td style={{ verticalAlign: 'middle' }}>
-                    <b>{t(plugin.oneshot_arg)} :</b>
+                    <b dangerouslySetInnerHTML={{ __html: `${t(plugin.oneshot_arg)} :` }} />
                   </td>
                   <td>
                     <input style={{ maxWidth: 200 }} size={20} value={scriptArg} onChange={(e) => setScriptArg(e.target.value)} />

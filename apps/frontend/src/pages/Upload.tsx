@@ -45,6 +45,12 @@ function matchesPattern(plugin: PluginInfo, url: string): boolean {
   }
 }
 
+/** When more than one plugin's `url_pattern` matches the same URL (a real, expected case — e.g.
+ * multiple metadata plugins that can all handle a given site), the first match wins. This relies
+ * on `usePlugins(...)`'s own list already being sorted by priority server-side
+ * (`lanrurugi-api::plugins::list_plugins`), which in turn reflects the Plugins page's own
+ * drag-to-reorder — so "first match" here means "highest-priority match", not "whichever
+ * happened to be discovered first on disk". */
 function findMatchingPlugin(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
   return plugins?.find((p) => matchesPattern(p, url)) ?? null
 }

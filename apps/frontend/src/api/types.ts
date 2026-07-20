@@ -121,6 +121,12 @@ export interface PluginInfo {
   // metadata plugin) to find the one applicable plugin for a metadata-preview-by-URL action.
   // `null` when this plugin has no meaningful URL-based routing.
   url_pattern: string | null
+  // This plugin's persisted display-order position within its own `type` group — `null` when
+  // never explicitly set (a fresh install, or added after the last reorder). `GET /plugins/{type}`
+  // already returns the list pre-sorted by this (falling back to discovery order for `null`
+  // entries), so a caller only needs this field to render a drag handle's current position, not
+  // to re-derive the sort itself.
+  priority: number | null
   parameters: Array<{ name: string; desc: string }>
 }
 

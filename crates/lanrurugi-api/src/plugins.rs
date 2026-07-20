@@ -92,6 +92,23 @@ async fn get_plugin_customargs(
     args
 }
 
+/// A plugin's persisted display-order priority within its own `type` group — lower sorts first,
+/// same convention as Redis's own `ZADD` ordering (not legacy, which has no such concept at all;
+/// this is a genuinely new, additive feature). Stored in the same `LRR_PLUGIN_<NS>` hash as
+/// `customargs`/`enabled` under a new `priority` field. Absent for a plugin whose order was never
+/// explicitly set (a fresh install, or one added after the last reorder) — `None` in that case,
+/// which `list_plugins` sorts *after* every plugin with a real priority (falling back to
+/// discovery order among themselves), so a newly installed plugin doesn't jump ahead of ones a
+/// user already arranged.
+async fn get_plugin_priority(state: &AppState, namespace: &str) -> Option<i64> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let raw: Option<String> = conn
+        .hget(plugin_settings_key(namespace), "priority")
+        .await
+        .unwrap_or_default();
+    raw?.parse().ok()
+}
+
 /// Runs `info`'s declared `login_from` plugin (if any) fresh and folds the resulting cookies into
 /// `args["user_agent_cookies"]` — mirrors legacy's `exec_login_plugin`
 /// (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:107-135`), which re-logs-in before *every*
@@ -197,6 +214,7 @@ pub fn router() -> Router<AppState> {
             "/plugins/settings",
             get(get_plugin_settings).put(put_plugin_settings),
         )
+        .route("/plugins/priority", post(put_plugin_priority))
         .route("/download_url", post(download_url))
         .route("/plugins/upload", post(upload_plugin))
         .route(
@@ -307,6 +325,66 @@ async fn put_plugin_settings(
             e.to_string(),
         ),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutPluginPriorityBody {
+    /// This body's own `type` — matched against every included namespace's *actual* declared
+    /// `plugin_info().type` before writing anything, so a stale/forged request naming a plugin of
+    /// a different type than claimed can't silently reorder it into the wrong group.
+    #[serde(rename = "type")]
+    kind: String,
+    /// The complete, newly-ordered namespace list for `type` (every plugin of that type the
+    /// client currently has rendered, front-to-back) — not a partial move-this-one-item delta, to
+    /// keep the write dead simple: each namespace's `priority` becomes its index in this array.
+    order: Vec<String>,
+}
+
+/// `PUT /plugins/priority` — persists a drag-and-drop reorder of one plugin `type` group's display
+/// order (additive, no legacy equivalent: legacy's `plugins.html.tt2` has no such affordance at
+/// all). Rewrites every listed namespace's `priority` field in its own `LRR_PLUGIN_<NS>` hash
+/// (same storage as `customargs`/`enabled`) to its position in `order`, so a subsequent
+/// `GET /plugins/{type}` sorts accordingly. A namespace whose actual type doesn't match `body.type`
+/// is skipped (not written, not erroring the whole request) — see `PutPluginPriorityBody::kind`'s
+/// own docs for why this check exists at all.
+async fn put_plugin_priority(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<PutPluginPriorityBody>,
+) -> Response {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "put_plugin_priority",
+                e.to_string(),
+            )
+        }
+    };
+    let mut skipped = Vec::new();
+    for (index, namespace) in body.order.iter().enumerate() {
+        let matches_type = state
+            .plugins
+            .plugin_info(namespace)
+            .await
+            .map(|info| info.kind == body.kind)
+            .unwrap_or(false);
+        if !matches_type {
+            skipped.push(namespace.clone());
+            continue;
+        }
+        let key = plugin_settings_key(namespace);
+        let result: Result<(), _> = conn.hset(&key, "priority", index.to_string()).await;
+        if let Err(e) = result {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "put_plugin_priority",
+                e.to_string(),
+            );
+        }
+    }
+    axum::Json(json!({ "operation": "put_plugin_priority", "success": 1, "skipped": skipped }))
+        .into_response()
 }
 
 /// Fetches `namespace`'s declared `pluginOptions()` fresh from the plugin, mapping "plugin exports
@@ -525,10 +603,20 @@ async fn discover_namespaces(plugins_dir: &std::path::Path) -> Vec<String> {
 
 async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -> Response {
     let namespaces = discover_namespaces(&state.plugins_dir).await;
+    // discovery order, per-type — the fallback ordering for any plugin with no explicit priority
+    // (see `get_plugin_priority`'s own docs), and the tiebreak among several such plugins.
+    let mut discovery_index: std::collections::HashMap<String, usize> = Default::default();
+    let mut per_type_counter: std::collections::HashMap<String, usize> = Default::default();
+
     let mut plugins = Vec::new();
     for ns in namespaces {
         if let Ok(info) = state.plugins.plugin_info(&ns).await {
             if kind == "all" || info.kind == kind {
+                let counter = per_type_counter.entry(info.kind.clone()).or_insert(0);
+                discovery_index.insert(ns.clone(), *counter);
+                *counter += 1;
+
+                let priority = get_plugin_priority(&state, &ns).await;
                 plugins.push(json!({
                     // The file-discovery-path namespace (`ns`, e.g. `download/pixiv`) — not the
                     // plugin's own self-declared `info.namespace` (e.g. `pixivdl`, legacy's
@@ -557,6 +645,7 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
                     // file-path namespace happens in `resolve_declared_namespace`, not here.
                     "login_from": info.login_from,
                     "url_pattern": info.url_pattern,
+                    "priority": priority,
                     "parameters": info.parameters.iter().map(|p| json!({
                         "name": p.name,
                         "desc": p.description,
@@ -565,6 +654,24 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
             }
         }
     }
+
+    // Sort by (type, priority-or-discovery-order) so the response is already in the order the
+    // Plugins page's own drag-to-reorder should display, and `findMatchingPlugin`-style callers
+    // just take the first url_pattern match within a type rather than needing their own sort.
+    plugins.sort_by(|a, b| {
+        let type_a = a["type"].as_str().unwrap_or("");
+        let type_b = b["type"].as_str().unwrap_or("");
+        type_a.cmp(type_b).then_with(|| {
+            let ns_a = a["namespace"].as_str().unwrap_or("");
+            let ns_b = b["namespace"].as_str().unwrap_or("");
+            let rank = |v: &Value, ns: &str| {
+                v.as_i64()
+                    .unwrap_or_else(|| i64::MAX / 2 + *discovery_index.get(ns).unwrap_or(&0) as i64)
+            };
+            rank(&a["priority"], ns_a).cmp(&rank(&b["priority"], ns_b))
+        })
+    });
+
     axum::Json(plugins).into_response()
 }
 
