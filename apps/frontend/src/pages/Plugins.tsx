@@ -300,7 +300,15 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
       <span
         {...attributes}
         {...listeners}
-        style={{ cursor: 'grab', padding: '4px 2px', touchAction: 'none', flexShrink: 0 }}
+        style={{
+          cursor: 'grab',
+          padding: '4px 2px',
+          touchAction: 'none',
+          flexShrink: 0,
+          fontSize: '0.9em',
+          opacity: 0.5,
+          lineHeight: 1,
+        }}
       >
         <i className="fa fa-grip-vertical" aria-hidden="true"></i>
       </span>
