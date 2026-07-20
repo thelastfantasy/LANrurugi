@@ -279,14 +279,22 @@ function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plug
   )
 }
 
-/** Drag handle + `PluginCard`. The handle renders *inline*, right before the card's own icon
- * (passed down as `dragHandle` rather than wrapped around the card in its own flex column) — an
- * earlier version put it in a separate column to the left of the whole card, but `PluginCard`'s
- * own root span is already legacy's `width: 80%` inset (`plugins.html.tt2`'s own layout), so a
- * separate column left a wide empty gutter (handle + flex gap + that pre-existing inset) that
- * read as one oversized dead zone. Kept as a distinct small grip rather than making the whole
- * card draggable, so clicking anywhere in the card's own controls (checkboxes, buttons, the
- * script-arg input) doesn't fight `PointerSensor`'s own activation constraint. */
+/** Width of the drag-handle column — narrow (just enough for the grip glyph plus a little
+ * click-target padding), not a full flex `gap`-separated column sized by its own content, which
+ * is what made an earlier version's handle column read as an oversized empty gutter next to
+ * `PluginCard`'s own `width: 80%` inset. */
+const DRAG_HANDLE_COLUMN_WIDTH = 18
+
+/** Drag handle + `PluginCard`, in its own narrow column that spans the full card height
+ * (`alignSelf: 'stretch'` on the column, not just the icon's own line) so it reads as a real
+ * grab-strip along the card's left edge, not a stray inline glyph — while staying `18px` wide so
+ * it doesn't reopen the "wide empty gutter" problem a wider/`gap`-separated column caused before.
+ * Dragging gets real depth cues (lift shadow + slight scale-up + a raised `zIndex`) so the card
+ * being moved visibly separates from the stack instead of just fading via `opacity`, matching
+ * dnd-kit's own recommended drag-overlay-style affordance. Kept as a distinct small grip rather
+ * than making the whole card draggable, so clicking anywhere in the card's own controls
+ * (checkboxes, buttons, the script-arg input) doesn't fight `PointerSensor`'s own activation
+ * constraint. */
 function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: plugin.namespace,
@@ -294,28 +302,38 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    display: 'flex',
+    alignItems: 'stretch',
+    ...(isDragging && {
+      zIndex: 1,
+      position: 'relative',
+      boxShadow: '0 8px 16px rgba(0, 0, 0, 0.35)',
+      scale: '1.02',
+    }),
   }
-
-  const dragHandle = (
-    <span
-      {...attributes}
-      {...listeners}
-      style={{
-        cursor: 'grab',
-        touchAction: 'none',
-        fontSize: '0.9em',
-        opacity: 0.5,
-        marginRight: 4,
-      }}
-    >
-      <i className="fa fa-grip-vertical" aria-hidden="true"></i>
-    </span>
-  )
 
   return (
     <div ref={setNodeRef} style={style}>
-      <PluginCard plugin={plugin} dragHandle={dragHandle} />
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          width: DRAG_HANDLE_COLUMN_WIDTH,
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: isDragging ? 'grabbing' : 'grab',
+          touchAction: 'none',
+          fontSize: '0.9em',
+          opacity: 0.5,
+        }}
+      >
+        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <PluginCard plugin={plugin} />
+      </div>
     </div>
   )
 }
@@ -328,7 +346,7 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
 // specs/005-download-plugin-progress) for download plugins whose `pluginOptions()` resolves —
 // deliberately distinctly labeled from "Plugin Settings" so the two aren't confused for one
 // another, rendered inside the same floated-right corner legacy uses for its own toggles.
-function PluginCard({ plugin, dragHandle }: { plugin: PluginInfo; dragHandle?: React.ReactNode }) {
+function PluginCard({ plugin }: { plugin: PluginInfo }) {
   const { t } = useTranslation()
   const [downloadSettingsOpen, setDownloadSettingsOpen] = useState(false)
   const [scriptArg, setScriptArg] = useState('')
@@ -363,7 +381,6 @@ function PluginCard({ plugin, dragHandle }: { plugin: PluginInfo; dragHandle?: R
           borderBottomStyle: 'solid',
         }}
       >
-        {dragHandle}
         {plugin.icon ? (
           <img height={20} width={20} src={plugin.icon} alt="" />
         ) : (
