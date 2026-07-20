@@ -1,20 +1,3 @@
-import {
-  closestCenter,
-  DndContext,
-  type DragEndEvent,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,6 +12,7 @@ import {
 } from '../api/hooks'
 import type { PluginInfo } from '../api/types'
 import CollapsibleSection from '../components/CollapsibleSection'
+import SortableList, { type DragHandleProps } from '../components/SortableList'
 import { useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 import PluginOptionsForm from './PluginOptionsForm'
@@ -234,7 +218,6 @@ function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plug
   const reorder = useReorderPlugins()
   const serverOrder = plugins.map((p) => p.namespace)
   const serverOrderKey = serverOrder.join(',')
-  const byNamespace = new Map(plugins.map((p) => [p.namespace, p]))
 
   // Local `order` state only exists to reflect an in-progress/just-finished drag ahead of the
   // server round trip — reset during render (React's own documented pattern for "adjust state
@@ -250,32 +233,19 @@ function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plug
     setSyncedKey(serverOrderKey)
   }
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  )
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    setOrder((current) => {
-      const oldIndex = current.indexOf(String(active.id))
-      const newIndex = current.indexOf(String(over.id))
-      const next = arrayMove(current, oldIndex, newIndex)
-      reorder.mutate({ type, order: next })
-      return next
-    })
-  }
+  const byNamespace = new Map(plugins.map((p) => [p.namespace, p]))
+  const orderedPlugins = order.map((namespace) => byNamespace.get(namespace)).filter((p): p is PluginInfo => !!p)
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={order} strategy={verticalListSortingStrategy}>
-        {order.map((namespace) => {
-          const plugin = byNamespace.get(namespace)
-          return plugin && <SortablePluginCard key={namespace} plugin={plugin} />
-        })}
-      </SortableContext>
-    </DndContext>
+    <SortableList
+      items={orderedPlugins}
+      getId={(p) => p.namespace}
+      onReorder={(next) => {
+        setOrder(next)
+        reorder.mutate({ type, order: next })
+      }}
+      renderItem={(plugin, dragHandleProps) => <PluginCard plugin={plugin} dragHandleProps={dragHandleProps} />}
+    />
   )
 }
 
@@ -285,59 +255,6 @@ function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plug
  * `PluginCard`'s own `width: 80%` inset. */
 const DRAG_HANDLE_COLUMN_WIDTH = 18
 
-/** Drag handle + `PluginCard`, in its own narrow column that spans the full card height
- * (`alignSelf: 'stretch'` on the column, not just the icon's own line) so it reads as a real
- * grab-strip along the card's left edge, not a stray inline glyph — while staying `18px` wide so
- * it doesn't reopen the "wide empty gutter" problem a wider/`gap`-separated column caused before.
- * Dragging gets real depth cues (lift shadow + slight scale-up + a raised `zIndex`) so the card
- * being moved visibly separates from the stack instead of just fading via `opacity`, matching
- * dnd-kit's own recommended drag-overlay-style affordance. Kept as a distinct small grip rather
- * than making the whole card draggable, so clicking anywhere in the card's own controls
- * (checkboxes, buttons, the script-arg input) doesn't fight `PointerSensor`'s own activation
- * constraint. */
-function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: plugin.namespace,
-  })
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    display: 'flex',
-    alignItems: 'stretch',
-    ...(isDragging && {
-      zIndex: 1,
-      position: 'relative',
-      boxShadow: '0 8px 16px rgba(0, 0, 0, 0.35)',
-      scale: '1.02',
-    }),
-  }
-
-  return (
-    <div ref={setNodeRef} style={style}>
-      <span
-        {...attributes}
-        {...listeners}
-        style={{
-          width: DRAG_HANDLE_COLUMN_WIDTH,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: isDragging ? 'grabbing' : 'grab',
-          touchAction: 'none',
-          fontSize: '0.9em',
-          opacity: 0.5,
-        }}
-      >
-        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <PluginCard plugin={plugin} />
-      </div>
-    </div>
-  )
-}
-
 // Per-plugin card, mirroring legacy's exact `pluginlist` markup (`plugins.html.tt2` lines
 // 121-215): an inline-block `<span>` at 80% width with a bottom-border separator between entries,
 // name/version/author inline, "Run Automatically"/"depends on login plugin" floated right, then
@@ -346,7 +263,13 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
 // specs/005-download-plugin-progress) for download plugins whose `pluginOptions()` resolves —
 // deliberately distinctly labeled from "Plugin Settings" so the two aren't confused for one
 // another, rendered inside the same floated-right corner legacy uses for its own toggles.
-function PluginCard({ plugin }: { plugin: PluginInfo }) {
+function PluginCard({
+  plugin,
+  dragHandleProps,
+}: {
+  plugin: PluginInfo
+  dragHandleProps: DragHandleProps
+}) {
   const { t } = useTranslation()
   const [downloadSettingsOpen, setDownloadSettingsOpen] = useState(false)
   const [scriptArg, setScriptArg] = useState('')
@@ -370,8 +293,42 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
     }
   }
 
+  const { attributes, listeners, isDragging } = dragHandleProps
+
   return (
-    <>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'stretch',
+        // Only ever true inside `SortableList`'s own `DragOverlay` (see that component's docs) —
+        // this element is genuinely detached from the page's normal layout flow at that point, so
+        // a lift shadow/scale-up/raised z-index here can't squish or overlap any other row the
+        // way it did before the overlay refactor.
+        ...(isDragging && {
+          zIndex: 1,
+          position: 'relative',
+          boxShadow: '0 8px 16px rgba(0, 0, 0, 0.35)',
+          scale: '1.02',
+        }),
+      }}
+    >
+      <span
+        {...attributes}
+        {...listeners}
+        style={{
+          width: DRAG_HANDLE_COLUMN_WIDTH,
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: isDragging ? 'grabbing' : 'grab',
+          touchAction: 'none',
+          fontSize: '0.9em',
+          opacity: 0.5,
+        }}
+      >
+        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
+      </span>
       <span
         style={{
           display: 'inline-block',
@@ -471,6 +428,6 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
       </span>
       <br />
       <br />
-    </>
+    </div>
   )
 }
