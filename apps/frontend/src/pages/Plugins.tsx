@@ -279,8 +279,13 @@ function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plug
   )
 }
 
-/** Drag handle + `PluginCard` — the handle is a separate small grip icon rather than making the
- * whole card draggable, so clicking anywhere in a card's own controls (checkboxes, buttons, the
+/** Drag handle + `PluginCard`. The handle renders *inline*, right before the card's own icon
+ * (passed down as `dragHandle` rather than wrapped around the card in its own flex column) — an
+ * earlier version put it in a separate column to the left of the whole card, but `PluginCard`'s
+ * own root span is already legacy's `width: 80%` inset (`plugins.html.tt2`'s own layout), so a
+ * separate column left a wide empty gutter (handle + flex gap + that pre-existing inset) that
+ * read as one oversized dead zone. Kept as a distinct small grip rather than making the whole
+ * card draggable, so clicking anywhere in the card's own controls (checkboxes, buttons, the
  * script-arg input) doesn't fight `PointerSensor`'s own activation constraint. */
 function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -290,31 +295,27 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 4,
   }
+
+  const dragHandle = (
+    <span
+      {...attributes}
+      {...listeners}
+      style={{
+        cursor: 'grab',
+        touchAction: 'none',
+        fontSize: '0.9em',
+        opacity: 0.5,
+        marginRight: 4,
+      }}
+    >
+      <i className="fa fa-grip-vertical" aria-hidden="true"></i>
+    </span>
+  )
 
   return (
     <div ref={setNodeRef} style={style}>
-      <span
-        {...attributes}
-        {...listeners}
-        style={{
-          cursor: 'grab',
-          padding: '4px 2px',
-          touchAction: 'none',
-          flexShrink: 0,
-          fontSize: '0.9em',
-          opacity: 0.5,
-          lineHeight: 1,
-        }}
-      >
-        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <PluginCard plugin={plugin} />
-      </div>
+      <PluginCard plugin={plugin} dragHandle={dragHandle} />
     </div>
   )
 }
@@ -327,7 +328,7 @@ function SortablePluginCard({ plugin }: { plugin: PluginInfo }) {
 // specs/005-download-plugin-progress) for download plugins whose `pluginOptions()` resolves —
 // deliberately distinctly labeled from "Plugin Settings" so the two aren't confused for one
 // another, rendered inside the same floated-right corner legacy uses for its own toggles.
-function PluginCard({ plugin }: { plugin: PluginInfo }) {
+function PluginCard({ plugin, dragHandle }: { plugin: PluginInfo; dragHandle?: React.ReactNode }) {
   const { t } = useTranslation()
   const [downloadSettingsOpen, setDownloadSettingsOpen] = useState(false)
   const [scriptArg, setScriptArg] = useState('')
@@ -362,6 +363,7 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
           borderBottomStyle: 'solid',
         }}
       >
+        {dragHandle}
         {plugin.icon ? (
           <img height={20} width={20} src={plugin.icon} alt="" />
         ) : (
