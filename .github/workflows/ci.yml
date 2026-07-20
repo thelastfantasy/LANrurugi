@@ -12,16 +12,6 @@ jobs:
   rust:
     name: Rust (check, fmt, clippy, test)
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
       LANRURUGI_TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
@@ -58,11 +48,29 @@ jobs:
       # against these at build time. `ubuntu-latest` doesn't ship them, so linking failed with
       # "mold: fatal: library not found: bz2" (first library alphabetically probed; the others
       # would have failed the same way one at a time without this).
-      - name: Install libarchive build dependencies
+      - name: Install libarchive build dependencies + redis-server
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            redis-server
+
+      # A `services.redis` Docker container can't be started with a custom `--databases` count
+      # (the `services:` schema only allows docker-run flags via `options`, not overriding the
+      # image's own command — and Redis's `databases` setting is immutable at runtime, confirmed
+      # via `CONFIG SET databases N` returning "can't set immutable config"). The workspace's own
+      # test suites collectively claim logical DB indices up to 23 across several crates
+      # (`lanrurugi-scanner::pipeline`'s own comment documents its disjoint-offset convention with
+      # `full_scan.rs`) — `redis-server`'s own default of 16 databases (0-15) isn't enough. Same
+      # real-binary approach the `e2e` job already uses (see its own comment: a service container
+      # can't be given the extra flags a real binary can).
+      - name: Start redis-server with extra logical databases
+        run: |
+          redis-server --daemonize yes --databases 64 --save "" --appendonly no
+          for i in $(seq 1 10); do
+            redis-cli ping && break
+            sleep 1
+          done
 
       - name: cargo check
         run: cargo check --workspace
