@@ -511,62 +511,16 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
     let _: () = conn.hdel("LRR_CONFIG", "theme").await.unwrap();
 }
 
-/// Faithful port of `nHentaiSourceConverter.pm`: `source:{<=6 digits}` becomes
-/// `source:nhentai.net/g/{digits}`; longer numbers and already-converted tags are untouched.
-#[tokio::test]
-async fn nhentai_source_converter_rewrites_short_numeric_source_tags_only() {
-    let Some((app, redis)) = test_app().await else {
-        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
-        return;
-    };
-    let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
-
-    let id = "e".repeat(40);
-    repo.save(&Archive {
-        id: id.clone(),
-        name: "n".to_string(),
-        title: "n".to_string(),
-        file: "/nonexistent/n.zip".to_string(),
-        tags: "source:123456, artist:someone, source:nhentai.net/g/1, source:1234567".to_string(),
-        summary: String::new(),
-        arcsize: 1,
-        pagecount: 1,
-        isnew: false,
-        lastreadpage: 0,
-        lastreadtime: 0,
-        thumbhash: None,
-        toc: vec![],
-        stamp_ids: vec![],
-    })
-    .await
-    .unwrap();
-
-    let response = app
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/api/database/scripts/nhentai-source-converter")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["success"], 1);
-    assert_eq!(json["modified"], 1);
-
-    let updated = repo.get(&id).await.unwrap().unwrap();
-    assert_eq!(
-        updated.tags,
-        "source:nhentai.net/g/123456, artist:someone, source:nhentai.net/g/1, source:1234567"
-    );
-
-    repo.delete(&id).await.unwrap();
-}
+// The old `nhentai_source_converter_rewrites_short_numeric_source_tags_only` test that used to
+// live here asserted against `POST /api/database/scripts/nhentai-source-converter` — a native
+// Rust endpoint that no longer exists (`nHentaiSourceConverter.pm` was migrated to a real
+// `script`-type plugin, `plugins/script/nhentaisourceconverter.ts`, run through `/plugins/use`
+// like every other plugin — see that file's own doc comment). It had been silently 404ing on
+// every run for some time (nobody noticed because `LANRURUGI_TEST_REDIS_URL` had never actually
+// been wired into the containerized test flow, so it — like every other Redis-gated test here —
+// was reported as `ok` while actually just skipping). Replaced by a real end-to-end test that
+// calls the actual plugin through the real Deno dispatcher:
+// `lanrurugi_api::plugins::tests::nhentai_source_converter_rewrites_short_numeric_source_tags_only`.
 
 /// Regression guard: `subfolders_to_categories` (`FolderToCat.pm` port) once generated catids as
 /// `SET_<timestamp>_<index>`, which doesn't match `CategoryRepository::list_all`'s

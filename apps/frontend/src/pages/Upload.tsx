@@ -1008,12 +1008,30 @@ function QueueItemRow({
   )
 }
 
-/** Splits a filename into its stem and extension the same way Rust's `Path::file_stem()`/
- * `extension()` do — `{filename}` (the template variable) is deliberately the stem only, not the
+/** Common compound extensions hardcoded, not user-configurable — real occurrences of this in this
+ * app's actual corpus (archive-download plugin output) are rare enough that a whole settings
+ * surface for it would be over-engineering. Checked longest-first purely so a filename that
+ * somehow matched more than one entry always takes the more specific/longer one (not currently
+ * possible with this exact list, but keeps the ordering intentional rather than incidental). */
+const COMPOUND_EXTENSIONS = ['tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst']
+
+/** Splits a filename into its stem and extension — matches Rust's `Path::file_stem()`/
+ * `extension()` for an ordinary single-segment extension, but recognizes `COMPOUND_EXTENSIONS` as
+ * one whole unit (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`, not `{stem:
+ * "archive.tar", ext: "gz"}`) — otherwise `{filename}`/`{ext}` (the template variables this feeds)
+ * would silently mangle a `.tar.gz` name, leaving half the real suffix stuck onto `{filename}`
+ * instead of `{ext}`. `{filename}` (the template variable) is deliberately the stem only, not the
  * full original name, since the default template `{filename}_{crc}.{ext}` already appends the
  * extension back on separately (explicit user call: this way the default never accidentally
  * duplicates it, e.g. `archive.zip_a1b2c3d4.zip`). */
 function splitFilenameStemAndExt(filename: string): { stem: string; ext: string } {
+  for (const compound of COMPOUND_EXTENSIONS) {
+    const suffix = `.${compound}`
+    const start = filename.length - suffix.length
+    if (start > 0 && filename.endsWith(suffix)) {
+      return { stem: filename.slice(0, start), ext: compound }
+    }
+  }
   const lastDot = filename.lastIndexOf('.')
   if (lastDot <= 0) return { stem: filename, ext: '' }
   return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
@@ -1138,6 +1156,349 @@ function anchoredPosition(
   return { top, left }
 }
 
+/** One piece of a parsed template string — either literal, freely-editable text, or a `{var}`/
+ * `({var})`/`.{var}` token rendered as an atomic, non-editable chip (with its own `×` remove
+ * button). Mirrors how a real mail-merge/mention editor represents a mixed text+placeholder
+ * string internally, rather than trying to treat the whole thing as one opaque string the way the
+ * plain-`<input>` version of this popover used to. */
+type TemplateSegment = { type: 'text'; value: string } | { type: 'token'; value: string }
+
+/** A real, zero-visual-width but genuinely-present text-node character — inserted immediately
+ * before and after every chip `<span>` in `renderSegments` so a native browser caret has an actual
+ * text-node anchor to land in/near a chip boundary. Two `contentEditable={false}` chip `<span>`s
+ * placed directly adjacent (or a chip at the very start/end of the editor, adjacent only to the
+ * container edge) give the browser's native caret-placement logic no text-node landing spot at
+ * all — confirmed live: clicking directly between two adjacent chips (or before the first/after
+ * the last) either silently fails to place a visible caret, or places one that's effectively
+ * invisible in the ~2px gap chip margins leave (a real, reported bug — widening that margin alone
+ * wouldn't fix the underlying "no text node here" cause, only make the same invisible-caret gap
+ * wider). Filtered back out in `extractTemplateFromDom`/skipped in `setCursorAtOffset`'s length
+ * accounting, so it never leaks into the real template string this editor represents. */
+const CURSOR_ANCHOR = '\u200b'
+
+/** Splits a template string into alternating text/token segments — `token` segments capture the
+ * optional wrapping `(`/`)` and leading `.` a Shift-click insertion can add (see
+ * `shiftClickInsertion`), so the whole thing (`({crc})`, `.{ext}`, `{filename}`) round-trips back
+ * into `substituteFilenameTemplate` unchanged as one atomic unit. */
+function parseTemplateSegments(template: string): TemplateSegment[] {
+  const segments: TemplateSegment[] = []
+  let lastIndex = 0
+  for (const match of template.matchAll(/\.?\(?\{[\w-]+\}\)?/g)) {
+    const start = match.index
+    if (start > lastIndex) {
+      segments.push({ type: 'text', value: template.slice(lastIndex, start) })
+    }
+    segments.push({ type: 'token', value: match[0] })
+    lastIndex = start + match[0].length
+  }
+  if (lastIndex < template.length) {
+    segments.push({ type: 'text', value: template.slice(lastIndex) })
+  }
+  return segments
+}
+
+/** A real mixed text/chip editor for a filename template string — a `contentEditable` `<div>`
+ * (not a plain `<input>`) since a token needs to render as an atomic, visually distinct chip with
+ * its own `×` button sitting *inline* among freely-typed text on either side of it, which a plain
+ * `<input>`'s single text node fundamentally can't represent. Each chip is
+ * `contentEditable={false}` (so the browser's own cursor/selection engine treats it as one
+ * indivisible unit — arrow keys skip over it in one step, Backspace at its edge deletes the whole
+ * thing, exactly like a real mention/tag in Gmail or Notion) sitting inside the outer
+ * `contentEditable="true"` container, which handles everything else (typing, arrow keys, text
+ * selection) via native browser behavior — no custom Selection/Range bookkeeping for the
+ * plain-text parts at all.
+ *
+ * Re-parses `template` into segments on every render (`parseTemplateSegments`) and re-renders the
+ * whole DOM subtree from that — a controlled `contentEditable` in the same sense a controlled
+ * `<input>` is, just with a heavier DOM diff. `onInput` reads the live DOM back out
+ * (`extractTemplateFromDom`) rather than trying to track incremental text-node edits. */
+function TemplateInput({
+  template,
+  onChange,
+  onInsert,
+}: {
+  template: string
+  onChange: (next: string) => void
+  /** Called once (on mount) with this editor's real `insert(text)` function — the caller stashes
+   * it (e.g. in a ref) and calls it later from its own template-variable buttons. */
+  onInsert: (insert: (text: string) => void) => void
+}) {
+  const palette = useMenuPalette()
+  const editorRef = useRef<HTMLDivElement>(null)
+  // Sidesteps a real feedback loop: `onInput` calls `onChange`, which flows back down as a new
+  // `template` prop — without this flag, the effect that re-renders the DOM from `template` would
+  // then stomp on the very keystroke that triggered it (the DOM already reflects the typed
+  // character; re-rendering from `template` at that point is redundant at best, and can steal
+  // focus/collapse the selection mid-composition at worst). Set right before `onChange` fires,
+  // cleared once the resulting re-render's effect has run.
+  const skipNextSyncRef = useRef(false)
+  // Set by the `×` remove button (to the deleted chip's own former character offset in the flat
+  // template string) right before it calls `onChange` — consumed by the `renderSegments` effect
+  // right after it rebuilds the DOM, so the cursor lands exactly where the chip used to be rather
+  // than wherever the browser happens to default to after an `innerHTML` rebuild (its start, in
+  // practice). Placing the cursor there — not e.g. at the end — is what makes "delete a chip, type
+  // or pick a replacement variable right where it was" a smooth one-motion "replace" gesture
+  // instead of "delete, then hunt for where the cursor ended up."
+  const pendingCursorOffsetRef = useRef<number | null>(null)
+
+  /** Places the caret at flat character offset `offset` (as `extractTemplateFromDom` would count
+   * it) by walking the editor's direct children, which are always either text nodes or one flat
+   * level of chip `<span>`s (never nested) — a plain linear scan tracking how many flat characters
+   * each child accounts for. Landing exactly on a chip boundary collapses to just after it (chips
+   * are `contentEditable={false}`, so a native caret can never be placed *inside* one anyway). */
+  function setCursorAtOffset(offset: number) {
+    const root = editorRef.current
+    if (!root) return
+    const selection = window.getSelection()
+    if (!selection) return
+    let remaining = offset
+    for (const node of root.childNodes) {
+      // A pure `CURSOR_ANCHOR` text node (see that constant's own docs) contributes zero real
+      // characters — it's a rendering-only caret landing spot, not part of the flat template
+      // string `offset` is measured against, so it's skipped entirely rather than treated as a
+      // normal zero/one-character text node candidate for the caret to land in.
+      if (node.nodeType === Node.TEXT_NODE && node.textContent === CURSOR_ANCHOR) continue
+      const length =
+        node.nodeType === Node.TEXT_NODE
+          ? (node.textContent?.length ?? 0)
+          : node instanceof HTMLElement
+            ? (node.dataset.token?.length ?? 0)
+            : 0
+      if (remaining <= length) {
+        const range = document.createRange()
+        if (node.nodeType === Node.TEXT_NODE) {
+          range.setStart(node, remaining)
+        } else {
+          // A chip boundary (`remaining` is 0 or equals this chip's own length) — position the
+          // range immediately before/after the chip node itself, since text offsets don't apply
+          // inside an atomic, non-text chip.
+          const parent = node.parentNode
+          if (!parent) return
+          const index = Array.prototype.indexOf.call(parent.childNodes, node)
+          range.setStart(parent, remaining === 0 ? index : index + 1)
+        }
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
+        return
+      }
+      remaining -= length
+    }
+    // `offset` was past the end of every child (e.g. the deleted chip was the last segment) —
+    // collapse to the very end of the editor instead.
+    const range = document.createRange()
+    range.selectNodeContents(root)
+    range.collapse(false)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  /** Reads the live DOM back into a flat template string — chips carry their own literal token
+   * text on a `data-token` attribute (rather than reading `textContent`, which would include the
+   * `×` button's own label) added by `renderSegments` below. Strips out every `CURSOR_ANCHOR`
+   * character (the zero-width text nodes `renderSegments` plants around each chip purely so the
+   * browser has somewhere to put a real caret) — those are a rendering-layer implementation
+   * detail, never part of the actual template content this editor represents. */
+  function extractTemplateFromDom(): string {
+    const root = editorRef.current
+    if (!root) return template
+    let result = ''
+    for (const node of root.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        result += node.textContent ?? ''
+      } else if (node instanceof HTMLElement && node.dataset.token) {
+        result += node.dataset.token
+      }
+    }
+    return result.split(CURSOR_ANCHOR).join('')
+  }
+
+  function renderSegments() {
+    const root = editorRef.current
+    if (!root) return
+    root.innerHTML = ''
+    for (const segment of parseTemplateSegments(template)) {
+      if (segment.type === 'text') {
+        root.appendChild(document.createTextNode(segment.value))
+        continue
+      }
+      // A real, empty-looking text node immediately before this chip — see `CURSOR_ANCHOR`'s own
+      // docs for why a chip needs one on both sides. Only actually needed when there's no real
+      // text node already adjacent (two chips back-to-back, or a chip at the very start/end of
+      // the editor) — but adding it unconditionally is simpler and harmless: an extra zero-width
+      // anchor next to a real text node costs nothing visually or functionally.
+      root.appendChild(document.createTextNode(CURSOR_ANCHOR))
+      const chip = document.createElement('span')
+      chip.contentEditable = 'false'
+      chip.dataset.token = segment.value
+      chip.style.display = 'inline-flex'
+      chip.style.alignItems = 'center'
+      chip.style.gap = '3px'
+      chip.style.padding = '0 2px 0 5px'
+      // Wider than the original `1px` — the cursor-anchor text node between two adjacent chips
+      // (see `CURSOR_ANCHOR`'s own docs) now makes the caret placeable there at all, but a mouse
+      // still has to physically land a click within that gap, and `1px` on either side left only
+      // ~2px of real clickable width between two chips — reported as still awkward to hit even
+      // after the caret-placement fix itself. `3px` roughly triples that usable gap.
+      chip.style.margin = '0 3px'
+      chip.style.borderRadius = '3px'
+      chip.style.background = 'rgba(0,0,0,0.08)'
+      // A neutral, low-opacity grey — not `palette.border`/`palette.text` (this app's own themed
+      // accent colors, e.g. `g.css`'s dark red `#5C0D11`), which reads too close to the browser's
+      // own (usually near-black/dark) text-cursor color and made a chip's edge easy to mistake
+      // for the caret sitting right next to it. Matches the template-variable insertion buttons'
+      // own already-established border color just below.
+      chip.style.border = '1px solid rgba(128,128,128,0.4)'
+      chip.style.fontFamily = 'monospace'
+      chip.style.userSelect = 'none'
+      chip.style.whiteSpace = 'nowrap'
+      chip.onmouseenter = () => {
+        chip.style.background = 'rgba(0,0,0,0.16)'
+      }
+      chip.onmouseleave = () => {
+        chip.style.background = 'rgba(0,0,0,0.08)'
+      }
+
+      const label = document.createElement('span')
+      label.textContent = segment.value
+      chip.appendChild(label)
+
+      // A real Font Awesome icon (`fa-times`, this app's own established "remove/delete" icon —
+      // see e.g. the queue row's own delete button) rather than a plain `×` character glyph:
+      // reported as easy to mistake for literal typed text sitting inside the chip rather than a
+      // clickable remove control. Colored with the theme's own destructive-looking accent
+      // (`palette.border`, falling back to `palette.text` the same way the chip's own border
+      // already does on the 2 themes where `border` is `transparent`) instead of `currentColor`,
+      // so it visually reads as "a distinct button" rather than blending into the chip's own text.
+      const removeBtn = document.createElement('button')
+      removeBtn.type = 'button'
+      removeBtn.innerHTML = '<i class="fa fa-times" aria-hidden="true"></i>'
+      removeBtn.setAttribute('aria-label', 'Remove')
+      removeBtn.style.border = 'none'
+      removeBtn.style.background = 'none'
+      removeBtn.style.padding = '0'
+      removeBtn.style.margin = '0'
+      removeBtn.style.cursor = 'pointer'
+      removeBtn.style.color = palette.border === 'transparent' ? palette.text : palette.border
+      removeBtn.style.fontSize = '0.85em'
+      removeBtn.style.lineHeight = '1'
+      // Deliberately does NOT set `skipNextSyncRef` — unlike a normal keystroke (where the DOM
+      // already reflects the edit and a re-render would be redundant/disruptive), removing a chip
+      // needs the DOM to actually change: the chip's own DOM node must be un-rendered, which only
+      // the `template`-driven effect below (calling `renderSegments`) does.
+      removeBtn.onclick = (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const tokenStart = template.indexOf(segment.value)
+        pendingCursorOffsetRef.current = tokenStart
+        onChange(template.slice(0, tokenStart) + template.slice(tokenStart + segment.value.length))
+      }
+      chip.appendChild(removeBtn)
+      root.appendChild(chip)
+      root.appendChild(document.createTextNode(CURSOR_ANCHOR))
+    }
+  }
+
+  useEffect(() => {
+    if (skipNextSyncRef.current) {
+      skipNextSyncRef.current = false
+      return
+    }
+    renderSegments()
+    if (pendingCursorOffsetRef.current !== null) {
+      editorRef.current?.focus()
+      setCursorAtOffset(pendingCursorOffsetRef.current)
+      pendingCursorOffsetRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [template])
+
+  useEffect(() => {
+    renderSegments()
+    editorRef.current?.focus()
+    // Places the initial cursor right before the extension (the `.` of `.{ext}`), not wherever
+    // the browser defaults an `innerHTML`-rebuilt `contentEditable` to (its very start, in
+    // practice) — the filename stem/CRC portion is what a user typically wants to actually look
+    // at/edit first, with the extension itself rarely touched. Only correct because the default
+    // template's own shape (`{filename}_{crc}.{ext}`) is fixed, not derived per-file — the offset
+    // right before its own trailing `.{ext}` token is always the same regardless of what the real
+    // extension turns out to be, so this doesn't need to know anything about the actual filename
+    // (compound extensions like `tar.gz` are already handled by `splitFilenameStemAndExt` itself,
+    // which feeds the whole `{ext}` value as one atomic token either way).
+    setCursorAtOffset(template.length - '.{ext}'.length)
+    // Runs once on mount only — subsequent re-renders are handled by the `template`-keyed effect
+    // above; re-running this on every render would double-render the same segments.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    // Registers an `insert(text)` function the parent (the template-variable buttons) calls —
+    // inserts at the current DOM selection (falling back to the end when the editor doesn't have
+    // focus/a real selection inside it, e.g. right after this popover first opens and a button is
+    // clicked before ever touching the editor itself).
+    onInsert((text) => {
+      const root = editorRef.current
+      if (!root) return
+      const selection = window.getSelection()
+      const range =
+        selection && selection.rangeCount > 0 && root.contains(selection.anchorNode)
+          ? selection.getRangeAt(0)
+          : null
+      if (range) {
+        range.deleteContents()
+        range.insertNode(document.createTextNode(text))
+        range.collapse(false)
+      } else {
+        root.appendChild(document.createTextNode(text))
+      }
+      // Deliberately does NOT set `skipNextSyncRef` (unlike a plain keystroke's own `onInput`
+      // below) — a real, confirmed-live bug this fixes: the text just inserted above is a plain
+      // text node, not yet a chip. Skipping the sync here (as an earlier version of this function
+      // did) left `{crc}`/`({crc})` etc. sitting in the DOM as bare, unstyled text forever — the
+      // `template`-driven `renderSegments` re-render below is exactly what turns that plain text
+      // into a real chip, so this insertion path needs it to actually run, not skip it.
+      onChange(extractTemplateFromDom())
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div
+      ref={editorRef}
+      contentEditable
+      suppressContentEditableWarning
+      role="textbox"
+      aria-multiline="false"
+      className="stdinput"
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        background: '#e8e8e8',
+        color: '#000',
+        // Chips now use a neutral grey border specifically so they don't get mistaken for the
+        // text caret sitting next to them (see that change's own docs) — giving the caret itself
+        // a real, distinct color (the theme's own accent, falling back to `palette.text` on the 2
+        // themes where `border` is `transparent`) instead of the browser default (usually
+        // near-black, easy to conflate with dark chip borders/text) reinforces that same
+        // distinction from the other direction.
+        caretColor: palette.border === 'transparent' ? palette.text : palette.border,
+        minHeight: '1.6em',
+        outline: 'none',
+        wordBreak: 'break-all',
+      }}
+      onInput={() => {
+        skipNextSyncRef.current = true
+        onChange(extractTemplateFromDom())
+      }}
+      onKeyDown={(e) => {
+        // A plain `Enter` inside a single-line field should submit the form, not insert a
+        // newline `contentEditable` would otherwise happily create.
+        if (e.key === 'Enter') e.preventDefault()
+      }}
+    />
+  )
+}
+
 /** The "重命名并入库" popover — lets the user resolve a `PendingFilenameConflict` by cataloguing
  * the already-downloaded, already-staged bytes under a new filename instead of overwriting the
  * archive that owns the original one. The input holds a *template string* (starting from the
@@ -1170,8 +1531,11 @@ function RenamePopover({
   const palette = useMenuPalette()
   const { stem, ext } = splitFilenameStemAndExt(conflict.original_filename)
   const [template, setTemplate] = useState('{filename}_{crc}.{ext}')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const width = 220
+  // 220px (the plain-`<input>` era's width) wraps the default `{filename}_{crc}.{ext}` template
+  // onto two lines once each token became its own bordered/padded chip with a `×` button — real
+  // screen-space cost a bare text token didn't have. 280px keeps the default template on one line
+  // in the common case.
+  const width = 280
   const { top, left } = anchoredPosition(
     new DOMRect(anchor.x, anchor.y, 0, 0),
     width,
@@ -1192,40 +1556,11 @@ function RenamePopover({
   }
   const resolved = substituteFilenameTemplate(template, vars)
 
-  function insertAtCursor(text: string) {
-    const input = inputRef.current
-    const start = input?.selectionStart ?? template.length
-    const end = input?.selectionEnd ?? template.length
-    const next = template.slice(0, start) + text + template.slice(end)
-    setTemplate(next)
-    const cursor = start + text.length
-    // The input still holds the *old* value at this point (React hasn't re-rendered with `next`
-    // yet) — restoring the selection has to wait for that render, hence the rAF rather than doing
-    // it synchronously right here.
-    requestAnimationFrame(() => {
-      input?.focus()
-      input?.setSelectionRange(cursor, cursor)
-    })
-  }
-
-  // Clicking anywhere inside a `{var}` (or shift-click-inserted `({var})`) token selects the
-  // whole token instead of just placing the caret mid-token — mirrors how clicking a variable/
-  // placeholder chip in a snippet/mail-merge tool behaves, and makes overtyping or deleting a
-  // whole token a single action rather than requiring the user to manually select `{crc}`
-  // character-by-character first.
-  function selectTokenAtCursor() {
-    const input = inputRef.current
-    if (!input || input.selectionStart !== input.selectionEnd) return
-    const pos = input.selectionStart ?? 0
-    for (const match of template.matchAll(/\(?\{[\w-]+\}\)?/g)) {
-      const tokenStart = match.index
-      const tokenEnd = tokenStart + match[0].length
-      if (pos > tokenStart && pos < tokenEnd) {
-        input.setSelectionRange(tokenStart, tokenEnd)
-        return
-      }
-    }
-  }
+  // `TemplateInput` registers its own real `insert(text)` function here once mounted (it needs
+  // access to the live DOM selection inside its own `contentEditable`, which this parent
+  // component has no direct way to reach) — the template-variable buttons below call whatever's
+  // currently registered rather than manipulating `template`/cursor position themselves.
+  const insertRef = useRef<(text: string) => void>(() => {})
 
   return (
     <>
@@ -1233,23 +1568,12 @@ function RenamePopover({
       <PopupMenu style={{ position: 'fixed', top, left, zIndex: Z_OVERLAY_CONTENT }}>
         <li style={{ listStyle: 'none', padding: '6px 10px', width }}>
           <div style={{ fontSize: FONT_SIZE_10PT, marginBottom: 4 }}>{t('New filename')}</div>
-          <input
-            ref={inputRef}
-            type="text"
-            className="stdinput"
-            // `.stdinput`'s own theme default background can coincide with this popup menu's own
-            // background (confirmed: both `#EDEADA` under the `g.css` theme) — with no visual
-            // separation between the two, the input reads as a plain bordered `<div>`, not an
-            // editable field. A light neutral grey (rather than pure white, which would read as
-            // jarringly bright against this app's darker themes, e.g. `modern.css`'s near-black
-            // menu palette) guarantees a visible field regardless of which of this app's 5 themes
-            // is active, rather than trying to compute a "contrasts with this specific theme's
-            // menu palette" color per-theme.
-            style={{ width: '100%', boxSizing: 'border-box', background: '#e8e8e8', color: '#000' }}
-            value={template}
-            onChange={(e) => setTemplate(e.target.value)}
-            onClick={selectTokenAtCursor}
-            autoFocus
+          <TemplateInput
+            template={template}
+            onChange={setTemplate}
+            onInsert={(insert) => {
+              insertRef.current = insert
+            }}
           />
           {/* `.stdbtn`'s theme default carries `min-width: 150px` — fine for a normal action
               button, wildly oversized for a small "insert this token" chip, so these deliberately
@@ -1284,7 +1608,7 @@ function RenamePopover({
                 onMouseLeave={(e) => {
                   e.currentTarget.style.outline = 'none'
                 }}
-                onClick={(e) => insertAtCursor(e.shiftKey ? shiftClickInsertion(key) : `{${key}}`)}
+                onClick={(e) => insertRef.current(e.shiftKey ? shiftClickInsertion(key) : `{${key}}`)}
               >
                 {`{${key}}`}
               </button>

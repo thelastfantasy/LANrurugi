@@ -1,6 +1,7 @@
 <!-- SPECKIT START -->
-Five feature specs exist. Phase 1 (001) is implemented; 002, 003, 004, and 005 are planned but not
-yet implemented.
+Five feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda to
+Phase 1) are also fully implemented (verified via each spec's own `tasks.md` — all checkboxes
+complete, no outstanding items). Only Phase 2 (004) remains planned but not yet implemented.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -117,3 +118,16 @@ dev-rebuild && dev-down && dev-up` is only needed when a change touches somethin
 image at build time: Rust code (`crates/`), plugin `.ts` files under `plugins/` (copied into the
 image, not bind-mounted), or the Dockerfile/compose files themselves. Don't reflexively rebuild
 after every change — check whether the edit was frontend-only first.
+
+## Before pushing — check whether README.md needs updating
+
+Before any `git push`, review what the commit(s) being pushed actually changed and ask: does this
+add/fix/remove something `README.md`'s own "## Improvements over LANraragi" section (or the Status/
+Stack/Documentation sections) already makes a claim about, or should now make a claim about? A
+shipped feature, a real bug fix with user-facing impact, or a spec moving from
+planned-but-unimplemented to fully implemented (verify via that spec's own `tasks.md` checkbox
+completion, not assumption) are all candidates. Not every push needs a README change — routine
+internal refactors, test-only changes, or mid-flight work-in-progress commits usually don't — but
+skipping this check silently lets the README drift out of date the same way the "002/003/005 are
+planned but not yet implemented" line above did until it was caught and corrected during a real
+README-writing pass.

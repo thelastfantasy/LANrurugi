@@ -2309,4 +2309,70 @@ mod tests {
         tokio::fs::remove_file(&downloaded.path).await.ok();
         tokio::fs::remove_file(&dispatcher_path).await.ok();
     }
+
+    /// Real, end-to-end replacement for the old `contract_api.rs` test
+    /// `nhentai_source_converter_rewrites_short_numeric_source_tags_only`, which asserted against
+    /// `POST /api/database/scripts/nhentai-source-converter` — a native Rust endpoint that no
+    /// longer exists (`scripts.rs`'s own doc comment: `nHentaiSourceConverter.pm` was migrated to
+    /// a real `script`-type plugin, `plugins/script/nhentaisourceconverter.ts`, run through the
+    /// same `/plugins/use` machinery every other plugin uses). That old test was silently 404ing
+    /// on every run — nobody noticed because `LANRURUGI_TEST_REDIS_URL` had never actually been
+    /// wired into the containerized test flow until this session, so it (like every other
+    /// Redis-gated test) was skipping, not failing.
+    ///
+    /// This test calls the real plugin's `runScript` directly through the real Deno dispatcher —
+    /// no Redis, no network, no login needed at all (unlike the `ehdl` test above): this plugin's
+    /// entire job is a pure, local `archives[].tags` string rewrite, handed back as `updates` for
+    /// the host to apply (see `nhentaisourceconverter.ts`'s own doc comment on that read-compute-
+    /// write split). Only requires `deno` on `$PATH`.
+    #[tokio::test]
+    async fn nhentai_source_converter_rewrites_short_numeric_source_tags_only() {
+        let deno_on_path = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join("deno").is_file())
+        });
+        if !deno_on_path {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        }
+
+        let plugins_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins")
+            .canonicalize()
+            .expect("repo's real plugins/ dir must exist");
+        let dispatcher_path =
+            std::env::temp_dir().join("lrr-nhsrcconv-integration-test-dispatcher.ts");
+        std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
+            .expect("failed to write out the real dispatcher script");
+        let pool =
+            lanrurugi_plugin::pool::PluginPool::new("deno", dispatcher_path.clone(), plugins_dir);
+
+        // Same fixture the old, now-dead test used: a mix of a short numeric `source:` tag (must
+        // be rewritten), an unrelated tag, an already-converted tag (must stay untouched), and a
+        // too-long numeric tag (7 digits — past the `{1,6}` the real plugin's own regex allows,
+        // must also stay untouched).
+        let archives = json!([
+            { "id": "a", "tags": "source:123456, artist:someone, source:nhentai.net/g/1, source:1234567" },
+        ]);
+        let result = pool
+            .execute(
+                "script/nhentaisourceconverter",
+                "exec_script",
+                json!({ "archives": archives }),
+            )
+            .await
+            .expect("real script/nhentaisourceconverter exec_script call failed");
+
+        assert_eq!(result["modified"], 1);
+        let updates = result["updates"]
+            .as_array()
+            .expect("updates must be an array");
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["id"], "a");
+        assert_eq!(
+            updates[0]["tags"],
+            "source:nhentai.net/g/123456, artist:someone, source:nhentai.net/g/1, source:1234567"
+        );
+
+        tokio::fs::remove_file(&dispatcher_path).await.ok();
+    }
 }
