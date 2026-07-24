@@ -3,9 +3,10 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
-import { sleep } from '../api/client'
-import { useArchives, useCategories, usePlugins } from '../api/hooks'
+import { sendJson, sleep } from '../api/client'
+import { useArchives, useCategories, usePlugins, useSettings } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
+import { routes } from '../routes'
 import { MSM_SELECTION_KEY } from '../storageKeys'
 import { useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
@@ -56,6 +57,7 @@ export default function Batch() {
   const archives = useArchives()
   const categories = useCategories()
   const plugins = usePlugins('metadata')
+  const settings = useSettings()
   const queryClient = useQueryClient()
 
   const [operation, setOperation] = useState<Operation>('plugin')
@@ -90,7 +92,34 @@ export default function Batch() {
     try {
       let processed = 0
       for (const id of selected) {
-        await fetch(`/api/plugins/use?${new URLSearchParams({ plugin: pluginNamespace, id })}`, { method: 'POST' })
+        const result = await sendJson<{
+          success: number
+          data?: { tags?: string; title?: string; summary?: string }
+        }>('POST', `/plugins/use?${new URLSearchParams({ plugin: pluginNamespace, id })}`).catch(
+          () => null,
+        )
+        // Mirrors legacy's `Controller::Batch::batch_plugin` (`set_tags($id, $new_tags, 1)` —
+        // the trailing `1` means append-to-existing, not replace — plus `set_title`/`set_summary`
+        // when present) applying the plugin's result directly, unlike the single-archive Edit
+        // page's staging-then-Save flow: a batch run over many archives has no per-archive review
+        // step to stage through, so legacy persists immediately, and this matches that.
+        if (result?.success && result.data) {
+          const { tags: newTags, title, summary } = result.data
+          if (newTags || (title && (settings.data?.replacetitles ?? true)) || summary) {
+            const archive = await fetchArchive(id)
+            const mergedTags = newTags
+              ? Array.from(new Set([...archive.tags.split(','), ...newTags.split(',')].map((tg) => tg.trim()).filter(Boolean))).join(', ')
+              : undefined
+            await fetch(
+              `/api/archives/${id}/metadata?${new URLSearchParams({
+                ...(mergedTags !== undefined && { tags: mergedTags }),
+                ...(title && (settings.data?.replacetitles ?? true) && { title }),
+                ...(summary && { summary }),
+              })}`,
+              { method: 'PUT' },
+            )
+          }
+        }
         processed += 1
         setStatus(formatProgress(t, processed, selected.size))
         if (pluginTimeout > 0 && processed < selected.size) await sleep(pluginTimeout * 1000)
@@ -298,8 +327,8 @@ export default function Batch() {
         </div>
       </div>
 
-      <input type="button" id="plugin-config" className="stdbtn" value={t('Plugin Configuration') ?? undefined} onClick={() => navigate('/config/plugins')} />
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/config')} />
+      <input type="button" id="plugin-config" className="stdbtn" value={t('Plugin Configuration') ?? undefined} onClick={() => navigate(routes.pluginSettings())} />
+      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.settings())} />
     </div>
   )
 }

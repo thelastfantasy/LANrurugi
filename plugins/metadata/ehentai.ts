@@ -77,18 +77,36 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — the
+// frontend's `apps/frontend/src/i18n/locales/*.json` use literal English sentences as keys, not
+// symbolic codes; write it as a natural, stable phrase that does not embed any dynamic value
+// (that goes in `data` instead), so the same `error_code` translates regardless of which specific
+// value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "ehplugin",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "Forced language to use in searches (Japanese won't work due to EH limitations)", required: false },
-      { name: "param2", description: "Fetch using thumbnail first (falls back to title)", required: false },
-      { name: "param3", description: "Search using gID from title (falls back to title)", required: false },
-      { name: "param4", description: "Use ExHentai (enable to search for fjorded content without star cookie)", required: false },
-      { name: "param5", description: "Save the original title when available instead of the English or romanised title", required: false },
-      { name: "param6", description: "Fetch additional timestamp (time posted) and uploader metadata", required: false },
-      { name: "param7", description: "Search only expunged galleries", required: false },
+      { name: "param1", description: "Forced language to use in searches (Japanese won't work due to EH limitations)", required: false, type: "string" },
+      { name: "param2", description: "Fetch using thumbnail first (falls back to title)", required: false, type: "bool" },
+      { name: "param3", description: "Search using gID from title (falls back to title)", required: false, type: "bool" },
+      { name: "param4", description: "Use ExHentai (enable to search for fjorded content without star cookie)", required: false, type: "bool" },
+      { name: "param5", description: "Save the original title when available instead of the English or romanised title", required: false, type: "bool" },
+      { name: "param6", description: "Fetch additional timestamp (time posted) and uploader metadata", required: false, type: "bool" },
+      { name: "param7", description: "Search only expunged galleries", required: false, type: "bool" },
     ],
     // Verified against every URL literal this plugin's own execMetadata actually calls: the
     // gallery page itself (e-hentai.org, or exhentai.org when the "Use ExHentai" parameter is
@@ -98,7 +116,7 @@ export function pluginInfo() {
     name: "E-Hentai",
     author: "thelastfantasy",
     description: "Searches g.e-hentai for tags matching your archive. <br/><i class='fa fa-exclamation-circle'></i> This plugin will use the source: tag of the archive if it exists.",
-    version: "2.6",
+    version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBI\nWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4wYBFg0JvyFIYgAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl\nYXRlZCB3aXRoIEdJTVBkLmUHAAAEo0lEQVQ4y02UPWhT7RvGf8/5yMkxMU2NKaYIFtKAHxWloYNU\ncRDeQTsUFPwAFwUHByu4ODq4Oghdiri8UIrooCC0Lx01ONSKfYOioi1WpWmaxtTm5PTkfNzv0H/D\n/9oeePjdPNd13Y8aHR2VR48eEUURpmmiaRqmaXbOAK7r4vs+IsLk5CSTk5P4vo9hGIgIsViMra0t\nCoUCRi6XY8+ePVSrVTRN61yybZuXL1/y7t078vk8mUyGvXv3cuLECWZnZ1lbW6PdbpNIJHAcB8uy\nePr0KYZlWTSbTRKJBLquo5TCMAwmJia4f/8+Sini8Ti1Wo0oikin09i2TbPZJJPJUK/XefDgAefO\nnWNlZQVD0zSUUvi+TxAE6LqOrut8/fqVTCaDbdvkcjk0TSOdTrOysoLrujiOw+bmJmEYMjAwQLVa\nJZVKYXR1ddFut/F9H9M0MU0T3/dZXV3FdV36+/vp7u7m6NGj7Nq1i0qlwuLiIqVSib6+Pubn5wGw\nbZtYLIaxMymVSuH7PpZlEUURSina7TZBEOD7Pp8/fyYMQ3zfZ25ujv3795NOp3n48CE9PT3ouk4Q\nBBi/fv3Ctm0cx6Grq4utrS26u7sREQzDIIoifv78SU9PD5VKhTAMGRoaYnV1leHhYa5evUoQBIRh\niIigiQhRFKHrOs1mE9u2iaKIkydPYhgGAKZp8v79e+LxOPl8Htd1uXbtGrdv3yYMQ3ZyAODFixeb\nrVZLvn//Lq7rSqVSkfX1dREROXz4sBw/flyUUjI6OipXrlyRQ4cOSbPZlCiKxHVdCcNQHMcRz/PE\ndV0BGL53756sra1JrVaT9fV1cRxHRESGhoakr69PUqmUvHr1SsrlsuzI931ptVriuq78+fNHPM+T\nVqslhoikjh075p09e9ba6aKu6/T39zM4OMjS0hIzMzM0Gg12794N0LEIwPd9YrEYrusShiEK4Nmz\nZ41yudyVy+XI5/MMDAyQzWap1+tks1lEhIWFBQqFArZto5QiCAJc1+14t7m5STweRwOo1WoSBAEj\nIyMUi0WSySQiQiqV6lRoYWGhY3673e7sfRAEiAjZbBbHcbaBb9++5cCBA2SzWZLJJLZt43kesViM\nHX379g1d1wnDsNNVEQEgCAIajQZ3797dBi4tLWGaJq7rYpompVKJmZkZ2u12B3j58mWUUmiahoiw\nsbFBEASdD2VsbIwnT55gACil+PHjB7Ozs0xPT/P7929u3ryJZVmEYUgYhhQKBZRSiAie52EYBkop\nLMvi8ePHTE1NUSwWt0OZn5/3hoeHzRs3bqhcLseXL1+YmJjowGzbRtO07RT/F8jO09+8ecP58+dJ\nJBKcPn0abW5uThWLRevOnTv/Li4u8vr1a3p7e9E0jXg8zsePHymVSnz69Kmzr7quY9s2U1NTXLp0\nCc/zOHLkCPv27UPxf6rX63+NjIz8IyKMj48zPT3NwYMHGRwcpLe3FwARodVqcf36dS5evMj4+DhB\nEHDmzBkymQz6DqxSqZDNZr8tLy//DYzdunWL5eVlqtUqHz58IJVKkUwmaTQalMtlLly4gIjw/Plz\nTp06RT6fZ2Njg/8AqMV7tO07rnsAAAAASUVORK5CYII=",
     oneshot_arg: "E-H Gallery URL (Will attach tags matching this exact gallery to your archive)",
     login_from: "ehlogin",
@@ -159,13 +177,13 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
       [gID, gToken] = await lookup_gallery(lrr_info["archive_title"], lrr_info["existing_tags"], lrr_info["thumbnail_hash"], ua, domain, lang, usethumbs, search_gid, expunged);
     } catch (e: any) {
       logger.error(e);
-      throw new Error(e);
+      throw new PluginErrorException("Gallery lookup failed");
     }
   }
   if (gID === "") {
     let message = "No matching EH Gallery Found!";
     logger.info(message);
-    throw new Error(`${message}\n`);
+    throw new PluginErrorException(message);
   } else {
     logger.debug(`EH API Tokens are ${gID} / ${gToken}`);
   }
@@ -272,7 +290,7 @@ async function search_gallery(url: any, ua: any) {
   let logger = perlCompat.getLogger("E-Hentai", "plugins");
   let res = (await ua.max_redirects(5).get(url)).result;
   if (res.body.indexOf("Your IP address has been") != -1) {
-    throw new Error("Temporarily banned from EH for excessive pageloads.\n");
+    throw new PluginErrorException("Temporarily banned from EH for excessive pageloads.");
   }
   return res.dom;
 }
@@ -314,7 +332,7 @@ async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let jsonresponse = rep.json;
   if ((jsonresponse["error"] !== undefined)) {
     logger.error(jsonresponse["error"]);
-    throw new Error("E-H API returned an error.\n");
+    throw new PluginErrorException("E-H API returned an error.");
   }
   return jsonresponse;
 }

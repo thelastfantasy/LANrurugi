@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Batch-converts legacy LANraragi Perl plugins (Metadata/Login/Download) into TypeScript under
-# plugins/<category>/, via `lanrurugi-plugin-converter`. Wraps the same per-file steps that were
-# done by hand for the first 21 Metadata plugins: run the converter inside the `lanrurugi-dev`
+# Batch-converts legacy LANraragi Perl plugins (Metadata/Login/Download/Scripts) into TypeScript
+# under plugins/<category>/, via `lanrurugi-plugin-converter`. Wraps the same per-file steps that
+# were done by hand for the first 21 Metadata plugins: run the converter inside the `lanrurugi-dev`
 # container (the host has no Rust/Perl/PPI toolchain — see `Dockerfile.build`), prepend a
 # provenance/warnings header, then verify with `deno check` on the host (deno *is* available on
 # the host via `mise`'s own toolchain — see `.mise.toml`).
 #
 # Usage: scripts/convert-plugins.sh <path-to-legacy-LANraragi-checkout> [--force] [category ...]
-#   categories: metadata login download (default: all three)
+#   categories: metadata login download script (default: metadata login download)
 #   --force:    overwrite a destination file even if it already has manually-reviewed
 #               `declared_permissions` (see the safety check below) — off by default so a second
 #               run (e.g. after a converter bugfix) can't silently clobber hand-verified net-host
@@ -15,16 +15,17 @@
 #               checking real URL literals in the Perl source — a converter re-run has no way to
 #               redo that verification itself).
 #
-# `Plugin/Scripts/*.pm` is deliberately not a category here: legacy's own Scripts plugins
-# (FolderToCat, SourceFinder, nHentaiSourceConverter) are reimplemented as native Rust REST
-# endpoints in `lanrurugi-api::scripts` instead of going through this Deno-plugin pipeline (see
-# that module's own doc comment) — there is nothing under `Plugin/Scripts/` for this script to
-# convert.
+# `script` must be requested explicitly (not part of the default set): legacy's three Scripts
+# plugins (FolderToCat, SourceFinder, nHentaiSourceConverter) were originally reimplemented as
+# native Rust REST endpoints in `lanrurugi-api::scripts` instead of going through this Deno-plugin
+# pipeline — that decision was later reversed (script-type plugins are real `.ts` files under
+# `plugins/script/` now, same as every other category), but `script` stays opt-in here since
+# there's only ever the same fixed three files to (re-)convert, not an open-ended corpus.
 set -euo pipefail
 
 usage() {
   echo "Usage: $0 <path-to-legacy-LANraragi-checkout> [--force] [category ...]" >&2
-  echo "  categories: metadata login download (default: all three)" >&2
+  echo "  categories: metadata login download script (default: metadata login download)" >&2
   exit 1
 }
 
@@ -57,15 +58,10 @@ command -v deno >/dev/null 2>&1 || {
   exit 1
 }
 
-declare -A LEGACY_SUBDIR=( [metadata]=Metadata [login]=Login [download]=Download )
+declare -A LEGACY_SUBDIR=( [metadata]=Metadata [login]=Login [download]=Download [script]=Scripts )
 for category in "${CATEGORIES[@]}"; do
   if [ -z "${LEGACY_SUBDIR[$category]:-}" ]; then
-    if [ "$category" = "script" ] || [ "$category" = "scripts" ]; then
-      echo "note: skipping '$category' — legacy's Scripts plugins are reimplemented natively in" \
-           "lanrurugi-api::scripts, not converted (see this script's own header comment)" >&2
-    else
-      echo "error: unknown category '$category' (known: metadata, login, download)" >&2
-    fi
+    echo "error: unknown category '$category' (known: metadata, login, download, script)" >&2
     exit 1
   fi
 done

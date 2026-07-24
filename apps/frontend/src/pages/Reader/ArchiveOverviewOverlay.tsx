@@ -1,8 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query'
+import type { MouseEvent } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
+import { useAddTocEntry, useRemoveTocEntry, useSetArchiveThumbnail, useStampedPages } from '../../api/hooks'
 import type { ArchiveMetadata, CategoryMetadata } from '../../api/types'
+import { getTagSearchURL } from '../../lib/tagFormat'
+import { routes } from '../../routes'
+import { toast } from '../../toast'
 import RatingWidget from './RatingWidget'
 
 // Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
@@ -54,12 +60,25 @@ function TagsTable({ tags }: { tags: string }) {
             <td>
               {(byNamespace.get(namespace) ?? []).map((value) => (
                 <div className="gt" key={value}>
-                  <a
-                    href={`/?sort=0&q=${encodeURIComponent(`${namespace}:${value}$`)}&`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {formatTagValue(namespace, value)}
-                  </a>
+                  {/* `source` is a link to an external, third-party site — real `target="_blank"`
+                      so it opens a new tab instead of navigating the reader away, matching
+                      `TagTable.tsx`'s own real `source` branch (this table predates that shared
+                      component and never got the same split when it landed there; this was a
+                      real, independently-discovered bug, not a copy of an already-fixed one). */}
+                  {namespace === 'source' ? (
+                    <a
+                      href={getTagSearchURL(namespace, value)}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {value}
+                    </a>
+                  ) : (
+                    <a href={getTagSearchURL(namespace, value)} onClick={(e) => e.stopPropagation()}>
+                      {formatTagValue(namespace, value)}
+                    </a>
+                  )}
                 </div>
               ))}
             </td>
@@ -79,12 +98,14 @@ export default function ArchiveOverviewOverlay({
   archive,
   categories,
   loggedIn,
+  currentPage,
   onClose,
   onSelectPage,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
   loggedIn: boolean
+  currentPage: number
   onClose: () => void
   onSelectPage: (page: number) => void
 }) {
@@ -94,7 +115,76 @@ export default function ArchiveOverviewOverlay({
   const staticCategories = (categories ?? []).filter((c) => !c.search)
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
 
+  // Legacy's `#filter-stamped` (`reader.js`'s `checkStampedPages`/`filterStampedOverlay`) — marks
+  // each thumbnail `data-stamped=true` if `GET /archives/{id}/stamps` includes its page number,
+  // then a toggle hides every non-stamped thumbnail so the grid becomes a stamped-pages-only view.
+  const stampedPages = useStampedPages(archive.arcid)
+  const stampedPageSet = new Set(stampedPages.data?.result ?? [])
+  const [filterStamped, setFilterStamped] = useState(false)
+
   const chapters = archive.toc.length > 0 ? archive.toc : null
+
+  // Legacy's `getCurrentChapter` (`reader.js`) — the last ToC entry whose `startPage` is `<=` the
+  // reader's current page; only leaf chapters (this port has no sub-chapter nesting) get
+  // edit/delete icons (legacy: `currentChapter.chapters === null`).
+  const currentChapter = chapters
+    ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
+    : undefined
+
+  const setThumbnail = useSetArchiveThumbnail(archive.arcid)
+  const addTocEntry = useAddTocEntry(archive.arcid)
+  const removeTocEntry = useRemoveTocEntry(archive.arcid)
+
+  // Legacy's `.set-thumbnail` click handler (`reader.js`) — regenerates the cover thumbnail from
+  // this page and shows a toast; `e.stopPropagation()` so the click doesn't also trigger the
+  // thumbnail's own `onSelectPage` navigation.
+  function handleSetThumbnail(e: MouseEvent, page: number) {
+    e.preventDefault()
+    e.stopPropagation()
+    setThumbnail.mutate(page, {
+      onSuccess: () => toast({ text: t('Successfully set page {{n}} as the thumbnail!', { n: page }) ?? undefined }),
+      onError: () => toast({ text: t('Error updating thumbnail') ?? undefined, icon: 'error' }),
+    })
+  }
+
+  // Legacy's `.add-toc` click handler + `addTocSection` (`reader.js`) — prompts for a chapter
+  // title, then PUTs the new ToC entry. Empty/cancelled input adds nothing (matches legacy's own
+  // `result.value.trim() !== ""` guard).
+  function handleAddToc(e: MouseEvent, page: number) {
+    e.preventDefault()
+    e.stopPropagation()
+    const title = window.prompt(t('Enter a title for this chapter/section:') ?? undefined)
+    if (title && title.trim() !== '') {
+      addTocEntry.mutate(
+        { page, title: title.trim() },
+        { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
+      )
+    }
+  }
+
+  // Legacy's `.edit-toc` click handler (`reader.js`: `addTocSection(currentChapter.startPage,
+  // currentChapter.name)`) — re-prompts with the existing name pre-filled as a placeholder, then
+  // re-adds the entry at the same page (the host's `add_toc_entry` replaces same-page entries
+  // rather than duplicating them, matching legacy's own upsert-by-page semantics).
+  function handleEditToc() {
+    if (!currentChapter) return
+    const title = window.prompt(t('Enter a title for this chapter/section:') ?? undefined, currentChapter.name)
+    if (title && title.trim() !== '') {
+      addTocEntry.mutate(
+        { page: currentChapter.page, title: title.trim() },
+        { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
+      )
+    }
+  }
+
+  // Legacy's `.remove-toc` click handler + `removeTocSection` (`reader.js`).
+  function handleRemoveToc() {
+    if (!currentChapter) return
+    if (!window.confirm(t('Are you sure you want to delete this chapter/section?') ?? undefined)) return
+    removeTocEntry.mutate(currentChapter.page, {
+      onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }),
+    })
+  }
 
   async function addToCategory(categoryId: string) {
     await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: 'PUT' })
@@ -116,7 +206,7 @@ export default function ArchiveOverviewOverlay({
       return
     }
     await fetch(`/api/archives/${archive.arcid}`, { method: 'DELETE' })
-    navigate('/')
+    navigate(routes.library())
   }
 
   const pageCount = archive.pagecount
@@ -149,7 +239,7 @@ export default function ArchiveOverviewOverlay({
                   className="stdbtn"
                   type="button"
                   value={t('Edit Archive Metadata') ?? undefined}
-                  onClick={() => navigate(`/edit/${archive.arcid}`)}
+                  onClick={() => navigate(routes.edit(archive.arcid))}
                 />
                 <input
                   className="stdbtn"
@@ -210,7 +300,21 @@ export default function ArchiveOverviewOverlay({
         <br />
 
         <div className="overlay-bar">
-          <div className="overlay-bar-left" />
+          <div className="overlay-bar-left">
+            {stampedPageSet.size > 0 && (
+              <a
+                className={`fas fa-stamp${filterStamped ? ' toggled' : ''}`}
+                id="filter-stamped"
+                href="#"
+                style={{ padding: 8, fontSize: 14 }}
+                title={t('Filter stamped pages') ?? undefined}
+                onClick={(e) => {
+                  e.preventDefault()
+                  setFilterStamped((v) => !v)
+                }}
+              />
+            )}
+          </div>
           <h2 className="ih">{chapters ? t('Chapters') : t('Pages')}</h2>
           <div className="chapter-selector">
             {chapters && (
@@ -229,27 +333,73 @@ export default function ArchiveOverviewOverlay({
                 ))}
               </select>
             )}
+            {loggedIn && chapters && currentChapter && (
+              <>
+                <a
+                  className="fas fa-pencil-alt edit-toc"
+                  href="#"
+                  style={{ padding: 8, fontSize: 14 }}
+                  title={t('Edit Chapter name') ?? undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    handleEditToc()
+                  }}
+                />
+                <a
+                  className="fas fa-trash-alt remove-toc"
+                  href="#"
+                  style={{ padding: 8, fontSize: 14 }}
+                  title={t('Delete Chapter') ?? undefined}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    handleRemoveToc()
+                  }}
+                />
+              </>
+            )}
           </div>
         </div>
 
         <div id="pages-section" style={{ textAlign: 'center' }}>
-          {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => (
-            <div
-              key={page}
-              className="id1"
-              style={{ display: 'inline-block', cursor: 'pointer' }}
-              onClick={() => onSelectPage(page)}
-            >
-              <div className="id3 quick-thumbnail">
-                <span className="page-number">{page}</span>
-                <img
-                  loading="lazy"
-                  alt={`${t('Page')} ${page}`}
-                  src={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
-                />
+          {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => {
+            const isStamped = stampedPageSet.has(String(page))
+            if (filterStamped && !isStamped) return null
+            return (
+              <div
+                key={page}
+                className="id1"
+                style={{ display: 'inline-block', cursor: 'pointer' }}
+                onClick={() => onSelectPage(page)}
+              >
+                <div className="id3 quick-thumbnail" data-stamped={isStamped || undefined}>
+                  <span className="page-number">{t('Page {{n}}', { n: page })}</span>
+                  <img
+                    loading="lazy"
+                    alt={t('Page {{n}}', { n: page }) ?? undefined}
+                    src={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
+                  />
+                  {loggedIn && (
+                    <>
+                      <a
+                        href="#"
+                        style={{ padding: 12, top: '2%', left: '72%' }}
+                        title={t('Set this Page as Thumbnail') ?? undefined}
+                        className="fas fa-file-image page-number set-thumbnail"
+                        onClick={(e) => handleSetThumbnail(e, page)}
+                      />
+                      <a
+                        href="#"
+                        style={{ padding: 12, top: '80%', left: '72%' }}
+                        title={t('Add Chapter at this Page') ?? undefined}
+                        className="fas fa-book-medical page-number add-toc"
+                        onClick={(e) => handleAddToc(e, page)}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </>

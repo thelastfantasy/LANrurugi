@@ -1,0 +1,38 @@
+# Local dev/try runtime for the `lanrurugi-try` image — a single container bundling
+# `lanrurugi-server` + Redis together (see Dockerfile's runtime stage and
+# scripts/docker-entrypoint.sh), matching legacy LANraragi's own real single-container deployment
+# convention (verified against tools/Documentation/installing-lanraragi/docker.md: one
+# `difegue/lanraragi` container with three bind mounts under
+# `/home/koyomi/lanraragi/{content,thumb,database}` — no separate Redis container/service in
+# their own documented examples). Not used by CI (see .github/workflows/ci.yml,
+# Dockerfile.act-runner) or the cargo-in-container tasks in .mise.toml (those build/test the
+# workspace itself; this runs the built server). Bring up with `podman compose up -d` (or
+# `docker compose up -d`), rebuild the image after a source change with `podman compose build`.
+#
+# `network_mode: host` because `lanrurugi-server` was developed and verified against
+# 127.0.0.1:3000 directly on the host network — switching to bridge networking would need every
+# already-verified same-origin frontend assumption re-checked, for no real benefit on a
+# single-host dev setup.
+services:
+  lanrurugi:
+    image: localhost/lanrurugi-try:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lrr-try
+    network_mode: host
+    volumes:
+      # Host-side dirs keep their existing, project-native names (data/manga, data/thumb,
+      # data/database) — only the *container-side* paths mirror legacy's
+      # `/home/koyomi/lanraragi/...` convention (project name swapped, per redis.conf/Dockerfile's
+      # own doc comments).
+      - ./data/manga:/home/koyomi/lanrurugi/content
+      - ./data/thumb:/home/koyomi/lanrurugi/thumb
+      - ./data/database:/home/koyomi/lanrurugi/database
+      - lrr-try-log:/log
+      - lrr-try-temp:/temp
+    restart: unless-stopped
+
+volumes:
+  lrr-try-log:
+  lrr-try-temp:

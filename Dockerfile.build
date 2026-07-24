@@ -18,8 +18,20 @@
 # own C and builds with just `gcc`. These are build-only — the runtime image links both statically,
 # so it needs neither cmake nor libclang.
 
-ARG RUST_VERSION=1.96.0
+ARG RUST_VERSION=1.97.1
+ARG DENO_VERSION=2.9.1
+
+# Same rationale as `Dockerfile.dev`'s own `deno-bin` stage: some `lanrurugi-api` integration
+# tests (e.g. `plugins.rs`'s real-`ehdl`-plugin end-to-end test) invoke a real plugin through the
+# actual Deno dispatcher, which needs a real `deno` binary — this image otherwise has cargo but no
+# way to run a `.ts` plugin at all. Kept as a separate `COPY --from` stage (not installed via
+# apt/curl in the main image) purely to match the exact version pin `Dockerfile.dev`/the
+# production `Dockerfile` already use, from the same official binary-only image.
+FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
+
 FROM rust:${RUST_VERSION}-slim-bookworm
+
+COPY --from=deno-bin /deno /usr/local/bin/deno
 
 WORKDIR /workspace
 

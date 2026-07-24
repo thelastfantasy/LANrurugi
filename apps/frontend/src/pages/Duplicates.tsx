@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { waitForJob } from '../api/client'
 import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from '../api/hooks'
+import { routes } from '../routes'
 import { useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -101,7 +102,7 @@ export default function Duplicates() {
                 <tr key={archive.arcid} className={i === 0 ? 'duplicate-group' : undefined}>
                   <td>
                     <div className="thumbnail-wrapper" style={{ display: 'inline-block', marginRight: 8 }}>
-                      <a href={`#/edit/${archive.arcid}`} onClick={(e) => { e.preventDefault(); navigate(`/edit/${archive.arcid}`) }}>
+                      <a href={routes.edit(archive.arcid)} onClick={(e) => { e.preventDefault(); navigate(routes.edit(archive.arcid)) }}>
                         <img
                           src={`/api/archives/${archive.arcid}/thumbnail`}
                           alt={archive.title}
@@ -109,7 +110,7 @@ export default function Duplicates() {
                         />
                       </a>
                     </div>
-                    <a href={`#/edit/${archive.arcid}`} onClick={(e) => { e.preventDefault(); navigate(`/edit/${archive.arcid}`) }}>
+                    <a href={routes.edit(archive.arcid)} onClick={(e) => { e.preventDefault(); navigate(routes.edit(archive.arcid)) }}>
                       {archive.title}
                     </a>
                   </td>
@@ -134,7 +135,7 @@ export default function Duplicates() {
         </table>
       )}
 
-      <input type="button" id="goback" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="goback" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

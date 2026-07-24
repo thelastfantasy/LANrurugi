@@ -8,7 +8,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::delete;
 use axum::Router;
-use lanrurugi_scanner::pipeline::{ingest_file_with_policy, DuplicatePolicy, IngestOutcome};
+use lanrurugi_scanner::pipeline::{
+    ingest_file_with_policy, DuplicatePolicy, IngestOptions, IngestOutcome,
+};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 
@@ -124,8 +126,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         &state.redis.search,
         &state.library.thumb_dir,
         &staging_path,
-        DuplicatePolicy::Reject,
-        Some(&file_name),
+        IngestOptions::named(DuplicatePolicy::Reject, &file_name),
     )
     .await;
 
@@ -207,6 +208,11 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
             let _ = state.repos.archives.save(&archive).await;
         }
     }
+
+    // Legacy's own real order (`Model::Upload.pm`): user-supplied title/tags land first, *then*
+    // every enabled metadata plugin runs and appends on top (`set_tags(..., append=1)`) — matched
+    // here by calling this after, not before, the user-supplied-fields block above.
+    crate::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
 
     axum::Json(json!({ "operation": "upload", "success": 1, "id": id })).into_response()
 }

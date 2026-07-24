@@ -39,7 +39,7 @@ interface ExecMetadataArgs {
 }
 
 interface ExecMetadataResult {
-  new_tags?: string;
+  tags?: string;
   title?: string;
   summary?: string;
 }
@@ -56,7 +56,7 @@ export async function execMetadata(args: ExecMetadataArgs): Promise<ExecMetadata
     // happy-path (enrichment actually populating tags) is still demonstrable.
   }
   return {
-    new_tags: `source:sample,archive:${args.archive_id}`,
+    tags: `source:sample,archive:${args.archive_id}`,
     summary: "Enriched by sample-metadata-plugin.",
   };
 }

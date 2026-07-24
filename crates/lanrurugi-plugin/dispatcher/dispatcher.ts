@@ -764,10 +764,23 @@ async function handleRequest(req: PluginRequest) {
     writeLine({ request_id: req.request_id, ok: true, result });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    // A plugin's own `PluginErrorException` (`plugin-sdk.ts`) carries a structured, translatable
+    // `{error_code, data}` pair the Rust host can turn into `QueueError::PluginReported` instead
+    // of an opaque string. Detected by property shape, not `instanceof` — this file deliberately
+    // has zero external imports (see this file's own header comment: importing `plugin-sdk.ts`
+    // here would need its path added to every plugin worker's `--allow-read` grant), so it never
+    // holds the exact same class reference the dynamically-`import()`'d plugin module threw.
+    const withCode = e as Error & { error_code?: unknown; data?: unknown };
+    const error_code =
+      e instanceof Error && typeof withCode.error_code === "string" ? withCode.error_code : undefined;
+    const data =
+      e instanceof Error && typeof withCode.data === "object"
+        ? (withCode.data as Record<string, string | number> | undefined)
+        : undefined;
     writeLine({
       request_id: req.request_id,
       ok: false,
-      error: { message, kind: "plugin_error" },
+      error: { message, kind: "plugin_error", error_code, data },
     });
   }
 }

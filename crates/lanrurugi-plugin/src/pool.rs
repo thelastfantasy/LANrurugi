@@ -34,8 +34,8 @@ pub enum PoolError {
     Spawn(#[from] std::io::Error),
     #[error("plugin worker did not respond within {0:?} (timeout)")]
     Timeout(Duration),
-    #[error("plugin {0:?} returned an error: {1}")]
-    PluginError(String, String),
+    #[error("plugin returned an error: {}", .0.message)]
+    PluginError(crate::protocol::ResponseError),
     #[error("plugin worker exited unexpectedly")]
     WorkerGone,
     #[error("malformed response from plugin worker: {0}")]
@@ -300,8 +300,10 @@ fn response_to_result(response: Response) -> Result<serde_json::Value> {
         let error = response.error.unwrap_or(crate::protocol::ResponseError {
             message: "unknown error".to_string(),
             kind: "plugin_error".to_string(),
+            error_code: None,
+            data: None,
         });
-        Err(PoolError::PluginError(error.kind, error.message))
+        Err(PoolError::PluginError(error))
     }
 }
 
@@ -425,7 +427,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result["new_tags"], "source:sample,archive:deadbeef");
+        assert_eq!(result["tags"], "source:sample,archive:deadbeef");
         assert_eq!(result["summary"], "Enriched by sample-metadata-plugin.");
     }
 
@@ -444,7 +446,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, PoolError::PluginError(_, _)));
+        assert!(matches!(err, PoolError::PluginError(_)));
 
         // The pool itself must still be usable afterwards for the same plugin (failure isolation
         // doesn't poison future calls, just that one).
@@ -456,6 +458,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result["new_tags"], "source:sample,archive:still-works");
+        assert_eq!(result["tags"], "source:sample,archive:still-works");
     }
 }

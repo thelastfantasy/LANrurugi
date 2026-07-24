@@ -78,6 +78,10 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// `new_archive_tx`, when given, receives the id of every genuinely brand-new archive this scan
+/// catalogues — same semantics as `pipeline::run`'s own parameter of the same name (only
+/// `Catalogued`, never `Rekeyed`/`Unchanged`/`Rejected`; see that function's own docs for why).
+#[allow(clippy::too_many_arguments)]
 pub async fn full_scan(
     library_path: &Path,
     archives: &ArchiveRepository,
@@ -86,6 +90,7 @@ pub async fn full_scan(
     thumb_dir: &Path,
     jobs: &JobRegistry,
     job_id: &str,
+    new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> ScanSummary {
     let mut paths = Vec::new();
     walk(library_path, &mut paths);
@@ -148,9 +153,27 @@ pub async fn full_scan(
     }
 
     while let Some(joined) = tasks.join_next().await {
-        let (path, result) = joined.expect("full_scan ingest task panicked");
+        // A panicked/cancelled task must not take the rest of the scan down with it — every
+        // other spawned task in this `JoinSet` is still running independently and its own result
+        // still needs to be collected by a later loop iteration. Counted alongside `errors` (the
+        // same bucket a normal `ingest_file` failure lands in) since, from the scan's own
+        // perspective, this file simply failed to ingest — the *reason* (panic vs. a returned
+        // `Err`) doesn't change what the caller needs to do about it.
+        let (path, result) = match joined {
+            Ok(pair) => pair,
+            Err(join_err) => {
+                tracing::warn!(error = %join_err, "full_scan: an ingest task panicked or was cancelled");
+                summary.errors += 1;
+                continue;
+            }
+        };
         match result {
-            Ok(IngestOutcome::Catalogued { .. }) => summary.catalogued += 1,
+            Ok(IngestOutcome::Catalogued { id }) => {
+                summary.catalogued += 1;
+                if let Some(tx) = &new_archive_tx {
+                    let _ = tx.send(id.clone());
+                }
+            }
             Ok(IngestOutcome::Rekeyed { .. }) => summary.rekeyed += 1,
             Ok(IngestOutcome::Unchanged { .. }) => summary.unchanged += 1,
             // `full_scan`/the watcher's own `run()` always call with `DuplicatePolicy::Reject,
@@ -294,6 +317,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &scan_job_id,
+            None,
         )
         .await;
         assert_eq!(
@@ -369,6 +393,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &job_id,
+            None,
         )
         .await;
 
@@ -430,6 +455,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &job_id,
+            None,
         )
         .await;
 

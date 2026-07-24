@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
+import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
@@ -141,34 +142,25 @@ export default function MarkerLayer({
       {menu && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setMenu(null)} />
-          <div
-            className="id1 marker-context-menu"
-            style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT, width: 180 }}
-          >
-            <ul style={{ listStyle: 'none', margin: 0, padding: '6px 0' }}>
-              <li
-                className="context-menu-item"
-                style={{ padding: '4px 12px', cursor: 'pointer' }}
-                onClick={() => {
-                  const content = window.prompt(t('Enter Stamp name:') ?? undefined)
-                  setMenu(null)
-                  if (content !== null) updateStamp.mutate({ stampId: menu.stampId, content })
-                }}
-              >
-                {t('Edit Marker')}
-              </li>
-              <li
-                className="context-menu-item"
-                style={{ padding: '4px 12px', cursor: 'pointer' }}
-                onClick={() => {
-                  setMenu(null)
-                  deleteStamp.mutate(menu.stampId)
-                }}
-              >
-                {t('Delete Marker')}
-              </li>
-            </ul>
-          </div>
+          <PopupMenu style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT }}>
+            <PopupMenuItem
+              onClick={() => {
+                const content = window.prompt(t('Enter Stamp name:') ?? undefined)
+                setMenu(null)
+                if (content !== null) updateStamp.mutate({ stampId: menu.stampId, content })
+              }}
+            >
+              {t('Edit Marker')}
+            </PopupMenuItem>
+            <PopupMenuItem
+              onClick={() => {
+                setMenu(null)
+                deleteStamp.mutate(menu.stampId)
+              }}
+            >
+              {t('Delete Marker')}
+            </PopupMenuItem>
+          </PopupMenu>
         </>
       )}
     </>

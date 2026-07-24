@@ -70,10 +70,11 @@ pub enum IngestOutcome {
 /// `intended_filename` (a different archive already occupies that destination basename).
 /// Every caller except a download-queue "start with overwrite" request uses [`Self::Reject`],
 /// preserving the exact behavior every existing caller already had before this enum existed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DuplicatePolicy {
     /// Leave the existing archive untouched; report [`IngestOutcome::Rejected`] instead of
     /// cataloguing the new file (the new file itself is not deleted — the caller decides that).
+    #[default]
     Reject,
     /// Delete the existing archive (record + on-disk file) first, then catalogue the new file as
     /// a brand-new archive — the old ID is never reused, matching legacy's real `replacedupe`
@@ -89,15 +90,33 @@ pub enum DuplicateReason {
     Filename,
 }
 
+impl From<DuplicateReason> for lanrurugi_core::queue_error::DuplicateReasonKind {
+    fn from(reason: DuplicateReason) -> Self {
+        match reason {
+            DuplicateReason::ContentHash => Self::ContentHash,
+            DuplicateReason::Filename => Self::Filename,
+        }
+    }
+}
+
 /// Runs the watcher-driven ingestion loop: pulls paths off `rx` and ingests them one at a time
 /// until the channel closes. Bulk/initial scans use `hashing::hash_batch` directly instead (they
 /// parallelize hashing itself rather than serializing through this channel).
+/// `new_archive_tx`, when given, receives the id of every genuinely brand-new archive this loop
+/// catalogues (`IngestOutcome::Catalogued` only — never `Rekeyed`, matching legacy's own
+/// `Shinobu.pm::update_filemap_entry`, whose rekey branch explicitly preserves old metadata and
+/// returns without calling `exec_enabled_plugins_on_file`; only its "brand-new file" fallthrough,
+/// `add_new_file`, does). This crate has no access to `AppState`/plugin execution (avoiding a
+/// circular dependency on `lanrurugi-api`), so the actual "run every enabled metadata plugin on
+/// this id" work happens on the *other* end of this channel, in the API crate — this loop only
+/// ever reports which ids are eligible.
 pub async fn run(
     mut rx: mpsc::UnboundedReceiver<PathBuf>,
     archives: ArchiveRepository,
     config_pool: Pool,
     search_pool: Pool,
     thumb_dir: PathBuf,
+    new_archive_tx: Option<mpsc::UnboundedSender<String>>,
 ) {
     while let Some(path) = rx.recv().await {
         match tokio::time::timeout(
@@ -106,7 +125,12 @@ pub async fn run(
         )
         .await
         {
-            Ok(Ok(outcome)) => tracing::info!(?path, ?outcome, "ingested file"),
+            Ok(Ok(outcome)) => {
+                if let (IngestOutcome::Catalogued { id }, Some(tx)) = (&outcome, &new_archive_tx) {
+                    let _ = tx.send(id.clone());
+                }
+                tracing::info!(?path, ?outcome, "ingested file")
+            }
             Ok(Err(e)) => tracing::warn!(?path, error = %e, "failed to ingest file"),
             Err(_) => tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out"),
         }
@@ -126,27 +150,58 @@ pub async fn ingest_file(
         search_pool,
         thumb_dir,
         path,
-        DuplicatePolicy::Reject,
-        None,
+        IngestOptions::default(),
     )
     .await
 }
 
-/// Like [`ingest_file`], but with control over how a colliding archive (by content hash or by
-/// `intended_filename`) is handled — see [`DuplicatePolicy`]. `intended_filename` is the
-/// destination basename this file will ultimately be known by (which may differ from `path`'s
-/// own basename, e.g. a staged upload written under a temp UUID name) — `None` skips the
-/// filename-collision check entirely (content-hash collision is still always checked).
+/// How [`ingest_file_with_policy`] should handle a colliding archive, and what name a newly
+/// catalogued archive's `title`/`name` should take.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IngestOptions<'a> {
+    pub duplicate_policy: DuplicatePolicy,
+    /// The destination basename this file will ultimately be known by (which may differ from
+    /// `path`'s own basename, e.g. a staged upload written under a temp UUID name) — `None` skips
+    /// the filename-collision check entirely (content-hash collision is still always checked).
+    pub intended_filename: Option<&'a str>,
+    /// Source for a newly catalogued archive's `title`/`name`, in preference to `path`'s own
+    /// (possibly disposable-staging-name) basename — see `catalogue_new_archive`'s own docs for
+    /// the real bug this fixes. Usually the same value as `intended_filename` (and every caller
+    /// but one just sets both to the same thing via [`Self::named`]) — kept as its own separate
+    /// field only because `download_manager::ingest::ingest_downloaded_file`'s `overwrite: false`
+    /// path wants the title benefit *without* the collision check (a same-named-but-different-
+    /// content download is expected there and should auto-rename around rather than reject), so it
+    /// sets `intended_filename: None` but still needs a real name for `title_filename`.
+    pub title_filename: Option<&'a str>,
+}
+
+impl<'a> IngestOptions<'a> {
+    /// The common case: `name` used for collision-checking and title on equal footing.
+    pub fn named(duplicate_policy: DuplicatePolicy, name: &'a str) -> Self {
+        Self {
+            duplicate_policy,
+            intended_filename: Some(name),
+            title_filename: Some(name),
+        }
+    }
+}
+
+/// Like [`ingest_file`], but with control over how a colliding archive is handled and what a
+/// newly catalogued archive's `title`/`name` should be — see [`IngestOptions`].
 pub async fn ingest_file_with_policy(
     archives: &ArchiveRepository,
     config_pool: &Pool,
     search_pool: &Pool,
     thumb_dir: &Path,
     path: &Path,
-    duplicate_policy: DuplicatePolicy,
-    intended_filename: Option<&str>,
+    options: IngestOptions<'_>,
 ) -> Result<IngestOutcome, PipelineError> {
     wait_until_stable(path).await?;
+    let IngestOptions {
+        duplicate_policy,
+        intended_filename,
+        title_filename,
+    } = options;
 
     let id = size_aware_id(path)?;
     let path_str = path.to_string_lossy().to_string();
@@ -180,21 +235,18 @@ pub async fn ingest_file_with_policy(
         }
     }
 
-    if let Some(existing) = archives.get(&id).await? {
+    if archives.get(&id).await?.is_some() {
         // Same content-hash ID already tracked under a different path. Under the size-aware
         // algorithm this can only happen for genuinely byte-identical content (Clarifications
-        // Q2).
-        match duplicate_policy {
-            DuplicatePolicy::Reject => {
-                return Ok(IngestOutcome::Rejected {
-                    existing_id: id,
-                    reason: DuplicateReason::ContentHash,
-                });
-            }
-            DuplicatePolicy::Overwrite => {
-                delete_existing_archive(archives, config_pool, &existing).await?;
-            }
-        }
+        // Q2). Always rejected — unlike a `Filename` collision below, `DuplicatePolicy::Overwrite`
+        // never applies here: deleting and recataloguing an archive whose bytes are provably
+        // identical to what's already tracked would just churn its ID/timestamps for zero real
+        // benefit (explicit product decision — a checkbox that silently does this on a true
+        // duplicate would be confusing, not useful).
+        return Ok(IngestOutcome::Rejected {
+            existing_id: id,
+            reason: DuplicateReason::ContentHash,
+        });
     }
 
     if let Some(intended_filename) = intended_filename {
@@ -217,16 +269,18 @@ pub async fn ingest_file_with_policy(
 
     let _: () = config_conn.hset(FILEMAP_KEY, &path_str, &id).await?;
 
-    let thumb_settings = crate::thumbnail::read_settings(&mut config_conn).await;
-    let date_added_settings = read_date_added_settings(&mut config_conn).await;
+    let catalogue_settings = CatalogueSettings {
+        thumb: crate::thumbnail::read_settings(&mut config_conn).await,
+        date_added: read_date_added_settings(&mut config_conn).await,
+    };
     catalogue_new_archive(
         archives,
         search_pool,
         thumb_dir,
         &id,
         path,
-        thumb_settings,
-        date_added_settings,
+        title_filename,
+        catalogue_settings,
     )
     .await?;
     Ok(IngestOutcome::Catalogued { id })
@@ -236,6 +290,15 @@ pub async fn ingest_file_with_policy(
 struct DateAddedSettings {
     enabled: bool,
     use_last_modified: bool,
+}
+
+/// The two independent settings groups `catalogue_new_archive` needs — bundled into one struct
+/// purely to keep that function's own argument count under clippy's limit, not because thumbnail
+/// generation and date-added tagging are conceptually related.
+#[derive(Debug, Clone, Copy)]
+struct CatalogueSettings {
+    thumb: crate::thumbnail::ThumbSettings,
+    date_added: DateAddedSettings,
 }
 
 /// Reads the live `usedateadded`/`usedatemodified` values from the same `LRR_CONFIG` hash
@@ -285,14 +348,35 @@ async fn catalogue_new_archive(
     thumb_dir: &Path,
     id: &str,
     path: &Path,
-    thumb_settings: crate::thumbnail::ThumbSettings,
-    date_added_settings: DateAddedSettings,
+    title_filename: Option<&str>,
+    settings: CatalogueSettings,
 ) -> Result<(), PipelineError> {
-    let name = path
-        .file_stem()
+    let CatalogueSettings {
+        thumb: thumb_settings,
+        date_added: date_added_settings,
+    } = settings;
+    // `title_filename` (when given) is the archive's real, destination-facing basename — used
+    // in preference to `path`'s own basename since a caller staging a file under a disposable temp
+    // name (`upload.rs`'s `upload-<uuid>`, the download pipeline's `download-<uuid>`) still wants
+    // the archive's `title`/`name` to reflect the real filename the user/plugin actually intended,
+    // not that throwaway staging name. A real, shipped bug until this fix: both the web-upload and
+    // download-queue paths always pass a UUID-named staging path here, and with nothing to fall
+    // back on, every archive ingested through either path got titled after the meaningless UUID
+    // instead of its real name (confirmed live: uploading "Real Test Filename Should Show.zip"
+    // produced an archive titled `upload-dcad970d75f9...`, and downloading "[King Angel] Maiden
+    // Under the Sun" produced `download-9602cda7e6d0...`). The watcher/full-scan callers correctly
+    // pass `None` here, since a file discovered already sitting in the watched archive directory
+    // already has its own real name as its `path`.
+    let name = title_filename
+        .and_then(|f| Path::new(f).file_stem())
         .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string()
+        });
     let arcsize = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let pagecount = archive_format::list_pages(path)
         .map(|p| p.len() as u32)
@@ -460,6 +544,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn title_filename_overrides_a_disposable_staging_path_basename() {
+        // Regression test for a real, shipped bug: `upload.rs`/`download_manager::ingest.rs` both
+        // stage their file under a throwaway UUID name (`upload-<uuid>`/`download-<uuid>`) before
+        // ingesting, and — before `title_filename` existed — `catalogue_new_archive` always
+        // derived `title`/`name` from *that* staging path's own basename, so every uploaded or
+        // downloaded archive ended up titled after a meaningless UUID instead of its real name.
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(24) else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        // Named the way a real staging file is: a disposable, meaningless basename that must NOT
+        // end up as the archive's title once `title_filename` is given.
+        let staged_path = make_zip_with_pages(dir.path(), "download-9602cda7e6d04444.zip", 2);
+
+        let outcome = ingest_file_with_policy(
+            &archives,
+            &config_pool,
+            &search_pool,
+            thumb_dir.path(),
+            &staged_path,
+            IngestOptions {
+                // No collision check (`intended_filename: None`) — mirrors
+                // `ingest_downloaded_file`'s own real `overwrite: false` case exactly.
+                title_filename: Some("[King Angel] Maiden Under the Sun.zip"),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let IngestOutcome::Catalogued { id } = outcome else {
+            panic!("expected Catalogued, got {outcome:?}");
+        };
+
+        let archive = archives.get(&id).await.unwrap().unwrap();
+        assert_eq!(archive.title, "[King Angel] Maiden Under the Sun");
+        assert_eq!(archive.name, "[King Angel] Maiden Under the Sun");
+        // The on-disk `file` path is untouched by `title_filename` — still the real staging path
+        // at this point (a caller's own separate rename-into-place step, already covered by
+        // `upload.rs`/`ingest_downloaded_file`'s own logic, isn't exercised by this pipeline-level
+        // function).
+        assert_eq!(archive.file, staged_path.to_string_lossy());
+
+        archives.delete(&id).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel(FILEMAP_KEY, staged_path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn changed_file_content_rekeys_existing_archive() {
         let Some((archive_pool, config_pool, search_pool)) = test_pools(12) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
@@ -514,7 +652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overwrite_policy_recatalogues_at_new_path_on_content_hash_collision() {
+    async fn overwrite_policy_still_rejects_a_content_hash_collision() {
         let Some((archive_pool, config_pool, search_pool)) = test_pools(15) else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -524,12 +662,11 @@ mod tests {
         let thumb_dir = tempfile::tempdir().unwrap();
 
         // Two distinct paths, byte-identical content -> the size-aware ID is a deterministic
-        // content hash, so both necessarily resolve to the *same* ID — "delete old, catalogue new
-        // under a fresh ID" is only meaningful for the filename-collision case (see the sibling
-        // test below); here, `Overwrite` deletes the old on-disk file and re-catalogues at the
-        // new path, which — given the ID is content-derived — is inherently the same ID, just
-        // pointed at the new location instead of silently doing nothing (the `Reject`/`Unchanged`
-        // behavior).
+        // content hash, so both necessarily resolve to the *same* ID. `DuplicatePolicy::Overwrite`
+        // does NOT apply to a content-hash collision (explicit product decision — deleting and
+        // recataloguing an archive whose bytes are provably identical to what's already tracked
+        // would just churn its ID/timestamps for zero benefit); only a `Filename` collision (see
+        // the sibling test below) still respects `Overwrite`.
         let first_path = make_zip_with_pages(dir.path(), "first.zip", 2);
         let first = ingest_file(
             &archives,
@@ -553,36 +690,33 @@ mod tests {
             &search_pool,
             thumb_dir.path(),
             &second_path,
-            DuplicatePolicy::Overwrite,
-            None,
+            IngestOptions {
+                duplicate_policy: DuplicatePolicy::Overwrite,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
-        let IngestOutcome::Catalogued { id: second_id } = second else {
-            panic!("expected Catalogued, got {second:?}");
-        };
-        assert_eq!(second_id, first_id, "content-derived ID is deterministic");
-
-        let replacement = archives.get(&second_id).await.unwrap().unwrap();
         assert_eq!(
-            std::path::Path::new(&replacement.file).file_name().unwrap(),
-            "second.zip"
-        );
-        assert!(
-            !first_path.exists(),
-            "old archive's on-disk file should be gone"
+            second,
+            IngestOutcome::Rejected {
+                existing_id: first_id.clone(),
+                reason: DuplicateReason::ContentHash,
+            }
         );
 
-        archives.delete(&second_id).await.unwrap();
+        // The original archive/file must be left fully untouched by the rejected attempt.
+        assert!(first_path.exists(), "original archive's file must survive");
+        let original = archives.get(&first_id).await.unwrap().unwrap();
+        assert_eq!(
+            std::path::Path::new(&original.file).file_name().unwrap(),
+            "first.zip"
+        );
+
+        archives.delete(&first_id).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();
         let _: () = conn
-            .hdel(
-                FILEMAP_KEY,
-                &[
-                    first_path.to_string_lossy().to_string(),
-                    second_path.to_string_lossy().to_string(),
-                ],
-            )
+            .hdel(FILEMAP_KEY, first_path.to_string_lossy().to_string())
             .await
             .unwrap();
     }
@@ -633,8 +767,7 @@ mod tests {
             &search_pool,
             thumb_dir.path(),
             &new_staged_path,
-            DuplicatePolicy::Overwrite,
-            Some("shared-name.zip"),
+            IngestOptions::named(DuplicatePolicy::Overwrite, "shared-name.zip"),
         )
         .await
         .unwrap();
@@ -704,8 +837,7 @@ mod tests {
             &search_pool,
             thumb_dir.path(),
             &second_path,
-            DuplicatePolicy::Reject,
-            None,
+            IngestOptions::default(),
         )
         .await
         .unwrap();

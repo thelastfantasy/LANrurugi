@@ -58,6 +58,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "hentaiathome",
@@ -68,7 +84,7 @@ export function pluginInfo() {
     name: "HentaiAtHome plugin",
     author: "thelastfantasy",
     description: "Collects metadata embedded into your archives by HentaiAtHome Downloader's galleryinfo txt files.",
-    version: "0.2",
+    version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBI\nWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4wYDFB0m9797jwAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl\nYXRlZCB3aXRoIEdJTVBkLmUHAAAEbklEQVQ4y1WUPW/TUBSGn3uvHdv5cBqSOrQJgQ4ghqhCAgQM\nIIRAjF2Y2JhA/Q0g8R9YmJAqNoZKTAwMSAwdQEQUypeQEBEkTdtUbdzYiW1sM1RY4m5Hunp1znmf\n94jnz5+nAGmakiQJu7u7KKWwbRspJWma0m63+fHjB9PpFM/z6Ha7FAoFDMNga2uLx48fkyQJ29vb\nyCRJSNMUz/PY2dnBtm0qlQpKKZIkIQgCer0eW1tbDIdDJpMJc3NzuK5Lt9tF13WWl5dJkoRyuYyU\nUrK3t0ccx9TrdQzD4F/HSilM08Q0TWzbplqtUqvVKBaLKKVoNpt8/vyZKIq4fv064/EY2ev1KBQK\n2LadCQkhEEJkteu6+L6P7/tMJhOm0ylKKarVKjdu3GA6nXL+/HmSJEHWajV0Xf9P7N8TQhDHMWEY\nIoRgOBzieR4At2/f5uTJk0RRRLFYZHZ2liNHjqBFUcRoNKJarSKlRAiRmfPr1y/SNMVxHI4dO8aF\nCxfI5/O4rotSirdv33L16lV+//7Nly9fUEqh5XI5dF0nTdPMaSEEtm3TaDSwLAvLstB1nd3dXUql\nEqZpYlkW6+vrdLtdHjx4wPb2NmEYHgpalkUQBBwcHLC2tsbx48cpFos4jkMQBIRhyGQyYTgcsrGx\nQavVot1uc+LECcbjMcPhkFKpRC6XQ0vTlDAMieOYQqGA4zhcu3YNwzDQdR3DMA4/ahpCCPL5fEbC\nvXv3WFlZ4c+fP7TbbZaWlpBRFGXjpmnK/Pw8QRAwnU6RUqJpGp7nMRqNcF0XwzCQUqKUolwus7y8\njO/7lMtlFhcX0YQQeJ6XMXfq1Cn29/epVCrouk4QBNi2TalUIoqizLg0TQEYjUbU63VmZmYOsdE0\nDd/3s5HH4zG6rtNsNrEsi0qlQqFQYH19nVevXjEej/8Tm0wmlMtlhBAMBgOkaZo0Gg329vbY2dkh\nCIJsZ0oplFK8efOGp0+fcvHiRfL5PAAHBweEYcj8/HxGydevX5FxHDMajajVanz69Ik4jkmSBF3X\n0TSNzc1N7t69S6vV4vXr10gp8X2f4XBIpVLJghDHMRsbG2jT6TRLxuLiIr1eDwBN09A0jYcPHyKE\n4OjRo8RxTBRF9Pt95ubmMud93+f79+80m03k/v4+UspDKDWNRqPBu3fvSNOUtbU16vU6ly5dwnEc\ncrkcrutimib5fD4zxzRNVldXWVpaQqysrKSdTofLly8zmUwoFAoIIfjXuW3bnD17NkuJlBLHcdA0\nDYAgCHj27BmO47C6uopM05RyucyLFy/QNA3XdRFCYBgGQRCwubnJhw8fGAwGANRqNTRNI0kSXr58\nyc2bN6nX64RhyP379xFPnjxJlVJIKTl37hydTocoiuh0OszOzmJZFv1+n8FgwJ07d7hy5Qrj8ZiP\nHz/S7/c5ffo0CwsL9Ho9ZmZmEI8ePUoNwyBJEs6cOcPCwgLfvn3j/fv35PN5bNtGKZUdjp8/f3Lr\n1q3svLVaLTzPI4oiLMviL7opJdyaltNwAAAAAElFTkSuQmCC",
     sidecar_files: ["galleryinfo.txt"],
   };
@@ -95,14 +111,14 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let logger = perlCompat.getLogger("HentaiAtHome plugin", "plugins");
   let file = lrr_info["file_path"];
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["galleryinfo.txt"];
-  if ((! path_in_archive)) { throw new Error("No galleryinfo.txt file found in this archive!\n"); }
+  if ((! path_in_archive)) { throw new PluginErrorException("No galleryinfo.txt file found in this archive!"); }
   //    # Extract galleryinfo.txt
 
   let filepath = path_in_archive;
   //    # Open it
 
   let fh = filepath;
-  if (fh === undefined) { throw new Error(`Could not open ${filepath}!\n`); }
+  if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }
   let tag = "";
   let title = "";
   for (let line of (fh ?? "").split(/\r?\n/)) {
@@ -128,5 +144,5 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
       return { tags: tag, title: title };
     }
   }
-  throw new Error("No tags were found in galleryinfo.txt!\n");
+  throw new PluginErrorException("No tags were found in galleryinfo.txt!");
 }

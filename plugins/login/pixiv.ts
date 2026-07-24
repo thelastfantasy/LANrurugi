@@ -71,8 +71,8 @@ export function pluginInfo() {
     namespace: "pixivlogin",
     type: "login" as const,
     parameters: [
-      { name: "param1", description: "Browser UserAgent (Default is 'Mozilla/5.0')", required: false },
-      { name: "param2", description: "Cookie (PHP session ID)", required: false },
+      { name: "param1", description: "Browser UserAgent (Default is 'Mozilla/5.0')", required: false, type: "string" },
+      { name: "param2", description: "Cookie (PHP session ID)", required: false, type: "string" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 

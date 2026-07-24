@@ -1,0 +1,130 @@
+# syntax=docker/dockerfile:1
+#
+# Local full-stack dev image — NOT the runtime image (see `Dockerfile` for that; this one is
+# never deployed, only ever built and run locally via `compose.dev.yaml`). Bundles Redis +
+# a compiled `lanrurugi-server` + a Node/pnpm frontend dev environment into one container, so
+# `podman compose -f compose.dev.yaml up -d` is the only thing needed for a full local loop with
+# live frontend hot-reload — kept entirely separate from the production `Dockerfile` so that one
+# stays free of dev-only tooling (Node/pnpm/vite) and dev-mode entrypoint branching it has no
+# other use for.
+#
+# The frontend's *source* is bind-mounted in at container-run time by `compose.dev.yaml` (not
+# baked in here) — that's what makes edits on the host show up live via Vite's own file watcher.
+# `node_modules` (both this package's own and the workspace root's hoisted copy) IS baked in here
+# via `pnpm install`, for a fast, lockfile-deterministic container start rather than reinstalling
+# on every `up`; `compose.dev.yaml`'s own volumes "poke a hole" back through the source bind mount
+# so it isn't shadowed. The backend is a normal compiled binary (rebuilt only when this image is
+# rebuilt) — this doesn't attempt Rust hot-reload, only the frontend, matching what was actually
+# asked for.
+
+ARG RUST_VERSION=1.97.1
+ARG NODE_VERSION=24.18.0
+ARG PNPM_VERSION=11.10.0
+ARG REDIS_VERSION=7.4.9
+ARG DENO_VERSION=2.9.1
+
+FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
+WORKDIR /build
+# Same libarchive2-sys/libwebp-sys build deps as the production `Dockerfile`'s own `rust-builder`
+# stage — see that file's doc comment for the full rationale.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libssl-dev \
+        make \
+        gcc \
+        g++ \
+        cmake \
+        libclang-dev \
+        zlib1g-dev \
+        libbz2-dev \
+        liblzma-dev \
+        libzstd-dev \
+        liblz4-dev \
+        libxml2-dev \
+        libacl1-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --release -p lanrurugi-server
+
+# Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
+# this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
+# `vite dev` serves straight from the bind-mounted source at container-run time instead of any
+# prebuilt `dist/`.
+FROM node:${NODE_VERSION}-slim AS frontend-deps
+ARG PNPM_VERSION
+WORKDIR /build
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/frontend/package.json apps/frontend/package.json
+RUN pnpm install --frozen-lockfile --filter lanrurugi-frontend
+
+# Same rationale as the production `Dockerfile`'s own `redis-bin` stage: the official image's
+# `-bookworm` (glibc) variant, pinned to the exact version this project's Redis data is already
+# written with.
+FROM docker.io/library/redis:${REDIS_VERSION}-bookworm AS redis-bin
+
+# Same rationale as the production `Dockerfile`'s own `deno-bin` stage — plugins (Deno-executed
+# `.ts` files) can't run at all without this; missing from this file's first draft entirely
+# (verified the hard way — plugin calls would have failed outright with no `deno` binary present).
+FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        fonts-noto-cjk \
+        libstdc++6 \
+        zlib1g \
+        libbz2-1.0 \
+        liblzma5 \
+        libzstd1 \
+        liblz4-1 \
+        libxml2 \
+        libacl1 \
+        libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
+COPY --from=deno-bin /deno /usr/local/bin/deno
+COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
+
+# Node itself — `node:${NODE_VERSION}-slim` is Debian bookworm/glibc underneath (verified), same
+# as this `runtime` base, so its binary links cleanly here without reinstalling from scratch.
+# `corepack`/`npm`/`npx` are themselves relative *symlinks* into `node_modules` in the source
+# image (e.g. `corepack -> ../lib/node_modules/corepack/dist/corepack.js`) — a plain multi-source
+# `COPY ... /usr/local/bin/` dereferences symlinks into flat regular files, which breaks their own
+# internal `require('./lib/...')` calls (relative to the symlink's real target, not to
+# `/usr/local/bin/` where the dereferenced copy actually lands). Copying `node`'s real binary
+# first, then `node_modules`, then recreating these three as symlinks matching the exact relative
+# paths the upstream image itself uses, avoids that — verified the hard way (this exact failure:
+# "Cannot find module './lib/corepack.cjs'").
+COPY --from=frontend-deps /usr/local/bin/node /usr/local/bin/
+COPY --from=frontend-deps /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+ARG PNPM_VERSION
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+
+# Baked-in node_modules for fast, deterministic startup (see this file's own doc comment on why
+# this isn't reinstalled at container-run time).
+COPY --from=frontend-deps /build/node_modules /workspace/node_modules
+COPY --from=frontend-deps /build/apps/frontend/node_modules /workspace/apps/frontend/node_modules
+
+COPY plugins /usr/local/share/lanrurugi/plugins
+
+COPY redis.conf /etc/lanrurugi/redis.conf
+COPY scripts/docker-entrypoint.dev.sh /usr/local/bin/docker-entrypoint.dev.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.dev.sh \
+    && mkdir -p /home/koyomi/lanrurugi/content /home/koyomi/lanrurugi/thumb /home/koyomi/lanrurugi/database
+
+ENV LANRURUGI_PLUGINS_DIR=/usr/local/share/lanrurugi/plugins
+ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
+ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
+ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
+# No `LANRURUGI_STATIC_DIR` set — this backend never serves the frontend itself in dev mode, Vite
+# does (see docker-entrypoint.dev.sh: the backend binds an *internal* port, Vite is the
+# container's actual public-facing port, proxying `/api/*` through to the backend).
+WORKDIR /workspace
+EXPOSE 3000
+ENTRYPOINT ["docker-entrypoint.dev.sh"]

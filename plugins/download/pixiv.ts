@@ -58,6 +58,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "pixivdl",
@@ -117,7 +133,7 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   const url = info.url;
   const artworkId = extractArtworkId(url);
   if (!artworkId) {
-    throw new Error(`Invalid Pixiv URL. Expected format: https://www.pixiv.net/artworks/12345678, got ${url}\n`);
+    throw new PluginErrorException("Invalid Pixiv URL", { url });
   }
   logger.info(`Processing Pixiv artwork ID: ${artworkId}`);
 
@@ -130,11 +146,11 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
 
   const metadataResult = await fetchArtworkMetadata(ua, artworkId);
   if (metadataResult.error !== undefined) {
-    throw new Error(metadataResult.error + "\n");
+    throw new PluginErrorException(metadataResult.error.error_code, metadataResult.error.data);
   }
   const metadata = metadataResult.metadata as { body?: Record<string, unknown> } | undefined;
   if (!metadata?.body) {
-    throw new Error(`Got invalid metadata response from artwork with ID ${artworkId}\n`);
+    throw new PluginErrorException("Got invalid metadata response from artwork", { artworkId });
   }
   const artwork = metadata.body;
   const title = artwork.title;
@@ -145,13 +161,13 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   if (pagesCount === 1) {
     const imgUrl = (artwork.urls as Record<string, string> | undefined)?.original;
     if (!imgUrl) {
-      throw new Error(`Could not find image URL in single-page artwork metadata for ID ${artworkId}\n`);
+      throw new PluginErrorException("Could not find image URL in single-page artwork metadata", { artworkId });
     }
     downloads = [{ url: imgUrl, headers: { Referer: referer }, filename_hint: basename(imgUrl) }];
   } else if (pagesCount > 1) {
     downloads = await resolveMultiPageDownloads(ua, artworkId, referer);
   } else {
-    throw new Error(`Invalid page count for artwork with ID ${artworkId}: ${pagesCount}\n`);
+    throw new PluginErrorException("Invalid page count for artwork", { artworkId, pagesCount });
   }
 
   logger.info(`Resolved ${downloads.length} page URL(s) for artwork ${artworkId}`);
@@ -167,11 +183,13 @@ async function resolveMultiPageDownloads(
   const pagesApiUrl = `https://www.pixiv.net/ajax/illust/${artworkId}/pages`;
   const pagesRes = (await ua.get(pagesApiUrl)).result;
   if (pagesRes.code < 200 || pagesRes.code >= 300) {
-    throw new Error(`Failed to get pages metadata from multi-page artwork (status ${pagesRes.code})\n`);
+    throw new PluginErrorException("Failed to get pages metadata from multi-page artwork", {
+      status: pagesRes.code,
+    });
   }
   const pagesData = pagesRes.json as { body?: Array<{ urls: Record<string, string> }> } | undefined;
   if (!pagesData?.body) {
-    throw new Error("Invalid pages metadata response from multi-page artwork\n");
+    throw new PluginErrorException("Invalid pages metadata response from multi-page artwork");
   }
   const pages = pagesData.body;
   const downloads: DownloadRequest[] = [];
@@ -190,16 +208,20 @@ async function resolveMultiPageDownloads(
 async function fetchArtworkMetadata(
   ua: PerlUserAgent,
   artworkId: string,
-): Promise<{ metadata?: unknown; error?: string }> {
+): Promise<{ metadata?: unknown; error?: { error_code: string; data?: Record<string, string | number> } }> {
   const apiUrl = `https://www.pixiv.net/ajax/illust/${artworkId}`;
   const res = (await ua.get(apiUrl)).result;
   if (res.code < 200 || res.code >= 300) {
-    return { error: `Failed to fetch artwork metadata from URL ${apiUrl} (status ${res.code})` };
+    return {
+      error: { error_code: "Failed to fetch artwork metadata", data: { url: apiUrl, status: res.code } },
+    };
   }
   try {
     return { metadata: res.json };
   } catch (caughtError) {
-    return { error: `Failed to parse metadata JSON response: ${caughtError}` };
+    return {
+      error: { error_code: "Failed to parse metadata JSON response", data: { detail: String(caughtError) } },
+    };
   }
 }
 

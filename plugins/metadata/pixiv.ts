@@ -75,18 +75,34 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "pixivmetadata",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "Comma-separated list of languages to support. Options: jp, en. Empty string defaults to original tags (jp) only.", required: false },
+      { name: "param1", description: "Comma-separated list of languages to support. Options: jp, en. Empty string defaults to original tags (jp) only.", required: false, type: "string" },
     ],
     declared_permissions: { net: ["www.pixiv.net"], read: false, write: false },
     name: "Pixiv",
     author: "thelastfantasy",
     description: "Retrieve metadata of a Pixiv artwork by its artwork ID.\n            <br>Supports ID extraction from these file formats: \"{{pixiv_id}} Title\", \"pixiv_{pixiv_id}\" or \"{pixiv_id} Title\".\n            <br>\n            <br><i class='fa fa-exclamation-circle'></i> Pixiv enforces a rate limit on API requests, and may suspend/ban your account for overuse.\n        ",
-    version: "0.4",
+    version: "0.1",
     icon: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAAUABQDAREAAhEBAxEB/8QAGQAAAgMBAAAAAAAAAAAAAAAAAwYABAUH/8QAJBAAAgICAgICAgMAAAAAAAAAAQIDBAUGABESIQcxImETQVH/xAAZAQACAwEAAAAAAAAAAAAAAAADBgACCAX/xAAoEQABBAEDAgYDAQAAAAAAAAABAgMEEQAFITESUQYTFEFhkTJxocH/2gAMAwEAAhEDEQA/ANfRvi3MbpRvZxrlfG4jHQT2J7U35PIsKB5FhjHuRgpHf0B5DsjvmrNV15nTHERwkrcWQABwOo0Co8AE/smjQzIWkeHn9VbXIKghpAUSTyekWQkckgV2G4s4fXNI1LeMkuuarsuQizVgEUYsnTSKG5IB2Iw6SN/GzdevIEE+uxwc3VJmlteqltJLQ/IoUSUjvRAsD3rf4wkHSYOru+khOqDp/ELSAFHtYUaJ9rFfOJFmtPTsy07UTRTQO0ciMOirKeiD+wRzvIWl1IWg2DuP1i642ppZbWKINEfIzpnwOHt5LaaE14QVzqeV/OTyMcRaNQXIUE/0O+gT64q+LKbajuJTZ85virNE7b/6cbvB9uPSWlKpPkO83QsDfa/4MFoFHVNE2jH7tsm54u5Dhplu16OLaSaxbmT2ie0VY18gO2Yj19A8Jq7szVYi4EVhSS4OkqXQSkHk8kk1wB95XRmYWjzG9QlyEqDZ6glFlSiNwOAAL5JPHtiHn8vNsGdyOesoqS5G3LbdV+laRyxA/XvjBEjJhx0R07hAA+hWLU2SqbJckrFFair7N4ClksjjWkbHX7NUzRmKQwyshdD9qej7B/w8u6y09QdSDW4sXR74Np91iy0opsUaJFjtt7ZX4XBZOTJn/9k=",
     oneshot_arg: "Pixiv artwork URL or illustration ID (e.g. pixiv.net/en/artworks/123456 or 123456.)",
     login_from: "pixivlogin",
@@ -129,7 +145,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (!illust_id) {
     const message = "Failed to extract Pixiv ID!";
     logger.error(message);
-    throw new Error(`${message}\n`);
+    throw new PluginErrorException(message);
   }
   logger.debug(`Retrieved Pixiv illustration ID = ${illust_id}`);
 
@@ -480,7 +496,7 @@ async function get_metadata_from_illust_id(illust_id: string, ua: PerlUserAgent,
     logger.debug(`Next.js method failed, falling back to HTML parsing for illustration ID: ${illust_id}`);
     const html = await get_html_from_illust_id(illust_id, ua);
     if (HTML_ERROR_MARKER_PATTERN.test(html)) {
-      throw new Error(`Error retrieving HTML from Pixiv Illustration: ${html}\n`);
+      throw new PluginErrorException("Error retrieving HTML from Pixiv Illustration", { html });
     }
     json = get_json_from_html(html);
   }

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useLogin } from '../api/hooks'
 import Footer from '../components/Footer'
+import { routes } from '../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -25,7 +26,7 @@ export default function Login() {
     e.preventDefault()
     try {
       await login.mutateAsync(password)
-      navigate('/')
+      navigate(routes.library())
     } catch {
       // login.isError renders the message below; nothing else to do here.
     }

@@ -12,6 +12,59 @@ use crate::archives::ArchiveMetadataJson;
 use crate::common::error;
 use crate::AppState;
 
+/// Resolves one search-result id to its JSON card shape — a real archive via
+/// `ArchiveMetadataJson`, or (when `groupby_tanks` left a `TANK_`-prefixed id in the result set) a
+/// synthetic aggregate entry shaped the same way, mirroring legacy's own `build_tank_json`
+/// (`~/LANraragi/lib/LANraragi/Utils/Database.pm`) — same field names as a real archive
+/// (`arcid`/`title`/`tags`/`isnew`/`pagecount`/`lastreadtime`/`size`) plus `archive_count`, so the
+/// frontend can render both through one card component. Before this, a `TANK_` id here was passed
+/// straight to `state.repos.archives.get`, which always returns `None` for a non-archive key —
+/// silently dropping every grouped Tankoubon out of search results entirely.
+pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<serde_json::Value> {
+    if let Some(tankid) = id.strip_prefix("TANK_").map(|_| id) {
+        let grouping = state.repos.groupings.get(tankid).await.ok()??;
+        let mut aggregate_names = Vec::new();
+        let mut aggregate_isnew = false;
+        let mut aggregate_pagecount: u64 = 0;
+        let mut aggregate_size: u64 = 0;
+        let mut latest_readtime: u64 = 0;
+        let mut tags: Vec<String> = Vec::new();
+        for archive_id in &grouping.archives {
+            let Ok(Some(a)) = state.repos.archives.get(archive_id).await else {
+                continue;
+            };
+            aggregate_names.push(a.title.clone());
+            aggregate_isnew = aggregate_isnew || a.isnew;
+            aggregate_pagecount += u64::from(a.pagecount);
+            aggregate_size += a.arcsize;
+            latest_readtime = latest_readtime.max(a.lastreadtime);
+            if !a.tags.is_empty() {
+                tags.push(a.tags.clone());
+            }
+        }
+        return Some(json!({
+            "arcid": grouping.tankid,
+            "title": grouping.name,
+            "filename": "",
+            "tags": if !grouping.tags.is_empty() { grouping.tags.clone() } else { tags.join(", ") },
+            "summary": format!("Tankoubon containing: {}", aggregate_names.join(", ")),
+            "isnew": aggregate_isnew,
+            "extension": ".tank",
+            "progress": grouping.progress,
+            "pagecount": aggregate_pagecount,
+            "lastreadtime": latest_readtime,
+            "size": aggregate_size,
+            "toc": [],
+            "archive_count": grouping.archives.len(),
+        }));
+    }
+    let a = state.repos.archives.get(id).await.ok()??;
+    let mut json = serde_json::to_value(ArchiveMetadataJson::from(&a)).ok()?;
+    json.as_object_mut()?
+        .insert("archive_count".into(), json!(null));
+    Some(json)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/search", get(search_archives))
@@ -83,8 +136,8 @@ async fn search_archives(State(state): State<AppState>, Query(q): Query<SearchQu
             let page = paginate(&result.ids, q.start);
             let mut data = Vec::with_capacity(page.len());
             for id in &page {
-                if let Ok(Some(a)) = state.repos.archives.get(id).await {
-                    data.push(ArchiveMetadataJson::from(&a));
+                if let Some(entry) = resolve_search_entry(&state, id).await {
+                    data.push(entry);
                 }
             }
             axum::Json(json!({
@@ -184,8 +237,8 @@ async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuer
                 if data.len() == count {
                     break;
                 }
-                if let Ok(Some(a)) = state.repos.archives.get(id).await {
-                    data.push(ArchiveMetadataJson::from(&a));
+                if let Some(entry) = resolve_search_entry(&state, id).await {
+                    data.push(entry);
                 }
             }
             // Legacy's `get_random_archives` (`~/LANraragi/lib/LANraragi/Controller/Api/Search.pm`)

@@ -57,6 +57,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "gallerydlplugin",
@@ -67,7 +83,7 @@ export function pluginInfo() {
     name: "GalleryDL",
     author: "thelastfantasy",
     description: "Collects metadata from gallery-dl-created info.json files, either embedded in your archive or in the same folder with the same name. ({archive_name}.json)",
-    version: "1.0",
+    version: "0.1",
     sidecar_files: ["info.json"],
   };
 }
@@ -106,13 +122,13 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     logger.debug(`Found file nearby at ${filepath}`);
     delete_after_parse = 0;
   } else {
-    throw new Error("No in-archive info.json or {archive_name}.json file found!\n");
+    throw new PluginErrorException("No in-archive info.json or {archive_name}.json file found!");
   }
   //    #Open it
 
   let stringjson = "";
   let fh = filepath;
-  if (fh === undefined) { throw new Error(`Could not open ${filepath}!\n`); }
+  if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }
   for (let row of (fh ?? "").split(/\r?\n/)) {
     row = perlCompat.chomp(row);
     stringjson += row;
@@ -122,7 +138,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let hashjson = JSON.parse(stringjson);
   logger.debug(`Loaded the following JSON: ${stringjson}`);
   if (hashjson["tags"] == undefined) {
-    return { error: "The info.json file could not be parsed as a gallery-dl file!" };
+    return { error: { error_code: "The info.json file could not be parsed as a gallery-dl file!" } };
   }
   //    #Parse it
 
@@ -176,7 +192,7 @@ function tags_from_gdl_json(...args: any[]) {
   } else {
     let message = "Tags are in an unexpected structure, can't be parsed";
     logger.error(message);
-    throw new Error(`${message}\n`);
+    throw new PluginErrorException(message);
   }
   push_mapped_fields(parsed_tags, seen_tags, hash);
   //    # Add source and category tag if possible

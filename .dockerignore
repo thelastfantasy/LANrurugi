@@ -7,3 +7,8 @@ apps/frontend/node_modules/
 specs/
 *.log
 .env*
+# Runtime data (compose.yaml's own bind-mount source) — never part of the build context. Besides
+# being pointlessly huge (the manga library itself), a rootless-podman uid-mapped subdirectory
+# under here (data/database/appendonlydir, owned by Redis's in-container uid) isn't even readable
+# by the host user building the image, which fails the build outright without this exclusion.
+data/

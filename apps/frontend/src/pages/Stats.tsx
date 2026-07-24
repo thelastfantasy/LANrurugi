@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useArchives, useServerInfo, useStats } from '../api/hooks'
 import CollapsibleSection from '../components/CollapsibleSection'
+import { routes } from '../routes'
 import { FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -79,7 +80,7 @@ export default function Stats() {
         {t('(These statistics only show tags that appear at least twice in your database.)')}
       </p>
 
-      <input type="button" id="goback" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="goback" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

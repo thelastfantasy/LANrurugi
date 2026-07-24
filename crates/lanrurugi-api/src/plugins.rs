@@ -649,6 +649,7 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
                     "parameters": info.parameters.iter().map(|p| json!({
                         "name": p.name,
                         "desc": p.description,
+                        "type": p.param_type,
                     })).collect::<Vec<_>>(),
                 }));
             }
@@ -729,6 +730,388 @@ async fn get_other_archive_tags(state: &AppState, plugin: &str, arg: Option<&str
     }
 }
 
+/// Normalizes a URL the same way both `plugins/script/sourcefinder.ts` (via
+/// `get_existing_archive_id_for_url` below) and legacy's `SourceFinder.pm::run_script` do before
+/// comparing it against a stored `source:` tag — strips scheme, `www.`, any query string, and a
+/// trailing slash.
+pub(crate) fn trim_url(url: &str) -> String {
+    let url = url.trim();
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let without_www = without_scheme
+        .strip_prefix("www.")
+        .unwrap_or(without_scheme);
+    let without_query = without_www.split('?').next().unwrap_or(without_www);
+    without_query.trim_end_matches('/').to_string()
+}
+
+/// `plugins/script/sourcefinder.ts`'s one real need: the ID of whichever archive (if any) has a
+/// `source:` tag matching `url`, including the E-Hentai/ExHentai domain-alias special case
+/// (`SourceFinder.pm::run_script`'s own two extra branches) — resolved host-side the same way
+/// `get_other_archive_tags` resolves `copyarchivetags`' need, since a Deno-sandboxed plugin has no
+/// direct storage access. Legacy maintains a dedicated `LRR_URLMAP` index for this; this scans
+/// every archive's tags on demand instead (same simplification already used by `GET
+/// /database/stats` — correct, just not index-accelerated, acceptable at personal-library scale).
+async fn get_existing_archive_id_for_url(
+    state: &AppState,
+    plugin: &str,
+    url: Option<&str>,
+) -> Value {
+    if plugin != "script/sourcefinder" {
+        return Value::Null;
+    }
+    let Some(url) = url else {
+        return Value::Null;
+    };
+    let trimmed = trim_url(url);
+    if trimmed.is_empty() {
+        return Value::Null;
+    }
+
+    let mut candidates = vec![trimmed.clone()];
+    if let Some(rest) = trimmed.strip_prefix("exhentai.org/") {
+        candidates.push(format!("e-hentai.org/{rest}"));
+    } else if let Some(rest) = trimmed.strip_prefix("e-hentai.org/") {
+        candidates.push(format!("exhentai.org/{rest}"));
+    }
+
+    let Ok(archives) = state.repos.archives.list_all().await else {
+        return Value::Null;
+    };
+    for archive in &archives {
+        for tag in archive.tags.split(',') {
+            let Some(source) = tag.trim().strip_prefix("source:") else {
+                continue;
+            };
+            if candidates.iter().any(|c| c == &trim_url(source)) {
+                return json!(archive.id);
+            }
+        }
+    }
+    Value::Null
+}
+
+/// `plugins/script/nhentaisourceconverter.ts`'s one real need: every archive's `id`/`tags`, so it
+/// can compute its own tag rewrite purely in JS and hand the result back rather than touching
+/// storage directly — resolved host-side the same way the other two `script/*`-specific helpers
+/// above are. Deliberately whole-library (not scoped to one archive, unlike every `metadata`-type
+/// helper), matching what `nHentaiSourceConverter.pm::run_script` itself operates over.
+async fn get_all_archive_tags_for_script(state: &AppState, plugin: &str) -> Value {
+    if plugin != "script/nhentaisourceconverter" {
+        return Value::Null;
+    }
+    match state.repos.archives.list_all().await {
+        Ok(archives) => json!(archives
+            .into_iter()
+            .map(|a| json!({ "id": a.id, "tags": a.tags }))
+            .collect::<Vec<_>>()),
+        Err(_) => Value::Null,
+    }
+}
+
+/// Applies `plugins/script/nhentaisourceconverter.ts`'s returned `updates` (see `ScriptResult` in
+/// `plugin-sdk.ts`) back onto real archive records — the host's half of the read-compute-write
+/// split described in that same SDK doc comment, since the plugin itself only ever returns its
+/// *intended* rewrites, never writes storage directly.
+async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) {
+    if plugin != "script/nhentaisourceconverter" {
+        return;
+    }
+    let Some(updates) = data.get("updates").and_then(Value::as_array) else {
+        return;
+    };
+    for update in updates {
+        let (Some(id), Some(tags)) = (
+            update.get("id").and_then(Value::as_str),
+            update.get("tags").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if let Ok(Some(mut archive)) = state.repos.archives.get(id).await {
+            archive.tags = tags.to_string();
+            let _ = state.repos.archives.save(&archive).await;
+        }
+    }
+}
+
+/// `plugins/script/foldertocat.ts`'s two real needs, resolved host-side since a Deno-sandboxed
+/// plugin has no direct storage access: the library's own archive-directory root (so it can walk
+/// the real filesystem itself via `Deno.readDir` — see that file's own docs for why the host
+/// doesn't pre-walk it instead), and a `path -> archive id` map (so the plugin can resolve the
+/// files it finds back to real archive IDs before returning its computed category groupings).
+async fn get_foldertocat_args(state: &AppState, plugin: &str) -> (Value, Value) {
+    if plugin != "script/foldertocat" {
+        return (Value::Null, Value::Null);
+    }
+    let library_path = json!(state.library.archive_dir.display().to_string());
+    let archive_id_by_path = match state.repos.archives.list_all().await {
+        Ok(archives) => {
+            let map: serde_json::Map<String, Value> = archives
+                .into_iter()
+                .map(|a| (a.file, json!(a.id)))
+                .collect();
+            Value::Object(map)
+        }
+        Err(_) => Value::Null,
+    };
+    (library_path, archive_id_by_path)
+}
+
+/// Applies `plugins/script/foldertocat.ts`'s returned `categories_to_create`/
+/// `delete_old_categories` (see `ScriptResult` in `plugin-sdk.ts`) — the host's half of the
+/// read-compute-return-write-to-host split, mirroring
+/// `lanrurugi-api::scripts::subfolders_to_categories`'s own category-creation logic exactly (same
+/// `SET_<unix-seconds>` catid generation) so the two implementations produce identical results,
+/// differing only in how the directory walk itself was performed.
+async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Value) {
+    if plugin != "script/foldertocat" {
+        return;
+    }
+    if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true) {
+        if let Ok(categories) = state.repos.categories.list_all().await {
+            for category in categories.iter().filter(|c| c.search.is_none()) {
+                let _ = state.repos.categories.delete(&category.catid).await;
+            }
+        }
+    }
+
+    let Some(to_create) = data.get("categories_to_create").and_then(Value::as_array) else {
+        return;
+    };
+    let mut next_candidate = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for entry in to_create {
+        let (Some(name), Some(archive_ids)) = (
+            entry.get("name").and_then(Value::as_str),
+            entry.get("archive_ids").and_then(Value::as_array),
+        ) else {
+            continue;
+        };
+        let mut catid = format!("SET_{next_candidate}");
+        while state
+            .repos
+            .categories
+            .get(&catid)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            next_candidate += 1;
+            catid = format!("SET_{next_candidate}");
+        }
+        next_candidate += 1;
+
+        let category = lanrurugi_core::entities::Category {
+            catid,
+            name: name.to_string(),
+            search: None,
+            archives: archive_ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect(),
+            pinned: false,
+        };
+        let _ = state.repos.categories.save(&category).await;
+    }
+}
+
+/// Result of [`run_enabled_metadata_plugins_on_archive`] — mirrors the 4-tuple legacy's own
+/// `exec_enabled_plugins_on_file` returns (`Model/Plugins.pm`), used for the same "N plugins
+/// used successfully, M failed, K tags added" style summary message every real ingestion path
+/// (upload, download, scan) surfaces.
+pub struct AutoPluginSummary {
+    pub successes: u32,
+    pub failures: u32,
+    pub added_tags: u32,
+    /// The last plugin-returned non-empty title, if any (later plugins in run order win, matching
+    /// legacy's own `$newtitle` being reassigned on every plugin that returns one).
+    pub new_title: Option<String>,
+}
+
+/// Legacy's real, load-bearing "自动运行"/"Run Automatically" mechanism (`Model::Plugins::
+/// exec_enabled_plugins_on_file`, called by `Model::Upload.pm` right after every new upload/
+/// download is cataloged, and by the watcher after every scanned file) — runs every metadata
+/// plugin with `enabled: true` against a freshly-cataloged archive, in priority order, with the
+/// filename-parsing plugin (`regexplugin`) always bumped to run first when present (legacy's own
+/// `TODO: Make plugin exec order configurable` comment, preserved verbatim — it still isn't).
+/// This closes a real Phase 1 gap: nothing in this port called anything like this at all, so
+/// every enabled metadata plugin's "auto-run" checkbox was silently inert on every ingestion path
+/// (confirmed live: two fully-downloaded E-Hentai archives never got a `source:` tag or any other
+/// metadata a plugin would have added, because nothing ever invoked one).
+///
+/// Reuses the exact same argument shape [`use_plugin_sync`] builds for an id-only (no `arg`/
+/// `oneshot_param`) call — that's already the args a metadata plugin needs (`archive_id`,
+/// `file_path`, `customargs`, sidecar files, login cookies, ...); this only adds the plugin-
+/// selection/ordering and the tag/title merge-and-persist step `use_plugin_sync` deliberately
+/// leaves to its caller (its own callers include the interactive "Fetch Metadata" button, which
+/// must NOT auto-persist before the user reviews the result).
+pub async fn run_enabled_metadata_plugins_on_archive(
+    state: &AppState,
+    archive_id: &str,
+) -> AutoPluginSummary {
+    let mut summary = AutoPluginSummary {
+        successes: 0,
+        failures: 0,
+        added_tags: 0,
+        new_title: None,
+    };
+
+    let mut namespaces = Vec::new();
+    for ns in discover_namespaces(&state.plugins_dir).await {
+        let Ok(info) = state.plugins.plugin_info(&ns).await else {
+            continue;
+        };
+        if info.kind != "metadata" {
+            continue;
+        }
+        if !get_plugin_enabled(state, &ns).await {
+            continue;
+        }
+        namespaces.push((ns, info));
+    }
+    // `regexplugin` (declared namespace, not necessarily `metadata/regexparse` — a custom-
+    // installed clone could sit at a different file path) always runs first when enabled, exactly
+    // matching legacy's own reordering.
+    if let Some(regex_pos) = namespaces
+        .iter()
+        .position(|(_, info)| info.namespace == "regexplugin")
+    {
+        let regex_entry = namespaces.remove(regex_pos);
+        namespaces.insert(0, regex_entry);
+    }
+
+    for (ns, info) in namespaces {
+        // Fetched fresh on every plugin iteration (not hoisted above the loop) since an earlier
+        // plugin in this same run may have just updated `title`/`tags` — the next plugin should
+        // see that plugin's own output as its "existing" state, matching legacy's own sequential
+        // `set_tags(..., append=1)` behavior across `exec_enabled_plugins_on_file`'s loop.
+        let archive = state.repos.archives.get(archive_id).await.ok().flatten();
+        let file_path = archive.as_ref().map(|a| a.file.clone());
+        let file_modified_time = file_path.as_deref().and_then(|p| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        });
+        let customargs = get_plugin_customargs(state, &ns, info.parameters.len()).await;
+        let args = json!({
+            "archive_id": archive_id,
+            "arg": null,
+            "oneshot_param": null,
+            "customargs": customargs,
+            "file_path": file_path,
+            "file_modified_time": file_modified_time,
+            "settings": get_plugin_relevant_settings(state).await,
+            "existing_tags": archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
+            "archive_title": archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
+        });
+        let args = with_sidecar_files(&info, args, file_path.as_deref());
+        let args = with_login_cookies(state, &info, args).await;
+
+        let data = match state
+            .plugins
+            .execute(&ns, plugin_method(&info.kind), args)
+            .await
+        {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!(%archive_id, plugin = %ns, error = %e, "auto-run metadata plugin failed");
+                summary.failures += 1;
+                continue;
+            }
+        };
+        if let Some(err) = data.get("error").and_then(Value::as_str) {
+            tracing::warn!(%archive_id, plugin = %ns, error = %err, "auto-run metadata plugin returned an error");
+            summary.failures += 1;
+            continue;
+        }
+
+        let Ok(Some(mut archive)) = state.repos.archives.get(archive_id).await else {
+            summary.failures += 1;
+            continue;
+        };
+        let old_title = archive.title.clone();
+        let old_tags = archive.tags.clone();
+
+        // `set_tags($id, $newtags, 1)`'s real append+dedupe semantics (`Utils/Database.pm`) — new
+        // tags are appended after the existing ones, then deduplicated (first occurrence wins),
+        // not a blind overwrite.
+        if let Some(new_tags) = data.get("tags").and_then(Value::as_str) {
+            if !new_tags.trim().is_empty() {
+                let mut seen = std::collections::HashSet::new();
+                let mut merged = Vec::new();
+                for t in old_tags
+                    .split(',')
+                    .chain(new_tags.split(','))
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                {
+                    if seen.insert(t.to_string()) {
+                        merged.push(t.to_string());
+                    }
+                }
+                summary.added_tags +=
+                    new_tags.split(',').filter(|t| !t.trim().is_empty()).count() as u32;
+                archive.tags = merged.join(",");
+            }
+        }
+        if let Some(title) = data.get("title").and_then(Value::as_str) {
+            if !title.trim().is_empty() {
+                archive.title = title.to_string();
+                summary.new_title = Some(title.to_string());
+            }
+        }
+        if let Some(summary_text) = data.get("summary").and_then(Value::as_str) {
+            if !summary_text.trim().is_empty() {
+                archive.summary = summary_text.to_string();
+            }
+        }
+
+        match state.repos.archives.save(&archive).await {
+            Ok(()) => {
+                summary.successes += 1;
+                if archive.title != old_title {
+                    if let Err(e) = lanrurugi_search::indexer::update_title_index(
+                        &state.redis.search,
+                        archive_id,
+                        &old_title,
+                        &archive.title,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%archive_id, error = %e, "failed to update title search index");
+                    }
+                }
+                if archive.tags != old_tags {
+                    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+                        &state.redis.search,
+                        archive_id,
+                        &old_tags,
+                        &archive.tags,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%archive_id, error = %e, "failed to update tag search index");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(%archive_id, plugin = %ns, error = %e, "failed to persist auto-run plugin's metadata");
+                summary.failures += 1;
+            }
+        }
+    }
+
+    summary
+}
+
 async fn use_plugin_sync(
     State(state): State<AppState>,
     Query(params): Query<UsePluginParams>,
@@ -756,18 +1139,18 @@ async fn use_plugin_sync(
     // Metadata plugins that derive tags from the filename (e.g. "Filename Parsing") need the
     // archive's actual on-disk path, not just its ID — fetch it once here rather than requiring
     // every such plugin to make its own round trip back into the API for something the host
-    // already knows.
-    let file_path = match &params.id {
-        Some(id) => state
-            .repos
-            .archives
-            .get(id)
-            .await
-            .ok()
-            .flatten()
-            .map(|a| a.file),
+    // already knows. Also the source of `existing_tags`/`archive_title` below: several real
+    // converted plugins (`chaika`/`ehentai`/`fakku`/`hitomi`/`mems`/`nhentai`/`pixiv`) fall back to
+    // parsing a `source:`-style tag or an embedded ID out of the archive's own current tags/title
+    // when no `arg`/oneshot URL was given — matching legacy's own `exec_metadata_plugin`
+    // (`Model/Plugins.pm`), whose `%infohash` always includes both. Missing entirely before this
+    // (confirmed live: every one of those plugins crashed with "Cannot read properties of
+    // undefined" whenever called without an explicit `arg`, including every auto-run invocation).
+    let queried_archive = match &params.id {
+        Some(id) => state.repos.archives.get(id).await.ok().flatten(),
         None => None,
     };
+    let file_path = queried_archive.as_ref().map(|a| a.file.clone());
 
     // The file's own last-modified time (Unix seconds), resolved host-side the same way
     // `file_path` already is — so `plugins/metadata/dateadded.ts` (the one real consumer) doesn't
@@ -782,27 +1165,42 @@ async fn use_plugin_sync(
 
     let customargs = get_plugin_customargs(&state, &plugin, info.parameters.len()).await;
     let other_archive_tags = get_other_archive_tags(&state, &plugin, params.arg.as_deref()).await;
+    let existing_archive_id =
+        get_existing_archive_id_for_url(&state, &plugin, params.arg.as_deref()).await;
+    let archives_for_script = get_all_archive_tags_for_script(&state, &plugin).await;
+    let (library_path, archive_id_by_path) = get_foldertocat_args(&state, &plugin).await;
     let args = json!({
         "archive_id": params.id,
         "arg": params.arg,
+        "oneshot_param": params.arg,
         "customargs": customargs,
         "file_path": file_path,
         "file_modified_time": file_modified_time,
         "settings": get_plugin_relevant_settings(&state).await,
         "other_archive_tags": other_archive_tags,
+        "existing_archive_id": existing_archive_id,
+        "archives": archives_for_script,
+        "library_path": library_path,
+        "archive_id_by_path": archive_id_by_path,
+        "existing_tags": queried_archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
+        "archive_title": queried_archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
     });
     let args = with_sidecar_files(&info, args, file_path.as_deref());
     let args = with_login_cookies(&state, &info, args).await;
     let method = plugin_method(&info.kind);
 
     match state.plugins.execute(&plugin, method, args).await {
-        Ok(data) => axum::Json(json!({
-            "operation": "use_plugin",
-            "success": 1,
-            "type": info.kind,
-            "data": data,
-        }))
-        .into_response(),
+        Ok(data) => {
+            apply_script_tag_updates(&state, &plugin, &data).await;
+            apply_foldertocat_categories(&state, &plugin, &data).await;
+            axum::Json(json!({
+                "operation": "use_plugin",
+                "success": 1,
+                "type": info.kind,
+                "data": data,
+            }))
+            .into_response()
+        }
         Err(e) => axum::Json(json!({
             "operation": "use_plugin",
             "success": 0,
@@ -859,16 +1257,30 @@ async fn use_plugin_async(
         let method = plugin_method(&info.kind);
         let customargs =
             get_plugin_customargs(&state_for_task, &plugin, info.parameters.len()).await;
+        let existing_archive_id =
+            get_existing_archive_id_for_url(&state_for_task, &plugin, arg.as_deref()).await;
+        let archives_for_script = get_all_archive_tags_for_script(&state_for_task, &plugin).await;
+        let (library_path, archive_id_by_path) =
+            get_foldertocat_args(&state_for_task, &plugin).await;
         let args = json!({
             "archive_id": archive_id,
             "arg": arg,
+            "oneshot_param": arg,
             "customargs": customargs,
             "file_path": file_path,
+            "existing_archive_id": existing_archive_id,
+            "archives": archives_for_script,
+            "library_path": library_path,
+            "archive_id_by_path": archive_id_by_path,
         });
         let args = with_sidecar_files(&info, args, file_path.as_deref());
         let args = with_login_cookies(&state_for_task, &info, args).await;
         match plugins.execute(&plugin, method, args).await {
-            Ok(data) => jobs.finish(&job_id_for_task, data).await,
+            Ok(data) => {
+                apply_script_tag_updates(&state_for_task, &plugin, &data).await;
+                apply_foldertocat_categories(&state_for_task, &plugin, &data).await;
+                jobs.finish(&job_id_for_task, data).await
+            }
             Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
         }
     });
@@ -898,13 +1310,22 @@ struct DownloadRequestJson {
     filename_hint: Option<String>,
 }
 
+/// A plugin's own structured error (`plugin-sdk.ts`'s `PluginError`) — `error_code` is itself an
+/// i18n lookup key (see that type's own docs), `data` its interpolation params.
+#[derive(Debug, Clone, Deserialize)]
+struct PluginErrorJson {
+    error_code: String,
+    #[serde(default)]
+    data: Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+}
+
 /// `execDownload`'s full return shape — see `contracts/plugin-download-protocol.md`'s extended
 /// `DownloadResult`. Exactly one of `downloads`/`file_path`/`error` is expected to be present.
 #[derive(Debug, Default, Deserialize)]
 struct PluginDownloadResult {
     downloads: Option<Vec<DownloadRequestJson>>,
     file_path: Option<String>,
-    error: Option<String>,
+    error: Option<PluginErrorJson>,
 }
 
 /// `POST /download_url` — finds an enabled download-type plugin whose `url_regex` matches `url`
@@ -999,159 +1420,297 @@ pub(crate) async fn start_download(
     let state_for_task = state.clone();
     let plugin_namespace_for_task = plugin_namespace.clone();
 
-    tokio::spawn(async move {
-        jobs.mark_active(&job_id_for_task).await;
-        if let Some((repo, item_id)) = &queue_link {
-            update_queue_item_state(
-                repo,
-                item_id,
-                lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
-                Some(job_id_for_task.clone()),
-                None,
-            )
-            .await;
-        }
-
-        // Legacy's own `exec_download_plugin` bundles the target URL as `url`, not `arg`
-        // (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:171-175`'s `%infohash` — `arg` is the
-        // completely separate per-plugin *settings* value, e.g. E-Hentai's `forceresampled`
-        // toggle, threaded in below via `with_login_cookies`'s `args["sidecar_files"]`-style
-        // merge instead). Every real download plugin (`chaika.ts`/`ehentai.ts`/`pixiv.ts`) reads
-        // `hostArgs.url` for exactly this reason.
-        let args = json!({ "url": url, "category": category });
-        let args = with_login_cookies(&state_for_task, &info, args).await;
-        let plugin_result = match plugins
-            .execute(&plugin_namespace_for_task, "exec_download", args)
+    // Registered only when this download is tied to a persistent queue item — a queue row is the
+    // only UI surface with a Stop button; a one-off `queue_link: None` download (if any caller
+    // ever uses that path) has nothing to cancel it from. Keyed by queue-item ID, not job ID,
+    // since `download_queue::stop_one` only ever knows the item ID the user clicked Stop on.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    if let Some((_, item_id)) = &queue_link {
+        state
+            .download_cancellations
+            .lock()
             .await
-        {
-            Ok(data) => data,
-            Err(e) => {
-                let message = e.to_string();
-                if let Some((repo, item_id)) = &queue_link {
-                    update_queue_item_state(
-                        repo,
-                        item_id,
-                        lanrurugi_storage::download_queue::DownloadQueueState::Error,
-                        None,
-                        Some(message.clone()),
-                    )
-                    .await;
-                }
-                jobs.fail(&job_id_for_task, message).await;
-                return;
-            }
-        };
+            .insert(item_id.clone(), cancel.clone());
+    }
+    let cancel_for_task = cancel.clone();
+    let queue_link_for_cleanup = queue_link.clone();
+    // A separate clone (not derived from `queue_link_for_cleanup` inside the inner task body)
+    // specifically because that one is captured by the inner `async move` block below and must
+    // still be usable, unmoved, in the cleanup code that runs *after* that block — `async move`
+    // captures a referenced variable by move regardless of whether it's only ever borrowed inside.
+    let queue_item_id_for_task = queue_link.as_ref().map(|(_, id)| id.clone());
+    let state_for_cleanup = state.clone();
 
-        let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                let message = format!("plugin returned an unrecognized result shape: {e}");
-                if let Some((repo, item_id)) = &queue_link {
-                    update_queue_item_state(
-                        repo,
-                        item_id,
-                        lanrurugi_storage::download_queue::DownloadQueueState::Error,
-                        None,
-                        Some(message.clone()),
-                    )
-                    .await;
-                }
-                jobs.fail(&job_id_for_task, message).await;
-                return;
-            }
-        };
-
-        if let Some(err) = parsed.error {
+    tokio::spawn(async move {
+        // The real task body is wrapped in its own async block (rather than being this whole
+        // closure) purely so the `download_cancellations` entry inserted above always gets
+        // removed afterward — every one of this body's several early `return`s is really "this
+        // task is done now" and each one needs the same cleanup, and a `Drop`-based guard can't
+        // do the `.await`ed `Mutex` removal this needs. Once the token is *inserted*, its only
+        // other real-world visitor is `download_queue::stop_one`'s own lock+lookup+remove, so
+        // there's a real (harmless) possible race where both this cleanup and a fresh stop
+        // request try to remove the same now-finished entry — `HashMap::remove` on a
+        // no-longer-present key is simply a no-op either way.
+        (async move {
+            jobs.mark_active(&job_id_for_task).await;
             if let Some((repo, item_id)) = &queue_link {
                 update_queue_item_state(
                     repo,
                     item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Error,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
+                    Some(job_id_for_task.clone()),
                     None,
-                    Some(err.clone()),
                 )
                 .await;
             }
-            jobs.fail(&job_id_for_task, err).await;
-            return;
-        }
 
-        if let Some(downloads) = parsed.downloads.filter(|d| !d.is_empty()) {
-            match run_managed_downloads(
-                state_for_task.clone(),
-                plugin_namespace_for_task.clone(),
-                downloads,
-                job_id_for_task.clone(),
-                category.clone(),
-                overwrite,
+            // Legacy's own `exec_download_plugin` bundles the target URL as `url`, not `arg`
+            // (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:171-175`'s `%infohash` — `arg` is a
+            // completely separate per-plugin *settings* value, e.g. E-Hentai's `forceresampled`
+            // toggle, passed as legacy's own separate `%settings` positional arg to `provide_url`, and
+            // as this repo's `hostArgs.customargs` — see `DownloadHostArgs`'s own docs). Every real
+            // download plugin (`chaika.ts`/`ehentai.ts`/`pixiv.ts`) reads `hostArgs.url` for the URL
+            // itself, for exactly this reason.
+            //
+            // Missing `customargs` here was a real, shipped bug (confirmed via a live "Cannot read
+            // properties of undefined (reading '0')" error on a real E*Hentai download): unlike
+            // `use_plugin_sync`/`use_plugin_async`, this path never called `get_plugin_customargs`, so
+            // `ehentai.ts`'s `lrr_info.customargs[0]` (`forceresampled`) always threw on `undefined`.
+            let customargs = get_plugin_customargs(
+                &state_for_task,
+                &plugin_namespace_for_task,
+                info.parameters.len(),
             )
-            .await
+            .await;
+            // Kept alive past `args`'s own move of `url` below — needed later for the real
+            // `source:<url>` tag legacy's own `Utils::Minion::download_url` task adds (see
+            // `ingest_downloaded_file`'s own docs), which must be the URL the *user* gave, not
+            // whatever internal link the plugin's own `exec_download` result later resolves to.
+            let source_url = url.clone();
+            let args = json!({ "url": url, "category": category, "customargs": customargs });
+            let args = with_login_cookies(&state_for_task, &info, args).await;
+            let plugin_result = match plugins
+                .execute(&plugin_namespace_for_task, "exec_download", args)
+                .await
             {
-                Ok(ids) => {
-                    if let Some((repo, item_id)) = &queue_link {
-                        update_queue_item_state(
-                            repo,
-                            item_id,
-                            lanrurugi_storage::download_queue::DownloadQueueState::Done,
-                            None,
-                            None,
-                        )
-                        .await;
-                    }
-                    jobs.finish(&job_id_for_task, json!({ "archive_ids": ids }))
-                        .await
-                }
+                Ok(data) => data,
                 Err(e) => {
+                    let queue_error = queue_error_from_pool_error(&plugin_namespace_for_task, &e);
                     if let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
                             repo,
                             item_id,
                             lanrurugi_storage::download_queue::DownloadQueueState::Error,
                             None,
-                            Some(e.clone()),
+                            Some(queue_error.clone()),
                         )
                         .await;
                     }
-                    jobs.fail(&job_id_for_task, e).await
+                    jobs.fail(&job_id_for_task, e.to_string()).await;
+                    return;
                 }
-            }
-            return;
-        }
+            };
 
-        if let Some(file_path) = parsed.file_path {
-            // Pre-existing fallback escape hatch — the plugin already downloaded/wrote the file
-            // itself; unmanaged, no progress/concurrency/rate-limit treatment, since the byte
-            // transfer already happened entirely inside the plugin process by this point.
+            let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    let queue_error =
+                        lanrurugi_core::queue_error::QueueError::MalformedPluginResponse {
+                            plugin: plugin_namespace_for_task.clone(),
+                        };
+                    if let Some((repo, item_id)) = &queue_link {
+                        update_queue_item_state(
+                            repo,
+                            item_id,
+                            lanrurugi_storage::download_queue::DownloadQueueState::Error,
+                            None,
+                            Some(queue_error.clone()),
+                        )
+                        .await;
+                    }
+                    jobs.fail(
+                        &job_id_for_task,
+                        format!("plugin returned an unrecognized result shape: {e}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            if let Some(err) = parsed.error {
+                let queue_error = queue_error_from_plugin_error(&plugin_namespace_for_task, &err);
+                if let Some((repo, item_id)) = &queue_link {
+                    update_queue_item_state(
+                        repo,
+                        item_id,
+                        lanrurugi_storage::download_queue::DownloadQueueState::Error,
+                        None,
+                        Some(queue_error.clone()),
+                    )
+                    .await;
+                }
+                jobs.fail(&job_id_for_task, err.error_code).await;
+                return;
+            }
+
+            if let Some(downloads) = parsed.downloads.filter(|d| !d.is_empty()) {
+                match run_managed_downloads(
+                    state_for_task.clone(),
+                    plugin_namespace_for_task.clone(),
+                    downloads,
+                    job_id_for_task.clone(),
+                    category.clone(),
+                    overwrite,
+                    &source_url,
+                    &cancel_for_task,
+                    queue_item_id_for_task.as_deref(),
+                )
+                .await
+                {
+                    Ok(ids) => {
+                        if let Some((repo, item_id)) = &queue_link {
+                            update_queue_item_state(
+                                repo,
+                                item_id,
+                                lanrurugi_storage::download_queue::DownloadQueueState::Done,
+                                None,
+                                None,
+                            )
+                            .await;
+                        }
+                        jobs.finish(&job_id_for_task, json!({ "archive_ids": ids }))
+                            .await
+                    }
+                    // A user-requested Stop races with `download_one`'s own cancellation check: by the
+                    // time `run_managed_downloads` returns `Err`, `cancel_for_task` may already be set
+                    // even though the underlying `QueueError` (e.g. `Internal`, from the placeholder
+                    // `DownloadError::Cancelled` conversion) looks like any other failure. Checking the
+                    // token here — rather than growing `QueueError` a `Cancelled` variant, which would
+                    // then have to be a persistable "error" that isn't really an error — is what lets a
+                    // deliberate stop revert the item to `Cancelled` (restartable, same as `Queued`/
+                    // `Error` — see `start_one`'s guard — but distinct so the frontend can keep
+                    // showing "已取消" after a page refresh instead of that signal only living in
+                    // transient mutation state) instead of `Error` (which `jobs.fail` + a stored
+                    // `QueueError` would otherwise imply this was a real failure).
+                    Err(_) if cancel_for_task.is_cancelled() => {
+                        if let Some((repo, item_id)) = &queue_link {
+                            update_queue_item_state(
+                                repo,
+                                item_id,
+                                lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
+                                None,
+                                None,
+                            )
+                            .await;
+                        }
+                        jobs.fail(&job_id_for_task, "cancelled".to_string()).await
+                    }
+                    Err(e) => {
+                        if let Some((repo, item_id)) = &queue_link {
+                            update_queue_item_state(
+                                repo,
+                                item_id,
+                                lanrurugi_storage::download_queue::DownloadQueueState::Error,
+                                None,
+                                Some(e.clone()),
+                            )
+                            .await;
+                        }
+                        jobs.fail(&job_id_for_task, format!("{e:?}")).await
+                    }
+                }
+                return;
+            }
+
+            if let Some(file_path) = parsed.file_path {
+                // Pre-existing fallback escape hatch — the plugin already downloaded/wrote the file
+                // itself; unmanaged, no progress/concurrency/rate-limit treatment, since the byte
+                // transfer already happened entirely inside the plugin process by this point.
+                if let Some((repo, item_id)) = &queue_link {
+                    update_queue_item_state(
+                        repo,
+                        item_id,
+                        lanrurugi_storage::download_queue::DownloadQueueState::Done,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+                jobs.finish(&job_id_for_task, json!({ "file_path": file_path }))
+                    .await;
+                return;
+            }
+
+            let queue_error = lanrurugi_core::queue_error::QueueError::EmptyPluginResult {
+                plugin: plugin_namespace_for_task.clone(),
+            };
             if let Some((repo, item_id)) = &queue_link {
                 update_queue_item_state(
                     repo,
                     item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Done,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Error,
                     None,
-                    None,
+                    Some(queue_error),
                 )
                 .await;
             }
-            jobs.finish(&job_id_for_task, json!({ "file_path": file_path }))
-                .await;
-            return;
-        }
-
-        let message = "plugin returned neither downloads, file_path, nor error".to_string();
-        if let Some((repo, item_id)) = &queue_link {
-            update_queue_item_state(
-                repo,
-                item_id,
-                lanrurugi_storage::download_queue::DownloadQueueState::Error,
-                None,
-                Some(message.clone()),
+            jobs.fail(
+                &job_id_for_task,
+                "plugin returned neither downloads, file_path, nor error",
             )
             .await;
+        })
+        .await;
+
+        if let Some((_, item_id)) = &queue_link_for_cleanup {
+            state_for_cleanup
+                .download_cancellations
+                .lock()
+                .await
+                .remove(item_id);
         }
-        jobs.fail(&job_id_for_task, message).await;
     });
 
     job_id
+}
+
+/// Builds a [`lanrurugi_core::queue_error::QueueError`] from a plugin-execution failure
+/// (`PluginPool::execute`'s `Err`) — `QueueError::PluginReported` when the underlying
+/// `ResponseError` carries a real `error_code` (the plugin itself threw a structured
+/// `PluginErrorException`), `QueueError::PluginExecutionFailed` for everything else (a crash,
+/// timeout, or unstructured throw — nothing translatable to extract).
+fn queue_error_from_pool_error(
+    plugin: &str,
+    e: &lanrurugi_plugin::pool::PoolError,
+) -> lanrurugi_core::queue_error::QueueError {
+    use lanrurugi_core::queue_error::QueueError;
+    tracing::warn!(plugin, error = %e, "plugin execution failed");
+    if let lanrurugi_plugin::pool::PoolError::PluginError(err) = e {
+        if let Some(error_code) = &err.error_code {
+            return QueueError::PluginReported {
+                plugin: plugin.to_string(),
+                error_code: error_code.clone(),
+                data: err.data.clone().unwrap_or_default(),
+            };
+        }
+    }
+    QueueError::PluginExecutionFailed {
+        plugin: plugin.to_string(),
+    }
+}
+
+/// Builds a `QueueError::PluginReported` from a plugin's own `{error_code, data}` payload (the
+/// `PluginError` a metadata/download/script plugin `return`s rather than throws — see
+/// `plugin-sdk.ts`'s `MetadataResult.error`/`DownloadResult.error` docs).
+fn queue_error_from_plugin_error(
+    plugin: &str,
+    err: &PluginErrorJson,
+) -> lanrurugi_core::queue_error::QueueError {
+    lanrurugi_core::queue_error::QueueError::PluginReported {
+        plugin: plugin.to_string(),
+        error_code: err.error_code.clone(),
+        data: err.data.clone().unwrap_or_default(),
+    }
 }
 
 /// Best-effort partial update of one download-queue item's live-progress fields — a failure here
@@ -1163,7 +1722,7 @@ async fn update_queue_item_state(
     item_id: &str,
     new_state: lanrurugi_storage::download_queue::DownloadQueueState,
     job_id: Option<String>,
-    error_message: Option<String>,
+    error: Option<lanrurugi_core::queue_error::QueueError>,
 ) {
     match repo.get(item_id).await {
         Ok(Some(mut item)) => {
@@ -1171,9 +1730,15 @@ async fn update_queue_item_state(
             if job_id.is_some() {
                 item.job_id = job_id;
             }
-            if error_message.is_some() {
-                item.error = error_message;
-            }
+            // Unconditional (not `if error.is_some()`): every real call site passes `None` to
+            // mean "this transition has no error" — which should clear any stale error left over
+            // from an earlier failed attempt on this same queue item (e.g. a retry that then
+            // succeeds), not silently preserve it. The old conditional left a `Done` transition's
+            // item permanently carrying its previous `Error` transition's message forever, a real,
+            // confirmed bug (found via a live queue item that had `state: "done"` with real
+            // successful `archive_ids` in its job result, yet still showed an "Invalid E*Hentai
+            // login credentials" error from an earlier failed attempt).
+            item.error = error;
             if let Err(e) = repo.update(&item).await {
                 tracing::warn!(%item_id, error = %e, "failed to update download-queue item state");
             }
@@ -1203,6 +1768,7 @@ async fn update_queue_item_state(
 /// lands while this download is already in flight only ever governs a *later* `download_url` call,
 /// never this one (verified: `download_manager::acquire`'s own capacity-change handling replaces
 /// the stale semaphore for future acquires without disturbing a permit already held by this call).
+#[allow(clippy::too_many_arguments)]
 async fn run_managed_downloads(
     state: AppState,
     plugin_namespace: String,
@@ -1210,7 +1776,10 @@ async fn run_managed_downloads(
     job_id: String,
     category: Option<String>,
     overwrite: bool,
-) -> Result<Vec<String>, String> {
+    source_url: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    queue_item_id: Option<&str>,
+) -> Result<Vec<String>, lanrurugi_core::queue_error::QueueError> {
     let manager = download_manager_for(&state, &plugin_namespace).await;
     let declared = fetch_declared_options(&state, &plugin_namespace)
         .await
@@ -1278,12 +1847,16 @@ async fn run_managed_downloads(
             &stream_req,
             progress_tx,
             &state.library.temp_dir,
+            cancel,
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
         // Reclaim `known_totals` from the drain task (it owned the only mutable copy while
         // draining) so the next resource's iteration sees this resource's now-known total.
-        known_totals = drain_task.await.map_err(|e| e.to_string())?;
+        known_totals = drain_task.await.map_err(|e| {
+            tracing::warn!(error = %e, "progress-drain task panicked");
+            lanrurugi_core::queue_error::QueueError::Internal
+        })?;
 
         base_downloaded += downloaded_result.bytes_downloaded;
         downloaded_files.push(downloaded_result);
@@ -1299,10 +1872,11 @@ async fn run_managed_downloads(
             &bundle_filename,
         )
         .await
-        .map_err(|e| e.to_string())?;
-        let ingested = ingest_downloaded_file(&state, &bundled, overwrite)
-            .await
-            .map_err(|e| e.to_string())?;
+        .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
+        let ingested =
+            ingest_downloaded_file(&state, &bundled, overwrite, source_url, queue_item_id)
+                .await
+                .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
         if let Some(catid) = &category {
             let _ = crate::categories::add_archive_to_category(&state, catid, &ingested.archive_id)
                 .await;
@@ -1310,9 +1884,15 @@ async fn run_managed_downloads(
         archive_ids.push(ingested.archive_id);
     } else {
         for downloaded_result in downloaded_files {
-            let ingested = ingest_downloaded_file(&state, &downloaded_result, overwrite)
-                .await
-                .map_err(|e| e.to_string())?;
+            let ingested = ingest_downloaded_file(
+                &state,
+                &downloaded_result,
+                overwrite,
+                source_url,
+                queue_item_id,
+            )
+            .await
+            .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
             if let Some(catid) = &category {
                 let _ =
                     crate::categories::add_archive_to_category(&state, catid, &ingested.archive_id)
@@ -1488,6 +2068,27 @@ mod tests {
     use super::*;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
 
+    #[test]
+    fn trim_url_strips_scheme_www_query_and_trailing_slash() {
+        assert_eq!(
+            trim_url("https://www.e-hentai.org/g/123/abc/?p=1"),
+            "e-hentai.org/g/123/abc"
+        );
+        assert_eq!(
+            trim_url("http://e-hentai.org/g/123/abc/"),
+            "e-hentai.org/g/123/abc"
+        );
+        assert_eq!(
+            trim_url("  e-hentai.org/g/123/abc  "),
+            "e-hentai.org/g/123/abc"
+        );
+    }
+
+    #[test]
+    fn trim_url_leaves_bare_paths_alone() {
+        assert_eq!(trim_url("nhentai.net/g/999"), "nhentai.net/g/999");
+    }
+
     fn rule(max_concurrent: Option<u32>, max_bytes_per_sec: Option<u64>) -> DomainRuleOverride {
         DomainRuleOverride {
             pattern: Some("*.example.com".to_string()),
@@ -1533,5 +2134,179 @@ mod tests {
         let rules = [rule(Some(2), None), rule(None, Some(0))];
         let (_, field) = validate_domain_rules(&rules).unwrap_err();
         assert_eq!(field, "domain_rules[1].max_bytes_per_sec");
+    }
+
+    /// Opt-in, real-server regression test exercising the actual `ehdl` (`plugins/download/
+    /// ehentai.ts`) plugin end-to-end through the real Deno dispatcher: logs in via the real
+    /// `login/ehentai` plugin (using this machine's own already-configured E-Hentai session
+    /// cookies, read from Redis exactly the way `with_login_cookies` does in production — this
+    /// test deliberately re-touches that private helper's logic inline rather than calling it
+    /// directly, since a `#[cfg(test)] mod` inside this same file *can* call private functions,
+    /// but `with_login_cookies` needs a full `AppState`, which is far heavier to construct than
+    /// the two `pool.execute` calls this test actually needs), then runs `execDownload` against a
+    /// real gallery URL to obtain a genuinely live H@H download link, then feeds that link through
+    /// the real `download_one` (`download_manager::stream`) to verify the Content-Disposition
+    /// non-ASCII filename fix against an actual live response — not a local mock, and not a
+    /// filename hardcoded into this repo's source (see that module's own test for why).
+    ///
+    /// Requires (all skipped, not failed, when unavailable — this test depends on infrastructure
+    /// this repo doesn't control: a live external site, this machine's own login session, and GP
+    /// balance to spend):
+    /// - `deno` on `$PATH` (only present inside the dev container, not typically on a bare host)
+    /// - `LANRURUGI_TEST_REDIS_URL` set (see `README.md`) and a real, currently-valid E-Hentai
+    ///   session already saved under `LRR_PLUGIN_LOGIN/EHENTAI` (via the app's own Settings UI —
+    ///   this test only *reads* that, it never prompts for or stores credentials itself)
+    /// - `TEST_REAL_EHENTAI_GALLERY_URL` set to a real, currently-accessible gallery page URL
+    ///   (e.g. `https://e-hentai.org/g/<gid>/<gtoken>/`) — left unset in `.env.local` by default
+    ///   since running this consumes real GP on every invocation; set it only when deliberately
+    ///   re-verifying this path end-to-end.
+    #[tokio::test]
+    async fn ehdl_plugin_produces_a_real_downloadable_url_with_a_correctly_decoded_filename() {
+        // `.env.local`'s own template ships these as present-but-empty (`KEY=`) rather than
+        // absent, so an empty string must be treated the same as unset.
+        let gallery_url = std::env::var("TEST_REAL_EHENTAI_GALLERY_URL").unwrap_or_default();
+        if gallery_url.is_empty() {
+            eprintln!(
+                "skipping: set TEST_REAL_EHENTAI_GALLERY_URL in .env.local to run this test \
+                 against a real E-Hentai gallery"
+            );
+            return;
+        }
+        let redis_url = std::env::var("LANRURUGI_TEST_REDIS_URL").unwrap_or_default();
+        if redis_url.is_empty() {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        }
+        let deno_on_path = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join("deno").is_file())
+        });
+        if !deno_on_path {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        }
+
+        let redis = lanrurugi_storage::redis::RedisDbs::connect(&redis_url)
+            .expect("failed to build a Redis connection pool from LANRURUGI_TEST_REDIS_URL");
+        let mut conn = redis
+            .config
+            .get()
+            .await
+            .expect("failed to reach the real Redis instance");
+        let raw_customargs: Option<String> = conn
+            .hget("LRR_PLUGIN_LOGIN/EHENTAI", "customargs")
+            .await
+            .unwrap_or_default();
+        let Some(raw_customargs) = raw_customargs else {
+            eprintln!(
+                "skipping: no E-Hentai login saved under LRR_PLUGIN_LOGIN/EHENTAI — configure \
+                 the login plugin via the app's Settings UI first"
+            );
+            return;
+        };
+        let login_customargs: Vec<String> =
+            serde_json::from_str(&raw_customargs).expect("stored customargs must be a JSON array");
+
+        // Real repo `plugins/` dir — this crate's own manifest dir is `crates/lanrurugi-api`, two
+        // levels below the workspace root.
+        let plugins_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins")
+            .canonicalize()
+            .expect("repo's real plugins/ dir must exist");
+        let temp_dir = std::env::temp_dir();
+        let dispatcher_path = temp_dir.join("lrr-ehdl-integration-test-dispatcher.ts");
+        std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
+            .expect("failed to write out the real dispatcher script");
+        let pool =
+            lanrurugi_plugin::pool::PluginPool::new("deno", dispatcher_path.clone(), plugins_dir);
+
+        let login_result = pool
+            .execute(
+                "login/ehentai",
+                "exec_login",
+                json!({ "customargs": login_customargs }),
+            )
+            .await
+            .expect("real login/ehentai exec_login call failed");
+        let cookies = login_result
+            .get("cookies")
+            .cloned()
+            .expect("a real, valid E-Hentai session must yield cookies");
+
+        let download_args = json!({
+            "url": gallery_url,
+            "category": null,
+            "customargs": [""],
+            "user_agent_cookies": cookies,
+        });
+        let download_result = pool
+            .execute("download/ehentai", "exec_download", download_args)
+            .await
+            .expect("real download/ehentai exec_download call failed");
+        let parsed: PluginDownloadResult = serde_json::from_value(download_result)
+            .expect("execDownload must return the documented DownloadResult shape");
+        if let Some(err) = &parsed.error {
+            panic!(
+                "ehdl plugin returned a real error (stale session, insufficient GP, or an \
+                 invalid gallery URL — check TEST_REAL_EHENTAI_GALLERY_URL and the saved login): \
+                 {} {:?}",
+                err.error_code, err.data
+            );
+        }
+        let downloads = parsed
+            .downloads
+            .filter(|d| !d.is_empty())
+            .expect("a successful ehdl exec_download must return a non-empty downloads[]");
+        assert_eq!(
+            downloads.len(),
+            1,
+            "a single E-Hentai gallery archive download is always exactly one resource"
+        );
+        let h_at_h_url = &downloads[0].url;
+        assert!(
+            h_at_h_url.contains(".hath.network"),
+            "the real download URL must point at an H@H client node, got: {h_at_h_url}"
+        );
+
+        // Now feed the real, live H@H URL through the real `download_one` — this is the actual
+        // regression check for `content_disposition_filename`'s non-ASCII UTF-8 fix
+        // (`download_manager::stream`), against a genuinely live response instead of a local mock.
+        let manager = crate::download_manager::DownloadManager::new();
+        let staging_dir = std::env::temp_dir();
+        let req = StreamDownloadRequest {
+            url: h_at_h_url.clone(),
+            method: downloads[0].method.clone(),
+            headers: downloads[0].headers.clone().into_iter().collect(),
+            filename_hint: downloads[0].filename_hint.clone(),
+        };
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let downloaded = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("the real H@H download must succeed");
+
+        // The real bug this guards against: before the fix, a non-ASCII Content-Disposition
+        // filename silently fell through to `filename_hint` (`{gID}_{gToken}.zip` — a meaningless
+        // gallery-ID string), never the real archive title. A correctly decoded filename must be
+        // neither empty nor exactly that fallback pattern.
+        assert!(
+            !downloaded.filename.is_empty(),
+            "resolved filename must not be empty"
+        );
+        if let Some(hint) = &downloads[0].filename_hint {
+            assert_ne!(
+                &downloaded.filename, hint,
+                "the real Content-Disposition filename must win over the gallery-ID \
+                 filename_hint fallback — getting the hint back means the parsing bug regressed"
+            );
+        }
+
+        tokio::fs::remove_file(&downloaded.path).await.ok();
+        tokio::fs::remove_file(&dispatcher_path).await.ok();
     }
 }

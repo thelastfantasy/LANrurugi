@@ -72,12 +72,28 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "ehdl",
     type: "download" as const,
     parameters: [
-      { name: "forceresampled", description: "Force resampled archive download", required: false },
+      { name: "forceresampled", description: "Force resampled archive download", required: false, type: "bool" },
     ],
     // Verified against every URL literal this plugin's own execDownload actually calls
     // (archiver.php on either domain, chosen based on the input URL) — this plugin still talks to
@@ -147,7 +163,7 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
     gID = match[1];
     gToken = match[2];
   } else {
-    return { error: "Not a valid E-H URL!" };
+    return { error: { error_code: "Not a valid E-H URL!" } };
   }
   logger.debug(`gID: ${gID}, gToken: ${gToken}`);
   let archiverurl = `${domain}\/archiver.php?gid=${gID}&token=${gToken}`;
@@ -156,10 +172,10 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
 
   let archiverHtml = (await lrr_info["user_agent"].max_redirects(5).get(archiverurl)).result.body;
   if (archiverHtml.indexOf("Invalid archiver key") != -1) {
-    return { error: `Invalid archiver key. (${archiverurl})` };
+    return { error: { error_code: "Invalid archiver key", data: { archiverurl } } };
   }
   if (archiverHtml.indexOf("This page requires you to log on.") != -1) {
-    return { error: "Invalid E*Hentai login credentials. Please make sure the login plugin has proper settings set." };
+    return { error: { error_code: "Invalid E*Hentai login credentials. Please make sure the login plugin has proper settings set." } };
   }
   //    # POST to the archiver form with the corresponding archive quality
 
@@ -177,7 +193,7 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   logger.debug(`/archiver.php result: ${content}`);
   if ((match = content.match(/.*Insufficient funds.*/gim))) {
     logger.debug("Not enough GP, aborting download.");
-    return { error: "You do not have enough GP to download this URL." };
+    return { error: { error_code: "You do not have enough GP to download this URL." } };
   }
   let finalURL = undefined;
   let perlError;
@@ -196,12 +212,18 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   }
   let archivesize = params["forceresampled"] ? "a resampled" : "an original size";
   if (perlError || finalURL === undefined) {
-    return { error: `Couldn't proceed with ${archivesize} download: <pre>${content}</pre>` };
+    return { error: { error_code: "Couldn't proceed with download", data: { archivesize, content } } };
   }
   //    # Set URL query parameters to ?start=1 to automatically trigger the download.
 
   finalURL.search = "start=1";
   //    # All done!
 
-  return { downloads: [{ url: finalURL.href }] };
+  // `filename_hint` matters here: the H@H archive-serving URL's own last path segment isn't a
+  // real filename (confirmed via a real download landing on the literal string `"2"`, no
+  // extension at all, since neither a `Content-Disposition` header nor this hint was available for
+  // Rust's `resolve_filename` fallback chain to use) — E-Hentai galleries are always packaged as a
+  // real `.zip` by the archiver, so `{gID}_{gToken}.zip` gives every download here a stable,
+  // sensible, uniquely-named `.zip` file instead of a URL-derived guess.
+  return { downloads: [{ url: finalURL.href, filename_hint: `${gID}_${gToken}.zip` }] };
 }

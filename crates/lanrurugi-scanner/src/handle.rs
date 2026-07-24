@@ -37,6 +37,7 @@ impl ScannerHandle {
         config_pool: Pool,
         search_pool: Pool,
         archives: ArchiveRepository,
+        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<(), crate::watcher::WatcherError> {
         let mut guard = self.running.lock().await;
         if guard.is_some() {
@@ -49,6 +50,7 @@ impl ScannerHandle {
             config_pool,
             search_pool,
             thumb_dir,
+            new_archive_tx,
         ));
         *guard = Some(Running {
             _watcher: watcher,
@@ -72,9 +74,17 @@ impl ScannerHandle {
         config_pool: Pool,
         search_pool: Pool,
         archives: ArchiveRepository,
+        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<(), crate::watcher::WatcherError> {
         self.stop().await;
-        self.start(archive_dir, thumb_dir, config_pool, search_pool, archives)
-            .await
+        self.start(
+            archive_dir,
+            thumb_dir,
+            config_pool,
+            search_pool,
+            archives,
+            new_archive_tx,
+        )
+        .await
     }
 }

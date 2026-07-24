@@ -81,7 +81,15 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
         }
     };
     let logged_in = !auth.enable_pass || crate::auth::session_is_valid(&auth, &headers);
-    axum::Json(serde_json::json!({ "logged_in": logged_in })).into_response()
+    // Drives the homepage's "you're using the default password" warning toast (legacy's own
+    // `[% IF usingdefpass %]`, `Controller/Index.pm`) — never itself a security boundary (nothing
+    // here decides whether a login succeeds), just a UI nudge, so it's safe to expose to anyone.
+    let using_default_password = auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
+    axum::Json(serde_json::json!({
+        "logged_in": logged_in,
+        "using_default_password": using_default_password,
+    }))
+    .into_response()
 }
 
 async fn logout() -> Response {

@@ -66,7 +66,7 @@ export function pluginInfo() {
     namespace: "nhapiauth",
     type: "login" as const,
     parameters: [
-      { name: "param1", description: "API Key", required: false },
+      { name: "param1", description: "API Key", required: false, type: "string" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
@@ -75,7 +75,7 @@ export function pluginInfo() {
     name: "nHentai",
     author: "thelastfantasy",
     description: "Authenticates the nHentai API using an API Key. You can generate one in your profile's settings.",
-    version: "1.0",
+    version: "0.1",
   };
 }
 

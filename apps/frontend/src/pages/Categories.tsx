@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
 import { useArchives, useCategories } from '../api/hooks'
+import { routes } from '../routes'
 import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { toast } from '../toast'
 import { useDocumentTitle } from '../useDocumentTitle'
@@ -368,7 +369,7 @@ export default function Categories() {
         <br />
       </div>
 
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

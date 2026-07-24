@@ -9,6 +9,7 @@ import {
   useUpdateTankoubon,
 } from '../api/hooks'
 import type { TankoubonMetadata } from '../api/types'
+import { routes } from '../routes'
 
 export default function TankoubonEdit() {
   const { t } = useTranslation()
@@ -30,7 +31,7 @@ export default function TankoubonEdit() {
         <p className="text-red-500">
           {t('Failed to load archives: {{error}}', { error: String(tankoubon.error) })}
         </p>
-        <button type="button" onClick={() => navigate('/')} className="self-start underline">
+        <button type="button" onClick={() => navigate(routes.library())} className="self-start underline">
           {t('Return to Library')}
         </button>
       </div>
@@ -76,7 +77,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
 
   async function handleDelete() {
     await deleteTankoubon.mutateAsync(tankId)
-    navigate('/')
+    navigate(routes.library())
   }
 
   async function handleAddArchive() {
@@ -159,7 +160,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate(`/edit/${archiveId}`)}
+                  onClick={() => navigate(routes.edit(archiveId))}
                   className="underline"
                   style={{ color: 'var(--theme-muted)' }}
                 >
@@ -209,7 +210,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
         {archives[0] && (
           <button
             type="button"
-            onClick={() => navigate(`/reader/${archives[0]}`)}
+            onClick={() => navigate(routes.reader(archives[0]))}
             className="rounded border px-3 py-1.5 text-sm"
             style={{ borderColor: 'var(--theme-border)' }}
           >
@@ -225,7 +226,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
         </button>
         <button
           type="button"
-          onClick={() => navigate('/')}
+          onClick={() => navigate(routes.library())}
           className="rounded border px-3 py-1.5 text-sm"
           style={{ borderColor: 'var(--theme-border)' }}
         >

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { LOG_CATEGORIES, type LogCategory, useLogLines } from '../api/hooks'
+import { routes } from '../routes'
 import { useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -109,7 +110,7 @@ export default function Logs() {
           />
         ))}
       </span>
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

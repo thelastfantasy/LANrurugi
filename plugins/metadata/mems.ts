@@ -69,14 +69,30 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "memsplugin",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "Save the original Japanese title when available instead of the English or ", required: false },
-      { name: "param2", description: "Save additional timestamp (time posted) and uploader metadata", required: false },
-      { name: "param3", description: "Use ExHentai link for source instead of E-Hentai link", required: false },
+      { name: "param1", description: "Save the original Japanese title when available instead of the English or romanised title", required: false, type: "bool" },
+      { name: "param2", description: "Save additional timestamp (time posted) and uploader metadata", required: false, type: "bool" },
+      { name: "param3", description: "Use ExHentai link for source instead of E-Hentai link", required: false, type: "bool" },
     ],
     // This plugin's own inlined `get_tags_from_EH`/`get_json_from_EH` (see their own docs below)
     // call the same E-Hentai JSON API `plugins/metadata/ehentai.ts` does.
@@ -86,10 +102,16 @@ export function pluginInfo() {
     description:
       "Accurately retrieves metadata from e-hentai.org using the identifiers appeneded to the " +
       "filenames of archives downloaded by Mayriad's EH Master Script.",
-    version: "1.2",
-    icon: "data:image/png;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAAAAAAAAAAAAAA",
+    version: "0.1",
+    icon: "data:image/png;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wARBmb/EQZm/xEGZv8RBmb/EQZm/////wD///8A////ABEGZv8RBmb/////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv8RBmb/EQZm/xEGZv////8A////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/////AP///wD///8A////AP///wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/////AP///wARBmb/EQZm/////wD///8A////AP///wD///8A////ABEGZv8RBmb/////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv////8A////AP///wD///8A////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/EQZm/xEGZv////8AEQZm/xEGZv////8AEQZm/xEGZv8RBmb/EQZm/xEGZv8RBmb/////AP///wARBmb/EQZm/xEGZv8RBmb/////ABEGZv8RBmb/////ABEGZv8RBmb/EQZm/xEGZv8RBmb/EQZm/////wD///8AEQZm/xEGZv////8A////AP///wD///8A////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/////AP///wD///8A////AP///wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/////AP///wARBmb/EQZm/////wD///8A////AP///wD///8A////ABEGZv8RBmb/////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv8RBmb/EQZm/xEGZv////8A////AP///wARBmb/EQZm/////wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/EQZm/xEGZv8RBmb/////AP///wD///8AEQZm/xEGZv////8A////ABEGZv8RBmb/////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A//8AAP//AACDmQAAg5kAAJ+ZAACfmQAAn5kAAISBAACEgQAAn5kAAJ+ZAACfmQAAg5kAAIOZAAD//wAA//8AAA==",
     oneshot_arg: "Enter a valid EH gallery URL to copy metadata from this EH gallery to this LANraragi archive",
     login_from: "ehlogin",
+    // Same real pattern as `plugins/metadata/ehentai.ts` — this plugin is just as much an
+    // E-Hentai/ExHentai-URL-based metadata source (see `oneshot_arg` above), but had no
+    // `url_pattern` at all, so the frontend's priority-ordered `findMatchingPlugin` skipped past
+    // it (a plugin with no pattern never matches) straight to `ehentai.ts` even when this plugin
+    // was configured as the higher-priority match for the same URL.
+    url_pattern: "e-?hentai\\.org|exhentai\\.org",
   };
 }
 
@@ -135,7 +157,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     if (gallery_id === '' || gallery_token === '') {
       let file_error = 'Skipping archive without connecting to EH, because the archive title does not have valid ' + 'gallery identifiers from Mayriad\'s EH Master Script.';
       logger.error(file_error);
-      throw new Error(`${file_error}\n`);
+      throw new PluginErrorException(file_error);
     }
   }
   //    # Retrieve metadata directly using EH API.
@@ -162,7 +184,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else {
     let source_error = 'No matching EH gallery found. The archive title may have incorrect gallery identifiers.';
     logger.error(source_error);
-    throw new Error(`${source_error}\n`);
+    throw new PluginErrorException(source_error);
   }
 }
 
@@ -209,7 +231,7 @@ async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let jsonresponse = rep.json;
   if ((jsonresponse["error"] !== undefined)) {
     logger.error(jsonresponse["error"]);
-    throw new Error("E-H API returned an error.\n");
+    throw new PluginErrorException("E-H API returned an error.");
   }
   return jsonresponse;
 }

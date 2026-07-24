@@ -21,6 +21,7 @@ import type { Settings as SettingsType } from '../../api/types'
 import CollapsibleSection from '../../components/CollapsibleSection'
 import LanguageSelector from '../../components/LanguageSelector'
 import { SUPPORTED_LANGUAGES } from '../../i18n'
+import { routes } from '../../routes'
 import {
   DEFAULT_THEME_ID,
   ensureLink,
@@ -150,7 +151,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
   async function handleLogout() {
     await logout.mutateAsync()
-    navigate('/login')
+    navigate(routes.login())
   }
 
   return (
@@ -178,19 +179,19 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           className="stdbtn"
           type="button"
           value={t('Plugin Configuration') ?? undefined}
-          onClick={() => navigate('/config/plugins')}
+          onClick={() => navigate(routes.pluginSettings())}
         />{' '}
         <input
           id="backup"
           className="stdbtn"
           type="button"
           value={t('Database Backup/Restore') ?? undefined}
-          onClick={() => navigate('/backup')}
+          onClick={() => navigate(routes.backup())}
         />{' '}
-        <input id="batch" className="stdbtn" type="button" value={t('Batch Operations') ?? undefined} onClick={() => navigate('/batch')} />
+        <input id="batch" className="stdbtn" type="button" value={t('Batch Operations') ?? undefined} onClick={() => navigate(routes.batch())} />
         <br />
         <br />
-        <input id="return" className="stdbtn" type="button" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+        <input id="return" className="stdbtn" type="button" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
 
         {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
 
@@ -320,7 +321,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                     onClick={async () => {
                       if (!window.confirm(t('Clicking this button will reset the entire database and delete all settings and metadata.') ?? '')) return
                       await dropDatabase.mutateAsync()
-                      setTimeout(() => navigate('/'), 1500)
+                      setTimeout(() => navigate(routes.library()), 1500)
                     }}
                   >
                     <span style={{ color: 'red' }}>
@@ -674,7 +675,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                   <ActionRow
                     id="open-minion"
                     label={t('Open Minion Console')}
-                    onClick={() => navigate('/jobs')}
+                    onClick={() => navigate(routes.jobs())}
                   >
                     {t('The Minion Worker handles spare tasks that are too long to execute within the request/response lifecycle of web applications.')}
                     <br />

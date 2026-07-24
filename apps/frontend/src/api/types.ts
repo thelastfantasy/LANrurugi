@@ -20,6 +20,10 @@ export interface ArchiveMetadata {
   lastreadtime: number
   size: number
   toc: TocEntry[]
+  /** Only present on a synthetic Tankoubon entry within search results (`arcid` starting with
+   * `TANK_`, `extension: ".tank"`) — `null` for a real archive. Mirrors legacy's own
+   * `build_tank_json` aggregate shape (`~/LANraragi/lib/LANraragi/Utils/Database.pm`). */
+  archive_count: number | null
 }
 
 export interface CategoryMetadata {
@@ -70,6 +74,7 @@ export interface Settings {
   tagruleson: boolean
   usedateadded: boolean
   usedatemodified: boolean
+  replacetitles: boolean
 }
 
 export interface ServerInfo {
@@ -127,7 +132,7 @@ export interface PluginInfo {
   // entries), so a caller only needs this field to render a drag handle's current position, not
   // to re-derive the sort itself.
   priority: number | null
-  parameters: Array<{ name: string; desc: string }>
+  parameters: Array<{ name: string; desc: string; type?: string }>
 }
 
 // `GET/PUT /api/plugins/settings?namespace=...` — a plugin's own persisted custom-parameter
@@ -240,7 +245,44 @@ export interface JobsResponse {
 // mirrors `lanrurugi_storage::download_queue::DownloadQueueItem` field-for-field. Backed by
 // Redis so a queued/in-progress item survives a page refresh or a different browser tab; the
 // actual download itself is a `JobRecord` (`job_id` below links the two once started).
-export type DownloadQueueState = 'queued' | 'starting' | 'downloading' | 'done' | 'error'
+export type DownloadQueueState = 'queued' | 'starting' | 'downloading' | 'done' | 'error' | 'cancelled'
+
+/** An interpolation value in a `QueueError`'s `data` map — mirrors
+ * `lanrurugi_core::queue_error::PluginErrorValue`'s untagged `String | Number` union. */
+export type PluginErrorValue = string | number
+
+/** Mirrors `lanrurugi_core::queue_error::QueueError` field-for-field, including its `#[serde(tag
+ * = "kind", rename_all = "snake_case")]` wire shape — every download-queue failure the backend
+ * can produce, structured (no free-text `detail`) so `QueueErrorText` (`components/`) can map
+ * `kind` to a translated string and interpolate each variant's own fields into it. */
+export type QueueError =
+  | { kind: 'plugin_reported'; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
+  | { kind: 'plugin_execution_failed'; plugin: string }
+  | { kind: 'malformed_plugin_response'; plugin: string }
+  | { kind: 'empty_plugin_result'; plugin: string }
+  | { kind: 'invalid_url'; url: string }
+  | { kind: 'invalid_http_method'; method: string }
+  | { kind: 'http_request_failed'; url: string }
+  | { kind: 'http_status'; url: string; status: number }
+  | { kind: 'write_failed' }
+  | { kind: 'bundle_failed' }
+  | { kind: 'duplicate_archive'; existing_id: string; reason: 'content_hash' | 'filename' }
+  | { kind: 'duplicate_filename'; existing_id: string; filename: string }
+  | { kind: 'duplicate_filename_cleaned'; existing_id: string; filename: string }
+  | { kind: 'internal' }
+
+/** Mirrors `lanrurugi_storage::download_queue::PendingFilenameConflict` — set on a queue item
+ * whose download was blocked by a `Filename` collision (content is genuinely new, only the
+ * resolved filename collides with an existing archive) and staged to `temp_dir` rather than being
+ * discarded, awaiting the user's choice via `POST /download_queue/{id}/overwrite` or `.../rename`.
+ * See that Rust type's own docs for why this is distinct from `QueueError::DuplicateArchive`'s
+ * `content_hash` case, which never reaches this state at all. */
+export interface PendingFilenameConflict {
+  temp_path: string
+  original_filename: string
+  existing_id: string
+  crc32: string
+}
 
 export interface DownloadQueueItem {
   id: string
@@ -259,7 +301,8 @@ export interface DownloadQueueItem {
   // untyped since every plugin's `tags` string uses its own namespace vocabulary (E-Hentai's
   // `artist:`/`uploader:`/`category:`/`timestamp:` mean nothing to a different site's plugin).
   metadata_preview: Record<string, unknown> | null
-  error: string | null
+  error: QueueError | null
+  pending_filename_conflict?: PendingFilenameConflict | null
   created_at: number
 }
 
@@ -303,6 +346,9 @@ export interface SearchResponse {
 // "am I logged in right now" has no place in that contract, only in our own SPA session.
 export interface LoginStatus {
   logged_in: boolean
+  /** Drives the homepage's "you're using the default password" warning toast — legacy's own
+   * `[% IF usingdefpass %]` (`Controller/Index.pm`). */
+  using_default_password: boolean
 }
 
 // Matches `lanrurugi-api::stamps::StampJson` exactly (constitution Principle II, verified against

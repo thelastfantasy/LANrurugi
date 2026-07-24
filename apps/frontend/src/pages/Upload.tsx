@@ -9,19 +9,34 @@ import {
   useCategories,
   useClearCompletedQueue,
   useDeleteQueueItem,
+  useDeleteSelectedQueue,
   useDownloadQueue,
   useJobs,
+  useOverwriteQueueItem,
   usePlugins,
-  useStartAllQueue,
+  useRenameQueueItem,
+  useSettings,
   useStartQueueItem,
   useStartSelectedQueue,
+  useStopQueueItem,
   useUpdateQueueItem,
 } from '../api/hooks'
-import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from '../api/types'
+import type {
+  ArchiveMetadata,
+  DownloadQueueItem,
+  JobRecord,
+  PendingFilenameConflict,
+  PluginInfo,
+} from '../api/types'
 import CollapsibleSection from '../components/CollapsibleSection'
-import { JobProgressBar, STATE_COLOR } from '../components/JobProgress'
+import { formatBytes, JobProgressBar, STATE_COLOR } from '../components/JobProgress'
+import { PopupMenu, PopupMenuItem, useMenuPalette } from '../components/PopupMenu'
+import QueueErrorText from '../components/QueueErrorText'
+import TagTable from '../components/TagTable'
 import Tooltip from '../components/Tooltip'
-import { FONT_SIZE_8PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
+import { splitTagsByNamespace } from '../lib/tagFormat'
+import { routes } from '../routes'
+import { FONT_SIZE_8PT, FONT_SIZE_10PT, useApplyTheme, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
 interface UploadRow {
@@ -55,6 +70,28 @@ function findMatchingPlugin(plugins: PluginInfo[] | undefined, url: string): Plu
   return plugins?.find((p) => matchesPattern(p, url)) ?? null
 }
 
+/** Fetches `metadataPlugin`'s preview for `item.url` and persists it onto the queue item (title +
+ * `metadata_preview`, via `update` — whichever `useUpdateQueueItem()` instance the caller already
+ * has, since that hook's own `onSuccess` already invalidates the `download-queue` query, so
+ * neither call site needs its own extra invalidation). Module-level (not a `QueueItemRow`-local
+ * closure) so both the single-row Start button and the batch "Start (N)" button can call the exact
+ * same logic — a batch start goes through `DownloadQueuePanel`, which has no per-row `item`/
+ * `metadataPlugin` closure to reach into. */
+async function fetchMetadataForItem(
+  item: DownloadQueueItem,
+  metadataPlugin: PluginInfo | null,
+  update: ReturnType<typeof useUpdateQueueItem>,
+) {
+  if (!metadataPlugin || item.metadata_preview) return
+  const result = await sendJson<{ success: number; data?: Record<string, unknown> }>(
+    'POST',
+    `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&arg=${encodeURIComponent(item.url)}`,
+  ).catch(() => null)
+  const data = result?.data
+  const title = typeof data?.title === 'string' ? data.title : undefined
+  if (data) await update.mutateAsync({ id: item.id, title, metadata_preview: data })
+}
+
 /** A square, icon-only `.stdbtn` — overrides its default padding/width so the icon is centered in
  * a fixed 24x24 box instead of stretching to fit label text (there is none). Two theme-specific
  * gotchas this accounts for:
@@ -78,76 +115,41 @@ const ICON_BUTTON_STYLE: React.CSSProperties = {
   fontSize: FONT_SIZE_10PT,
 }
 
-/** A bare `namespace:value` tag's value is a real absolute URL missing only its `https://`
- * scheme (real corpus evidence: E-Hentai's `source:` tag — `hashdata["tags"] += ", source:" +
- * (domain.split('://'))[1] + ...` in `plugins/metadata/ehentai.ts` — strips the scheme off
- * before appending). Adding it back is what turns `source` from inert text into a clickable
- * link without the tooltip needing to special-case *which* namespace means "this is a URL". */
-function withScheme(value: string): string {
-  return /^https?:\/\//i.test(value) ? value : `https://${value}`
+/** Overrides `.stdbtn`'s theme-provided `min-width: 150px` (5 of those, plus gaps, don't fit most
+ * viewport widths — see the toolbar's own comment for the full story) so the 5-button download-
+ * queue toolbar can size each button to its own text and genuinely never wrap, rather than just
+ * being visually allowed to. */
+const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
+  minWidth: 0,
+  width: 'auto',
+  flex: '0 1 auto',
+  whiteSpace: 'nowrap',
+  fontSize: FONT_SIZE_10PT,
+  padding: '0 6px',
 }
 
-/** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short multi-line
- * tooltip body — deliberately schema-agnostic (see `DownloadQueueItem.metadata_preview`'s own
- * docs): `tags` is split on commas into `namespace: value` rows using whatever namespaces this
- * particular plugin happened to return (E-Hentai's `artist:`/`uploader:`/`category:`/
- * `timestamp:`/`source:`, or a completely different set from another site's plugin), not a fixed
- * allowlist. An untagged/non-namespaced entry (no `:`) renders as a bare value under a generic
- * "Tags" heading instead of being dropped.
+/** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body —
+ * deliberately schema-agnostic (see `DownloadQueueItem.metadata_preview`'s own docs): the tags
+ * themselves render via the shared `TagTable` (same namespace-colored look the Library grid's own
+ * tag tooltip uses), grouped by whatever namespaces this particular plugin happened to return
+ * (E-Hentai's `artist:`/`uploader:`/`category:`/`timestamp:`/`source:`, or a completely different
+ * set from another site's plugin) — an untagged/non-namespaced entry falls under `TagTable`'s own
+ * `other` bucket rather than being dropped.
  *
- * No separate "raw URL" line: a `source:` tag (when present) already carries the same URL — see
- * `withScheme`'s own docs — so showing both was pure duplication. `source` is instead rendered as
- * a real hyperlink (opened in a new tab) rather than plain text; every other namespace keeps its
- * original plain-text rendering. */
+ * No separate "raw URL" line: a `source:` tag (when present) already links out to the same URL
+ * (`TagTable`'s own `source`-namespace handling) — showing both was pure duplication. */
 function MetadataPreviewTooltip({ preview, url }: { preview: Record<string, unknown>; url: string }) {
-  const { t } = useTranslation()
   const tags = typeof preview.tags === 'string' ? preview.tags : ''
   const summary = typeof preview.summary === 'string' ? preview.summary : undefined
-
-  const grouped = new Map<string, string[]>()
-  const plain: string[] = []
-  for (const raw of tags.split(',')) {
-    const entry = raw.trim()
-    if (!entry) continue
-    const colonIndex = entry.indexOf(':')
-    if (colonIndex === -1) {
-      plain.push(entry)
-      continue
-    }
-    const namespace = entry.slice(0, colonIndex).trim()
-    const value = entry.slice(colonIndex + 1).trim()
-    const list = grouped.get(namespace) ?? []
-    list.push(value)
-    grouped.set(namespace, list)
-  }
-  const hasSourceTag = grouped.has('source')
+  const hasSourceTag = 'source' in splitTagsByNamespace(tags)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ fontWeight: 'bold', wordBreak: 'break-word' }}>
         {typeof preview.title === 'string' ? preview.title : url}
       </div>
       {!hasSourceTag && <div style={{ wordBreak: 'break-all', opacity: 0.8, fontSize: FONT_SIZE_10PT }}>{url}</div>}
-      {[...grouped.entries()].map(([namespace, values]) => (
-        <div key={namespace} style={{ wordBreak: 'break-all' }}>
-          <strong>{namespace}:</strong>{' '}
-          {namespace === 'source'
-            ? values.map((value, i) => (
-                <span key={value}>
-                  {i > 0 && ', '}
-                  <a href={withScheme(value)} target="_blank" rel="noreferrer">
-                    {value}
-                  </a>
-                </span>
-              ))
-            : values.join(', ')}
-        </div>
-      ))}
-      {plain.length > 0 && (
-        <div>
-          <strong>{t('Tags')}:</strong> {plain.join(', ')}
-        </div>
-      )}
+      <TagTable tags={tags} />
       {summary && <div style={{ opacity: 0.8 }}>{summary}</div>}
     </div>
   )
@@ -404,7 +406,7 @@ export default function Upload() {
                   <tr key={row.key}>
                     <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {row.state === 'done' && row.archiveId ? (
-                        <a href={`/reader/${row.archiveId}`} title={row.title ?? row.name}>
+                        <a href={routes.reader(row.archiveId)} title={row.title ?? row.name}>
                           {row.title ?? row.name}
                         </a>
                       ) : (
@@ -420,7 +422,7 @@ export default function Upload() {
                       {row.state === 'done' && row.archiveId && (
                         <>
                           <i className="fas fa-check-circle"></i>{' '}
-                          <a href={`/edit/${row.archiveId}`} target="_blank" rel="noreferrer">
+                          <a href={routes.edit(row.archiveId)} target="_blank" rel="noreferrer">
                             {t('Click here to edit metadata.')}
                           </a>
                         </>
@@ -443,14 +445,17 @@ export default function Upload() {
 
       <br />
       <br />
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }
 
 /** Right-column panel: the persistent queue, grouped by `plugin_namespace` (one
- * `CollapsibleSection` per namespace present), with bulk Start All / Start Selected / Clear
- * Completed actions and per-item controls. */
+ * `CollapsibleSection` per namespace present), with bulk Select All / Invert Selection / Start /
+ * Clear Completed / Delete actions and per-item controls. A row is selectable while `queued` or
+ * `error` — `error` had to become a startable state too (not just selectable-for-delete), so a
+ * failed download (e.g. missing login credentials at the time it first ran) has a real way back to
+ * running again once the underlying problem is fixed, instead of being permanently stuck. */
 function DownloadQueuePanel({
   downloadPlugins,
   metadataPlugins,
@@ -461,9 +466,11 @@ function DownloadQueuePanel({
   const { t } = useTranslation()
   const queue = useDownloadQueue()
   const jobs = useJobs()
-  const startAll = useStartAllQueue()
+  const settings = useSettings()
   const startSelected = useStartSelectedQueue()
+  const deleteSelected = useDeleteSelectedQueue()
   const clearCompleted = useClearCompletedQueue()
+  const updateForBatchMetadata = useUpdateQueueItem()
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   const items = useMemo(() => queue.data ?? [], [queue.data])
@@ -499,14 +506,63 @@ function DownloadQueuePanel({
       const metadataPlugin = findMatchingPlugin(metadataPlugins, item.url)
       if (!metadataPlugin) continue
       triggeredRef.current.add(item.job_id)
-      void sendJson('POST', `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&id=${encodeURIComponent(archiveId)}`)
+      void (async () => {
+        const result = await sendJson<{
+          success: number
+          data?: { tags?: string; title?: string; summary?: string }
+        }>(
+          'POST',
+          `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&id=${encodeURIComponent(archiveId)}`,
+        ).catch(() => null)
+        // Mirrors `Controller::Batch::batch_plugin`'s persist-immediately semantics (no per-archive
+        // staging step here either — this fires automatically post-download, with no form open for
+        // the user to review through) — merges into whatever tags the fresh archive already has
+        // (normally none yet) rather than assuming it's empty.
+        if (!result?.success || !result.data) return
+        const { tags: newTags, title, summary } = result.data
+        if (!newTags && !(title && (settings.data?.replacetitles ?? true)) && !summary) return
+        const archive = await fetchJson<ArchiveMetadata>(`/archives/${archiveId}/metadata`).catch(() => null)
+        const mergedTags = newTags
+          ? Array.from(
+              new Set(
+                [...(archive?.tags.split(',') ?? []), ...newTags.split(',')].map((tg) => tg.trim()).filter(Boolean),
+              ),
+            ).join(', ')
+          : undefined
+        await sendJson(
+          'PUT',
+          `/archives/${archiveId}/metadata?${new URLSearchParams({
+            ...(mergedTags !== undefined && { tags: mergedTags }),
+            ...(title && (settings.data?.replacetitles ?? true) && { title }),
+            ...(summary && { summary }),
+          })}`,
+        )
+      })()
     }
-  }, [items, jobById, metadataPlugins])
+  }, [items, jobById, metadataPlugins, settings.data?.replacetitles])
 
   if (items.length === 0) return null
 
-  const selectableIds = items.filter((i) => i.state === 'queued').map((i) => i.id)
-  const cleared = items.filter((i) => i.state === 'done' || i.state === 'error').length
+  // `error` is included alongside `queued` — both are valid starting states now (retrying a failed
+  // download, e.g. after fixing a login plugin's saved credentials, reuses the exact same
+  // start/select flow as a first attempt; see `start_one`'s own docs on the Rust side for why
+  // `error`/`cancelled` had to become startable at all). `downloading`/`starting`/`done` are never
+  // selectable.
+  const selectableIds = items
+    .filter((i) => i.state === 'queued' || i.state === 'error' || i.state === 'cancelled')
+    .map((i) => i.id)
+  // Matches the backend `clear_completed` handler's own filter exactly — `error` is deliberately
+  // excluded (it's a restartable, still-actionable state, not "completed" work), so this button's
+  // enabled/disabled state and displayed count don't imply it would also sweep up failed items.
+  const cleared = items.filter((i) => i.state === 'done').length
+
+  function selectAll() {
+    setSelected(new Set(selectableIds))
+  }
+
+  function invertSelection() {
+    setSelected((prev) => new Set(selectableIds.filter((id) => !prev.has(id))))
+  }
 
   return (
     <div style={{ marginTop: 16, textAlign: 'left' }}>
@@ -514,33 +570,79 @@ function DownloadQueuePanel({
         {t('Download Queue')}
       </h2>
 
-      <div className="control-btn-group" style={{ justifyContent: 'center', gap: 6, marginBottom: 6 }}>
+      {/* `.control-btn-group` (also used by Jobs.tsx/Duplicates.tsx) carries no actual CSS from
+          either this app's own stylesheet or any of the 5 legacy theme files — it's a plain,
+          unstyled class name, so `justifyContent`/`gap` here need `display: 'flex'` alongside them
+          explicitly, or the group falls back to block layout. `flexWrap: 'wrap'` alone isn't
+          enough to satisfy "never wrap": `.stdbtn` carries a theme `min-width: 150px`, and 5 of
+          those (750px) plus gaps don't fit most viewports, so wrap was still happening — the real
+          fix is overriding that min-width down to `0` and letting each button size to its own
+          text (`width: 'auto'`) so all 5 actually fit on one row instead of merely being allowed
+          to wrap when they don't. */}
+      <div
+        className="control-btn-group"
+        style={{ display: 'flex', flexWrap: 'nowrap', justifyContent: 'center', gap: 4, marginBottom: 6 }}
+      >
         <button
           type="button"
           className="stdbtn"
-          disabled={selectableIds.length === 0 || startAll.isPending}
-          onClick={() => void startAll.mutateAsync()}
+          style={TOOLBAR_BUTTON_STYLE}
+          disabled={selectableIds.length === 0}
+          onClick={selectAll}
         >
-          {t('Start All')}
+          {t('Select All')}
         </button>
         <button
           type="button"
           className="stdbtn"
+          style={TOOLBAR_BUTTON_STYLE}
+          disabled={selectableIds.length === 0}
+          onClick={invertSelection}
+        >
+          {t('Invert Selection')}
+        </button>
+        <button
+          type="button"
+          className="stdbtn"
+          style={TOOLBAR_BUTTON_STYLE}
           disabled={selected.size === 0 || startSelected.isPending}
           onClick={async () => {
-            await startSelected.mutateAsync([...selected])
+            const selectedIds = [...selected]
+            await startSelected.mutateAsync(selectedIds)
             setSelected(new Set())
+            // Same "fire alongside the real download, don't block it" behavior as the single-row
+            // Start button's own `fetchMetadataOnStart` (see that function's own docs) — one call
+            // per selected item, each independently fire-and-forget so a slow/failed metadata
+            // fetch for one item never delays or breaks the others.
+            for (const id of selectedIds) {
+              const item = items.find((i) => i.id === id)
+              if (!item) continue
+              void fetchMetadataForItem(item, findMatchingPlugin(metadataPlugins, item.url), updateForBatchMetadata)
+            }
           }}
         >
-          {t('Start Selected ({{n}})', { n: selected.size })}
+          {t('Start ({{n}})', { n: selected.size })}
         </button>
         <button
           type="button"
           className="stdbtn"
+          style={TOOLBAR_BUTTON_STYLE}
           disabled={cleared === 0 || clearCompleted.isPending}
           onClick={() => void clearCompleted.mutateAsync()}
         >
           {t('Clear Completed')}
+        </button>
+        <button
+          type="button"
+          className="stdbtn"
+          style={TOOLBAR_BUTTON_STYLE}
+          disabled={selected.size === 0 || deleteSelected.isPending}
+          onClick={async () => {
+            await deleteSelected.mutateAsync([...selected])
+            setSelected(new Set())
+          }}
+        >
+          {t('Delete ({{n}})', { n: selected.size })}
         </button>
       </div>
 
@@ -562,7 +664,8 @@ function DownloadQueuePanel({
                   job={item.job_id ? jobById.get(item.job_id) : undefined}
                   selected={selected.has(item.id)}
                   onToggleSelect={() => {
-                    if (item.state !== 'queued') return
+                    if (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled')
+                      return
                     setSelected((prev) => {
                       const next = new Set(prev)
                       if (next.has(item.id)) next.delete(item.id)
@@ -595,25 +698,47 @@ function QueueItemRow({
   metadataPlugin: PluginInfo | null
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const update = useUpdateQueueItem()
   const start = useStartQueueItem()
+  const stop = useStopQueueItem()
   const del = useDeleteQueueItem()
+  const overwriteConflict = useOverwriteQueueItem()
+  const renameConflict = useRenameQueueItem()
+  // Holds the trigger button's own `getBoundingClientRect()`, captured at click time (an
+  // event-handler read, not a render-time `ref.current` read — this app's ESLint config forbids
+  // the latter, `react-hooks/refs`) — `null` means closed.
+  const [conflictMenuAnchor, setConflictMenuAnchor] = useState<DOMRect | null>(null)
+  const [renamePopover, setRenamePopover] = useState<{ x: number; y: number } | null>(null)
   const [fetchingMetadata, setFetchingMetadata] = useState(false)
+  // Same shape the auto-fetch-metadata effect above already reads from a finished job's result
+  // (`{archive_ids?: string[]}`) — here just to make a `done` item's title clickable through to
+  // the archive it actually became, matching every other archive-title link in this app.
+  const archiveId = (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0]
+  // `cancelled` is a real, persisted queue state (survives a page refresh) — `useStopQueueItem`'s
+  // own optimistic `onMutate` write already sets this in the cache the instant Stop is clicked,
+  // before the request even resolves, so this reads as immediate despite being server state.
+  const wasCancelled = item.state === 'cancelled'
 
   async function handleFetchMetadata() {
     if (!metadataPlugin) return
     setFetchingMetadata(true)
     try {
-      const result = await sendJson<{ success: number; data?: Record<string, unknown> }>(
-        'POST',
-        `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&arg=${encodeURIComponent(item.url)}`,
-      ).catch(() => null)
-      const data = result?.data
-      const title = typeof data?.title === 'string' ? data.title : undefined
-      if (data) await update.mutateAsync({ id: item.id, title, metadata_preview: data })
+      await fetchMetadataForItem(item, metadataPlugin, update)
     } finally {
       setFetchingMetadata(false)
     }
+  }
+
+  // Fired alongside Start/Retry (not awaited — runs concurrently with the real download, not
+  // before/blocking it) so the row's title/tooltip fill in with real metadata while the transfer
+  // is still in progress, instead of showing only the bare URL for the download's entire duration.
+  // A no-op when there's no metadata plugin for this URL, or metadata was already fetched (either
+  // manually via the tags button beforehand, or by an earlier start-triggered call — e.g. after a
+  // Stop + restart cycle).
+  function fetchMetadataOnStart() {
+    if (!metadataPlugin || item.metadata_preview || fetchingMetadata) return
+    void handleFetchMetadata()
   }
 
   return (
@@ -627,7 +752,12 @@ function QueueItemRow({
         flexWrap: 'wrap',
       }}
     >
-      <input type="checkbox" checked={selected} disabled={item.state !== 'queued'} onChange={onToggleSelect} />
+      <input
+        type="checkbox"
+        checked={selected}
+        disabled={item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled'}
+        onChange={onToggleSelect}
+      />
 
       <TooltipIfPresent preview={item.metadata_preview} url={item.url} wrapperStyle={{ flex: '1 1 180px', minWidth: 0 }}>
         <div
@@ -640,18 +770,78 @@ function QueueItemRow({
           }}
         >
           {item.state === 'downloading' || item.state === 'starting' ? (
-            job ? (
-              <JobProgressBar job={job} />
-            ) : (
-              <span style={{ fontSize: FONT_SIZE_10PT }}>{t('Starting…')}</span>
-            )
+            <>
+              {/* Title/URL stays visible above the progress bar (previously fully replaced by
+                  `JobProgressBar`, which only ever renders byte-progress — losing sight of *which*
+                  item is downloading, and burying the `TooltipIfPresent` trigger since the title
+                  text it wraps was gone from the DOM). Matches the plain-text rendering used for
+                  every other state below. */}
+              <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: 'break-all', display: 'block' }} title={item.metadata_preview ? undefined : item.url}>
+                {item.title ?? item.url}
+              </span>
+              {job ? (
+                <JobProgressBar job={job} />
+              ) : (
+                <span style={{ fontSize: FONT_SIZE_10PT }}>{t('Starting…')}</span>
+              )}
+            </>
+          ) : item.state === 'done' ? (
+            // A plain full green bar with the title overlaid on top (not beside it, which felt
+            // cramped — explicit user call), not `JobProgressBar` (which always renders the
+            // byte-count/speed detail line) — once a download is actually done, that detail is
+            // just noise: no one needs to see "50.9 MB / 101.3 MB (100%) · 0 B/s" for a finished
+            // item. Earlier versions tried reusing `JobProgressBar` here (first grey via
+            // `STATE_COLOR.finished`, then green, then a same-row bar+text pair) before landing on
+            // this overlay treatment.
+            <div style={{ position: 'relative', height: 18, borderRadius: 4, overflow: 'hidden', background: STATE_COLOR.active }}>
+              {/* Clickable through to the reader once cataloged (explicit user call) — matches
+                  every other archive-title link in this app (`Library.tsx`'s cards, `Upload.tsx`'s
+                  own file-upload rows below). `archiveId` can be absent (job result not yet
+                  polled-in, or a `file_path` fallback result with no `archive_ids`), in which case
+                  this stays plain text rather than a dead link. */}
+              <a
+                href={archiveId ? routes.reader(archiveId) : undefined}
+                onClick={(e) => {
+                  if (!archiveId) return
+                  e.preventDefault()
+                  navigate(routes.reader(archiveId))
+                }}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '0 6px',
+                  fontSize: FONT_SIZE_10PT,
+                  color: '#fff',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.6)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  cursor: archiveId ? 'pointer' : 'default',
+                }}
+              >
+                {item.title ?? item.url}
+                {job?.total_bytes != null && (
+                  <span style={{ marginLeft: 6, opacity: 0.85, flexShrink: 0 }}>({formatBytes(job.total_bytes)})</span>
+                )}
+              </a>
+            </div>
           ) : (
             <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: 'break-all' }} title={item.metadata_preview ? undefined : item.url}>
               {item.title ?? item.url}
             </span>
           )}
           {item.state === 'error' && item.error && (
-            <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>{item.error}</div>
+            <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>
+              <QueueErrorText error={item.error} />
+            </div>
+          )}
+          {/* A stopped download gets its own real, persisted state (`cancelled`, distinct from
+              `queued`) precisely so this label — and the Retry-button treatment below — survive a
+              page refresh instead of only living in this mutation's own transient local state. */}
+          {wasCancelled && (
+            <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>{t('Cancelled')}</div>
           )}
         </div>
       </TooltipIfPresent>
@@ -674,17 +864,102 @@ function QueueItemRow({
         />
       </Tooltip>
 
-      <Tooltip label={t('Download') ?? ''}>
-        <button
-          type="button"
-          className="stdbtn"
-          style={ICON_BUTTON_STYLE}
-          disabled={item.state !== 'queued' || start.isPending}
-          onClick={() => void start.mutateAsync(item.id)}
-        >
-          <i className="fa fa-download" aria-hidden="true"></i>
-        </button>
-      </Tooltip>
+      {item.pending_filename_conflict ? (
+        // A `Filename` collision (content is genuinely new, only the resolved filename collides —
+        // see `PendingFilenameConflict`'s own docs) has a real choice, unlike a `ContentHash`
+        // collision (`QueueError::DuplicateArchive`, unconditionally rejected — no buttons render
+        // for that case at all, just the plain error text below). The already-downloaded bytes are
+        // staged server-side either way, so neither action re-downloads anything. Both resolutions
+        // share one trigger button (a dropdown, not two separate icon buttons) — the same visual
+        // slot the row's other single-purpose action buttons occupy.
+        <>
+          <Tooltip label={t('Resolve Conflict') ?? ''}>
+            <button
+              type="button"
+              className="stdbtn"
+              style={ICON_BUTTON_STYLE}
+              disabled={overwriteConflict.isPending || renameConflict.isPending}
+              onClick={(e) => {
+                // `e.currentTarget` must be read synchronously here, not inside the updater
+                // function below — React nulls it out by the time that callback runs.
+                const rect = e.currentTarget.getBoundingClientRect()
+                setConflictMenuAnchor((open) => (open ? null : rect))
+              }}
+            >
+              <i className="fa fa-clone" aria-hidden="true"></i>
+            </button>
+          </Tooltip>
+          {conflictMenuAnchor && (
+            <>
+              <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setConflictMenuAnchor(null)} />
+              <ConflictMenu
+                anchor={conflictMenuAnchor}
+                onOverwrite={() => {
+                  setConflictMenuAnchor(null)
+                  void overwriteConflict.mutateAsync(item.id)
+                }}
+                onRename={() => {
+                  // Anchored off the trigger button's own rect (already captured above), not the
+                  // menu item that was clicked — that item disappears the instant `ConflictMenu`
+                  // closes, so anchoring off it made the popover feel like it drifted from
+                  // whatever position the (now-gone) item happened to occupy.
+                  setRenamePopover({ x: conflictMenuAnchor.left, y: conflictMenuAnchor.bottom })
+                  setConflictMenuAnchor(null)
+                }}
+              />
+            </>
+          )}
+          {renamePopover && (
+            <RenamePopover
+              anchor={renamePopover}
+              conflict={item.pending_filename_conflict}
+              itemTitle={item.title}
+              itemNamespace={item.plugin_namespace}
+              pending={renameConflict.isPending}
+              onCancel={() => setRenamePopover(null)}
+              onConfirm={(filename) => {
+                setRenamePopover(null)
+                void renameConflict.mutateAsync({ id: item.id, filename })
+              }}
+            />
+          )}
+        </>
+      ) : item.state === 'starting' || item.state === 'downloading' ? (
+        <Tooltip label={t('Stop') ?? ''}>
+          <button
+            type="button"
+            className="stdbtn"
+            style={ICON_BUTTON_STYLE}
+            disabled={stop.isPending}
+            onClick={() => void stop.mutateAsync(item.id)}
+          >
+            <i className="fa fa-stop" aria-hidden="true"></i>
+          </button>
+        </Tooltip>
+      ) : (
+        // `cancelled` is its own restartable state (see `wasCancelled`'s own docs) — treated as a
+        // restart (Retry wording/icon), same as `error`, rather than a fresh download.
+        <Tooltip label={(item.state === 'error' || wasCancelled ? t('Retry') : t('Download')) ?? ''}>
+          <button
+            type="button"
+            className="stdbtn"
+            style={ICON_BUTTON_STYLE}
+            disabled={
+              (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled') ||
+              start.isPending
+            }
+            onClick={() => {
+              void start.mutateAsync(item.id)
+              fetchMetadataOnStart()
+            }}
+          >
+            <i
+              className={`fa ${item.state === 'error' || wasCancelled ? 'fa-redo' : 'fa-download'}`}
+              aria-hidden="true"
+            ></i>
+          </button>
+        </Tooltip>
+      )}
 
       <Tooltip
         label={
@@ -697,25 +972,374 @@ function QueueItemRow({
           type="button"
           className="stdbtn"
           style={ICON_BUTTON_STYLE}
-          disabled={!metadataPlugin || item.state !== 'queued' || fetchingMetadata}
+          disabled={!metadataPlugin || item.state === 'done' || fetchingMetadata}
           onClick={() => void handleFetchMetadata()}
         >
           <i className={`fa ${fetchingMetadata ? 'fa-spinner fa-spin' : 'fa-tags'}`} aria-hidden="true"></i>
         </button>
       </Tooltip>
 
-      <Tooltip label={t('Delete') ?? ''}>
+      {/* `DELETE /download_queue/{id}` only ever removes this queue-history row — it never touches
+          the actual cataloged archive a `done` item became (that's `DELETE /archives/{id}`, a
+          completely separate, unrelated endpoint). "Delete"/`fa-times` on a `done` row reads as
+          "delete the archive I just downloaded", which it explicitly is not — relabeled "Remove"
+          with a distinct icon for that one state (matching this page's own "清除已完成" bulk
+          action's own real semantics) so the wording doesn't imply a destructive action this
+          button was never capable of. */}
+      <Tooltip label={(item.state === 'done' ? t('Remove') : t('Delete')) ?? ''}>
         <button
           type="button"
           className="stdbtn"
           style={ICON_BUTTON_STYLE}
-          disabled={item.state === 'downloading' || item.state === 'starting' || del.isPending}
+          // Deleting an in-flight item would rip its Redis entry out from under the still-running
+          // download task (`update_queue_item_state`'s writes afterward silently no-op against a
+          // gone item — see that function's own docs) with no way to stop the transfer or see its
+          // progress afterward. Must Stop first, matching the same restartable-states set the
+          // Download/Retry button itself allows starting from.
+          disabled={
+            del.isPending || item.state === 'starting' || item.state === 'downloading'
+          }
           onClick={() => void del.mutateAsync(item.id)}
         >
-          <i className="fa fa-times" aria-hidden="true"></i>
+          <i className={`fa ${item.state === 'done' ? 'fa-eraser' : 'fa-times'}`} aria-hidden="true"></i>
         </button>
       </Tooltip>
     </div>
+  )
+}
+
+/** Splits a filename into its stem and extension the same way Rust's `Path::file_stem()`/
+ * `extension()` do — `{filename}` (the template variable) is deliberately the stem only, not the
+ * full original name, since the default template `{filename}_{crc}.{ext}` already appends the
+ * extension back on separately (explicit user call: this way the default never accidentally
+ * duplicates it, e.g. `archive.zip_a1b2c3d4.zip`). */
+function splitFilenameStemAndExt(filename: string): { stem: string; ext: string } {
+  const lastDot = filename.lastIndexOf('.')
+  if (lastDot <= 0) return { stem: filename, ext: '' }
+  return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
+}
+
+const TEMPLATE_VARS = [
+  'filename',
+  'crc',
+  'title',
+  'ext',
+  'date-yyyymmdd',
+  'date-yyyy-mm-dd',
+  'namespace',
+] as const
+
+/** `YYYYMMDD`/`YYYY-MM-DD` (local time, computed fresh each render — this is the moment the
+ * rename is happening, not the original download's own timestamp) — the padStart calls are
+ * needed since `getMonth()`/`getDate()` return unpadded single digits for January-September/the
+ * 1st-9th. Keyed by the exact `date-*` template-variable suffix so `substituteFilenameTemplate`'s
+ * lookup is a plain object-key hit, no per-call parsing of the suffix needed. */
+function dateTemplateValues(): Record<string, string> {
+  const now = new Date()
+  const yyyy = String(now.getFullYear())
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  return {
+    'date-yyyymmdd': `${yyyy}${mm}${dd}`,
+    'date-yyyy-mm-dd': `${yyyy}-${mm}-${dd}`,
+  }
+}
+
+/** Replaces every `{filename}`/`{crc}`/`{title}`/`{ext}`/`{date-*}`/`{namespace}` occurrence in
+ * `template` with its real value — an unrecognized `{...}` placeholder is left as-is rather than
+ * silently dropped, so a typo reads as "this literally didn't get replaced" instead of vanishing
+ * without a trace. Matches `[\w-]+` (not just `\w+`) so the hyphenated `date-yyyymmdd`/
+ * `date-yyyy-mm-dd` variable names are recognized at all. */
+function substituteFilenameTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{([\w-]+)\}/g, (match, key: string) => vars[key] ?? match)
+}
+
+/** What a Shift-click on a template-variable button inserts — plain-wrapped-in-parentheses
+ * (`({var})`) for every variable except `ext`: a file extension is never meaningfully wrapped in
+ * parentheses (nobody names a file `archive(zip)`), but it does need its own leading `.` when
+ * inserted this way, since a plain click already omits one (`{filename}_{crc}.{ext}`'s own literal
+ * `.` between `{crc}` and `{ext}` is typed by hand, not part of either variable) — `.{ext}` is the
+ * one insertion this button can make that's actually useful on its own, appended directly after
+ * whatever the user already typed. */
+function shiftClickInsertion(key: string): string {
+  return key === 'ext' ? '.{ext}' : `({${key}})`
+}
+
+/** The dropdown that opens off the filename-conflict row's single trigger button, offering both
+ * resolutions for a `PendingFilenameConflict` (see that type's own docs) — "Overwrite" runs
+ * immediately, "Rename and Catalog" just signals the caller to open {@link RenamePopover} (the
+ * caller anchors it off `anchor` itself — the trigger button's own rect, captured once when this
+ * menu was opened — rather than off whichever menu item was clicked, since that item disappears
+ * the instant this menu closes and would make the popover feel like it drifted from a
+ * now-nonexistent position). Positioned off `anchor` the same viewport-aware way `RenamePopover`
+ * itself is — see that component's own docs for why a plain `rect.bottom`/`rect.left` isn't
+ * enough. */
+function ConflictMenu({
+  anchor,
+  onOverwrite,
+  onRename,
+}: {
+  anchor: DOMRect
+  onOverwrite: () => void
+  onRename: () => void
+}) {
+  const { t } = useTranslation()
+  const pos = anchoredPosition(anchor, 160)
+  return (
+    <PopupMenu style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}>
+      <PopupMenuItem onClick={onOverwrite}>
+        <i className="fa fa-clone" aria-hidden="true" style={{ marginRight: 6 }}></i>
+        {t('Overwrite')}
+      </PopupMenuItem>
+      <PopupMenuItem onClick={onRename}>
+        <i className="fa fa-i-cursor" aria-hidden="true" style={{ marginRight: 6 }}></i>
+        {t('Rename and Catalog')}
+      </PopupMenuItem>
+    </PopupMenu>
+  )
+}
+
+/** Picks a `{top, left}` for a `width`-wide floating panel anchored below `rect` (its trigger's
+ * own `getBoundingClientRect()`).
+ *
+ * `preferCenter: false` (the default — regular dropdown-menu behavior, used by `ConflictMenu`):
+ * always left-aligns with the trigger, flipping to right-aligned only when left-aligned genuinely
+ * doesn't fit. A small menu anchored right at its trigger reads as "opened from this button"; the
+ * moment it drifts toward the window's center instead, it stops looking anchored to anything.
+ *
+ * `preferCenter: true` (used by `RenamePopover`, a much wider standalone form panel, not a menu
+ * hugging its trigger): picks whichever side actually pulls the panel closer to the *center* of
+ * the viewport when both directions have room — a trigger that's already past the horizontal
+ * midpoint (routine here: these triggers live inside a right-aligned-icon download-queue row)
+ * opens left-of-button, not right-of-button, since a right-aligned trigger opening rightward still
+ * visually hugs the window edge even when it technically "fits". Only falls back to whichever side
+ * doesn't fit when the preferred side genuinely has no room at all.
+ *
+ * Both modes flip above the trigger when there isn't enough room below, the same way. */
+function anchoredPosition(
+  rect: DOMRect,
+  width: number,
+  preferCenter = false,
+): { top: number; left: number } {
+  const margin = 8
+  const estimatedHeight = 220
+  const fitsLeftAligned = rect.left + width + margin <= window.innerWidth
+  const fitsRightAligned = rect.right - width >= margin
+  const preferLeftAligned = preferCenter
+    ? (rect.left + rect.right) / 2 <= window.innerWidth / 2
+    : true
+  const useLeftAligned = preferLeftAligned ? fitsLeftAligned || !fitsRightAligned : fitsLeftAligned && !fitsRightAligned
+  const left = useLeftAligned ? rect.left : Math.max(rect.right - width, margin)
+  const spaceBelow = window.innerHeight - rect.bottom
+  const top =
+    spaceBelow >= estimatedHeight || spaceBelow >= rect.top
+      ? rect.bottom + 4
+      : Math.max(rect.top - estimatedHeight - 4, margin)
+  return { top, left }
+}
+
+/** The "重命名并入库" popover — lets the user resolve a `PendingFilenameConflict` by cataloguing
+ * the already-downloaded, already-staged bytes under a new filename instead of overwriting the
+ * archive that owns the original one. The input holds a *template string* (starting from the
+ * default `{filename}_{crc}.{ext}`, literal placeholder syntax, not yet substituted) rather than
+ * an already-resolved filename — the four small buttons insert more literal `{var}` placeholders
+ * at the input's current cursor position (explicit user call, mirroring how a mail-merge/snippet
+ * tool's own "insert field" buttons work), and only `onConfirm` substitutes the real values, once,
+ * at submit time. Styled as a single custom `PopupMenu` item (this app's existing from-scratch
+ * menu primitive, `components/PopupMenu.tsx`) rather than a whole new popover component, since a
+ * `PopupMenu` accepts arbitrary children — its own `<PopupMenuItem>` row abstraction just isn't
+ * used here, since a form doesn't fit that component's plain-clickable-row model. */
+function RenamePopover({
+  anchor,
+  conflict,
+  itemTitle,
+  itemNamespace,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  anchor: { x: number; y: number }
+  conflict: PendingFilenameConflict
+  itemTitle: string | null
+  itemNamespace: string
+  pending: boolean
+  onCancel: () => void
+  onConfirm: (filename: string) => void
+}) {
+  const { t } = useTranslation()
+  const palette = useMenuPalette()
+  const { stem, ext } = splitFilenameStemAndExt(conflict.original_filename)
+  const [template, setTemplate] = useState('{filename}_{crc}.{ext}')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const width = 220
+  const { top, left } = anchoredPosition(
+    new DOMRect(anchor.x, anchor.y, 0, 0),
+    width,
+    true,
+  )
+
+  const vars: Record<string, string> = {
+    filename: stem,
+    crc: conflict.crc32,
+    title: itemTitle ?? '',
+    ext,
+    ...dateTemplateValues(),
+    // Uppercased per explicit request — every other template variable here is either already
+    // lowercase content (`filename`/`crc`/`title`) or a fixed-case file extension, but a plugin
+    // namespace (e.g. `ehdl`) reads more like a stable identifier/tag when shouted, similar to how
+    // `source:` tag values elsewhere in this app are left as-is rather than case-normalized.
+    namespace: itemNamespace.toUpperCase(),
+  }
+  const resolved = substituteFilenameTemplate(template, vars)
+
+  function insertAtCursor(text: string) {
+    const input = inputRef.current
+    const start = input?.selectionStart ?? template.length
+    const end = input?.selectionEnd ?? template.length
+    const next = template.slice(0, start) + text + template.slice(end)
+    setTemplate(next)
+    const cursor = start + text.length
+    // The input still holds the *old* value at this point (React hasn't re-rendered with `next`
+    // yet) — restoring the selection has to wait for that render, hence the rAF rather than doing
+    // it synchronously right here.
+    requestAnimationFrame(() => {
+      input?.focus()
+      input?.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  // Clicking anywhere inside a `{var}` (or shift-click-inserted `({var})`) token selects the
+  // whole token instead of just placing the caret mid-token — mirrors how clicking a variable/
+  // placeholder chip in a snippet/mail-merge tool behaves, and makes overtyping or deleting a
+  // whole token a single action rather than requiring the user to manually select `{crc}`
+  // character-by-character first.
+  function selectTokenAtCursor() {
+    const input = inputRef.current
+    if (!input || input.selectionStart !== input.selectionEnd) return
+    const pos = input.selectionStart ?? 0
+    for (const match of template.matchAll(/\(?\{[\w-]+\}\)?/g)) {
+      const tokenStart = match.index
+      const tokenEnd = tokenStart + match[0].length
+      if (pos > tokenStart && pos < tokenEnd) {
+        input.setSelectionRange(tokenStart, tokenEnd)
+        return
+      }
+    }
+  }
+
+  return (
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={onCancel} />
+      <PopupMenu style={{ position: 'fixed', top, left, zIndex: Z_OVERLAY_CONTENT }}>
+        <li style={{ listStyle: 'none', padding: '6px 10px', width }}>
+          <div style={{ fontSize: FONT_SIZE_10PT, marginBottom: 4 }}>{t('New filename')}</div>
+          <input
+            ref={inputRef}
+            type="text"
+            className="stdinput"
+            // `.stdinput`'s own theme default background can coincide with this popup menu's own
+            // background (confirmed: both `#EDEADA` under the `g.css` theme) — with no visual
+            // separation between the two, the input reads as a plain bordered `<div>`, not an
+            // editable field. A light neutral grey (rather than pure white, which would read as
+            // jarringly bright against this app's darker themes, e.g. `modern.css`'s near-black
+            // menu palette) guarantees a visible field regardless of which of this app's 5 themes
+            // is active, rather than trying to compute a "contrasts with this specific theme's
+            // menu palette" color per-theme.
+            style={{ width: '100%', boxSizing: 'border-box', background: '#e8e8e8', color: '#000' }}
+            value={template}
+            onChange={(e) => setTemplate(e.target.value)}
+            onClick={selectTokenAtCursor}
+            autoFocus
+          />
+          {/* `.stdbtn`'s theme default carries `min-width: 150px` — fine for a normal action
+              button, wildly oversized for a small "insert this token" chip, so these deliberately
+              don't use that class at all (plain themed-border buttons instead). */}
+          <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+            {TEMPLATE_VARS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                style={{
+                  fontSize: FONT_SIZE_8PT,
+                  padding: '1px 5px',
+                  minWidth: 0,
+                  width: 'auto',
+                  border: '1px solid rgba(128,128,128,0.4)',
+                  borderRadius: 3,
+                  background: 'transparent',
+                  cursor: 'pointer',
+                }}
+                // Inline `style` can't express `:hover` — this app's own theme classes
+                // (`.stdbtn`/`.stdinput`) get their hover state from real CSS rules, but these
+                // buttons deliberately don't use `.stdbtn` (its 150px min-width is wildly oversized
+                // here), so the hover affordance has to be applied by hand, on the actual events,
+                // the same way `PopupMenuItem` already does for its own row-hover highlight.
+                // `palette.border` is `transparent` on 2 of this app's 5 themes (`modern_red.css`/
+                // `modern_clear.css`) — an outline in that color would be invisible on hover.
+                // `palette.text` is a real, non-transparent color on every theme.
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.outline = `1px solid ${palette.text}`
+                  e.currentTarget.style.outlineOffset = '1px'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.outline = 'none'
+                }}
+                onClick={(e) => insertAtCursor(e.shiftKey ? shiftClickInsertion(key) : `{${key}}`)}
+              >
+                {`{${key}}`}
+              </button>
+            ))}
+          </div>
+          {/* Explains the shift-click insertion mode right below the buttons that trigger it —
+              easy to miss otherwise, since holding shift changes what a plain click inserts with
+              no other visual cue on the buttons themselves. Two lines, not one: `{ext}` is a real
+              exception to the general "wrapped in parentheses" rule (see `shiftClickInsertion`'s
+              own docs for why), so the general explanation on its own would be actively wrong
+              about that one button. */}
+          <div style={{ fontSize: FONT_SIZE_8PT, opacity: 0.6, marginTop: 4 }}>
+            <div>{t('Shift-click to insert wrapped in parentheses')}</div>
+            <div>{t('Shift-click {{ext}} to insert with a leading dot instead', { ext: '{ext}' })}</div>
+          </div>
+          {/* A `<code>` block (not a plain `<div>`) — this text is a literal, exact filename the
+              user is about to commit to, not prose, so it reads better set in a monospace/code
+              typeface with its own subtle background, same convention as an inline code snippet
+              elsewhere in a document. */}
+          <code
+            style={{
+              display: 'block',
+              fontSize: FONT_SIZE_8PT,
+              marginTop: 6,
+              padding: '3px 5px',
+              background: 'rgba(0,0,0,0.06)',
+              borderRadius: 3,
+              wordBreak: 'break-all',
+              minHeight: '1.2em',
+            }}
+          >
+            {resolved}
+          </code>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+            <button
+              type="button"
+              className="stdbtn"
+              style={{ minWidth: 0, width: 'auto', padding: '2px 8px' }}
+              onClick={onCancel}
+            >
+              {t('Cancel')}
+            </button>
+            <button
+              type="button"
+              className="stdbtn"
+              style={{ minWidth: 0, width: 'auto', padding: '2px 8px' }}
+              disabled={pending || !resolved.trim()}
+              onClick={() => onConfirm(resolved)}
+            >
+              {t('Rename and Catalog')}
+            </button>
+          </div>
+        </li>
+      </PopupMenu>
+    </>
   )
 }
 

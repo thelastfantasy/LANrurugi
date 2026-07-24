@@ -33,13 +33,14 @@ import type {
 } from './types'
 
 /** Standard polling frequency for anything that needs "close to live" freshness without a
- * push/SSE mechanism (Shinobu status, log tail, the job registry) — shared so all three agree on
- * the same cadence rather than each hardcoding its own copy of "5 seconds". */
+ * push/SSE mechanism (Shinobu status, log tail) — shared so both agree on the same cadence rather
+ * than each hardcoding its own copy of "5 seconds". */
 const POLL_INTERVAL_MS = 5000
-/** The Upload page's download queue polls faster than the shared default above while its panel is
- * the primary thing the user is watching (an in-progress download's byte progress feels laggy at
- * the slower cadence). */
-const DOWNLOAD_QUEUE_POLL_INTERVAL_MS = 3000
+/** `useJobs()` and the Upload page's download queue both poll faster than the shared default
+ * above — an in-progress download's byte progress/speed is the one thing on this whole page a
+ * user is likely to be actively watching tick up in real time, so it gets its own, snappier
+ * cadence rather than sharing the "good enough for a background status indicator" one. */
+const DOWNLOAD_QUEUE_POLL_INTERVAL_MS = 1000
 const UPDATE_CHECK_STALE_TIME_MS = 60 * 60 * 1000
 
 export function useArchives() {
@@ -203,6 +204,15 @@ export interface SearchOptions {
   /** Pagination cursor — the *index* into the filtered+sorted result set, not a page number
    * (`lanrurugi-api::search`'s own fixed 100-per-page `PAGE_SIZE`). */
   start?: number
+  /** The two hardcoded quick-filter categories (`NEW_ONLY`/`UNTAGGED_ONLY` in legacy's own
+   * `index.js`) are intercepted client-side before ever reaching `category`, and become these
+   * two flags instead — matches `LANraragi::Controller::Api::Search::handle_databases`. */
+  newonly?: boolean
+  untaggedonly?: boolean
+  /** Index-settings-menu toggles (`localStorage.hidecompleted`/`grouptanks` in legacy), sent on
+   * every search so both the main grid and (if built) the carousel stay in sync with them. */
+  hidecompleted?: boolean
+  groupbyTanks?: boolean
 }
 
 export function useSearch(options: SearchOptions) {
@@ -212,6 +222,10 @@ export function useSearch(options: SearchOptions) {
   if (options.sortby) params.set('sortby', options.sortby)
   if (options.order) params.set('order', options.order)
   if (options.start !== undefined) params.set('start', String(options.start))
+  if (options.newonly) params.set('newonly', 'true')
+  if (options.untaggedonly) params.set('untaggedonly', 'true')
+  if (options.hidecompleted) params.set('hidecompleted', 'true')
+  if (options.groupbyTanks === false) params.set('groupby_tanks', 'false')
   return useQuery({
     queryKey: ['search', options],
     queryFn: () => fetchJson<SearchResponse>(`/search?${params.toString()}`),
@@ -231,6 +245,44 @@ export function useUpdateArchiveMetadata(id: string) {
       queryClient.invalidateQueries({ queryKey: ['archive', id] })
       queryClient.invalidateQueries({ queryKey: ['archives'] })
       queryClient.invalidateQueries({ queryKey: ['search'] })
+    },
+  })
+}
+
+/** Reader overview overlay's "set as thumbnail" hover icon (legacy `.set-thumbnail`) — regenerates
+ * the archive's cover thumbnail from the given page (`PUT /archives/{id}/thumbnail?page=N`). */
+export function useSetArchiveThumbnail(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (page: number) => sendJson('PUT', `/archives/${id}/thumbnail?page=${page}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
+    },
+  })
+}
+
+/** Reader overview overlay's "add chapter" hover icon (legacy `.add-toc`, `addTocSection`). */
+export function useAddTocEntry(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ page, title }: { page: number; title: string }) =>
+      sendJson('PUT', `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
+    },
+  })
+}
+
+/** Chapter selector's edit/delete actions (legacy `.edit-toc`/`.remove-toc`). */
+export function useRemoveTocEntry(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (page: number) => sendJson('DELETE', `/archives/${id}/toc?page=${page}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
     },
   })
 }
@@ -561,8 +613,7 @@ export function useLogLines(category: LogCategory, lines = 100) {
 
 // --- Background Job Console (specs/002-job-console) --------------------------------------------
 // Native `/api/jobs` endpoints, additive over the legacy-mimicking `/api/minion/*` contract
-// (research.md §1). Polling interval matches the `useShinobuStatus`/`useLogLines` convention
-// (research.md §3).
+// (research.md §1).
 
 export function useJobs() {
   return useQuery({
@@ -570,7 +621,12 @@ export function useJobs() {
     queryFn: () => fetchJson<JobsResponse>('/jobs'),
     // `select` unwraps the `{ jobs: [...] }` envelope so consumers get the array directly.
     select: (data) => data.jobs as JobRecord[],
-    refetchInterval: POLL_INTERVAL_MS,
+    // Shares `DOWNLOAD_QUEUE_POLL_INTERVAL_MS`'s own faster cadence (not the shared
+    // `POLL_INTERVAL_MS` this used to match with Shinobu/log-tail polling) — this is the query
+    // that actually carries a download's live `downloaded_bytes`/`total_bytes`, so it needs to be
+    // at least as fresh as the download-queue list itself for the Upload page's progress bar/speed
+    // readout to feel responsive rather than laggy.
+    refetchInterval: DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
   })
 }
 
@@ -664,10 +720,63 @@ export function useStartQueueItem() {
   })
 }
 
-export function useStartAllQueue() {
+export function useStopQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson('POST', '/download_queue/start_all'),
+    mutationFn: (id: string) =>
+      sendJson('POST', `/download_queue/${encodeURIComponent(id)}/stop`),
+    // Optimistic: the real cancellation is cooperative (the download task itself has to notice
+    // the token and finish its own cleanup before the server-side state actually flips), so
+    // waiting for a poll/invalidation round-trip to reflect it made the Stop-button-vs-Retry-
+    // button swap and the "已取消" label both feel laggy. Flips `state` to `cancelled` in the
+    // cache synchronously on click (`onMutate`, not `onSuccess`) — the eventual real poll
+    // overwrites this with the server's own (matching) value regardless. `cancelled` (not
+    // `queued`) so this survives a page refresh too: it's a real, persisted queue state
+    // (`lanrurugi_storage::download_queue::DownloadQueueState::Cancelled`), not something only
+    // this transient mutation's own local state remembers.
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['download-queue'] })
+      const previous = queryClient.getQueryData<DownloadQueueListResponse>(['download-queue'])
+      queryClient.setQueryData<DownloadQueueListResponse>(['download-queue'], (data) =>
+        data
+          ? {
+              items: data.items.map((item) =>
+                item.id === id ? { ...item, state: 'cancelled' } : item,
+              ),
+            }
+          : data,
+      )
+      return { previous }
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) queryClient.setQueryData(['download-queue'], context.previous)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useOverwriteQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ archive_id: string }>('POST', `/download_queue/${encodeURIComponent(id)}/overwrite`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useRenameQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, filename }: { id: string; filename: string }) =>
+      sendJson<{ archive_id: string }>('POST', `/download_queue/${encodeURIComponent(id)}/rename`, {
+        filename,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['download-queue'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
@@ -690,6 +799,15 @@ export function useClearCompletedQueue() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => sendJson<{ cleared: number }>('POST', '/download_queue/clear_completed'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+  })
+}
+
+export function useDeleteSelectedQueue() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      sendJson<{ deleted: string[] }>('POST', '/download_queue/delete_selected', { ids }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
   })
 }

@@ -56,6 +56,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "comicinfo",
@@ -66,7 +82,7 @@ export function pluginInfo() {
     name: "ComicInfo",
     author: "thelastfantasy",
     description: "Parses metadata from ComicInfo.xml embedded in the archive",
-    version: "1.2",
+    version: "0.1",
     sidecar_files: ["ComicInfo.xml"],
   };
 }
@@ -93,7 +109,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let logger = perlCompat.getLogger("ComicInfo", "plugins");
   let file = lrr_info["file_path"];
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["ComicInfo.xml"];
-  if ((! path_in_archive)) { throw new Error("No ComicInfo.xml file found in the archive\n"); }
+  if ((! path_in_archive)) { throw new PluginErrorException("No ComicInfo.xml file found in the archive"); }
   //    #Extract ComicInfo.xml
 
   let filepath = path_in_archive;
@@ -101,7 +117,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 
   let stringxml = "";
   let fh = filepath;
-  if (fh === undefined) { throw new Error(`Could not open ${filepath}!\n`); }
+  if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }
   for (let line of (fh ?? "").split(/\r?\n/)) {
     line = perlCompat.chomp(line);
     stringxml += line;

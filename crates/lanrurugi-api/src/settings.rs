@@ -80,6 +80,12 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // same tag as a manual, per-archive re-run.
     ("usedateadded", true),
     ("usedatemodified", false),
+    // `Model/Config.pm::can_replacetitles` — gates whether a metadata plugin's returned `title`
+    // is actually applied to an archive (vs. only its tags/summary). Rendered on the Plugins page
+    // itself (`~/LANraragi/templates/plugins.html.tt2:84-91`), not the Settings page, even though
+    // it's stored in the same `LRR_CONFIG` hash — `Controller/Plugins.pm:31,101-102` reads/writes
+    // it directly rather than going through `Config.pm`'s settings-page field list.
+    ("replacetitles", true),
 ];
 
 async fn get_settings(State(state): State<AppState>) -> Response {

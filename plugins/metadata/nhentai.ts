@@ -69,12 +69,28 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "nhplugin",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "Fetch date uploaded and set timestamp tag", required: false },
+      { name: "param1", description: "Fetch date uploaded and set timestamp tag", required: false, type: "bool" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
@@ -83,7 +99,7 @@ export function pluginInfo() {
     name: "nHentai",
     author: "thelastfantasy",
     description: "Searches nHentai for tags matching your archive.\n          <br>Supports reading the ID from files formatted as \"{Id} Title\" and if not, tries to search for a matching gallery.\n          <br><i class='fa fa-exclamation-circle'></i> This plugin will use the source: tag of the archive if it exists.",
-    version: "2.0",
+    version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAACXBIWXMAAAsTAAALEwEAmpwYAAAA\nB3RJTUUH4wYCFA8s1yKFJwAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUH\nAAACL0lEQVQ4y6XTz0tUURQH8O+59773nLFcaGWTk4UUVCBFiJs27VxEQRH0AyRo4x8Q/Qtt2rhr\nU6soaCG0KYKSwIhMa9Ah+yEhZM/5oZMG88N59717T4sxM8eZCM/ycD6Xwznn0pWhG34mh/+PA8mk\n8jO5heziP0sFYwfgMDFQJg4IUjmquSFGG+OIlb1G9li5kykgTgvzSoUCaIYlo8/Igcjpj5wOkARp\n8AupP0uzJLijCY4zzoXOxdBLshAgABr8VOp7bpAXDEI7IBrhdksnjNr3WzI4LaIRV9fk2iAaYV/y\nA1dPiYjBAALgpQxnhV2XzTCAGWGeq7ACBvCdzKQyTH+voAm2hGlpcmQt2Bc2K+ymAhWPxTzPDQLt\nOKo1FiNBQaArq9WNRQwEgKl7XQ1duzSRSn/88vX0qf7DPQddx1nI5UfHxt+m0sLYPiP3shRAG8MD\nok1XEEXR/EI2ly94nrNYWG6Nx0/2Hp2b94dv34mlZge1e4hVCJ4jc6tl9ZP803n3/i4lpdyzq2N0\n7M3DkSeF5ZVYS8v1qxcGz5+5eey4nPDbmGdE9FpGeWErVNe2tTabX3r0+Nk3PwOgXFkdfz99+exA\nMtFZITEt9F23mpLG0hYTVQCKpfKPlZ/rqWKpYoAPcTmpginW76QBbb0OBaBaDdjaDbNlJmQE3/d0\nMYoaybU9126oPkrEhpr+U2wjtoVVGBowkslEsVSupRKdu0Mduq7q7kqExjSS3V2dvwDLavx0eczM\neAAAAABJRU5ErkJggg==",
     oneshot_arg: "nHentai Gallery URL (Will attach tags matching this exact gallery to your archive)",
     login_from: "nhapiauth",
@@ -142,7 +158,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (! galleryID) {
     let message = "No matching nHentai Gallery Found!";
     logger.info(message);
-    throw new Error(`${message}\n`);
+    throw new PluginErrorException(message);
   }
   logger.debug(`Detected nHentai gallery ID is ${galleryID}`);
   let hashdata = await get_tags_from_nh(galleryID, ua, add_uploaded);
@@ -159,7 +175,7 @@ async function get_search_json(...args: any[]) {
   let res = (await ua.get(URL)).result;
   if (res.is_error) {
     let code = res.code;
-    throw new Error(`Search gallery by title failed! (Code: ${code})\n`);
+    throw new PluginErrorException("Search gallery by title failed", { code });
   }
   logger.debug("Tentative JSON: " + res.body);
   return JSON.parse(res).body;
@@ -189,7 +205,7 @@ async function get_json_from_nh(...args: any[]) {
   let res = (await ua.get(URL)).result;
   if (res.is_error) {
     let code = res.code;
-    throw new Error(`Error retrieving gallery from nHentai! (Code: ${code})\n`);
+    throw new PluginErrorException("Error retrieving gallery from nHentai", { code });
   }
   logger.debug("Tentative JSON: " + res.body);
   return JSON.parse(res).body;

@@ -36,6 +36,43 @@ pub enum DownloadQueueState {
     Downloading,
     Done,
     Error,
+    /// A user-requested Stop interrupted this item's in-flight download (`download_queue::stop_one`).
+    /// Deliberately its own state rather than reverting straight to `Queued` — the same reasoning
+    /// that motivated showing a "已取消"/"Cancelled" label on the row at all also means that signal
+    /// needs to survive a page refresh, not just live in transient frontend mutation state. Treated
+    /// as a startable state everywhere `Queued`/`Error` already are (see `start_one`'s guard).
+    Cancelled,
+}
+
+/// Set on a `DownloadQueueItem` when its most recent ingest attempt was blocked by a `Filename`
+/// collision — a different, already-cataloged archive owns the resolved filename, but the
+/// downloaded *content* is genuinely new (not the same as `QueueError::DuplicateArchive`'s
+/// `ContentHash` case, which is unconditionally rejected and never reaches this state at all: the
+/// two `DuplicateReasonKind`s are not symmetric in what's actually safe to allow — see that type's
+/// own docs). The downloaded bytes are staged at `temp_path` (not catalogued, not deleted)
+/// awaiting the user's explicit choice — `POST /download_queue/{id}/overwrite` or
+/// `.../rename` — rather than being silently auto-renamed or immediately discarded. Cleared (and
+/// `temp_path` deleted) either when the user resolves it, or by the periodic stale-temp-file sweep
+/// in `main.rs` after 24 hours if left unresolved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingFilenameConflict {
+    /// Absolute path to the staged file inside `temp_dir`, named `temp_{crc32}_{filename}` — the
+    /// content-derived crc32 prefix (rather than e.g. a numeric `(1)`/`(2)` suffix) makes a second
+    /// collision against a stale unresolved temp file's own name astronomically unlikely, and
+    /// lets the periodic sweep recognize its own files by a stable `temp_*` glob regardless of
+    /// what the original filename was.
+    pub temp_path: String,
+    /// The filename that was originally intended and that collided — the basename portion of
+    /// `temp_path`'s own name, without the `temp_{crc32}_` prefix. Surfaced to the frontend as the
+    /// `{filename}` template variable in the rename UI (without its extension — see `{ext}`).
+    pub original_filename: String,
+    /// The archive ID that already owns `original_filename` — what `.../overwrite` replaces, and
+    /// what the frontend links to so the user can inspect it before deciding.
+    pub existing_id: String,
+    /// Lowercase hex CRC32 of the staged content — the same value embedded in `temp_path`'s own
+    /// name, surfaced separately as the `{crc}` template variable so the frontend doesn't need to
+    /// parse it back out of the path.
+    pub crc32: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,16 +94,24 @@ pub struct DownloadQueueItem {
     /// Set by a "Fetch metadata" preview action (no archive download) — shown in place of the raw
     /// URL once known.
     pub title: Option<String>,
-    /// The metadata plugin's full `execMetadata` response (`{tags, title, summary}`, per
-    /// `lanrurugi_plugin::protocol::MetadataResult` — see `POST /plugins/use`'s `data` field),
-    /// stashed verbatim alongside `title` by the same "Fetch metadata" preview action. Kept as
+    /// The metadata plugin's full `execMetadata` response (`{tags, title, summary}` — see
+    /// `POST /plugins/use`'s `data` field), stashed verbatim alongside `title` by the same
+    /// "Fetch metadata" preview action. Kept as
     /// untyped JSON rather than a fixed struct because every metadata plugin's `tags` string uses
     /// its own namespace vocabulary (E-Hentai's `artist:`/`uploader:`/`category:`/`timestamp:`
     /// don't necessarily mean anything to, say, a Pixiv-derived plugin) — the frontend renders
     /// whatever keys/tags actually came back rather than the host assuming a shared schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_preview: Option<serde_json::Value>,
-    pub error: Option<String>,
+    /// Structured, translatable failure detail (`lanrurugi_core::queue_error::QueueError`) — no
+    /// free-text message; the frontend maps `.kind` to an i18n key and renders its own fields
+    /// into it. See that type's own docs for why no raw Rust `Display` string is stored here.
+    pub error: Option<lanrurugi_core::queue_error::QueueError>,
+    /// See [`PendingFilenameConflict`]'s own docs. Independent of `error` (which is set alongside
+    /// it, `QueueError::DuplicateFilename`, for the generic error-rendering path) so the frontend
+    /// can specifically detect "this needs a resolve action" rather than a plain retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_filename_conflict: Option<PendingFilenameConflict>,
     pub created_at: i64,
 }
 
@@ -107,6 +152,7 @@ impl DownloadQueueRepository {
             title: None,
             metadata_preview: None,
             error: None,
+            pending_filename_conflict: None,
             created_at: now_unix(),
         };
         self.save(&item).await?;

@@ -8,7 +8,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://127.0.0.1:3001',
+      // Target port is overridable via env var (mirrors `preview.proxy` below) — the plain
+      // `cargo run`/bare-metal dev backend defaults to 3001, but the same override lets `vite
+      // dev` point at a `compose.yaml`-run container instead (which always binds 3000 itself,
+      // per its own `network_mode: host` + `LANRURUGI_BIND` default — meaning `vite dev` can't
+      // also bind 3000 in that case; run it with `--port <other>` alongside this override).
+      '/api': `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
     },
   },
   // `vite preview` (used by Playwright's per-worker e2e fixture, see tests/e2e/fixtures.ts) needs

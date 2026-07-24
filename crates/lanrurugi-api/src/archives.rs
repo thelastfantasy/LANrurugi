@@ -104,7 +104,10 @@ pub fn router() -> Router<AppState> {
             "/archives/{id}/files/thumbnails",
             axum::routing::post(generate_page_thumbnails),
         )
-        .route("/archives/{id}/thumbnail", get(get_archive_thumbnail))
+        .route(
+            "/archives/{id}/thumbnail",
+            get(get_archive_thumbnail).put(update_thumbnail),
+        )
         .route("/archives/{id}/categories", get(get_archive_categories))
         .route("/archives/{id}/tankoubons", get(get_archive_tankoubons))
         .route(
@@ -178,15 +181,15 @@ fn has_meaningful_tags(tags: &str) -> bool {
     })
 }
 
+/// Same `TANK_`-prefix resolution as `search::resolve_search_entry` — before this, a `TANK_` id
+/// here always hit `state.repos.archives.get`, which never has a matching key, so a single
+/// Tankoubon's own metadata could never be fetched by ID at all (only ever seen indirectly via a
+/// search result already containing one). This is the same latent bug the search endpoints had,
+/// just on a different endpoint.
 async fn get_archive_metadata(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.repos.archives.get(&id).await {
-        Ok(Some(archive)) => axum::Json(ArchiveMetadataJson::from(&archive)).into_response(),
-        Ok(None) => not_found("get_archive_metadata", format!("{id} does not exist.")),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_archive_metadata",
-            e.to_string(),
-        ),
+    match crate::search::resolve_search_entry(&state, &id).await {
+        Some(json) => axum::Json(json).into_response(),
+        None => not_found("get_archive_metadata", format!("{id} does not exist.")),
     }
 }
 
@@ -210,6 +213,13 @@ async fn delete_archive(State(state): State<AppState>, Path(id): Path<String>) -
     };
     match state.repos.archives.delete(&id).await {
         Ok(()) => {
+            // The only success-path log line this handler had before this was added — every other
+            // outcome below is a best-effort cleanup failure (`warn!`) or silently discarded
+            // (`let _ =`), so a normal, successful delete previously produced zero tracing output
+            // at all, leaving no audit trail in `general.log` for what is a real, irreversible,
+            // user-triggered destructive action (unlinks the archive's file from disk, not just a
+            // DB record).
+            tracing::info!(%id, filename = %archive.name, "deleted archive");
             // Best-effort, matching every other indexer call site in this file (`update_title_index`/
             // `update_tag_indexes` above) — a search-index cleanup failure shouldn't undo an already
             // committed archive deletion, just leave a ghost id behind (logged) for a future rescan
@@ -224,6 +234,29 @@ async fn delete_archive(State(state): State<AppState>, Path(id): Path<String>) -
             {
                 tracing::warn!(%id, error = %e, "failed to remove deleted archive from search index");
             }
+            // Real legacy's own `delete_archive` (`~/LANraragi/lib/LANraragi/Model/Archive.pm`)
+            // unconditionally deletes the archive file, its cover thumbnail, and its per-page
+            // thumbnail cache directory too — not an opt-in checkbox. This was missing entirely
+            // here (confirmed via a real deleted archive whose ~97MB file and DB record's absence
+            // still left the file sitting on disk indefinitely), silently accumulating orphaned
+            // files on every delete. Best-effort (logged, not propagated) for the same reason as
+            // the search-index cleanup above — the DB record is already gone either way.
+            if let Err(e) = tokio::fs::remove_file(&archive.file).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
+                }
+            }
+            let shard = &id[0..2.min(id.len())];
+            for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+                let thumb_path = state
+                    .library
+                    .thumb_dir
+                    .join(shard)
+                    .join(format!("{id}.{}", format.extension()));
+                let _ = tokio::fs::remove_file(&thumb_path).await;
+            }
+            let pages_dir = state.library.thumb_dir.join(shard).join(&id);
+            let _ = tokio::fs::remove_dir_all(&pages_dir).await;
             axum::Json(json!({
                 "operation": "delete_archive",
                 "id": id,
@@ -403,30 +436,212 @@ async fn download_archive(State(state): State<AppState>, Path(id): Path<String>)
 
 /// Cover thumbnail path, matching legacy `extract_thumbnail`'s sharding: `<thumb_dir>/<id[0:2]>/<id>.<ext>`.
 /// Probes both thumbnail formats (`ThumbFormat::ALL`) since a library-wide format switch's regen
-/// job may still be in flight — falls back to a placeholder if neither is on disk yet, so the
-/// endpoint degrades gracefully rather than 500ing.
-async fn get_archive_thumbnail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// job may still be in flight.
+///
+/// A cache miss (e.g. `thumb_dir` was never mounted, or its contents were lost/corrupted — a
+/// real, previously-silent failure mode: the archive itself is fine, only its thumbnail is
+/// missing) triggers on-demand regeneration from the source archive file rather than serving
+/// [`PLACEHOLDER_THUMBNAIL`] forever. Bounded via [`AppState::thumbnail_singleflight`] (see
+/// `lanrurugi_core::singleflight`'s own doc comment) since a page like the homepage requests
+/// dozens of *different* covers in one load — both same-ID dedup (two browser tabs, a retry,
+/// several cards referencing the same cover) and a total-concurrency cap (so a wiped thumb
+/// directory can't turn one page load into an unbounded burst of heavy decode/decompress work)
+/// matter here.
+///
+/// If generation itself fails (source archive also missing/corrupted, decode error, ...), this
+/// still degrades to the placeholder rather than an error response — matches the original
+/// steady-state contract (never 500s), it just no longer *masks a fixable problem* the way an
+/// unconditional placeholder-on-miss did.
+#[derive(Debug, Deserialize)]
+pub struct GetThumbnailParams {
+    /// `0`/absent selects the cover thumbnail (`<thumb_dir>/<shard>/<id>.<ext>`); `N > 0` selects
+    /// a per-page thumbnail (`<thumb_dir>/<shard>/<id>/<N>.<ext>`) — matches legacy's real
+    /// `serve_thumbnail` (`Model::Archive.pm`: `$is_first_page = $page == 0`), which the reader's
+    /// archive-overview page grid (`ArchiveOverviewOverlay.tsx`) relies on to show a distinct
+    /// thumbnail per page rather than the cover repeated for every page.
+    page: Option<u32>,
+}
+
+async fn get_archive_thumbnail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<GetThumbnailParams>,
+) -> Response {
     // Archive IDs are always a 40-char lowercase-hex SHA-1 digest (`lanrurugi_storage::id`) —
     // enforcing that shape here, before `id` ever reaches a path-join, closes a path-traversal
     // hole: without it, an `id` containing `/` or `..` (e.g. `../../../../etc/passwd`) would let
-    // a caller read arbitrary `.jpg`/`.webp` files elsewhere on the host, since (unlike every
-    // other per-archive endpoint here) this one never looks the ID up in the archive repository
-    // first.
+    // a caller read arbitrary `.jpg`/`.webp` files elsewhere on the host.
     if !is_valid_archive_id(&id) {
         return not_found("serve_thumbnail", "No archive ID specified.");
     }
+    let page = params.page.unwrap_or(0);
+    if let Some((content_type, bytes)) = read_thumbnail_from_disk(&state, &id, page).await {
+        return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+    }
+    if let Some((content_type, bytes)) = regenerate_thumbnail_on_demand(&state, &id, page).await {
+        return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+    }
+    ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response()
+}
+
+fn thumbnail_disk_path(
+    state: &AppState,
+    id: &str,
+    page: u32,
+    format: lanrurugi_scanner::thumbnail::ThumbFormat,
+) -> std::path::PathBuf {
     let shard = &id[0..2];
-    for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
-        let path = state
+    if page == 0 {
+        state
             .library
             .thumb_dir
             .join(shard)
-            .join(format!("{id}.{}", format.extension()));
-        if let Ok(bytes) = tokio::fs::read(&path).await {
-            return ([(header::CONTENT_TYPE, format.content_type())], bytes).into_response();
+            .join(format!("{id}.{}", format.extension()))
+    } else {
+        state
+            .library
+            .thumb_dir
+            .join(shard)
+            .join(id)
+            .join(format!("{page}.{}", format.extension()))
+    }
+}
+
+async fn read_thumbnail_from_disk(
+    state: &AppState,
+    id: &str,
+    page: u32,
+) -> Option<(&'static str, bytes::Bytes)> {
+    for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+        let path = thumbnail_disk_path(state, id, page, format);
+        if let Ok(contents) = tokio::fs::read(&path).await {
+            return Some((format.content_type(), bytes::Bytes::from(contents)));
         }
     }
-    ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response()
+    None
+}
+
+/// Generates a missing cover or per-page thumbnail on the spot and returns it, or `None` if
+/// generation isn't possible (unknown ID, missing/corrupt source archive, decode failure) — the
+/// caller falls back to the placeholder in that case. `page == 0` selects the cover (generated
+/// from the archive's own page 1); `page > 0` selects that page directly. See
+/// [`get_archive_thumbnail`]'s doc comment for the singleflight/concurrency-cap rationale — keyed
+/// by `"{id}:{page}"` so a cover regen and a per-page regen for the same archive don't collide on
+/// the same singleflight slot.
+async fn regenerate_thumbnail_on_demand(
+    state: &AppState,
+    id: &str,
+    page: u32,
+) -> Option<(&'static str, bytes::Bytes)> {
+    let archive = state.repos.archives.get(id).await.ok().flatten()?;
+
+    state
+        .thumbnail_singleflight
+        .run(format!("{id}:{page}"), {
+            let state = state.clone();
+            let id = id.to_string();
+            move || async move {
+                let thumb_settings = match state.redis.config.get().await {
+                    Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+                    Err(_) => return None,
+                };
+                let output = thumbnail_disk_path(&state, &id, page, thumb_settings.format);
+                let source_page = if page == 0 { 1 } else { page as usize };
+                let result = lanrurugi_scanner::thumbnail::generate(
+                    std::path::PathBuf::from(&archive.file),
+                    source_page,
+                    output,
+                    thumb_settings.format,
+                    thumb_settings.quality,
+                )
+                .await;
+                match result {
+                    Ok(_) => read_thumbnail_from_disk(&state, &id, page).await,
+                    Err(e) => {
+                        tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
+                        None
+                    }
+                }
+            }
+        })
+        .await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateThumbnailParams {
+    page: Option<u32>,
+}
+
+/// Sets the archive's cover thumbnail to a given page (legacy: `Model::Archive::update_thumbnail`,
+/// backed by `Utils::Archive::extract_thumbnail($thumbdir, $id, $page, 1, 1)` — the reader
+/// overview overlay's "set as thumbnail" hover icon on the page grid, `reader.js`'s
+/// `.set-thumbnail` click handler, calls this). `page` defaults to `1` (legacy: `$page = 1 unless
+/// $page`). Only overwrites `thumbhash` when `generate` actually returns one — matches legacy's
+/// own behavior, which only ever hashes on `set_cover`, so setting a non-cover page as thumbnail
+/// still refreshes `thumbhash` (unlike the cover-page-only condition inside `generate` itself,
+/// legacy's `extract_thumbnail` hashes on *any* `set_cover=1` call regardless of which page was
+/// picked — `generate`'s narrower `page == 1` condition is a deliberate divergence documented on
+/// its own doc comment for duplicate-detection purposes, so a non-cover "set as thumbnail" here
+/// intentionally leaves the existing `thumbhash` untouched rather than hashing the wrong page).
+async fn update_thumbnail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<UpdateThumbnailParams>,
+) -> Response {
+    if !is_valid_archive_id(&id) {
+        return not_found("update_thumbnail", "No archive ID specified.");
+    }
+    let page = params.page.unwrap_or(1);
+    let mut archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return not_found("update_thumbnail", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "update_thumbnail",
+                e.to_string(),
+            )
+        }
+    };
+    let thumb_settings = match state.redis.config.get().await {
+        Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "update_thumbnail",
+                e.to_string(),
+            )
+        }
+    };
+    let shard = &id[0..2];
+    let output = state
+        .library
+        .thumb_dir
+        .join(shard)
+        .join(format!("{id}.{}", thumb_settings.format.extension()));
+    match lanrurugi_scanner::thumbnail::generate(
+        std::path::PathBuf::from(&archive.file),
+        page as usize,
+        output.clone(),
+        thumb_settings.format,
+        thumb_settings.quality,
+    )
+    .await
+    {
+        Ok(thumbhash) => {
+            if thumbhash.is_some() {
+                archive.thumbhash = thumbhash;
+                if let Err(e) = state.repos.archives.save(&archive).await {
+                    tracing::warn!(id = %id, error = %e, "failed to persist updated thumbhash");
+                }
+            }
+            ok(
+                "update_thumbnail",
+                [("new_thumbnail", json!(output.display().to_string()))],
+            )
+        }
+        Err(e) => error(StatusCode::BAD_REQUEST, "update_thumbnail", e.to_string()),
+    }
 }
 
 async fn set_new_flag(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -733,6 +948,15 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// `sizethreshold` KB get downscaled/recompressed to JPEG at `readerquality` and cached under
 /// `temp_dir`, rather than served as their original bytes every time. Disabled by default
 /// (`enableresize = false`), matching legacy's own default.
+///
+/// The actual archive read (and optional resize) is collapsed through
+/// [`AppState::page_singleflight`], keyed by `(id, entry path)` — the reader requests several
+/// pages of the same archive at once (prefetch), and this archive format's underlying
+/// `read_entry` has no random-access index: reading page N means linearly rescanning the archive
+/// from its first entry (see `lanrurugi_scanner::archive_format`'s own doc comment). Without
+/// dedup, two overlapping requests for the exact same page (e.g. a fast back-and-forth flip)
+/// would each independently pay that full rescan; without the concurrency cap, prefetching many
+/// *different* pages at once would launch unbounded concurrent rescans of the same archive file.
 async fn get_page(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -749,37 +973,57 @@ async fn get_page(
             )
         }
     };
-    let raw = match lanrurugi_scanner::archive_format::read_entry(
-        std::path::Path::new(&archive.file),
-        &params.path,
-    ) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serve_page",
-                e.to_string(),
-            )
-        }
-    };
 
-    let mut conn = match state.redis.config.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serve_page",
-                e.to_string(),
-            )
+    let result = state
+        .page_singleflight
+        .run((id.clone(), params.path.clone()), {
+            let state = state.clone();
+            let id = id.clone();
+            let path = params.path.clone();
+            let archive_file = archive.file.clone();
+            move || async move { fetch_page(&state, &id, &path, &archive_file).await }
+        })
+        .await;
+
+    match result {
+        Ok((content_type, bytes)) => {
+            ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
         }
-    };
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, "serve_page", msg),
+    }
+}
+
+/// The actual per-`(archive, entry path)` work [`AppState::page_singleflight`] collapses
+/// concurrent duplicate calls onto — see [`get_page`]'s own doc comment.
+async fn fetch_page(
+    state: &AppState,
+    id: &str,
+    path: &str,
+    archive_file: &str,
+) -> Result<(&'static str, bytes::Bytes), String> {
+    // `read_entry` does blocking libarchive FFI + file IO (constitution Principle III: never run
+    // inline on an async worker thread) — `resize_if_over_threshold` below already goes through
+    // `run_blocking` internally, this call didn't before this change.
+    let archive_file_owned = archive_file.to_string();
+    let entry_path = path.to_string();
+    let raw = lanrurugi_core::concurrency::run_blocking(move || {
+        lanrurugi_scanner::archive_format::read_entry(
+            std::path::Path::new(&archive_file_owned),
+            &entry_path,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
     let fields: HashMap<String, String> = conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
     let enable_resize = fields
         .get("enableresize")
         .map(|v| v != "0")
         .unwrap_or(false);
     if !enable_resize {
-        return ([(header::CONTENT_TYPE, "application/octet-stream")], raw).into_response();
+        return Ok(("application/octet-stream", bytes::Bytes::from(raw)));
     }
     let threshold: i64 = fields
         .get("sizethreshold")
@@ -790,15 +1034,9 @@ async fn get_page(
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
 
-    let cache_path = resize_cache_path(
-        &state.library.temp_dir,
-        &id,
-        &params.path,
-        threshold,
-        quality,
-    );
+    let cache_path = resize_cache_path(&state.library.temp_dir, id, path, threshold, quality);
     if let Ok(cached) = tokio::fs::read(&cache_path).await {
-        return ([(header::CONTENT_TYPE, "image/jpeg")], cached).into_response();
+        return Ok(("image/jpeg", bytes::Bytes::from(cached)));
     }
 
     match lanrurugi_scanner::resize::resize_if_over_threshold(raw.clone(), quality as u8, threshold)
@@ -809,14 +1047,10 @@ async fn get_page(
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
             let _ = tokio::fs::write(&cache_path, &resized).await;
-            ([(header::CONTENT_TYPE, "image/jpeg")], resized).into_response()
+            Ok(("image/jpeg", bytes::Bytes::from(resized)))
         }
-        Ok(None) => ([(header::CONTENT_TYPE, "application/octet-stream")], raw).into_response(),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serve_page",
-            e.to_string(),
-        ),
+        Ok(None) => Ok(("application/octet-stream", bytes::Bytes::from(raw))),
+        Err(e) => Err(e.to_string()),
     }
 }
 

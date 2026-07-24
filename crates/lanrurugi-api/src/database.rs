@@ -336,6 +336,11 @@ async fn rebuild_index(State(state): State<AppState>) -> Response {
     let library_path = state.library.archive_dir.clone();
     let thumb_dir = state.library.thumb_dir.clone();
     let job_id_for_task = job_id.clone();
+    // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` spawns once at
+    // startup — a manually-triggered rebuild discovering previously-invisible files should
+    // auto-tag them exactly the same way the watcher/startup scan would, so this just hands that
+    // same consumer a clone of its sender rather than spawning a redundant one of its own.
+    let new_archive_tx = state.new_archive_tx.clone();
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
@@ -364,6 +369,7 @@ async fn rebuild_index(State(state): State<AppState>) -> Response {
             &thumb_dir,
             &jobs,
             &job_id_for_task,
+            Some(new_archive_tx),
         )
         .await;
 

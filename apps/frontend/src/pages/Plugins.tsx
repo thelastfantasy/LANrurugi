@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
@@ -8,12 +8,15 @@ import {
   usePlugins,
   usePluginSettings,
   useReorderPlugins,
+  useSettings,
   useUpdatePluginSettings,
+  useUpdateSettings,
 } from '../api/hooks'
 import type { PluginInfo } from '../api/types'
 import CollapsibleSection from '../components/CollapsibleSection'
 import SortableList, { type DragHandleProps } from '../components/SortableList'
-import { useApplyTheme } from '../theme'
+import { routes } from '../routes'
+import { ensureLink, removeLink, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 import PluginOptionsForm from './PluginOptionsForm'
 import PluginParametersForm from './PluginParametersForm'
@@ -45,14 +48,26 @@ export default function Plugins() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const plugins = usePlugins('all')
+  const settings = useSettings()
+  const updateSettings = useUpdateSettings()
   const queryClient = useQueryClient()
   const [running, setRunning] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
-  const [sourceUrl, setSourceUrl] = useState('')
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   useApplyTheme()
   useDocumentTitle(t('Plugin Configuration') ?? undefined)
+
+  // Real legacy also links `config.css` from `plugins.html.tt2` (not just `config.html.tt2`) —
+  // same reasoning as `Settings.tsx`'s own identical block: it globally restyles every
+  // `input[type=checkbox]` on the page into the real ON/OFF toggle look, which an SPA has to
+  // link/unlink by hand per-page rather than getting "for free" from a full page load. Missing
+  // here left every checkbox on this page (自动运行/允许插件替换档案标题/every bool-typed plugin
+  // parameter) rendering as a bare, unstyled native checkbox instead of a switch.
+  useEffect(() => {
+    ensureLink('legacy-config-css', '/legacy/config.css')
+    return () => removeLink('legacy-config-css')
+  }, [])
 
   async function runScript(path: string, params?: Record<string, string>) {
     setRunning(path)
@@ -89,6 +104,30 @@ export default function Plugins() {
     const groupPlugins = plugins.data?.filter((p) => p.type === group.type) ?? []
     return (
       <CollapsibleSection icon={group.icon} title={t(group.label)} key={group.type}>
+        {/* Legacy's own `plugins.html.tt2:84-91` — sits at the top of the Metadata Plugins flyout
+            body, above the plugin list itself. Gates whether a metadata plugin's returned `title`
+            is actually applied to an archive (`Edit.tsx`'s own `handleSave`/`runPlugin`); tags and
+            summary are never gated. */}
+        {group.type === 'metadata' && (
+          <div style={{ padding: '4px 0 8px 0' }}>
+            <h1 className="ih" style={{ display: 'inline' }}>
+              {t('Allow Plugins to replace archive titles:')}{' '}
+            </h1>
+            <input
+              id="replacetitles"
+              className="fa"
+              type="checkbox"
+              checked={settings.data?.replacetitles ?? true}
+              onChange={(e) => updateSettings.mutate({ replacetitles: e.target.checked })}
+            />
+            <label htmlFor="replacetitles">
+              <br />
+              {t(
+                'If enabled, metadata plugins will be able to change the title of your archives alongside adding tags to them.',
+              )}
+            </label>
+          </div>
+        )}
         {groupPlugins.length === 0 ? (
           <p>{t('No plugins installed.')}</p>
         ) : (
@@ -114,7 +153,12 @@ export default function Plugins() {
           {/* This app's own library-wide maintenance scripts — a genuinely new feature with no
               legacy template of its own, labeled distinctly from legacy's real "Scripts" flyout
               right above it (`LEFT_GROUPS`'s own `'script'`-type entry, per-plugin script
-              execution) so the two aren't confused for one another. */}
+              execution) so the two aren't confused for one another. Only "Subfolders to
+              Categories" lives here — it walks the entire archive directory tree, I/O-heavy enough
+              to be worth a native Rust endpoint rather than a Deno-subprocess round trip. Source
+              Finder / nHentai Source Converter are real `script`-type plugins now
+              (`plugins/script/{sourcefinder,nhentaisourceconverter}.ts`) and render as ordinary
+              cards in the "Scripts" flyout above, like any other script plugin. */}
           <CollapsibleSection icon="fa-scroll" title={t('Maintenance Scripts')}>
               <p>{t('Library-wide maintenance scripts (operate on the whole database, not one archive).')}</p>
 
@@ -129,36 +173,6 @@ export default function Plugins() {
                   className="stdbtn"
                   disabled={running === 'subfolders-to-categories'}
                   onClick={() => void runScript('subfolders-to-categories')}
-                  value={t('Run') ?? undefined}
-                />
-              </div>
-
-              <div style={{ padding: '4px 0' }}>
-                <b>{t('Source Finder')}</b>
-                <br />
-                {t("Looks in the database if an archive has a 'source:' tag matching the given URL.")}
-                <br />
-                <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder={t('URL to search.') ?? undefined} className="stdinput" />
-                <input
-                  type="button"
-                  className="stdbtn"
-                  disabled={running === 'source-finder' || !sourceUrl.trim()}
-                  onClick={() => void runScript('source-finder', { url: sourceUrl })}
-                  value={t('Run') ?? undefined}
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
-                <span>
-                  <b>{t('nHentai Source Converter')}</b>
-                  <br />
-                  {t('Converts "source:{id}" tags with 6 or less digits into "source:nhentai.net/g/{id}"')}
-                </span>
-                <input
-                  type="button"
-                  className="stdbtn"
-                  disabled={running === 'nhentai-source-converter'}
-                  onClick={() => void runScript('nhentai-source-converter')}
                   value={t('Run') ?? undefined}
                 />
               </div>
@@ -184,9 +198,31 @@ export default function Plugins() {
 
       {uploadStatus && <p style={{ textAlign: 'center' }}>{uploadStatus}</p>}
 
-      <h1 style={{ textAlign: 'center' }}>
-        <span className="stdbtn fileinput-button" style={{ display: 'inline-block' }}>
-          <span>{t('Upload Plugin')}</span>
+      {/* `justifyContent`/`alignItems: center` (flex) instead of the plain `text-align: center`
+          markup legacy uses — a `<span class="fileinput-button">` (text baseline) and an
+          `<input type="button">` (treated as a replaced-ish element) align differently under
+          `vertical-align: baseline` when sitting side by side inline, visibly offsetting the
+          Upload Plugin button above the Return to Library button. `.stdbtn`'s own CSS (vendored
+          verbatim from each theme) sets no `vertical-align` override, and the real demo's Plugins
+          page is login-gated so this couldn't be confirmed against live legacy computed style —
+          flex alignment sidesteps the baseline-vs-replaced-element quirk entirely without touching
+          the vendored theme CSS or diverging from any confirmed real value. */}
+      <h1 style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+        {/* Also flex (not the plain `display: inline-block` legacy's own `.fileinput-button` CSS
+            provides): an `<input type="button">`'s value text is vertically centered in its
+            content box by the browser's own native rendering, but a `<span>` wrapping plain text
+            has no such behavior — it just follows normal inline flow, which left the label sitting
+            close to the top of the 28px-tall box instead of centered. `inline-flex` here gives the
+            label the same effective centering an `<input>` gets for free.
+
+            `fontWeight: 'normal'` on the inner label: this `<h1>`'s own bold inherits down into a
+            plain `<span>` child (verified via computed style — `700` on the label vs. the sibling
+            `<input>`'s `400`), since form controls don't inherit a heading's bold by browser UA
+            default the way ordinary text elements do. `.stdbtn` itself never sets `font-weight` at
+            all, so this resets the span back to that same un-bolded baseline instead of silently
+            inheriting the heading's weight. */}
+        <span className="stdbtn fileinput-button" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontWeight: 'normal' }}>{t('Upload Plugin')}</span>
           <input
             ref={fileInputRef}
             type="file"
@@ -197,8 +233,8 @@ export default function Plugins() {
               if (file) void uploadPlugin(file)
             }}
           />
-        </span>{' '}
-        <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+        </span>
+        <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
       </h1>
     </div>
   )
@@ -300,6 +336,18 @@ function PluginCard({
       style={{
         display: 'flex',
         alignItems: 'stretch',
+        // Legacy's own markup puts two trailing `<br />` tags after each card's closing `</span>`
+        // (`plugins.html.tt2:213-214`) to create the gap before the next card — real vertical space
+        // in legacy's non-flex layout, since each `<br>` there is a genuine block-level line break.
+        // Inside *this* flex row, though, a `<br>` is just another flex item sitting side-by-side
+        // with zero width, contributing nothing to the row's height (confirmed live: two `<br>`s
+        // measured 14px tall each but 0 additional row height) — so the gap collapsed to 0 and the
+        // border-bottom separator line sat flush against the very next card. `marginBottom: 28`
+        // (2 × the 14px a `<br>` actually rendered at) reproduces the same visual gap explicitly,
+        // applies uniformly across every theme (a real CSS property, not theme-dependent whitespace
+        // rendering), and the two now-inert trailing `<br />`s below are removed rather than kept
+        // as dead markup.
+        marginBottom: 28,
         // Only ever true inside `SortableList`'s own `DragOverlay` (see that component's docs) —
         // this element is genuinely detached from the page's normal layout flow at that point, so
         // a lift shadow/scale-up/raised z-index here can't squish or overlap any other row the
@@ -333,7 +381,15 @@ function PluginCard({
         style={{
           display: 'inline-block',
           textAlign: 'left',
-          width: '80%',
+          // Legacy's own template hardcodes `width:80%` here (`plugins.html.tt2:124`) — a fixed
+          // proportion of whatever containing block happens to be available, which is why real
+          // legacy's own right-floated "Run Automatically" checkbox also stops short of the
+          // panel's actual right edge (verified against the live reference instance) rather than
+          // reaching it. `flex: 1` instead fills 100% of the row's remaining width (after the drag
+          // handle column), removing that dead gutter entirely — a deliberate improvement over
+          // legacy's own layout, not a parity target.
+          flex: 1,
+          minWidth: 0,
           borderBottomWidth: 1,
           borderBottomStyle: 'solid',
         }}
@@ -426,8 +482,6 @@ function PluginCard({
 
         <br />
       </span>
-      <br />
-      <br />
     </div>
   )
 }

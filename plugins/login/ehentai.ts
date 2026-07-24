@@ -71,10 +71,10 @@ export function pluginInfo() {
     namespace: "ehlogin",
     type: "login" as const,
     parameters: [
-      { name: "param1", description: "ipb_member_id cookie", required: false },
-      { name: "param2", description: "ipb_pass_hash cookie", required: false },
-      { name: "param3", description: "star cookie (optional, if present you can view fjorded content without exhentai)", required: false },
-      { name: "param4", description: "igneous cookie(optional, if present you can view exhentai without Europe and America IP)", required: false },
+      { name: "param1", description: "ipb_member_id cookie", required: false, type: "int" },
+      { name: "param2", description: "ipb_pass_hash cookie", required: false, type: "string" },
+      { name: "param3", description: "star cookie (optional, if present you can view fjorded content without exhentai)", required: false, type: "string" },
+      { name: "param4", description: "igneous cookie(optional, if present you can view exhentai without Europe and America IP)", required: false, type: "string" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
@@ -83,7 +83,7 @@ export function pluginInfo() {
     name: "E-Hentai",
     author: "thelastfantasy",
     description: "Handles login to E-H. If you have an account that can access fjorded content or exhentai, adding the credentials here will make more archives available for parsing.",
-    version: "2.3",
+    version: "0.1",
   };
 }
 

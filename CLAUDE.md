@@ -74,3 +74,46 @@ are working on.
 ## Language
 
 始终使用中文回答（Always respond in Chinese）。
+
+## UI migration verification (mandatory)
+
+When porting/reproducing a piece of real legacy UI (an icon, a layout region, a component's
+markup structure — anything claimed to match `~/LANraragi` or a confirmed-consistent live
+reference site), visual screenshot comparison alone is NOT sufficient sign-off. Every element
+being ported MUST have its real computed style pulled from the ground-truth source (via
+`getComputedStyle`/`getBoundingClientRect` in a live browser session, not guessed from reading
+CSS source or from memory of an earlier check) and diffed field-by-field against the same
+properties on the reproduction, at minimum: `font-size`, `font-weight`, `line-height`, rendered
+height/width (`getBoundingClientRect`), `border-radius`, `padding`, `margin`, and any icon's actual
+size class (e.g. Font Awesome `fa-2x`/`fa-3x`/`fa-4x` — these are easy to copy-paste wrong between
+similar-looking icons in the same region and the visual difference at screenshot scale can be
+subtle enough to miss by eye). A claim of "matches legacy" is not valid until this comparison has
+actually been run and the values shown to agree — not assumed, not eyeballed from a screenshot.
+
+## Cross-session issue tracking (GitHub Issues, not memos)
+
+Problems that surface mid-session but aren't resolved in that same turn (a bug spotted while
+working on something else, a design question deferred, a regression noticed but not yet
+root-caused) get tracked in a GitHub issue via `gh`, not a local memo/scratch file — durable across
+context compaction and visible outside this tool.
+
+Before creating a new issue, run `gh issue list --state open` and check whether an existing open
+issue can hold the new item instead — append to it (`gh issue edit <number> --body-file <path>` to
+rewrite the checklist, or `gh issue comment` for supplementary notes/screenshots) rather than
+opening a new issue per problem. Only create a new issue when no suitable open one exists.
+Resolved items are checked off (`- [x]`) with a short note on the actual root cause, not deleted —
+the issue is a running log, not a todo list that gets wiped clean.
+
+All *future* issue content (new entries, comments, edits) must be written in Chinese — the user's
+own working language. Do not retroactively translate existing English entries already in the
+issue; only new content going forward needs to be in Chinese.
+
+## Dev container rebuild — frontend-only changes don't need one
+
+The dev container (`compose.dev.yaml`) runs the frontend via `vite dev` with `apps/frontend`
+bind-mounted from the host, not a pre-built static bundle — so a pure frontend edit (`.tsx`/`.ts`/
+`.css` under `apps/frontend/`) is picked up by Vite's HMR immediately on save. `mise run
+dev-rebuild && dev-down && dev-up` is only needed when a change touches something baked into the
+image at build time: Rust code (`crates/`), plugin `.ts` files under `plugins/` (copied into the
+image, not bind-mounted), or the Dockerfile/compose files themselves. Don't reflexively rebuild
+after every change — check whether the edit was frontend-only first.

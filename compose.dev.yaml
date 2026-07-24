@@ -1,0 +1,45 @@
+# Local full-stack dev environment — separate from `compose.yaml` (the production-image compose
+# file) so that one stays untouched by anything dev-only. Bring up with
+# `podman compose -f compose.dev.yaml up -d` (rebuild after a *backend* source change with
+# `podman compose -f compose.dev.yaml build`; frontend changes need no rebuild at all — Vite's
+# own file watcher picks them up live through the bind mount below).
+#
+# One container (`Dockerfile.dev`): Redis + a compiled `lanrurugi-server` (internal port 3001,
+# not published) + `vite dev` (the container's actual public port, 3000 — same port number as
+# `compose.yaml`'s own production container, so switching between the two doesn't change what URL
+# you open). See docker-entrypoint.dev.sh for how the three are started together.
+services:
+  lanrurugi-dev:
+    image: localhost/lanrurugi-dev-full:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: lrr-dev
+    network_mode: host
+    volumes:
+      - ./data/manga:/home/koyomi/lanrurugi/content
+      - ./data/thumb:/home/koyomi/lanrurugi/thumb
+      - ./data/database:/home/koyomi/lanrurugi/database
+      - lrr-dev-log:/log
+      - lrr-dev-temp:/temp
+      # Frontend source, bind-mounted live (this is what makes hot-reload actually reflect host
+      # edits) — the named volume right after it "pokes a hole" back through this bind mount so
+      # the image's own baked-in, lockfile-installed `node_modules` isn't shadowed by whatever
+      # (or nothing) exists at that path on the host. Podman/Docker seed a fresh named volume from
+      # the image's own content at that path on first use, so this starts populated, not empty.
+      - ./apps/frontend:/workspace/apps/frontend
+      - lrr-dev-frontend-node-modules:/workspace/apps/frontend/node_modules
+      # Plugin `.ts` sources, bind-mounted live for the same reason — `discover_namespaces`
+      # (crates/lanrurugi-api/src/plugins.rs) rescans this directory on every request rather than
+      # caching it once at startup, and each plugin invocation spawns a fresh Deno subprocess that
+      # reads the `.ts` file straight off disk (no persistent compile cache to invalidate) — so a
+      # host edit here takes effect on the very next plugin call, no container restart needed.
+      # `Dockerfile.dev` still bakes plugins in via `COPY` too (matches the production image), but
+      # this bind mount takes precedence at the same path once the container is actually running.
+      - ./plugins:/usr/local/share/lanrurugi/plugins
+    restart: unless-stopped
+
+volumes:
+  lrr-dev-log:
+  lrr-dev-temp:
+  lrr-dev-frontend-node-modules:

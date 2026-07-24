@@ -65,6 +65,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 /** LRR's own archive ID format (a SHA-1 hex digest) — matches
  * `~/LANraragi/lib/LANraragi/Plugin/Metadata/CopyArchiveTags.pm::extract_archive_id`. */
 const ARCHIVE_ID_PATTERN = /([0-9a-f]{40,})/;
@@ -76,13 +92,13 @@ export function pluginInfo() {
     namespace: "copy-archive-tags",
     type: "metadata" as const,
     parameters: [
-      { name: "copy_date_added", description: "Enable to also copy the date (but it's up to you to remove the old one)", required: false },
+      { name: "copy_date_added", description: "Enable to also copy the date (but it's up to you to remove the old one)", required: false, type: "bool" },
     ],
     declared_permissions: { net: [], read: false, write: false },
     name: "Copy Archive Tags",
     author: "thelastfantasy",
     description: "Copy tags from another LRR archive given either the URI or the ID.",
-    version: "1.2",
+    version: "0.1",
     oneshot_arg: "LRR Gallery URL or ID:",
   };
 }
@@ -100,10 +116,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 
   const lrr_gid = extract_archive_id(lrr_info.arg);
   if (!lrr_gid) {
-    throw new Error("oneshot_param doesn't contain a valid archive ID\n");
+    throw new PluginErrorException("oneshot_param doesn't contain a valid archive ID");
   }
   if (lrr_gid === lrr_info.archive_id) {
-    throw new Error("You are using the current archive ID\n");
+    throw new PluginErrorException("You are using the current archive ID");
   }
 
   logger.info(`Copying tags from archive "${lrr_gid}"`);

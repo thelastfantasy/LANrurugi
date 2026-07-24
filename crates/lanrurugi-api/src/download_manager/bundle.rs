@@ -18,6 +18,16 @@ pub enum BundleError {
     Join(#[from] tokio::task::JoinError),
 }
 
+/// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
+/// the original `Display` text via `tracing::warn!` here (the one place it's available before
+/// being discarded) rather than serializing it anywhere user-facing.
+impl From<&BundleError> for lanrurugi_core::queue_error::QueueError {
+    fn from(e: &BundleError) -> Self {
+        tracing::warn!(error = %e, "bundling failed");
+        lanrurugi_core::queue_error::QueueError::BundleFailed
+    }
+}
+
 /// Zips every file in `resources` (in order) into one new archive under `staging_dir`, each
 /// entry named after that resource's own resolved filename (deduplicated with a numeric suffix
 /// on collision, same convention as `ingest::unique_dest_path`), then deletes the original

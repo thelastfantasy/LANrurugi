@@ -10,7 +10,7 @@
 # installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
 # contributor machine that already had a system-wide Rust install with these components wouldn't
 # surface the gap).
-rust = { version = "1.96.0", components = "rustfmt,clippy" }
+rust = { version = "1.97.1", components = "rustfmt,clippy" }
 node = "24.18.0"
 deno = "2.9.1"
 pnpm = "11.10.0"
@@ -26,6 +26,12 @@ lefthook = "2.1.9"
 # wiring, which needs a target-triple-scoped rustflag rather than an env var.
 RUSTC_WRAPPER = "sccache"
 
+# Per-contributor overrides (gitignored via .gitignore's `.env.*` pattern) — currently just
+# `CARGO_CONTAINER_YIELD_TO` (see scripts/cargo-container-run.sh's own docs), a personal-machine
+# tuning knob with no sane repo-wide default, so it belongs here rather than hardcoded or checked
+# in. Silently absent/no-op for anyone who hasn't created this file.
+_.file = ".env.local"
+
 # ── Podman dev/CI tasks ──────────────────────────────────────────────────────
 # `lanrurugi-scanner` depends on `libarchive2-sys`, which builds the bundled libarchive C source
 # via CMake + generates bindings via bindgen (libclang) — build deps the host may lack and that the
@@ -38,37 +44,29 @@ RUSTC_WRAPPER = "sccache"
 description = "Build the Dockerfile.build dev image (lanrurugi-dev) — run once before the other tasks"
 run = "podman build -f Dockerfile.build -t lanrurugi-dev ."
 
+# Every cargo-in-container task below shares the same guardrails via `scripts/cargo-container-run.sh`
+# — see that script's own header comment for the full rationale (added after a real host crash,
+# 2026-07-21: an unbounded `--rm` container running `cargo build` on this 32-core/28GB-RAM machine
+# drove the system into OOM and a hard reboot). In short: memory-capped, parallelism-capped,
+# persistent target/registry cache with a 20GB soft-cap auto-clean, and a step-down (fewer CPUs,
+# lower scheduling priority) when `dwproton` (Wuthering Waves' Proton runtime) is detected running,
+# so a foreground game keeps priority under contention instead of the build starving it.
+
 [tasks.test]
-description = "cargo test --workspace inside the dev container"
-run = """
-cmd="$(command -v podman || command -v docker)"
-[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
-"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo test --workspace
-"""
+description = "cargo test --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo test --workspace"
 
 [tasks.clippy]
-description = "cargo clippy --workspace inside the dev container"
-run = """
-cmd="$(command -v podman || command -v docker)"
-[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
-"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo clippy --workspace --all-targets -- -D warnings
-"""
+description = "cargo clippy --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo clippy --workspace --all-targets -- -D warnings"
 
 [tasks.fmt-check]
-description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook)"
-run = """
-cmd="$(command -v podman || command -v docker)"
-[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
-"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo fmt --all --check
-"""
+description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook; see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo fmt --all --check"
 
 [tasks.build]
-description = "cargo build --workspace inside the dev container"
-run = """
-cmd="$(command -v podman || command -v docker)"
-[ -n "$cmd" ] || { echo "podman/docker not found on PATH"; exit 1; }
-"$cmd" run --rm -v "$PWD":/workspace -w /workspace lanrurugi-dev cargo build --workspace
-"""
+description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo build --workspace"
 
 [tasks.convert-plugins]
 description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
@@ -94,6 +92,26 @@ run = """
 cargo build -p lanrurugi-server
 pnpm -C apps/frontend run test:e2e
 """
+
+# ── Local full-stack dev environment (compose.dev.yaml / Dockerfile.dev) ─────
+# One container: Redis + a compiled `lanrurugi-server` + `vite dev` with the frontend live
+# hot-reloading from the bind-mounted host source — see compose.dev.yaml's own doc comment.
+# Deliberately separate from the production `compose.yaml`/`Dockerfile` (never touched by these).
+[tasks.dev-up]
+description = "Build (if needed) and start the local full-stack dev container — frontend hot-reloads, backend/Redis are the same as production"
+run = "podman compose -f compose.dev.yaml up -d"
+
+[tasks.dev-down]
+description = "Stop the local full-stack dev container"
+run = "podman compose -f compose.dev.yaml stop"
+
+[tasks.dev-rebuild]
+description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
+run = "podman compose -f compose.dev.yaml build"
+
+[tasks.dev-logs]
+description = "Follow the local dev container's logs"
+run = "podman logs -f lrr-dev"
 
 # ── Local CI reproduction (act) ──────────────────────────────────────────────
 # Runs .github/workflows/ci.yml locally via `act` + podman/docker, so a CI failure can be

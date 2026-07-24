@@ -93,9 +93,9 @@ export function pluginInfo() {
     namespace: "regexplugin",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: `If the filename ends with a pair of curly braces, return the contents inside them as a list of simple tags, without the "${PLUGIN_TAG_NS}" namespace`, required: false },
-      { name: "param2", description: `Capture everything you find between a pair of parentheses and make it available under the "${PLUGIN_TAG_NS}" namespace<BR />`, required: false },
-      { name: "param3", description: "Regex to use for parsing", required: false },
+      { name: "param1", description: `If the filename ends with a pair of curly braces, return the contents inside them as a list of simple tags, without the "${PLUGIN_TAG_NS}" namespace`, required: false, type: "bool" },
+      { name: "param2", description: `Capture everything you find between a pair of parentheses and make it available under the "${PLUGIN_TAG_NS}" namespace<BR />(use this in conjunction with Tag Rules)`, required: false, type: "bool" },
+      { name: "param3", description: "Regex to use for parsing", required: false, type: "string" },
     ],
     declared_permissions: { net: [], read: false, write: false },
     name: "Filename Parsing",
@@ -130,7 +130,7 @@ export function pluginInfo() {
       `Non-standard tags will be made available to you associated with the "<i>${PLUGIN_TAG_NS}</i>" namespace so` +
       " you can manage them as you please by creating your own set of Tag Rules.<br>" +
       `My only suggestion is that you should place the rule "<i>-${PLUGIN_TAG_NS}*</i>" as your last rule to cleanup all the unnecessary elements.`,
-    version: "1.2",
+    version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAL1JREFUOI1jZMABpNbH/sclx8DAwPAscDEjNnEMQUIGETIYhUOqYdgMhTPINQzdUEZqGIZsKBM1DEIGTOiuexqwCKdidDl0vtT62P9kuZCJEWuKYWBgYGBgRHbh04BFDNIb4jAUbbSrZTARUkURg6lD10OUC/0PNaMYgs1Skgwk1jCSDCQWoBg46dYmhite0+D8pwGLCMY6uotRDOy8toZBkI2HIhcO/pxCm8KBUkOxFl/kGoq3gCXFYFxVAACeoU/8xSNybwAAAABJRU5ErkJggg==",
   };
 }

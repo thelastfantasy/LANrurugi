@@ -26,6 +26,16 @@ pub struct Response {
 pub struct ResponseError {
     pub message: String,
     pub kind: String,
+    /// A plugin-authored structured error's `error_code` (`plugin-sdk.ts`'s `PluginError`/
+    /// `PluginErrorException`) — an i18n lookup key, present only when the plugin actually threw
+    /// or returned one; `None` for an unexpected/unstructured fault (a genuine bug, a network
+    /// library's own exception), which `lanrurugi-api::plugins` maps to
+    /// `QueueError::PluginExecutionFailed` instead of `QueueError::PluginReported`.
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub data:
+        Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +54,12 @@ pub struct PluginParameter {
     pub description: String,
     #[serde(default)]
     pub required: bool,
+    /// Matches `plugin-sdk.ts`'s own `PluginParameter.type` docs — see that comment for why
+    /// `Some("color")`, though technically valid on the wire, is never emitted by any real plugin
+    /// in this corpus and legacy's own equivalent default is a quirk this SDK deliberately doesn't
+    /// mirror. `None` (absent `type`) is treated the same as `Some("string")` by the frontend.
+    #[serde(default, rename = "type")]
+    pub param_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,16 +110,6 @@ pub struct PluginInfo {
     /// host-mediated file contents).
     #[serde(default)]
     pub sidecar_files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MetadataResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_tags: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
 }
 
 /// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `DomainRule` field-for-field —

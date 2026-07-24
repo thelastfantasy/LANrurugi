@@ -70,19 +70,35 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 export function pluginInfo() {
   return {
     namespace: "fakkumetadata",
     type: "metadata" as const,
     parameters: [
-      { name: "param1", description: "Add 'Source' tag", required: false },
-      { name: "param2", description: "Only use current title for exact matches", required: false },
+      { name: "param1", description: "Add 'Source' tag", required: false, type: "bool" },
+      { name: "param2", description: "Only use current title for exact matches", required: false, type: "bool" },
     ],
     declared_permissions: { net: ["www.fakku.net"], read: false, write: false },
     name: "FAKKU",
     author: "thelastfantasy",
     description: "Searches FAKKU for tags matching your archive. If you have an account, don't forget to enter the matching cookie in the login plugin to be able to access controversial content. <br/><br/>\n           <i class='fa fa-exclamation-circle'></i> <b>This plugin can and will return invalid results depending on what you're searching for!</b> <br/>The FAKKU search API isn't very precise and I recommend you either enable 'Only use current title for exact matches', or use the Chaika.moe plugin when possible.",
-    version: "1.0.2",
+    version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAFiUAABYlAUlSJPAAAACZSURBVDhPlY+xDYQwDEWvZgRGYA22Y4frqJDSZhFugiuuo4cqPGT0iTjAYL3C+fGzktc3hEcsQvJq6HtjE2Jdv4viH4a4pWnL8q4A6g+ET9P8YhS2/kqwIZXWnwqChDxPfCFfD76wOzJ2IOR/0DSwnuRKYAKUW3gq2OsJTYM0jr7QVRVwlabJEaw3ARYBcmFXeomxphIeEMIMmh3lOLQR+QQAAAAASUVORK5CYII=",
     oneshot_arg: "FAKKU Gallery URL (Will attach tags matching this exact gallery to your archive)",
     login_from: "fakkulogin",
@@ -124,7 +140,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   const logger = perlCompat.getLogger("FAKKU", "plugins");
 
   if (!fakku_cookie_exists(ua)) {
-    throw new Error("Not logged in to FAKKU! Set your FAKKU SID in the plugin settings page!\n");
+    throw new PluginErrorException("Not logged in to FAKKU! Set your FAKKU SID in the plugin settings page!");
   }
 
   // If the user specified a oneshot argument, use it as-is (we could stand to pre-check it to see
@@ -139,14 +155,14 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (!fakku_URL) {
     const message = "No matching FAKKU Gallery Found!";
     logger.info(message);
-    throw new Error(`${message}\n`);
+    throw new PluginErrorException(message);
   }
   logger.debug(`Detected FAKKU URL: ${fakku_URL}`);
   const [newtags, newtitle, newSummary] = await get_tags_from_fakku(fakku_URL, ua, !!add_source);
   const current_title = lrr_info.archive_title;
   if (safe_mode && !URL_safe && newtitle !== current_title) {
     logger.info(`Found FAKKU Gallery '${newtitle}', but it does not match current title '${current_title}' exactly`);
-    throw new Error("Exact title match not found\n");
+    throw new PluginErrorException("Exact title match not found");
   }
   logger.info(`Sending the following tags to LRR: ${newtags}`);
   //    #Return a hash containing the new metadata - it will be integrated in LRR.
@@ -211,7 +227,7 @@ async function get_dom_from_fakku(url: string, ua: PerlUserAgent): Promise<PerlD
   const match = html.match(CLOUDFLARE_ERROR_PATTERN);
   if (match) {
     logger.debug(`Blocked by Cloudflare, aborting for now. (Error code ${match[1]})`);
-    throw new Error(`The plugin has been blocked by Cloudflare. (Error code ${match[1]}) Try opening FAKKU in your browser to bypass this.`);
+    throw new PluginErrorException("The plugin has been blocked by Cloudflare. Try opening FAKKU in your browser to bypass this.", { code: match[1] });
   }
   return res.dom;
 }

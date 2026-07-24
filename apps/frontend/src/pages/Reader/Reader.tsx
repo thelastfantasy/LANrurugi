@@ -14,6 +14,7 @@ import {
   useUpdateProgress,
 } from '../../api/hooks'
 import Footer from '../../components/Footer'
+import { routes } from '../../routes'
 import { useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
 import ArchiveOverviewOverlay from './ArchiveOverviewOverlay'
@@ -147,6 +148,38 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages])
 
+  // Prefetches the next `readerSettings.preloadCount` pages beyond the currently-shown spread —
+  // the `preloadCount` setting itself (`useReaderSettings.ts`) already existed and was
+  // user-configurable via `SettingsOverlay`, but nothing ever consumed it: this is that missing
+  // wiring. A bare `new Image()` with its `src` set (not appended to the DOM) is enough to make
+  // the browser fetch and HTTP-cache the bytes — when the reader later actually renders an `<img
+  // src={...}>` for that same URL, the browser serves it from cache instantly instead of a fresh
+  // network round-trip. Fetching several *different* pages of the same archive concurrently like
+  // this is exactly the case `AppState::page_singleflight` (`crates/lanrurugi-api/src/state.rs`)
+  // exists to bound on the server side, alongside the same-page dedup that guards against a
+  // second prefetch re-requesting a page the reader is already displaying.
+  useEffect(() => {
+    if (!pages.data || readerSettings.preloadCount <= 0) return
+    const urls: string[] = []
+    for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
+      const page = currentPage + offset
+      if (page > totalPages) break
+      const url = pages.data.pages[page - 1]
+      if (url) urls.push(url)
+    }
+    // Keeping references (not just firing-and-forgetting the `Image()` objects) prevents the
+    // browser from cancelling an in-flight prefetch request when the object would otherwise be
+    // garbage-collected before the request finishes.
+    const preloaded = urls.map((url) => {
+      const img = new Image()
+      img.src = url
+      return img
+    })
+    return () => {
+      preloaded.length = 0
+    }
+  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount])
+
   // Sets up cross-archive `,`/`.` navigation once per archive open (legacy's
   // `setupArchiveNavigation`, called from `initializeAll`) — resolves whether this reader session
   // arrived from a same-origin index search, and if so prefetches the adjacent results page.
@@ -249,7 +282,7 @@ export default function Reader() {
 
   async function goRandom() {
     const id = await fetchRandomArchiveId()
-    if (id) navigate(`/reader/${id}`)
+    if (id) navigate(routes.reader(id))
   }
 
   function cleanCache() {
@@ -383,7 +416,7 @@ export default function Reader() {
 
       switch (e.key) {
         case 'Backspace':
-          navigate('/')
+          navigate(routes.library())
           return
         case 'Escape':
           setOverlay(null)
@@ -500,9 +533,12 @@ export default function Reader() {
             error: String(metadata.error ?? pages.error),
           })}
         </p>
-        <a onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
-          {t('Return to Library')}
-        </a>
+        <input
+          type="button"
+          className="stdbtn"
+          value={t('Return to Library') ?? undefined}
+          onClick={() => navigate(routes.library())}
+        />
       </div>
     )
   }
@@ -771,7 +807,7 @@ export default function Reader() {
             id="return-to-index"
             style={{ cursor: 'pointer' }}
             title={t('Done reading? Go back to Archive Index') ?? undefined}
-            onClick={() => navigate('/')}
+            onClick={() => navigate(routes.library())}
           >
             <i className="fas fa-angle-down fa-3x"></i>
           </a>
@@ -802,6 +838,7 @@ export default function Reader() {
           archive={metadata.data}
           categories={categories.data}
           loggedIn={loggedIn}
+          currentPage={currentPage}
           onClose={() => setOverlay(null)}
           onSelectPage={selectPage}
         />

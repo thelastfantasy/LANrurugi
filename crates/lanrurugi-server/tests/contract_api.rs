@@ -53,8 +53,21 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
         download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
         plugin_options: plugin_options.clone(),
         download_queue: download_queue.clone(),
+        new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
     };
     Some((lanrurugi_server::app::build_app(state, None, None), redis))
 }
@@ -271,8 +284,21 @@ async fn static_frontend_is_served_with_spa_fallback() {
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
         download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
         plugin_options: plugin_options.clone(),
         download_queue: download_queue.clone(),
+        new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -374,8 +400,21 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
         download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
         plugin_options: plugin_options.clone(),
         download_queue: download_queue.clone(),
+        new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -599,8 +638,21 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         )),
         plugins_dir: PathBuf::from("/tmp/plugins"),
         download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
         plugin_options: plugin_options.clone(),
         download_queue: download_queue.clone(),
+        new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
     };
     let app = lanrurugi_server::app::build_app(state, None, None);
 

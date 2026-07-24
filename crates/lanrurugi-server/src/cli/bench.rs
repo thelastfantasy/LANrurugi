@@ -76,6 +76,14 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
 
+    // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
+    // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
+    // bench tool drives its own scans through, per the comment above) always hands it a clone of
+    // `state.new_archive_tx`, and legacy's own real deployment also runs auto-plugins during
+    // ingestion, so silently skipping that here would make this comparison less representative,
+    // not more.
+    let (new_archive_tx, mut new_archive_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
     let state = AppState {
         redis,
         repos,
@@ -94,9 +102,31 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         plugins,
         plugins_dir,
         download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
         plugin_options,
         download_queue,
+        new_archive_tx,
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
     };
+
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            while let Some(id) = new_archive_rx.recv().await {
+                lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+            }
+        });
+    }
 
     let app = crate::app::build_app(state, None, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

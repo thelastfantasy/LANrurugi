@@ -71,8 +71,8 @@ export function pluginInfo() {
     namespace: "fakkulogin",
     type: "login" as const,
     parameters: [
-      { name: "param1", description: "fakku_sid cookie value", required: false },
-      { name: "param2", description: "Useragent value", required: false },
+      { name: "param1", description: "fakku_sid cookie value", required: false, type: "string" },
+      { name: "param2", description: "Useragent value", required: false, type: "string" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
@@ -81,7 +81,7 @@ export function pluginInfo() {
     name: "Fakku",
     author: "thelastfantasy",
     description: "Handles login to FAKKU. If the FAKKU metadata plugin stops working, update your 'fakku_sid' cookie and add your own Useragent.",
-    version: "0.2",
+    version: "0.1",
   };
 }
 

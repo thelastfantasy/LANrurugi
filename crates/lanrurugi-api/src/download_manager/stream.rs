@@ -28,10 +28,47 @@ pub enum DownloadError {
     InvalidMethod(String),
     #[error("request failed: {0}")]
     Request(#[source] reqwest::Error),
-    #[error("server responded with status {0}")]
-    HttpStatus(reqwest::StatusCode),
+    #[error("server responded with status {1}")]
+    HttpStatus(String, reqwest::StatusCode),
     #[error("failed to write to {0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
+    /// The caller's `CancellationToken` fired (a user pressed Stop) — deliberately not converted
+    /// to a `QueueError` variant the way every other member of this enum is: a user-requested stop
+    /// isn't a failure to surface as an error state, it's handled by the caller reverting the
+    /// queue item back to `Queued` instead (see `download_queue::stop_one`).
+    #[error("cancelled")]
+    Cancelled,
+}
+
+/// Converts to the structured, translatable [`lanrurugi_core::queue_error::QueueError`] the
+/// frontend actually renders — logs the original `Display` text via `tracing::warn!` here (the
+/// one place it's available before being discarded) rather than serializing it anywhere
+/// user-facing.
+impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
+    fn from(e: &DownloadError) -> Self {
+        use lanrurugi_core::queue_error::QueueError;
+        tracing::warn!(error = %e, "download failed");
+        match e {
+            DownloadError::InvalidUrl(url, _) => QueueError::InvalidUrl { url: url.clone() },
+            DownloadError::InvalidMethod(method) => QueueError::InvalidHttpMethod {
+                method: method.clone(),
+            },
+            DownloadError::Request(err) => QueueError::HttpRequestFailed {
+                url: err.url().map(|u| u.to_string()).unwrap_or_default(),
+            },
+            DownloadError::HttpStatus(url, status) => QueueError::HttpStatus {
+                url: url.clone(),
+                status: status.as_u16(),
+            },
+            DownloadError::Io(..) => QueueError::WriteFailed,
+            // Every real caller intercepts `Cancelled` before it ever reaches this conversion
+            // (`run_managed_downloads`/`start_download` check for it explicitly and revert the
+            // queue item to `Queued` instead of recording an error) — this arm only exists so the
+            // match stays exhaustive; `Internal` is a harmless placeholder that should never
+            // actually surface.
+            DownloadError::Cancelled => QueueError::Internal,
+        }
+    }
 }
 
 /// Result of a single successful streaming download.
@@ -88,7 +125,11 @@ pub async fn download_one(
     req: &DownloadRequest,
     progress_tx: tokio::sync::mpsc::UnboundedSender<ProgressUpdate>,
     staging_dir: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<DownloadedFile, DownloadError> {
+    if cancel.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
     let parsed_url =
         url::Url::parse(&req.url).map_err(|e| DownloadError::InvalidUrl(req.url.clone(), e))?;
     let hostname = parsed_url.host_str().unwrap_or("").to_string();
@@ -113,13 +154,31 @@ pub async fn download_one(
 
     let response = request.send().await.map_err(DownloadError::Request)?;
     if !response.status().is_success() {
-        return Err(DownloadError::HttpStatus(response.status()));
+        return Err(DownloadError::HttpStatus(
+            req.url.clone(),
+            response.status(),
+        ));
     }
 
     let total_bytes = response.content_length();
     let filename = resolve_filename(&response, req.filename_hint.as_deref(), &parsed_url);
 
-    let staging_path = staging_dir.join(format!("download-{}", uuid::Uuid::new_v4().simple()));
+    // Carries the resolved filename's own extension (when it has one) onto the staging file
+    // itself — `lanrurugi_scanner::pipeline::catalogue_new_archive` reads *this* path (not the
+    // later-renamed final destination) to compute `pagecount` via `archive_format::list_pages`,
+    // which is a pure extension-based format check. A bare `download-<uuid>` with no extension at
+    // all (the previous behavior, regardless of what `filename` resolved to) always fails that
+    // check, so `pagecount` silently and permanently stuck at 0 for every archive ever ingested
+    // through this download path, no matter how sensible `filename`/`filename_hint` was — the
+    // final destination file (after `ingest_downloaded_file`'s rename) does end up correctly
+    // named/extensioned, but nothing ever re-runs page-counting against it afterward. Confirmed
+    // live: two real, fully-downloaded, genuinely-readable `.zip` archives (one via a plugin fix
+    // that finally gave it a real filename_hint, one that already had a normal-looking name) both
+    // still ended up permanently `pagecount: 0` before this fix, for exactly this reason.
+    let staging_path = match Path::new(&filename).extension().and_then(|e| e.to_str()) {
+        Some(ext) => staging_dir.join(format!("download-{}.{ext}", uuid::Uuid::new_v4().simple())),
+        None => staging_dir.join(format!("download-{}", uuid::Uuid::new_v4().simple())),
+    };
     let mut file = tokio::fs::File::create(&staging_path)
         .await
         .map_err(|e| DownloadError::Io(staging_path.clone(), e))?;
@@ -134,7 +193,25 @@ pub async fn download_one(
     let mut last_reported = std::time::Instant::now();
     const PROGRESS_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // Raced against the stream on every iteration (rather than checked once before the loop)
+        // so a Stop click lands promptly no matter how large the transfer or how long a single
+        // chunk takes to arrive — cooperative cancellation, not `AbortHandle`-based, specifically
+        // so this branch can run the exact same partial-file cleanup the network-error branch
+        // below already has, rather than leaving an untraceable UUID-named orphan in
+        // `staging_dir` (see `AppState::download_cancellations`'s own docs for why).
+        let chunk = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&staging_path).await;
+                return Err(DownloadError::Cancelled);
+            }
+            chunk = stream.next() => match chunk {
+                Some(chunk) => chunk,
+                None => break,
+            },
+        };
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(e) => {
@@ -217,12 +294,26 @@ fn resolve_filename(
 /// source (Chaika/EHentai-style direct-file-download endpoints) sends the plain `filename=` form —
 /// good enough for this project's actual plugin corpus without pulling in a dedicated MIME/header
 /// parsing crate for a rarely-exercised edge case.
+///
+/// Reads the header's **raw bytes** (`.as_bytes()`), not `HeaderValue::to_str()` — a real,
+/// confirmed-live bug this fixes: `to_str()` only succeeds for visible-ASCII byte sequences and
+/// returns `Err` (silently swallowed by the old code's `.ok()?`) for anything else, so a server
+/// that puts a real UTF-8-encoded non-ASCII filename directly into a plain `filename="..."`
+/// parameter — not RFC-compliant (that should be `filename*=UTF-8''...`, percent-encoded), but
+/// confirmed against a real download source that sends raw UTF-8 bytes in a plain `filename=`
+/// parameter — made this function give up entirely and fall through to the plugin's own
+/// `filename_hint`/URL-derived fallback, discarding a perfectly real filename the server did
+/// provide.
 fn content_disposition_filename(response: &reqwest::Response) -> Option<String> {
-    let header = response
+    let bytes = response
         .headers()
         .get(reqwest::header::CONTENT_DISPOSITION)?
-        .to_str()
-        .ok()?;
+        .as_bytes();
+    // UTF-8 first (the real, confirmed-live case above) — Latin-1 as a last-resort fallback for a
+    // server that genuinely sends single-byte-per-character bytes (Latin-1 maps every byte to a
+    // Unicode code point of the identical value, so this conversion can never itself fail).
+    let header = String::from_utf8(bytes.to_vec())
+        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
     for part in header.split(';') {
         let part = part.trim();
         if let Some(name) = part.strip_prefix("filename=") {
@@ -309,9 +400,16 @@ mod tests {
         };
 
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let result = download_one(&manager, &[], &req, progress_tx, &staging_dir)
-            .await
-            .expect("download must succeed against a real local server");
+        let result = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("download must succeed against a real local server");
 
         assert_eq!(
             result.filename, "real-name.zip",
@@ -335,6 +433,61 @@ mod tests {
         server.abort();
     }
 
+    /// Opt-in, real-server regression test for a non-ASCII UTF-8 `Content-Disposition` filename
+    /// (some real-world servers send raw UTF-8 bytes directly in a plain `filename="..."`
+    /// parameter — not RFC 6266-compliant, that requires `filename*=UTF-8''<percent-encoded>` —
+    /// which is what made `content_disposition_filename` give up and fall through to the
+    /// `filename_hint`/URL-derived fallback before this fix). Both the URL and the exact expected
+    /// filename come from `.env.local` (gitignored — see `.env.example`) rather than being
+    /// hardcoded in source, since a real download target/filename shouldn't live in this repo's
+    /// history. Skipped (not failed) when unset, since it depends on an external server that
+    /// isn't this repo's to guarantee uptime/content for.
+    #[tokio::test]
+    async fn download_one_decodes_a_non_ascii_utf8_content_disposition_filename() {
+        // `.env.local`'s own template ships these as present-but-empty (`KEY=`) rather than
+        // absent, so an empty string must be treated the same as unset — `std::env::var` alone
+        // would otherwise return `Ok("")` and this test would try to download from `""`.
+        let url = std::env::var("TEST_REAL_DOWNLOAD_URL").unwrap_or_default();
+        let expected_filename =
+            std::env::var("TEST_REAL_DOWNLOAD_EXPECTED_FILENAME").unwrap_or_default();
+        if url.is_empty() || expected_filename.is_empty() {
+            eprintln!(
+                "skipping: set TEST_REAL_DOWNLOAD_URL and TEST_REAL_DOWNLOAD_EXPECTED_FILENAME \
+                 in .env.local to run this test against a real server"
+            );
+            return;
+        }
+
+        let manager = DownloadManager::new();
+        let staging_dir = std::env::temp_dir();
+
+        let req = DownloadRequest {
+            url,
+            method: None,
+            headers: vec![],
+            filename_hint: Some("fallback-hint-name.zip".to_string()),
+        };
+
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("download must succeed against the real configured server");
+
+        assert_eq!(
+            result.filename, expected_filename,
+            "the real UTF-8 filename must be used, not the filename_hint fallback"
+        );
+
+        tokio::fs::remove_file(&result.path).await.ok();
+    }
+
     #[tokio::test]
     async fn download_one_reports_http_error_status_without_writing_a_file() {
         let router = axum::Router::new().route(
@@ -354,10 +507,75 @@ mod tests {
         };
 
         let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let err = download_one(&manager, &[], &req, progress_tx, &staging_dir)
+        let err = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect_err("a 404 response must surface as an error, not a successful empty file");
+        assert!(matches!(err, DownloadError::HttpStatus(_, status) if status == 404));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_one_returns_cancelled_and_writes_no_staging_file_when_pre_cancelled() {
+        let router = axum::Router::new().route(
+            "/archive.zip",
+            axum::routing::get(|| async { b"hello world".to_vec() }),
+        );
+        let (base_url, server) = spawn_test_server(router).await;
+
+        let manager = DownloadManager::new();
+        let staging_dir = std::env::temp_dir();
+
+        let req = DownloadRequest {
+            url: format!("{base_url}/archive.zip"),
+            method: None,
+            headers: vec![],
+            filename_hint: None,
+        };
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        // `staging_dir` is the shared OS temp dir, not a private scratch directory — other tests
+        // in this same `cargo test` run write their own unrelated files there concurrently, so a
+        // raw whole-directory before/after diff is flaky (confirmed: failed once against a sibling
+        // bundle test's own `lrr-bundle-test-*` file landing mid-run). Scoped to `download-*`,
+        // matching this function's own real staging-filename convention (see `download_one`'s
+        // `staging_path` construction above) — only files *this* code path could have written.
+        fn own_staging_files(
+            dir: &std::path::Path,
+        ) -> std::collections::HashSet<std::path::PathBuf> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("download-"))
+                })
+                .collect()
+        }
+
+        let before = own_staging_files(&staging_dir);
+
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let err = download_one(&manager, &[], &req, progress_tx, &staging_dir, &cancel)
             .await
-            .expect_err("a 404 response must surface as an error, not a successful empty file");
-        assert!(matches!(err, DownloadError::HttpStatus(status) if status == 404));
+            .expect_err("a pre-cancelled token must short-circuit before any request is sent");
+        assert!(matches!(err, DownloadError::Cancelled));
+
+        let after = own_staging_files(&staging_dir);
+        assert_eq!(
+            before, after,
+            "no staging file should be created for a download that never started"
+        );
 
         server.abort();
     }
@@ -390,9 +608,16 @@ mod tests {
         };
 
         let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let result = download_one(&manager, &[], &req, progress_tx, &staging_dir)
-            .await
-            .expect("download with a custom header must succeed");
+        let result = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("download with a custom header must succeed");
         tokio::fs::remove_file(&result.path).await.ok();
         server.abort();
     }
@@ -449,9 +674,16 @@ mod tests {
             };
             let base = combined_downloaded;
             let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-            let result = download_one(&manager, &[], &req, progress_tx, &staging_dir)
-                .await
-                .unwrap();
+            let result = download_one(
+                &manager,
+                &[],
+                &req,
+                progress_tx,
+                &staging_dir,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
             while let Ok((downloaded, _total)) = progress_rx.try_recv() {
                 last_seen = base + downloaded;
             }
@@ -512,11 +744,16 @@ mod tests {
         };
         let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let err = download_one(&manager, &[], &req, progress_tx, &staging_dir)
-            .await
-            .expect_err(
-                "a truncated body must surface as a real error, not a short-but-clean file",
-            );
+        let err = download_one(
+            &manager,
+            &[],
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect_err("a truncated body must surface as a real error, not a short-but-clean file");
         assert!(matches!(err, DownloadError::Request(_)));
 
         let remaining: Vec<_> = std::fs::read_dir(&staging_dir)

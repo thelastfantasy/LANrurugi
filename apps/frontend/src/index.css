@@ -86,6 +86,23 @@
   float: right;
   margin-left: 1rem;
 }
+/* Additive: none of the vendored theme stylesheets (`public/legacy/themes/*.css`) define a
+ * `.stdbtn`/checkbox `:disabled` rule at all — legacy's own real usage apparently never actually
+ * disables one of these controls, so the gap was never noticed there. This project's download-
+ * queue panel (`Upload.tsx`) is the first real, functional use of disabled `.stdbtn`s/checkboxes
+ * in this app, and without this rule a disabled button/checkbox is visually identical to an
+ * enabled one — same color, same opacity — with the *only* difference being that clicking it does
+ * nothing, discoverable only by trial and error (a real, reported issue: "already disabled? then
+ * you haven't visually distinguished enabled/disabled button appearance"). `cursor: not-allowed`
+ * matches the browser's own native default for a disabled `<input>`/`<button>`, made explicit here
+ * since `.stdbtn`'s own `cursor: pointer` would otherwise override it.
+ */
+.stdbtn:disabled,
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .caret-right-down.active:after {
   content: '\025BC';
 }

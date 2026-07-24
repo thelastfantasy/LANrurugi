@@ -206,6 +206,86 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let repos = Repositories::new(&redis);
     let scanner = ScannerHandle::new();
+    let jobs = JobRegistry::new();
+
+    let plugin_options = Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
+
+    // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
+    // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
+    // each newly-discovered archive, matching legacy's own `Shinobu.pm::add_new_file`, which does
+    // exactly this right after cataloguing a genuinely new file (verified against source; the
+    // watcher's own *rekey* path, `update_filemap_entry`, deliberately does not — see
+    // `pipeline::run`'s own docs). This mechanism was entirely missing from this port until now.
+    // The channel's sender lives on `AppState` itself (`new_archive_tx`) so every other call site
+    // that starts/restarts the watcher or a full scan (`shinobu.rs`, `database.rs::rebuild_index`)
+    // can hand this same long-lived consumer a clone, instead of each spawning its own.
+    let (new_archive_tx, mut new_archive_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let state = AppState {
+        redis: redis.clone(),
+        repos: repos.clone(),
+        jobs: jobs.clone(),
+        auth: AuthConfig {
+            api_key: args.api_key,
+            enable_pass: !args.no_pass,
+        },
+        library: LibraryPaths {
+            archive_dir: args.library_path.clone(),
+            thumb_dir: args.thumb_dir.clone(),
+            temp_dir: args.temp_dir,
+            log_dir: Some(args.log_dir),
+        },
+        scanner: scanner.clone(),
+        plugins,
+        plugins_dir: args.plugins_dir,
+        download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        plugin_options,
+        download_queue,
+        new_archive_tx: new_archive_tx.clone(),
+        download_cancellations: Default::default(),
+        filename_locks: Default::default(),
+    };
+
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            while let Some(id) = new_archive_rx.recv().await {
+                lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+            }
+        });
+    }
+
+    // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
+    // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
+    // sweep's own schedule happens to line up against when it was staged.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            // The first tick fires immediately (`tokio::time::interval`'s own documented
+            // behavior) — deliberate, not skipped: a conflict staged just before a restart
+            // shouldn't have to wait a full hour for the first sweep to even notice it's stale.
+            loop {
+                interval.tick().await;
+                lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
+            }
+        });
+    }
+
     if !args.no_watch {
         if let Err(e) = scanner
             .start(
@@ -214,6 +294,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 redis.config.clone(),
                 redis.search.clone(),
                 (*repos.archives).clone(),
+                Some(new_archive_tx.clone()),
             )
             .await
         {
@@ -221,7 +302,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
-    let jobs = JobRegistry::new();
     // A cold start's `library_path` may already contain files the notify-based watcher above
     // will never see on its own — it only reacts to filesystem events from this point forward,
     // matching legacy's own reactive Shinobu. Legacy *also* does exactly this one-time
@@ -245,6 +325,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let redis = redis.clone();
         let library_path = args.library_path.clone();
         let thumb_dir = args.thumb_dir.clone();
+        let new_archive_tx = new_archive_tx.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -255,6 +336,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 &thumb_dir,
                 &jobs,
                 &job_id,
+                Some(new_archive_tx),
             )
             .await;
             tracing::info!(
@@ -276,35 +358,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .await;
         });
     }
-
-    let plugin_options = Arc::new(
-        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
-    );
-    let download_queue = Arc::new(
-        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
-    );
-
-    let state = AppState {
-        redis,
-        repos,
-        jobs,
-        auth: AuthConfig {
-            api_key: args.api_key,
-            enable_pass: !args.no_pass,
-        },
-        library: LibraryPaths {
-            archive_dir: args.library_path,
-            thumb_dir: args.thumb_dir,
-            temp_dir: args.temp_dir,
-            log_dir: Some(args.log_dir),
-        },
-        scanner,
-        plugins,
-        plugins_dir: args.plugins_dir,
-        download_managers: Default::default(),
-        plugin_options,
-        download_queue,
-    };
 
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
@@ -341,6 +394,10 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
     );
 
     tracing::info!("Scanning library for previously-invisible files...");
+    // `None`: this is the standalone `rebuild-index` CLI subcommand, a one-shot maintenance tool
+    // with no `AppState`/Deno plugin pool constructed at all (unlike `serve`'s own startup scan,
+    // which has a live one to thread through) — nothing here could run a metadata plugin even if
+    // asked to.
     let scan_summary = lanrurugi_scanner::full_scan::full_scan(
         &args.library_path,
         &repos.archives,
@@ -349,6 +406,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         &args.thumb_dir,
         &jobs,
         &job_id,
+        None,
     )
     .await;
     tracing::info!(

@@ -67,6 +67,22 @@ declare global {
   };
 }
 
+// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
+// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
+// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
+// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
+// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
+// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
+// instead), so the same `error_code` translates regardless of which specific value triggered it.
+class PluginErrorException extends Error {
+  constructor(
+    public error_code: string,
+    public data?: Record<string, string | number>,
+  ) {
+    super(error_code);
+  }
+}
+
 const METADATA_FILE = "info.txt";
 
 /** `read_file`'s little state machine over `info.txt`'s lines — mirrors the real EH-Downloader
@@ -101,15 +117,15 @@ export function pluginInfo() {
     namespace: "ehd-info",
     type: "metadata" as const,
     parameters: [
-      { name: "replace_title", description: "Replace the title with the one in the metadata file", required: false },
-      { name: "japanese_title", description: "Use Japanese title if available", required: false },
-      { name: "save_summary", description: "Save \"description\" as summary", required: false },
+      { name: "replace_title", description: "Replace the title with the one in the metadata file", required: false, type: "bool" },
+      { name: "japanese_title", description: "Use Japanese title if available", required: false, type: "bool" },
+      { name: "save_summary", description: "Save \"description\" as summary", required: false, type: "bool" },
     ],
     declared_permissions: { net: [], read: false, write: true },
     name: "EHDL info.txt",
     author: "thelastfantasy",
     description: "EHDL info.txt metadata parser",
-    version: "1.0",
+    version: "0.1",
     sidecar_files: ["info.txt"],
   };
 }
@@ -172,7 +188,7 @@ function read_file(fileContents: string, params: EhdInfoParams): ParsedInfoTxt {
       if ((match = line.match(GALLERY_URL_LINE))) {
         tags.source = match[1];
       } else {
-        throw new Error("Unknown file format");
+        throw new PluginErrorException("Unknown file format");
       }
     } else if (reading_section === ReadingSection.Info) {
       if ((match = line.match(CATEGORY_LINE))) {

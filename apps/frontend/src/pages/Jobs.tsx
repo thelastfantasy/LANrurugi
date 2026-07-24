@@ -6,6 +6,7 @@ import { useClearFinishedJobs, useClearJobs, useJobs } from '../api/hooks'
 import type { JobRecord, JobRecordState } from '../api/types'
 import CodeBlock from '../components/CodeBlock'
 import { JobProgressBar, STATE_COLOR } from '../components/JobProgress'
+import { routes } from '../routes'
 import { FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { useDocumentTitle } from '../useDocumentTitle'
 
@@ -220,7 +221,7 @@ export default function Jobs() {
           id="return"
           className="stdbtn"
           value={t('Return to Library') ?? undefined}
-          onClick={() => navigate('/')}
+          onClick={() => navigate(routes.library())}
         />
       </div>
 

@@ -15,7 +15,7 @@ export default function PluginParametersForm({
   parameters,
 }: {
   namespace: string
-  parameters: Array<{ name: string; desc: string }>
+  parameters: Array<{ name: string; desc: string; type?: string }>
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -53,7 +53,7 @@ function PluginParametersFormBody({
   initial,
 }: {
   namespace: string
-  parameters: Array<{ name: string; desc: string }>
+  parameters: Array<{ name: string; desc: string; type?: string }>
   initial: PluginSettings
 }) {
   const { t } = useTranslation()
@@ -69,22 +69,44 @@ function PluginParametersFormBody({
   return (
     <table>
       <tbody>
-        {parameters.map((param, i) => (
-          <tr key={param.name}>
-            <td style={{ verticalAlign: 'middle' }}>
-              <b>{t(param.desc)} :</b>
-            </td>
-            <td>
-              <input
-                style={{ maxWidth: 200 }}
-                size={20}
-                className="stdinput"
-                value={values[i]}
-                onChange={(e) => setValue(i, e.target.value)}
-              />
-            </td>
-          </tr>
-        ))}
+        {parameters.map((param, i) =>
+          param.type === 'bool' ? (
+            // Real legacy markup (`~/LANraragi/templates/plugins.html.tt2`): `type="checkbox"
+            // value="1" class="fa"`, `checked` iff the saved value is truthy — the literal string
+            // `"1"` is legacy's own real "checked" storage value (matching what an HTML form
+            // naturally submits), not a JSON boolean; `class="fa"` supplies the Font Awesome
+            // font-family `config.css`'s `::before`/`::after` glyph content needs to actually
+            // render as the ON/OFF switch look, not a bare native checkbox.
+            <tr key={param.name}>
+              <td style={{ verticalAlign: 'middle' }}>
+                <b>{t(param.desc)} :</b>
+              </td>
+              <td>
+                <input
+                  type="checkbox"
+                  className="fa"
+                  checked={values[i] === '1'}
+                  onChange={(e) => setValue(i, e.target.checked ? '1' : '')}
+                />
+              </td>
+            </tr>
+          ) : (
+            <tr key={param.name}>
+              <td style={{ verticalAlign: 'middle' }}>
+                <b>{t(param.desc)} :</b>
+              </td>
+              <td>
+                <input
+                  style={{ maxWidth: 200 }}
+                  size={20}
+                  className="stdinput"
+                  value={values[i]}
+                  onChange={(e) => setValue(i, e.target.value)}
+                />
+              </td>
+            </tr>
+          ),
+        )}
         <tr>
           <td colSpan={2}>
             <input

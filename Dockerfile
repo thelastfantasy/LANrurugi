@@ -6,10 +6,11 @@
 # release build of the single `lanrurugi-server` binary serving the built frontend as static assets
 # (Principle III — one deployable).
 
-ARG RUST_VERSION=1.96.0
+ARG RUST_VERSION=1.97.1
 ARG NODE_VERSION=24.18.0
 ARG DENO_VERSION=2.9.1
 ARG PNPM_VERSION=11.10.0
+ARG REDIS_VERSION=7.4.9
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
 WORKDIR /build
@@ -52,6 +53,15 @@ RUN pnpm --filter lanrurugi-frontend run build
 # copies it into a real shell-having image rather than trying to `RUN deno doc` here directly.
 FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
 
+# Source of the bundled `redis-server`/`redis-cli` binaries for the `runtime` stage below — the
+# official image's own `-bookworm` variant (Debian/glibc, not `-alpine`/musl, to link cleanly
+# against the same runtime's glibc) at the exact version Redis data in this project has already
+# been written with (`7.4.9`; Debian bookworm's own `apt` package is a much older `7.0.15`, which
+# cannot read the newer on-disk RDB/AOF format version 7.4.9 writes — verified the hard way, not
+# a hypothetical: pointing this project's real recovered data at a 7.0.15 binary failed outright
+# with "Can't handle RDB format version 12").
+FROM docker.io/library/redis:${REDIS_VERSION}-bookworm AS redis-bin
+
 # Plugin-authoring SDK reference (`mise run plugin-sdk-docs`'s own build-time equivalent) — built
 # fresh from this exact image's own copy of the source `.ts` files, never copied in from a
 # developer's possibly-stale local `target/plugin-sdk-docs/` (gitignored, never committed). Same
@@ -73,6 +83,15 @@ FROM debian:bookworm-slim AS runtime
 # via libarchive (see `crates/lanrurugi-scanner/src/archive_format.rs` + `Dockerfile.build`). This
 # also drops the old `unrar-free`, whose getopt CLI never accepted the RARLAB `lb`/`p -inul` flags
 # the previous shell-out used — RAR/CBR was silently broken in production with it.
+#
+# `redis-server`/`redis-cli` are bundled into this same image/container, matching legacy
+# LANraragi's own real single-container deployment convention (verified against
+# tools/Documentation/installing-lanraragi/docker.md: one `difegue/lanraragi` container, three
+# bind mounts under `/home/koyomi/lanraragi/{content,thumb,database}` — no separate Redis
+# container in their own documented `docker run`/`docker-compose.yml` examples) — not a
+# split-into-two-services topology. Copied from the `redis-bin` stage above (not installed via
+# `apt`) — see that stage's own doc comment for why (Debian bookworm's own package is a much
+# older, on-disk-format-incompatible 7.0.15).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         fonts-noto-cjk \
@@ -88,6 +107,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deno-bin /deno /usr/local/bin/deno
+COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
 COPY --from=frontend-builder /build/apps/frontend/dist /usr/local/share/lanrurugi/frontend
 # Bakes in whatever converted `.ts` plugins live in the repo's `./plugins/` at build time.
@@ -103,9 +123,24 @@ COPY plugins /usr/local/share/lanrurugi/plugins
 # instance itself to function (unlike the frontend/plugins above).
 COPY --from=docs-builder /build/docs /usr/local/share/lanrurugi/docs
 
+# Bundled Redis's own config (see redis.conf's doc comment) + the supervisor script that starts
+# both processes in this one container (see scripts/docker-entrypoint.sh's own doc comment for why
+# it's a plain trap-based wrapper rather than a real init system like legacy's s6-overlay).
+COPY redis.conf /etc/lanrurugi/redis.conf
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /home/koyomi/lanrurugi/content /home/koyomi/lanrurugi/thumb /home/koyomi/lanrurugi/database
+
 ENV LANRURUGI_STATIC_DIR=/usr/local/share/lanrurugi/frontend
 ENV LANRURUGI_PLUGINS_DIR=/usr/local/share/lanrurugi/plugins
 ENV LANRURUGI_DOCS_DIR=/usr/local/share/lanrurugi/docs
+# Legacy-mirrored paths (`/home/koyomi/lanraragi/{content,thumb}` with the project name swapped —
+# see redis.conf's own `dir` for the `database` counterpart) — not this binary's own bare
+# `./library`/`./thumb` CLI defaults (see crates/lanrurugi-server/src/main.rs), which are meant
+# for non-Docker/bare-metal use where no such convention applies.
+ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
+ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
+ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 EXPOSE 3000
-ENTRYPOINT ["lanrurugi-server"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve", "--bind", "0.0.0.0:3000"]

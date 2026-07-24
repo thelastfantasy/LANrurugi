@@ -3,12 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { waitForJob } from '../../api/client'
+import { routes } from '../../routes'
 import { FONT_SIZE_10PT, useApplyTheme } from '../../theme'
 import { useDocumentTitle } from '../../useDocumentTitle'
 
 // Mirrors legacy's `~/LANraragi/templates/backup.html.tt2` — one `table > tbody#files > tr` with
 // two `.stdbtn.fileinput-button` spans (backup/restore), a processing spinner, and a return
-// button. Doesn't reproduce the jQuery-fileupload progress bar (`backup.js`) — status is a plain
+// button. Doesn't reproduce the upload-plugin progress bar (`backup.js`) — status is a plain
 // text line instead.
 export default function Backup() {
   const { t } = useTranslation()
@@ -153,7 +154,7 @@ export default function Backup() {
       <br />
       <br />
       <br />
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate('/')} />
+      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }
