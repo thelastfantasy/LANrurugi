@@ -193,12 +193,24 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&args.temp_dir)?;
     std::fs::create_dir_all(&args.plugins_dir)?;
 
+    // `dispatcher.ts` (`crates/lanrurugi-plugin/dispatcher/dispatcher.ts`) builds a `file://` URL
+    // by string-concatenating this path directly (`import(\`file://${pluginsDir}/${namespace}.ts\`)`)
+    // — a relative path there produces an invalid URL Deno's own `import()` rejects outright
+    // (`file://./plugins/login/nhentai.ts` — confirmed live: every download/login-type plugin
+    // failed to load, silently, whenever this arg was left at its own relative default `./plugins`
+    // instead of being overridden with an absolute path, as every real deployment/dev-container
+    // path already does — see `--plugins-dir`'s own CLI doc comment). Canonicalizing once here,
+    // right after the directory is guaranteed to exist, fixes it at the source for every caller
+    // (including the Rust side's own `plugins_dir.join(...)` in `lanrurugi-plugin::pool::Worker`)
+    // rather than requiring every invocation of this binary to remember to pass an absolute path.
+    let plugins_dir = std::fs::canonicalize(&args.plugins_dir)?;
+
     let dispatcher_path = args.temp_dir.join("dispatcher.ts");
     std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)?;
     let plugins = Arc::new(PluginPool::new(
         args.deno_bin,
         dispatcher_path,
-        args.plugins_dir.clone(),
+        plugins_dir.clone(),
     ));
 
     let redis = RedisDbs::connect(&args.redis_url)?;
@@ -241,7 +253,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         },
         scanner: scanner.clone(),
         plugins,
-        plugins_dir: args.plugins_dir,
+        plugins_dir,
         download_managers: Default::default(),
         thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
             std::thread::available_parallelism()

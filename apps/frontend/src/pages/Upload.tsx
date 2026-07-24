@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
@@ -1160,8 +1160,12 @@ function anchoredPosition(
  * `({var})`/`.{var}` token rendered as an atomic, non-editable chip (with its own `×` remove
  * button). Mirrors how a real mail-merge/mention editor represents a mixed text+placeholder
  * string internally, rather than trying to treat the whole thing as one opaque string the way the
- * plain-`<input>` version of this popover used to. */
-type TemplateSegment = { type: 'text'; value: string } | { type: 'token'; value: string }
+ * plain-`<input>` version of this popover used to.
+ *
+ * `key` is a stable per-render React key distinct from `value` — two chips with the same literal
+ * token text (`{filename}_{filename}`, a real if unusual template) would otherwise collide on
+ * `value` alone. */
+type TemplateSegment = { type: 'text'; value: string; key: string } | { type: 'token'; value: string; key: string }
 
 /** A real, zero-visual-width but genuinely-present text-node character — inserted immediately
  * before and after every chip `<span>` in `renderSegments` so a native browser caret has an actual
@@ -1179,28 +1183,157 @@ const CURSOR_ANCHOR = '\u200b'
 /** Splits a template string into alternating text/token segments — `token` segments capture the
  * optional wrapping `(`/`)` and leading `.` a Shift-click insertion can add (see
  * `shiftClickInsertion`), so the whole thing (`({crc})`, `.{ext}`, `{filename}`) round-trips back
- * into `substituteFilenameTemplate` unchanged as one atomic unit. */
+ * into `substituteFilenameTemplate` unchanged as one atomic unit. Each segment's `key` is its own
+ * start offset in `template` — stable across renders as long as nothing before it changed, which
+ * is exactly the React-key semantics wanted here (a chip dragged to a new position gets a new
+ * offset/key and is treated as freshly mounted, rather than React trying to reuse/animate the old
+ * DOM node into the new slot). */
 function parseTemplateSegments(template: string): TemplateSegment[] {
   const segments: TemplateSegment[] = []
   let lastIndex = 0
   for (const match of template.matchAll(/\.?\(?\{[\w-]+\}\)?/g)) {
     const start = match.index
     if (start > lastIndex) {
-      segments.push({ type: 'text', value: template.slice(lastIndex, start) })
+      segments.push({ type: 'text', value: template.slice(lastIndex, start), key: `t${lastIndex}` })
     }
-    segments.push({ type: 'token', value: match[0] })
+    segments.push({ type: 'token', value: match[0], key: `k${start}` })
     lastIndex = start + match[0].length
   }
   if (lastIndex < template.length) {
-    segments.push({ type: 'text', value: template.slice(lastIndex) })
+    segments.push({ type: 'text', value: template.slice(lastIndex), key: `t${lastIndex}` })
   }
   return segments
+}
+
+/** dataTransfer MIME type used for both drag sources this editor accepts drops from: an existing
+ * chip being reordered (payload is its own token text, e.g. `{crc}`) and a template-variable
+ * button inserting a brand-new token (payload is that button's insertion text, e.g. `{crc}` or,
+ * shift-clicked equivalently via drag, `({crc})`). The editor's own `onDrop` doesn't need to tell
+ * the two apart: either way the payload is "some literal text, insert it at the drop point" — the
+ * only difference (an existing chip must also be removed from its old position) is carried by a
+ * separate `text/x-lanrurugi-template-chip-origin` flag, not a different MIME type. */
+const TEMPLATE_TOKEN_MIME = 'text/x-lanrurugi-template-token'
+/** Companion payload to {@link TEMPLATE_TOKEN_MIME}, present only when the drag source is an
+ * existing chip being *moved* (not a template-variable button inserting a fresh one) — its value
+ * is that chip's own start offset in the flat template string at drag-start time, so `onDrop` can
+ * remove that exact occurrence (not just the first string match, which would be wrong for a
+ * template with the same token twice, e.g. `{filename}_{filename}`). */
+const TEMPLATE_CHIP_ORIGIN_MIME = 'text/x-lanrurugi-template-chip-origin'
+
+/** One atomic, non-editable `{var}`/`({var})`/`.{var}` chip inside {@link TemplateInput} — a real
+ * React component (not hand-built DOM) so it can be a normal `draggable` element React itself
+ * manages, participating in the same declarative re-render as the surrounding text. `contentEditable={false}`
+ * makes the browser's own cursor/selection engine treat it as one indivisible unit inside the
+ * outer editable container (arrow keys skip over it in one step, Backspace at its edge deletes the
+ * whole thing) — the same behavior the original hand-built-DOM version relied on, just now
+ * expressed as a JSX prop instead of an imperative `chip.contentEditable = 'false'` assignment.
+ * `data-token` (read by `extractTemplateFromDom`) carries the chip's own literal text separately
+ * from its rendered label, exactly as before — needed because the label's sibling remove-button
+ * icon would otherwise pollute a plain `textContent` read. */
+function TemplateChip({
+  value,
+  onRemove,
+  onDragStartToken,
+}: {
+  value: string
+  /** Called with this chip's own root DOM node (`e.currentTarget`, not a stale offset computed at
+   * render time) — the caller locates this chip's real *current* position in the live DOM at the
+   * moment of the event, since a `segment`'s own parse-time offset can be stale relative to
+   * whatever the user has typed since the last re-render (see `TemplateInput`'s own
+   * `offsetOfChipNode` docs for the real bug this avoids). */
+  onRemove: (chipNode: HTMLElement) => void
+  /** Called with this chip's own root DOM node and drag-start `DataTransfer`, so the container can
+   * both locate this chip's real current offset (to remove it from its old position — see
+   * `onRemove`'s own docs for why that must be read fresh, not from a stale parse-time offset) and
+   * tag the drag as "move this existing chip" (see `TEMPLATE_CHIP_ORIGIN_MIME`) rather than "insert
+   * new text" (what a template-variable button's own drag does). */
+  onDragStartToken: (chipNode: HTMLElement, dataTransfer: DataTransfer) => void
+}) {
+  const palette = useMenuPalette()
+  const [hovered, setHovered] = useState(false)
+  // Real-time drag feedback (explicit user call) — a dragged chip stays in the DOM at its origin
+  // spot for the whole gesture (native HTML5 DnD doesn't remove the source element until `drop`
+  // actually lands), so without dimming it, a chip dragged to a nearby spot in the same editor
+  // visually occludes the very drop-target text/gap the user is trying to see underneath it.
+  const [dragging, setDragging] = useState(false)
+  const removeColor = palette.border === 'transparent' ? palette.text : palette.border
+
+  return (
+    <span
+      contentEditable={false}
+      draggable
+      data-token={value}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        onDragStartToken(e.currentTarget, e.dataTransfer)
+        setDragging(true)
+      }}
+      onDragEnd={() => setDragging(false)}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        padding: '0 2px 0 5px',
+        // Wider than an early `1px` version — the cursor-anchor text node between two adjacent
+        // chips (see `CURSOR_ANCHOR`'s own docs) makes the caret placeable there at all, but a
+        // mouse still has to physically land a click within that gap, and `1px` on either side
+        // left only ~2px of real clickable width between two chips — reported as still awkward to
+        // hit even after the caret-placement fix itself. `3px` roughly triples that usable gap.
+        margin: '0 3px',
+        borderRadius: 3,
+        background: hovered ? 'rgba(0,0,0,0.16)' : 'rgba(0,0,0,0.08)',
+        // A neutral, low-opacity grey — not `palette.border`/`palette.text` (this app's own themed
+        // accent colors, e.g. `g.css`'s dark red `#5C0D11`), which reads too close to the browser's
+        // own (usually near-black/dark) text-cursor color and made a chip's edge easy to mistake
+        // for the caret sitting right next to it. Matches the template-variable insertion buttons'
+        // own already-established border color.
+        border: '1px solid rgba(128,128,128,0.4)',
+        fontFamily: 'monospace',
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+        cursor: 'grab',
+        opacity: dragging ? 0.35 : 1,
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span>{value}</span>
+      {/* A real Font Awesome icon (`fa-times`, this app's own established "remove/delete" icon —
+          see e.g. the queue row's own delete button) rather than a plain `×` character glyph:
+          reported as easy to mistake for literal typed text sitting inside the chip rather than a
+          clickable remove control. Colored with the theme's own destructive-looking accent
+          (falling back to `palette.text` the same way the chip's own border already does on the 2
+          themes where `border` is `transparent`) instead of `currentColor`, so it visually reads
+          as "a distinct button" rather than blending into the chip's own text. */}
+      <button
+        type="button"
+        aria-label="Remove"
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onRemove(e.currentTarget.parentElement as HTMLElement)
+        }}
+        style={{
+          border: 'none',
+          background: 'none',
+          padding: 0,
+          margin: 0,
+          cursor: 'pointer',
+          color: removeColor,
+          fontSize: '0.85em',
+          lineHeight: 1,
+        }}
+      >
+        <i className="fa fa-times" aria-hidden="true"></i>
+      </button>
+    </span>
+  )
 }
 
 /** A real mixed text/chip editor for a filename template string — a `contentEditable` `<div>`
  * (not a plain `<input>`) since a token needs to render as an atomic, visually distinct chip with
  * its own `×` button sitting *inline* among freely-typed text on either side of it, which a plain
- * `<input>`'s single text node fundamentally can't represent. Each chip is
+ * `<input>`'s single text node fundamentally can't represent. Each chip ({@link TemplateChip}) is
  * `contentEditable={false}` (so the browser's own cursor/selection engine treats it as one
  * indivisible unit — arrow keys skip over it in one step, Backspace at its edge deletes the whole
  * thing, exactly like a real mention/tag in Gmail or Notion) sitting inside the outer
@@ -1208,10 +1341,20 @@ function parseTemplateSegments(template: string): TemplateSegment[] {
  * selection) via native browser behavior — no custom Selection/Range bookkeeping for the
  * plain-text parts at all.
  *
- * Re-parses `template` into segments on every render (`parseTemplateSegments`) and re-renders the
- * whole DOM subtree from that — a controlled `contentEditable` in the same sense a controlled
- * `<input>` is, just with a heavier DOM diff. `onInput` reads the live DOM back out
- * (`extractTemplateFromDom`) rather than trying to track incremental text-node edits. */
+ * Re-parses `template` into segments on every render (`parseTemplateSegments`) and renders them as
+ * real React children — a controlled `contentEditable` in the same sense a controlled `<input>`
+ * is, just with React (not a manual `innerHTML` rebuild) owning the DOM diff. `onInput` still reads
+ * the live DOM back out (`extractTemplateFromDom`) rather than trying to track incremental
+ * text-node edits, since `contentEditable`'s own in-place browser mutations (typing, native
+ * cut/paste) never go through React's render path at all.
+ *
+ * Drag-and-drop (both chip reordering and dropping a template-variable button's text in) is native
+ * HTML5 DnD, not `@dnd-kit` — `@dnd-kit`'s sortable/draggable primitives assume the drop target is
+ * itself one of a fixed set of managed slots (see `components/SortableList.tsx`'s own list-reorder
+ * use), but a drop here can land at *any* arbitrary character offset inside freely-typed text, not
+ * just before/after another managed item. Native `dragover`/`drop` events carry real client
+ * coordinates, and `document.caretRangeFromPoint` (already used elsewhere in this app to convert
+ * a drop's screen position into a real DOM caret position) is exactly the primitive this needs. */
 function TemplateInput({
   template,
   onChange,
@@ -1225,21 +1368,38 @@ function TemplateInput({
 }) {
   const palette = useMenuPalette()
   const editorRef = useRef<HTMLDivElement>(null)
-  // Sidesteps a real feedback loop: `onInput` calls `onChange`, which flows back down as a new
-  // `template` prop — without this flag, the effect that re-renders the DOM from `template` would
-  // then stomp on the very keystroke that triggered it (the DOM already reflects the typed
-  // character; re-rendering from `template` at that point is redundant at best, and can steal
-  // focus/collapse the selection mid-composition at worst). Set right before `onChange` fires,
-  // cleared once the resulting re-render's effect has run.
-  const skipNextSyncRef = useRef(false)
-  // Set by the `×` remove button (to the deleted chip's own former character offset in the flat
-  // template string) right before it calls `onChange` — consumed by the `renderSegments` effect
-  // right after it rebuilds the DOM, so the cursor lands exactly where the chip used to be rather
-  // than wherever the browser happens to default to after an `innerHTML` rebuild (its start, in
-  // practice). Placing the cursor there — not e.g. at the end — is what makes "delete a chip, type
-  // or pick a replacement variable right where it was" a smooth one-motion "replace" gesture
-  // instead of "delete, then hunt for where the cursor ended up."
+  // The JSX children actually rendered are derived from this, NOT directly from the `template`
+  // prop — a real, confirmed-live bug this fixes: `contentEditable`'s own native typing mutates
+  // the real DOM directly (inserting a raw text node), completely bypassing React. If `segments`
+  // were computed straight from `template` (which changes on every keystroke via `onChange`),
+  // React would re-reconcile its stale virtual-DOM picture of the editor's children against the
+  // browser's already-mutated real DOM on every single keystroke — since React has no idea the
+  // browser inserted that character itself, this reconciliation gets the text-node boundaries
+  // wrong and can duplicate or misplace the just-typed character (observed live: typing one "X" at
+  // a chip boundary landed as two separate copies straddling a stale zero-width anchor node). Plain
+  // typing (`onInput` below) updates `template` via `onChange` for the *parent's* sake (so the
+  // resolved-filename preview stays live) but deliberately does NOT update this local state —
+  // every other kind of change (insert-from-button, drag-drop, chip removal/reorder) *does*,
+  // since those really do need React to re-render fresh chip JSX (a plain-text insertion becoming
+  // a real chip, a removed chip's DOM node actually disappearing, etc.).
+  const [renderedTemplate, setRenderedTemplate] = useState(template)
+  // Set right before a chip is removed or moved (to its own former character offset in the flat
+  // template string) — consumed by the `renderedTemplate`-keyed effect right after React
+  // re-renders, so the cursor lands exactly where the chip used to be rather than wherever the
+  // browser happens to default to. Placing the cursor there — not e.g. at the end — is what makes
+  // "delete a chip, type or pick a replacement variable right where it was" a smooth one-motion
+  // "replace" gesture instead of "delete, then hunt for where the cursor ended up."
   const pendingCursorOffsetRef = useRef<number | null>(null)
+  const segments = useMemo(() => parseTemplateSegments(renderedTemplate), [renderedTemplate])
+  // A real caret-shaped indicator tracking `dragover` — explicit user call: native drag-and-drop
+  // gives no visual feedback at all about *where* a drop will actually land (unlike typing, which
+  // has the browser's own blinking text caret), and a drop here can land at any arbitrary point
+  // among freely mixed text and chips, not just "before/after this row" the way a plain reorderable
+  // list would. `null` when nothing is being dragged over this editor. Position is a viewport
+  // `{left, top, height}` rect (matching `getBoundingClientRect()`'s own shape) — computed fresh on
+  // every `dragover` from the live pointer coordinates via `document.caretRangeFromPoint`, the same
+  // primitive `onDrop` itself already uses to resolve a drop position.
+  const [dropIndicator, setDropIndicator] = useState<{ left: number; top: number; height: number } | null>(null)
 
   /** Places the caret at flat character offset `offset` (as `extractTemplateFromDom` would count
    * it) by walking the editor's direct children, which are always either text nodes or one flat
@@ -1295,10 +1455,10 @@ function TemplateInput({
 
   /** Reads the live DOM back into a flat template string — chips carry their own literal token
    * text on a `data-token` attribute (rather than reading `textContent`, which would include the
-   * `×` button's own label) added by `renderSegments` below. Strips out every `CURSOR_ANCHOR`
-   * character (the zero-width text nodes `renderSegments` plants around each chip purely so the
-   * browser has somewhere to put a real caret) — those are a rendering-layer implementation
-   * detail, never part of the actual template content this editor represents. */
+   * `×` button's own label) set by {@link TemplateChip} itself. Strips out every `CURSOR_ANCHOR`
+   * character (the zero-width text nodes rendered around each chip purely so the browser has
+   * somewhere to put a real caret) — those are a rendering-layer implementation detail, never part
+   * of the actual template content this editor represents. */
   function extractTemplateFromDom(): string {
     const root = editorRef.current
     if (!root) return template
@@ -1313,121 +1473,132 @@ function TemplateInput({
     return result.split(CURSOR_ANCHOR).join('')
   }
 
-  function renderSegments() {
-    const root = editorRef.current
-    if (!root) return
-    root.innerHTML = ''
-    for (const segment of parseTemplateSegments(template)) {
-      if (segment.type === 'text') {
-        root.appendChild(document.createTextNode(segment.value))
-        continue
-      }
-      // A real, empty-looking text node immediately before this chip — see `CURSOR_ANCHOR`'s own
-      // docs for why a chip needs one on both sides. Only actually needed when there's no real
-      // text node already adjacent (two chips back-to-back, or a chip at the very start/end of
-      // the editor) — but adding it unconditionally is simpler and harmless: an extra zero-width
-      // anchor next to a real text node costs nothing visually or functionally.
-      root.appendChild(document.createTextNode(CURSOR_ANCHOR))
-      const chip = document.createElement('span')
-      chip.contentEditable = 'false'
-      chip.dataset.token = segment.value
-      chip.style.display = 'inline-flex'
-      chip.style.alignItems = 'center'
-      chip.style.gap = '3px'
-      chip.style.padding = '0 2px 0 5px'
-      // Wider than the original `1px` — the cursor-anchor text node between two adjacent chips
-      // (see `CURSOR_ANCHOR`'s own docs) now makes the caret placeable there at all, but a mouse
-      // still has to physically land a click within that gap, and `1px` on either side left only
-      // ~2px of real clickable width between two chips — reported as still awkward to hit even
-      // after the caret-placement fix itself. `3px` roughly triples that usable gap.
-      chip.style.margin = '0 3px'
-      chip.style.borderRadius = '3px'
-      chip.style.background = 'rgba(0,0,0,0.08)'
-      // A neutral, low-opacity grey — not `palette.border`/`palette.text` (this app's own themed
-      // accent colors, e.g. `g.css`'s dark red `#5C0D11`), which reads too close to the browser's
-      // own (usually near-black/dark) text-cursor color and made a chip's edge easy to mistake
-      // for the caret sitting right next to it. Matches the template-variable insertion buttons'
-      // own already-established border color just below.
-      chip.style.border = '1px solid rgba(128,128,128,0.4)'
-      chip.style.fontFamily = 'monospace'
-      chip.style.userSelect = 'none'
-      chip.style.whiteSpace = 'nowrap'
-      chip.onmouseenter = () => {
-        chip.style.background = 'rgba(0,0,0,0.16)'
-      }
-      chip.onmouseleave = () => {
-        chip.style.background = 'rgba(0,0,0,0.08)'
-      }
-
-      const label = document.createElement('span')
-      label.textContent = segment.value
-      chip.appendChild(label)
-
-      // A real Font Awesome icon (`fa-times`, this app's own established "remove/delete" icon —
-      // see e.g. the queue row's own delete button) rather than a plain `×` character glyph:
-      // reported as easy to mistake for literal typed text sitting inside the chip rather than a
-      // clickable remove control. Colored with the theme's own destructive-looking accent
-      // (`palette.border`, falling back to `palette.text` the same way the chip's own border
-      // already does on the 2 themes where `border` is `transparent`) instead of `currentColor`,
-      // so it visually reads as "a distinct button" rather than blending into the chip's own text.
-      const removeBtn = document.createElement('button')
-      removeBtn.type = 'button'
-      removeBtn.innerHTML = '<i class="fa fa-times" aria-hidden="true"></i>'
-      removeBtn.setAttribute('aria-label', 'Remove')
-      removeBtn.style.border = 'none'
-      removeBtn.style.background = 'none'
-      removeBtn.style.padding = '0'
-      removeBtn.style.margin = '0'
-      removeBtn.style.cursor = 'pointer'
-      removeBtn.style.color = palette.border === 'transparent' ? palette.text : palette.border
-      removeBtn.style.fontSize = '0.85em'
-      removeBtn.style.lineHeight = '1'
-      // Deliberately does NOT set `skipNextSyncRef` — unlike a normal keystroke (where the DOM
-      // already reflects the edit and a re-render would be redundant/disruptive), removing a chip
-      // needs the DOM to actually change: the chip's own DOM node must be un-rendered, which only
-      // the `template`-driven effect below (calling `renderSegments`) does.
-      removeBtn.onclick = (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        const tokenStart = template.indexOf(segment.value)
-        pendingCursorOffsetRef.current = tokenStart
-        onChange(template.slice(0, tokenStart) + template.slice(tokenStart + segment.value.length))
-      }
-      chip.appendChild(removeBtn)
-      root.appendChild(chip)
-      root.appendChild(document.createTextNode(CURSOR_ANCHOR))
+  /** Sums the flat-offset contribution of the editor's direct children up to (but not including)
+   * `stopAt` — the shared walk both {@link offsetFromRange} and {@link offsetOfChipNode} need, so
+   * "where does this DOM position/node fall in the flat template string" has exactly one
+   * implementation. Returns `null` if `stopAt` is never found among `root`'s direct children. */
+  function offsetUpTo(root: HTMLElement, stopAt: Node): number | null {
+    let offset = 0
+    for (const node of root.childNodes) {
+      if (node === stopAt) return offset
+      if (node.nodeType === Node.TEXT_NODE && node.textContent === CURSOR_ANCHOR) continue
+      offset +=
+        node.nodeType === Node.TEXT_NODE
+          ? (node.textContent?.length ?? 0)
+          : node instanceof HTMLElement
+            ? (node.dataset.token?.length ?? 0)
+            : 0
     }
+    return null
+  }
+
+  /** Converts a real DOM `Range` (as `document.caretRangeFromPoint` returns for a drop's screen
+   * coordinates) back into a flat character offset in the same counting scheme
+   * `extractTemplateFromDom`/`setCursorAtOffset` use — the inverse of `setCursorAtOffset`. Walks
+   * the editor's direct children up to (but not including) `range`'s own container
+   * ({@link offsetUpTo}), then adds `range`'s own offset within its container (0 for a chip/element
+   * container, since a range can only land *beside* an atomic chip, never inside one). Returns
+   * `null` if the range's container isn't a direct child of (or isn't) the editor at all — e.g. the
+   * drop landed on the remove-button icon inside a chip. */
+  function offsetFromRange(range: Range): number | null {
+    const root = editorRef.current
+    if (!root) return null
+    let container = range.startContainer
+    // A drop can land inside a chip's own child nodes (its label `<span>` or remove `<button>`),
+    // not just directly on the chip `<span>` itself — walk up to the nearest node that's actually
+    // a direct child of the editor before doing the linear scan below.
+    while (container.parentNode && container.parentNode !== root) {
+      container = container.parentNode
+    }
+    if (container.parentNode !== root) return null
+    const base = offsetUpTo(root, container)
+    if (base === null) return null
+    return base + (container.nodeType === Node.TEXT_NODE ? Math.min(range.startOffset, container.textContent?.length ?? 0) : 0)
+  }
+
+  /** True when `range` (as `document.caretRangeFromPoint` returns) landed *inside* a chip's own
+   * rendered subtree — its label text or its remove button — rather than beside it in real
+   * editable text. A chip is an atomic, `contentEditable={false}` unit; "dropping into" one makes
+   * no more sense than dropping into the middle of a single character, so both the drop-position
+   * indicator and the actual drop itself must reject this and fall back to the nearest valid
+   * position instead (explicit user call: a drop landing visually on top of a chip previously
+   * looked like it was "inside" it, when what actually happened was always beside it — confusing
+   * given how large a chip's own hit-area is relative to the ~6px anchor gap surrounding it). */
+  function rangeIsInsideChip(range: Range): boolean {
+    const root = editorRef.current
+    if (!root) return false
+    let node: Node | null = range.startContainer
+    while (node && node !== root) {
+      if (node instanceof HTMLElement && node.dataset.token !== undefined) return true
+      node = node.parentNode
+    }
+    return false
+  }
+
+  /** Finds `chipNode`'s own real, *current* flat offset in the live DOM ({@link offsetUpTo}) —
+   * deliberately NOT derived from `segment.key` (that offset is only valid as of whatever render
+   * produced `segments`, i.e. as of `renderedTemplate` — see that state's own docs for why it can
+   * be stale relative to the actual live DOM: a plain keystroke since the last insert/drag/remove
+   * moves the real DOM ahead without moving `renderedTemplate`/`segments` at all). A confirmed-live
+   * bug this fixes: removing/dragging a chip using its own stale `segment.key` offset corrupted
+   * unrelated already-typed plain text sitting elsewhere in the editor (observed: typing "XYZ"
+   * right before the `{ext}` chip, then removing an earlier `{crc}` chip via its own stale offset,
+   * silently relocated "XYZ" to after `{ext}` instead of leaving it in place) — every structural op
+   * (remove, drag-start, drop) must locate its target fresh, from the DOM, at the moment it acts. */
+  function offsetOfChipNode(chipNode: ChildNode): number | null {
+    const root = editorRef.current
+    if (!root) return null
+    return offsetUpTo(root, chipNode)
+  }
+
+  /** Shared by both real drop sources this editor accepts (see `TEMPLATE_TOKEN_MIME`'s own docs):
+   * inserts `text` at flat offset `dropOffset`, first removing `removeRange` (the dragged chip's
+   * own former `[start, start+length)` span) if this drop is a chip being moved rather than a
+   * button inserting something brand new. Removing before inserting, with `dropOffset` adjusted
+   * for whatever the removal shifted, is what makes "drag a chip from earlier in the string to
+   * later in it" (or vice versa) land in the right final place instead of off-by-the-chip's-own-
+   * length. Bases the edit on `extractTemplateFromDom()` — the *true* current content, read fresh
+   * — not `renderedTemplate` (only valid as of the last structural re-render) or the `template`
+   * prop (updated on every keystroke, but this component's own copy of "what the DOM says" can
+   * still be one render behind it): both `dropOffset` and `removeRange.start` were themselves just
+   * computed by walking the *live* DOM (`offsetFromRange`/`offsetOfChipNode`), so the string they
+   * index into must be that same live DOM's content, not a potentially-stale local copy of it. */
+  function insertAtOffset(text: string, dropOffset: number, removeRange?: { start: number; length: number }) {
+    let base = extractTemplateFromDom()
+    let offset = dropOffset
+    if (removeRange) {
+      base = base.slice(0, removeRange.start) + base.slice(removeRange.start + removeRange.length)
+      if (dropOffset > removeRange.start) offset -= Math.min(removeRange.length, dropOffset - removeRange.start)
+    }
+    pendingCursorOffsetRef.current = offset + text.length
+    const next = base.slice(0, offset) + text + base.slice(offset)
+    setRenderedTemplate(next)
+    onChange(next)
   }
 
   useEffect(() => {
-    if (skipNextSyncRef.current) {
-      skipNextSyncRef.current = false
-      return
-    }
-    renderSegments()
     if (pendingCursorOffsetRef.current !== null) {
       editorRef.current?.focus()
       setCursorAtOffset(pendingCursorOffsetRef.current)
       pendingCursorOffsetRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [template])
+  }, [renderedTemplate])
 
   useEffect(() => {
-    renderSegments()
     editorRef.current?.focus()
     // Places the initial cursor right before the extension (the `.` of `.{ext}`), not wherever
-    // the browser defaults an `innerHTML`-rebuilt `contentEditable` to (its very start, in
-    // practice) — the filename stem/CRC portion is what a user typically wants to actually look
-    // at/edit first, with the extension itself rarely touched. Only correct because the default
-    // template's own shape (`{filename}_{crc}.{ext}`) is fixed, not derived per-file — the offset
-    // right before its own trailing `.{ext}` token is always the same regardless of what the real
-    // extension turns out to be, so this doesn't need to know anything about the actual filename
-    // (compound extensions like `tar.gz` are already handled by `splitFilenameStemAndExt` itself,
-    // which feeds the whole `{ext}` value as one atomic token either way).
+    // the browser defaults a freshly-mounted `contentEditable` to (its very start, in practice) —
+    // the filename stem/CRC portion is what a user typically wants to actually look at/edit first,
+    // with the extension itself rarely touched. Only correct because the default template's own
+    // shape (`{filename}_{crc}.{ext}`) is fixed, not derived per-file — the offset right before its
+    // own trailing `.{ext}` token is always the same regardless of what the real extension turns
+    // out to be, so this doesn't need to know anything about the actual filename (compound
+    // extensions like `tar.gz` are already handled by `splitFilenameStemAndExt` itself, which feeds
+    // the whole `{ext}` value as one atomic token either way).
     setCursorAtOffset(template.length - '.{ext}'.length)
-    // Runs once on mount only — subsequent re-renders are handled by the `template`-keyed effect
-    // above; re-running this on every render would double-render the same segments.
+    // Runs once on mount only — subsequent re-renders are handled by the `renderedTemplate`-keyed
+    // effect above; re-running this on every render would re-focus/move the cursor on every
+    // keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1444,25 +1615,14 @@ function TemplateInput({
         selection && selection.rangeCount > 0 && root.contains(selection.anchorNode)
           ? selection.getRangeAt(0)
           : null
-      if (range) {
-        range.deleteContents()
-        range.insertNode(document.createTextNode(text))
-        range.collapse(false)
-      } else {
-        root.appendChild(document.createTextNode(text))
-      }
-      // Deliberately does NOT set `skipNextSyncRef` (unlike a plain keystroke's own `onInput`
-      // below) — a real, confirmed-live bug this fixes: the text just inserted above is a plain
-      // text node, not yet a chip. Skipping the sync here (as an earlier version of this function
-      // did) left `{crc}`/`({crc})` etc. sitting in the DOM as bare, unstyled text forever — the
-      // `template`-driven `renderSegments` re-render below is exactly what turns that plain text
-      // into a real chip, so this insertion path needs it to actually run, not skip it.
-      onChange(extractTemplateFromDom())
+      const offset = range ? (offsetFromRange(range) ?? extractTemplateFromDom().length) : extractTemplateFromDom().length
+      insertAtOffset(text, offset)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
+    <>
     <div
       ref={editorRef}
       contentEditable
@@ -1487,7 +1647,11 @@ function TemplateInput({
         wordBreak: 'break-all',
       }}
       onInput={() => {
-        skipNextSyncRef.current = true
+        // Deliberately does NOT update `renderedTemplate` — see that state's own docs for why
+        // plain typing must not feed back into the JSX children React renders (the browser's own
+        // DOM mutation from this exact keystroke has already happened; re-rendering from it would
+        // fight that mutation instead of leaving it alone). `onChange` still fires so the parent
+        // (the resolved-filename preview, `substituteFilenameTemplate`) stays live.
         onChange(extractTemplateFromDom())
       }}
       onKeyDown={(e) => {
@@ -1495,7 +1659,200 @@ function TemplateInput({
         // newline `contentEditable` would otherwise happily create.
         if (e.key === 'Enter') e.preventDefault()
       }}
-    />
+      onDragEnter={(e) => {
+        // A real, confirmed-live bug this fixes: the HTML5 DnD spec requires `preventDefault()` on
+        // BOTH `dragenter` AND every subsequent `dragover` for an element to be treated as a valid
+        // drop target — this editor previously only did it on `dragover`. Chromium (observed live)
+        // uses `dragenter`'s own outcome to decide whether the element counts as a drop target for
+        // the whole hover session: leaving `dragenter` unhandled meant `dragover` kept firing (and
+        // its own `preventDefault()` calls looked like they should have been enough), but `drop`
+        // itself was silently never dispatched at all — no console error, the browser just quietly
+        // refuses. This is *exactly* the failure mode reported live (drag ghost follows the
+        // pointer, the custom drop-position indicator even renders correctly during `dragover`,
+        // but releasing the mouse does nothing) and was invisible to synthetic `DragEvent` tests
+        // dispatched directly in a script, since those don't reproduce a real browser's own
+        // internal per-drag-session drop-target eligibility tracking.
+        e.preventDefault()
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        // Recomputed on every `dragover` (fires continuously while the pointer moves), not just
+        // once at `dragenter` — the whole point is that it tracks the live pointer position, the
+        // same real drop-target primitive `onDrop` itself resolves with (`caretRangeFromPoint`).
+        const point = document.caretRangeFromPoint?.(e.clientX, e.clientY)
+        // Landing inside a chip's own rendered subtree is not a valid drop target (see
+        // `rangeIsInsideChip`'s own docs) — no indicator shown for it, matching `onDrop`'s own
+        // refusal to insert there (a dangling indicator with nowhere real to land would be worse
+        // than none at all).
+        if (point && rangeIsInsideChip(point)) {
+          setDropIndicator(null)
+          return
+        }
+        const rect = point?.getClientRects()[0] ?? point?.startContainer.parentElement?.getBoundingClientRect()
+        if (rect) setDropIndicator({ left: rect.left, top: rect.top, height: rect.height || 16 })
+      }}
+      onDragLeave={(e) => {
+        // `dragleave` fires when crossing from the editor onto one of its own children too (a
+        // chip, a text node's own bounding box) — only actually clear the indicator once the
+        // pointer has left the editor's own bounding box entirely, or it'd flicker on/off while
+        // dragging over chip boundaries within the same editor.
+        const root = editorRef.current
+        if (!root) return
+        const stillInside =
+          e.clientX >= root.getBoundingClientRect().left &&
+          e.clientX <= root.getBoundingClientRect().right &&
+          e.clientY >= root.getBoundingClientRect().top &&
+          e.clientY <= root.getBoundingClientRect().bottom
+        if (!stillInside) setDropIndicator(null)
+      }}
+      onDrop={(e) => {
+        const text = e.dataTransfer.getData(TEMPLATE_TOKEN_MIME)
+        setDropIndicator(null)
+        if (!text) return
+        e.preventDefault()
+        const point = document.caretRangeFromPoint?.(e.clientX, e.clientY)
+        // A drop landing inside a chip's own subtree is rejected outright (see
+        // `rangeIsInsideChip`'s own docs) rather than silently falling back to some other
+        // position — that would insert the dropped text somewhere the user never actually pointed
+        // at, which is worse than just not accepting the drop at all.
+        if (point && rangeIsInsideChip(point)) return
+        const dropOffset = (point && offsetFromRange(point)) ?? extractTemplateFromDom().length
+        const originRaw = e.dataTransfer.getData(TEMPLATE_CHIP_ORIGIN_MIME)
+        const removeRange = originRaw ? { start: Number(originRaw), length: text.length } : undefined
+        insertAtOffset(text, dropOffset, removeRange)
+      }}
+    >
+      {segments.map((segment) =>
+        segment.type === 'text' ? (
+          segment.value
+        ) : (
+          // A real, empty-looking text node immediately before (and, below, after) this chip —
+          // see `CURSOR_ANCHOR`'s own docs for why a chip needs one on both sides. Only actually
+          // needed when there's no real text node already adjacent (two chips back-to-back, or a
+          // chip at the very start/end of the editor) — but adding it unconditionally is simpler
+          // and harmless: an extra zero-width anchor next to a real text node costs nothing
+          // visually or functionally.
+          <Fragment key={segment.key}>
+            {CURSOR_ANCHOR}
+            <TemplateChip
+              value={segment.value}
+              onDragStartToken={(chipNode, dataTransfer) => {
+                dataTransfer.setData(TEMPLATE_TOKEN_MIME, segment.value)
+                // Real, current offset (`offsetOfChipNode`), not `segment.key` — see that
+                // function's own docs for the corruption bug this avoids.
+                const origin = offsetOfChipNode(chipNode)
+                if (origin !== null) dataTransfer.setData(TEMPLATE_CHIP_ORIGIN_MIME, String(origin))
+              }}
+              onRemove={(chipNode) => {
+                const tokenStart = offsetOfChipNode(chipNode)
+                if (tokenStart === null) return
+                pendingCursorOffsetRef.current = tokenStart
+                const dom = extractTemplateFromDom()
+                const next = dom.slice(0, tokenStart) + dom.slice(tokenStart + segment.value.length)
+                setRenderedTemplate(next)
+                onChange(next)
+              }}
+            />
+            {CURSOR_ANCHOR}
+          </Fragment>
+        ),
+      )}
+    </div>
+    {/* A real, fixed-position blinking-caret-style bar tracking `dragover` (explicit user call —
+        see `dropIndicator`'s own docs for why native drag-and-drop needs this at all). Rendered as
+        a sibling overlay, not a child of the `contentEditable` div itself — an extra element
+        *inside* that div would need to be excluded from `extractTemplateFromDom`'s own walk (like
+        `CURSOR_ANCHOR` already is) and would shift every other child's DOM-position-based offset
+        math for no reason, when a `position: fixed` overlay using the same viewport coordinates
+        `getBoundingClientRect()` already returns achieves the identical visual result with zero
+        interaction with the editor's real content model. */}
+    {dropIndicator && (
+      <div
+        style={{
+          position: 'fixed',
+          left: dropIndicator.left - 1,
+          top: dropIndicator.top,
+          height: dropIndicator.height,
+          width: 2,
+          background: palette.border === 'transparent' ? palette.text : palette.border,
+          pointerEvents: 'none',
+          zIndex: Z_OVERLAY_CONTENT,
+        }}
+      />
+    )}
+    </>
+  )
+}
+
+/** One `{var}`-insertion button in {@link RenamePopover}'s own button row — a real component (not
+ * an inline map body) specifically so it can carry its own `dragging` state and apply the exact
+ * same dim-while-dragging opacity treatment {@link TemplateChip} already applies to a chip being
+ * dragged (explicit user call: reported as feeling inconsistent when only chips dimmed while
+ * dragging and these buttons didn't, even though both are real drag sources feeding the same
+ * editor). `.stdbtn`'s theme default carries `min-width: 150px` — fine for a normal action button,
+ * wildly oversized for a small "insert this token" chip, so this deliberately doesn't use that
+ * class at all (a plain themed-border button instead). */
+function TemplateVarButton({
+  label,
+  palette,
+  onClick,
+  onDragStart,
+}: {
+  label: string
+  palette: ReturnType<typeof useMenuPalette>
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
+  onDragStart: (e: React.DragEvent<HTMLButtonElement>) => void
+}) {
+  const [dragging, setDragging] = useState(false)
+  // Real React state, not an imperative `e.currentTarget.style.outline` mutation (an earlier
+  // version of this button did that, mirroring `PopupMenuItem`'s own hover-highlight pattern) — a
+  // confirmed-live bug this fixes: starting a drag from a hovered button never fires the matching
+  // `mouseleave` (native drag-and-drop suspends normal mouse-tracking events for the whole
+  // gesture, using `dragenter`/`dragleave`/`dragover` instead), so the outline set by
+  // `onMouseEnter` was left permanently stuck on the DOM node — visually read as "the popover's
+  // own left border got thicker" since the button sits flush against it. Driving `outline` from
+  // React state instead means `dragging` (already correctly reset by the real `onDragEnd`) can
+  // also suppress the hover outline for the whole gesture, and the outline can never desync from
+  // an actual mouse event that failed to fire.
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      type="button"
+      draggable
+      style={{
+        fontSize: FONT_SIZE_8PT,
+        padding: '1px 5px',
+        minWidth: 0,
+        width: 'auto',
+        border: '1px solid rgba(128,128,128,0.4)',
+        borderRadius: 3,
+        background: 'transparent',
+        cursor: 'grab',
+        opacity: dragging ? 0.35 : 1,
+        // `palette.border` is `transparent` on 2 of this app's 5 themes (`modern_red.css`/
+        // `modern_clear.css`) — an outline in that color would be invisible on hover.
+        // `palette.text` is a real, non-transparent color on every theme.
+        outline: hovered && !dragging ? `1px solid ${palette.text}` : 'none',
+        outlineOffset: '1px',
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={onClick}
+      onDragStart={(e) => {
+        onDragStart(e)
+        setDragging(true)
+      }}
+      onDragEnd={() => {
+        setDragging(false)
+        // A real drag gesture ends with the pointer somewhere else entirely (over the editor, or
+        // outside the popup) — `mouseleave` still won't have fired on this button, so `hovered`
+        // must be cleared explicitly here too, not left to an event that isn't coming.
+        setHovered(false)
+      }}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -1580,38 +1937,23 @@ function RenamePopover({
               don't use that class at all (plain themed-border buttons instead). */}
           <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
             {TEMPLATE_VARS.map((key) => (
-              <button
+              <TemplateVarButton
                 key={key}
-                type="button"
-                style={{
-                  fontSize: FONT_SIZE_8PT,
-                  padding: '1px 5px',
-                  minWidth: 0,
-                  width: 'auto',
-                  border: '1px solid rgba(128,128,128,0.4)',
-                  borderRadius: 3,
-                  background: 'transparent',
-                  cursor: 'pointer',
-                }}
-                // Inline `style` can't express `:hover` — this app's own theme classes
-                // (`.stdbtn`/`.stdinput`) get their hover state from real CSS rules, but these
-                // buttons deliberately don't use `.stdbtn` (its 150px min-width is wildly oversized
-                // here), so the hover affordance has to be applied by hand, on the actual events,
-                // the same way `PopupMenuItem` already does for its own row-hover highlight.
-                // `palette.border` is `transparent` on 2 of this app's 5 themes (`modern_red.css`/
-                // `modern_clear.css`) — an outline in that color would be invisible on hover.
-                // `palette.text` is a real, non-transparent color on every theme.
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.outline = `1px solid ${palette.text}`
-                  e.currentTarget.style.outlineOffset = '1px'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.outline = 'none'
-                }}
+                label={`{${key}}`}
+                palette={palette}
                 onClick={(e) => insertRef.current(e.shiftKey ? shiftClickInsertion(key) : `{${key}}`)}
-              >
-                {`{${key}}`}
-              </button>
+                // Drag-to-insert is the click behavior's own drag equivalent — same
+                // shift-modifier-aware insertion text (`shiftClickInsertion`), just delivered via
+                // the editor's own `onDrop` (which computes the real drop-point offset) instead of
+                // `insertRef.current` (which always targets wherever the caret/selection currently
+                // sits, oblivious to where a drag actually released). A native `DragEvent` still
+                // carries the held-modifier-keys state at `dragstart` time, so Shift-drag works the
+                // same as Shift-click.
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'copy'
+                  e.dataTransfer.setData(TEMPLATE_TOKEN_MIME, e.shiftKey ? shiftClickInsertion(key) : `{${key}}`)
+                }}
+              />
             ))}
           </div>
           {/* Explains the shift-click insertion mode right below the buttons that trigger it —
