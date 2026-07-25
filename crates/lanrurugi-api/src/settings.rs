@@ -41,6 +41,40 @@ pub fn router() -> Router<AppState> {
         .route("/settings/password", post(change_password))
 }
 
+/// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s
+/// `build_app` (same pattern as `lanrurugi_api::login::router()`) — the Login page needs the
+/// saved theme to render itself correctly, but it runs before any session exists, so it can't go
+/// through the auth-gated `/settings` the rest of the Settings page uses. Exposes only `theme`,
+/// not the full settings payload (which includes things like `apikey`).
+pub fn public_router() -> Router<AppState> {
+    Router::new().route("/theme", get(get_theme))
+}
+
+async fn get_theme(State(state): State<AppState>) -> Response {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_theme",
+                e.to_string(),
+            )
+        }
+    };
+    let theme: Option<String> = match conn.hget(CONFIG_KEY, "theme").await {
+        Ok(t) => t,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_theme",
+                e.to_string(),
+            )
+        }
+    };
+    axum::Json(json!({ "theme": theme.unwrap_or_else(|| "modern.css".to_string()) }))
+        .into_response()
+}
+
 /// `(field, default)` pairs for every `LRR_CONFIG` value the Settings page's Global/Security/
 /// Files/Tags sections read or write, verified against `Model/Config.pm`'s `get_redis_conf`
 /// calls. Excludes `password` (see module docs) and `theme` (already had its own default before

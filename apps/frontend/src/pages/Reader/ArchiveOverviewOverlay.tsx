@@ -1,15 +1,17 @@
 import { useQueryClient } from '@tanstack/react-query'
-import type { MouseEvent } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { useAddTocEntry, useRemoveTocEntry, useSetArchiveThumbnail, useStampedPages } from '../../api/hooks'
 import type { ArchiveMetadata, CategoryMetadata } from '../../api/types'
+import RatingWidget from '../../components/RatingWidget'
+import StarRatingDisplay from '../../components/StarRating'
+import { parseRating } from '../../lib/rating'
 import { getTagSearchURL } from '../../lib/tagFormat'
 import { routes } from '../../routes'
 import { toast } from '../../toast'
-import RatingWidget from './RatingWidget'
 
 // Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
 // converts the tag value through a date formatter instead of printing it raw).
@@ -30,7 +32,20 @@ function formatTagValue(namespace: string, value: string): string {
 /** Mirrors legacy's `splitTagsByNamespace` + `buildTagsDiv` (`~/LANraragi/public/js/mod/common.js`)
  * — groups a flat comma-separated tag string by its `namespace:value` prefix (untagged values fall
  * under `other`), rendered as a `caption-namespace` row per namespace with each value as a
- * clickable search-link chip. */
+ * clickable search-link chip. `rating:` gets its own gold-star rendering instead of the raw tag
+ * value (see the `namespace === 'rating'` branch below) — legacy's own real overview page shows
+ * the star icons in this table *in addition to* the separate interactive `RatingWidget` above it
+ * (confirmed against a real screenshot of a rated archive), so this table must render it too, not
+ * skip it. Still a real, working search-link chip underneath, though — legacy's own real rating
+ * chip *is* clickable (a real user-confirmed link, e.g. `?q=rating%3A⭐⭐⭐⭐⭐$` against a live
+ * legacy instance), a link this port's own `q=rating:2.5$` (the equivalent search against this
+ * app's own decimal-encoded storage format — verified live: correctly returns exactly the archive
+ * carrying that tag) actually and correctly answers, unlike an earlier version of this component
+ * that dropped the link entirely on the assumption nobody would search by star count — wrong,
+ * since legacy itself treats it as a completely ordinary searchable tag. No underline on it
+ * specifically, though (a real, deliberate deviation, not a bug) — legacy's own underlined
+ * rating-star link reads like a broken/dead link at a glance, which the star icons alone don't
+ * need to invite. */
 function TagsTable({ tags }: { tags: string }) {
   if (!tags) return null
   const byNamespace = new Map<string, string[]>()
@@ -40,7 +55,6 @@ function TagsTable({ tags }: { tags: string }) {
     const idx = tag.indexOf(':')
     const namespace = idx === -1 ? 'other' : tag.slice(0, idx).trim()
     const value = idx === -1 ? tag : tag.slice(idx + 1).trim()
-    if (namespace.toLowerCase() === 'rating') continue // shown by RatingWidget, not the table
     const list = byNamespace.get(namespace) ?? []
     list.push(value)
     byNamespace.set(namespace, list)
@@ -58,34 +72,186 @@ function TagsTable({ tags }: { tags: string }) {
               {displayNamespace(namespace)}:
             </td>
             <td>
-              {(byNamespace.get(namespace) ?? []).map((value) => (
-                <div className="gt" key={value}>
-                  {/* `source` is a link to an external, third-party site — real `target="_blank"`
-                      so it opens a new tab instead of navigating the reader away, matching
-                      `TagTable.tsx`'s own real `source` branch (this table predates that shared
-                      component and never got the same split when it landed there; this was a
-                      real, independently-discovered bug, not a copy of an already-fixed one). */}
-                  {namespace === 'source' ? (
-                    <a
-                      href={getTagSearchURL(namespace, value)}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {value}
-                    </a>
-                  ) : (
-                    <a href={getTagSearchURL(namespace, value)} onClick={(e) => e.stopPropagation()}>
-                      {formatTagValue(namespace, value)}
-                    </a>
-                  )}
+              {namespace.toLowerCase() === 'rating' ? (
+                <div className="gt">
+                  <a
+                    href={getTagSearchURL(namespace, (byNamespace.get(namespace) ?? [])[0] ?? '')}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ textDecoration: 'none' }}
+                  >
+                    <StarRatingDisplay rating={parseRating((byNamespace.get(namespace) ?? [])[0]) ?? 0} size={16} />
+                  </a>
                 </div>
-              ))}
+              ) : (
+                (byNamespace.get(namespace) ?? []).map((value) => (
+                  <div className="gt" key={value}>
+                    {/* `source` is a link to an external, third-party site — real `target="_blank"`
+                        so it opens a new tab instead of navigating the reader away, matching
+                        `TagTable.tsx`'s own real `source` branch (this table predates that shared
+                        component and never got the same split when it landed there; this was a
+                        real, independently-discovered bug, not a copy of an already-fixed one). */}
+                    {namespace === 'source' ? (
+                      <a
+                        href={getTagSearchURL(namespace, value)}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {value}
+                      </a>
+                    ) : (
+                      <a href={getTagSearchURL(namespace, value)} onClick={(e) => e.stopPropagation()}>
+                        {formatTagValue(namespace, value)}
+                      </a>
+                    )}
+                  </div>
+                ))
+              )}
             </td>
           </tr>
         ))}
       </tbody>
     </table>
+  )
+}
+
+/** One page thumbnail in the overview grid — shows a spin icon (same `fa-circle-notch fa-spin`
+ * class legacy's own equivalent uses) while its `<img>` hasn't loaded yet, removed once it has.
+ *
+ * Legacy's real equivalent (`reader.js`'s `updateArchiveOverlay`/`generateThumbnails`) instead
+ * polls a Minion job's progress notes to know which pages have a generated thumbnail yet, since
+ * legacy pre-extracts thumbnails as a separate background step. This app's own
+ * `GET /archives/{id}/thumbnail?page=N` has no such split — a cache miss regenerates synchronously
+ * and blocks the same request until it's ready (see that handler's own docs,
+ * `crates/lanrurugi-api/src/archives.rs`) — so the browser's native `<img>` `onLoad` event already
+ * *is* the real "this page's thumbnail is ready" signal, with nothing else to poll.
+ *
+ * Positioned via real `position: absolute` centering within the parent `.id3.quick-thumbnail`
+ * (itself `position: relative` — set by the caller), rather than reusing `Library.tsx`'s
+ * `.ttspinner` class as-is: that class's own CSS is a `top: -162px` *relative* offset tuned
+ * specifically for `ArchiveCard`'s layout, where a full-size `wait_warmly.jpg` placeholder
+ * `<img>` occupies real space immediately before it in DOM flow — this grid's cards have no such
+ * placeholder image, so the same fixed offset pushed the icon above the card entirely (confirmed
+ * via a real `getBoundingClientRect()` comparison: the spinner's rect landed above the card's own
+ * top edge, not inside it).
+ *
+ * Hides the not-yet-loaded `<img>` with `visibility: hidden` (which still occupies real layout
+ * space, so the browser can compute whether it intersects the viewport), never `display: none`
+ * (which removes it from layout, and Chrome's real `loading="lazy"` never fires the network
+ * request for an image in that state at all — confirmed live: an earlier version of this
+ * component that used `display: none` here left every one of a 293-page archive's thumbnails
+ * stuck on their spinner forever, `list_network_requests` showing zero `thumbnail?page=N`
+ * requests ever fired). `Library.tsx`'s own `ArchiveCard` gets away with `display: none` only
+ * because its thumbnail `<img>` was never marked `loading="lazy"` to begin with. */
+function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
+  const [loaded, setLoaded] = useState(false)
+  return (
+    <>
+      {!loaded && (
+        // The centering transform lives on this plain, non-animated wrapper, not on the `<i>`
+        // itself — `fa-spin`'s own CSS animation drives the icon's `transform` (a rotation) every
+        // frame, which silently overwrote a `translate(-50%, -50%)` placed directly on the same
+        // element (only one `transform` can apply at a time; they don't compose) and put the
+        // icon's rotation pivot at the card's top-left corner instead of centered on it —
+        // confirmed live via `getBoundingClientRect()`: the icon's rendered center sat well right
+        // of the card's true horizontal center. Splitting the two transforms across parent/child
+        // is what lets both apply independently.
+        <span
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+          }}
+        >
+          <i className="fa fa-4x fa-circle-notch fa-spin" aria-hidden="true"></i>
+        </span>
+      )}
+      <img
+        loading="lazy"
+        alt={alt}
+        src={src}
+        style={loaded ? undefined : { visibility: 'hidden' }}
+        onLoad={() => setLoaded(true)}
+      />
+    </>
+  )
+}
+
+/** The "第 N 页" label shown over a page-grid cell — its own component (was previously a plain
+ * `<span className="page-number">`, sharing that CSS class with the two hover-reveal buttons
+ * below purely because legacy's own markup groups all three under it). Genuinely centered
+ * (`left: 50%` + `translateX(-50%)`) rather than legacy's own real `left: 30%` (verified against
+ * `lrr.css`) — that value was never actually a deliberate "off-center" design choice to preserve,
+ * just an artifact of the label's own text width never being accounted for in a fixed percentage;
+ * a real centering rule is what "第 N 页" visibly reads as trying to be. */
+function PageNumberLabel({ children }: { children: ReactNode }) {
+  return (
+    <span
+      className="page-number"
+      style={{ left: '50%', transform: 'translateX(-50%)' }}
+    >
+      {children}
+    </span>
+  )
+}
+
+/** One of the two hover-revealed action buttons in a page-grid cell (`SetThumbnailButton`/
+ * `AddChapterButton` below) — split out from a shared `page-number` class (legacy's own
+ * `reader.js` markup puts the page-number label and both buttons under that one class, since all
+ * three want the same `position: absolute` + hidden-until-hovered behavior) into its own
+ * component with its own React-driven hover state, once their *positions* stopped actually
+ * matching each other (the label is now genuinely centered — see `PageNumberLabel` — while the
+ * buttons anchor to a `right`-anchored corner instead). Three unrelated things sharing one CSS
+ * class/hover-reveal mechanism just because they used to occupy the same *area* was more coupling
+ * than the actual relationship between them warranted once that stopped being true. */
+function PageGridActionIcon({
+  icon,
+  corner,
+  title,
+  hovered,
+  onClick,
+}: {
+  icon: string
+  corner: 'top' | 'bottom'
+  title: string | undefined
+  /** Lifted to the parent `.quick-thumbnail` cell rather than tracked on this element itself —
+   * at rest this icon sits at `z-index: -1`, *behind* the thumbnail `<img>`, so the pointer never
+   * actually reaches it to fire its own `onMouseEnter` in the first place (confirmed live: a
+   * version of this component with its own local hover state never once revealed itself, since
+   * entering it was exactly the thing being behind another element prevented). Legacy's real
+   * equivalent (`.quick-thumbnail:hover>.page-number`) sidesteps this the same way, by keying off
+   * the *parent's* hover instead of the icon's own. */
+  hovered: boolean
+  onClick: (e: MouseEvent) => void
+}) {
+  return (
+    <a
+      href="#"
+      title={title}
+      className={`fas ${icon}`}
+      onClick={onClick}
+      style={{
+        position: 'absolute',
+        // Legacy's own two real values here are `top: 2%`/`top: 80%` (verified against
+        // `reader.js`) — both computed from the top, so the "bottom" button's exact position
+        // depends on the cell's own height. `bottom: 2%` for this one instead expresses the
+        // actually-intended "pinned near the bottom-right corner" relationship directly,
+        // independent of cell height — the same reasoning that motivated `right` over `left`
+        // for the horizontal axis.
+        [corner === 'top' ? 'top' : 'bottom']: '2%',
+        right: '2%',
+        padding: 12,
+        fontSize: 20,
+        color: 'lightskyblue',
+        // Mirrors legacy's own real `.quick-thumbnail:hover>.page-number` rule (`lrr.css`) —
+        // `z-index: -1` at rest (behind the thumbnail `<img>`, effectively invisible), `300` +
+        // a black backdrop once actually hovered, driven here by this component's own React
+        // state rather than that shared CSS selector (see this component's own docs for why).
+        zIndex: hovered ? 300 : -1,
+        backgroundColor: hovered ? '#000000' : undefined,
+      }}
+    />
   )
 }
 
@@ -135,6 +301,19 @@ export default function ArchiveOverviewOverlay({
   const addTocEntry = useAddTocEntry(archive.arcid)
   const removeTocEntry = useRemoveTocEntry(archive.arcid)
 
+  // `useSetArchiveThumbnail`'s own `onSuccess` invalidates the *metadata* query, but the cover
+  // `<img>` below points at a plain, param-free `/api/archives/{id}/thumbnail` URL — a browser
+  // caches an image response by URL alone, so a same-URL re-render after a successful "set as
+  // thumbnail" click kept serving the old cached bytes instead of the just-regenerated ones (only
+  // a full page reload, which bypasses the image cache incidentally rather than by design, ever
+  // showed the update). Bumped on success and appended as a cache-busting query param below.
+  // Legacy itself has no equivalent fix — its own `.set-thumbnail` handler (`reader.js`) never
+  // re-fetches the cover `<img>` at all after a successful PUT, so the same staleness exists
+  // there too (confirmed by reading that handler's full body — it only ever calls `Server.callAPI`
+  // and shows a toast, nothing image-related) — this is a straightforward improvement, not a port
+  // of some real legacy mechanism.
+  const [thumbnailVersion, setThumbnailVersion] = useState(0)
+
   // Legacy's `.set-thumbnail` click handler (`reader.js`) — regenerates the cover thumbnail from
   // this page and shows a toast; `e.stopPropagation()` so the click doesn't also trigger the
   // thumbnail's own `onSelectPage` navigation.
@@ -142,7 +321,10 @@ export default function ArchiveOverviewOverlay({
     e.preventDefault()
     e.stopPropagation()
     setThumbnail.mutate(page, {
-      onSuccess: () => toast({ text: t('Successfully set page {{n}} as the thumbnail!', { n: page }) ?? undefined }),
+      onSuccess: () => {
+        setThumbnailVersion((v) => v + 1)
+        toast({ text: t('Successfully set page {{n}} as the thumbnail!', { n: page }) ?? undefined })
+      },
       onError: () => toast({ text: t('Error updating thumbnail') ?? undefined, icon: 'error' }),
     })
   }
@@ -227,8 +409,23 @@ export default function ArchiveOverviewOverlay({
         <div id="tagContainer" className="caption caption-tags caption-reader">
           <br />
           <div style={{ marginBottom: 16 }}>
-            <div className="id3 nocrop reader-thumbnail">
-              <img alt="" src={`/api/archives/${archive.arcid}/thumbnail`} />
+            {/* Legacy's own `.id3 img { max-height: 275px }` alone doesn't keep this narrow — a
+                landscape-oriented cover (a raw panel image rather than a proper portrait cover,
+                confirmed via a real archive that reproduces this) has plenty of headroom under
+                that height cap to still render very wide, pushing Admin Options below instead of
+                beside it. Legacy avoids this because `#archivePagesOverlay` itself carries `.id1`
+                (`width: 228px`), which `.id3.nocrop img { max-width: 95% }` computes against —
+                this port's own `#tagContainer` (`.caption-reader { min-width: 50% }`) has no such
+                fixed width to inherit from, so the same 95%-of-ancestor rule alone doesn't
+                reliably leave room for Admin Options beside it. 200px lands close to legacy's own
+                effective ~217px (95% of 228px) without depending on an ancestor width this port
+                doesn't have. */}
+            <div className="id3 nocrop reader-thumbnail" style={{ maxWidth: 200 }}>
+              <img
+                alt=""
+                src={`/api/archives/${archive.arcid}/thumbnail${thumbnailVersion > 0 ? `?v=${thumbnailVersion}` : ''}`}
+                style={{ maxWidth: '100%' }}
+              />
             </div>
 
             {loggedIn && (
@@ -320,6 +517,7 @@ export default function ArchiveOverviewOverlay({
             {chapters && (
               <select
                 id="chapter-select"
+                className="favtag-btn"
                 style={{ width: 200 }}
                 onChange={(e) => {
                   const page = Number(e.target.value)
@@ -365,43 +563,81 @@ export default function ArchiveOverviewOverlay({
             const isStamped = stampedPageSet.has(String(page))
             if (filterStamped && !isStamped) return null
             return (
-              <div
+              <PageGridCell
                 key={page}
-                className="id1"
-                style={{ display: 'inline-block', cursor: 'pointer' }}
-                onClick={() => onSelectPage(page)}
-              >
-                <div className="id3 quick-thumbnail" data-stamped={isStamped || undefined}>
-                  <span className="page-number">{t('Page {{n}}', { n: page })}</span>
-                  <img
-                    loading="lazy"
-                    alt={t('Page {{n}}', { n: page }) ?? undefined}
-                    src={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
-                  />
-                  {loggedIn && (
-                    <>
-                      <a
-                        href="#"
-                        style={{ padding: 12, top: '2%', left: '72%' }}
-                        title={t('Set this Page as Thumbnail') ?? undefined}
-                        className="fas fa-file-image page-number set-thumbnail"
-                        onClick={(e) => handleSetThumbnail(e, page)}
-                      />
-                      <a
-                        href="#"
-                        style={{ padding: 12, top: '80%', left: '72%' }}
-                        title={t('Add Chapter at this Page') ?? undefined}
-                        className="fas fa-book-medical page-number add-toc"
-                        onClick={(e) => handleAddToc(e, page)}
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
+                page={page}
+                isStamped={isStamped}
+                loggedIn={loggedIn}
+                thumbnailSrc={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
+                onSelectPage={onSelectPage}
+                onSetThumbnail={handleSetThumbnail}
+                onAddToc={handleAddToc}
+              />
             )
           })}
         </div>
       </div>
     </>
+  )
+}
+
+/** One cell in the page-grid — split out from the inline map body so the hover state that both
+ * `PageGridActionIcon`s need (see that component's own docs on why it can't track its own hover)
+ * has somewhere to live: the parent `.quick-thumbnail` cell itself, exactly like legacy's own
+ * `.quick-thumbnail:hover>.page-number` CSS rule keys off the same element. */
+function PageGridCell({
+  page,
+  isStamped,
+  loggedIn,
+  thumbnailSrc,
+  onSelectPage,
+  onSetThumbnail,
+  onAddToc,
+}: {
+  page: number
+  isStamped: boolean
+  loggedIn: boolean
+  thumbnailSrc: string
+  onSelectPage: (page: number) => void
+  onSetThumbnail: (e: MouseEvent, page: number) => void
+  onAddToc: (e: MouseEvent, page: number) => void
+}) {
+  const { t } = useTranslation()
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      className="id1"
+      style={{ display: 'inline-block', cursor: 'pointer' }}
+      onClick={() => onSelectPage(page)}
+    >
+      <div
+        className="id3 quick-thumbnail"
+        data-stamped={isStamped || undefined}
+        style={{ position: 'relative' }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <PageNumberLabel>{t('Page {{n}}', { n: page })}</PageNumberLabel>
+        <OverviewThumbnail src={thumbnailSrc} alt={t('Page {{n}}', { n: page }) ?? undefined} />
+        {loggedIn && (
+          <>
+            <PageGridActionIcon
+              icon="fa-file-image"
+              corner="top"
+              title={t('Set this Page as Thumbnail') ?? undefined}
+              hovered={hovered}
+              onClick={(e) => onSetThumbnail(e, page)}
+            />
+            <PageGridActionIcon
+              icon="fa-book-medical"
+              corner="bottom"
+              title={t('Add Chapter at this Page') ?? undefined}
+              hovered={hovered}
+              onClick={(e) => onAddToc(e, page)}
+            />
+          </>
+        )}
+      </div>
+    </div>
   )
 }

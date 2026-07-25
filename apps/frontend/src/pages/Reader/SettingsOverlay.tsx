@@ -130,7 +130,12 @@ export default function SettingsOverlay({
             <input
               id="preload-input"
               className="stdinput"
-              style={{ display: 'inline' }}
+              // Legacy's own markup (`reader.html.tt2`) sets no width at all on this input, so
+              // it's whatever the browser's default `<input type="number">` width happens to be
+              // — wide enough (for a field that only ever needs 1-2 digits) to force the Apply
+              // button below it onto its own line in this settings panel's narrower column,
+              // rather than sitting inline beside it the way `display: 'inline'` alone intends.
+              style={{ display: 'inline', width: '4em' }}
               type="number"
               placeholder={t('The default is two images.') ?? undefined}
               defaultValue={settings.preloadCount}

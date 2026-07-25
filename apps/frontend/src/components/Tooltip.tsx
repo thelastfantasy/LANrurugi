@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import { FONT_SIZE_9PT, Z_OVERLAY_BACKDROP } from '../theme'
+import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from '../theme'
 
 /** `'element'` (default) anchors the bubble to the trigger's own bounding box, in a fixed spot
  * relative to it — the usual "attached to this button" tooltip. `'cursor'` instead follows the
@@ -156,7 +156,7 @@ export default function Tooltip({
             role="tooltip"
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
-            style={{ ...style, zIndex: Z_OVERLAY_BACKDROP }}
+            style={{ ...style, zIndex: Z_OVERLAY_TOOLTIP }}
           >
             {/* `swal2-popup` (not an actual SweetAlert2 dialog — just its class name) — every
                 legacy theme already styles it for this "informational popup" role, so the tooltip

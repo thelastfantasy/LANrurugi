@@ -71,6 +71,18 @@ export function useSettings() {
   })
 }
 
+/** Unauthenticated equivalent of `useSettings().data?.theme` — the Login page renders before any
+ * session exists, so the auth-gated `/settings` 401s there and `useApplyTheme` would otherwise
+ * always fall back to the hardcoded default theme regardless of what's actually saved. Backed by
+ * `GET /theme`, a separate public endpoint (see `lanrurugi_api::settings::public_router`). */
+export function usePublicTheme(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['theme'],
+    queryFn: () => fetchJson<{ theme: string }>('/theme'),
+    enabled: options?.enabled,
+  })
+}
+
 export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({

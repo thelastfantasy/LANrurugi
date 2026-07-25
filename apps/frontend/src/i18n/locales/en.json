@@ -137,6 +137,7 @@
   "Cleared new flag for ID \\${id}!": "Cleared new flag for ID ${id}!",
   "Cleared {{n}} finished jobs.": "Cleared {{n}} finished jobs.",
   "Clearing…": "Clearing…",
+  "Click a star to rate. Right-click to clear the rating.": "Click a star to rate. Right-click to clear the rating.",
   "Click Archives to add them to the selection. Your selection carries over across searches.": "Click Archives to add them to the selection. Your selection carries over across searches.",
   "Click here to check it out.": "Click here to check it out.",
   "Click here to display archives in this category only.": "Click here to display archives in this category only.",

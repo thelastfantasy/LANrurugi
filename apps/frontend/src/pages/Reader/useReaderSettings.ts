@@ -27,7 +27,9 @@ const DEFAULTS: ReaderSettings = {
   mangaMode: false,
   doublePageMode: false,
   ignoreProgress: false,
-  showOverlayByDefault: false,
+  // Deliberately `true`, unlike legacy's own `false` default — a real, requested product
+  // decision to always land on the archive overview first, not a port of legacy's own behavior.
+  showOverlayByDefault: true,
   fitMode: 'container',
   containerWidth: '',
   markersVisible: true,

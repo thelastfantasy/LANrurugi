@@ -1,20 +1,27 @@
 //! `POST /archives/upload` and `/tempfolder` — shapes verified against
-//! `~/LANraragi/tools/openapi.yaml`. Reuses `pipeline::ingest_file`'s size-aware cataloguing logic
-//! (T041) rather than duplicating it, so uploaded and watched-in files go through the exact same
-//! non-merging path.
+//! `~/LANraragi/tools/openapi.yaml`. Reuses `download_manager::ingest::ingest_downloaded_file`
+//! (originally written for the download pipeline, per that module's own docs) rather than a
+//! second, parallel stage→catalog→rename-into-`archive_dir`→`LRR_FILEMAP`-fixup implementation —
+//! this is also what gives a local upload the exact same persisted download-queue state machine a
+//! download gets: it survives a page refresh, offers the same overwrite/rename UI for a filename
+//! collision instead of a flat 409 rejection, and shows a Remove button through the same
+//! `DELETE /download_queue/{id}` endpoint.
+
+use std::path::Path;
 
 use axum::extract::{DefaultBodyLimit, Multipart, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::delete;
 use axum::Router;
-use lanrurugi_scanner::pipeline::{
-    ingest_file_with_policy, DuplicatePolicy, IngestOptions, IngestOutcome,
-};
+use lanrurugi_storage::download_queue::{DownloadQueueState, NewQueueItem, QueueItemOrigin};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::common::error;
+use crate::download_manager::ingest::ingest_downloaded_file;
+use crate::download_manager::stream::DownloadedFile;
+use crate::plugins::update_queue_item_state;
 use crate::AppState;
 
 /// Axum's `Multipart` extractor enforces `DefaultBodyLimit`'s built-in 2 MB default when no
@@ -23,6 +30,12 @@ use crate::AppState;
 /// file over 2 MB. Scoped to this route only, not applied globally, so every other endpoint
 /// keeps the small default.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// The fixed `plugin_namespace` every local-upload queue item is stored under — never a real
+/// installed plugin's namespace (validated nowhere against `PluginPool`, since nothing in this
+/// path ever calls a plugin to move bytes the way a download does), just this item type's own
+/// grouping key on the Upload page.
+const LOCAL_UPLOAD_NAMESPACE: &str = "local_upload";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -43,12 +56,11 @@ fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-use std::path::Path;
-
 async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name: Option<String> = None;
     let mut checksum: Option<String> = None;
+    let mut category: Option<String> = None;
     let mut title: Option<String> = None;
     let mut summary: Option<String> = None;
     let mut tags: Option<String> = None;
@@ -69,6 +81,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
                 }
             }
             "file_checksum" => checksum = field.text().await.ok(),
+            "catid" => category = field.text().await.ok().filter(|s| !s.is_empty()),
             "title" => title = field.text().await.ok(),
             "summary" => summary = field.text().await.ok(),
             "tags" => tags = field.text().await.ok(),
@@ -98,7 +111,30 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         }
     }
 
-    let dest = state.library.archive_dir.join(&file_name);
+    // Persisted *before* the byte transfer even starts (there is none left to do — the whole
+    // multipart body is already fully in `bytes` by this point — but staged, hashed, and
+    // catalogued asynchronously all the same, below) so a queue item exists to record whatever
+    // outcome follows. `Queued` initially, same as a fresh download — flipped to `Done`/`Error`
+    // a few lines down once the real outcome is known, never left sitting in `Queued` the way a
+    // download does while waiting on a user's own Start click (a local upload has nothing left
+    // to start; the multipart PUT that got this far already committed to running it now).
+    let queue_item = match state
+        .download_queue
+        .add(NewQueueItem {
+            origin: QueueItemOrigin::LocalUpload,
+            url: file_name.clone(),
+            plugin_namespace: LOCAL_UPLOAD_NAMESPACE.to_string(),
+            file_size: Some(bytes.len() as u64),
+            category: category.clone(),
+            auto_fetch_metadata: false,
+            overwrite_on_duplicate: false,
+            state: DownloadQueueState::Queued,
+        })
+        .await
+    {
+        Ok(item) => item,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string()),
+    };
 
     // Written to `temp_dir` (never watched — `crate::watcher::watch` only recurses
     // `archive_dir`) and ingested *there* first, mirroring legacy's own `handle_incoming_file`
@@ -112,109 +148,151 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
     // first-time upload. Reproduced directly against a real running backend during
     // 003-ui-test-automation's implementation (confirmed by disabling the watcher via
     // `--no-watch`, which made the race disappear) before this fix.
-    let staging_path = state
-        .library
-        .temp_dir
-        .join(format!("upload-{}", uuid::Uuid::new_v4().simple()));
+    // Carries the uploaded file's own extension onto the staging path — mirrors the identical fix
+    // in `download_manager::stream::download_one` (see that call site's own doc comment for the
+    // full story). `lanrurugi_scanner::pipeline::catalogue_new_archive` computes `pagecount` via
+    // `archive_format::list_pages` against *this* staging path, a pure extension-based format
+    // check; a bare `upload-<uuid>` with no extension always fails it, silently and permanently
+    // stuck at `pagecount: 0` regardless of how the final, renamed destination file looks.
+    let staging_path = match Path::new(&file_name).extension().and_then(|e| e.to_str()) {
+        Some(ext) => state
+            .library
+            .temp_dir
+            .join(format!("upload-{}.{ext}", uuid::Uuid::new_v4().simple())),
+        None => state
+            .library
+            .temp_dir
+            .join(format!("upload-{}", uuid::Uuid::new_v4().simple())),
+    };
     if let Err(e) = tokio::fs::write(&staging_path, &bytes).await {
+        update_queue_item_state(
+            &state.download_queue,
+            &queue_item.id,
+            DownloadQueueState::Error,
+            None,
+            Some(lanrurugi_core::queue_error::QueueError::WriteFailed),
+            None,
+        )
+        .await;
         return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string());
     }
 
-    let outcome = ingest_file_with_policy(
-        &state.repos.archives,
-        &state.redis.config,
-        &state.redis.search,
-        &state.library.thumb_dir,
-        &staging_path,
-        IngestOptions::named(DuplicatePolicy::Reject, &file_name),
-    )
-    .await;
+    let downloaded = DownloadedFile {
+        path: staging_path,
+        filename: file_name.clone(),
+        bytes_downloaded: bytes.len() as u64,
+    };
 
-    let id = match outcome {
-        Ok(IngestOutcome::Catalogued { id }) => id,
-        Ok(IngestOutcome::Unchanged { id }) => {
-            let _ = tokio::fs::remove_file(&staging_path).await;
-            return (
-                StatusCode::CONFLICT,
-                axum::Json(json!({
-                    "operation": "upload",
-                    "error": "This file already exists in the Library.",
-                    "success": 0,
-                    "id": id,
-                })),
+    // Same overwrite/reject semantics as a download's own `overwrite_on_duplicate` checkbox
+    // (always `false` here — see `NewQueueItem` above; a same-name re-upload is offered the
+    // same overwrite/rename choice a download would get instead of an unconditional overwrite),
+    // and the exact same `ContentHash`-vs-`Filename` collision handling: a byte-identical
+    // duplicate is unconditionally rejected, while a filename-only collision is staged to
+    // `temp_dir` and offered to the user via `.../overwrite`/`.../rename` — no longer a flat 409
+    // with the staged bytes simply deleted, unlike this handler's previous behavior.
+    // `None` — a local upload has no real external source URL to stamp a `source:` tag with (see
+    // `ingest_downloaded_file`'s own docs); `file_name` here is just the uploaded file's name, not
+    // a URL, and was previously being written into `source:` verbatim as if it were one.
+    match ingest_downloaded_file(&state, &downloaded, false, None, Some(&queue_item.id)).await {
+        Ok(ingested) => {
+            if let Some(catid) = &category {
+                let _ =
+                    crate::categories::add_archive_to_category(&state, catid, &ingested.archive_id)
+                        .await;
+            }
+
+            if title.is_some() || summary.is_some() || tags.is_some() {
+                if let Ok(Some(mut archive)) = state.repos.archives.get(&ingested.archive_id).await
+                {
+                    if let Some(t) = title {
+                        archive.title = t;
+                    }
+                    if let Some(s) = summary {
+                        archive.summary = s;
+                    }
+                    if let Some(t) = tags {
+                        archive.tags = t;
+                    }
+                    let _ = state.repos.archives.save(&archive).await;
+                }
+            }
+
+            // Legacy's own real order (`Model::Upload.pm`): user-supplied title/tags land first,
+            // *then* every enabled metadata plugin runs and appends on top
+            // (`set_tags(..., append=1)`) — matched here by calling this after, not before, the
+            // user-supplied-fields block above.
+            crate::plugins::run_enabled_metadata_plugins_on_archive(&state, &ingested.archive_id)
+                .await;
+
+            update_queue_item_state(
+                &state.download_queue,
+                &queue_item.id,
+                DownloadQueueState::Done,
+                None,
+                None,
+                Some(vec![ingested.archive_id.clone()]),
             )
-                .into_response();
+            .await;
+
+            axum::Json(json!({
+                "operation": "upload",
+                "success": 1,
+                "id": ingested.archive_id,
+            }))
+            .into_response()
         }
-        Ok(IngestOutcome::Rejected { existing_id, .. }) => {
-            let _ = tokio::fs::remove_file(&staging_path).await;
-            return (
-                StatusCode::CONFLICT,
+        Err(e) => {
+            // `PendingRename` is not a genuine failure the way the other variants are — the
+            // bytes are safe, staged in `temp_dir`, and `stage_pending_rename` (inside
+            // `ingest_downloaded_file`) already persisted the `PendingFilenameConflict` itself
+            // directly onto the queue item; this only needs to additionally record the matching
+            // `state`/`error`, mirroring `plugins.rs::start_download`'s own error-recording
+            // convention for the identical situation on the download side. The HTTP response
+            // below is still a plain error status either way — the frontend never reads this
+            // response body for its own error UI (this handler doesn't return an id/`Location`
+            // for the queue item), it always resolves via the queue item's next
+            // `GET /download_queue` poll.
+            let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
+            update_queue_item_state(
+                &state.download_queue,
+                &queue_item.id,
+                DownloadQueueState::Error,
+                None,
+                Some(queue_error.clone()),
+                None,
+            )
+            .await;
+
+            use lanrurugi_core::queue_error::QueueError;
+            let (status, message, existing_id) = match &queue_error {
+                QueueError::DuplicateArchive { existing_id, .. } => (
+                    StatusCode::CONFLICT,
+                    "This file already exists in the Library.".to_string(),
+                    Some(existing_id.clone()),
+                ),
+                QueueError::DuplicateFilename { existing_id, .. } => (
+                    StatusCode::CONFLICT,
+                    "A file with this name already exists in the Library.".to_string(),
+                    Some(existing_id.clone()),
+                ),
+                other => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{other:?}"),
+                    None,
+                ),
+            };
+            (
+                status,
                 axum::Json(json!({
                     "operation": "upload",
-                    "error": "A file with this name already exists in the Library.",
+                    "error": message,
                     "success": 0,
                     "id": existing_id,
                 })),
             )
-                .into_response();
-        }
-        Ok(IngestOutcome::Rekeyed { new_id, .. }) => new_id,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&staging_path).await;
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string());
-        }
-    };
-
-    // Now move the ingested file into its real, watched location and fix up the Archive record
-    // (and filemap entry) to point at that final path instead of the temp staging path used only
-    // for hashing/cataloguing above. Falls back to copy+remove if `rename` fails at all (most
-    // commonly a cross-filesystem `EXDEV`, e.g. `temp_dir`/`archive_dir` mounted as separate
-    // volumes) — matching legacy's own `move_path` portability behavior (Perl's `File::Copy::move`
-    // does the same fallback internally) rather than assuming same-filesystem in every deployment.
-    if tokio::fs::rename(&staging_path, &dest).await.is_err() {
-        if let Err(copy_err) = tokio::fs::copy(&staging_path, &dest).await {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "upload",
-                copy_err.to_string(),
-            );
-        }
-        let _ = tokio::fs::remove_file(&staging_path).await;
-    }
-    if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {
-        archive.file = dest.to_string_lossy().to_string();
-        let _ = state.repos.archives.save(&archive).await;
-    }
-    if let Ok(mut conn) = state.redis.config.get().await {
-        use deadpool_redis::redis::AsyncCommands;
-        use lanrurugi_storage::keys::FILEMAP_KEY;
-        let staging_str = staging_path.to_string_lossy().to_string();
-        let dest_str = dest.to_string_lossy().to_string();
-        let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &staging_str).await;
-        let _: Result<(), _> = conn.hset(FILEMAP_KEY, &dest_str, &id).await;
-    }
-
-    if title.is_some() || summary.is_some() || tags.is_some() {
-        if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {
-            if let Some(t) = title {
-                archive.title = t;
-            }
-            if let Some(s) = summary {
-                archive.summary = s;
-            }
-            if let Some(t) = tags {
-                archive.tags = t;
-            }
-            let _ = state.repos.archives.save(&archive).await;
+                .into_response()
         }
     }
-
-    // Legacy's own real order (`Model::Upload.pm`): user-supplied title/tags land first, *then*
-    // every enabled metadata plugin runs and appends on top (`set_tags(..., append=1)`) — matched
-    // here by calling this after, not before, the user-supplied-fields block above.
-    crate::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
-
-    axum::Json(json!({ "operation": "upload", "success": 1, "id": id })).into_response()
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

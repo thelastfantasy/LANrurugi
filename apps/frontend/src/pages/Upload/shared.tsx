@@ -4,6 +4,67 @@ import Tooltip from '../../components/Tooltip'
 import { splitTagsByNamespace } from '../../lib/tagFormat'
 import { FONT_SIZE_10PT } from '../../theme'
 
+/** The fixed `plugin_namespace` every local-upload queue item is stored under
+ * (`crates/lanrurugi-api/src/upload.rs`'s own constant of the same name) — never a real installed
+ * plugin, just this item type's own grouping key on the Upload page. */
+export const LOCAL_UPLOAD_NAMESPACE = 'local_upload'
+
+// Common compound extensions hardcoded, not user-configurable — rare enough in this app's actual
+// corpus that a settings surface would be over-engineering.
+const COMPOUND_EXTENSIONS = ['tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst']
+
+/** Splits a filename into stem and extension, recognizing `COMPOUND_EXTENSIONS` as one unit
+ * (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`, not `{stem: "archive.tar", ext: "gz"}`)
+ * — otherwise the `{filename}`/`{ext}` template variables `FilenameTemplateEditor` feeds from
+ * this, and `TruncatedFilename`'s own truncation below, would both mangle a `.tar.gz` name. */
+export function splitFilenameStemAndExt(filename: string): { stem: string; ext: string } {
+  for (const compound of COMPOUND_EXTENSIONS) {
+    const suffix = `.${compound}`
+    const start = filename.length - suffix.length
+    if (start > 0 && filename.endsWith(suffix)) {
+      return { stem: filename.slice(0, start), ext: compound }
+    }
+  }
+  const lastDot = filename.lastIndexOf('.')
+  if (lastDot <= 0) return { stem: filename, ext: '' }
+  return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
+}
+
+/** A queue row's title/filename text, truncated with an ellipsis when too long for its row —
+ * but truncating the *stem* only, never the extension: `splitFilenameStemAndExt` splits the two
+ * apart so the stem sits in a `min-width: 0` flex-shrinking span (the part that actually
+ * truncates) while the extension sits in its own `flexShrink: 0` span at the end, always fully
+ * visible. A plain single-span `text-overflow: ellipsis` would truncate from the end, silently
+ * eating the extension along with however much of the stem doesn't fit — hiding exactly the part
+ * (`.zip` vs. `.pdf` vs. `.cbz`) most useful for telling two similarly-named rows apart at a
+ * glance. Skips the split entirely (renders `text` as one plain truncating span) when `text` is
+ * `item.title` rather than a real filename — a plugin-supplied title has no meaningful
+ * "extension" to preserve. */
+export function TruncatedFilename({
+  text,
+  isFilename,
+  style,
+}: {
+  text: string
+  /** `true` only when `text` is actually `item.url`/a filename — `item.title` (a plugin- or
+   * metadata-supplied display name) has no extension worth carving out. */
+  isFilename: boolean
+  style?: React.CSSProperties
+}) {
+  if (!isFilename) {
+    return (
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...style }}>{text}</span>
+    )
+  }
+  const { stem, ext } = splitFilenameStemAndExt(text)
+  return (
+    <span style={{ display: 'inline-flex', minWidth: 0, maxWidth: '100%', ...style }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{stem}</span>
+      {ext && <span style={{ flexShrink: 0 }}>.{ext}</span>}
+    </span>
+  )
+}
+
 /** Matches `url` against `plugin.url_pattern` (a JS `RegExp` source, no delimiters), case-
  * insensitively. `null`/absent pattern never matches. */
 export function matchesPattern(plugin: PluginInfo, url: string): boolean {

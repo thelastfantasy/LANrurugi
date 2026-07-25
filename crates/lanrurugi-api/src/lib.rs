@@ -30,8 +30,9 @@ use axum::Router;
 /// shapes/paths below are additive-only over the verified legacy `tools/openapi.yaml` contract
 /// (constitution Principle II); see each submodule for the specific paths it covers.
 ///
-/// Does **not** include [`login::router`] — that one must stay reachable without a valid
-/// API key/session (see that module's docs), so the server wires it in separately, unprotected.
+/// Does **not** include [`login::router`] or [`settings::public_router`] — those must stay
+/// reachable without a valid API key/session (see each module's docs), so the server wires them
+/// in separately, unprotected.
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(archives::router())

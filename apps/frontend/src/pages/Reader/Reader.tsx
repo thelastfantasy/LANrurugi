@@ -92,6 +92,20 @@ export default function Reader() {
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null)
   const infiniteScrollRootRef = useRef<HTMLDivElement>(null)
   const infiniteScrollObserverPage = useRef<number | null>(null)
+  const imageAreaRef = useRef<HTMLDivElement>(null)
+  // The previously-rendered `#i3`'s own real height, captured right before a page turn swaps in
+  // a not-yet-loaded image — used as the `.loading` gap's `min-height` instead of the CSS
+  // default's flat `75vh`. That flat floor is only a good match for a page that happens to
+  // render near 75% of viewport height; a wide/short landscape image in the default "container"
+  // fit mode (no `maxHeight` clamp at all — see `imageStyle`'s own docs below) commonly renders
+  // *shorter* than that, so falling back to `75vh` during the loading gap made the page briefly
+  // grow taller than either the outgoing or the incoming page's own real height, then snap back
+  // down once the new image's real dimensions were known — a visible flash pushing the nav
+  // controls toward the bottom of the viewport and back on every single page turn.
+  const lastSpreadHeightRef = useRef<number | null>(null)
+  // The previous spread's own full `fileInfoText` output — see `displayedFileInfo`'s own docs
+  // below for why this is held onto rather than always rendering `currentFileInfo` directly.
+  const lastFileInfoRef = useRef<string | null>(null)
 
   const currentPage = clamp(
     pageOverride ?? Math.max(metadata.data?.progress ?? 1, 1),
@@ -200,7 +214,24 @@ export default function Reader() {
         return
       }
     }
+    // Captured now, synchronously, before the state update below triggers the re-render that
+    // swaps in the new (not-yet-loaded) image — see `lastSpreadHeightRef`'s own docs for why.
+    if (imageAreaRef.current) {
+      lastSpreadHeightRef.current = imageAreaRef.current.getBoundingClientRect().height
+    }
     setPageOverride(next)
+    // Legacy's own `goToPage` (reader.js) ends every non-infinite-scroll page change with a
+    // plain, instant `window.scrollTo(0, 0)` — verified against the real source, not a smooth
+    // scroll. A page tall enough to have been scrolled (a long strip page, a zoomed-in fit mode,
+    // a short viewport) would otherwise leave a turn landing wherever the previous page's scroll
+    // position happened to be, instead of the new page's own title/nav bar at `#i2` starting
+    // visible from the top. Infinite-scroll mode is excluded, matching legacy's own `if
+    // (infiniteScroll) { ... } else { ...; window.scrollTo(0, 0); }` branch — there every page
+    // shares one continuously-scrolling document, and `selectPage`'s own `scrollIntoView` (not
+    // this) is what "jump to page N" means there.
+    if (!readerSettings.infiniteScroll) {
+      window.scrollTo(0, 0)
+    }
   }
 
   async function readAdjacentArchive(direction: 'prev' | 'next') {
@@ -227,6 +258,11 @@ export default function Reader() {
     setOverlay(null)
     if (readerSettings.infiniteScroll) {
       document.querySelector(`[data-page="${page}"]`)?.scrollIntoView({ block: 'start' })
+    } else {
+      // Same as `goTo`'s own scroll-to-top — legacy's `goToPage` is the single shared landing
+      // point every page-jump path (Next/Prev, the overview thumbnail grid, the page-number
+      // input) funnels through, verified against the real source.
+      window.scrollTo(0, 0)
     }
   }
 
@@ -689,12 +725,28 @@ export default function Reader() {
     </div>
   )
 
+  // `fileInfoText` returns just the bare filename (dimensions/size omitted) whenever the new
+  // spread's `pageDimensions`/`pageSizesKb` aren't known yet — true for every freshly-turned-to
+  // page until its `onLoad` (and the follow-up `HEAD` request for byte size) resolve. Rendering
+  // that shorter string immediately made this line visibly shrink then grow back on every single
+  // page turn; holding the *previous* spread's full text during that gap (via a ref, so this
+  // doesn't itself trigger an extra render) keeps the line's content — and thus its wrapped
+  // height — stable until the new page's real info is ready to replace it outright, matching how
+  // `lastSpreadHeightRef` above smooths the image area's own height across the same gap.
   const currentFileInfo = pages.data
     ? fileInfoText(pages.data.pages, spread, pageDimensions, pageSizesKb, window.location.origin)
     : ''
+  const isFileInfoReady = spread.right === null
+    ? pageDimensions[spread.left] !== undefined && pageSizesKb[spread.left] !== undefined
+    : pageDimensions[spread.left] !== undefined &&
+      pageDimensions[spread.right] !== undefined &&
+      pageSizesKb[spread.left] !== undefined &&
+      pageSizesKb[spread.right] !== undefined
+  if (isFileInfoReady) lastFileInfoRef.current = currentFileInfo
+  const displayedFileInfo = isFileInfoReady ? currentFileInfo : (lastFileInfoRef.current ?? currentFileInfo)
   const fileinfo = (
-    <div className="file-info" title={currentFileInfo}>
-      {currentFileInfo}
+    <div className="file-info" title={displayedFileInfo}>
+      {displayedFileInfo}
     </div>
   )
 
@@ -710,7 +762,23 @@ export default function Reader() {
         </div>
       )}
 
-      <div id="i3" className={!readerSettings.infiniteScroll && !currentSpreadLoaded ? 'loading' : undefined}>
+      <div
+        id="i3"
+        ref={imageAreaRef}
+        className={!readerSettings.infiniteScroll && !currentSpreadLoaded ? 'loading' : undefined}
+        // Overrides `.loading`'s CSS `min-height: 75vh` with the previous spread's own real
+        // height (captured in `goTo`, right before this page turn) whenever one's actually
+        // known — a floor that already matches what's about to render is far less likely to
+        // over- or under-shoot the incoming page's real height than a flat, content-blind 75vh
+        // guess. Falls through to the CSS default (by simply not setting `minHeight` at all,
+        // rather than overriding it with something equally arbitrary) for the very first page
+        // load, when there's no previous spread to measure yet.
+        style={
+          !currentSpreadLoaded && lastSpreadHeightRef.current !== null
+            ? { minHeight: lastSpreadHeightRef.current }
+            : undefined
+        }
+      >
         {readerSettings.infiniteScroll ? (
           <div id="display" ref={infiniteScrollRootRef}>
             {pages.data.pages.map((url, i) => (

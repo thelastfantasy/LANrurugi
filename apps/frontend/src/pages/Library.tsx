@@ -22,7 +22,8 @@ import {
   useTankoubons,
 } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from '../components/PopupMenu'
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator, useMenuPalette } from '../components/PopupMenu'
+import RatingWidget from '../components/RatingWidget'
 import TagTable from '../components/TagTable'
 import Tooltip from '../components/Tooltip'
 import {
@@ -734,8 +735,6 @@ function RecentlyAddedCarousel({
   )
 }
 
-const RATING_OPTIONS = ['⭐', '⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐']
-
 /** Ports legacy's own right-click menu (`~/LANraragi/public/js/mod/index_contextmenu.js`) — same
  * action set and same login-gating (Edit/Delete/Rating/Category only shown when `useLoginStatus`
  * reports logged in). Built entirely from `PopupMenu`/`PopupMenuItem`/`PopupMenuSeparator`
@@ -746,6 +745,7 @@ function ArchiveContextMenu({
   state,
   categories,
   loggedIn,
+  liveArchives,
   onClose,
   onToggleCategory,
   onDelete,
@@ -757,6 +757,14 @@ function ArchiveContextMenu({
   state: ContextMenuState
   categories: { id: string; name: string; search: string | null; archives: string[] }[] | undefined
   loggedIn: boolean
+  /** The live, refetch-synced search results (`shown` in the parent) — `state.archive` itself is
+   * a one-time snapshot taken at right-click time and never updated, which used to be harmless
+   * (every action that changed the archive also closed the menu immediately) but broke once the
+   * rating row became a persistent, stay-open-after-click control: clicking a star correctly
+   * updated the archive in Redis, but the menu kept rendering the stale pre-click tags until
+   * closed and reopened. Looked up by ID so the rating row (and anything else keying off
+   * `archive.tags`) reflects the real just-saved value without needing its own separate refetch. */
+  liveArchives: ArchiveMetadata[]
   onClose: () => void
   onToggleCategory: (categoryId: string, archiveId: string, currentlyIn: boolean) => void
   onDelete: (archiveId: string, isTank: boolean) => void
@@ -767,26 +775,24 @@ function ArchiveContextMenu({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { archive, x, y } = state
+  const { x, y } = state
+  const archive = liveArchives.find((a) => a.arcid === state.archive.arcid) ?? state.archive
   const isTank = isTankoubonId(archive.arcid)
   const staticCategories = (categories ?? []).filter((c) => !c.search)
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false)
-  const [ratingMenuOpen, setRatingMenuOpen] = useState(false)
-  const currentRating = splitTagsByNamespace(archive.tags).rating?.[0] ?? null
+  const palette = useMenuPalette()
 
-  // Submenus open on hover (matching legacy's `jquery-contextMenu`, and standard desktop
+  // Submenu opens on hover (matching legacy's `jquery-contextMenu`, and standard desktop
   // context-menu behavior generally) rather than click. A short close delay absorbs the mouse
   // briefly leaving the trigger row while crossing the gap into the submenu itself.
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  function openSubmenu(which: 'rating' | 'category') {
+  function openSubmenu(which: 'category') {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-    setRatingMenuOpen(which === 'rating')
     setCategoryMenuOpen(which === 'category')
   }
   function scheduleCloseSubmenus() {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
     closeTimerRef.current = setTimeout(() => {
-      setRatingMenuOpen(false)
       setCategoryMenuOpen(false)
     }, 200)
   }
@@ -812,6 +818,31 @@ function ArchiveContextMenu({
         }}
       />
       <PopupMenu style={{ position: 'fixed', top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
+        {loggedIn && (
+          <>
+            {/* A compact icon-only row at the very top of the menu (Firefox's own right-click
+                menu puts Back/Forward/Reload/Bookmark the same way) rather than a full-width
+                "Add Rating" row that opens a whole separate hover submenu — the star widget's own
+                click targets are already precise enough that a submenu was pure overhead. Not a
+                `PopupMenuItem` (no hover-highlight-the-whole-row/click-closes-menu behavior makes
+                sense for a row of independent controls). */}
+            <li
+              className="flex items-center justify-center gap-1 px-2 pt-1"
+              style={{ paddingBottom: '.45em', borderBottom: `1px solid ${palette.separator}`, marginBottom: '.35em' }}
+            >
+              <RatingWidget
+                archiveId={archive.arcid}
+                tags={archive.tags}
+                size={16}
+                onChange={(nextTags) => {
+                  const tagsByNamespace = splitTagsByNamespace(nextTags)
+                  const rating = tagsByNamespace.rating?.[0] ?? null
+                  onRatingChange(archive.arcid, isTank, rating)
+                }}
+              />
+            </li>
+          </>
+        )}
         <PopupMenuItem
           onClick={() => {
             onClose()
@@ -857,39 +888,6 @@ function ArchiveContextMenu({
               }}
             >
               <i className="fa fa-pen" style={{ width: 18 }}></i> {t('Edit Metadata')}
-            </PopupMenuItem>
-            <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('rating')} onMouseLeave={scheduleCloseSubmenus}>
-              <i className="fa fa-star" style={{ width: 18 }}></i> {t('Add Rating')}
-              {ratingMenuOpen && (
-                <PopupMenu
-                  portal={false}
-                  style={{ position: 'absolute', left: '100%', top: 0 }}
-                  onMouseEnter={() => openSubmenu('rating')}
-                  onMouseLeave={scheduleCloseSubmenus}
-                >
-                  <PopupMenuItem
-                    onClick={() => {
-                      onClose()
-                      onRatingChange(archive.arcid, isTank, null)
-                    }}
-                  >
-                    <input type="checkbox" readOnly checked={currentRating === null} style={{ verticalAlign: 'middle' }} />{' '}
-                    {t('Remove Rating')}
-                  </PopupMenuItem>
-                  {RATING_OPTIONS.map((stars) => (
-                    <PopupMenuItem
-                      key={stars}
-                      onClick={() => {
-                        onClose()
-                        onRatingChange(archive.arcid, isTank, stars)
-                      }}
-                    >
-                      <input type="checkbox" readOnly checked={currentRating === stars} style={{ verticalAlign: 'middle' }} />{' '}
-                      {stars}
-                    </PopupMenuItem>
-                  ))}
-                </PopupMenu>
-              )}
             </PopupMenuItem>
             <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('category')} onMouseLeave={scheduleCloseSubmenus}>
               <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t('Add to Category')}
@@ -1979,6 +1977,7 @@ export default function Library() {
           state={contextMenu}
           categories={categories.data}
           loggedIn={loggedIn}
+          liveArchives={shown}
           onClose={() => setContextMenu(null)}
           onToggleCategory={(categoryId, archiveId, currentlyIn) => void toggleArchiveCategory(categoryId, archiveId, currentlyIn)}
           onDelete={(archiveId, isTank) => setDeleteTarget({ id: archiveId, isTank })}

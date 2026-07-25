@@ -4,28 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { PendingFilenameConflict } from '../../api/types'
 import { PopupMenu, PopupMenuItem, useMenuPalette } from '../../components/PopupMenu'
 import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
-
-// Common compound extensions hardcoded, not user-configurable — rare enough in this app's actual
-// corpus that a settings surface would be over-engineering.
-const COMPOUND_EXTENSIONS = ['tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst']
-
-/** Splits a filename into stem and extension, recognizing `COMPOUND_EXTENSIONS` as one unit
- * (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`, not `{stem: "archive.tar", ext: "gz"}`)
- * — otherwise the `{filename}`/`{ext}` template variables this feeds would mangle a `.tar.gz`
- * name. `{filename}` is the stem only since the default template `{filename}_{crc}.{ext}` appends
- * the extension back separately. */
-function splitFilenameStemAndExt(filename: string): { stem: string; ext: string } {
-  for (const compound of COMPOUND_EXTENSIONS) {
-    const suffix = `.${compound}`
-    const start = filename.length - suffix.length
-    if (start > 0 && filename.endsWith(suffix)) {
-      return { stem: filename.slice(0, start), ext: compound }
-    }
-  }
-  const lastDot = filename.lastIndexOf('.')
-  if (lastDot <= 0) return { stem: filename, ext: '' }
-  return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
-}
+import { splitFilenameStemAndExt } from './shared'
 
 const TEMPLATE_VARS = [
   'filename',

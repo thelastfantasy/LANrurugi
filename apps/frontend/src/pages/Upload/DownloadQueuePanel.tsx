@@ -25,7 +25,14 @@ import Tooltip from '../../components/Tooltip'
 import { routes } from '../../routes'
 import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from '../../theme'
 import { ConflictMenu, RenamePopover } from './FilenameTemplateEditor'
-import { findMatchingPlugin, ICON_BUTTON_STYLE, TOOLBAR_BUTTON_STYLE, TooltipIfPresent } from './shared'
+import {
+  findMatchingPlugin,
+  ICON_BUTTON_STYLE,
+  LOCAL_UPLOAD_NAMESPACE,
+  TOOLBAR_BUTTON_STYLE,
+  TooltipIfPresent,
+  TruncatedFilename,
+} from './shared'
 
 /** Fetches `metadataPlugin`'s preview for `item.url` and persists it onto the queue item (title +
  * `metadata_preview`). Module-level so both the single-row Start button and the batch "Start (N)"
@@ -231,38 +238,50 @@ export default function DownloadQueuePanel({
       </div>
 
       <ul className="collapsible extensible with-right-caret" style={{ width: '100%' }}>
-        {[...grouped.entries()].map(([namespace, groupItems]) => {
-          const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
-          return (
-            <CollapsibleSection
-              key={namespace}
-              icon="fa-cloud-download-alt"
-              title={`${plugin?.name ?? namespace} (${groupItems.length})`}
-              caretStyle="right-down"
-              defaultOpen
-            >
-              {groupItems.map((item) => (
-                <QueueItemRow
-                  key={item.id}
-                  item={item}
-                  job={item.job_id ? jobById.get(item.job_id) : undefined}
-                  selected={selected.has(item.id)}
-                  onToggleSelect={() => {
-                    if (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled')
-                      return
-                    setSelected((prev) => {
-                      const next = new Set(prev)
-                      if (next.has(item.id)) next.delete(item.id)
-                      else next.add(item.id)
-                      return next
-                    })
-                  }}
-                  metadataPlugin={findMatchingPlugin(metadataPlugins, item.url)}
-                />
-              ))}
-            </CollapsibleSection>
-          )
-        })}
+        {/* Local uploads always pinned to the top, ahead of every download-plugin group —
+            `grouped`'s own iteration order otherwise just follows whichever namespace's first
+            item happened to appear earliest in `items` (queue insertion order), which puts local
+            uploads wherever they landed rather than somewhere a user can reliably expect. */}
+        {[...grouped.entries()]
+          .sort(([a], [b]) => {
+            if (a === LOCAL_UPLOAD_NAMESPACE) return -1
+            if (b === LOCAL_UPLOAD_NAMESPACE) return 1
+            return 0
+          })
+          .map(([namespace, groupItems]) => {
+            const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
+            const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
+            const groupTitle = isLocalUpload ? t('From your computer') : (plugin?.name ?? namespace)
+            return (
+              <CollapsibleSection
+                key={namespace}
+                icon={isLocalUpload ? 'fa-upload' : 'fa-cloud-download-alt'}
+                title={`${groupTitle} (${groupItems.length})`}
+                caretStyle="right-down"
+                defaultOpen
+              >
+                {groupItems.map((item) => (
+                  <QueueItemRow
+                    key={item.id}
+                    item={item}
+                    job={item.job_id ? jobById.get(item.job_id) : undefined}
+                    selected={selected.has(item.id)}
+                    onToggleSelect={() => {
+                      if (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled')
+                        return
+                      setSelected((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(item.id)) next.delete(item.id)
+                        else next.add(item.id)
+                        return next
+                      })
+                    }}
+                    metadataPlugin={findMatchingPlugin(metadataPlugins, item.url)}
+                  />
+                ))}
+              </CollapsibleSection>
+            )
+          })}
       </ul>
     </div>
   )
@@ -302,6 +321,17 @@ function QueueItemRow({
   // `cancelled` is a persisted queue state — `useStopQueueItem`'s optimistic `onMutate` sets it in
   // the cache the instant Stop is clicked, before the request resolves.
   const wasCancelled = item.state === 'cancelled'
+  // A local upload has no plugin to fetch metadata from, no `auto_fetch_metadata`/
+  // `overwrite_on_duplicate` toggle of its own, and — since it's a synchronous, already-finished
+  // operation by the time its queue item even exists — never passes through `queued`/`starting`/
+  // `downloading`, so it has nothing to Start/Stop either. All of that UI is hidden outright
+  // rather than left to fall back on state-mismatch `disabled` alone (true, but leaves dead
+  // controls sitting in the row).
+  const isLocalUpload = item.plugin_namespace === LOCAL_UPLOAD_NAMESPACE
+  // Persisted at creation time for a local upload (`item.file_size`); a download instead reports
+  // its size live through the linked job (`job.total_bytes`), which only becomes known partway
+  // through the transfer and isn't persisted onto the queue item itself.
+  const fileSize = item.file_size ?? job?.total_bytes
 
   async function handleFetchMetadata() {
     if (!metadataPlugin) return
@@ -386,21 +416,31 @@ function QueueItemRow({
                   fontSize: FONT_SIZE_10PT,
                   color: '#fff',
                   textShadow: '0 1px 2px rgba(0,0,0,0.6)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                   cursor: archiveId ? 'pointer' : 'default',
                 }}
               >
-                {item.title ?? item.url}
-                {job?.total_bytes != null && (
-                  <span style={{ marginLeft: 6, opacity: 0.85, flexShrink: 0 }}>({formatBytes(job.total_bytes)})</span>
+                {/* The name and the `(size)` suffix are two separate flex children (not one
+                    plain text run) specifically so a long name truncates on its own without
+                    also pushing the size suffix out of view — a single `text-overflow:
+                    ellipsis` on the whole flex row would silently do nothing (that CSS property
+                    only works on a single text-run box, not across flex children) and just let
+                    the size get squeezed off/hidden past the row's edge instead. */}
+                <TruncatedFilename
+                  text={item.title ?? item.url}
+                  isFilename={!item.title}
+                  style={{ minWidth: 0, flexShrink: 1 }}
+                />
+                {fileSize != null && (
+                  <span style={{ marginLeft: 6, opacity: 0.85, flexShrink: 0 }}>({formatBytes(fileSize)})</span>
                 )}
               </a>
             </div>
           ) : (
-            <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: 'break-all' }} title={item.metadata_preview ? undefined : item.url}>
-              {item.title ?? item.url}
+            <span
+              style={{ fontSize: FONT_SIZE_10PT, display: 'flex' }}
+              title={item.metadata_preview ? undefined : item.url}
+            >
+              <TruncatedFilename text={item.title ?? item.url} isFilename={!item.title} />
             </span>
           )}
           {item.state === 'error' && item.error && (
@@ -417,23 +457,27 @@ function QueueItemRow({
         </div>
       </TooltipIfPresent>
 
-      <Tooltip label={t('Auto Fetch Metadata') ?? ''}>
-        <input
-          type="checkbox"
-          checked={item.auto_fetch_metadata}
-          disabled={item.state !== 'queued'}
-          onChange={(e) => void update.mutateAsync({ id: item.id, auto_fetch_metadata: e.target.checked })}
-        />
-      </Tooltip>
+      {!isLocalUpload && (
+        <>
+          <Tooltip label={t('Auto Fetch Metadata') ?? ''}>
+            <input
+              type="checkbox"
+              checked={item.auto_fetch_metadata}
+              disabled={item.state !== 'queued'}
+              onChange={(e) => void update.mutateAsync({ id: item.id, auto_fetch_metadata: e.target.checked })}
+            />
+          </Tooltip>
 
-      <Tooltip label={t('Overwrite Duplicate') ?? ''}>
-        <input
-          type="checkbox"
-          checked={item.overwrite_on_duplicate}
-          disabled={item.state !== 'queued'}
-          onChange={(e) => void update.mutateAsync({ id: item.id, overwrite_on_duplicate: e.target.checked })}
-        />
-      </Tooltip>
+          <Tooltip label={t('Overwrite Duplicate') ?? ''}>
+            <input
+              type="checkbox"
+              checked={item.overwrite_on_duplicate}
+              disabled={item.state !== 'queued'}
+              onChange={(e) => void update.mutateAsync({ id: item.id, overwrite_on_duplicate: e.target.checked })}
+            />
+          </Tooltip>
+        </>
+      )}
 
       {item.pending_filename_conflict ? (
         // A `Filename` collision has a real choice (see `PendingFilenameConflict`'s own docs),
@@ -490,7 +534,7 @@ function QueueItemRow({
             />
           )}
         </>
-      ) : item.state === 'starting' || item.state === 'downloading' ? (
+      ) : isLocalUpload ? null : item.state === 'starting' || item.state === 'downloading' ? (
         <Tooltip label={t('Stop') ?? ''}>
           <button
             type="button"
@@ -527,23 +571,28 @@ function QueueItemRow({
         </Tooltip>
       )}
 
-      <Tooltip
-        label={
-          metadataPlugin
-            ? `${t('Fetch Metadata')} (${metadataPlugin.name})`
-            : (t('Fetch Metadata') ?? '')
-        }
-      >
-        <button
-          type="button"
-          className="stdbtn"
-          style={ICON_BUTTON_STYLE}
-          disabled={!metadataPlugin || item.state === 'done' || fetchingMetadata}
-          onClick={() => void handleFetchMetadata()}
+      {/* A local upload has no plugin match possible in the first place (`item.url` is a
+          filename, not a real URL — `findMatchingPlugin` never matches any `url_pattern` against
+          it) — hidden outright rather than left as a permanently-disabled dead button. */}
+      {!isLocalUpload && (
+        <Tooltip
+          label={
+            metadataPlugin
+              ? `${t('Fetch Metadata')} (${metadataPlugin.name})`
+              : (t('Fetch Metadata') ?? '')
+          }
         >
-          <i className={`fa ${fetchingMetadata ? 'fa-spinner fa-spin' : 'fa-tags'}`} aria-hidden="true"></i>
-        </button>
-      </Tooltip>
+          <button
+            type="button"
+            className="stdbtn"
+            style={ICON_BUTTON_STYLE}
+            disabled={!metadataPlugin || item.state === 'done' || fetchingMetadata}
+            onClick={() => void handleFetchMetadata()}
+          >
+            <i className={`fa ${fetchingMetadata ? 'fa-spinner fa-spin' : 'fa-tags'}`} aria-hidden="true"></i>
+          </button>
+        </Tooltip>
+      )}
 
       {/* `DELETE /download_queue/{id}` only removes this queue-history row — it never touches the
           cataloged archive a `done` item became (that's the separate `DELETE /archives/{id}`).

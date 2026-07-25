@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::Router;
-use lanrurugi_storage::download_queue::DownloadQueueState;
+use lanrurugi_storage::download_queue::{DownloadQueueState, QueueItemOrigin};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -72,13 +72,16 @@ async fn add_to_queue(State(state): State<AppState>, body: axum::Json<AddQueueBo
         match state.plugins.plugin_info(&item.plugin_namespace).await {
             Ok(_) => match state
                 .download_queue
-                .add(
-                    item.url.clone(),
-                    item.plugin_namespace.clone(),
-                    item.category.clone(),
-                    item.auto_fetch_metadata,
-                    item.overwrite_on_duplicate,
-                )
+                .add(lanrurugi_storage::download_queue::NewQueueItem {
+                    origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                    url: item.url.clone(),
+                    plugin_namespace: item.plugin_namespace.clone(),
+                    file_size: None,
+                    category: item.category.clone(),
+                    auto_fetch_metadata: item.auto_fetch_metadata,
+                    overwrite_on_duplicate: item.overwrite_on_duplicate,
+                    state: DownloadQueueState::Queued,
+                })
                 .await
             {
                 Ok(saved) => added.push(saved),
@@ -573,16 +576,24 @@ async fn resolve_conflict(
         .clone()
         .ok_or(ResolveConflictError::NoConflict)?;
 
+    // A `LocalUpload` item's `url` field is just the uploaded file's own name (see
+    // `upload.rs::upload_archive`'s `NewQueueItem` construction), never a real external source —
+    // stamping it into `source:` would be the same fabricated-data bug `ingest_downloaded_file`'s
+    // own initial call already avoids for uploads (see that call site's docs).
+    let source_url = match item.origin {
+        QueueItemOrigin::Download => Some(item.url.as_str()),
+        QueueItemOrigin::LocalUpload => None,
+    };
     let result = match &action {
         ResolveAction::Overwrite => {
-            crate::download_manager::ingest::resolve_overwrite(state, &conflict, &item.url).await
+            crate::download_manager::ingest::resolve_overwrite(state, &conflict, source_url).await
         }
         ResolveAction::Rename(new_filename) => {
             crate::download_manager::ingest::resolve_rename(
                 state,
                 &conflict,
                 new_filename,
-                &item.url,
+                source_url,
                 Some(id),
             )
             .await
@@ -600,6 +611,14 @@ async fn resolve_conflict(
                 fresh.state = DownloadQueueState::Done;
                 fresh.error = None;
                 fresh.pending_filename_conflict = None;
+                // Same field the managed-download success path (`plugins.rs::start_download`)
+                // persists onto `Done` — without it, a resolved item's completed-item reader
+                // link had nothing of its own to read (no linked `job_id` on this path at all,
+                // since resolving a conflict re-catalogs already-staged bytes rather than
+                // starting a new job) and rendered as unclickable plain text after the very next
+                // page refresh, even though the archive it became was real and already in the
+                // library.
+                fresh.archive_ids = Some(vec![ingested.archive_id.clone()]);
                 if let Err(e) = state.download_queue.update(&fresh).await {
                     tracing::warn!(%id, error = %e, "failed to update download-queue item after resolving filename conflict");
                 }
@@ -701,8 +720,10 @@ mod tests {
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {
             id: id.to_string(),
+            origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
             url: url.to_string(),
             plugin_namespace: "download/ehentai".to_string(),
+            file_size: None,
             category: None,
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,

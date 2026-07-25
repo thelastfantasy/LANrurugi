@@ -39,6 +39,7 @@ pub fn build_app(
         require_api_key,
     ));
     let api = lanrurugi_api::login::router()
+        .merge(lanrurugi_api::settings::public_router())
         .merge(protected)
         .with_state(state);
 

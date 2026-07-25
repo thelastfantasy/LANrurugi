@@ -105,7 +105,7 @@ pub async fn ingest_downloaded_file(
     state: &AppState,
     downloaded: &DownloadedFile,
     overwrite: bool,
-    source_url: &str,
+    source_url: Option<&str>,
     queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     let duplicate_policy = if overwrite {
@@ -150,7 +150,7 @@ async fn catalogue_staged_file(
     state: &AppState,
     staging_path: &Path,
     filename: &str,
-    source_url: &str,
+    source_url: Option<&str>,
     duplicate_policy: DuplicatePolicy,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     // Serializes this whole function's filename-collision-check-through-catalog-write sequence
@@ -218,20 +218,26 @@ async fn catalogue_staged_file(
 
     if let Ok(Some(mut archive)) = state.repos.archives.get(&archive_id).await {
         archive.file = dest.to_string_lossy().to_string();
-        // Legacy's own `Utils::Minion::download_url` task (verified against source) computes
-        // `$og_url = trim_url($url)` from the URL the *user originally gave* (the gallery page,
-        // never whatever internal download link a plugin transformed it into) and passes
-        // `"source:$og_url"` into `handle_incoming_file` *before* cataloguing — this is host-side
-        // download-task code, not something a metadata plugin adds itself. Appended here (not a
-        // blind overwrite) since a plugin's own `execDownload` could in principle have already
-        // supplied tags via some other path; deduped the same way `set_tags(..., append=1)` does.
-        let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-        if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
-            archive.tags = if archive.tags.is_empty() {
-                source_tag
-            } else {
-                format!("{},{source_tag}", archive.tags)
-            };
+        // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
+        // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
+        // real external source for a file the user picked off their own disk, so stamping one
+        // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
+        // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
+        // originally gave* (the gallery page, never whatever internal download link a plugin
+        // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
+        // cataloguing — this is host-side download-task code, not something a metadata plugin adds
+        // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
+        // since a plugin's own `execDownload` could in principle have already supplied tags via
+        // some other path; deduped the same way `set_tags(..., append=1)` does.
+        if let Some(source_url) = source_url {
+            let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
+            if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                archive.tags = if archive.tags.is_empty() {
+                    source_tag
+                } else {
+                    format!("{},{source_tag}", archive.tags)
+                };
+            }
         }
         let _ = state.repos.archives.save(&archive).await;
     }
@@ -466,7 +472,7 @@ async fn unique_dest_path(archive_dir: &Path, filename: &str) -> std::path::Path
 pub async fn resolve_overwrite(
     state: &AppState,
     conflict: &PendingFilenameConflict,
-    source_url: &str,
+    source_url: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     catalogue_staged_file(
         state,
@@ -488,7 +494,7 @@ pub async fn resolve_rename(
     state: &AppState,
     conflict: &PendingFilenameConflict,
     new_filename: &str,
-    source_url: &str,
+    source_url: Option<&str>,
     queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     match catalogue_staged_file(

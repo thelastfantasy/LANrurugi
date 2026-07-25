@@ -1,4 +1,6 @@
+import { parseRating } from '../lib/rating'
 import { getTagSearchURL, splitTagsByNamespace } from '../lib/tagFormat'
+import StarRatingDisplay from './StarRating'
 
 // Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
 // converts the tag value through a date formatter instead of printing it raw).
@@ -51,39 +53,60 @@ export default function TagTable({
             {displayNamespace(namespace)}:
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-            {byNamespace[namespace].map((value, i) => (
-              <div key={i} className="gt">
-                {namespace === 'source' ? (
-                  <a
-                    href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ wordBreak: 'break-all' }}
-                  >
-                    {value}
-                  </a>
-                ) : (
-                  <a
-                    href={getTagSearchURL(namespace, value)}
-                    onClick={(e) => {
-                      // A real `href` (rather than legacy's placeholder `href="#"`) so
-                      // middle-click/right-click/hover-preview all resolve to the actual search
-                      // URL, matching legacy's own `buildTagsDiv` — but a plain left-click still
-                      // applies the filter in-app (no full navigation/reload) when a handler is
-                      // given, same as before.
-                      if (!onSearchTag) return
-                      e.preventDefault()
-                      e.stopPropagation()
-                      onSearchTag(namespace, value)
-                    }}
-                    style={{ wordBreak: 'break-all', cursor: onSearchTag ? 'pointer' : undefined }}
-                  >
-                    {formatTagValue(namespace, value)}
-                  </a>
-                )}
+            {namespace.toLowerCase() === 'rating' ? (
+              // Still a real, working search-link chip (legacy's own real rating chip *is*
+              // clickable — see `TagsTable`'s own docs in `ArchiveOverviewOverlay.tsx` for the
+              // live-verified detail) — just no underline on it specifically, which reads like a
+              // broken/dead link at a glance and the star icons alone don't need to invite.
+              <div className="gt">
+                <a
+                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? '')}
+                  onClick={(e) => {
+                    if (!onSearchTag) return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onSearchTag(namespace, byNamespace[namespace][0] ?? '')
+                  }}
+                  style={{ textDecoration: 'none', cursor: onSearchTag ? 'pointer' : undefined }}
+                >
+                  <StarRatingDisplay rating={parseRating(byNamespace[namespace][0]) ?? 0} size={14} />
+                </a>
               </div>
-            ))}
+            ) : (
+              byNamespace[namespace].map((value, i) => (
+                <div key={i} className="gt">
+                  {namespace === 'source' ? (
+                    <a
+                      href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ wordBreak: 'break-all' }}
+                    >
+                      {value}
+                    </a>
+                  ) : (
+                    <a
+                      href={getTagSearchURL(namespace, value)}
+                      onClick={(e) => {
+                        // A real `href` (rather than legacy's placeholder `href="#"`) so
+                        // middle-click/right-click/hover-preview all resolve to the actual search
+                        // URL, matching legacy's own `buildTagsDiv` — but a plain left-click still
+                        // applies the filter in-app (no full navigation/reload) when a handler is
+                        // given, same as before.
+                        if (!onSearchTag) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onSearchTag(namespace, value)
+                      }}
+                      style={{ wordBreak: 'break-all', cursor: onSearchTag ? 'pointer' : undefined }}
+                    >
+                      {formatTagValue(namespace, value)}
+                    </a>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </div>
       ))}

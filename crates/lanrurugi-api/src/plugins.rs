@@ -1726,8 +1726,11 @@ fn queue_error_from_plugin_error(
 /// Best-effort partial update of one download-queue item's live-progress fields — a failure here
 /// (e.g. the item was deleted mid-download) is logged, not propagated, since the actual download
 /// job itself (the source of truth) keeps running/finishing regardless of whether its queue-item
-/// mirror could be updated.
-async fn update_queue_item_state(
+/// mirror could be updated. `pub(crate)`: also the update path a local upload's own synchronous
+/// ingest (`upload.rs::upload_archive`) writes its outcome through, so `Done`/`Error`/
+/// `archive_ids` are recorded via the exact same set-if-some/error-unconditionally-overwrites
+/// semantics a download uses, rather than a second, parallel implementation of the same rules.
+pub(crate) async fn update_queue_item_state(
     repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
     item_id: &str,
     new_state: lanrurugi_storage::download_queue::DownloadQueueState,
@@ -1891,7 +1894,7 @@ async fn run_managed_downloads(
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
         let ingested =
-            ingest_downloaded_file(&state, &bundled, overwrite, source_url, queue_item_id)
+            ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
                 .await
                 .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
         if let Some(catid) = &category {
@@ -1905,7 +1908,7 @@ async fn run_managed_downloads(
                 &state,
                 &downloaded_result,
                 overwrite,
-                source_url,
+                Some(source_url),
                 queue_item_id,
             )
             .await

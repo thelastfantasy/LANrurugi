@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-import { useSettings } from './api/hooks'
+import { usePublicTheme, useSettings } from './api/hooks'
 
 // Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
 // css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
@@ -84,11 +84,20 @@ export const FONT_SIZE_9PT = '0.833rem'
 export const FONT_SIZE_10PT = '0.75rem'
 
 // Shared full-screen-overlay layering: a fixed, click-to-dismiss backdrop behind a floating menu/
-// tooltip/popup — used by Library's/the Reader's own context menus and Tooltip. `CONTENT` is
-// exactly one level above `BACKDROP` so the popup itself always wins the stacking order.
+// popup — used by Library's/the Reader's own context menus. `CONTENT` is exactly one level above
+// `BACKDROP` so the popup itself always wins the stacking order.
 export const Z_OVERLAY_BACKDROP = 1000
 
 export const Z_OVERLAY_CONTENT = 1001
+
+// `Tooltip` needs to win against *any* trigger it's attached to, including one that's itself
+// already floating at `Z_OVERLAY_CONTENT` (e.g. a `RatingWidget` rendered as a row inside a
+// `PopupMenu`, per `Library.tsx`'s context menu) — confirmed via a real screenshot where the
+// tooltip rendered visibly *behind* the popup menu's own rows using `Z_OVERLAY_BACKDROP` (equal
+// to the menu's backdrop layer, one level below the menu content itself). Comfortably above
+// `Z_OVERLAY_CONTENT` rather than merely `+1`, so a future overlay layer inserted between the two
+// doesn't silently reopen this same gap.
+export const Z_OVERLAY_TOOLTIP = 1100
 
 const LEGACY_STRUCTURAL_CSS_ID = 'legacy-structural-css'
 const LEGACY_THEME_CSS_ID = 'legacy-theme-css'
@@ -138,6 +147,10 @@ export function removeLink(id: string) {
  * table above — no menu-plugin CSS file is linked in for them at all. */
 export function useApplyTheme() {
   const settings = useSettings()
+  // Only ever actually fetched when `settings` has no data to offer (see the enabled check below)
+  // — i.e. pre-login, where `/settings` 401s. Once authenticated, `settings.data` wins and this
+  // stays idle.
+  const publicTheme = usePublicTheme({ enabled: settings.data === undefined })
 
   useEffect(() => {
     ensureLink(LEGACY_STRUCTURAL_CSS_ID, '/legacy/lrr.css')
@@ -146,8 +159,8 @@ export function useApplyTheme() {
   }, [])
 
   useEffect(() => {
-    const theme = settings.data?.theme ?? DEFAULT_THEME_ID
+    const theme = settings.data?.theme ?? publicTheme.data?.theme ?? DEFAULT_THEME_ID
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
-  }, [settings.data?.theme])
+  }, [settings.data?.theme, publicTheme.data?.theme])
 }

@@ -282,12 +282,23 @@ export interface PendingFilenameConflict {
   crc32: string
 }
 
+// `#[serde(default)]` on the Rust side — absent on any record written before this field existed,
+// which always means 'download' (the only kind that could have produced them).
+export type QueueItemOrigin = 'download' | 'local_upload'
+
 export interface DownloadQueueItem {
   id: string
+  origin?: QueueItemOrigin
+  // For a download: the source URL. For a local upload: the uploaded file's own filename — see
+  // `origin`.
   url: string
   // Resolved once, client-side, at add-to-queue time and fixed from then on — not re-resolved at
-  // start time.
+  // start time. For a local upload: the fixed placeholder `'local_upload'`, never a real plugin.
   plugin_namespace: string
+  // Known at creation time for a local upload (the request body's byte length) — absent for a
+  // download, which instead reports its size live through the linked job's own `total_bytes`
+  // (see `JobRecord`).
+  file_size?: number | null
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean

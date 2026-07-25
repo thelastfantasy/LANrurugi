@@ -4,20 +4,21 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { fetchJson } from '../../api/client'
-import { useAddToQueue, useCategories, usePlugins } from '../../api/hooks'
-import type { ArchiveMetadata, PluginInfo } from '../../api/types'
+import { useAddToQueue, useCategories, useDownloadQueue, usePlugins } from '../../api/hooks'
+import type { PluginInfo } from '../../api/types'
 import { STATE_COLOR } from '../../components/JobProgress'
 import { routes } from '../../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import DownloadQueuePanel from './DownloadQueuePanel'
-import LocalUploadPanel, { type UploadRow } from './LocalUploadPanel'
 import { findMatchingPlugin } from './shared'
 
 // "Add from URL" stages matched URLs into a persistent, server-side queue (`useDownloadQueue`),
 // grouped by which download plugin's `url_pattern` matched, so the queue survives a page refresh
-// or a different browser tab. Manual file upload (left column) is unchanged — synchronous, no
-// queue step.
+// or a different browser tab. Manual file upload (left column) now goes through that exact same
+// persistent queue too (`crates/lanrurugi-api/src/upload.rs` writes a `local_upload`-origin queue
+// item before/around its own synchronous ingest) — `DownloadQueuePanel` renders both kinds from
+// one `useDownloadQueue()` poll, so this page itself no longer tracks any upload state of its own.
 export default function Upload() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -25,46 +26,32 @@ export default function Upload() {
   const categories = useCategories()
   const downloadPlugins = usePlugins('download')
   const metadataPlugins = usePlugins('metadata')
+  const downloadQueue = useDownloadQueue()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [category, setCategory] = useState('')
-  const [rows, setRows] = useState<UploadRow[]>([])
   const [urls, setUrls] = useState('')
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
   useApplyTheme()
   useDocumentTitle(t('Upload Center') ?? undefined)
 
-  function upsertRow(key: string, patch: Partial<UploadRow>) {
-    setRows((prev) => {
-      const idx = prev.findIndex((r) => r.key === key)
-      if (idx === -1) return [...prev, { key, name: key, state: 'processing', ...patch }]
-      const next = [...prev]
-      next[idx] = { ...next[idx], ...patch }
-      return next
-    })
-  }
-
   async function handleUpload(toUpload: File) {
-    const key = `upload-${Date.now()}-${toUpload.name}`
-    upsertRow(key, { name: toUpload.name, state: 'processing' })
     setUploadingCount((n) => n + 1)
     try {
       const formData = new FormData()
       formData.append('file', toUpload)
       if (category) formData.append('catid', category)
 
-      const response = await fetch('/api/archives/upload', { method: 'PUT', body: formData })
-      const data = (await response.json()) as { success: number; error?: string; id?: string }
-
-      if (data.success && data.id) {
-        const meta = await fetchJson<ArchiveMetadata>(`/archives/${data.id}/metadata`).catch(() => null)
-        upsertRow(key, { state: 'done', archiveId: data.id, title: meta?.title ?? toUpload.name })
-        await queryClient.invalidateQueries({ queryKey: ['archives'] })
-      } else {
-        upsertRow(key, { state: 'error', message: data.error ?? t('unknown error') ?? '' })
-      }
-    } catch (e) {
-      upsertRow(key, { state: 'error', message: String(e) })
+      // The handler's own JSON response is no longer this page's source of truth for what to show
+      // — the queue item it created (and its outcome, including a filename conflict) is. Refetch
+      // is what actually surfaces the new row; `archives`/`stats` are invalidated too so the
+      // Library/Stats pages don't need their own separate refresh to see a successful upload.
+      await fetch('/api/archives/upload', { method: 'PUT', body: formData }).catch(() => null)
+      await Promise.all([
+        downloadQueue.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['archives'] }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      ])
     } finally {
       setUploadingCount((n) => n - 1)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -240,8 +227,6 @@ export default function Upload() {
         </div>
 
         <div className="right-column" style={{ paddingLeft: 24, boxSizing: 'border-box' }}>
-          <LocalUploadPanel rows={rows} />
-
           <DownloadQueuePanel downloadPlugins={downloadPlugins.data} metadataPlugins={metadataPlugins.data} />
         </div>
       </div>
