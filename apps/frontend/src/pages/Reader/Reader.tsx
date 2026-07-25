@@ -35,10 +35,8 @@ import { useReaderSettings } from './useReaderSettings'
 
 /** Uniform icon size for every paginator (prev/next-archive, prev/next-page) nav link. */
 const PAGINATOR_ICON_FONT_SIZE = '1.5em'
-/** How long an ephemeral reader toast (bookmark-link save confirmation, etc.) stays visible before
- * auto-dismissing — matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default; specified explicitly
- * here rather than omitted, to make clear this reader-specific case is deliberately using that
- * same duration, not just inheriting it incidentally. */
+/** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default — specified explicitly to make clear
+ * this is deliberate, not incidental inheritance. */
 const TOAST_DURATION_MS = 5000
 
 type OverlayKind = 'archive' | 'settings' | 'help' | null
@@ -81,9 +79,8 @@ export default function Reader() {
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false)
   const [navState, setNavState] = useState<ArchiveNavState>({ ids: [], index: -1 })
   // Resuming a slideshow across an archive boundary (legacy stashes this in `sessionStorage`
-  // before navigating away — see `readAdjacentArchive` below — and the next reader page picks it
-  // back up here) is a pure read of already-set-before-mount state, not a derived side effect, so
-  // it belongs in the initializer, not a `useEffect` calling `setState`.
+  // before navigating away — see `readAdjacentArchive` below) is a pure read of already-set-
+  // before-mount state, so it belongs in the initializer, not a `useEffect` calling `setState`.
   const [autoNextActive, setAutoNextActive] = useState(
     () => sessionStorage.getItem('autoNextPage') === 'true',
   )
@@ -112,18 +109,13 @@ export default function Reader() {
         (page) => widespreads[page],
       )
 
-  // Mirrors legacy's `#i3.loading` toggle exactly (`changePage` adds the class before the new
-  // page's image starts loading; `updateMetadata` — which in double-page mode reads *both*
-  // images' `naturalWidth`/`naturalHeight` before doing anything else — removes it once decoded;
-  // reader.js lines 710/1290/1334 remove, 1404 add). `.loading`'s CSS (`min-height: 75vh`) exists
-  // so the page doesn't visually collapse to zero height while blank/loading; keeping the class
-  // after the image(s) have actually finished loading, as an unconditional `'loading'` className
-  // would, left that `75vh` floor in effect forever — dead whitespace below any image shorter
-  // than 75% of the viewport height, not present in legacy, which drops the class right away.
-  // `pageDimensions` already only gets an entry once `onImageLoad` has fired for that page, so
-  // it doubles as the "has this page's image finished loading" set without extra state; both
+  // Mirrors legacy's `#i3.loading` toggle exactly: added before the new page's image starts
+  // loading, removed once decoded. `.loading`'s CSS (`min-height: 75vh`) keeps the page from
+  // visually collapsing while blank — keeping the class after load would leave that floor in
+  // effect forever (dead whitespace below any shorter image). `pageDimensions` already only gets
+  // an entry once `onImageLoad` has fired, so it doubles as the "finished loading" set; both
   // `spread.left` and (if present) `spread.right` must have an entry, matching legacy waiting on
-  // both images in double-page mode rather than removing the class as soon as the first resolves.
+  // both images in double-page mode.
   const currentSpreadLoaded =
     pageDimensions[spread.left] !== undefined &&
     (spread.right === null || pageDimensions[spread.right] !== undefined)
@@ -148,16 +140,11 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages])
 
-  // Prefetches the next `readerSettings.preloadCount` pages beyond the currently-shown spread —
-  // the `preloadCount` setting itself (`useReaderSettings.ts`) already existed and was
-  // user-configurable via `SettingsOverlay`, but nothing ever consumed it: this is that missing
-  // wiring. A bare `new Image()` with its `src` set (not appended to the DOM) is enough to make
-  // the browser fetch and HTTP-cache the bytes — when the reader later actually renders an `<img
-  // src={...}>` for that same URL, the browser serves it from cache instantly instead of a fresh
-  // network round-trip. Fetching several *different* pages of the same archive concurrently like
-  // this is exactly the case `AppState::page_singleflight` (`crates/lanrurugi-api/src/state.rs`)
-  // exists to bound on the server side, alongside the same-page dedup that guards against a
-  // second prefetch re-requesting a page the reader is already displaying.
+  // Prefetches the next `readerSettings.preloadCount` pages beyond the currently-shown spread. A
+  // bare `new Image()` with its `src` set (not appended to the DOM) is enough to make the browser
+  // fetch and HTTP-cache the bytes, so a later real `<img>` for that URL serves from cache
+  // instantly. Concurrent prefetches across pages are bounded server-side by
+  // `AppState::page_singleflight`.
   useEffect(() => {
     if (!pages.data || readerSettings.preloadCount <= 0) return
     const urls: string[] = []
@@ -167,9 +154,8 @@ export default function Reader() {
       const url = pages.data.pages[page - 1]
       if (url) urls.push(url)
     }
-    // Keeping references (not just firing-and-forgetting the `Image()` objects) prevents the
-    // browser from cancelling an in-flight prefetch request when the object would otherwise be
-    // garbage-collected before the request finishes.
+    // Keeping references prevents the browser from cancelling an in-flight prefetch request when
+    // the `Image()` object would otherwise be garbage-collected before the request finishes.
     const preloaded = urls.map((url) => {
       const img = new Image()
       img.src = url

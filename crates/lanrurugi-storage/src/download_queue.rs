@@ -91,6 +91,15 @@ pub struct DownloadQueueItem {
     /// `lanrurugi_core::jobs::JobRegistry` job ID, used by the frontend to look up live
     /// `downloaded_bytes`/`total_bytes` progress via the existing `GET /jobs` polling.
     pub job_id: Option<String>,
+    /// Archive IDs a successful managed download produced (set alongside the transition to
+    /// `Done`), persisted here — not just in the linked job's own result — because
+    /// `JobRegistry` is purely in-process memory and is lost on every server restart, while this
+    /// queue item is meant to survive one (it's stored in Redis). The frontend reads this field
+    /// first for the completed-item "click title to open archive" link, falling back to the
+    /// (possibly already-gone) job result only for an item finished earlier in the same process
+    /// lifetime whose queue record predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_ids: Option<Vec<String>>,
     /// Set by a "Fetch metadata" preview action (no archive download) — shown in place of the raw
     /// URL once known.
     pub title: Option<String>,
@@ -149,6 +158,7 @@ impl DownloadQueueRepository {
             overwrite_on_duplicate,
             state: DownloadQueueState::Queued,
             job_id: None,
+            archive_ids: None,
             title: None,
             metadata_preview: None,
             error: None,
@@ -268,6 +278,16 @@ mod tests {
         let refetched = repo.get(&item.id).await.unwrap().unwrap();
         assert_eq!(refetched.state, DownloadQueueState::Downloading);
         assert_eq!(refetched.job_id.as_deref(), Some("job-123"));
+
+        // `archive_ids` must survive a round-trip through Redis — this is the field the
+        // completed-item reader link now reads instead of the ephemeral `JobRegistry` result,
+        // specifically so it still resolves after a server restart.
+        let mut done = refetched;
+        done.state = DownloadQueueState::Done;
+        done.archive_ids = Some(vec!["abc123".to_string()]);
+        repo.update(&done).await.unwrap();
+        let refetched_done = repo.get(&item.id).await.unwrap().unwrap();
+        assert_eq!(refetched_done.archive_ids, Some(vec!["abc123".to_string()]));
 
         repo.delete(&item.id).await.unwrap();
         assert_eq!(repo.get(&item.id).await.unwrap(), None);

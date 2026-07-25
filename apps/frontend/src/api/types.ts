@@ -126,11 +126,9 @@ export interface PluginInfo {
   // metadata plugin) to find the one applicable plugin for a metadata-preview-by-URL action.
   // `null` when this plugin has no meaningful URL-based routing.
   url_pattern: string | null
-  // This plugin's persisted display-order position within its own `type` group — `null` when
-  // never explicitly set (a fresh install, or added after the last reorder). `GET /plugins/{type}`
-  // already returns the list pre-sorted by this (falling back to discovery order for `null`
-  // entries), so a caller only needs this field to render a drag handle's current position, not
-  // to re-derive the sort itself.
+  // Persisted display-order position within its own `type` group — `null` when never explicitly
+  // set. `GET /plugins/{type}` already returns the list pre-sorted by this, so a caller only needs
+  // this field to render a drag handle's current position, not to re-derive the sort.
   priority: number | null
   parameters: Array<{ name: string; desc: string; type?: string }>
 }
@@ -295,6 +293,10 @@ export interface DownloadQueueItem {
   overwrite_on_duplicate: boolean
   state: DownloadQueueState
   job_id: string | null
+  // Set once a managed download completes successfully — persisted here (not just in the linked
+  // job's own ephemeral result) so the completed-item reader link survives a server restart.
+  // Absent on items finished before this field existed, or via the unmanaged `file_path` fallback.
+  archive_ids?: string[] | null
   title: string | null
   // The metadata plugin's full `execMetadata` response (`{tags?, title?, summary?}`, per
   // `lanrurugi_plugin::protocol::MetadataResult`), set by the "Fetch metadata" preview action —

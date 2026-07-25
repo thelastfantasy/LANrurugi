@@ -54,11 +54,9 @@ import { toast } from '../toast'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { recordSearchNavigation } from './Reader/crossArchiveNav'
 
-// Matches `lanrurugi-api::search`'s own fixed page size (`search.rs`'s `PAGE_SIZE` constant) —
-// server-side pagination isn't configurable per-request, so "Go to Page" paginates through
-// exactly these fixed 100-archive chunks rather than the user's own `archives_per_page` display
-// setting (a real, minor mismatch versus legacy, which the same setting also doesn't control this
-// exact cursor for).
+// Matches `lanrurugi-api::search`'s fixed page size (`search.rs`'s `PAGE_SIZE` constant) —
+// server-side pagination isn't configurable per-request, so "Go to Page" paginates through these
+// fixed 100-archive chunks rather than the user's own `archives_per_page` display setting.
 const PAGE_SIZE = 100
 
 // The two hardcoded quick-filter category ids legacy's own `index.js` special-cases
@@ -517,34 +515,18 @@ function RecentlyAddedCarousel({
   return (
     <ul className="collapsible index-carousel with-right-caret">
       {/* Real legacy class list is exactly `collapsible index-carousel with-right-caret` with no
-          inline style at all — `index-carousel`'s own CSS (`lrr.css`) supplies `margin-top: -20px;
-          margin-bottom: 36px`, and `.index-carousel>.option-flyout { margin: 0 4% }` is what insets
-          the panel itself from the page edges. An earlier version used a made-up `extensible` class
-          and was missing `index-carousel` entirely, so that 4%-side-inset rule never matched — the
-          dark panel background rendered flush to the page container instead of inset, verified via
-          live `getComputedStyle`/`getBoundingClientRect` comparison against the real demo (`.option-
-          flyout`'s real computed `margin: 0px 49.1406px` at matching viewport width vs. `0px` here).
-
-          Matches legacy's real inline style on this exact `<li>` (`index.html.tt2`) —
-          `.collapsible-title`/`.collapsible-right` must stay *direct* children of `.option-flyout`
-          (not nested inside an extra wrapper div) since `lrr.css`'s `.option-flyout>.collapsible-title`
-          rule (the `font-size: 18px; font-weight: bold` that makes the icon+label actually
-          legible) is a direct-child selector — introducing a wrapper here silently drops that
-          styling entirely, verified the hard way. `.collapsible-body` still reliably wraps onto
-          its own row below despite sharing this same flex-wrap container, since it has its own
-          `width: 100%` below forcing the break regardless of how much space the header row itself
-          leaves. */}
+          inline style — `index-carousel`'s CSS (`lrr.css`) supplies the panel's own margins/inset,
+          and `.option-flyout>.collapsible-title` is a direct-child selector, so
+          `.collapsible-title`/`.collapsible-right` must stay direct children of `.option-flyout`
+          (no wrapper div) or that styling silently drops. */}
       <li
         className="option-flyout"
         style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between' }}
       >
-        {/* Matches legacy's real two-sibling split (`index.html.tt2`'s `#carousel-icon`/
-            `#carousel-title` wrapped alone in `.collapsible-title`, `#reload-carousel`/
-            `#carousel-mode-menu` in a *separate* sibling `.collapsible-right`) — `caret-right`'s
-            CSS `::after` glyph is painted at the end of whichever element carries the class, so
-            keeping the refresh/more-options buttons out of `.collapsible-title` entirely (not
-            just visually after the label) is what puts the caret right after "On Deck" instead of
-            at the far right of the whole bar past both buttons. */}
+        {/* Matches legacy's real two-sibling split — `caret-right`'s CSS `::after` glyph paints
+            at the end of whichever element carries the class, so keeping the refresh/more-options
+            buttons out of `.collapsible-title` entirely puts the caret right after "On Deck"
+            instead of at the far right past both buttons. */}
         <div
           className={`collapsible-title caret-right${isOpen ? ' active' : ''}`}
           onClick={() => setOpen((o) => !o)}
@@ -558,29 +540,14 @@ function RecentlyAddedCarousel({
         </div>
         {isOpen && multiSelect && (
           <div className="collapsible-right" onClick={(e) => e.stopPropagation()}>
-            {/* Legacy's real 4-button MSM toolbar (`#msm-batch-ops`/`#msm-merge`/`#msm-clear`/
-                `#msm-select-page`) lives in this exact `.collapsible-right` slot, replacing the
-                refresh/more-options icons rather than sitting in a separate div below the
-                carousel. `updateSelectionCount` (`index.js`) hides batch-ops/merge/clear at zero
-                selected — only select-page stays visible — leaving just one icon in the empty
-                state, matching the real demo screenshot exactly (not a guess: 3 icons showing at
-                zero selected was a real, caught deviation from this). */}
-            {/* `#msm-selection-count` itself carries no margin in the real markup (plain
-                `<span id="msm-selection-count"></span>`, no inline style) — the gap after it comes
-                entirely from the *next* icon's own unconditional `margin-left: 12px`, verified via
-                the real demo's own outerHTML. Every one of the four icons below gets that same
-                12px unconditionally, including `#msm-select-page` even when it's the only one
-                visible (0 selected) — legacy does NOT special-case away the leading margin for
-                whichever icon happens to be first-visible, which an earlier version of this code
-                incorrectly did. */}
+            {/* Legacy's real 4-button MSM toolbar lives in this exact `.collapsible-right`
+                slot, replacing the refresh/more-options icons. `updateSelectionCount` hides
+                batch-ops/merge/clear at zero selected — only select-page stays visible. */}
             {selectedIds.size > 0 && (
               <span>{t('{{n}} selected', { n: selectedIds.size })}</span>
             )}
-            {/* No `marginBottom` offset on these four (unlike the refresh/more-options icons
-                below) — verified via the real demo's own computed style: `#msm-batch-ops`/
-                `#msm-merge`/`#msm-clear`/`#msm-select-page` are all `margin-bottom: 0px`, while
-                `#reload-carousel`/`#carousel-mode-menu` are `-4px`. Assumed these two icon groups
-                shared the same offset without checking independently — a real, caught mismatch. */}
+            {/* No `marginBottom` offset on these four, unlike the refresh/more-options icons
+                below (`margin-bottom: 0px` vs. `-4px` in legacy's real computed style). */}
             {selectedIds.size > 0 && (
               <a
                 href="#"
@@ -678,26 +645,16 @@ function RecentlyAddedCarousel({
           </div>
         )}
         {isOpen && multiSelect && (
-          // Legacy's carousel body is repurposed into the selection list itself during MSM
-          // (`addArchiveToSelection`/`removeArchiveFromSelection`, `index.js`) — reuses the same
-          // empty-state icon/copy the normal "no results" state already had, just with MSM's own
-          // hint text, matching `enterSelectionCarouselMode` reusing `#carousel-empty` rather than
-          // inventing a second empty state.
+          // Legacy's carousel body is repurposed into the selection list itself during MSM,
+          // reusing the same empty-state icon/copy the normal "no results" state has.
           //
           // `boxSizing: 'border-box'` matters here: `.option-flyout>.collapsible-body`'s real CSS
-          // (`lrr.css`) gives it `padding: 10px !important`, and this element's own browser-default
-          // `box-sizing: content-box` means that padding is ADDED on top of `width: 100%` rather
-          // than included in it — so both this element and everything nested inside it (the swiper
-          // carousel) rendered ~10-15px wider than the `<li>` actually containing them, visibly
-          // overflowing its right edge. `border-box` makes the 10px padding count toward the 100%
-          // instead, keeping the real width within the parent's own bounds.
+          // gives it `padding: 10px !important`, which under content-box sizing would add on top
+          // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
           <div className="collapsible-body" style={{ width: '100%', boxSizing: 'border-box' }}>
             {selectedIds.size === 0 ? (
-              /* Real legacy `#carousel-empty` (verified via live `getComputedStyle`/innerHTML on
-                 the demo): a fixed `height: 344px` flex column, centered both axes — not a
-                 content-flow `<p>` with a `<br>`, which renders at a different (content-driven)
-                 height and visibly mismatches legacy's box size. Icon+text are flex siblings; the
-                 gap is `margin-top: 12px` on the text span, not a line-break. */
+              /* Real legacy `#carousel-empty`: a fixed `height: 344px` flex column, centered both
+                 axes, not a content-flow `<p>` with a `<br>`. */
               <div style={{ height: 344, display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
                 <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
                 <span style={{ marginTop: 12 }}>
@@ -708,18 +665,11 @@ function RecentlyAddedCarousel({
               <Swiper
                 modules={[Navigation, Mousewheel]}
                 navigation={{ nextEl: '.carousel-next', prevEl: '.carousel-prev' }}
-                // Real legacy's own Swiper instance (`~/LANraragi/public/js/mod/index.js`) enables
-                // `mousewheel: true` — a vertical scroll-wheel gesture over the carousel scrolls it
-                // horizontally instead of scrolling the page underneath it, standard Swiper
-                // behavior for a horizontal carousel with no further options needed.
                 mousewheel
                 spaceBetween={8}
                 slidesPerView="auto"
-                // No side padding — real legacy's `.index-carousel-container` has `padding: 0`
-                // (verified via live `getComputedStyle`); the prev/next arrows are absolutely
-                // positioned to overlay on top of the slide track's own edge, not reserved as a
-                // dedicated gutter. A `padding: '8px 32px'` here was reserving unused space before
-                // the first/after the last card that legacy doesn't have.
+                // No side padding — legacy's `.index-carousel-container` has `padding: 0`; the
+                // prev/next arrows overlay the slide track's own edge rather than a reserved gutter.
                 style={{ padding: '8px 0' }}
               >
                 {[...selectedIds].map((id) => (
@@ -731,18 +681,9 @@ function RecentlyAddedCarousel({
                     onRemove={onToggleSelected}
                   />
                 ))}
-                {/* Icon classes go directly on this element (matching legacy's real
-                    `<a class="fa fa-3x fa-chevron-left carousel-prev">`, verified via computed
-                    style) — not a wrapper `<div>` around a separately-sized nested `<i>`, which
-                    both diverges from the real markup and was rendering at the wrong size
-                    (`fa-2x`/32px vs. the real `fa-3x`/48px... verified: legacy's own computed
-                    `font-size` for this exact element is `32px`, i.e. `fa-3x`, not `fa-2x`). */}
-                {/* `top: 136` (not `50%`) matches legacy's own real `.carousel-prev`/
-                    `.carousel-next` rule (`lrr.css`: `position: absolute; top: 136px; left/right:
-                    0; z-index: 20`) — a fixed pixel offset, not vertically-centered — verified via
-                    live `getComputedStyle`. `position`/`left`/`right`/`zIndex` are already provided
-                    by that same class; only `top`/`cursor` need to be set here since the class's
-                    own `z-index: 20` differs from an earlier arbitrary `zIndex: 2` guess. */}
+                {/* `top: 136` (not `50%`) matches legacy's real `.carousel-prev`/`.carousel-next`
+                    rule (`lrr.css`: `position: absolute; top: 136px; left/right: 0; z-index: 20`)
+                    — a fixed pixel offset, not vertically-centered. */}
                 <a href="#" className="fa fa-3x fa-chevron-left carousel-prev" style={{ position: 'absolute', left: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
                 <a href="#" className="fa fa-3x fa-chevron-right carousel-next" style={{ position: 'absolute', right: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
               </Swiper>
@@ -750,10 +691,7 @@ function RecentlyAddedCarousel({
           </div>
         )}
         {isOpen && !multiSelect && (
-          // Same `boxSizing: 'border-box'` reasoning as the MSM branch above — without it, this
-          // element's real `padding: 10px !important` (`lrr.css`) adds on top of `width: 100%`
-          // under the browser-default `content-box` sizing, overflowing the `<li>` panel's own
-          // right edge (and the swiper carousel nested inside it along with it).
+          // Same `boxSizing: 'border-box'` reasoning as the MSM branch above.
           <div className="collapsible-body" style={{ width: '100%', boxSizing: 'border-box' }}>
             {loading && items.length === 0 ? (
               <div style={{ height: 344, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -768,24 +706,14 @@ function RecentlyAddedCarousel({
               <Swiper
                 modules={[Navigation, Mousewheel]}
                 navigation={{ nextEl: '.carousel-next', prevEl: '.carousel-prev' }}
-                // Real legacy's own Swiper instance (`~/LANraragi/public/js/mod/index.js`) enables
-                // `mousewheel: true` — a vertical scroll-wheel gesture over the carousel scrolls it
-                // horizontally instead of scrolling the page underneath it, standard Swiper
-                // behavior for a horizontal carousel with no further options needed.
                 mousewheel
                 spaceBetween={8}
                 slidesPerView="auto"
-                // No side padding — real legacy's `.index-carousel-container` has `padding: 0`
-                // (verified via live `getComputedStyle`); the prev/next arrows are absolutely
-                // positioned to overlay on top of the slide track's own edge, not reserved as a
-                // dedicated gutter. A `padding: '8px 32px'` here was reserving unused space before
-                // the first/after the last card that legacy doesn't have.
                 style={{ padding: '8px 0' }}
               >
                 {items.map((a) => (
-                  // 228px matches `div.id1`'s real fixed width (`lrr.css`) — a narrower slide box
-                  // than the card actually renders at makes each card visually spill into/overlap
-                  // its neighbor.
+                  // 228px matches `div.id1`'s real fixed width — a narrower slide box makes each
+                  // card visually spill into its neighbor.
                   <SwiperSlide key={a.arcid} style={{ width: 228 }}>
                     <CarouselCard
                       archive={a}
@@ -795,12 +723,6 @@ function RecentlyAddedCarousel({
                     />
                   </SwiperSlide>
                 ))}
-                {/* `top: 136` (not `50%`) matches legacy's own real `.carousel-prev`/
-                    `.carousel-next` rule (`lrr.css`: `position: absolute; top: 136px; left/right:
-                    0; z-index: 20`) — a fixed pixel offset, not vertically-centered — verified via
-                    live `getComputedStyle`. `position`/`left`/`right`/`zIndex` are already provided
-                    by that same class; only `top`/`cursor` need to be set here since the class's
-                    own `z-index: 20` differs from an earlier arbitrary `zIndex: 2` guess. */}
                 <a href="#" className="fa fa-3x fa-chevron-left carousel-prev" style={{ position: 'absolute', left: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
                 <a href="#" className="fa fa-3x fa-chevron-right carousel-next" style={{ position: 'absolute', right: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
               </Swiper>
@@ -851,6 +773,23 @@ function ArchiveContextMenu({
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false)
   const [ratingMenuOpen, setRatingMenuOpen] = useState(false)
   const currentRating = splitTagsByNamespace(archive.tags).rating?.[0] ?? null
+
+  // Submenus open on hover (matching legacy's `jquery-contextMenu`, and standard desktop
+  // context-menu behavior generally) rather than click. A short close delay absorbs the mouse
+  // briefly leaving the trigger row while crossing the gap into the submenu itself.
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function openSubmenu(which: 'rating' | 'category') {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    setRatingMenuOpen(which === 'rating')
+    setCategoryMenuOpen(which === 'category')
+  }
+  function scheduleCloseSubmenus() {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = setTimeout(() => {
+      setRatingMenuOpen(false)
+      setCategoryMenuOpen(false)
+    }, 200)
+  }
 
   function copyLink() {
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`
@@ -919,24 +858,23 @@ function ArchiveContextMenu({
             >
               <i className="fa fa-pen" style={{ width: 18 }}></i> {t('Edit Metadata')}
             </PopupMenuItem>
-            <PopupMenuItem
-              style={{ position: 'relative' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                setRatingMenuOpen((v) => !v)
-                setCategoryMenuOpen(false)
-              }}
-            >
+            <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('rating')} onMouseLeave={scheduleCloseSubmenus}>
               <i className="fa fa-star" style={{ width: 18 }}></i> {t('Add Rating')}
               {ratingMenuOpen && (
-                <PopupMenu portal={false} style={{ position: 'absolute', left: '100%', top: 0 }}>
+                <PopupMenu
+                  portal={false}
+                  style={{ position: 'absolute', left: '100%', top: 0 }}
+                  onMouseEnter={() => openSubmenu('rating')}
+                  onMouseLeave={scheduleCloseSubmenus}
+                >
                   <PopupMenuItem
                     onClick={() => {
                       onClose()
                       onRatingChange(archive.arcid, isTank, null)
                     }}
                   >
-                    <input type="checkbox" readOnly checked={currentRating === null} /> {t('Remove Rating')}
+                    <input type="checkbox" readOnly checked={currentRating === null} style={{ verticalAlign: 'middle' }} />{' '}
+                    {t('Remove Rating')}
                   </PopupMenuItem>
                   {RATING_OPTIONS.map((stars) => (
                     <PopupMenuItem
@@ -946,23 +884,22 @@ function ArchiveContextMenu({
                         onRatingChange(archive.arcid, isTank, stars)
                       }}
                     >
-                      <input type="checkbox" readOnly checked={currentRating === stars} /> {stars}
+                      <input type="checkbox" readOnly checked={currentRating === stars} style={{ verticalAlign: 'middle' }} />{' '}
+                      {stars}
                     </PopupMenuItem>
                   ))}
                 </PopupMenu>
               )}
             </PopupMenuItem>
-            <PopupMenuItem
-              style={{ position: 'relative' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                setCategoryMenuOpen((v) => !v)
-                setRatingMenuOpen(false)
-              }}
-            >
+            <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('category')} onMouseLeave={scheduleCloseSubmenus}>
               <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t('Add to Category')}
               {categoryMenuOpen && (
-                <PopupMenu portal={false} style={{ position: 'absolute', left: '100%', top: 0, maxHeight: 220, overflowY: 'auto' }}>
+                <PopupMenu
+                  portal={false}
+                  style={{ position: 'absolute', left: '100%', top: 0, maxHeight: 220, overflowY: 'auto' }}
+                  onMouseEnter={() => openSubmenu('category')}
+                  onMouseLeave={scheduleCloseSubmenus}
+                >
                   {staticCategories.length === 0 && (
                     <PopupMenuItem disabled>{t('No categories found.')}</PopupMenuItem>
                   )}
@@ -970,7 +907,7 @@ function ArchiveContextMenu({
                     const currentlyIn = c.archives.includes(archive.arcid)
                     return (
                       <PopupMenuItem key={c.id} onClick={() => onToggleCategory(c.id, archive.arcid, currentlyIn)}>
-                        <input type="checkbox" readOnly checked={currentlyIn} /> {c.name}
+                        <input type="checkbox" readOnly checked={currentlyIn} style={{ verticalAlign: 'middle' }} /> {c.name}
                       </PopupMenuItem>
                     )
                   })}
@@ -1234,13 +1171,10 @@ function SettingsMenu({
 }
 
 // Module-level (not component state/`localStorage`): persists across `Library` remounting
-// mid-session — e.g. navigating away via an in-app link and back to `/` without a full browser
-// reload — but naturally resets on an actual page reload/fresh tab, matching legacy's real
-// semantics (`[% IF usingdefpass %]` in `index.html.tt2`'s own inline script only ever runs once
-// per real HTTP page load). Without this, each SPA-internal remount re-fired the toast — with its
-// own long `hideAfter: 25000` and no de-dup, back-and-forth in-app navigation within that window
-// stacked up multiple copies on screen (confirmed: a real hard reload only ever shows one; the
-// stacking only reproduces via repeated remounts of the same page load).
+// mid-session (e.g. in-app nav back to `/`) but resets on an actual page reload/fresh tab,
+// matching legacy's semantics (its own toast trigger only ever runs once per real HTTP page
+// load). Without this, each SPA-internal remount re-fired the toast, stacking multiple copies on
+// screen given its long `hideAfter: 25000` with no de-dup.
 let defaultPasswordToastShownThisPageLoad = false
 
 export default function Library() {
@@ -1257,37 +1191,24 @@ export default function Library() {
   const loggedIn = loginStatus.data?.logged_in ?? true
 
   // `appliedFilter`/`selectedCategory`/`sortby`/`order`/`page` all derive directly from
-  // `location.search` on every render — no `useState` mirror, no effect to keep one in sync with
-  // the other. `useLocation()` is already React Router's own live subscription to the URL
-  // (updates on `navigate()` calls *and* on browser back/forward, since React Router listens to
-  // `popstate` internally), so it's the single source of truth here; each `setXxx` function below
-  // is a real `navigate()` call (a genuine, back/forward-navigable history entry — matching real
-  // legacy's own `index_datatables.js`, which calls `window.history.pushState(...)` on every
-  // distinct search/sort/page change) rather than local state, with `sortby`/`order` additionally
-  // persisted to `localStorage` as a fallback for the *next* fresh visit with no URL params at all
-  // (matching legacy's own `getColumnCount()`-style persistence). One `URLSearchParams` object
-  // shared by every derivation below keeps them all reading the exact same snapshot of the URL
-  // within a given render, rather than each re-parsing `location.search` independently.
+  // `location.search` on every render — no `useState` mirror. `useLocation()` is React Router's
+  // live subscription to the URL (updates on `navigate()` and browser back/forward), so it's the
+  // single source of truth; each `setXxx` function below is a real `navigate()` call, a genuine
+  // back/forward-navigable history entry, with `sortby`/`order` additionally persisted to
+  // `localStorage` as a fallback for the next fresh visit with no URL params. One shared
+  // `URLSearchParams` object keeps every derivation reading the same snapshot of the URL.
   const urlParams = useMemo(() => new URLSearchParams(location.search), [location.search])
 
-  // The textbox's own live contents mid-typing, before the user has applied it (via Enter/the
-  // button/a tag click) — genuinely not URL-driven, unlike `appliedFilter` below. `null` means
-  // "not being actively edited right now", in which case the input displays `appliedFilter`
-  // directly (see `filterInput` below) — this, not a `useState` initializer + a `key`-remount
-  // trick to re-run it, is what keeps the textbox in sync with browser back/forward: a `key`-based
-  // remount's freshly re-run initializer sounds right in principle, but reads `location`/`urlParams`
-  // as of whichever render React happened to schedule the remount in, which isn't guaranteed to be
-  // the render that already has the *final* post-navigation value — confirmed live (the DOM node
-  // demonstrably did remount on back/forward, but still showed one step behind). Tracking "is the
-  // user actively diverging from the URL" as its own nullable piece of state sidesteps needing a
-  // remount to reset anything at all — there's nothing to reset, since not being in override mode
-  // already means "display whatever `appliedFilter` derives from `location.search` right now".
+  // The textbox's own live contents mid-typing, before applied (Enter/button/tag click) — not
+  // URL-driven, unlike `appliedFilter` below. `null` means "not being actively edited", in which
+  // case the input displays `appliedFilter` directly. Tracking this as its own nullable state
+  // (rather than a `key`-remount trick) keeps the textbox in sync with browser back/forward
+  // without racing which render the remount's initializer happens to read stale `location` from.
   const [filterInputOverride, setFilterInputOverride] = useState<string | null>(null)
   const appliedFilter = urlParams.get('q') ?? ''
   const filterInput = filterInputOverride ?? appliedFilter
-  // Real legacy's own `index_datatables.js` appends the current search term to the tab title
-  // (`document.title = originalTitle + (currentSearch ? " - " + currentSearch : "")`) — useful
-  // for scanning browser history for which search produced which page, not just cosmetic.
+  // Legacy's own `index_datatables.js` appends the current search term to the tab title — useful
+  // for scanning browser history for which search produced which page.
   useDocumentTitle(appliedFilter || undefined)
 
   function buildSearch(overrides: {
@@ -1321,15 +1242,11 @@ export default function Library() {
     return (localStorage.getItem(INDEX_ORDER_KEY) as 'asc' | 'desc' | null) ?? 'asc'
   })()
   // The one and only setter for every URL-driven field — every call site below passes every
-  // field it's changing in a *single* call (e.g. `navigateSearch({ appliedFilter: '', page: 0 })`
-  // for "clear filter", not two separate calls). This matters because `buildSearch()` reads its
-  // un-overridden fields from the *current render's* closure values — two independent `navigate()`
-  // calls in the same event handler would each rebuild the full URL from that same stale snapshot,
-  // so the second call's URL wouldn't include the first call's change, and would silently
-  // overwrite it (confirmed live: a "clear filter" button that called a separate `setAppliedFilter`
-  // then `setPage` ended up re-adding the just-cleared `q` param via the second, stale-closured
-  // `navigate()`). `sortby`/`order` changes also persist to `localStorage` here as a fallback for
-  // a future fresh visit with no URL params at all.
+  // field it's changing in a single call (e.g. `navigateSearch({ appliedFilter: '', page: 0 })`,
+  // not two separate calls), since `buildSearch()` reads its un-overridden fields from the current
+  // render's closure values — two independent `navigate()` calls in the same handler would each
+  // rebuild the URL from that same stale snapshot, silently overwriting each other's change.
+  // `sortby`/`order` changes also persist to `localStorage` as a fallback for a future fresh visit.
   function navigateSearch(overrides: {
     page?: number
     sortby?: string
@@ -1385,11 +1302,9 @@ export default function Library() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; isTank: boolean } | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // First-visit context-menu tutorial toast + default-password warning (legacy's own
-  // `[% IF usingdefpass %]`/first-run toast in `index.html.tt2`'s inline script) — fired once per
-  // browser via a `localStorage` flag for the tutorial (no per-session re-nag), and every load for
-  // the default-password warning (matches legacy, which has no dismiss-forever flag for it either
-  // — a real security nudge is meant to keep showing up until actually fixed).
+  // First-visit context-menu tutorial toast + default-password warning — fired once per browser
+  // via a `localStorage` flag for the tutorial, and every load for the default-password warning
+  // (matching legacy, which has no dismiss-forever flag for it either).
   useEffect(() => {
     if (loginStatus.data?.using_default_password && !defaultPasswordToastShownThisPageLoad) {
       defaultPasswordToastShownThisPageLoad = true
@@ -1418,14 +1333,10 @@ export default function Library() {
     })
   }, [t])
 
-  // Ports `migrateProgress` (`~/LANraragi/public/js/mod/index.js:942-1013`) — a one-time sweep of
-  // stray `*-reader` localStorage progress entries left over from when `localprogress` was on (or
-  // the user wasn't logged in under `authprogress`), pushing each one to the server (only if it's
-  // *ahead* of whatever the server already has, never regressing it) and then clearing the local
-  // copy. Runs whenever server-side progress is what's actually in effect now (mirrors the
-  // condition legacy checks before bothering to scan at all) — waits for `settings`/`loginStatus`
-  // to have actually loaded first so it doesn't fire (and wrongly skip) on the default `false`s a
-  // still-pending query briefly returns.
+  // Ports `migrateProgress` — a one-time sweep of stray `*-reader` localStorage progress entries
+  // left over from when `localprogress` was on, pushing each one to the server (only if ahead of
+  // what the server already has) and clearing the local copy. Waits for `settings`/`loginStatus`
+  // to load first so it doesn't wrongly skip on a still-pending query's default `false`s.
   useEffect(() => {
     if (!settings.data || loginStatus.data === undefined) return
     if (settings.data.localprogress || (settings.data.authprogress && !loggedIn)) return
@@ -1493,23 +1404,10 @@ export default function Library() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // `appliedFilter`/`selectedCategory`/`sortby`/`order`/`page` are derived directly from
-  // `location.search` (declared above, near the top of the component) rather than mirrored into
-  // their own `useState` synced via an effect — React Router's `useLocation()` is already a live,
-  // reactive subscription to the URL (covers browser back/forward for free, since React Router
-  // listens to `popstate` internally), so there's no separate "URL changed, now copy it into
-  // state" step to keep in sync, and no `useEffect`/render-time `setState` calling into React's
-  // "cascading render" lint warnings. Each `setXxx` below is a real, back/forward-navigable
-  // `navigate()` call rather than local state — see the declarations above for the derivation and
-  // matching setter for each. An earlier version hand-rolled `window.history.pushState`/
-  // `popstate` bookkeeping instead (plus a flag to stop the push- and restore-effects from
-  // fighting each other) — reinventing state React Router already owns for no benefit.
-
   // A plain, unfiltered `useArchives()` isn't enough on its own to answer "how many total
   // archives are there" once a category/sort/page is active — `/search` (empty filter included)
-  // is the single source of truth for everything shown here, matching legacy's own `index.js`,
-  // which always goes through the same DataTables-backed search endpoint regardless of whether a
-  // text filter is actually set.
+  // is the single source of truth here, matching legacy's own `index.js`, which always goes
+  // through the same search endpoint regardless of whether a text filter is set.
   const isBuiltinSelector = selectedCategory === NEW_ONLY || selectedCategory === UNTAGGED_ONLY
   const search = useSearch({
     filter: appliedFilter,
@@ -1542,10 +1440,9 @@ export default function Library() {
   const visibleCategories = sortedCategories.slice(0, CATEGORY_BUTTON_CAP)
   const overflowCategories = sortedCategories.slice(CATEGORY_BUTTON_CAP)
 
-  // Search-bar tag autocomplete — ports Awesomplete's own filter/sort rule from `loadTagSuggestions`
-  // (`~/LANraragi/public/js/mod/index.js`): match against only the fragment after the last
-  // `,`/`-`/whitespace (so autocomplete works mid-multi-tag-search, not just at the very start),
-  // case-insensitive substring match, sorted by tag weight descending.
+  // Search-bar tag autocomplete — ports `loadTagSuggestions`'s filter/sort rule: match against
+  // only the fragment after the last `,`/`-`/whitespace (so autocomplete works mid-multi-tag-
+  // search), case-insensitive substring match, sorted by tag weight descending.
   const currentFragment = filterInput.match(/[^,\s-]*$/)?.[0] ?? ''
   const tagSuggestions = useMemo(() => {
     if (!currentFragment) return []
@@ -1892,18 +1789,12 @@ export default function Library() {
         canMerge={canMerge}
       />
 
-      {/* The real 4%-side inset (`margin-left/right: 4%`) comes from each theme's own
-          `.table-options` rule (verified via live `styleSheets` inspection on the real demo:
-          `modern.css`'s `.table-options { margin-right: 4%; margin-left: 4%; margin-bottom:
-          -64px; }`, varying slightly per theme) — an inline `margin` here previously overrode that
-          rule entirely, flattening the panel to the full container width instead of the real 4%
-          inset. The theme rule's own `margin-bottom: -64px` is NOT reused, though: that value only
-          makes sense against legacy's own jQuery DataTables layout, which reserves invisible
-          header/`thead` space above the grid that this negative margin pulls the toolbar back
-          into — this app's grid has no such reserved space, so inheriting `-64px` verbatim pulled
-          the whole toolbar out of view behind the grid below it (a real regression, caught by
-          reloading and finding the row missing). Explicit `marginBottom: 0` overrides just that
-          one property back off, keeping the real `4%` sides. */}
+      {/* The real 4%-side inset comes from each theme's own `.table-options` rule (e.g.
+          `modern.css`'s `margin-right/left: 4%; margin-bottom: -64px`). The theme's own
+          `margin-bottom: -64px` is NOT reused: that value only makes sense against legacy's own
+          jQuery DataTables layout, which reserves invisible header space this app's grid doesn't
+          have — inheriting it verbatim pulls the toolbar out of view behind the grid below.
+          Explicit `marginBottom: 0` overrides just that one property back off. */}
       <div className="table-options" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginBottom: 0 }}>
         <div className="thumbnail-options">
           {t('Sort by:')}{' '}
@@ -1922,15 +1813,13 @@ export default function Library() {
             {[...new Set((stats.data ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== 'date_added'))]
               .sort()
               .map((ns) => (
+                // legacy capitalizes only the display label, not the `value` (`index.js:341`).
                 <option key={ns} value={ns}>
-                  {ns}
+                  {ns.charAt(0).toUpperCase() + ns.slice(1)}
                 </option>
               ))}
           </select>
-          {/* Real legacy markup (`index.html.tt2`): `class="fa fa-sort-alpha-down fa-2x
-              table-option"` — `fa-2x` was missing here, rendering at the browser default 1x size
-              instead of legacy's real 21.3333px, and the inline `marginLeft: 6` should instead be
-              `.table-option`'s own real `margin-left: 8px !important` (`lrr.css`). */}
+          {/* Real legacy markup: `class="fa fa-sort-alpha-down fa-2x table-option"`. */}
           <a
             className={`fa fa-2x fa-sort-alpha-${order === 'asc' ? 'down' : 'up'} table-option`}
             href="#"
@@ -1944,10 +1833,9 @@ export default function Library() {
         {viewMode === 'compact' && (
           <div className="compact-options">
             {t('Columns:')}{' '}
-            {/* This is legacy's real semantics (verified against `index.js`'s `handleColumnNum`/
-                `generateTableHeaders`) — NOT a thumbnail-grid column count (that grid has no such
-                setting at all, see `#thumbs_container`'s own comment below). It's how many extra
-                namespace columns (Artist, Series, ...) the compact table shows beyond Title. */}
+            {/* Legacy semantics — NOT a thumbnail-grid column count (that grid has no such
+                setting). It's how many extra namespace columns (Artist, Series, ...) the compact
+                table shows beyond Title. */}
             <select className="favtag-btn" value={columns} onChange={(e) => setColumns(Number(e.target.value))}>
               {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
                 <option key={n} value={n}>
@@ -2050,16 +1938,11 @@ export default function Library() {
       ) : (
         <div
           id="thumbs_container"
-          // Legacy's real thumbnail grid: `#thumbs_container` itself has NO layout CSS of its
-          // own at all — it's plain block flow, and each card (`div.id1`) is `display:
-          // inline-block` with its own `margin` (not a flex `gap`), wrapping the same way inline
-          // text would. A `display:flex` version (even with `flexWrap: wrap`) measurably fits
-          // fewer cards per row than this at the same container width — flexbox's own
-          // row-filling algorithm isn't equivalent to inline-block wrapping here, so this needs
-          // to be the real thing, not a flex approximation of it. `text-align: center` verified
-          // via live `getComputedStyle` on the real demo's own `#thumbs_container` — a same-sided
-          // right gutter (from an earlier `text-align: left` override) was flagged as a mismatch
-          // against legacy, so this reverts to matching legacy exactly.
+          // Legacy's real thumbnail grid: `#thumbs_container` has no layout CSS of its own —
+          // plain block flow, each card (`div.id1`) is `display: inline-block` with its own
+          // `margin`, wrapping the same way inline text would. A `display: flex` version
+          // measurably fits fewer cards per row at the same container width, so this needs to be
+          // the real thing, not a flex approximation.
           style={{ textAlign: 'center' }}
         >
           {shown.map((a) => (

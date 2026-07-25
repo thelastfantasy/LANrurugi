@@ -708,6 +708,7 @@ mod tests {
             overwrite_on_duplicate: false,
             state,
             job_id: None,
+            archive_ids: None,
             title: None,
             metadata_preview: None,
             error: None,

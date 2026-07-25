@@ -1460,6 +1460,7 @@ pub(crate) async fn start_download(
                     lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
                     Some(job_id_for_task.clone()),
                     None,
+                    None,
                 )
                 .await;
             }
@@ -1503,6 +1504,7 @@ pub(crate) async fn start_download(
                             lanrurugi_storage::download_queue::DownloadQueueState::Error,
                             None,
                             Some(queue_error.clone()),
+                            None,
                         )
                         .await;
                     }
@@ -1525,6 +1527,7 @@ pub(crate) async fn start_download(
                             lanrurugi_storage::download_queue::DownloadQueueState::Error,
                             None,
                             Some(queue_error.clone()),
+                            None,
                         )
                         .await;
                     }
@@ -1546,6 +1549,7 @@ pub(crate) async fn start_download(
                         lanrurugi_storage::download_queue::DownloadQueueState::Error,
                         None,
                         Some(queue_error.clone()),
+                        None,
                     )
                     .await;
                 }
@@ -1575,6 +1579,7 @@ pub(crate) async fn start_download(
                                 lanrurugi_storage::download_queue::DownloadQueueState::Done,
                                 None,
                                 None,
+                                Some(ids.clone()),
                             )
                             .await;
                         }
@@ -1600,6 +1605,7 @@ pub(crate) async fn start_download(
                                 lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
                                 None,
                                 None,
+                                None,
                             )
                             .await;
                         }
@@ -1613,6 +1619,7 @@ pub(crate) async fn start_download(
                                 lanrurugi_storage::download_queue::DownloadQueueState::Error,
                                 None,
                                 Some(e.clone()),
+                                None,
                             )
                             .await;
                         }
@@ -1625,12 +1632,14 @@ pub(crate) async fn start_download(
             if let Some(file_path) = parsed.file_path {
                 // Pre-existing fallback escape hatch — the plugin already downloaded/wrote the file
                 // itself; unmanaged, no progress/concurrency/rate-limit treatment, since the byte
-                // transfer already happened entirely inside the plugin process by this point.
+                // transfer already happened entirely inside the plugin process by this point. No
+                // `archive_ids` either — this path never catalogs the file into an archive itself.
                 if let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,
                         item_id,
                         lanrurugi_storage::download_queue::DownloadQueueState::Done,
+                        None,
                         None,
                         None,
                     )
@@ -1651,6 +1660,7 @@ pub(crate) async fn start_download(
                     lanrurugi_storage::download_queue::DownloadQueueState::Error,
                     None,
                     Some(queue_error),
+                    None,
                 )
                 .await;
             }
@@ -1723,12 +1733,19 @@ async fn update_queue_item_state(
     new_state: lanrurugi_storage::download_queue::DownloadQueueState,
     job_id: Option<String>,
     error: Option<lanrurugi_core::queue_error::QueueError>,
+    archive_ids: Option<Vec<String>>,
 ) {
     match repo.get(item_id).await {
         Ok(Some(mut item)) => {
             item.state = new_state;
             if job_id.is_some() {
                 item.job_id = job_id;
+            }
+            // Set-if-some, same as `job_id` above — persisted here (not just in the linked job's
+            // ephemeral `JobRegistry` result) so the completed-item reader link survives a server
+            // restart; see the field's own docs (`download_queue.rs`).
+            if archive_ids.is_some() {
+                item.archive_ids = archive_ids;
             }
             // Unconditional (not `if error.is_some()`): every real call site passes `None` to
             // mean "this transition has no error" — which should clear any stale error left over

@@ -2,13 +2,11 @@ import { useEffect } from 'react'
 
 import { useSettings } from './api/hooks'
 
-// Matches legacy's own theme file names and display data exactly
-// (`Utils/Generic.pm::css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG`
-// Redis hash under `theme`, so this list must stay in sync with what a legacy instance (or its
-// own settings page) would write there. `color` is each theme's real `body` background colour
-// (read straight out of `~/LANraragi/public/themes/*.css`, not an approximation) — note that
-// Nadeko and H-Verse are actually *light* themes, easy to get backwards without checking the
-// real file.
+// Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
+// css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
+// `theme`, so this list must stay in sync with legacy. `color` is each theme's real `body`
+// background colour — note that Nadeko and H-Verse are actually light themes, easy to get
+// backwards without checking the real file.
 export const THEMES = [
   { id: 'modern.css', name: 'Hachikuji', color: '#34353B' },
   { id: 'modern_red.css', name: 'Nadeko', color: '#E9BBC5' },
@@ -20,11 +18,10 @@ export const THEMES = [
 export const DEFAULT_THEME_ID = 'modern.css'
 
 /** Popup-menu palette per theme (right-click menu, index settings gear menu) — real colour values
- * read directly off each theme's own `.context-menu-list`/`.context-menu-item`/
- * `.context-menu-item.context-menu-hover`/`.context-menu-separator` rules
- * (`~/LANraragi/public/themes/*.css`), so the from-scratch Tailwind-based `PopupMenu` component
- * matches each theme's real popup styling exactly without linking any menu-plugin CSS file at
- * all — colours live here as plain data, applied via inline style/Tailwind arbitrary values. */
+ * read directly off each theme's own `.context-menu-list`/`.context-menu-item`/`.context-menu-
+ * item.context-menu-hover`/`.context-menu-separator` rules, so the from-scratch Tailwind-based
+ * `PopupMenu` component matches each theme's real popup styling without linking any menu-plugin
+ * CSS file at all. */
 export const MENU_PALETTE: Record<
   (typeof THEMES)[number]['id'],
   { bg: string; border: string; text: string; hoverBg: string; hoverText: string; separator: string; shadow: string }
@@ -79,8 +76,7 @@ export const MENU_PALETTE: Record<
 // `lrr.css`/`allcollapsible.css` hardcode several rules in `pt` (some `!important`) — these are
 // the `rem` equivalents used throughout the app instead (16px root font size assumed), so a
 // pt-sized legacy rule and our own inline styles agree on the same rendered size. Naming reflects
-// the legacy pt value they replace, not the rem number, since that's the meaningful constant here
-// (a change to the base font size would change the rem value but not which legacy rule it matches).
+// the legacy pt value they replace, not the rem number, since that's the meaningful constant.
 export const FONT_SIZE_8PT = '0.667rem'
 
 export const FONT_SIZE_9PT = '0.833rem'
@@ -126,26 +122,20 @@ export function removeLink(id: string) {
 /** Links in legacy's own real stylesheets — `lrr.css` (structural, theme-independent, loaded
  * once) and whichever theme file is currently selected (swapped by changing one `<link>`'s
  * `href`, exactly how legacy's own settings page switches themes — not a CSS-variable
- * recalculation). Both files are verbatim copies of legacy's own `public/css/lrr.css` and
- * `public/themes/*.css` (see `public/legacy/`), so components written against legacy's own
- * classnames (`.id1`, `.stdbtn`, `.favtag-btn`, ...) get pixel-accurate styling for free.
+ * recalculation). Both are verbatim copies of legacy's own CSS (see `public/legacy/`), so
+ * components written against legacy's own classnames get pixel-accurate styling for free.
  *
- * Also links a *vendor* stylesheet legacy's own templates load that isn't part of LANraragi's own
- * CSS at all, easy to miss since it doesn't ship as a source file in the legacy repo (pulled from
- * its own npm package at legacy's own build time, same as the Geist/Inter fonts) — fetched from
- * the same real package here (`blueimp-file-upload`) rather than approximated:
- * - `fileupload-vendor.css` (blueimp File Upload plugin): the `.fileinput-button` positioning (a
- *   huge, invisible, absolutely positioned `<input type=file>` layered over the visible button)
- *   every file-picker button on Upload/Backup/Plugins depends on to not render a raw native
- *   input.
+ * Also links a vendor stylesheet legacy's own templates load that isn't part of LANraragi's own
+ * CSS (pulled from an npm package at legacy's build time), fetched from the same real package
+ * here (`blueimp-file-upload`) rather than approximated:
+ * - `fileupload-vendor.css`: the `.fileinput-button` positioning (an invisible, absolutely
+ *   positioned `<input type=file>` layered over the visible button) every file-picker button
+ *   depends on to not render a raw native input.
  * - `allcollapsible.css`: the `.collapsible`/`.collapsible-title`/`.collapsible-body`/
- *   `.caret-right` accordion classes used by the nav carousel, Stats, Plugins, and Batch's
- *   flyouts — real padding/border/box-shadow and the `::after` caret glyph, not just a bare
- *   list.
+ *   `.caret-right` accordion classes used by the nav carousel, Stats, Plugins, and Batch.
  *
- * Popup menus (right-click menu, index settings gear menu) are a from-scratch `PopupMenu`
- * component styled with Tailwind + the `MENU_PALETTE` table above — no menu-plugin CSS file is
- * linked in for them at all. */
+ * Popup menus are a from-scratch `PopupMenu` component styled with Tailwind + the `MENU_PALETTE`
+ * table above — no menu-plugin CSS file is linked in for them at all. */
 export function useApplyTheme() {
   const settings = useSettings()
 

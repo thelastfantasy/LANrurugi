@@ -20,25 +20,22 @@ import { CSS } from '@dnd-kit/utilities'
 import { useState } from 'react'
 
 /** Props a caller's `renderItem` must spread onto whatever element should act as the grab handle
- * (`{...dragHandleProps.attributes} {...dragHandleProps.listeners}`) — kept as a distinct handle
- * rather than making the whole row draggable, so clicking a row's own interactive controls
- * (checkboxes, buttons, inputs) doesn't fight the pointer sensor's own activation constraint.
- * `attributes`/`listeners` are absent for the `DragOverlay`'s own render of `renderItem` — that
- * copy is a purely visual stand-in (the real drag is still driven by the original row's, now
- * invisible, sortable element), so it needs no working drag listeners of its own. */
+ * (`{...dragHandleProps.attributes} {...dragHandleProps.listeners}`) — kept distinct from the
+ * whole row so clicking a row's own interactive controls (checkboxes, buttons, inputs) doesn't
+ * fight the pointer sensor's activation constraint. `attributes`/`listeners` are absent for
+ * `DragOverlay`'s render of `renderItem` — that copy is a purely visual stand-in, so it needs no
+ * working drag listeners of its own. */
 export interface DragHandleProps {
   attributes?: ReturnType<typeof useSortable>['attributes']
   listeners?: ReturnType<typeof useSortable>['listeners']
   isDragging: boolean
 }
 
-/** One sortable row — renders its own `renderItem` output, wired up to dnd-kit's per-item
- * position tracking. While dragging, this row becomes an inert, zero-visual placeholder (no
- * shadow/scale/z-index of its own, no visible content) rather than moving in place: the real,
- * fully-styled dragged content renders once, separately, inside `SortableList`'s own
- * `DragOverlay` (a fixed-position portal layer) — see that component's own docs for why a
- * same-flow-moving item caused visual overlap/squishing against neighboring rows of a different
- * height. */
+/** One sortable row — renders its own `renderItem` output, wired to dnd-kit's per-item position
+ * tracking. While dragging, this row becomes an invisible placeholder rather than moving in
+ * place: the real, fully-styled dragged content renders once, separately, inside `SortableList`'s
+ * own `DragOverlay` — see that component's docs for why a same-flow-moving item caused visual
+ * overlap against neighboring rows of a different height. */
 function SortableRow<T>({
   id,
   item,
@@ -66,21 +63,17 @@ function SortableRow<T>({
 }
 
 /** Drag-and-drop reorderable list (dnd-kit), generic over any item type — extracted from the
- * Plugins page's own per-type priority reordering so any future list needing the same
- * "drag a row, persist the new order" behavior doesn't need to re-wire dnd-kit from scratch.
+ * Plugins page's own per-type priority reordering so any future list needing "drag a row, persist
+ * the new order" doesn't need to re-wire dnd-kit from scratch.
  *
- * Uses `DragOverlay` (a fixed-position portal layer, not each row moving in its own document-flow
- * slot) for the actively-dragged row's real rendered content — necessary because this list's rows
- * can have very different heights (e.g. a plugin card with a multi-line "depends on login plugin"
- * notice vs. a bare one-liner); without it, a tall row dragged over a shorter one visually
- * overlapped/squished the shorter row's own content instead of cleanly passing over it (a real,
- * observed bug — confirmed via a live drag: `EHDL info.txt`'s heading text became unreadable,
- * pressed underneath the taller `nHentai` row being dragged past it).
+ * Uses `DragOverlay` for the actively-dragged row's real rendered content rather than each row
+ * moving in its own document-flow slot — necessary because rows can have very different heights
+ * (e.g. a plugin card with a multi-line notice vs. a bare one-liner); without it, a tall row
+ * dragged over a shorter one visually overlapped the shorter row's content (a real, observed bug).
  *
  * `items`/`getId`/`renderItem` mirror a typical virtualized-list API: `renderItem` receives the
  * item plus `DragHandleProps` to spread onto whichever element the caller wants as the grab
- * handle (not necessarily the whole row), so callers keep full control over their own row layout.
- */
+ * handle, so callers keep full control over their own row layout. */
 export default function SortableList<T>({
   items,
   getId,

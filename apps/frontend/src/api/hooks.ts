@@ -725,15 +725,11 @@ export function useStopQueueItem() {
   return useMutation({
     mutationFn: (id: string) =>
       sendJson('POST', `/download_queue/${encodeURIComponent(id)}/stop`),
-    // Optimistic: the real cancellation is cooperative (the download task itself has to notice
-    // the token and finish its own cleanup before the server-side state actually flips), so
-    // waiting for a poll/invalidation round-trip to reflect it made the Stop-button-vs-Retry-
-    // button swap and the "已取消" label both feel laggy. Flips `state` to `cancelled` in the
-    // cache synchronously on click (`onMutate`, not `onSuccess`) — the eventual real poll
-    // overwrites this with the server's own (matching) value regardless. `cancelled` (not
-    // `queued`) so this survives a page refresh too: it's a real, persisted queue state
-    // (`lanrurugi_storage::download_queue::DownloadQueueState::Cancelled`), not something only
-    // this transient mutation's own local state remembers.
+    // Optimistic: cancellation is cooperative (the download task has to notice the token and
+    // clean up before server-side state actually flips), so waiting for a poll round-trip made the
+    // button swap feel laggy. Flips `state` to `cancelled` in the cache synchronously on click; the
+    // eventual real poll overwrites this with the server's matching value regardless. `cancelled`
+    // is a real, persisted queue state, so this also survives a page refresh.
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: ['download-queue'] })
       const previous = queryClient.getQueryData<DownloadQueueListResponse>(['download-queue'])

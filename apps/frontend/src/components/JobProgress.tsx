@@ -21,14 +21,10 @@ const ROW_GAP = 6
 const MIN_INTERVAL_FOR_SPEED_MS = 500
 
 /** Formats a byte count as a short human-readable string (`45.3 MB`) — 1024-based (binary)
- * divisions, matching every real legacy byte-size conversion found in `~/LANraragi` (`common.js`'s
- * `imgSize = ... / 1024`, `reader.js`'s identical preload-size calc, `Model/Reader.pm`'s resize
- * threshold check, `duplicates.html.tt2`'s `archive.arcsize / (1024 * 1024)`) — labeled `KB`/`MB`/
- * `GB` per that same convention (not the technically-correct `KiB`/`MiB`/`GiB`, which legacy never
- * uses either). One decimal place from `MB` upward (explicit user call: a KB/s-range speed reading
- * jittering between whole KB values is already meaningful signal, a fractional KB adds noise
- * without adding precision anyone reads at a glance; MB and up is where a whole number alone hides
- * a real difference in transfer rate, e.g. `1 MB/s` vs `1.9 MB/s`). */
+ * divisions, matching every real legacy byte-size conversion, labeled `KB`/`MB`/`GB` per that same
+ * convention (not the technically-correct `KiB`/`MiB`/`GiB`, which legacy never uses either). One
+ * decimal place from `MB` upward — whole KB values are already meaningful signal, but a whole
+ * number at MB+ hides a real difference in transfer rate (`1 MB/s` vs `1.9 MB/s`). */
 export function formatBytes(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let value = bytes
@@ -41,47 +37,33 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(decimals)} ${units[unitIndex]}`
 }
 
-/** Download-job progress (specs/005-download-plugin-progress, US1): real, incrementally-updating
- * byte progress instead of the plain queued→finished jump every other job type still uses.
- * Three cases (spec FR-001/FR-002):
+/** Download-job progress: real, incrementally-updating byte progress instead of the plain
+ * queued→finished jump every other job type still uses. Three cases:
  * - `downloaded_bytes` + `total_bytes` both known → a determinate bar sized by the real ratio,
- *   labeled with both byte counts (e.g. "45.2 MB / 120.0 MB") rather than just a percentage —
- *   more informative for a multi-hundred-MB archive than "38%" alone.
- * - `downloaded_bytes` known but `total_bytes` absent (server didn't report a size) → an
- *   indeterminate spinner-style indicator, never a stuck-at-some-fraction or divide-by-zero bar.
- * - Neither present (every non-download job, or a download job that hasn't started transferring
- *   bytes yet) → the pre-existing plain `progress` fraction bar, unchanged.
+ *   labeled with both byte counts rather than just a percentage.
+ * - `downloaded_bytes` known but `total_bytes` absent → an indeterminate spinner-style indicator,
+ *   never a stuck-at-some-fraction or divide-by-zero bar.
+ * - Neither present → the pre-existing plain `progress` fraction bar, unchanged.
  *
- * `color` defaults to the Jobs page's own per-state color convention when a `job.state`-derived
- * value isn't supplied by the caller (e.g. the Upload page's download-queue panel, which has no
- * equivalent per-state color scheme of its own).
- */
-/** One job's last-seen `(bytes, timestamp, speed)` reading, keyed by job ID — a plain module-level
- * `Map` rather than a `useRef` inside the component: the same job can be rendered by more than one
- * `JobProgressBar` instance over its lifetime (e.g. the Upload page's queue panel unmounts a row
- * once its state moves on, or the Jobs page remounts rows on every poll-driven list re-sort), and
- * speed tracking needs to survive that — a per-component ref would silently reset to "no previous
- * reading" (and so drop one speed sample) every time. Entries for finished/failed/gone jobs are
- * harmless dead weight (a handful of numbers per job ID) rather than a real leak; nothing here
- * currently prunes them, matching this component's own already-small, short-lived-process scope. */
+ * `color` defaults to the Jobs page's own per-state color convention when not supplied by the
+ * caller. */
+/** One job's last-seen `(bytes, timestamp, speed)` reading, keyed by job ID — a module-level `Map`
+ * rather than a `useRef`, since the same job can be rendered by more than one `JobProgressBar`
+ * instance over its lifetime (e.g. remounted rows on a poll-driven list re-sort), and speed
+ * tracking needs to survive that. Entries for finished/gone jobs are harmless dead weight; nothing
+ * prunes them. */
 const lastReadings = new Map<string, { bytes: number; at: number; speed: number | null }>()
 
 /** Bytes/sec since this job's own last-seen reading, or `null` if there isn't a usable prior
  * sample yet (first render for this job, or the last one was too recent — see
  * `MIN_INTERVAL_FOR_SPEED_MS`).
  *
- * Called from render (not an effect), so under `<StrictMode>` React double-invokes the owning
- * component in dev, calling this twice back-to-back with the *same* `bytes` for what is logically
- * one render — and, independent of that, this component's own `job` prop re-renders on *any*
- * parent poll tick, not just the `useJobs()` one that actually refreshes `downloaded_bytes` (the
- * Upload page's download-queue panel polls its own list every 3s, `useJobs()` every 5s, so most
- * renders see byte-identical `bytes` to the previous call). Both cases hit the same "bytes
- * unchanged since last recorded reading" branch below — critically, that branch returns the
- * **last actually-computed speed**, not `0`: an earlier version returned `0` here, which meant
- * the displayed speed flickered down to "0 B/s" on every renders-without-fresh-data tick (i.e.
- * most of the time), even while a real, ongoing transfer was making steady progress. Returning
- * the cached speed instead keeps the display showing the last real measurement until the next
- * genuine byte-count change updates it. */
+ * Called from render (not an effect): under `<StrictMode>` React double-invokes with the same
+ * `bytes`, and this component's `job` prop also re-renders on any parent poll tick, not just the
+ * one that refreshes `downloaded_bytes` — most renders see byte-identical `bytes`. That "unchanged
+ * since last reading" branch below returns the last actually-computed speed, not `0` — returning
+ * `0` there would flicker the displayed speed down to "0 B/s" on every stale-data tick even during
+ * a real, ongoing transfer. */
 function computeSpeed(jobId: string, bytes: number): number | null {
   const now = Date.now()
   const previous = lastReadings.get(jobId)
@@ -121,10 +103,9 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
   const speedLabel = speed != null ? t('{{rate}}/s', { rate: formatBytes(speed) }) : null
 
   if (job.downloaded_bytes != null && job.total_bytes != null && job.total_bytes > 0) {
-    // One decimal place (explicit user call, alongside the faster poll cadence above — at 1s
-    // polling a whole-number percentage visibly stalls between ticks even though real progress is
-    // happening underneath; a decimal keeps the readout moving) — the *bar width* still uses the
-    // unrounded ratio directly (not `pctLabel`) so the fill itself is exact, not just its label.
+    // One decimal place: a whole-number percentage visibly stalls between fast polling ticks
+    // even though real progress is happening. The bar width still uses the unrounded ratio
+    // directly (not `pctLabel`) so the fill itself is exact.
     const ratio = Math.min(1, job.downloaded_bytes / job.total_bytes)
     const pctLabel = (ratio * 100).toFixed(1)
     return (

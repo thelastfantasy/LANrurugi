@@ -42,15 +42,12 @@ impl RateLimiterMap {
     /// **Correctness note**: `governor`'s `until_n_ready(n)` returns `Err(InsufficientCapacity)`
     /// — immediately, without waiting at all — whenever `n` exceeds the limiter's own burst
     /// capacity (`Quota::per_second(rate)`'s burst size equals `rate`), rather than queueing and
-    /// draining it across multiple refill periods. A single `reqwest` chunk read is very
-    /// routinely larger than a configured slow rate limit (e.g. a 64KB TCP read against a
-    /// 10KB/sec cap) — passing the whole `chunk_len` through in one `until_n_ready` call would
-    /// silently fail to throttle at all every time that happens (confirmed directly: an earlier
-    /// version of this function did exactly that, and a unit test asserting real throttling
-    /// occurred failed because the "wait" resolved in under a millisecond — the error was being
-    /// silently discarded). Fixed by splitting `chunk_len` into sub-chunks no larger than
-    /// `bytes_per_sec` itself (which is guaranteed to be within the limiter's own burst capacity)
-    /// and awaiting each in turn.
+    /// draining it across multiple refill periods. A single `reqwest` chunk read is routinely
+    /// larger than a configured slow rate limit (e.g. a 64KB TCP read against a 10KB/sec cap) —
+    /// passing the whole `chunk_len` through in one `until_n_ready` call would silently fail to
+    /// throttle whenever that happens. Fixed by splitting `chunk_len` into sub-chunks no larger
+    /// than `bytes_per_sec` itself (guaranteed to be within the limiter's own burst capacity) and
+    /// awaiting each in turn.
     ///
     /// Same capacity-change handling as `DownloadManager::acquire`: if `bytes_per_sec` for `key`
     /// differs from the tracked limiter's own originally-declared rate, the stale limiter is
