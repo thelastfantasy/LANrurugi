@@ -1,252 +1,204 @@
+简体中文 | [English](./README.en.md) | [日本語](./README.ja.md)
+
 # LANrurugi
 
-A from-scratch Rust + React rewrite of [LANraragi](https://github.com/Difegue/LANraragi), a
-self-hosted manga/doujinshi library manager. Aims for feature parity with, and full data/API
-compatibility with, existing LANraragi installations, while fixing a known duplicate-detection
-defect and adding genuine multi-core concurrency where the legacy Perl implementation had none.
+[LANraragi](https://github.com/Difegue/LANraragi)（一个自托管的漫画/同人志库管理器）的从零开始的
+Rust + React 重写版本。目标是与现有 LANraragi 部署实现功能对等，并保持完整的数据/API 兼容性，同时修复一个
+已知的重复检测缺陷，并在旧版 Perl 实现完全没有的地方加入真正的多核并发能力。
 
-**Status**: Phase 1 (`specs/001-lanrurugi-full-rewrite/`) is implemented — all eight user stories
-(library continuity, non-merging ingestion, third-party API compatibility, plugin metadata
-enrichment, backup/export, duplicate repair, UI localization, and a concurrency benchmark against
-the legacy system) are done; see `specs/001-lanrurugi-full-rewrite/tasks.md` for the full
-breakdown. Three additive-to-Phase-1 addenda are also fully implemented: `specs/002-job-console/`
-(background job management UI), `specs/003-ui-test-automation/` (Vitest + Playwright frontend test
-coverage), and `specs/005-download-plugin-progress/` (real byte-level download progress,
-per-domain concurrency/rate limiting). Only Phase 2 (`specs/004-ocr-manga-translation/`, on-page
-manga translation) remains a plan with no implementation yet, deliberately kept independent per
-constitution Principle VI so it never blocks or is blocked by Phase 1.
+**状态**：Phase 1（`specs/001-lanrurugi-full-rewrite/`）已实现——全部八个用户故事（库连续性、非合并式
+入库、第三方 API 兼容性、插件元数据增强、备份/导出、重复项修复、UI 本地化，以及一项对比旧系统的并发基准
+测试）均已完成；完整拆解见 `specs/001-lanrurugi-full-rewrite/tasks.md`。三个附加于 Phase 1 之上的补充功能
+也已全部实现：`specs/002-job-console/`（后台任务管理 UI）、`specs/003-ui-test-automation/`（Vitest +
+Playwright 前端测试覆盖），以及 `specs/005-download-plugin-progress/`（真实的字节级下载进度、按域名的并发/
+限速）。只有 Phase 2（`specs/004-ocr-manga-translation/`，页面内漫画翻译）仍停留在计划阶段、尚未实现，按照
+章程（constitution）原则 VI 被刻意保持独立，使其永远不会阻塞 Phase 1，也不会被 Phase 1 阻塞。
 
-## Stack
+## 技术栈
 
-- **Backend**: Rust (Tokio async runtime, Axum web framework, Rayon for CPU-bound parallelism),
-  one Cargo workspace under `crates/` producing a single binary, `lanrurugi-server`, with
-  `serve` / `rebuild-index` / `bench` subcommands.
-- **Datastore**: Redis, reused as-is from the legacy deployment (five logical DBs — see
-  `crates/lanrurugi-storage/src/redis.rs`).
-- **Frontend**: React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query, under
-  `apps/frontend/`.
-- **Plugins**: sandboxed Deno subprocesses, one per plugin namespace (`crates/lanrurugi-plugin/`).
-- **Benchmark harness**: `crates/lanrurugi-bench/` — a synthetic-library generator, `criterion`
-  microbenchmarks, and a cross-system comparison harness that drives both this binary and an
-  actual legacy LANraragi instance side by side.
+- **后端**：Rust（Tokio 异步运行时、Axum Web 框架、Rayon 用于 CPU 密集型并行计算），一个位于
+  `crates/` 下的 Cargo workspace，产出单一二进制文件 `lanrurugi-server`，带有
+  `serve` / `rebuild-index` / `bench` 三个子命令。
+- **数据存储**：Redis，原样复用自旧版部署（五个逻辑数据库——见
+  `crates/lanrurugi-storage/src/redis.rs`）。
+- **前端**：React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query，位于
+  `apps/frontend/` 下。
+- **插件**：沙箱化的 Deno 子进程，每个插件命名空间一个（`crates/lanrurugi-plugin/`）。
+- **基准测试工具**：`crates/lanrurugi-bench/`——一个合成库生成器、`criterion` 微基准测试，以及一个同时驱动
+  本二进制文件和一个真实旧版 LANraragi 实例进行并排对比的跨系统对比测试工具。
 
-## Improvements over LANraragi
+## 相较 LANraragi 的改进
 
-This isn't just "the same features in a different language." Below is a concrete inventory of
-functional/architectural improvements — each one either fixes a real, named defect in legacy or
-adds a capability legacy never had, not a "used Rust so it's automatically better" claim. Sections
-marked **parity** are deliberate compatibility decisions, called out so this list doesn't overclaim.
+这不只是"用不同语言实现了同样的功能"。以下是功能/架构层面改进的具体清单——每一条要么修复了旧版中一个
+真实、有名有姓的缺陷，要么增加了旧版从未拥有的能力，而不是"用了 Rust 所以自动变好"这种空泛说法。标记为
+**对等（parity）** 的部分是刻意的兼容性决策，特别列出是为了让这份清单不至于夸大其词。
 
-### Data integrity & duplicate detection
+### 数据完整性与重复检测
 
-- **A real fix for legacy's false-duplicate-merge defect.** Legacy computes an archive's ID as
-  `SHA-1` of only the first 512,000 bytes of the file
-  (`~/LANraragi/lib/LANraragi/Utils/Database.pm::compute_id`) — two different files that happen to
-  share the same leading content (e.g. identical cover pages, different pages after that) hash
-  identically and get silently collapsed into one library entry, clobbering whichever one's
-  metadata got overwritten. LANrurugi's default ID algorithm
-  (`crates/lanrurugi-storage/src/id.rs::size_aware_id`) folds the real file size into the hash
-  input, so two archives sharing a prefix but differing in length no longer collide — while the
-  original legacy ID is still computed and kept forever for read-compatibility with existing
-  libraries (constitution Principle I). SHA-1 (not a newer hash) was deliberately kept rather than
-  switched to something like BLAKE3, specifically because legacy code elsewhere enumerates archive
-  IDs via a fixed-40-hex-character Redis key-glob pattern — changing the digest length would have
-  silently broken every one of those glob patterns.
-- **A one-time repair tool for libraries already damaged by that defect** (`lanrurugi
-  rebuild-index` / `POST /database/rebuild-index`, User Story 6) — recomputes every archive's ID
-  with the new algorithm, and any previously-hidden file that a historical false-merge had
-  swallowed reappears as its own, independently taggable archive, without disturbing the
-  already-correctly-tracked one's tags/reading progress. Legacy has no equivalent repair mechanism
-  at all — once two archives were merged, they stayed merged.
-- **Filename conflicts and content conflicts are no longer treated the same way.** A `QueueError`
-  carries a `DuplicateReasonKind` (`ContentHash` vs. `Filename`) so the two genuinely different
-  situations get genuinely different handling: a real content duplicate is unconditionally
-  rejected (no "overwrite" bypass — overwriting identical content was previously dead work that
-  also lost the original `date_added`), while a filename collision on *different* content stages
-  the downloaded bytes to a temp file and offers a real choice via two new endpoints —
-  `POST /download_queue/{id}/overwrite` and `POST /download_queue/{id}/rename` — letting the new
-  download either replace the existing archive or be catalogued under a new name as a fully
-  independent, coexisting archive. Legacy has no equivalent; this class of conflict was previously
-  either undetected or silently overwritten. An hourly background sweep reclaims any staged file
-  left unresolved for 24+ hours and downgrades the queue item to a distinct "expired, please
-  re-download" state instead of continuing to offer actions on bytes that no longer exist.
+- **真正修复了旧版的误判去重合并缺陷。** 旧版将归档文件的 ID 计算为文件前 512,000 字节的 `SHA-1`
+  （`~/LANraragi/lib/LANraragi/Utils/Database.pm::compute_id`）——两个恰好共享相同开头内容的不同文件
+  （例如封面页相同，但之后的页面不同）会得到相同的哈希值，从而被静默合并为库中的同一条目，导致其中一份的
+  元数据被覆盖丢失。LANrurugi 的默认 ID 算法
+  （`crates/lanrurugi-storage/src/id.rs::size_aware_id`）将文件的真实大小折入哈希输入，因此两个共享前缀
+  但长度不同的归档文件不再冲突——同时，为了与现有库保持读兼容（章程原则 I），原始的旧版 ID 仍然会被计算并
+  永久保留。之所以刻意保留 SHA-1（而不是换用 BLAKE3 之类更新的哈希算法），是因为旧版代码在其他地方通过固定
+  40 位十六进制字符的 Redis 键 glob 模式来枚举归档 ID——更改摘要长度会悄无声息地破坏所有这些 glob 模式。
+- **为已经被该缺陷损坏的库提供了一次性修复工具**（`lanrurugi rebuild-index` /
+  `POST /database/rebuild-index`，用户故事 6）——用新算法重新计算每个归档文件的 ID，任何曾被历史误判合并
+  吞掉的隐藏文件都会重新出现，成为其自身独立的、可单独打标签的归档，而不会打扰那个原本就被正确追踪的归档
+  的标签/阅读进度。旧版完全没有对应的修复机制——一旦两个归档被合并，就永远合并在一起。
+- **文件名冲突与内容冲突不再被同等对待。** `QueueError` 携带一个 `DuplicateReasonKind`
+  （`ContentHash` 对 `Filename`），使这两种本质不同的情况得到真正不同的处理：真正的内容重复会被无条件拒绝
+  （没有"覆盖"绕过选项——覆盖相同内容以前是无意义的重复劳动，而且还会丢失原始的 `date_added`），而不同
+  内容之间的文件名冲突则会将已下载的字节暂存到临时文件，并通过两个新端点提供真正的选择——
+  `POST /download_queue/{id}/overwrite` 和 `POST /download_queue/{id}/rename`——让新下载的文件要么替换
+  现有归档，要么以新名字被编目为一个完全独立、共存的归档。旧版没有对应机制；这类冲突以前要么无法被检测到，
+  要么被静默覆盖。每小时运行一次的后台清扫任务会回收任何超过 24 小时未解决的暂存文件，并将该队列项降级为一个
+  独立的"已过期，请重新下载"状态，而不是继续对已经不存在的字节提供操作选项。
 
-### Concurrency & architecture
+### 并发与架构
 
-- **One consolidated process instead of three.** Legacy runs the main Mojolicious app, `Shinobu`
-  as a separate file-watcher process, and Minion as a separate job-queue worker — three
-  independent OS processes. LANrurugi is one `clap`-based binary (`lanrurugi-server`) with
-  `serve`/`rebuild-index`/`bench` subcommands; `serve` runs the HTTP API, the `notify`-based file
-  watcher, and the Deno plugin pool all as tasks inside one Tokio runtime, not separate processes.
-- **A real fix for a concurrent-download race that could silently corrupt files.** Filename-
-  conflict detection used to be a one-time directory scan with no lock between "checked, no
-  conflict" and "wrote the file" — two downloads racing to the same resolved filename could both
-  pass the check and then one would silently clobber the other's bytes on disk while both left a
-  catalog record pointing at the same (now half-wrong) file. Fixed with a per-filename async lock
-  (`AppState::lock_filename`, `crates/lanrurugi-api/src/state.rs`) held across the whole
-  check-then-write window, with an RAII guard that releases correctly even across early-return
-  error paths.
-- **Cooperative download cancellation, not a forceful process-level abort.** A per-queue-item
-  `CancellationToken` lets the download loop notice a stop request at the same point it already
-  checks for network errors, reusing the identical partial-file cleanup path rather than leaving
-  an untraceable orphaned temp file behind the way an `AbortHandle`-style hard-kill would (dropping
-  mid-`write_all()` with no chance to clean up). Legacy has no per-download stop mechanism at all.
-- **Explicit, correct CPU/async bridging.** All CPU-bound work (hashing, image decode/resize) runs
-  via `rayon`, bridged into the async runtime through `tokio::task::spawn_blocking` — deliberately
-  never inline on an async worker thread, so a bulk scan/reindex can't stall requests the HTTP
-  server is concurrently serving. Legacy's single-threaded-per-request Perl model has no equivalent
-  concept of "don't block the reactor" to get right or wrong in the first place; this is new,
-  genuine multi-core parallelism for exactly the bulk operations (full library scan, duplicate-
-  repair reindex) the benchmark suite below measures.
-- **Request coalescing for expensive, frequently-repeated work.** Concurrent requests for the same
-  missing thumbnail, or the same archive page, collapse onto one regeneration/read instead of each
-  independently re-scanning the archive file from scratch — a class of duplicate-work legacy's
-  per-request model never had to (or could) avoid.
+- **一个整合进程，而不是三个。** 旧版运行主 Mojolicious 应用、作为独立文件监视进程的 `Shinobu`，以及作为
+  独立任务队列 worker 的 Minion——三个独立的操作系统进程。LANrurugi 是一个基于 `clap` 的单一二进制文件
+  （`lanrurugi-server`），带有 `serve`/`rebuild-index`/`bench` 子命令；`serve` 在同一个 Tokio 运行时内
+  以任务（task）的形式运行 HTTP API、基于 `notify` 的文件监视器和 Deno 插件池，而不是作为独立进程。
+- **真正修复了一个可能悄悄损坏文件的并发下载竞态条件。** 文件名冲突检测过去是一次性的目录扫描，在"检查过、
+  无冲突"和"写入文件"之间没有任何锁——两个下载竞争同一个解析出的文件名时，都可能通过检查，然后其中一个会
+  静默覆盖另一个在磁盘上的字节，而两者的目录记录都指向同一个（现在半错误的）文件。已通过一个跨越整个
+  "检查再写入"窗口持有的按文件名异步锁修复（`AppState::lock_filename`，
+  `crates/lanrurugi-api/src/state.rs`），并配有一个即使在提前返回的错误路径下也能正确释放的 RAII guard。
+- **协作式下载取消，而不是强制的进程级中止。** 每个队列项对应的 `CancellationToken` 让下载循环在其原本已经
+  检查网络错误的同一位置感知到停止请求，复用完全相同的部分文件清理路径，而不是像 `AbortHandle` 式硬杀
+  那样在 `write_all()` 执行中途丢弃、没有机会清理，从而留下无法追踪的孤立临时文件。旧版完全没有针对单个
+  下载的停止机制。
+- **明确、正确的 CPU/异步桥接。** 所有 CPU 密集型工作（哈希计算、图片解码/缩放）都通过 `rayon` 运行，并通过
+  `tokio::task::spawn_blocking` 桥接进异步运行时——刻意从不在异步 worker 线程上内联执行，因此批量扫描/
+  重建索引不会阻塞 HTTP 服务器正在并发处理的请求。旧版单线程每请求的 Perl 模型完全没有"不要阻塞反应器
+  （reactor）"这个概念需要去做对或做错；这是针对下方基准测试套件所测量的正是那些批量操作（完整库扫描、
+  重复项修复重建索引）的真正的、货真价实的多核并行能力。
+- **对昂贵且频繁重复的工作进行请求合并。** 对同一个缺失缩略图，或同一个归档页面的并发请求会合并到一次
+  重新生成/读取上，而不是各自独立地从头重新扫描归档文件——这是一类旧版按请求处理的模型从未需要（或能够）
+  避免的重复劳动。
 
-### Download pipeline
+### 下载流水线
 
-- **Real, byte-level download progress.** Previously, a download plugin's actual HTTP transfer
-  happened invisibly inside the Deno-sandboxed plugin process, with no way for the host to observe
-  progress at all. The real transfer moved into Rust (streaming `reqwest`), so `downloaded_bytes`/
-  `total_bytes` are real and stream into a genuine progress bar, instead of a queue item jumping
-  straight from 0% to 100%.
-- **Per-domain concurrency limits and rate limiting**, configurable per plugin (exact-hostname and
-  wildcard domain rules, token-bucket rate limiting) and user-overridable through a settings UI —
-  something legacy's download plugins never had any way to express or enforce at all.
-- **A real, verified bug fix for non-ASCII download filenames.** Some real download servers send a
-  legitimate UTF-8 filename directly in a plain `Content-Disposition: filename="..."` header
-  (technically not RFC 6266-compliant, but common in practice) — the original filename-parsing
-  code used `HeaderValue::to_str()`, which silently fails on any non-ASCII byte, so these downloads
-  fell back to a meaningless gallery-ID string as the saved filename. Fixed by reading the header's
-  raw bytes, decoding as UTF-8 first and falling back to a Latin-1 byte mapping (which can never
-  itself fail) only for genuinely non-UTF-8 servers.
-- **Download cancellation is a real, persisted state**, not just a frontend illusion — a
-  `Cancelled` state was added to the actual queue-item state machine (surviving a page refresh,
-  distinct from `Queued`/`Error`, with its own "已取消/Cancelled" UI treatment), after an earlier
-  frontend-only-optimistic-state attempt was found to vanish on refresh.
-- **Duplicate in-flight downloads of the same URL are now rejected** (`409`) instead of silently
-  allowed to run concurrently with no detection at all, and a running download's queue record can
-  no longer be deleted out from under it (previously silently orphaning the background task with
-  no way to observe or stop it afterward).
+- **真正的字节级下载进度。** 以前，下载插件真正的 HTTP 传输过程发生在 Deno 沙箱化的插件进程内部，主机
+  完全无法观察其进度。真正的传输过程已迁移到 Rust 中（使用流式 `reqwest`），因此 `downloaded_bytes`/
+  `total_bytes` 是真实的，能流入一个真正的进度条，而不是队列项从 0% 直接跳到 100%。
+- **按域名的并发限制和限速**，可按插件配置（精确主机名和通配符域名规则、令牌桶限速），并且用户可通过设置
+  界面覆盖——这是旧版下载插件完全没有任何方式表达或强制执行的能力。
+- **一个真实、经过验证的非 ASCII 下载文件名 bug 修复。** 一些真实的下载服务器会直接在普通的
+  `Content-Disposition: filename="..."` 头中发送合法的 UTF-8 文件名（严格来说不符合 RFC 6266，但实践中
+  很常见）——原来的文件名解析代码使用 `HeaderValue::to_str()`，遇到任何非 ASCII 字节都会静默失败，因此
+  这些下载会退化为使用毫无意义的画廊 ID 字符串作为保存文件名。现已修复：先读取头部的原始字节，优先尝试
+  UTF-8 解码，只有对真正非 UTF-8 的服务器才回退到 Latin-1 字节映射（该映射本身永远不会失败）。
+- **下载取消是一个真实的、持久化的状态**，而不仅仅是前端的假象——实际的队列项状态机中新增了一个
+  `Cancelled` 状态（能在页面刷新后保留，区别于 `Queued`/`Error`，并有其自己的"已取消/Cancelled" UI
+  处理），此前一次仅前端乐观状态的实现被发现在刷新后会消失。
+- **对同一 URL 的重复在途下载现在会被拒绝**（`409`），而不是完全没有检测地静默允许并发运行，并且正在运行
+  的下载对应的队列记录也不能再被从其下方删除（以前会静默地孤立后台任务，之后既无法观察也无法停止它）。
 
-### Error handling & internationalization
+### 错误处理与国际化
 
-- **Every download-queue error is now structured and translatable, never a raw string.**
-  `QueueError` (`crates/lanrurugi-core/src/queue_error.rs`) is a closed enum with zero free-text
-  fields — only structured, interpolatable data. Every variant gets a stable numeric code (real
-  HTTP-equivalent codes like 409/422 where applicable, ≥1000 for pure business errors with no HTTP
-  analog), and the frontend renders each `kind` as a real translated string — including turning a
-  duplicate-archive error's `existing_id` into an actual clickable link to the existing archive,
-  something legacy's plain error text never offered.
-- **The plugin SDK gained the same structured-error treatment.** Every plugin-side
-  `throw new Error("...")`/`{error: "a string"}` (roughly 40 call sites across the shipped plugin
-  set) was converted to a `{error_code, data}` shape, where `error_code` doubles as an i18n lookup
-  key rather than opaque English text a non-English-reading user would otherwise be stuck with.
+- **每一个下载队列错误现在都是结构化且可翻译的，绝不再是原始字符串。**
+  `QueueError`（`crates/lanrurugi-core/src/queue_error.rs`）是一个零自由文本字段的封闭枚举——只有结构化
+  的、可插值的数据。每个变体都有一个稳定的数字代码（在适用的地方使用真正的 HTTP 等价代码如 409/422，对于
+  没有 HTTP 对应物的纯业务错误则使用 ≥1000 的代码），前端将每个 `kind` 渲染为一段真正翻译过的字符串——
+  包括将重复归档错误中的 `existing_id` 转换为一个指向该已存在归档的真实可点击链接，这是旧版纯文本错误从未
+  提供过的。
+- **插件 SDK 获得了同样的结构化错误处理。** 每一处插件端的
+  `throw new Error("...")`/`{error: "a string"}`（在已发布的插件集合中大约 40 处调用点）都被转换为
+  `{error_code, data}` 的形式，其中 `error_code` 同时充当 i18n 查找键，而不再是不懂英语的用户原本会被
+  困住的不透明英文文本。
 
-### Plugin sandboxing
+### 插件沙箱化
 
-- **Per-plugin least-privilege permissions — legacy has no permission model for plugins at all.**
-  Each plugin namespace gets its own Deno subprocess, started only with the exact
-  network/read/write permissions that plugin itself declares (queried via a throwaway
-  zero-permission startup probe before the real worker is spawned) — never a shared process that
-  would otherwise grant every plugin the union of every other plugin's permissions.
-- **Real path-traversal hardening** on the plugin-namespace parameter, which arrives from an
-  unauthenticated HTTP query string (`POST /plugins/use?plugin=...`) — rejects `..`-traversal and
-  absolute paths, covered by dedicated tests.
-- **One plugin's failure can't take down another's.** A crashed or timed-out plugin call drops
-  just that plugin's own worker (respawned lazily on next use); every other plugin's pool is
-  unaffected.
+- **每个插件的最小权限原则——旧版对插件完全没有权限模型。** 每个插件命名空间拥有自己的 Deno 子进程，
+  仅以该插件自身声明的确切网络/读/写权限启动（在真正的 worker 被启动之前，通过一次一次性的零权限启动探测
+  来查询这些权限）——绝不是一个会让每个插件都获得所有其他插件权限并集的共享进程。
+- **针对插件命名空间参数的真正路径遍历加固**，该参数来自一个未经身份验证的 HTTP 查询字符串
+  （`POST /plugins/use?plugin=...`）——拒绝 `..` 路径遍历和绝对路径，并有专门的测试覆盖。
+- **一个插件的失败不会拖垮另一个插件。** 崩溃或超时的插件调用只会丢弃该插件自身的 worker（在下次使用时
+  惰性地重新生成）；其他所有插件的池都不受影响。
 
-### Frontend
+### 前端
 
-- **Centralized route management** (`apps/frontend/src/routes.ts`) replacing previously scattered,
-  hand-written path strings — this closed real dead-link bugs, not just a refactor: several pages
-  used a `#/reader/{id}`-style hash fragment in an app that uses `BrowserRouter` (not
-  `HashRouter`), which only "worked" via a left-click `onClick` handler intercepting the browser's
-  default navigation — middle-click-to-open-in-new-tab, right-click-copy-link, and the app's own
-  "copy link" button were all genuinely broken until this was centralized and fixed.
-- **A rebuilt tag editor** with real removable chips (click-to-remove, Enter/comma-to-commit,
-  paste-splits-on-comma, duplicate rejection, autocomplete) replacing a degenerated plain
-  `<textarea>` — and, in the process, a real behavioral bug fix: running a metadata plugin now
-  correctly saves pending edits first (matching legacy's own real save-then-fetch sequencing),
-  which the prior implementation skipped entirely.
-- **Search filter state round-trips through the browser's real back/forward history** via React
-  Router's own `navigate()`, rather than a `replaceState`-only implementation that couldn't be
-  navigated with the back button at all.
+- **集中化的路由管理**（`apps/frontend/src/routes.ts`），取代了此前分散、手写的路径字符串——这修复了
+  真实的死链接 bug，而不只是一次重构：有几个页面在一个使用 `BrowserRouter`（而非 `HashRouter`）的应用中
+  使用了 `#/reader/{id}` 风格的哈希片段，这只能靠一个拦截浏览器默认导航行为的左键点击 `onClick` 处理器
+  才能"正常工作"——中键在新标签页打开、右键复制链接，以及应用自身的"复制链接"按钮，在这次集中化并修复
+  之前全都是真正坏掉的。
+- **重建的标签编辑器**，具有真正可移除的芯片（点击移除、Enter/逗号提交、粘贴时按逗号拆分、重复项拒绝、
+  自动补全），取代了一个已退化为纯 `<textarea>` 的实现——同时，在这个过程中修复了一个真实的行为 bug：
+  运行元数据插件现在会先正确保存待处理的编辑（匹配旧版自身"先保存再获取"的真实顺序），而此前的实现完全
+  跳过了这一步。
+- **搜索过滤器状态通过浏览器真实的前进/后退历史往返**，使用 React Router 自身的 `navigate()`，而不是一个
+  仅使用 `replaceState` 的实现——后者完全无法通过后退按钮导航。
 
-### Testing infrastructure
+### 测试基础设施
 
-- **A two-layer automated test suite that Phase 1 shipped without.** Vitest + React Testing
-  Library for fast, no-backend unit coverage of hooks/logic, and Playwright (Chromium + Firefox)
-  for real end-to-end coverage against a live backend + Redis, with per-worker Redis isolation.
-  Several suites specifically encode real bugs this project's own manual QA already found and
-  fixed, plus systematic fixture coverage across every archive format the scanner supports.
-- **A dead test was found and fixed by actually wiring up the test infrastructure it depended on.**
-  A contract test kept silently passing (reported `ok`) while actually just skipping, because the
-  Redis connection string it needed had never been wired into the containerized test runner — true
-  of every Redis-dependent test in the suite until this was fixed. Fixing the wiring (not just the
-  one stale test) immediately surfaced that the specific test in question asserted against an
-  endpoint that no longer exists (the underlying feature had migrated to a different mechanism),
-  which was then replaced with a real equivalent test.
+- **Phase 1 交付时缺失的两层自动化测试套件。** Vitest + React Testing Library 用于对 hook/逻辑进行快速、
+  无需后端的单元测试覆盖，Playwright（Chromium + Firefox）用于针对真实后端 + Redis 的真正端到端覆盖，
+  并具备按 worker 隔离的 Redis。若干测试套件专门编码了本项目自身人工 QA 已经发现并修复过的真实 bug，
+  再加上覆盖 scanner 支持的每一种归档格式的系统性 fixture 覆盖。
+- **一个失效的测试被发现并通过真正接通其所依赖的测试基础设施而修复。** 一个契约测试一直静默地"通过"
+  （报告 `ok`），实际上只是被跳过了，原因是它所需要的 Redis 连接字符串从未被接入容器化的测试运行器——
+  在此修复之前，测试套件中每一个依赖 Redis 的测试都是如此。修复这一接线问题（而不只是那一个陈旧测试）
+  立刻暴露出该测试实际上是针对一个已不存在的端点做断言（底层功能已迁移到另一种机制），随后被替换为一个
+  真正对等的测试。
 
-### Job console
+### 任务控制台
 
-- Surfaces the job registry already used internally for backup/restore, thumbnail regeneration,
-  duplicate scans, and index rebuilds as a real browsable admin page — live state/progress,
-  per-job result/error inspection, filtering — something legacy exposes only through Minion's own
-  admin UI, on a separate, additive `/api/jobs*` contract that leaves the legacy-mimicking
-  `/api/minion/*` API untouched (Principle II).
+- 将后台已经在内部用于备份/恢复、缩略图重新生成、重复项扫描和索引重建的任务注册表，呈现为一个真正可浏览的
+  管理页面——实时状态/进度、按任务查看结果/错误、过滤——这是旧版仅通过 Minion 自身的管理 UI 才能提供的
+  东西，通过一个独立、附加式的 `/api/jobs*` 契约实现，且未触及模拟旧版行为的 `/api/minion/*` API
+  （原则 II）。
 
-### What's deliberately *not* claimed as an improvement (parity by design)
+### 刻意不作为"改进"声明的部分（有意保持对等）
 
-- SHA-1 was kept, not upgraded to a newer hash — see the archive-ID section above; the improvement
-  is the size-aware *input*, not the hash primitive itself.
-- RAR/7z archives are still handled by shelling out to `unrar`/`7z`, matching legacy's own
-  pragmatic approach, not reimplemented from scratch.
-- The REST API contract is derived directly from legacy's own OpenAPI spec, additive-only — the
-  explicit goal is *not breaking existing third-party clients*, not a redesigned API.
-- The search engine is a direct port of legacy's Redis-based model (sorted sets, tag filtering),
-  not a new search technology — parity was the actual goal here, evaluated and confirmed sufficient
-  at this project's target scale.
+- SHA-1 被保留，而不是升级为更新的哈希算法——见上面的归档 ID 部分；这里的改进在于加入了大小感知的
+  *输入*，而不是哈希算法本身。
+- RAR/7z 归档仍然通过调用外部 `unrar`/`7z` 处理，与旧版自身的实用做法一致，而不是从零重新实现。
+- REST API 契约直接派生自旧版自身的 OpenAPI 规范，只做增量添加——明确的目标是*不破坏现有的第三方客户端*，
+  而不是重新设计一套 API。
+- 搜索引擎是旧版基于 Redis 的模型（有序集合、标签过滤）的直接移植，而不是一项新的搜索技术——这里的实际
+  目标就是对等，并已在本项目的目标规模下评估并确认足够。
 
-## Building and running
+## 构建与运行
 
-Toolchain versions are pinned in `.mise.toml` (`mise install` reproduces them exactly: Rust,
-Node, Deno, pnpm, plus `sccache`/`mold` for build acceleration).
+工具链版本固定在 `.mise.toml` 中（`mise install` 会精确复现它们：Rust、Node、Deno、pnpm，以及用于加速
+构建的 `sccache`/`mold`）。
 
 ```sh
-# Backend
+# 后端
 cargo build --release -p lanrurugi-server
 ./target/release/lanrurugi-server serve --redis-url redis://127.0.0.1:6379 \
   --library-path /path/to/existing/library
 
-# Frontend (dev server, proxies /api to the backend above)
+# 前端（开发服务器，将 /api 代理到上面的后端）
 cd apps/frontend && pnpm install && pnpm run dev
 ```
 
-Or via Docker (bundles the built frontend into the same image):
+或者通过 Docker（将构建好的前端打包进同一个镜像）：
 
 ```sh
 docker build -t lanrurugi .
 docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
 ```
 
-A fresh instance (or one migrated from a legacy install that never changed its password) starts
-with legacy LANraragi's own default admin password still in place. **Change it immediately after
-first login** via the Settings page — don't leave a default-password instance reachable from
-outside your local network.
+一个全新的实例（或者一个从从未修改过密码的旧版安装迁移过来的实例）启动时，仍然使用的是旧版 LANraragi
+自身的默认管理员密码。**首次登录后请立即修改密码**，通过设置页面——不要让一个使用默认密码的实例可以从
+本地网络外部访问。
 
-### CLI subcommands
+### CLI 子命令
 
-- `lanrurugi serve` — runs the HTTP API, static frontend, file watcher, and plugin pool in one
-  process.
-- `lanrurugi rebuild-index` — recomputes every archive's ID with the size-aware algorithm and
-  discovers any previously-invisible files a historical false-merge had hidden (User Story 6).
-- `lanrurugi bench` — generates a synthetic library and runs the concurrency/throughput
-  comparison against an already-running legacy instance (User Story 8;
-  see `specs/001-lanrurugi-full-rewrite/quickstart.md` §8).
+- `lanrurugi serve`——在同一进程中运行 HTTP API、静态前端、文件监视器和插件池。
+- `lanrurugi rebuild-index`——用大小感知算法重新计算每个归档文件的 ID，并发现任何曾被历史误判合并隐藏的
+  文件（用户故事 6）。
+- `lanrurugi bench`——生成一个合成库，并针对一个已运行的旧版实例执行并发/吞吐量对比测试（用户故事 8；
+  参见 `specs/001-lanrurugi-full-rewrite/quickstart.md` 第 8 节）。
 
-## Testing
+## 测试
 
 ```sh
 cargo fmt --all
@@ -254,41 +206,37 @@ cargo clippy --workspace --all-targets -- -D warnings
 LANRURUGI_TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --workspace
 ```
 
-Redis-backed tests are skipped gracefully if `LANRURUGI_TEST_REDIS_URL` is unset; point it at a
-scratch Redis instance (e.g. `docker run -d --rm -p 16379:6379 redis:7-alpine`) to run them.
+如果未设置 `LANRURUGI_TEST_REDIS_URL`，依赖 Redis 的测试会被优雅地跳过；将其指向一个临时的 Redis 实例
+（例如 `docker run -d --rm -p 16379:6379 redis:7-alpine`）以运行这些测试。
 
-### Frontend tests (`specs/003-ui-test-automation/`)
+### 前端测试（`specs/003-ui-test-automation/`）
 
 ```sh
-mise run test-frontend-unit   # Vitest + React Testing Library — fast, no backend required
-mise run test-frontend-e2e    # Playwright — real backend + Redis, Chromium + Firefox
+mise run test-frontend-unit   # Vitest + React Testing Library——快速，无需后端
+mise run test-frontend-e2e    # Playwright——真实后端 + Redis，Chromium + Firefox
 ```
 
-`test-frontend-e2e` builds the backend, then starts its own isolated Redis instance, backend
-process, and frontend preview server per test worker (see `apps/frontend/tests/e2e/fixtures.ts`),
-always starting from a clean state. Set `KEEP=1 mise run test-frontend-e2e` to skip teardown for
-one run and inspect its environment afterward (Redis/library state) — this never persists past
-that single run. See `specs/003-ui-test-automation/quickstart.md` for the full validation guide.
+`test-frontend-e2e` 会先构建后端，然后为每个测试 worker 启动其自己独立隔离的 Redis 实例、后端进程和
+前端预览服务器（见 `apps/frontend/tests/e2e/fixtures.ts`），每次都从一个干净的状态开始。设置
+`KEEP=1 mise run test-frontend-e2e` 可以在某一次运行中跳过清理步骤，以便之后检查其环境（Redis/库状态）
+——这不会在那一次运行之外持续存在。完整验证指南见 `specs/003-ui-test-automation/quickstart.md`。
 
-## Documentation
+## 文档
 
-- [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) — Phase 1 spec, plan,
-  research decisions, data model, API contracts, and `quickstart.md` (end-to-end validation steps
-  for all eight user stories).
-- [`specs/002-job-console/`](./specs/002-job-console/) — Phase 1 addendum (additive, implemented):
-  background job management console surfacing the existing in-process job registry.
-- [`specs/003-ui-test-automation/`](./specs/003-ui-test-automation/) — Phase 1 addendum (additive,
-  implemented): Vitest + Playwright automated frontend test coverage — see `## Testing` above.
-- [`specs/005-download-plugin-progress/`](./specs/005-download-plugin-progress/) — Phase 1
-  addendum (additive, implemented): real byte-level download progress, per-domain concurrency
-  limits, and rate limiting for the download-plugin pipeline.
-- [`specs/004-ocr-manga-translation/`](./specs/004-ocr-manga-translation/) — Phase 2 (depends on
-  Phase 1, does not block it, not yet implemented): optional on-page manga translation via OCR
-  detection/recognition, a user-selectable translation backend (cloud or locally-hosted), and
-  volume-level font matching.
-- [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) — project governance,
-  architectural principles, and technology stack decisions.
+- [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) —— Phase 1 的
+  spec、plan、研究决策、数据模型、API 契约，以及 `quickstart.md`（覆盖全部八个用户故事的端到端验证步骤）。
+- [`specs/002-job-console/`](./specs/002-job-console/) —— Phase 1 附加功能（增量添加，已实现）：
+  呈现现有进程内任务注册表的后台任务管理控制台。
+- [`specs/003-ui-test-automation/`](./specs/003-ui-test-automation/) —— Phase 1 附加功能（增量添加，
+  已实现）：Vitest + Playwright 自动化前端测试覆盖——见上方的 `## 测试` 一节。
+- [`specs/005-download-plugin-progress/`](./specs/005-download-plugin-progress/) —— Phase 1
+  附加功能（增量添加，已实现）：为下载插件流水线提供真实的字节级下载进度、按域名的并发限制和限速。
+- [`specs/004-ocr-manga-translation/`](./specs/004-ocr-manga-translation/) —— Phase 2（依赖于
+  Phase 1，但不会阻塞它，尚未实现）：通过 OCR 检测/识别、用户可选的翻译后端（云端或本地托管）以及
+  卷级别的字体匹配实现的可选页面内漫画翻译。
+- [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) —— 项目治理、架构原则和
+  技术栈决策。
 
-## License
+## 许可证
 
-MIT — see [LICENSE](./LICENSE).
+MIT——见 [LICENSE](./LICENSE)。
