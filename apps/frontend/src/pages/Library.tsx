@@ -1145,6 +1145,10 @@ function SettingsMenu({
             ...(openTowardLeft ? { right: 0 } : { left: 0 }),
             zIndex: Z_OVERLAY_CONTENT,
           }}
+          // The gear icon's own real title (`Index Settings`) — this menu's actual name, as
+          // distinct from `Display Mode` right below, which is a sub-heading for just the
+          // Thumbnail/Compact radio pair, not the whole menu.
+          mainLabel={{ icon: 'fa-cog', text: t('Index Settings') ?? 'Index Settings' }}
         >
           <PopupMenuItem disabled>
             <i className="fas fa-table" style={{ width: 18 }}></i> {t('Display Mode')}

@@ -93,6 +93,7 @@
   "Archives:": "档案：",
   "Are you sure you want to delete the selected archives?": "您确定要删除选定的档案吗？",
   "Are you sure you want to delete this archive?": "您确定要删除此档案吗？",
+  "Are you sure you want to delete \"{{name}}\"?": "您确定要删除“{{name}}”吗？",
   "Are you sure you want to delete this chapter/section?": "你确定要删除此章节/部分吗？",
   "Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.": "确定要删除此单行本吗？档案将保留在您的库中，但不再被归组。",
   "Are you sure you want to wipe the database?": "您确定要清空数据库吗？",

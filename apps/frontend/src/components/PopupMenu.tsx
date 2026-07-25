@@ -29,7 +29,15 @@ export function useMenuPalette() {
  * Forwards `ref` onto the rendered `<ul>` itself (not the trigger). A caller's own
  * outside-click-to-close handler that does `triggerRef.current.contains(e.target)` breaks once
  * the menu is portaled to `document.body` — pass a second ref here and also check
- * `menuRef.current?.contains(e.target)` to fix that. */
+ * `menuRef.current?.contains(e.target)` to fix that.
+ *
+ * `mainLabel`, when given, renders a disabled, icon-prefixed header row + separator above
+ * `children` — the "name this menu" row `Library.tsx`'s own gear-icon `SettingsMenu` hand-wrote
+ * itself (a `<PopupMenuItem disabled>` + `<PopupMenuSeparator>` pair) before this prop existed;
+ * pulled up into `PopupMenu` itself once a second, independent menu
+ * (`ArchiveOverviewOverlay.tsx`'s quick-add-chapter/delete-chapter popups) needed the identical
+ * row and copy-pasting the same two-element pair a second time read as the header really being
+ * this component's own concern, not each individual menu's. */
 export const PopupMenu = forwardRef<
   HTMLUListElement,
   {
@@ -37,9 +45,10 @@ export const PopupMenu = forwardRef<
     portal?: boolean
     onMouseEnter?: () => void
     onMouseLeave?: () => void
+    mainLabel?: { text: string; icon: string }
     children: ReactNode
   }
->(function PopupMenu({ style, portal = true, onMouseEnter, onMouseLeave, children }, ref) {
+>(function PopupMenu({ style, portal = true, onMouseEnter, onMouseLeave, mainLabel, children }, ref) {
   const palette = useMenuPalette()
   const menu = (
     <ul
@@ -60,6 +69,14 @@ export const PopupMenu = forwardRef<
         ...style,
       }}
     >
+      {mainLabel && (
+        <>
+          <PopupMenuItem disabled>
+            <i className={`fa ${mainLabel.icon}`} style={{ width: 18 }}></i> {mainLabel.text}
+          </PopupMenuItem>
+          <PopupMenuSeparator />
+        </>
+      )}
       {children}
     </ul>
   )

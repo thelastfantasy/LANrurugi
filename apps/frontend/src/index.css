@@ -106,3 +106,14 @@ input[type="checkbox"]:disabled {
 .caret-right-down.active:after {
   content: '\025BC';
 }
+
+/* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
+ * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
+ * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
+ * cells, so it pulses a few times instead. No legacy equivalent (legacy's own overlay always opens
+ * scrolled to the top, with nothing marking "here").
+ */
+@keyframes lrr-overview-highlight-pulse {
+  0%, 100% { outline-color: #3b97ea; }
+  50% { outline-color: transparent; }
+}

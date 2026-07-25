@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import type { MouseEvent, ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
@@ -266,19 +266,76 @@ function PageGridActionIcon({
 
 const QUICK_ADD_TOC_CHAPTER_COUNT = 15
 
+/** Positions a popup's `{top, left}` with its own **top-right corner** anchored to `anchor`'s
+ * bottom-right corner (matching how a real button-triggered dropdown reads — "opens below and to
+ * the same side as the button", same relationship `Library.tsx`'s own gear-icon `SettingsMenu`
+ * uses) rather than at raw click coordinates: a popup anchored to wherever inside the button the
+ * pointer happened to land reads as misaligned/floating, most visibly when the button sits near
+ * the modal's own edge (confirmed live via a real screenshot — a menu triggered near the trash
+ * icon rendered oddly offset instead of hanging directly off that icon's own corner).
+ *
+ * `width` must be the popup's own *real*, already-rendered width (`getBoundingClientRect().width`
+ * — see `useAnchoredMenuPosition`'s own two-pass measure-then-reposition dance, the same "don't
+ * know the real size until after layout" problem `Tooltip.tsx` already solves the same way) — an
+ * earlier version of this function took a hardcoded width *estimate* instead, which silently
+ * placed the menu's right edge wherever that guess said to rather than the button's own real
+ * right edge, confirmed live via a real screenshot: a 180px estimate for an actually-97px-wide
+ * menu left a visible ~80px gap between the menu and the button that triggered it.
+ *
+ * Also clamped so the result stays fully inside `#archivePagesOverlay` (this overlay's own modal
+ * box, not just the browser viewport — also a real, live-confirmed bug: a menu near the modal's
+ * own right edge rendered partly outside it). */
+function anchorPopupToOverviewModal(anchor: DOMRect, width: number, height: number): { top: number; left: number } {
+  const margin = 8
+  const bounds = document.getElementById('archivePagesOverlay')?.getBoundingClientRect()
+  const minLeft = (bounds?.left ?? 0) + margin
+  const maxLeft = (bounds?.right ?? window.innerWidth) - width - margin
+  const minTop = (bounds?.top ?? 0) + margin
+  const maxTop = (bounds?.bottom ?? window.innerHeight) - height - margin
+  return {
+    left: Math.max(minLeft, Math.min(anchor.right - width, maxLeft)),
+    top: Math.max(minTop, Math.min(anchor.bottom, maxTop)),
+  }
+}
+
+/** Two-pass measure-then-reposition for a popup anchored via `anchorPopupToOverviewModal` — first
+ * render parks the menu off-screen (so nothing flashes at a wrong position for a frame), a
+ * `useLayoutEffect` then measures its own real rendered `getBoundingClientRect()` and recomputes
+ * the real position from that, both applied before the browser actually paints. Shared by
+ * `QuickAddTocPopover`/`RemoveTocMenu` rather than each hand-rolling the identical dance. */
+function useAnchoredMenuPosition(anchor: DOMRect) {
+  const [menuEl, setMenuEl] = useState<HTMLUListElement | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number }>({ top: -9999, left: -9999 })
+
+  useLayoutEffect(() => {
+    if (!menuEl) return
+    // This is exactly the "synchronize with an external system" case the underlying rule's own
+    // description carves out as legitimate — measuring the menu's real, just-rendered DOM box
+    // (`getBoundingClientRect()`, unknowable before this menu actually exists in the tree) to
+    // reposition it, mirroring `Tooltip.tsx`'s own identical measure-then-reposition dance for the
+    // identical reason (a real popup's true size is never known ahead of its own first render).
+    const rect = menuEl.getBoundingClientRect()
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPos(anchorPopupToOverviewModal(anchor, rect.width, rect.height))
+    // `anchor` is a fresh `DOMRect` object every render (from `getBoundingClientRect()` at the
+    // trigger's own click-time) — comparing it by reference would recompute every render for no
+    // reason; comparing its own numeric fields is what actually reflects "the anchor moved".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuEl, anchor.top, anchor.left, anchor.right, anchor.bottom])
+  return { setMenuEl, pos }
+}
+
 /** Right-click menu on the "add chapter" icon (`PageGridActionIcon`'s `fa-book-medical`) — a
  * purely additive shortcut, no legacy equivalent, for the handful of chapter titles common enough
  * in real doujin/manga scans to not need typing out via the plain left-click `promptDialog` flow
  * every time. Every option submits immediately on pick (no separate confirm step) — the point is
  * speed for a title that's already fully decided the moment it's clicked/selected, not a form. */
 function QuickAddTocPopover({
-  x,
-  y,
+  anchor,
   onPick,
   onClose,
 }: {
-  x: number
-  y: number
+  anchor: DOMRect
   onPick: (title: string) => void
   onClose: () => void
 }) {
@@ -289,6 +346,7 @@ function QuickAddTocPopover({
     { icon: 'fa-list', title: t('Table of Contents') ?? 'Table of Contents' },
     { icon: 'fa-palette', title: t('Color Pages') ?? 'Color Pages' },
   ]
+  const { setMenuEl, pos } = useAnchoredMenuPosition(anchor)
   return (
     <>
       {/* `stopPropagation` — this backdrop's own click-to-close would otherwise bubble up to
@@ -307,7 +365,11 @@ function QuickAddTocPopover({
           e.stopPropagation()
         }}
       />
-      <PopupMenu style={{ position: 'fixed', top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
+      <PopupMenu
+        ref={setMenuEl}
+        style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}
+        mainLabel={{ icon: 'fa-bolt', text: t('Quick Add Chapter') ?? 'Quick Add Chapter' }}
+      >
         {presets.map(({ icon, title }) => (
           <PopupMenuItem
             key={title}
@@ -352,6 +414,62 @@ function QuickAddTocPopover({
   )
 }
 
+/** Delete-chapter menu — legacy's own `.remove-toc` (`reader.js`) only ever deletes whichever
+ * chapter the reader currently happens to be scrolled into (`getCurrentChapter()`), with no way
+ * to target a different one at all (see `handleRemoveToc`'s own docs for the real-source
+ * confirmation). This lists every chapter in the archive (matching the Upload page's own
+ * `ConflictMenu`/`RenamePopover` popup-menu visual pattern), so picking one to delete doesn't
+ * require first navigating to it. Clicking an entry still goes through the same themed
+ * `confirmDialog` as before (see `handleRemoveToc`) — this menu only changes *which* chapter that
+ * confirmation is about, not whether one still happens. */
+function RemoveTocMenu({
+  anchor,
+  chapters,
+  onPick,
+  onClose,
+}: {
+  anchor: DOMRect
+  chapters: { page: number; name: string }[]
+  onPick: (entry: { page: number; name: string }) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const { setMenuEl, pos } = useAnchoredMenuPosition(anchor)
+  return (
+    <>
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+      />
+      <PopupMenu
+        ref={setMenuEl}
+        style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT, maxHeight: 260, overflowY: 'auto' }}
+        mainLabel={{ icon: 'fa-trash-alt', text: t('Delete Chapter') ?? 'Delete Chapter' }}
+      >
+        {chapters.map((entry) => (
+          <PopupMenuItem
+            key={entry.page}
+            onClick={(e) => {
+              e.stopPropagation()
+              onPick(entry)
+              onClose()
+            }}
+          >
+            <i className="fas fa-trash-alt" style={{ width: 18 }}></i> {entry.name}
+          </PopupMenuItem>
+        ))}
+      </PopupMenu>
+    </>
+  )
+}
+
 // Mirrors legacy's `#archivePagesOverlay` (`updateArchiveOverlay`/`generateThumbnails` in
 // `~/LANraragi/public/js/reader.js`) — thumbnail (left) + Admin Options/Categories/Rating (right)
 // side by side via `.reader-thumbnail`'s `display:inline-block` (verified against
@@ -384,6 +502,7 @@ export default function ArchiveOverviewOverlay({
   const stampedPages = useStampedPages(archive.arcid)
   const stampedPageSet = new Set(stampedPages.data?.result ?? [])
   const [filterStamped, setFilterStamped] = useState(false)
+  const [removeTocMenuAt, setRemoveTocMenuAt] = useState<DOMRect | null>(null)
 
   const chapters = archive.toc.length > 0 ? archive.toc : null
 
@@ -469,11 +588,16 @@ export default function ArchiveOverviewOverlay({
     }
   }
 
-  // Legacy's `.remove-toc` click handler + `removeTocSection` (`reader.js`).
-  async function handleRemoveToc() {
-    if (!currentChapter) return
-    if (!(await confirmDialog(t('Are you sure you want to delete this chapter/section?') ?? ''))) return
-    removeTocEntry.mutate(currentChapter.page, {
+  // Legacy's own `.remove-toc` (`reader.js`'s `removeTocSection`) only ever targets
+  // `getCurrentChapter()` — whichever chapter the reader happens to be scrolled into right now —
+  // with no way to pick a different one at all; a real, confirmed limitation in legacy itself,
+  // not a porting gap (verified against `reader.js:157-158,1702` — `getCurrentChapter` really is
+  // the only chapter `.edit-toc`/`.remove-toc` ever operate on). A real improvement over that: the
+  // delete button now opens `RemoveTocMenu` listing every chapter in the archive, so deleting one
+  // that isn't the currently-viewed one doesn't require first scrolling/navigating to it.
+  async function handleRemoveToc(entry: { page: number; name: string }) {
+    if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? ''))) return
+    removeTocEntry.mutate(entry.page, {
       onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }),
     })
   }
@@ -501,6 +625,33 @@ export default function ArchiveOverviewOverlay({
   }
 
   const pageCount = archive.pagecount
+
+  // Scrolls to and briefly outlines the current page's own thumbnail once, right after the
+  // overlay opens — otherwise the reader has to hunt for it by eye across a grid that can run
+  // into the hundreds of cells for a long archive, with no indication at all of where "here" is.
+  // Additive; legacy's own `#archivePagesOverlay` has no equivalent (it opens already scrolled to
+  // the top, same as this port without this effect).
+  const [highlightedPage, setHighlightedPage] = useState<number | null>(null)
+  useEffect(() => {
+    // Deferred a tick rather than calling `setHighlightedPage` synchronously in the effect body
+    // (the project's own lint rules flag that as cascading-render-prone) — also conveniently lets
+    // the just-mounted grid finish its first paint before `scrollIntoView` runs against it.
+    const startTimer = setTimeout(() => {
+      const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
+      if (!cell) return
+      cell.scrollIntoView({ block: 'center' })
+      setHighlightedPage(currentPage)
+    }, 0)
+    const clearTimer = setTimeout(() => setHighlightedPage(null), 3000)
+    return () => {
+      clearTimeout(startTimer)
+      clearTimeout(clearTimer)
+    }
+    // Intentionally empty deps — this is a one-time "where am I" cue for whichever page the
+    // overlay opened on, not something that should re-trigger on every `currentPage` change while
+    // it stays open (e.g. from clicking around the grid itself).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <>
@@ -659,9 +810,17 @@ export default function ArchiveOverviewOverlay({
                   title={t('Delete Chapter') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
-                    void handleRemoveToc()
+                    setRemoveTocMenuAt(e.currentTarget.getBoundingClientRect())
                   }}
                 />
+                {removeTocMenuAt && (
+                  <RemoveTocMenu
+                    anchor={removeTocMenuAt}
+                    chapters={chapters}
+                    onPick={(entry) => void handleRemoveToc(entry)}
+                    onClose={() => setRemoveTocMenuAt(null)}
+                  />
+                )}
               </>
             )}
           </div>
@@ -677,6 +836,7 @@ export default function ArchiveOverviewOverlay({
                 page={page}
                 isStamped={isStamped}
                 loggedIn={loggedIn}
+                highlighted={page === highlightedPage}
                 thumbnailSrc={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
                 onSelectPage={onSelectPage}
                 onSetThumbnail={handleSetThumbnail}
@@ -699,6 +859,7 @@ function PageGridCell({
   page,
   isStamped,
   loggedIn,
+  highlighted,
   thumbnailSrc,
   onSelectPage,
   onSetThumbnail,
@@ -708,6 +869,12 @@ function PageGridCell({
   page: number
   isStamped: boolean
   loggedIn: boolean
+  /** Briefly true right after the overlay opens, for whichever page it opened on — see
+   * `ArchiveOverviewOverlay`'s own `highlightedPage` docs. Rendered as a pulsing accent outline
+   * (a plain animated `boxShadow`, not a static one, so it actually draws the eye across a grid
+   * that can run into the hundreds of otherwise-identical cells) rather than anything relying on
+   * a new global CSS class, since this is the only place that needs it. */
+  highlighted: boolean
   thumbnailSrc: string
   onSelectPage: (page: number) => void
   onSetThumbnail: (e: MouseEvent, page: number) => void
@@ -716,17 +883,34 @@ function PageGridCell({
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
-  const [quickAddAt, setQuickAddAt] = useState<{ x: number; y: number } | null>(null)
+  const [quickAddAt, setQuickAddAt] = useState<DOMRect | null>(null)
   return (
     <div
-      className="id1"
+      // Not `className="id1"` — that class's own real intended purpose is the library grid's
+      // `ArchiveCard` (verified against legacy's own `reader.js`: its real page-grid markup, line
+      // 1791, wraps each cell in exactly `class='${thumbCss} quick-thumbnail'`, never `id1` at
+      // all). Every currently-active theme's own `.id1` rule (e.g. `g.css`) carries a real
+      // `min-height: 335px` tuned for that taller card (thumbnail + title + tags), which a page
+      // cell here — just a shorter thumbnail with no title/tags below it — has no use for; the
+      // extra ~55px was rendering as a real, visible gap of solid background color underneath
+      // every cell (confirmed live via `getBoundingClientRect()`: `.id1` computed `335px` tall
+      // while its own `.quick-thumbnail` child inside was only `280px`, the difference exactly
+      // matching what the screenshot showed).
+      data-page-cell={page}
       style={{ display: 'inline-block', cursor: 'pointer' }}
       onClick={() => onSelectPage(page)}
     >
       <div
         className="id3 quick-thumbnail"
         data-stamped={isStamped || undefined}
-        style={{ position: 'relative' }}
+        style={{
+          position: 'relative',
+          ...(highlighted && {
+            outline: '3px solid #3b97ea',
+            outlineOffset: 2,
+            animation: 'lrr-overview-highlight-pulse 0.6s ease-in-out 4',
+          }),
+        }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
@@ -761,7 +945,7 @@ function PageGridCell({
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  setQuickAddAt({ x: e.clientX, y: e.clientY })
+                  setQuickAddAt(e.currentTarget.getBoundingClientRect())
                 }}
               />
             </Tooltip>
@@ -770,8 +954,7 @@ function PageGridCell({
       </div>
       {quickAddAt && (
         <QuickAddTocPopover
-          x={quickAddAt.x}
-          y={quickAddAt.y}
+          anchor={quickAddAt}
           onPick={(title) => onQuickAddToc(page, title)}
           onClose={() => setQuickAddAt(null)}
         />
