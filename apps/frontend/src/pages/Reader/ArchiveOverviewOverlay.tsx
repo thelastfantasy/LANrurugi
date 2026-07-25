@@ -6,11 +6,15 @@ import { useNavigate } from 'react-router-dom'
 
 import { useAddTocEntry, useRemoveTocEntry, useSetArchiveThumbnail, useStampedPages } from '../../api/hooks'
 import type { ArchiveMetadata, CategoryMetadata } from '../../api/types'
+import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
 import RatingWidget from '../../components/RatingWidget'
 import StarRatingDisplay from '../../components/StarRating'
+import Tooltip from '../../components/Tooltip'
+import { confirmDialog, promptDialog } from '../../dialog'
 import { parseRating } from '../../lib/rating'
 import { getTagSearchURL } from '../../lib/tagFormat'
 import { routes } from '../../routes'
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
 import { toast } from '../../toast'
 
 // Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
@@ -211,6 +215,7 @@ function PageGridActionIcon({
   title,
   hovered,
   onClick,
+  onContextMenu,
 }: {
   icon: string
   corner: 'top' | 'bottom'
@@ -224,6 +229,9 @@ function PageGridActionIcon({
    * the *parent's* hover instead of the icon's own. */
   hovered: boolean
   onClick: (e: MouseEvent) => void
+  /** Only the "add chapter" icon actually supplies this (see `QuickAddTocPopover`) — additive,
+   * no legacy equivalent at all. */
+  onContextMenu?: (e: MouseEvent) => void
 }) {
   return (
     <a
@@ -231,6 +239,7 @@ function PageGridActionIcon({
       title={title}
       className={`fas ${icon}`}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       style={{
         position: 'absolute',
         // Legacy's own two real values here are `top: 2%`/`top: 80%` (verified against
@@ -252,6 +261,94 @@ function PageGridActionIcon({
         backgroundColor: hovered ? '#000000' : undefined,
       }}
     />
+  )
+}
+
+const QUICK_ADD_TOC_CHAPTER_COUNT = 15
+
+/** Right-click menu on the "add chapter" icon (`PageGridActionIcon`'s `fa-book-medical`) — a
+ * purely additive shortcut, no legacy equivalent, for the handful of chapter titles common enough
+ * in real doujin/manga scans to not need typing out via the plain left-click `promptDialog` flow
+ * every time. Every option submits immediately on pick (no separate confirm step) — the point is
+ * speed for a title that's already fully decided the moment it's clicked/selected, not a form. */
+function QuickAddTocPopover({
+  x,
+  y,
+  onPick,
+  onClose,
+}: {
+  x: number
+  y: number
+  onPick: (title: string) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const presets: { icon: string; title: string }[] = [
+    { icon: 'fa-file-image', title: t('Cover') ?? 'Cover' },
+    { icon: 'fa-file-image', title: t('Back Cover') ?? 'Back Cover' },
+    { icon: 'fa-list', title: t('Table of Contents') ?? 'Table of Contents' },
+    { icon: 'fa-palette', title: t('Color Pages') ?? 'Color Pages' },
+  ]
+  return (
+    <>
+      {/* `stopPropagation` — this backdrop's own click-to-close would otherwise bubble up to
+          `#overlay-shade` (the outer Archive Overview modal's own click-to-close backdrop,
+          covering the same full viewport) and close *that* too, since neither backdrop is a DOM
+          ancestor/descendant of the other that a plain click could be scoped to (confirmed live:
+          clicking outside this popover closed the whole overview modal along with it). */}
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+      />
+      <PopupMenu style={{ position: 'fixed', top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
+        {presets.map(({ icon, title }) => (
+          <PopupMenuItem
+            key={title}
+            onClick={(e) => {
+              // Without this, the click bubbles up to the page-grid cell's own
+              // `onClick={() => onSelectPage(page)}` (this popover's trigger icon sits inside
+              // that cell) — the chapter got added correctly, but the reader then also navigated
+              // to that page, an unwanted extra side effect this popover was never meant to have.
+              e.stopPropagation()
+              onPick(title)
+              onClose()
+            }}
+          >
+            <i className={`fa ${icon}`} style={{ width: 18 }}></i> {title}
+          </PopupMenuItem>
+        ))}
+        <PopupMenuItem style={{ cursor: 'default' }}>
+          <i className="fa fa-book-medical" style={{ width: 18 }}></i>
+          <select
+            className="favtag-btn"
+            defaultValue=""
+            style={{ marginLeft: 4 }}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => {
+              if (!e.target.value) return
+              onPick(t('Chapter {{n}}', { n: e.target.value }) ?? `Chapter ${e.target.value}`)
+              onClose()
+            }}
+          >
+            <option value="" disabled>
+              {t('Chapter…')}
+            </option>
+            {Array.from({ length: QUICK_ADD_TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>
+                {t('Chapter {{n}}', { n })}
+              </option>
+            ))}
+          </select>
+        </PopupMenuItem>
+      </PopupMenu>
+    </>
   )
 }
 
@@ -332,10 +429,10 @@ export default function ArchiveOverviewOverlay({
   // Legacy's `.add-toc` click handler + `addTocSection` (`reader.js`) — prompts for a chapter
   // title, then PUTs the new ToC entry. Empty/cancelled input adds nothing (matches legacy's own
   // `result.value.trim() !== ""` guard).
-  function handleAddToc(e: MouseEvent, page: number) {
+  async function handleAddToc(e: MouseEvent, page: number) {
     e.preventDefault()
     e.stopPropagation()
-    const title = window.prompt(t('Enter a title for this chapter/section:') ?? undefined)
+    const title = await promptDialog(t('Enter a title for this chapter/section:') ?? '')
     if (title && title.trim() !== '') {
       addTocEntry.mutate(
         { page, title: title.trim() },
@@ -344,13 +441,26 @@ export default function ArchiveOverviewOverlay({
     }
   }
 
+  // Right-click on the same "add chapter" icon (see `handleAddToc` above for its plain left-click
+  // prompt-based flow) — a purely additive shortcut (no legacy equivalent) for the handful of
+  // chapter titles that come up often enough in real doujin/manga scans to not need typing out
+  // every time: 封面/封底/目录/彩页, plus 第N章 (1–15) via a `<select>`. Submits immediately on
+  // pick — no separate confirm step, matching this popover's own single-click-and-done feel
+  // rather than a form the user has to explicitly submit.
+  function handleQuickAddToc(page: number, title: string) {
+    addTocEntry.mutate(
+      { page, title },
+      { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
+    )
+  }
+
   // Legacy's `.edit-toc` click handler (`reader.js`: `addTocSection(currentChapter.startPage,
   // currentChapter.name)`) — re-prompts with the existing name pre-filled as a placeholder, then
   // re-adds the entry at the same page (the host's `add_toc_entry` replaces same-page entries
   // rather than duplicating them, matching legacy's own upsert-by-page semantics).
-  function handleEditToc() {
+  async function handleEditToc() {
     if (!currentChapter) return
-    const title = window.prompt(t('Enter a title for this chapter/section:') ?? undefined, currentChapter.name)
+    const title = await promptDialog(t('Enter a title for this chapter/section:') ?? '', currentChapter.name)
     if (title && title.trim() !== '') {
       addTocEntry.mutate(
         { page: currentChapter.page, title: title.trim() },
@@ -360,9 +470,9 @@ export default function ArchiveOverviewOverlay({
   }
 
   // Legacy's `.remove-toc` click handler + `removeTocSection` (`reader.js`).
-  function handleRemoveToc() {
+  async function handleRemoveToc() {
     if (!currentChapter) return
-    if (!window.confirm(t('Are you sure you want to delete this chapter/section?') ?? undefined)) return
+    if (!(await confirmDialog(t('Are you sure you want to delete this chapter/section?') ?? ''))) return
     removeTocEntry.mutate(currentChapter.page, {
       onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }),
     })
@@ -380,10 +490,9 @@ export default function ArchiveOverviewOverlay({
 
   async function deleteArchive() {
     if (
-      !window.confirm(
-        t('This will delete both metadata and matching files from your system! Please use with caution.') ??
-          undefined,
-      )
+      !(await confirmDialog(
+        t('This will delete both metadata and matching files from your system! Please use with caution.') ?? '',
+      ))
     ) {
       return
     }
@@ -540,7 +649,7 @@ export default function ArchiveOverviewOverlay({
                   title={t('Edit Chapter name') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
-                    handleEditToc()
+                    void handleEditToc()
                   }}
                 />
                 <a
@@ -550,7 +659,7 @@ export default function ArchiveOverviewOverlay({
                   title={t('Delete Chapter') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
-                    handleRemoveToc()
+                    void handleRemoveToc()
                   }}
                 />
               </>
@@ -572,6 +681,7 @@ export default function ArchiveOverviewOverlay({
                 onSelectPage={onSelectPage}
                 onSetThumbnail={handleSetThumbnail}
                 onAddToc={handleAddToc}
+                onQuickAddToc={handleQuickAddToc}
               />
             )
           })}
@@ -593,6 +703,7 @@ function PageGridCell({
   onSelectPage,
   onSetThumbnail,
   onAddToc,
+  onQuickAddToc,
 }: {
   page: number
   isStamped: boolean
@@ -601,9 +712,11 @@ function PageGridCell({
   onSelectPage: (page: number) => void
   onSetThumbnail: (e: MouseEvent, page: number) => void
   onAddToc: (e: MouseEvent, page: number) => void
+  onQuickAddToc: (page: number, title: string) => void
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
+  const [quickAddAt, setQuickAddAt] = useState<{ x: number; y: number } | null>(null)
   return (
     <div
       className="id1"
@@ -628,16 +741,41 @@ function PageGridCell({
               hovered={hovered}
               onClick={(e) => onSetThumbnail(e, page)}
             />
-            <PageGridActionIcon
-              icon="fa-book-medical"
-              corner="bottom"
-              title={t('Add Chapter at this Page') ?? undefined}
-              hovered={hovered}
-              onClick={(e) => onAddToc(e, page)}
-            />
+            {/* `wrapperStyle={{ position: 'static' }}` — `Tooltip`'s own default wrapper is
+                `position: relative`, which silently became this icon's *new* positioning
+                containing block once it started wrapping it (the icon itself is `position:
+                absolute; bottom: 2%` — a real, live-confirmed regression: without this override,
+                that 2% resolved against the wrapper's own ~44px shrink-to-fit height instead of
+                `.quick-thumbnail`'s real ~280px, landing the icon far too high). `Tooltip`'s own
+                positioning math (`getBoundingClientRect()` on the wrapper) doesn't depend on
+                `position: relative` at all, so this is a safe override. */}
+            <Tooltip
+              label={t('Add Chapter at this Page') + ' ' + t('(right-click for quick presets)')}
+              wrapperStyle={{ position: 'static' }}
+            >
+              <PageGridActionIcon
+                icon="fa-book-medical"
+                corner="bottom"
+                hovered={hovered}
+                onClick={(e) => onAddToc(e, page)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setQuickAddAt({ x: e.clientX, y: e.clientY })
+                }}
+              />
+            </Tooltip>
           </>
         )}
       </div>
+      {quickAddAt && (
+        <QuickAddTocPopover
+          x={quickAddAt.x}
+          y={quickAddAt.y}
+          onPick={(title) => onQuickAddToc(page, title)}
+          onClose={() => setQuickAddAt(null)}
+        />
+      )}
     </div>
   )
 }

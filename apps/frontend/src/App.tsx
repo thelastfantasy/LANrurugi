@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { ToastContainer } from 'react-toastify'
 
+import { DialogHost } from './dialog'
 import Layout from './Layout'
 import Batch from './pages/Batch'
 import Categories from './pages/Categories'
@@ -23,6 +24,8 @@ function App() {
     <BrowserRouter>
       {/* Mounted once app-wide, matching legacy's own `initializeToasts()` — see `toast.tsx`. */}
       <ToastContainer limit={7} theme="light" />
+      {/* Mounted once app-wide — see `dialog.tsx`'s own docs. */}
+      <DialogHost />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/reader/:archiveId" element={<Reader />} />

@@ -20,6 +20,7 @@ import {
 import type { Settings as SettingsType } from '../../api/types'
 import CollapsibleSection from '../../components/CollapsibleSection'
 import LanguageSelector from '../../components/LanguageSelector'
+import { confirmDialog } from '../../dialog'
 import { SUPPORTED_LANGUAGES } from '../../i18n'
 import { routes } from '../../routes'
 import {
@@ -319,7 +320,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                     id="drop-db"
                     label={t('Reset Database')}
                     onClick={async () => {
-                      if (!window.confirm(t('Clicking this button will reset the entire database and delete all settings and metadata.') ?? '')) return
+                      if (!(await confirmDialog(t('Clicking this button will reset the entire database and delete all settings and metadata.') ?? ''))) return
                       await dropDatabase.mutateAsync()
                       setTimeout(() => navigate(routes.library()), 1500)
                     }}

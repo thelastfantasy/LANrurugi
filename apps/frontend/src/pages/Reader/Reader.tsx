@@ -14,6 +14,7 @@ import {
   useUpdateProgress,
 } from '../../api/hooks'
 import Footer from '../../components/Footer'
+import { promptDialog } from '../../dialog'
 import { routes } from '../../routes'
 import { useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
@@ -461,9 +462,11 @@ export default function Reader() {
           toggleFullScreen()
           return
         case 'g': {
-          const value = window.prompt(t('Go to page:') ?? undefined)
-          const page = value ? parseInt(value, 10) : NaN
-          if (!Number.isNaN(page)) selectPage(page)
+          void (async () => {
+            const value = await promptDialog(t('Go to page:') ?? '')
+            const page = value ? parseInt(value, 10) : NaN
+            if (!Number.isNaN(page)) selectPage(page)
+          })()
           return
         }
         case 'h':

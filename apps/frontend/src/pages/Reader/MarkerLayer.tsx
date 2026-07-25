@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
 import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
+import { promptDialog } from '../../dialog'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
@@ -52,14 +53,14 @@ export default function MarkerLayer({
   const [drag, setDrag] = useState<DragState | null>(null)
   const draggedRef = useRef(false)
 
-  function handlePlacementClick(e: React.MouseEvent<HTMLDivElement>) {
+  async function handlePlacementClick(e: React.MouseEvent<HTMLDivElement>) {
     const img = imageRef.current
     if (!img) return
     const rect = img.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * 100
     const y = ((e.clientY - rect.top) / rect.height) * 100
     onPlaced()
-    const content = window.prompt(t('Enter Stamp name:') ?? undefined)
+    const content = await promptDialog(t('Enter Stamp name:') ?? '')
     if (content === null) return
     addStamp.mutate({ page, content, position: `${x.toFixed(2)},${y.toFixed(2)}` })
   }
@@ -135,7 +136,7 @@ export default function MarkerLayer({
         <div
           className="focus-overlay"
           style={{ display: 'block', cursor: 'cell', zIndex: 22 }}
-          onClick={handlePlacementClick}
+          onClick={(e) => void handlePlacementClick(e)}
         />
       )}
 
@@ -145,9 +146,11 @@ export default function MarkerLayer({
           <PopupMenu style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT }}>
             <PopupMenuItem
               onClick={() => {
-                const content = window.prompt(t('Enter Stamp name:') ?? undefined)
-                setMenu(null)
-                if (content !== null) updateStamp.mutate({ stampId: menu.stampId, content })
+                void (async () => {
+                  const content = await promptDialog(t('Enter Stamp name:') ?? '')
+                  setMenu(null)
+                  if (content !== null) updateStamp.mutate({ stampId: menu.stampId, content })
+                })()
               }}
             >
               {t('Edit Marker')}

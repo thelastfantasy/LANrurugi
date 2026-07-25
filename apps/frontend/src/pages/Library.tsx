@@ -26,6 +26,7 @@ import { PopupMenu, PopupMenuItem, PopupMenuSeparator, useMenuPalette } from '..
 import RatingWidget from '../components/RatingWidget'
 import TagTable from '../components/TagTable'
 import Tooltip from '../components/Tooltip'
+import { confirmDialog, promptDialog } from '../dialog'
 import {
   buildNamespacedTag,
   buildTagList,
@@ -1010,8 +1011,10 @@ function CustomColumnHeader({ index }: { index: number }) {
         title={t('Edit this column') ?? undefined}
         style={{ cursor: 'pointer' }}
         onClick={() => {
-          const next = window.prompt(t('Tag namespace') ?? undefined, namespace)
-          if (next?.trim()) setNamespace(next.trim())
+          void (async () => {
+            const next = await promptDialog(t('Tag namespace') ?? '', namespace)
+            if (next?.trim()) setNamespace(next.trim())
+          })()
         }}
       ></i>
     </th>
@@ -1481,9 +1484,9 @@ export default function Library() {
   // Legacy's own MSM toggle confirms before clearing a non-empty selection when turning
   // multi-select *off* (`index.js`'s `toggleMultiSelectMode`) — turning it *on* never needs
   // confirmation since there's nothing to lose yet.
-  function handleToggleMultiSelect() {
+  async function handleToggleMultiSelect() {
     if (multiSelect && selectedIds.size > 0) {
-      if (!window.confirm(t('You have an active selection. Exiting will clear it. Continue?') ?? undefined)) {
+      if (!(await confirmDialog(t('You have an active selection. Exiting will clear it. Continue?') ?? ''))) {
         return
       }
     }
@@ -1524,7 +1527,7 @@ export default function Library() {
         navigate(routes.tankoubonEdit(targetTank))
         return
       }
-      const name = window.prompt(t('Enter a name for the new Tankoubon.') ?? undefined)
+      const name = await promptDialog(t('Enter a name for the new Tankoubon.') ?? '')
       if (!name?.trim()) return
       const result = await createTankoubon.mutateAsync(name.trim())
       await fetch(`/api/tankoubons/${result.tankid}`, {
@@ -1764,7 +1767,7 @@ export default function Library() {
             className="searchbtn stdbtn"
             type="button"
             value={t('Select Archives') ?? undefined}
-            onClick={handleToggleMultiSelect}
+            onClick={() => void handleToggleMultiSelect()}
           />
         </div>
       </div>

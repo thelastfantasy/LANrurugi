@@ -12,6 +12,7 @@ import {
 } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
 import TagInput from '../components/TagInput'
+import { confirmDialog } from '../dialog'
 import { routes } from '../routes'
 import { toast } from '../toast'
 
@@ -73,7 +74,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   }
 
   async function handleDelete() {
-    if (!window.confirm(t('Are you sure you want to delete this archive?') ?? undefined)) return
+    if (!(await confirmDialog(t('Are you sure you want to delete this archive?') ?? ''))) return
     await deleteArchive.mutateAsync(archiveId)
     navigate('/')
   }

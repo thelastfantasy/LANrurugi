@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
 import { useArchives, useCategories } from '../api/hooks'
+import { confirmDialog, promptDialog } from '../dialog'
 import { routes } from '../routes'
 import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { toast } from '../toast'
@@ -17,10 +18,13 @@ const BOOKMARK_CATEGORY_STORAGE_KEY = 'bookmarkCategoryId'
 // combobox populates Name/Predicate/Pin/Bookmark-link fields, each of which auto-saves on
 // change (matching `category.js`'s own `change` event bindings) with a "Saving.../Saved!"
 // status indicator, plus a full library-wide archive checklist for static categories. Uses
-// `window.prompt`/`window.confirm` for the new-category/delete flows rather than introducing
-// SweetAlert2 (legacy's own popup library) — same interaction shape (prompt for a name, confirm
-// before deleting), matching this codebase's own existing convention for destructive actions
-// (`Settings.tsx`'s database-reset confirmation) instead of a new dependency for two dialogs.
+// `promptDialog`/`confirmDialog` (a real themed popup, `dialog.tsx` — legacy's own real
+// equivalent is SweetAlert2's `LRR.showPopUp`/`Swal.fire`) for the new-category/delete flows,
+// not the plain `window.prompt`/`window.confirm` an earlier version of this file used: those are
+// unstyled native OS dialogs outside the page's own DOM/CSS entirely, not something this app's
+// own theme ever actually controls (a coincidental resemblance on some Linux desktop themes was
+// mistaken for real theming during an earlier pass — corrected app-wide, see `dialog.tsx`'s own
+// docs for the full list of call sites this affected).
 // The Tankoubons sub-list always renders empty: nothing links a Tankoubon to a Category yet on
 // the host side (`lanrurugi-api::categories::add_to_category` only accepts real archive IDs), a
 // real gap beyond this page's own markup — kept as an always-shown placeholder so the layout
@@ -88,7 +92,7 @@ export default function Categories() {
   }
 
   async function handleNewCategory(isDynamic: boolean) {
-    const value = window.prompt(t('Enter a name for the new category') ?? undefined, t('My Category') ?? undefined)
+    const value = await promptDialog(t('Enter a name for the new category') ?? '', t('My Category') ?? '')
     if (value === null) return
     if (!value.trim()) {
       toast({ text: t('Please enter a category name.') ?? undefined, icon: 'error' })
@@ -108,7 +112,7 @@ export default function Categories() {
 
   async function handleDelete() {
     if (!selectedId) return
-    if (!window.confirm(t('The category will be deleted permanently.') ?? undefined)) return
+    if (!(await confirmDialog(t('The category will be deleted permanently.') ?? ''))) return
     try {
       await sendJson('DELETE', `/categories/${selectedId}`)
       toast({ text: t('Category deleted!') ?? undefined, icon: 'success' })
