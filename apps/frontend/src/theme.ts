@@ -99,6 +99,18 @@ export const Z_OVERLAY_CONTENT = 1001
 // doesn't silently reopen this same gap.
 export const Z_OVERLAY_TOOLTIP = 1100
 
+// Legacy's own real `.base-overlay` class (`lrr.css` — the Archive Overview modal's own outer
+// class, `#archivePagesOverlay`) carries a hardcoded `z-index: 9000`, far above every generic
+// overlay tier above — anything meant to render *on top of* that modal (rather than as a popup
+// triggered from inside it, which the tiers above already cover) needs to clear 9000 specifically,
+// not just the app's own internal overlay stack. `PageLightbox` (`ArchiveOverviewOverlay.tsx`) is
+// the first, and so far only, real case of this: a confirmed live bug where its own `Z_OVERLAY_
+// CONTENT` (1001) silently lost the stacking fight to the still-open Archive Overview modal
+// underneath it, rendering the lightbox's own dark backdrop and content invisible behind that
+// modal despite mounting later in the React tree (DOM/mount order doesn't override an explicit,
+// much higher `z-index`).
+export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
+
 const LEGACY_STRUCTURAL_CSS_ID = 'legacy-structural-css'
 const LEGACY_THEME_CSS_ID = 'legacy-theme-css'
 const LEGACY_FILEUPLOAD_CSS_ID = 'legacy-fileupload-css'

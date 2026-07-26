@@ -107,7 +107,15 @@ ARG PNPM_VERSION
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Baked-in node_modules for fast, deterministic startup (see this file's own doc comment on why
-# this isn't reinstalled at container-run time).
+# this isn't reinstalled at container-run time). `pnpm-workspace.yaml` itself must ship alongside
+# them, not just the installed packages — Vite's dev server uses it to detect the monorepo root
+# for its own `server.fs.allow` access control; without it (a real, live-confirmed gap — this file
+# was never copied into any runtime image layer at all, only ever patched into one specific
+# already-running container by hand, which didn't survive that container being recreated), Vite
+# falls back to a narrower allowed-root guess that doesn't cover `/workspace/node_modules/.pnpm/`,
+# 403ing every asset resolved through there — including, very visibly, Font Awesome's own webfont
+# files, which silently degraded every icon in the app to plain underlined text.
+COPY pnpm-workspace.yaml /workspace/pnpm-workspace.yaml
 COPY --from=frontend-deps /build/node_modules /workspace/node_modules
 COPY --from=frontend-deps /build/apps/frontend/node_modules /workspace/apps/frontend/node_modules
 

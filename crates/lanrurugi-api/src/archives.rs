@@ -327,6 +327,21 @@ async fn get_archive_tankoubons(State(state): State<AppState>, Path(id): Path<St
     }
 }
 
+/// Reserved chapter/ToC identifiers the frontend's quick-add presets and 0-9 keyboard shortcut
+/// send as `title` instead of localized display text (`c1`-`c20` for "Chapter N", `toc` for
+/// "Table of Contents") — kept in sync with the frontend's own `RESERVED_TOC_IDENTIFIERS`
+/// (`apps/frontend/src/lib/tocValidation.ts`). 20 chapters covers real doujin/manga volume counts
+/// comfortably (the frontend's own quick-add `<select>` offers the same range).
+fn is_reserved_toc_identifier(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "toc"
+        || (2..=3).contains(&lower.len())
+            && lower.starts_with('c')
+            && lower[1..]
+                .parse::<u8>()
+                .is_ok_and(|n| (1..=20).contains(&n))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TocParams {
     page: u32,
@@ -353,6 +368,15 @@ async fn add_toc_entry(
         }
     };
     archive.toc.retain(|t| t.page != params.page);
+    // Reserved chapter/ToC identifiers (`c1`-`c20`, `toc`) are meant to be unique per archive —
+    // the frontend's quick-add/keyboard-shortcut flows send these instead of localized display
+    // text specifically so re-setting "chapter 4" on a new page moves it rather than creating a
+    // second, stale "chapter 4" entry at the old page. Plain free-text titles (anything not one
+    // of these reserved identifiers) keep the old page-only dedup — a user is free to have two
+    // different pages both titled the same custom text if they want.
+    if is_reserved_toc_identifier(&title) {
+        archive.toc.retain(|t| t.name != title);
+    }
     archive.toc.push(TocEntry {
         page: params.page,
         name: title,
