@@ -630,18 +630,28 @@ function ChapterActionMenu({
         style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: zIndexBase + 1, maxHeight: 260, overflowY: 'auto' }}
         mainLabel={{ icon, text: label }}
       >
-        {chapters.map((entry) => (
-          <PopupMenuItem
-            key={entry.page}
-            onClick={(e) => {
-              e.stopPropagation()
-              onPick(entry)
-              onClose()
-            }}
-          >
-            <i className={`fas ${icon}`} style={{ width: 18 }}></i> {displayTocName(entry.name, t)}
-          </PopupMenuItem>
-        ))}
+        {chapters.map((entry) => {
+          // Reserved preset identifiers (`c1`-`c20`/`toc`) aren't editable through this manual
+          // free-text flow — their whole point is that the *stored* value and the *displayed*
+          // text are deliberately different (see `lib/tocValidation.ts`'s own docs), so "editing"
+          // one here would silently convert it into an unrelated free-text entry rather than
+          // actually renaming the preset. Changing one of these is done by deleting it and
+          // re-applying a (possibly different) preset instead, not by editing it in place.
+          const isPreset = mode === 'edit' && isReservedTocIdentifier(entry.name)
+          return (
+            <PopupMenuItem
+              key={entry.page}
+              disabled={isPreset}
+              onClick={(e) => {
+                e.stopPropagation()
+                onPick(entry)
+                onClose()
+              }}
+            >
+              <i className={`fas ${icon}`} style={{ width: 18 }}></i> {displayTocName(entry.name, t)}
+            </PopupMenuItem>
+          )
+        })}
       </PopupMenu>
     </>
   )
@@ -787,14 +797,16 @@ export default function ArchiveOverviewOverlay({
   // the "edit chapter" menu instead, the same real improvement over legacy's single-target
   // restriction `handleRemoveToc`'s own docs describe for delete.
   //
-  // Pre-fills `displayTocName(entry.name, t)` — the localized display text, not the raw stored
-  // value — since `entry.name` may be a reserved identifier (`c4`/`toc`) if it was set via a
-  // preset/keyboard shortcut, and pre-filling that raw identifier into a free-text box the zod
-  // validation itself rejects re-submitting unchanged would be a dead end. Editing a preset-set
-  // chapter through this manual dialog intentionally converts it to free text on save — the user
-  // is explicitly typing a custom title at that point.
+  // Refuses to edit a reserved preset identifier (`c1`-`c20`/`toc`) at all — `ChapterActionMenu`
+  // already disables picking one of these in its own list (see that component's own docs), but
+  // this plain left-click path (which always targets `currentChapter`, bypassing that menu
+  // entirely) needs the same guard independently. The whole point of storing an identifier
+  // instead of real text is that the two are deliberately different — silently "editing" one into
+  // free text here would erase that distinction without the user necessarily intending to change
+  // what kind of entry it is, not just its wording. Changing one of these is done by deleting it
+  // and re-applying a (possibly different) preset instead.
   async function handleEditToc(entry = currentChapter) {
-    if (!entry) return
+    if (!entry || isReservedTocIdentifier(entry.name)) return
     const title = await promptTocTitle(displayTocName(entry.name, t))
     if (title) {
       addTocEntry.mutate(
@@ -1009,10 +1021,12 @@ export default function ArchiveOverviewOverlay({
             )}
             {loggedIn && chapters && currentChapter && (
               <>
-                {/* Plain left-click keeps legacy's own behavior (edits `currentChapter` — whichever
-                    chapter the reader is scrolled into right now); right-click opens the same
-                    "pick any chapter" menu the delete icon already has, matching the "add chapter"
-                    icon's own left-click/right-click split further up this file. */}
+                {/* Left-click opens the same "pick any chapter" menu the delete icon already
+                    has, rather than legacy's own left-click-edits-`currentChapter`-directly
+                    shortcut — the plain-click path silently no-ops on a reserved preset
+                    identifier now (see `handleEditToc`'s own guard), which reads as "broken" with
+                    no explanation if it's still the default click behavior instead of routing
+                    through the menu, where that same entry shows up visibly disabled instead. */}
                 <a
                   className="fas fa-pencil-alt edit-toc"
                   href="#"
@@ -1020,11 +1034,6 @@ export default function ArchiveOverviewOverlay({
                   title={t('Edit Chapter name') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
-                    void handleEditToc()
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
                     setEditTocMenuAt(e.currentTarget.getBoundingClientRect())
                   }}
                 />

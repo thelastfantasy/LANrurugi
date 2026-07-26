@@ -193,11 +193,21 @@ async fn token_matches(
 
     let mut ids = HashSet::new();
 
-    if token.isexact {
-        let members: Vec<String> = search_conn
-            .smembers(format!("INDEX_{}", token.tag))
-            .await
-            .unwrap_or_default();
+    // `Search.pm::search_uncached`: for an exact-tag search, checks `exists("INDEX_$tag")` first
+    // and only trusts a direct `smembers` on that literal key if it's really there — otherwise
+    // (even though `isexact` is true) it falls through to the exact same glob-key lookup the
+    // non-exact branch below uses. This fallback is load-bearing, not a redundant legacy quirk:
+    // `_`/`%` in a tag are unconditionally glob-escaped to `?`/`*` *before* this check runs (both
+    // here and in legacy), with no exception for underscores that are part of a namespace name
+    // rather than an intentional wildcard (e.g. `date_added:...$` normalizes its own tag to
+    // `date?added:...`) — so the literal `INDEX_date?added:...` key almost never actually exists,
+    // and skipping the fallback (an earlier version of this function did) silently returned zero
+    // results for exact-match searches on any namespace containing an underscore, a real
+    // live-confirmed regression from legacy's own actual (if accidental) behavior.
+    let exact_key = format!("INDEX_{}", token.tag);
+    let exact_hit = token.isexact && search_conn.exists(&exact_key).await.unwrap_or(false);
+    if exact_hit {
+        let members: Vec<String> = search_conn.smembers(&exact_key).await.unwrap_or_default();
         ids.extend(members);
     } else {
         let pattern = if token.tag.contains(':') {
