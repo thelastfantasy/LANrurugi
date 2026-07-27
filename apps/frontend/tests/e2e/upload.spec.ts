@@ -61,7 +61,19 @@ test.describe('upload', { tag: '@upload' }, () => {
   test('repeated first-time uploads all succeed (no upload-vs-watcher race)', async ({ page }) => {
     const original = fs.readFileSync(fixturePath('sample.zip'))
     for (let i = 0; i < 5; i++) {
-      const unique = Buffer.concat([original, Buffer.from(`race-check-${Date.now()}-${i}-${Math.random()}`)])
+      // `wait_until_stable` (lanrurugi-scanner's watcher.rs, mirroring legacy Shinobu.pm's
+      // add_to_filemap) treats any file under its 512000-byte hashing-sample threshold as
+      // "possibly still being written" and polls up to 5 times at a 1s interval before giving up
+      // and proceeding anyway — a deliberate, unit-tested behavior, not a bug. `sample.zip` itself
+      // is 416 bytes, so an unpadded upload pays that full ~5s tax on every single ingest. This
+      // loop's whole point is 5 uploads in quick succession to exercise a race, not to exercise
+      // that stability wait — padding each buffer past the threshold lets the first size check
+      // pass immediately, keeping the test's real 30s budget for the thing it actually tests.
+      const unique = Buffer.concat([
+        original,
+        Buffer.from(`race-check-${Date.now()}-${i}-${Math.random()}`),
+        Buffer.alloc(520_000),
+      ])
       const res = await page.request.put('/api/archives/upload', {
         multipart: { file: { name: `race-check-${i}.zip`, mimeType: 'application/zip', buffer: unique } },
       })
