@@ -34,6 +34,7 @@ import {
   formatTimestampForDisplay,
   getTagSearchURL,
   splitTagsByNamespace,
+  tagValueForSearch,
 } from '../lib/tagFormat'
 import { routes } from '../routes'
 import {
@@ -1053,7 +1054,12 @@ function CustomColumnCell({
               style={{ cursor: 'pointer' }}
               onClick={(e) => {
                 e.preventDefault()
-                onSearchTag(raw)
+                // `tagValueForSearch`, not the raw stored value — same real bug class as
+                // `TagTable.tsx`'s own fix: a `date_added`/`timestamp` value's search semantics
+                // are the `yyyy-mm-dd` day-range syntax, not its bare Unix-seconds form (which
+                // never matches, `date_added` isn't tag-indexed). This in-app click path bypassed
+                // the same conversion the `href` above already applies.
+                onSearchTag(buildNamespacedTag(namespace, tagValueForSearch(namespace, raw, timezone)))
               }}
             >
               {text}

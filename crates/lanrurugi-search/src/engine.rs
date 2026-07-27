@@ -247,6 +247,21 @@ async fn token_matches(
         return Ok(ids);
     }
 
+    // `date_added` (once its `_`/`%` glob-escaping is undone — see `parse_date_range`'s own docs)
+    // only ever supports the `YYYY-MM-DD` day-range form above; a bare-timestamp write like
+    // `date_added:1784871857` deliberately returns *empty*, not "whatever the generic tag-index/
+    // title-fuzzy-match fallback below happens to find". `date_added` was never tag-indexed to
+    // begin with (it's in `indexer::BASIC_NAMESPACES`, the same "too noisy to index" list as
+    // `source`/`artist`/etc. — see that constant's own docs), so falling through here already
+    // returned empty in practice, but only as an *accidental* consequence of that separate
+    // indexing decision — a future change to what gets indexed could silently resurrect
+    // second-precision timestamp search as an unintended side effect. This makes "date_added only
+    // supports day-range search" a real, explicit guarantee instead of a coincidence two unrelated
+    // pieces of code happen to agree on today.
+    if token.tag.replace('?', "_").starts_with("date_added:") {
+        return Ok(HashSet::new());
+    }
+
     let mut ids = HashSet::new();
 
     // `Search.pm::search_uncached`: for an exact-tag search, checks `exists("INDEX_$tag")` first

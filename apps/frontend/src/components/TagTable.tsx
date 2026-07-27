@@ -1,6 +1,6 @@
 import { useSettings } from '../api/hooks'
 import { parseRating } from '../lib/rating'
-import { formatTimestampForDisplay, getTagSearchURL, splitTagsByNamespace, TIMESTAMP_NAMESPACE } from '../lib/tagFormat'
+import { formatTimestampForDisplay, getTagSearchURL, splitTagsByNamespace, tagValueForSearch, TIMESTAMP_NAMESPACE } from '../lib/tagFormat'
 import StarRatingDisplay from './StarRating'
 
 function displayNamespace(namespace: string): string {
@@ -94,10 +94,20 @@ export default function TagTable({
                         // URL, matching legacy's own `buildTagsDiv` — but a plain left-click still
                         // applies the filter in-app (no full navigation/reload) when a handler is
                         // given, same as before.
+                        //
+                        // `tagValueForSearch`, not the raw `value` — a timestamp-namespace tag's
+                        // raw stored value is a bare Unix-seconds number, but its search semantics
+                        // are now the `yyyy-mm-dd` day-range syntax (see `getTagSearchURL`'s own
+                        // docs); the `href` above already does this conversion, but this in-app
+                        // `onSearchTag` path is a *separate* code path that bypassed it entirely —
+                        // a real, live-confirmed bug where left-click search used the untranslated
+                        // raw timestamp (never matching anything, since `date_added` isn't
+                        // indexed for exact/fuzzy tag search) while middle-click/right-click
+                        // (which actually navigate via `href`) got the correct date-range query.
                         if (!onSearchTag) return
                         e.preventDefault()
                         e.stopPropagation()
-                        onSearchTag(namespace, value)
+                        onSearchTag(namespace, tagValueForSearch(namespace, value, timezone))
                       }}
                       style={{ wordBreak: 'break-all', cursor: onSearchTag ? 'pointer' : undefined }}
                     >
