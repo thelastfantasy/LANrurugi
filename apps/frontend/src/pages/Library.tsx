@@ -31,7 +31,7 @@ import {
   buildNamespacedTag,
   buildTagList,
   colorCodeTags,
-  convertTimestamp,
+  formatTimestampForDisplay,
   getTagSearchURL,
   splitTagsByNamespace,
 } from '../lib/tagFormat'
@@ -182,7 +182,8 @@ function TagLine({
   tags: string
   onSearchTag: (namespacedTag: string) => void
 }) {
-  const coded = colorCodeTags(tags)
+  const timezone = useSettings().data?.timezone ?? ''
+  const coded = colorCodeTags(tags, timezone)
   if (coded.length === 0) return null
 
   return (
@@ -1036,16 +1037,19 @@ function CustomColumnCell({
   onSearchTag: (namespacedTag: string) => void
 }) {
   const [namespace] = useCustomColumnNamespace(index)
+  // Server timezone for `date_added`/`timestamp` custom-column display + search URL — same
+  // pattern as `TagTable`/`ArchiveOverviewOverlay`'s own `TagsTable`.
+  const timezone = useSettings().data?.timezone ?? ''
   const matches = [...tags.matchAll(new RegExp(`${namespace}:([^,]+)`, 'g'))].map((m) => m[1].trim())
   const isDate = namespace === 'date_added' || namespace === 'timestamp'
   return (
     <td style={{ textAlign: 'left' }}>
       {matches.map((raw, i) => {
-        const text = isDate ? convertTimestamp(raw) : namespace === 'source' ? raw : raw.replace(/\b./g, (c) => c.toUpperCase())
+        const text = isDate ? formatTimestampForDisplay(raw, timezone) : namespace === 'source' ? raw : raw.replace(/\b./g, (c) => c.toUpperCase())
         return (
           <span key={i}>
             <a
-              href={getTagSearchURL(namespace, raw)}
+              href={getTagSearchURL(namespace, raw, timezone)}
               style={{ cursor: 'pointer' }}
               onClick={(e) => {
                 e.preventDefault()

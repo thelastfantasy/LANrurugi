@@ -62,6 +62,39 @@ export default function Settings() {
   return <SettingsForm settings={settings.data} />
 }
 
+// Full IANA timezone list for the Settings-page `<select>`, grouped by continent — phpBB-style
+// (every real zone the runtime knows about, not a hand-curated subset). Built at module load from
+// `Intl.supportedValuesOf('timeZone')`, which every modern browser ships with the same bundled
+// IANA tzdata Node/Rust `chrono-tz` also use, so the offered ids always line up with what the
+// backend's `parse_date_range` actually accepts — no list to keep in sync by hand. `UTC` is
+// hoisted into its own top group as the documented default. Anything `Intl.supportedValuesOf`
+// doesn't return (older browsers, or a genuinely unusual id a user typed before this UI existed)
+// still round-trips through the "Custom…" free-text fallback below.
+const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
+  const supported: string[] = (Intl.supportedValuesOf?.('timeZone') as string[] | undefined) ?? []
+  const groups = new Map<string, string[]>()
+  for (const tz of supported) {
+    const area = tz.includes('/') ? tz.slice(0, tz.indexOf('/')) : 'Other'
+    const bucket = groups.get(area)
+    if (bucket) {
+      bucket.push(tz)
+    } else {
+      groups.set(area, [tz])
+    }
+  }
+  const order = ['Africa', 'America', 'Antarctica', 'Asia', 'Atlantic', 'Australia', 'Europe', 'Indian', 'Pacific']
+  const sortedAreas = [...groups.keys()].sort((a, b) => {
+    const ai = order.indexOf(a)
+    const bi = order.indexOf(b)
+    return (ai === -1 ? order.length : ai) - (bi === -1 ? order.length : bi) || a.localeCompare(b)
+  })
+  return sortedAreas.map((area) => ({ label: area, zones: (groups.get(area) ?? []).sort() }))
+})()
+
+function isKnownTimezone(tz: string): boolean {
+  return tz === 'UTC' || TIMEZONE_GROUPS.some((g) => g.zones.includes(tz))
+}
+
 function SettingsForm({ settings }: { settings: SettingsType }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -109,6 +142,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [tagrules, setTagrules] = useState(settings.tagrules)
   const [usedateadded, setUsedateadded] = useState(settings.usedateadded)
   const [usedatemodified, setUsedatemodified] = useState(settings.usedatemodified)
+  const [timezone, setTimezone] = useState(settings.timezone)
 
   const [status, setStatus] = useState('')
 
@@ -146,6 +180,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       tagrules,
       usedateadded,
       usedatemodified,
+      timezone,
     })
     setStatus(t('Settings saved!') ?? '')
   }
@@ -584,6 +619,48 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                       {t('Enabling this will use file modified time instead of current time when setting "date_added" timestamps.')}
                     </CheckboxRow>
                   )}
+                  <Row label={t('Timezone')}>
+                    {/* `date_added` display + day-range search resolve in this IANA timezone so
+                        every viewer agrees on which day an archive belongs to, regardless of
+                        their own browser timezone (see `lanrurugi_search::engine`'s
+                        `parse_date_range`). The dropdown lists every IANA zone the runtime knows
+                        (built from `Intl.supportedValuesOf('timeZone')` at module load — see
+                        `TIMEZONE_GROUPS`), grouped by continent phpBB-style; a value the runtime
+                        doesn't recognize (older browser, or an unusual id set before this UI
+                        existed) falls through to a "Custom…" free-text input. */}
+                    <select
+                      className="stdbtn"
+                      value={isKnownTimezone(timezone) ? timezone : '__custom__'}
+                      onChange={(e) => {
+                        if (e.target.value === '__custom__') return
+                        setTimezone(e.target.value)
+                      }}
+                    >
+                      <option value="UTC">UTC</option>
+                      {TIMEZONE_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.zones.map((tz) => (
+                            <option key={tz} value={tz}>{tz}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                      {!isKnownTimezone(timezone) && (
+                        <option value="__custom__">{t('Custom…')} ({timezone})</option>
+                      )}
+                    </select>
+                    {!isKnownTimezone(timezone) && (
+                      <input
+                        className="stdinput"
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={timezone}
+                        onChange={(e) => setTimezone(e.target.value)}
+                        type="text"
+                        placeholder="e.g. Asia/Tokyo"
+                      />
+                    )}
+                    <br />
+                    {t('IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to display date_added tags and resolve date_added:YYYY-MM-DD searches to a calendar day. Defaults to UTC.')}
+                  </Row>
                   <Row label={t('Excluded Namespaces')}>
                     <input
                       className="stdinput"

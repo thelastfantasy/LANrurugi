@@ -57,6 +57,11 @@ export interface Settings {
   apikey: string
   excludednamespaces: string
   tagrules: string
+  /** IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"`) — see `lanrurugi_search::engine`'s
+   * `date_added` date-range handling. Used by the frontend to render `date_added`/`timestamp` tag
+   * values as `yyyy-mm-dd` in this timezone (via `Intl.DateTimeFormat({ timeZone })`, which the
+   * browser implements natively for any IANA id) and to build same-day search URLs. */
+  timezone: string
   pagesize: number
   tempmaxsize: number
   sizethreshold: number

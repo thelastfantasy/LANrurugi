@@ -9,6 +9,7 @@ import {
   useArchivePages,
   useRemoveTocEntry,
   useSetArchiveThumbnail,
+  useSettings,
   useStampedPages,
 } from '../../api/hooks'
 import type { ArchiveMetadata, CategoryMetadata } from '../../api/types'
@@ -18,7 +19,7 @@ import StarRatingDisplay from '../../components/StarRating'
 import Tooltip from '../../components/Tooltip'
 import { confirmDialog, promptDialog } from '../../dialog'
 import { parseRating } from '../../lib/rating'
-import { getTagSearchURL } from '../../lib/tagFormat'
+import { formatTimestampForDisplay, getTagSearchURL, TIMESTAMP_NAMESPACE } from '../../lib/tagFormat'
 import {
   displayTocName,
   isReservedTocIdentifier,
@@ -30,9 +31,10 @@ import { routes } from '../../routes'
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
 import { toast } from '../../toast'
 
-// Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
-// converts the tag value through a date formatter instead of printing it raw).
-const TIMESTAMP_NAMESPACE = /^(date|time)/i
+// `TIMESTAMP_NAMESPACE` + `formatTimestampForDisplay` (re-exported from `lib/tagFormat`) live
+// there rather than here so the Library grid card's tag tooltip (`colorCodeTags`) and this
+// overview's tag table share the exact same timestamp-formatting logic — including the
+// server-timezone setting both now thread through.
 
 // How many `ChapterActionMenu` instances are currently mounted/open — a plain module-level
 // counter, not React state, since it exists purely to answer one synchronous yes/no question
@@ -59,11 +61,9 @@ function displayNamespace(key: string): string {
   return key.charAt(0).toUpperCase() + key.slice(1)
 }
 
-function formatTagValue(namespace: string, value: string): string {
+function formatTagValue(namespace: string, value: string, timezone: string): string {
   if (!TIMESTAMP_NAMESPACE.test(namespace)) return value
-  const ms = Number(value) * 1000
-  if (Number.isNaN(ms)) return value
-  return new Date(ms).toLocaleDateString()
+  return formatTimestampForDisplay(value, timezone)
 }
 
 /** Mirrors legacy's `splitTagsByNamespace` + `buildTagsDiv` (`~/LANraragi/public/js/mod/common.js`)
@@ -84,6 +84,11 @@ function formatTagValue(namespace: string, value: string): string {
  * rating-star link reads like a broken/dead link at a glance, which the star icons alone don't
  * need to invite. */
 function TagsTable({ tags }: { tags: string }) {
+  // Server timezone for `date_added`/`timestamp` tag display + search-URL date-range conversion
+  // (see `lib/tagFormat.ts`'s `formatTimestampForDisplay`/`getTagSearchURL`). Falls back to the
+  // browser's local timezone if settings haven't loaded yet, matching the pre-feature behavior.
+  const settings = useSettings()
+  const timezone = settings.data?.timezone ?? ''
   if (!tags) return null
   const byNamespace = new Map<string, string[]>()
   for (const raw of tags.split(',')) {
@@ -129,7 +134,7 @@ function TagsTable({ tags }: { tags: string }) {
                         real, independently-discovered bug, not a copy of an already-fixed one). */}
                     {namespace === 'source' ? (
                       <a
-                        href={getTagSearchURL(namespace, value)}
+                        href={getTagSearchURL(namespace, value, timezone)}
                         target="_blank"
                         rel="noreferrer"
                         onClick={(e) => e.stopPropagation()}
@@ -137,8 +142,8 @@ function TagsTable({ tags }: { tags: string }) {
                         {value}
                       </a>
                     ) : (
-                      <a href={getTagSearchURL(namespace, value)} onClick={(e) => e.stopPropagation()}>
-                        {formatTagValue(namespace, value)}
+                      <a href={getTagSearchURL(namespace, value, timezone)} onClick={(e) => e.stopPropagation()}>
+                        {formatTagValue(namespace, value, timezone)}
                       </a>
                     )}
                   </div>

@@ -32,6 +32,45 @@ export function buildNamespacedTag(namespace: string, tag: string): string {
   return namespace !== '' && namespace !== 'other' ? `${namespace}:${tag}` : tag
 }
 
+/** Regex matching the timestamp namespaces legacy treats as date values (`buildTagsDiv`:
+ * `/^(date|time)/`). Kept here so callers that need to know "is this namespace a timestamp?" for
+ * display/search-URL decisions don't each re-derive it. */
+export const TIMESTAMP_NAMESPACE = /^(date|time)/i
+
+/** Formats a Unix-seconds timestamp as `yyyy-mm-dd` in the given IANA timezone, using the
+ * browser's native `Intl.DateTimeFormat` (which understands any IANA id `chrono-tz` on the
+ * backend also accepts — `Asia/Tokyo`, `UTC`, etc.). Falls back to the raw value if it isn't a
+ * number, and to the browser's local timezone if `timezone` is empty/unset (matches the
+ * pre-timezone-setting behavior exactly). */
+export function formatTimestampForDisplay(value: string, timezone: string): string {
+  const seconds = Number(value)
+  if (!Number.isFinite(seconds)) return value
+  const options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: timezone || undefined,
+  }
+  // `Intl` emits in the locale's own field order (e.g. `7/20/2026` for en-US); force `yyyy-mm-dd`
+  // by reading the parts back out and reassembling — `formatToParts` is the stable way to do this
+  // regardless of locale.
+  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(new Date(seconds * 1000))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+/** Inverse of `formatTimestampForDisplay` for search-URL purposes: a timestamp namespace's
+ * displayed value is a `yyyy-mm-dd` date, and clicking it should search that whole calendar day
+ * (via the backend's `date_added:YYYY-MM-DD` date-range syntax), not the bare second-level
+ * timestamp. For non-timestamp namespaces this returns the raw value unchanged. */
+export function tagValueForSearch(namespace: string, value: string, timezone: string): string {
+  if (!TIMESTAMP_NAMESPACE.test(namespace)) return value
+  return formatTimestampForDisplay(value, timezone)
+}
+
+/** Back-compat overload — the previous signature (no timezone) preserved so existing call sites
+ * that haven't been threaded through `useSettings` yet keep compiling; renders in the browser's
+ * local timezone exactly as before. Prefer `formatTimestampForDisplay` for new code. */
 export function convertTimestamp(value: string): string {
   const seconds = Number(value)
   if (!Number.isFinite(seconds)) return value
@@ -48,11 +87,15 @@ export interface ColorCodedTag {
  * else to show), sorted alphabetically by namespace. Returns structured data instead of an HTML
  * string (this is React, not string-templated markup) — callers render each entry as
  * `<span className="{namespace}-tag">`, matching the CSS class names legacy's own theme
- * stylesheets already define. */
-export function colorCodeTags(tags: string | null | undefined): ColorCodedTag[] {
+ * stylesheets already define.
+ *
+ * `timezone` (optional) formats timestamp-namespace values as `yyyy-mm-dd` in the server's
+ * configured timezone via [`formatTimestampForDisplay`]; omit it to keep the legacy browser-local
+ * `toLocaleDateString` behavior. */
+export function colorCodeTags(tags: string | null | undefined, timezone?: string): ColorCodedTag[] {
   const byNamespace = splitTagsByNamespace(tags)
   const allKeys = Object.keys(byNamespace)
-  const filteredKeys = allKeys.filter((k) => !/^(date|time)/.test(k))
+  const filteredKeys = allKeys.filter((k) => !TIMESTAMP_NAMESPACE.test(k))
   const keysToShow = (filteredKeys.length ? filteredKeys : allKeys).sort()
 
   const out: ColorCodedTag[] = []
@@ -60,7 +103,11 @@ export function colorCodeTags(tags: string | null | undefined): ColorCodedTag[] 
     for (const value of byNamespace[key]) {
       out.push({
         namespace: key.toLowerCase(),
-        text: /^(date|time)/.test(key) ? convertTimestamp(value) : value,
+        text: TIMESTAMP_NAMESPACE.test(key)
+          ? timezone !== undefined
+            ? formatTimestampForDisplay(value, timezone)
+            : convertTimestamp(value)
+          : value,
       })
     }
   }
@@ -68,11 +115,24 @@ export function colorCodeTags(tags: string | null | undefined): ColorCodedTag[] 
 }
 
 /** Ports `getTagSearchURL` — a `source:` tag's value is an external link (opened as-is, restoring
- * a `https://` scheme if missing); every other namespace searches the library for that tag. */
-export function getTagSearchURL(namespace: string, tag: string): string {
-  const namespacedTag = buildNamespacedTag(namespace, tag)
-  if (namespace !== 'source') {
-    return `/?q=${encodeURIComponent(namespacedTag)}$`
+ * a `https://` scheme if missing); every other namespace searches the library for that tag.
+ *
+ * `timezone` (optional) reroutes a timestamp-namespace tag's search URL through the backend's
+ * `date_added:YYYY-MM-DD` date-range syntax (a whole calendar day in that timezone) instead of the
+ * bare second-level timestamp the tag actually stores — so clicking a displayed `2026-07-20`
+ * finds every archive added that day, not just the exact second this one was. */
+export function getTagSearchURL(namespace: string, tag: string, timezone?: string): string {
+  if (namespace === 'source') {
+    return /^https?:\/\//.test(tag) ? tag : `https://${tag}`
   }
-  return /^https?:\/\//.test(tag) ? tag : `https://${tag}`
+  // Timestamp namespaces get rerouted through the date-range syntax when a timezone is available —
+  // and that syntax (`date_added:2026-07-20`) must NOT carry a trailing `$`, since `$` would make
+  // the grammar treat it as an exact tag match (against an `INDEX_date?added:2026-07-20` key that
+  // doesn't exist) instead of the date-range branch in `token_matches`. Plain (non-timestamp)
+  // namespaces keep the `$` exact-match suffix as before.
+  const isTimestamp = timezone !== undefined && TIMESTAMP_NAMESPACE.test(namespace)
+  const searchValue = isTimestamp ? tagValueForSearch(namespace, tag, timezone) : tag
+  const suffix = isTimestamp ? '' : '$'
+  const namespacedTag = buildNamespacedTag(namespace, searchValue)
+  return `/?q=${encodeURIComponent(namespacedTag)}${suffix}`
 }

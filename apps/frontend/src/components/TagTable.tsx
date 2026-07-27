@@ -1,20 +1,16 @@
+import { useSettings } from '../api/hooks'
 import { parseRating } from '../lib/rating'
-import { getTagSearchURL, splitTagsByNamespace } from '../lib/tagFormat'
+import { formatTimestampForDisplay, getTagSearchURL, splitTagsByNamespace, TIMESTAMP_NAMESPACE } from '../lib/tagFormat'
 import StarRatingDisplay from './StarRating'
-
-// Namespaces treated as timestamps for display (legacy `buildTagsDiv`: `/^(date|time)/.test(key)`
-// converts the tag value through a date formatter instead of printing it raw).
-const TIMESTAMP_NAMESPACE = /^(date|time)/i
 
 function displayNamespace(namespace: string): string {
   if (namespace === 'date_added') return 'Date Added'
   return namespace.charAt(0).toUpperCase() + namespace.slice(1)
 }
 
-function formatTagValue(namespace: string, value: string): string {
+function formatTagValue(namespace: string, value: string, timezone: string): string {
   if (!TIMESTAMP_NAMESPACE.test(namespace)) return value
-  const ms = Number(value) * 1000
-  return Number.isNaN(ms) ? value : new Date(ms).toLocaleDateString()
+  return formatTimestampForDisplay(value, timezone)
 }
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
@@ -38,6 +34,10 @@ export default function TagTable({
   tags: string
   onSearchTag?: (namespace: string, value: string) => void
 }) {
+  // Server timezone for timestamp-namespace display + search-URL conversion — see
+  // `ArchiveOverviewOverlay.tsx`'s own `TagsTable` for the same pattern.
+  const settings = useSettings()
+  const timezone = settings.data?.timezone ?? ''
   const byNamespace = splitTagsByNamespace(tags)
   const namespaces = Object.keys(byNamespace).sort()
   if (namespaces.length === 0) return null
@@ -60,7 +60,7 @@ export default function TagTable({
               // broken/dead link at a glance and the star icons alone don't need to invite.
               <div className="gt">
                 <a
-                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? '')}
+                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? '', timezone)}
                   onClick={(e) => {
                     if (!onSearchTag) return
                     e.preventDefault()
@@ -87,7 +87,7 @@ export default function TagTable({
                     </a>
                   ) : (
                     <a
-                      href={getTagSearchURL(namespace, value)}
+                      href={getTagSearchURL(namespace, value, timezone)}
                       onClick={(e) => {
                         // A real `href` (rather than legacy's placeholder `href="#"`) so
                         // middle-click/right-click/hover-preview all resolve to the actual search
@@ -101,7 +101,7 @@ export default function TagTable({
                       }}
                       style={{ wordBreak: 'break-all', cursor: onSearchTag ? 'pointer' : undefined }}
                     >
-                      {formatTagValue(namespace, value)}
+                      {formatTagValue(namespace, value, timezone)}
                     </a>
                   )}
                 </div>

@@ -4,6 +4,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
 use axum::Router;
+use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_search::engine::{search, SearchParams};
 use serde::Deserialize;
 use serde_json::json;
@@ -94,6 +95,19 @@ async fn build_params(
         Some(id) => state.repos.categories.get(id).await?,
         None => None,
     };
+    // `date_added:YYYY-MM-DD` date-range tokens resolve to a timestamp range in this timezone —
+    // read from the same `LRR_CONFIG` hash as the Settings page writes, defaulting to UTC if the
+    // field isn't set yet (e.g. a Redis DB written before this feature existed).
+    let timezone = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(lanrurugi_storage::keys::CONFIG_KEY, "timezone")
+            .await
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "UTC".to_string()),
+        Err(_) => "UTC".to_string(),
+    };
     Ok(SearchParams {
         filter: q.filter.clone().unwrap_or_default(),
         category,
@@ -103,6 +117,7 @@ async fn build_params(
         untaggedonly: q.untaggedonly.unwrap_or(false),
         hidecompleted: q.hidecompleted.unwrap_or(false),
         groupby_tanks: q.groupby_tanks.unwrap_or(true),
+        timezone,
     })
 }
 

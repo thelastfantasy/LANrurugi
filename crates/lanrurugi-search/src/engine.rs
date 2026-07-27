@@ -25,7 +25,7 @@ pub enum SearchError {
 
 type Result<T> = std::result::Result<T, SearchError>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SearchParams {
     pub filter: String,
     pub category: Option<Category>,
@@ -35,6 +35,27 @@ pub struct SearchParams {
     pub untaggedonly: bool,
     pub hidecompleted: bool,
     pub groupby_tanks: bool,
+    /// IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"`) used only by `date_added:YYYY-MM-DD`
+    /// date-range tokens — the day an archive was added is computed in this timezone, not the
+    /// viewer's browser timezone, so two viewers always agree on which archives belong to a given
+    /// searched date. API layer reads this from the `timezone` setting; defaults to UTC upstream.
+    pub timezone: String,
+}
+
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            filter: String::new(),
+            category: None,
+            sortby: None,
+            order_desc: false,
+            newonly: false,
+            untaggedonly: false,
+            hidecompleted: false,
+            groupby_tanks: true,
+            timezone: "UTC".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +144,14 @@ pub async fn search(
         if filtered.is_empty() {
             break;
         }
-        let ids = token_matches(&mut archive_conn, &mut search_conn, token, &filtered).await?;
+        let ids = token_matches(
+            &mut archive_conn,
+            &mut search_conn,
+            token,
+            &filtered,
+            &params.timezone,
+        )
+        .await?;
         if ids.is_empty() && !token.isneg {
             filtered.clear();
             break;
@@ -161,14 +189,42 @@ pub async fn search(
     })
 }
 
-/// pages:/read: numeric filters plus the general tag-index/title-fuzzy-match lookup, matching
-/// `search_uncached`'s per-token logic.
+/// pages:/read: numeric filters, the additive `date_added:YYYY-MM-DD` date-range filter, and the
+/// general tag-index/title-fuzzy-match lookup, matching `search_uncached`'s per-token logic (the
+/// date-range branch is an additive improvement over legacy, which has no "search by calendar day"
+/// at all — see [`parse_date_range`]).
 async fn token_matches(
     archive_conn: &mut deadpool_redis::Connection,
     search_conn: &mut deadpool_redis::Connection,
     token: &Token,
     scope: &HashSet<String>,
+    timezone: &str,
 ) -> Result<HashSet<String>> {
+    if let Some((start, end)) = parse_date_range(&token.tag, timezone) {
+        let mut ids = HashSet::new();
+        for id in scope {
+            if id.starts_with("TANK") {
+                continue;
+            }
+            // `date_added` lives inside the archive's comma-separated `tags` string as
+            // `date_added:<unix_seconds>`, not as its own Redis hash field — so unlike
+            // `pages:`/`read:` (which read a dedicated `pagecount`/`progress` field) this has to
+            // scan the tags string for the matching namespace. Tolerates a malformed/missing
+            // numeric value (treated as not matching) rather than erroring, matching the rest of
+            // this function's own `unwrap_or_default()` resilience.
+            let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+            let matches = tags.split(',').any(|t| {
+                t.trim()
+                    .strip_prefix("date_added:")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .is_some_and(|ts| ts >= start && ts < end)
+            });
+            if matches {
+                ids.insert(id.clone());
+            }
+        }
+        return Ok(ids);
+    }
     if let Some((col, op, value)) = parse_numeric_filter(&token.tag) {
         let mut ids = HashSet::new();
         for id in scope {
@@ -241,6 +297,44 @@ async fn token_matches(
     }
 
     Ok(ids)
+}
+
+/// Parses an additive `date_added:YYYY-MM-DD` token into the half-open Unix-timestamp range
+/// `[start, end)` covering that calendar day in the given IANA timezone — returns `None` for any
+/// tag that isn't exactly that shape (other namespaces, partial dates, comparison operators, or
+/// the bare timestamp form `date_added:1784871857` all fall through to the existing numeric/tag
+/// paths). The day boundaries (00:00:00 inclusive, 00:00:00 next day exclusive) are computed in
+/// `timezone`, then converted back to absolute UTC seconds — which is what `date_added` tags
+/// actually store — so two viewers in different timezones searching the same string resolve to
+/// the same set of archives, by design (see `SearchParams::timezone`'s own docs for the why).
+///
+/// Legacy LANraragi has no equivalent — its `date_added:` is a plain Unix-timestamp tag with no
+/// calendar-day search at all; this is a purely additive improvement, not a port.
+fn parse_date_range(tag: &str, timezone: &str) -> Option<(u64, u64)> {
+    let (ns, rest) = tag.split_once(':')?;
+    // `token.tag` arrives here *after* `grammar::normalize` has already rewritten every `_` to `?`
+    // (legacy's own glob-escape convention — see `grammar.rs`), so `date_added:` shows up as
+    // `date?added:`. Reverse that rewrite on the namespace half only before comparing, so the
+    // literal `date_added` namespace is recognized without disturbing the `?` wildcard semantics
+    // the rest of the search engine depends on for actual wildcard queries.
+    let ns = ns.replace('?', "_");
+    if ns != "date_added" {
+        return None;
+    }
+    let date = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d").ok()?;
+    let tz: chrono_tz::Tz = timezone.parse().ok().unwrap_or(chrono_tz::UTC);
+    let day_start = date
+        .and_hms_opt(0, 0, 0)?
+        .and_local_timezone(tz)
+        .single()?
+        .timestamp() as u64;
+    let day_end = date
+        .succ_opt()?
+        .and_hms_opt(0, 0, 0)?
+        .and_local_timezone(tz)
+        .single()?
+        .timestamp() as u64;
+    Some((day_start, day_end))
 }
 
 fn parse_numeric_filter(tag: &str) -> Option<(&'static str, &'static str, u32)> {

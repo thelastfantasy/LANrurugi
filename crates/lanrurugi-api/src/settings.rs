@@ -86,6 +86,14 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     ("motd", "Welcome to this Library running LANrurugi!"),
     ("apikey", ""),
     ("excludednamespaces", "source, date_added"),
+    // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
+    // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
+    // date-range handling) so that "the day an archive was added" is unambiguous regardless of
+    // where the server happens to be deployed or which timezone the *viewer's* browser is in.
+    // Defaults to UTC (timezone-independent) — a single admin-configured value shared across all
+    // viewers, not per-user: two users looking at the same tag see the same `yyyy-mm-dd` string,
+    // matching the same date-range a search by that string would resolve to.
+    ("timezone", "UTC"),
     ("tagrules", "-already uploaded;-forbidden content;-incomplete;-ongoing;-complete;-various;-digital;-translated;-russian;-chinese;-portuguese;-french;-spanish;-italian;-vietnamese;-german;-indonesian"),
 ];
 
