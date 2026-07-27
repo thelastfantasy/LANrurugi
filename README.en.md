@@ -175,6 +175,30 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
 - **Search filter state round-trips through the browser's real back/forward history** via React
   Router's own `navigate()`, rather than a `replaceState`-only implementation that couldn't be
   navigated with the back button at all.
+- **A full-page zoom preview (lightbox) on the reader overview.** Clicking a magnifying-glass icon
+  on any page-grid thumbnail opens a large preview + current-page info (page number, filename,
+  resolution, size, chapter) plus a fast-scrubbing, hover-to-preview horizontal filmstrip gallery
+  — none of it disturbing the underlying overview modal's own scroll position or actual reading
+  progress. Legacy's own thumbnail grid is too small to judge chapter start/end purely by content;
+  legacy has no equivalent feature at all.
+- **Several real chapter (ToC) management improvements**: delete/edit now lists every chapter in
+  the archive to pick from, instead of legacy's own real limitation of only ever operating on
+  "whichever chapter the reader is currently scrolled into" (`getCurrentChapter()`, not a porting
+  gap); one-click presets (cover/back cover/table of contents/color pages/omake/afterword/
+  illustration + a chapter-N dropdown) or number-key shortcuts (0 = table of contents, 1–9 = that
+  chapter) for common chapter types; preset-set chapter titles are now stored as reserved internal
+  identifiers (`toc`/`c1`–`c20`) and deduped by re-write (re-setting "Chapter 4" moves it instead
+  of leaving a stale duplicate behind), with the frontend mapping them back to real localized
+  display text — these preset entries can't be renamed through the manual-edit dialog (that would
+  break the dedup semantics) and must be deleted and re-applied via a preset instead.
+- **`date_added` now supports calendar-day search** (`date_added:2026-07-20`, resolved against a
+  server timezone configurable on the Settings page) as the timestamp range covering that day
+  00:00–24:00 in that timezone; legacy's own `date_added` is a bare Unix-seconds tag with no
+  concept of "by day" search at all. Tag display and its search link now consistently show/resolve
+  as `yyyy-mm-dd` in that same timezone.
+- **A "Mark as Read"/"Mark as Unread" context-menu item on Library grid cards**, setting reading
+  progress directly to the last page or 0 — legacy has no way to manually toggle read status
+  outside of actually paging through the archive.
 
 ### Testing infrastructure
 
