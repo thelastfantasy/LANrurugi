@@ -99,9 +99,6 @@ jobs:
   frontend:
     name: Frontend (eslint, build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/frontend
     steps:
       - uses: actions/checkout@v4
 
@@ -110,17 +107,28 @@ jobs:
           install: true
           cache: true
 
+      # Every pnpm invocation below runs from the repo root with `--filter`, never with cwd inside
+      # apps/frontend (`working-directory:` on a step, or `defaults.run.working-directory`) —
+      # pnpm-lock.yaml and pnpm-workspace.yaml both live at the repo root, and pnpm 11.10's
+      # workspace detection is unreliable when invoked from a workspace subdirectory (confirmed
+      # via `act` + manual repro: `pnpm root -w` run from apps/frontend resolves back to
+      # apps/frontend/node_modules instead of the real root). Concretely this broke two things
+      # when cwd was apps/frontend: `--frozen-lockfile` compared package.json against a lockfile
+      # it treated as non-workspace-shaped, falsely reporting every real dependency as "newly
+      # added" (e.g. zod); and plain `pnpm run <script>` re-triggers pnpm's own deps-status-check
+      # (implicit install) which then couldn't see the root pnpm-workspace.yaml's `allowBuilds`
+      # entries either, failing on `sharp`'s ignored build script even though it's allow-listed.
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
       - name: eslint
-        run: pnpm run lint
+        run: pnpm --filter lanrurugi-frontend run lint
 
       - name: build (includes tsc type-check)
-        run: pnpm run build
+        run: pnpm --filter lanrurugi-frontend run build
 
       - name: vitest (unit)
-        run: pnpm run test:unit
+        run: pnpm --filter lanrurugi-frontend run test:unit
 
   e2e:
     name: Frontend E2E (Playwright)
@@ -162,8 +170,9 @@ jobs:
         if: always()
         run: scripts/sccache-summary.sh
 
+      # Must run from the repo root — see the `frontend` job's own comment on why
+      # `working-directory: apps/frontend` breaks `--frozen-lockfile` under pnpm 11.10.
       - name: pnpm install
-        working-directory: apps/frontend
         run: pnpm install --frozen-lockfile
 
       # Playwright's own browser downloads (~300MB combined for Chromium+Firefox) are the single
@@ -176,24 +185,21 @@ jobs:
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('apps/frontend/pnpm-lock.yaml') }}
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright browsers
-        working-directory: apps/frontend
         run: |
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            pnpm exec playwright install-deps chromium firefox
+            pnpm --filter lanrurugi-frontend exec playwright install-deps chromium firefox
           else
-            pnpm exec playwright install --with-deps chromium firefox
+            pnpm --filter lanrurugi-frontend exec playwright install --with-deps chromium firefox
           fi
 
       - name: Build frontend
-        working-directory: apps/frontend
-        run: pnpm run build
+        run: pnpm --filter lanrurugi-frontend run build
 
       - name: playwright test
-        working-directory: apps/frontend
-        run: pnpm run test:e2e
+        run: pnpm --filter lanrurugi-frontend exec playwright test
 
       - name: Upload Playwright report
         if: failure()
