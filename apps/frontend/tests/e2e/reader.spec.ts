@@ -59,6 +59,11 @@ test.describe('reader', { tag: '@reader' }, () => {
   test('fit-mode switching changes rendered image sizing and persists', async ({ page }) => {
     const id = await uploadArchive(page, 'sample.cbz')
     await page.goto(`/reader/${id}`)
+    // The reader opens with the Archive Overview overlay shown by default (readerSettings'
+    // showOverlayByDefault, matching legacy) — its full-screen #overlay-shade backdrop intercepts
+    // clicks on everything behind it, including the toolbar. Dismiss it (same Escape handling the
+    // reader itself wires up) before interacting with the toolbar.
+    await page.keyboard.press('Escape')
 
     await page.click('a[title="Reader Options"]')
     await page.click('input[value="Width"]')
@@ -69,6 +74,7 @@ test.describe('reader', { tag: '@reader' }, () => {
     expect(widthValue).toBe('100%')
 
     await page.reload()
+    await page.keyboard.press('Escape')
     await page.click('a[title="Reader Options"]')
     const widthButton = page.locator('input[value="Width"]')
     await expect(widthButton).toHaveClass(/toggled/)

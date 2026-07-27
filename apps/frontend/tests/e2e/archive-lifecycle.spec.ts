@@ -45,6 +45,11 @@ test.describe('archive lifecycle', { tag: '@archive-lifecycle' }, () => {
     expect(deleteRes.ok()).toBe(true)
 
     await page.goto(`/reader/${survivorId}`)
+    // The reader opens with the Archive Overview overlay shown by default (readerSettings'
+    // showOverlayByDefault, matching legacy) — its full-screen #overlay-shade backdrop intercepts
+    // clicks on everything behind it, including the "Switch to another random archive" link this
+    // test needs to click. Dismiss it first (same Escape handling the reader itself wires up).
+    await page.keyboard.press('Escape')
     const [randomResponse] = await Promise.all([
       page.waitForResponse((r) => r.url().includes('/api/search/random')),
       page.getByText('Switch to another random archive').click(),

@@ -20,10 +20,14 @@ test.describe('upload', { tag: '@upload' }, () => {
 
   test('an archive larger than the 2MB default body limit uploads successfully', async ({ page }) => {
     // Pad a real, valid zip fixture past axum's 2MB default so a regression in the override is
-    // actually exercised (over 2MB, not merely "a normal-sized archive").
+    // actually exercised (over 2MB, not merely "a normal-sized archive"). The filename carries a
+    // timestamp specifically so it's unique against whatever the download queue panel's
+    // worker-scoped backend already has queued from other tests sharing the same worker/backend
+    // instance (queue history persists in Redis for the worker's whole lifetime, not per-test).
     const original = fs.readFileSync(fixturePath('sample.zip'))
     const padded = Buffer.concat([original, Buffer.alloc(3 * 1024 * 1024)])
-    const tmpPath = path.join(os.tmpdir(), `oversized-${Date.now()}.zip`)
+    const uniqueName = `oversized-${Date.now()}`
+    const tmpPath = path.join(os.tmpdir(), `${uniqueName}.zip`)
     fs.writeFileSync(tmpPath, padded)
 
     try {
@@ -31,7 +35,14 @@ test.describe('upload', { tag: '@upload' }, () => {
       const fileInput = page.locator('input[type="file"]')
       await fileInput.setInputFiles(tmpPath)
 
-      await expect(page.locator('td', { hasText: 'Click here to edit metadata.' })).toBeVisible({
+      // The local-upload result UI was rewritten (issue #2: uploads now share the download
+      // queue's own persisted-state panel, not a standalone <table>) — a `done` row renders as a
+      // green bar whose whole title is a link straight to the reader, not a separate "Click here
+      // to edit metadata." cell. Match the current UI's real success signal instead, scoped to
+      // this test's own uniquely-named upload — the panel accumulates rows from every prior test
+      // that shared this worker's backend, so an unscoped `a[href^="/reader/"]` locator matches
+      // several unrelated rows (strict-mode violation) rather than resolving unambiguously.
+      await expect(page.getByRole('link', { name: new RegExp(uniqueName) })).toBeVisible({
         timeout: 30_000,
       })
     } finally {
