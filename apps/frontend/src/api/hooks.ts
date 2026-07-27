@@ -203,6 +203,31 @@ export function useUpdateProgress(id: string | null) {
   })
 }
 
+/** Same endpoint as `useUpdateProgress`, but not bound to one archive at mount time — used by the
+ * Library grid's "Mark as Read"/"Mark as Unread" context-menu item, which operates on whichever
+ * archive was right-clicked rather than a single archive the whole component is scoped to.
+ *
+ * Also invalidates every `['search', ...]` query, not just `['archives']` — the Library page's
+ * own main grid and "On Deck"/etc. filters go through `useSearch` (query key `['search',
+ * options]`, one distinct key per options object), not `useArchives`'s plain `['archives']`; a
+ * real, live-confirmed bug (this mutation originally only invalidated `['archives']`, matching
+ * `useUpdateProgress`'s own pre-existing pattern above — but nothing in the Library page actually
+ * queries under that key, so the grid's displayed progress silently kept showing the pre-mutation
+ * value until an unrelated refetch happened to occur). A `predicate` matching on the query key's
+ * first element is needed since the second element (the full `SearchOptions` object) varies per
+ * distinct search/filter/sort combination and there's no single exact key to invalidate. */
+export function useSetArchiveProgress() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson('PUT', `/archives/${id}/progress/${page}`),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === 'search' })
+    },
+  })
+}
+
 export interface SearchOptions {
   filter?: string
   category?: string

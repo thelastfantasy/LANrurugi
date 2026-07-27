@@ -461,6 +461,8 @@
   "Max upload size (MB):": "最大上传大小（MB）：",
   "Maximum <br>Cache Size": "最大<br>缓存大小",
   "Maximum Cache Size": "最大缓存大小",
+  "Mark as Read": "标记为已读",
+  "Mark as Unread": "标记为未读",
   "Merge Archives into Tankoubon": "将档案合并为单行本",
   "Merge selection into a Tankoubon": "将选择合并为单行本",
   "Metadata Plugins": "元数据插件",

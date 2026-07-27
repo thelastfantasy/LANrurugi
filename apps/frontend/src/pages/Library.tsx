@@ -17,6 +17,7 @@ import {
   useLoginStatus,
   useSearch,
   useServerInfo,
+  useSetArchiveProgress,
   useSettings,
   useStats,
   useTankoubons,
@@ -311,11 +312,22 @@ function CarouselCard({
   cropThumbs,
   onContextMenu,
   onOpen,
+  onSearchTag,
 }: {
   archive: ArchiveMetadata
   cropThumbs: boolean
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
+  /** Optional — `SelectedArchiveSlide`'s own multi-select-mode selection list doesn't have a
+   * meaningful "search" action for its slides (clicking there removes the archive from the
+   * selection instead, via `onOpen`), so it's fine to omit and fall back to a no-op. The
+   * On Deck/Random/Inbox/Untagged carousel *does* wire this through to the real in-app search —
+   * previously a bare no-op there too, a real, live-reported bug: clicking a tag in this
+   * carousel's tooltip visibly did nothing at all (worse than the main grid's own tags, which at
+   * least still navigate via a real `href` on middle/right-click even before `onSearchTag` was
+   * fixed — this carousel's `<a>` click handler calls `e.preventDefault()` unconditionally, so a
+   * no-op handler swallowed the click with no fallback whatsoever). */
+  onSearchTag?: (namespacedTag: string) => void
 }) {
   return (
     <ArchiveCard
@@ -326,7 +338,7 @@ function CarouselCard({
       onToggleSelect={() => {}}
       onContextMenu={onContextMenu}
       onOpen={onOpen}
-      onSearchTag={() => {}}
+      onSearchTag={onSearchTag ?? (() => {})}
     />
   )
 }
@@ -392,6 +404,8 @@ function RecentlyAddedCarousel({
   onRunBatch,
   onMerge,
   canMerge,
+  onSearchTag,
+  refreshKey,
 }: {
   filter: string
   category: string
@@ -408,6 +422,13 @@ function RecentlyAddedCarousel({
   onRunBatch: () => void
   onMerge: () => void
   canMerge: boolean
+  onSearchTag: (namespacedTag: string) => void
+  /** Bumped by the parent whenever something outside this component's own control (the
+   * "Mark as Read"/"Mark as Unread" context-menu action, currently the only such case) changes
+   * archive progress data this carousel's own fetch effect has no other way to learn about — this
+   * carousel doesn't use TanStack Query (a plain `useEffect`+`fetch`, unlike the main grid's own
+   * `useSearch`), so a parent-side `invalidateQueries` call has no effect on it at all. */
+  refreshKey: number
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(() => localStorage.getItem(CAROUSEL_OPEN_KEY) === '1')
@@ -507,7 +528,7 @@ function RecentlyAddedCarousel({
       cancelled = true
     }
      
-  }, [isOpen, mode, filter, category, hideCompleted, groupbyTanks, nonce, multiSelect])
+  }, [isOpen, mode, filter, category, hideCompleted, groupbyTanks, nonce, multiSelect, refreshKey])
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t('On Deck'),
@@ -534,7 +555,7 @@ function RecentlyAddedCarousel({
         <div
           className={`collapsible-title caret-right${isOpen ? ' active' : ''}`}
           onClick={() => setOpen((o) => !o)}
-          style={{ display: 'flex', flex: '1 1 0', overflow: 'hidden' }}
+          style={{ display: 'flex', alignItems: 'center', flex: '1 1 0', overflow: 'hidden' }}
         >
           {/* Legacy's `enterSelectionCarouselMode`/`exitSelectionCarouselMode` (`index.js`) swap
               this same header's icon/text in place rather than showing a second header — MSM is a
@@ -724,6 +745,7 @@ function RecentlyAddedCarousel({
                       cropThumbs={cropThumbs}
                       onContextMenu={(e, archive) => onContextMenu(e, archive, 'carousel')}
                       onOpen={onOpen}
+                      onSearchTag={onSearchTag}
                     />
                   </SwiperSlide>
                 ))}
@@ -756,6 +778,7 @@ function ArchiveContextMenu({
   onRatingChange,
   onToggleSelection,
   isSelected,
+  onSetProgress,
 }: {
   state: ContextMenuState
   categories: { id: string; name: string; search: string | null; archives: string[] }[] | undefined
@@ -775,6 +798,17 @@ function ArchiveContextMenu({
   onRatingChange: (archiveId: string, isTank: boolean, rating: string | null) => void
   onToggleSelection: (id: string) => void
   isSelected: boolean
+  /** "Mark as Read"/"Mark as Unread" — the actual mutation lives in the parent `Library`
+   * component, not here, because `onClose()` (called first, on the same click) unmounts this
+   * whole menu immediately; a `useMutation` instance owned by *this* component would have its
+   * observer torn down before the mutation's async response ever arrives, silently dropping
+   * whatever `onSuccess` callback was passed to that particular `mutate()` call (TanStack Query's
+   * own `hasListeners()` guard on delivering per-call `mutate(vars, { onSuccess })` callbacks — a
+   * real, live-confirmed bug: the write to Redis genuinely succeeded and the main grid's `invalidate
+   * Queries`-driven refetch picked it up fine since that mutation is defined in the *parent*, but
+   * a second effect meant to also refresh the On Deck carousel never fired at all, because it was
+   * wired through this component's own now-torn-down mutation instance instead). */
+  onSetProgress: (archiveId: string, page: number) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -854,6 +888,24 @@ function ArchiveContextMenu({
         >
           <i className="fa fa-book-open" style={{ width: 18 }}></i> {t('Read')}
         </PopupMenuItem>
+        {/* Not offered on a Tankoubon — it's an aggregate container with no single `progress`/
+            `pagecount` of its own (each member archive tracks its own separately), so "mark this
+            one thing as read" doesn't have a single well-defined target the way it does for a
+            plain archive. Toggles on `progress > 0` (any progress at all counts as "not unread"),
+            not the 85%-complete threshold `hidecompleted`/On Deck use elsewhere — those answer a
+            different question ("is this basically finished, worth hiding from an in-progress
+            list") than this menu item's own binary read/unread state. */}
+        {!isTank && archive.pagecount > 0 && (
+          <PopupMenuItem
+            onClick={() => {
+              onClose()
+              onSetProgress(archive.arcid, archive.progress > 0 ? 0 : archive.pagecount)
+            }}
+          >
+            <i className={`fa ${archive.progress > 0 ? 'fa-eye-slash' : 'fa-eye'}`} style={{ width: 18 }}></i>{' '}
+            {archive.progress > 0 ? t('Mark as Unread') : t('Mark as Read')}
+          </PopupMenuItem>
+        )}
         {!isTank && (
           <PopupMenuItem
             onClick={() => {
@@ -1315,7 +1367,19 @@ export default function Library() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; isTank: boolean } | null>(null)
+  // See `RecentlyAddedCarousel`'s own `refreshKey` prop docs — bumped after "Mark as Read"/"Mark
+  // as Unread" so the carousel's own non-TanStack-Query fetch effect re-runs and picks up the new
+  // progress value, since `invalidateQueries` alone (which the main grid's `useSearch` already
+  // responds to) has no effect on this carousel at all.
+  const [carouselRefreshKey, setCarouselRefreshKey] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const setArchiveProgress = useSetArchiveProgress()
+  function handleSetProgress(archiveId: string, page: number) {
+    setArchiveProgress.mutate(
+      { id: archiveId, page },
+      { onSuccess: () => setCarouselRefreshKey((k) => k + 1) },
+    )
+  }
 
   // First-visit context-menu tutorial toast + default-password warning — fired once per browser
   // via a `localStorage` flag for the tutorial, and every load for the default-password warning
@@ -1802,6 +1866,8 @@ export default function Library() {
         onRunBatch={runBatchOnSelection}
         onMerge={() => void mergeSelectionIntoTankoubon()}
         canMerge={canMerge}
+        onSearchTag={applyTagSearch}
+        refreshKey={carouselRefreshKey}
       />
 
       {/* The real 4%-side inset comes from each theme's own `.table-options` rule (e.g.
@@ -2005,6 +2071,7 @@ export default function Library() {
             toggleSelected(id)
           }}
           isSelected={selectedIds.has(contextMenu.archive.arcid)}
+          onSetProgress={handleSetProgress}
         />
       )}
 
