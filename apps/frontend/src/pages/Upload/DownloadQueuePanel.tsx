@@ -287,10 +287,12 @@ export default function DownloadQueuePanel({
   )
 }
 
-/** A `JobProgressBar` for a rate-limited download, wrapped in a hover tooltip showing the limit +
- * matched domain rule and a deep-link to that plugin's rate-limit settings (issue #2). Only the
- * speed figure itself is amber-highlighted (inside `JobProgressBar`); this wrapper adds the hover
- * detail + the jump-to-settings affordance the issue asks for. */
+/** A `JobProgressBar` for a rate-limited download, with a hover tooltip anchored to *just the
+ * speed figure itself* (via `JobProgressBar`'s own `speedTooltip` prop) showing the limit +
+ * matched domain rule and a deep-link to that plugin's rate-limit settings (issue #2). Deliberately
+ * not a `Tooltip` wrapped around the whole bar/row — that shadowed the title's own metadata-preview
+ * tooltip (`TooltipIfPresent` above this bar), since both triggers would then overlap the same
+ * area. */
 function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; pluginNamespace: string }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -298,8 +300,9 @@ function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; plug
   const cap = job.rate_limit_bytes_per_sec as number
   const pattern = job.rate_limit_matched_pattern
   return (
-    <Tooltip
-      label={
+    <JobProgressBar
+      job={job}
+      speedTooltip={
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 280 }}>
           <span>{t('Rate-limited to {{limit}}/s', { limit: formatBytes(cap) })}</span>
           {pattern && <span style={{ opacity: 0.85 }}>{t('Matched rule: {{pattern}}', { pattern })}</span>}
@@ -317,10 +320,7 @@ function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; plug
           </a>
         </div>
       }
-      wrapperStyle={{ display: 'block' }}
-    >
-      <JobProgressBar job={job} />
-    </Tooltip>
+    />
   )
 }
 

@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { JobRecord, JobRecordState } from '../api/types'
 import { FONT_SIZE_10PT } from '../theme'
+import Tooltip from './Tooltip'
 
 /** State → color, shared between the Jobs page's own badges/borders and this component's default
  * bar color (so a state's color only needs to change in one place). */
@@ -97,7 +99,19 @@ function computeSpeed(jobId: string, bytes: number): number | null {
   return speed
 }
 
-export function JobProgressBar({ job, color }: { job: JobRecord; color?: string }) {
+export function JobProgressBar({
+  job,
+  color,
+  speedTooltip,
+}: {
+  job: JobRecord
+  color?: string
+  /** Hover detail for a rate-limited download (issue #2) — wraps *only* the speed figure itself,
+   * not the byte-count text or the whole row, so it doesn't shadow/overlap a sibling tooltip
+   * anchored to the row (e.g. the upload queue's metadata-preview tooltip on the title above this
+   * bar). `undefined` renders the speed as plain text, same as before this prop existed. */
+  speedTooltip?: ReactNode
+}) {
   const { t } = useTranslation()
   const barColor = color ?? STATE_COLOR.active
   // Computed unconditionally (not just in the branches that render it) so every render feeds a
@@ -110,6 +124,7 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
   // speed figure itself is colored, not the surrounding byte-count/percentage text.
   const isRateLimited = job.rate_limit_bytes_per_sec != null && job.rate_limit_bytes_per_sec > 0
   const speedColor = isRateLimited ? RATE_LIMITED_SPEED_COLOR : undefined
+  const speedNode = <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
 
   if (job.downloaded_bytes != null && job.total_bytes != null && job.total_bytes > 0) {
     // One decimal place: a whole-number percentage visibly stalls between fast polling ticks
@@ -135,7 +150,13 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
           {speedLabel && (
             <>
               {' · '}
-              <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
+              {speedTooltip ? (
+                <Tooltip label={speedTooltip} wrapperStyle={{ display: 'inline' }}>
+                  {speedNode}
+                </Tooltip>
+              ) : (
+                speedNode
+              )}
             </>
           )}
         </span>
@@ -152,7 +173,13 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
           {speedLabel && (
             <>
               {' ('}
-              <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
+              {speedTooltip ? (
+                <Tooltip label={speedTooltip} wrapperStyle={{ display: 'inline' }}>
+                  {speedNode}
+                </Tooltip>
+              ) : (
+                speedNode
+              )}
               {')'}
             </>
           )}
