@@ -43,6 +43,15 @@ function bytesPerSecToKb(bytesPerSec: number): string {
   return (bytesPerSec / 1024).toString()
 }
 
+function rowsFromOptions(options: PluginOptions): DomainRuleFormRow[] {
+  return options.domain_rules.map((r) => ({
+    pattern: r.pattern ?? '',
+    max_concurrent: r.max_concurrent?.toString() ?? '',
+    max_bytes_per_sec: r.max_bytes_per_sec != null ? bytesPerSecToKb(r.max_bytes_per_sec) : '',
+    description: r.description,
+  }))
+}
+
 function PluginOptionsFormBody({
   namespace,
   initial,
@@ -54,14 +63,7 @@ function PluginOptionsFormBody({
   const update = useUpdatePluginOptions(namespace)
   const reset = useResetPluginOptions(namespace)
 
-  const [rows, setRows] = useState<DomainRuleFormRow[]>(() =>
-    initial.domain_rules.map((r) => ({
-      pattern: r.pattern ?? '',
-      max_concurrent: r.max_concurrent?.toString() ?? '',
-      max_bytes_per_sec: r.max_bytes_per_sec != null ? bytesPerSecToKb(r.max_bytes_per_sec) : '',
-      description: r.description,
-    })),
-  )
+  const [rows, setRows] = useState<DomainRuleFormRow[]>(() => rowsFromOptions(initial))
   const [bundleValue, setBundleValue] = useState(initial.bundle_as_archive?.value ?? false)
   const [overwriteValue, setOverwriteValue] = useState(initial.overwrite_on_duplicate?.value ?? false)
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null)
@@ -92,7 +94,15 @@ function PluginOptionsFormBody({
     if (initial.bundle_as_archive) body.bundle_as_archive = bundleValue
     if (initial.overwrite_on_duplicate) body.overwrite_on_duplicate = overwriteValue
     try {
-      await update.mutateAsync(body)
+      const saved = await update.mutateAsync(body)
+      // Re-seed local state from the server's own response (not just leave `rows` as whatever was
+      // last typed) — the backend is the source of truth for what was actually persisted, and this
+      // is what makes a *second* Save/Reset in the same session see accurate `initial`-equivalent
+      // data instead of a stale mount-time snapshot (this component never remounts on its own; only
+      // switching which plugin's card is open does, per `PluginOptionsForm`'s `key={namespace}`).
+      setRows(rowsFromOptions(saved))
+      setBundleValue(saved.bundle_as_archive?.value ?? false)
+      setOverwriteValue(saved.overwrite_on_duplicate?.value ?? false)
     } catch (e) {
       if (e instanceof ValidationError) {
         setFieldError({ field: e.field, message: e.message })
@@ -100,6 +110,16 @@ function PluginOptionsFormBody({
         throw e
       }
     }
+  }
+
+  async function resetToDefaults() {
+    const restored = await reset.mutateAsync()
+    // Same reasoning as `save()` above — without this, deleting the only rule then clicking Reset
+    // visibly did nothing: the mutation succeeded and the React Query cache updated, but this
+    // component's own `rows` state was seeded once at mount and never re-derived from new props.
+    setRows(rowsFromOptions(restored))
+    setBundleValue(restored.bundle_as_archive?.value ?? false)
+    setOverwriteValue(restored.overwrite_on_duplicate?.value ?? false)
   }
 
   return (
@@ -222,7 +242,7 @@ function PluginOptionsFormBody({
           className="stdbtn"
           disabled={reset.isPending}
           value={t('Reset to Defaults') ?? undefined}
-          onClick={() => void reset.mutateAsync()}
+          onClick={() => void resetToDefaults()}
         />
       </div>
     </div>
