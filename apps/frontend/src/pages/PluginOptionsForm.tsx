@@ -183,7 +183,12 @@ function PluginOptionsFormBody({
       {initial.bundle_as_archive && (
         <p>
           <label>
-            <input type="checkbox" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{' '}
+            {/* `className="fa"` is what makes legacy's `config.css` (linked by this page's own
+                `useEffect`) render this as the real ON/OFF switch, matching the "Run Automatically"
+                toggle above — a plain unstyled checkbox renders as a bare browser checkbox in this
+                theme (a hollow red square with no check glyph), not a rendering failure per se, just
+                the wrong class. */}
+            <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{' '}
             {t(initial.bundle_as_archive.description)}
           </label>
         </p>
@@ -192,7 +197,7 @@ function PluginOptionsFormBody({
       {initial.overwrite_on_duplicate && (
         <p>
           <label>
-            <input type="checkbox" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{' '}
+            <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{' '}
             {t(initial.overwrite_on_duplicate.description)}
           </label>
         </p>
