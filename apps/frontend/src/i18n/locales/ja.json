@@ -164,7 +164,7 @@
   "Double": "見開き表示",
   "Download": "ダウンロード",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "このウィンドウを閉じても、ダウンロード処理は継続されます！",
   "Downloaders": "ダウンローダー",
   "Downloading file... (Job #\\${jobid})": "ファイルをダウンロードしています...（ジョブ : #${jobid}）",
@@ -303,7 +303,7 @@
   "MOTD": "本日のお知らせ",
   "Maintenance Scripts": "Maintenance Scripts",
   "Make sure the OS user running LANrurugi has read/write access to this directory.": "LANrurugi 実行ユーザーに、このディレクトリへの読み書き権限が必要です。",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "最大<br>キャッシュサイズ",
   "Merge Archives into Tankoubon": "アーカイブを単行本にまとめる",
@@ -568,5 +568,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "読了ページ数",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

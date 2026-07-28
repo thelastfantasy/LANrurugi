@@ -178,7 +178,7 @@
   "Double": "이중",
   "Download": "다운로드",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "다운로드 작업은 이 창을 닫아도 계속 진행됩니다!",
   "Downloaders": "다운로더",
   "Downloading file... (Job #\\${jobid})": "파일 다운로드 중... (작업 #${jobid})",
@@ -333,7 +333,7 @@
   "MOTD": "MOTD",
   "Maintenance Scripts": "Maintenance Scripts",
   "Make sure to set a suitable <b>timeout</b> between archives using this picker if the plugin you want to use is concerned.": "사용하려는 플러그인이 중요한 경우, 이 선택기를 사용하여 아카이브 간에 적절한 ",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "최대 <br>캐시 크기",
   "Merge Archives into Tankoubon": "단행본에 아카이브 병합",
@@ -624,5 +624,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "읽은 페이지",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

@@ -15,6 +15,10 @@ export const STATE_COLOR: Record<JobRecordState, string> = {
 const BAR_HEIGHT = 8
 const BAR_BACKGROUND = 'rgba(128,128,128,0.25)'
 const ROW_GAP = 6
+// A download subject to a configured rate limit gets its speed label rendered in this distinct
+// amber (vs. the default inherited text color) so a throttled transfer is visually distinguishable
+// from an unrestricted one at a glance (issue #2).
+const RATE_LIMITED_SPEED_COLOR = 'rgb(230, 126, 34)'
 // Below this, a speed reading is more poll-jitter than signal (e.g. two ticks landing 50ms apart
 // due to render timing, not the actual poll interval) — showing "0.0 B/s" or a wildly inflated
 // number from a near-zero time delta is worse than just omitting the speed for that one tick.
@@ -101,6 +105,11 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
   // which branch actually ends up displaying a speed.
   const speed = job.downloaded_bytes != null ? computeSpeed(job.id, job.downloaded_bytes) : null
   const speedLabel = speed != null ? t('{{rate}}/s', { rate: formatBytes(speed) }) : null
+  // Absent cap = unlimited (no rule matched, or the matched rule declared no `max_bytes_per_sec`);
+  // a present, positive cap is what the upload-queue UI highlights + tooltips (issue #2). Only the
+  // speed figure itself is colored, not the surrounding byte-count/percentage text.
+  const isRateLimited = job.rate_limit_bytes_per_sec != null && job.rate_limit_bytes_per_sec > 0
+  const speedColor = isRateLimited ? RATE_LIMITED_SPEED_COLOR : undefined
 
   if (job.downloaded_bytes != null && job.total_bytes != null && job.total_bytes > 0) {
     // One decimal place: a whole-number percentage visibly stalls between fast polling ticks
@@ -123,7 +132,12 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
         </div>
         <span style={{ fontSize: FONT_SIZE_10PT, minWidth: 120, textAlign: 'right', whiteSpace: 'nowrap' }}>
           {formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} ({pctLabel}%)
-          {speedLabel && ` · ${speedLabel}`}
+          {speedLabel && (
+            <>
+              {' · '}
+              <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
+            </>
+          )}
         </span>
       </div>
     )
@@ -135,7 +149,13 @@ export function JobProgressBar({ job, color }: { job: JobRecord; color?: string 
         <i className="fa fa-circle-notch fa-spin" aria-hidden="true"></i>
         <span style={{ fontSize: FONT_SIZE_10PT, whiteSpace: 'nowrap' }}>
           {t('{{size}} downloaded', { size: formatBytes(job.downloaded_bytes) })}
-          {speedLabel && ` (${speedLabel})`}
+          {speedLabel && (
+            <>
+              {' ('}
+              <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
+              {')'}
+            </>
+          )}
         </span>
       </div>
     )

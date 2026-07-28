@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import {
   usePluginOptions,
@@ -280,13 +280,39 @@ function PluginCard({
   dragHandleProps: DragHandleProps
 }) {
   const { t } = useTranslation()
-  const [downloadSettingsOpen, setDownloadSettingsOpen] = useState(false)
   const [scriptArg, setScriptArg] = useState('')
   const [scriptRunning, setScriptRunning] = useState(false)
+  // Deep-link target from `/config/plugins?focus=<namespace>` (the upload queue's rate-limit
+  // tooltip links here, issue #2). When this card is the focused plugin and its rate-limit section
+  // has rendered, scroll it into view and briefly flash it.
+  const [searchParams] = useSearchParams()
+  const focusNamespace = searchParams.get('focus')
+  const didFocusRef = useRef(false)
 
   const options = usePluginOptions(plugin.type === 'download' ? plugin.namespace : '')
   const hasDownloadOptions = plugin.type === 'download' && Boolean(options.data)
   const hasParameters = plugin.parameters.length > 0
+
+  // Scrolls + highlights this plugin's rate-limit section once it has rendered (i.e. once
+  // `usePluginOptions` resolves and `hasDownloadOptions` flips true) and this is the focused
+  // plugin. Pure DOM side-effect (no React state) — the section element carries its own
+  // `transition: background-color`, so setting its inline background here flashes amber and the
+  // 2.5s `setTimeout` clearing it fades smoothly. `didFocusRef` guards against re-scrolling on
+  // later polls. This is "synchronize with an external system (the DOM)" — exactly what an effect
+  // is for.
+  useEffect(() => {
+    if (!focusNamespace || focusNamespace !== plugin.namespace || !hasDownloadOptions || didFocusRef.current) return
+    const el = document.querySelector(`[data-download-settings-namespace="${CSS.escape(plugin.namespace)}"]`)
+    if (!el) return
+    didFocusRef.current = true
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    const htmlEl = el as HTMLElement
+    htmlEl.style.backgroundColor = 'rgba(230, 126, 34, 0.18)'
+    const timer = window.setTimeout(() => {
+      htmlEl.style.backgroundColor = ''
+    }, 2500)
+    return () => window.clearTimeout(timer)
+  }, [focusNamespace, plugin.namespace, hasDownloadOptions])
 
   const settings = usePluginSettings(plugin.type === 'metadata' ? plugin.namespace : '')
   const updateSettings = useUpdatePluginSettings(plugin.namespace)
@@ -333,8 +359,13 @@ function PluginCard({
           width: DRAG_HANDLE_COLUMN_WIDTH,
           flexShrink: 0,
           display: 'flex',
-          alignItems: 'center',
+          // Top-aligned (not vertically centered in the whole, possibly-tall card) so the handle
+          // sits level with the plugin's own icon/name row instead of floating in the card's
+          // vertical middle. `paddingTop` nudges it down from the very top edge to roughly match
+          // the 20px icon's own visual center, rather than sitting flush against the card's border.
+          alignItems: 'flex-start',
           justifyContent: 'center',
+          paddingTop: 6,
           cursor: isDragging ? 'grabbing' : 'grab',
           touchAction: 'none',
           fontSize: '0.9em',
@@ -387,14 +418,6 @@ function PluginCard({
               <br />
             </>
           )}
-          {hasDownloadOptions && (
-            <input
-              type="button"
-              className="stdbtn"
-              value={t('Download Settings') ?? undefined}
-              onClick={() => setDownloadSettingsOpen((o) => !o)}
-            />
-          )}
           {plugin.login_from && (
             <>
               <i className="fa fa-plug" aria-hidden="true"></i>{' '}
@@ -437,10 +460,8 @@ function PluginCard({
           </table>
         )}
 
+        {hasDownloadOptions && <PluginOptionsForm namespace={plugin.namespace} />}
         {hasParameters && <PluginParametersForm namespace={plugin.namespace} parameters={plugin.parameters} />}
-        {downloadSettingsOpen && hasDownloadOptions && (
-          <PluginOptionsForm namespace={plugin.namespace} onClose={() => setDownloadSettingsOpen(false)} />
-        )}
 
         <br />
       </span>

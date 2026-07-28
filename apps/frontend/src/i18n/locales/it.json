@@ -64,7 +64,7 @@
   "Domain Pattern": "Domain Pattern",
   "Double": "Doppio",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Duplicate Detection": "Rilevamento Duplicati",
   "EPUB support in LANrurugi is minimal": "Il supporto per EPUB in LANrurugi è minimo",
   "Edit Chapter name": "Modifica nome Capitolo",
@@ -107,7 +107,7 @@
   "Loading…": "Loading…",
   "MOTD": "Messaggio del giorno",
   "Maintenance Scripts": "Maintenance Scripts",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Volume <br>massimo della Cache",
   "Metadata saved!": "Metadati salvati!",
@@ -220,5 +220,8 @@
   "nHentai Source Converter": "nHentai Source Converter",
   "nhentai-source-converter": "nhentai-source-converter",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

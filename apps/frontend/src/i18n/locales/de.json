@@ -149,7 +149,7 @@
   "Double": "Doppelt",
   "Download": "Herunterladen",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Downloaders": "Herunterladen-Plugins",
   "Downloading file... (Job #\\${jobid})": "Datei wird heruntergeladen... (Job #${jobid})",
   "Duplicate Detection": "Duplikaterkennung",
@@ -275,7 +275,7 @@
   "M: toggle manga mode (right-to-left reading)": "M: Manga Modus umschalten (von Rechts nach Links lesen)",
   "MOTD": "MOTD",
   "Maintenance Scripts": "Maintenance Scripts",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Maximale <br>Speichergröße",
   "Merge Archives into Tankoubon": "Archive in einen Tankoubon zusammenführen",
@@ -518,5 +518,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "Seiten gelesen",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

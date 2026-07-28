@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use reqwest::Method;
 use tokio::io::AsyncWriteExt;
 
-use super::domain_rules::{resolved_key, DomainRule};
+use super::domain_rules::DomainRule;
 use super::DownloadManager;
 
 /// One resource to fetch — mirrors `contracts/plugin-download-protocol.md`'s `downloads[]`
@@ -137,7 +137,10 @@ pub async fn download_one(
     // FR-016 snapshot: acquired once, held for this whole function's lifetime (dropped when this
     // function returns/errors, at the very end of the transfer — see `_permit` below).
     let permit = manager.acquire(&hostname, rules).await;
-    let rate_limit_key = resolved_key(rules, &hostname);
+    // Reuse the permit's own `matched_pattern` (already computed once inside `acquire`) as the
+    // throttle key, rather than traversing `rules` a second time — guarantees the rate-limiter map
+    // grouping and the pattern exposed via `JobStatus` always agree (issue #2).
+    let rate_limit_key = permit.matched_pattern.clone();
 
     let method = match &req.method {
         None => Method::GET,

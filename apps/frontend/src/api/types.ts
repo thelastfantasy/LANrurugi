@@ -236,6 +236,12 @@ export interface JobRecord {
   // didn't report a size) — render an indeterminate indicator in that case, not a 0/NaN percentage.
   downloaded_bytes?: number
   total_bytes?: number
+  // Present only for a download-type job once it has started (issue #2), mirroring the backend's
+  // `rate_limit_bytes_per_sec`/`rate_limit_matched_pattern`. `rate_limit_bytes_per_sec` absent
+  // means unlimited (no matching rule, or the rule declared no cap); both absent for every non-
+  // download job. The frontend highlights the speed label and shows a tooltip when a cap is set.
+  rate_limit_bytes_per_sec?: number
+  rate_limit_matched_pattern?: string
   result: unknown | null
   error: string | null
 }

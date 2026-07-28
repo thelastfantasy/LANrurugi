@@ -4,10 +4,15 @@ import { useTranslation } from 'react-i18next'
 import { ValidationError } from '../api/client'
 import { usePluginOptions, useResetPluginOptions, useUpdatePluginOptions } from '../api/hooks'
 import type { PluginOptions, PluginOptionsUpdate } from '../api/types'
+import Tooltip from '../components/Tooltip'
+import { ICON_BUTTON_STYLE } from './Upload/shared'
 
 interface DomainRuleFormRow {
   pattern: string
   max_concurrent: string
+  // Entered/displayed in KB/s for the user's mental model (a raw bytes/sec figure runs to seven
+  // digits for even a modest limit); converted to/from the backend's bytes/sec `max_bytes_per_sec`
+  // at the form boundary (÷1024 on load, ×1024 on save).
   max_bytes_per_sec: string
   description?: string
 }
@@ -16,8 +21,9 @@ interface DomainRuleFormRow {
 // US4) — renders each domain_rules entry and the bundle_as_archive toggle (only shown when the
 // plugin's effective settings include it, i.e. only for a multi-resource-capable plugin), with
 // each field's current plugin-default-vs-user-override state (T031's `source`) and inline 422
-// validation-error display.
-export default function PluginOptionsForm({ namespace, onClose }: { namespace: string; onClose: () => void }) {
+// validation-error display. Rendered as its own visually-separated section directly under the
+// plugin card (issue #2: no extra "Download Settings" toggle/flyout layer).
+export default function PluginOptionsForm({ namespace }: { namespace: string }) {
   const { t } = useTranslation()
   const options = usePluginOptions(namespace)
 
@@ -27,17 +33,22 @@ export default function PluginOptionsForm({ namespace, onClose }: { namespace: s
   // Keyed by namespace so switching which plugin's settings are open (unmount + fresh mount)
   // re-seeds the form's local state from that plugin's own current data, without needing an
   // effect to re-sync state that's already available at mount time.
-  return <PluginOptionsFormBody key={namespace} namespace={namespace} initial={options.data} onClose={onClose} />
+  return <PluginOptionsFormBody key={namespace} namespace={namespace} initial={options.data} />
+}
+
+/** Backend `max_bytes_per_sec` (bytes/sec) → KB/s display string. Whole KB values render without a
+ * trailing `.0`; a non-divisible byte count keeps its fractional KB so nothing is silently rounded
+ * away (a 1000-byte limit would otherwise show as 0 KB). */
+function bytesPerSecToKb(bytesPerSec: number): string {
+  return (bytesPerSec / 1024).toString()
 }
 
 function PluginOptionsFormBody({
   namespace,
   initial,
-  onClose,
 }: {
   namespace: string
   initial: PluginOptions
-  onClose: () => void
 }) {
   const { t } = useTranslation()
   const update = useUpdatePluginOptions(namespace)
@@ -47,7 +58,7 @@ function PluginOptionsFormBody({
     initial.domain_rules.map((r) => ({
       pattern: r.pattern ?? '',
       max_concurrent: r.max_concurrent?.toString() ?? '',
-      max_bytes_per_sec: r.max_bytes_per_sec?.toString() ?? '',
+      max_bytes_per_sec: r.max_bytes_per_sec != null ? bytesPerSecToKb(r.max_bytes_per_sec) : '',
       description: r.description,
     })),
   )
@@ -75,7 +86,7 @@ function PluginOptionsFormBody({
         .map((r) => ({
           pattern: r.pattern.trim() || undefined,
           max_concurrent: r.max_concurrent.trim() ? Number(r.max_concurrent) : undefined,
-          max_bytes_per_sec: r.max_bytes_per_sec.trim() ? Number(r.max_bytes_per_sec) : undefined,
+          max_bytes_per_sec: r.max_bytes_per_sec.trim() ? Math.round(Number(r.max_bytes_per_sec) * 1024) : undefined,
         })),
     }
     if (initial.bundle_as_archive) body.bundle_as_archive = bundleValue
@@ -92,13 +103,33 @@ function PluginOptionsFormBody({
   }
 
   return (
-    <div className="option-flyout" style={{ padding: '8px 0' }}>
+    <div
+      // Stable anchor for deep-linking from the upload queue's rate-limit tooltip (issue #2):
+      // `routes.pluginSettings(namespace)` lands on `/config/plugins?focus=<ns>`, and Plugins.tsx
+      // scrolls this section into view + briefly highlights it.
+      data-download-settings-namespace={namespace}
+      className="option-flyout"
+      style={{
+        // A visually distinct section, not a flyout: top separator + spacing sets it apart from
+        // the plugin's description/parameters above (issue #2).
+        borderTop: '1px solid rgba(128,128,128,0.3)',
+        marginTop: 8,
+        paddingTop: 8,
+        // `transition: background-color` lets Plugins.tsx's deep-link highlight (an inline
+        // backgroundColor set then cleared 2.5s later, directly on this element) fade smoothly
+        // rather than snapping off (issue #2).
+        transition: 'background-color 0.6s ease',
+      }}
+    >
+      <h3 className="ih" style={{ fontSize: '1.0em', margin: '0 0 6px' }}>
+        {t('Download / Rate-limit Settings')}
+      </h3>
       <table className="itg" style={{ width: '100%' }}>
         <thead>
           <tr className="jtr0">
             <th>{t('Domain Pattern')}</th>
             <th>{t('Max Concurrent')}</th>
-            <th>{t('Max Bytes/sec')}</th>
+            <th>{t('Max KB/s')}</th>
             <th></th>
           </tr>
         </thead>
@@ -126,13 +157,22 @@ function PluginOptionsFormBody({
                 <input
                   className="stdinput"
                   type="number"
-                  min={1}
+                  min={0}
+                  step="any"
                   value={row.max_bytes_per_sec}
                   onChange={(e) => updateRow(i, { max_bytes_per_sec: e.target.value })}
                 />
               </td>
               <td>
-                <input type="button" className="stdbtn" value={t('Remove') ?? undefined} onClick={() => removeRow(i)} />
+                {/* Icon-only button (matches the upload queue's own row-action buttons, e.g. its
+                    "Delete"/"Remove" `fa-times`) instead of a labeled `.stdbtn` — a one-word
+                    "Remove" button at `.stdbtn`'s default min-width was far wider than the column
+                    needed. */}
+                <Tooltip label={t('Remove') ?? ''}>
+                  <button type="button" className="stdbtn" style={ICON_BUTTON_STYLE} onClick={() => removeRow(i)}>
+                    <i className="fa fa-times" aria-hidden="true"></i>
+                  </button>
+                </Tooltip>
               </td>
             </tr>
           ))}
@@ -179,7 +219,6 @@ function PluginOptionsFormBody({
           value={t('Reset to Defaults') ?? undefined}
           onClick={() => void reset.mutateAsync()}
         />
-        <input type="button" className="stdbtn" value={t('Close') ?? undefined} onClick={onClose} />
       </div>
     </div>
   )

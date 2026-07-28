@@ -132,7 +132,7 @@
   "Double": "Doble",
   "Download": "Descargar",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "¡Las descargas seguirán activas aunque cierres esta ventana!",
   "Downloaders": "Descargadores",
   "Downloading file... (Job #\\${jobid})": "Descargando archivo... (Tarea #${jobid})",
@@ -244,7 +244,7 @@
   "M: toggle manga mode (right-to-left reading)": "M: modo manga (lectura de derecha-a-izquierda)",
   "MOTD": "MOTD",
   "Maintenance Scripts": "Maintenance Scripts",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Tamaño máximo<br>de la caché",
   "Metadata Plugins": "Complementos de metadatos",
@@ -463,5 +463,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "páginas leídas",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

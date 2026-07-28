@@ -287,6 +287,43 @@ export default function DownloadQueuePanel({
   )
 }
 
+/** A `JobProgressBar` for a rate-limited download, wrapped in a hover tooltip showing the limit +
+ * matched domain rule and a deep-link to that plugin's rate-limit settings (issue #2). Only the
+ * speed figure itself is amber-highlighted (inside `JobProgressBar`); this wrapper adds the hover
+ * detail + the jump-to-settings affordance the issue asks for. */
+function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; pluginNamespace: string }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  // `rate_limit_bytes_per_sec > 0` is the caller's precondition; format as a KB/s·MB/s cap.
+  const cap = job.rate_limit_bytes_per_sec as number
+  const pattern = job.rate_limit_matched_pattern
+  return (
+    <Tooltip
+      label={
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 280 }}>
+          <span>{t('Rate-limited to {{limit}}/s', { limit: formatBytes(cap) })}</span>
+          {pattern && <span style={{ opacity: 0.85 }}>{t('Matched rule: {{pattern}}', { pattern })}</span>}
+          {/* The tooltip's 150ms close grace period (Tooltip.tsx) keeps this link reachable as the
+              pointer crosses from the trigger into the bubble. */}
+          <a
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(routes.pluginSettings(pluginNamespace))
+            }}
+            href={routes.pluginSettings(pluginNamespace)}
+            style={{ textDecoration: 'underline' }}
+          >
+            {t('Edit this plugin’s rate-limit settings')}
+          </a>
+        </div>
+      }
+      wrapperStyle={{ display: 'block' }}
+    >
+      <JobProgressBar job={job} />
+    </Tooltip>
+  )
+}
+
 function QueueItemRow({
   item,
   job,
@@ -388,7 +425,11 @@ function QueueItemRow({
                 {item.title ?? item.url}
               </span>
               {job ? (
-                <JobProgressBar job={job} />
+                job.rate_limit_bytes_per_sec != null && job.rate_limit_bytes_per_sec > 0 ? (
+                  <RateLimitedProgressBar job={job} pluginNamespace={item.plugin_namespace} />
+                ) : (
+                  <JobProgressBar job={job} />
+                )
               ) : (
                 <span style={{ fontSize: FONT_SIZE_10PT }}>{t('Starting…')}</span>
               )}

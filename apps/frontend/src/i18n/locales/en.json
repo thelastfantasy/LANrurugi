@@ -222,7 +222,7 @@
   "Double": "Double",
   "Download": "Download",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "Download jobs will keep going even if you close this window!",
   "Downloaders": "Downloaders",
   "Downloading file... (Job #\\${jobid})": "Downloading file... (Job #${jobid})",
@@ -428,7 +428,7 @@
   "Make sure the OS user running LANrurugi has read access to this directory.": "Make sure the OS user running LANrurugi has read access to this directory.",
   "Make sure the OS user running LANrurugi has read/write access to this directory.": "Make sure the OS user running LANrurugi has read/write access to this directory.",
   "Make sure to set a suitable <b>timeout</b> between archives using this picker if the plugin you want to use is concerned.": "Make sure to set a suitable <b>timeout</b> between archives using this picker if the plugin you want to use is concerned.",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Maximum <br>Cache Size",
   "Maximum Cache Size": "Maximum Cache Size",
@@ -848,5 +848,8 @@
   "{{count}} unlinked entries — their file went missing.": "{{count}} unlinked entries — their file went missing.",
   "{{n}} could not be removed.": "{{n}} could not be removed.",
   "{{rate}}/s": "{{rate}}/s",
-  "{{size}} downloaded": "{{size}} downloaded"
+  "{{size}} downloaded": "{{size}} downloaded",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

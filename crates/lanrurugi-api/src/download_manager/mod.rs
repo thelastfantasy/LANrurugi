@@ -51,6 +51,12 @@ pub struct DownloadManager {
 pub struct DownloadPermit {
     _permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pub max_bytes_per_sec: Option<u64>,
+    /// The matching domain-rule pattern (exact hostname / wildcard / `"*"`) that this download's
+    /// limits were resolved from — `domain_rules::resolved_key`'s value, surfaced through the
+    /// permit so the throttle key and the pattern exposed via `JobStatus` (issue #2) are guaranteed
+    /// to agree without a second independent traversal. See `acquire`'s resolution-order caveat for
+    /// the known approximation when one rule declares concurrency and another the rate limit.
+    pub matched_pattern: String,
 }
 
 impl DownloadManager {
@@ -83,10 +89,12 @@ impl DownloadManager {
             let max_concurrent = max_concurrent.max(1) as usize;
             let sem = {
                 let mut semaphores = self.semaphores.lock().await;
-                let entry = semaphores.entry(key).or_insert_with(|| SizedSemaphore {
-                    semaphore: Arc::new(Semaphore::new(max_concurrent)),
-                    capacity: max_concurrent,
-                });
+                let entry = semaphores
+                    .entry(key.clone())
+                    .or_insert_with(|| SizedSemaphore {
+                        semaphore: Arc::new(Semaphore::new(max_concurrent)),
+                        capacity: max_concurrent,
+                    });
                 if entry.capacity != max_concurrent {
                     *entry = SizedSemaphore {
                         semaphore: Arc::new(Semaphore::new(max_concurrent)),
@@ -107,6 +115,7 @@ impl DownloadManager {
         DownloadPermit {
             _permit: permit,
             max_bytes_per_sec: resolved.max_bytes_per_sec,
+            matched_pattern: key,
         }
     }
 
@@ -192,5 +201,27 @@ mod tests {
 
         drop(held);
         drop(new_permits);
+    }
+
+    #[tokio::test]
+    async fn acquire_surfaces_matched_pattern_in_permit() {
+        let mgr = DownloadManager::new();
+        let rules = vec![DomainRule {
+            pattern: Some("*.example.com".to_string()),
+            max_concurrent: Some(2),
+            max_bytes_per_sec: Some(1_048_576),
+            description: None,
+        }];
+        let permit = mgr.acquire("cdn.example.com", &rules).await;
+        assert_eq!(permit.matched_pattern, "*.example.com");
+        assert_eq!(permit.max_bytes_per_sec, Some(1_048_576));
+    }
+
+    #[tokio::test]
+    async fn acquire_returns_asterisk_when_unmanaged() {
+        let mgr = DownloadManager::new();
+        let permit = mgr.acquire("unrelated.com", &[]).await;
+        assert_eq!(permit.matched_pattern, "*");
+        assert_eq!(permit.max_bytes_per_sec, None);
     }
 }

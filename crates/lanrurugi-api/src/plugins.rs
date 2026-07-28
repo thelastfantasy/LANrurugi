@@ -1810,6 +1810,44 @@ async fn run_managed_downloads(
         .await
         .unwrap_or_default();
     let rules: Vec<DomainRule> = resolve_domain_rules(&declared, override_.as_ref());
+
+    // Record this download job's effective rate limit (and the matching domain-rule pattern) onto
+    // its `JobStatus` once, at start, so the frontend's progress UI can show a highlighted badge +
+    // tooltip for rate-limited downloads (issue #2). Uses the first resource's hostname as this
+    // job's representative — the UI model is one combined progress indicator per job (FR-003), so
+    // rate-limit display is a single value too, and real multi-resource downloads (Pixiv pages,
+    // single-archive H@H) almost always share one domain/rule. Snapshotted here per FR-016: a
+    // settings change mid-download never retroactively alters this value.
+    //
+    // Known approximation: `max_bytes_per_sec` comes from `resolve` (per-field independent
+    // resolution — exact > wildcard > fallback, first rule declaring the field) while
+    // `matched_pattern` comes from `resolved_key` (first pattern-matching rule in array order).
+    // When an exact rule omits the rate limit and a wildcard supplies it, the two can name
+    // different rules — an acceptable display-only approximation; fixing it would touch the
+    // rate-limiter map's grouping key, out of scope here.
+    if let Some(first) = downloads.first() {
+        if let Ok(parsed) = url::Url::parse(&first.url) {
+            let first_hostname = parsed.host_str().unwrap_or("");
+            let resolved = crate::download_manager::domain_rules::resolve(&rules, first_hostname);
+            let matched =
+                crate::download_manager::domain_rules::resolved_key(&rules, first_hostname);
+            state
+                .jobs
+                .set_rate_limit(
+                    &job_id,
+                    resolved.max_bytes_per_sec,
+                    // Only record the pattern when a real hostname was matched, so a malformed
+                    // (host-less) URL doesn't write a misleading catch-all "*".
+                    if first_hostname.is_empty() {
+                        None
+                    } else {
+                        Some(matched)
+                    },
+                )
+                .await;
+        }
+    }
+
     let should_bundle =
         downloads.len() > 1 && resolve_bundle_as_archive(&declared, override_.as_ref());
 

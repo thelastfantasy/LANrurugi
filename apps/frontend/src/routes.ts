@@ -27,5 +27,9 @@ export const routes = {
   batch: () => '/batch',
   settings: () => '/config',
   categories: () => '/config/categories',
-  pluginSettings: () => '/config/plugins',
+  // `focus` deep-links to a specific plugin's download/rate-limit settings section (issue #2):
+  // Plugins.tsx reads `?focus=<namespace>` and scrolls that section into view + briefly highlights
+  // it. Omit for the plain plugin-list landing.
+  pluginSettings: (focus?: string) =>
+    focus ? `/config/plugins?focus=${encodeURIComponent(focus)}` : '/config/plugins',
 } as const

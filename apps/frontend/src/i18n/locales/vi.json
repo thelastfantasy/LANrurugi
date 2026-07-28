@@ -142,7 +142,7 @@
   "Double": "Hai trang",
   "Download": "Tải",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "Các tác vụ tải xuống sẽ vẫn tiếp tục ngay cả khi bạn đóng cửa sổ này!",
   "Downloaders": "Trình tải xuống",
   "Downloading file... (Job #\\${jobid})": "Đang tải file... (Tác vụ #${jobid})",
@@ -256,7 +256,7 @@
   "MOTD": "TNTN",
   "Maintenance Scripts": "Maintenance Scripts",
   "Make sure the OS user running LANrurugi has read access to this directory.": "Đảm bảo tài khoản hệ điều hành chạy LANrurugi có quyền đọc thư mục này.",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Kích thước <br>bộ nhớ đệm tối đa",
   "Metadata Plugins": "Plugin Metadata",
@@ -483,5 +483,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "trang đọc",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }

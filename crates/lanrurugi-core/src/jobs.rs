@@ -48,6 +48,23 @@ pub struct JobStatus {
     /// known (spec FR-003: one combined indicator per job, not per-resource).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_bytes: Option<u64>,
+    /// The rate limit actually in effect for this download job — the resolved `max_bytes_per_sec`
+    /// for the download's first resource's hostname (`download_manager::domain_rules::resolve`,
+    /// spec FR-009/FR-016), in bytes/second. `None` (genuinely absent from JSON, not `null` —
+    /// mirroring `downloaded_bytes`/`total_bytes`'s own contract) for every non-download job, for a
+    /// download with no matching rate-limit rule, and until the download has actually started. A
+    /// `0`/`null` would be ambiguous with "unlimited", so absence means unlimited. The frontend
+    /// renders this as a highlighted badge + tooltip next to the progress bar (issue #2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_bytes_per_sec: Option<u64>,
+    /// The matching domain-rule pattern that produced `rate_limit_bytes_per_sec` — an exact hostname
+    /// (`"cdn.example.com"`), a wildcard (`"*.example.com"`), or `"*"` for the general fallback
+    /// (i.e. `download_manager::domain_rules::resolved_key`'s return value). `None` for non-download
+    /// jobs and before the download starts. Lets the frontend's rate-limit tooltip show *which* rule
+    /// is in effect, and is `None` (not `"*"`) when the first resource's URL had no parseable
+    /// hostname at all, to avoid a misleading catch-all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_matched_pattern: Option<String>,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
 }
@@ -61,6 +78,8 @@ impl JobStatus {
             progress: 0.0,
             downloaded_bytes: None,
             total_bytes: None,
+            rate_limit_bytes_per_sec: None,
+            rate_limit_matched_pattern: None,
             result: None,
             error: None,
         }
@@ -162,6 +181,27 @@ impl JobRegistry {
             if let Some(total) = total.filter(|&t| t > 0) {
                 job.progress = (downloaded as f32 / total as f32).clamp(0.0, 1.0);
             }
+        }
+    }
+
+    /// Sibling to [`Self::set_download_progress`] recording the resolved rate limit (and the
+    /// domain-rule pattern it came from) for a download job, called once when the download starts
+    /// (`download_manager`'s `run_managed_downloads`, snapshotting FR-016's limit-at-start-time so a
+    /// mid-download settings change doesn't retroactively alter the displayed value). Both fields
+    /// stay `None` for every non-download job; a download whose resolved rule declared no
+    /// `max_bytes_per_sec` still records the matched `pattern` (e.g. `"*"` catch-all with no cap),
+    /// leaving `bytes_per_sec` as `None` to mean "unlimited" — matching `RateLimiterMap::throttle`'s
+    /// own "absent cap = full speed" convention. The two args are recorded verbatim rather than
+    /// coupled so the frontend can decide what to render.
+    pub async fn set_rate_limit(
+        &self,
+        id: &str,
+        bytes_per_sec: Option<u64>,
+        matched_pattern: Option<String>,
+    ) {
+        if let Some(job) = self.jobs.write().await.get_mut(id) {
+            job.rate_limit_bytes_per_sec = bytes_per_sec;
+            job.rate_limit_matched_pattern = matched_pattern;
         }
     }
 
@@ -304,6 +344,78 @@ mod tests {
             "an unknown total must stay genuinely absent from JSON (indeterminate progress), \
              not null — got: {value}"
         );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_fields_are_absent_until_set() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        let job = reg.get(&id).await.unwrap();
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(
+            value.get("rate_limit_bytes_per_sec").is_none(),
+            "rate_limit_bytes_per_sec must be genuinely absent from JSON, not null, until the \
+             download starts — got: {value}"
+        );
+        assert!(
+            value.get("rate_limit_matched_pattern").is_none(),
+            "rate_limit_matched_pattern must be genuinely absent from JSON, not null, until the \
+             download starts — got: {value}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_rate_limit_populates_both_fields() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.set_rate_limit(&id, Some(1_048_576), Some("cdn.example.com".to_string()))
+            .await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.rate_limit_bytes_per_sec, Some(1_048_576));
+        assert_eq!(
+            job.rate_limit_matched_pattern.as_deref(),
+            Some("cdn.example.com")
+        );
+
+        let value = serde_json::to_value(&job).unwrap();
+        assert_eq!(value["rate_limit_bytes_per_sec"], json!(1_048_576));
+        assert_eq!(
+            value["rate_limit_matched_pattern"],
+            json!("cdn.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_rate_limit_with_none_bytes_per_sec_still_records_pattern() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        // A `"*"` catch-all rule that declared no `max_bytes_per_sec` — the pattern is meaningful
+        // ("this hostname matched the fallback rule") even though no cap is in effect.
+        reg.set_rate_limit(&id, None, Some("*".to_string())).await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.rate_limit_bytes_per_sec, None);
+        assert_eq!(job.rate_limit_matched_pattern.as_deref(), Some("*"));
+
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(
+            value.get("rate_limit_bytes_per_sec").is_none(),
+            "an absent cap must stay genuinely absent from JSON (unlimited), not null — got: {value}"
+        );
+        assert_eq!(value["rate_limit_matched_pattern"], json!("*"));
+    }
+
+    #[tokio::test]
+    async fn non_download_job_never_has_rate_limit_fields() {
+        let reg = JobRegistry::new();
+        let id = reg.create("backup").await;
+        reg.mark_active(&id).await;
+        reg.finish(&id, json!({})).await;
+        let job = reg.get(&id).await.unwrap();
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(value.get("rate_limit_bytes_per_sec").is_none());
+        assert!(value.get("rate_limit_matched_pattern").is_none());
     }
 
     #[tokio::test]

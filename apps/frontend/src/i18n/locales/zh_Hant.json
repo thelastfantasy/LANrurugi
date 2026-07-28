@@ -180,7 +180,7 @@
   "Double": "雙頁",
   "Download": "下載",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "下載 / 限速設定",
   "Download jobs will keep going even if you close this window!": "即使您關閉此視窗，下載任務也會持續進行！",
   "Downloaders": "下載器",
   "Downloading file... (Job #\\${jobid})": "正在下載檔案...（任務 #${jobid}）",
@@ -337,7 +337,7 @@
   "Make sure the OS user running LANrurugi has read access to this directory.": "請確保執行 LANrurugi 的作業系統使用者具有此資料夾的讀取權限。",
   "Make sure the OS user running LANrurugi has read/write access to this directory.": "請確保執行 LANrurugi 的作業系統使用者擁有此資料夾的讀寫權限。",
   "Make sure to set a suitable <b>timeout</b> between archives using this picker if the plugin you want to use is concerned.": "若您使用的外掛涉及外部服務，請確保檔案之間設定適當的<b>逾時</b>。",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "最大 KB/秒",
   "Max Concurrent": "Max Concurrent",
   "Max upload size (MB):": "最大上傳大小（MB）：",
   "Maximum <br>Cache Size": "最大 <br>快取大小",
@@ -677,5 +677,8 @@
   "unknown error": "未知錯誤",
   "{{count}} deleted entries.": "已刪除 {{count}} 個項目。",
   "{{count}} unlinked entries — their file went missing.": "{{count}} 個項目已解除連結——其檔案已遺失。",
-  "{{n}} could not be removed.": "{{n}} 個任務無法移除。"
+  "{{n}} could not be removed.": "{{n}} 個任務無法移除。",
+  "Rate-limited to {{limit}}/s": "已限速：{{limit}}/s",
+  "Matched rule: {{pattern}}": "匹配規則：{{pattern}}",
+  "Edit this plugin’s rate-limit settings": "編輯該插件的限速設定"
 }

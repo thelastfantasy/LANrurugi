@@ -240,7 +240,7 @@
   "Double": "双页",
   "Download": "下载",
   "Download Queue": "下载队列",
-  "Download Settings": "下载设置",
+  "Download / Rate-limit Settings": "下载 / 限速设置",
   "Download jobs will keep going even if you close this window!": "即使您关闭此窗口，下载任务也会继续进行！",
   "Downloaders": "下载器",
   "Downloading file... (Job #\\${jobid})": "正在下载文件...（任务 #${jobid}）",
@@ -456,7 +456,7 @@
   "Make sure the OS user running LANrurugi has read access to this directory.": "确保运行LANrurugi的操作系统用户对该目录具有读取权限。",
   "Make sure the OS user running LANrurugi has read/write access to this directory.": "确保运行 LANrurugi 的操作系统用户对该目录具有读/写权限。",
   "Make sure to set a suitable <b>timeout</b> between archives using this picker if the plugin you want to use is concerned.": "如果您要使用的插件涉及，请确保在档案之间设置合适的<b>超时</b>。",
-  "Max Bytes/sec": "最大字节数/秒",
+  "Max KB/s": "最大 KB/秒",
   "Max Concurrent": "最大并发数",
   "Max upload size (MB):": "最大上传大小（MB）：",
   "Maximum <br>Cache Size": "最大<br>缓存大小",
@@ -911,5 +911,8 @@
   "{{count}} unlinked entries — their file went missing.": "{{count}} 个条目已解除链接——其文件已丢失。",
   "{{n}} could not be removed.": "{{n}} 个任务无法移除。",
   "{{rate}}/s": "{{rate}}/s",
-  "{{size}} downloaded": "已下载 {{size}}"
+  "{{size}} downloaded": "已下载 {{size}}",
+  "Rate-limited to {{limit}}/s": "已限速：{{limit}}/s",
+  "Matched rule: {{pattern}}": "匹配规则：{{pattern}}",
+  "Edit this plugin’s rate-limit settings": "编辑该插件的限速设置"
 }

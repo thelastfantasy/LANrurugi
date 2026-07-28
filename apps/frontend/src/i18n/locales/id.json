@@ -154,7 +154,7 @@
   "Double": "Ganda",
   "Download": "Unduh",
   "Download Queue": "Download Queue",
-  "Download Settings": "Download Settings",
+  "Download / Rate-limit Settings": "Download / Rate-limit Settings",
   "Download jobs will keep going even if you close this window!": "Proses unduhan akan terus berjalan meskipun Anda menutup jendela ini!",
   "Downloaders": "Pengunduh",
   "Downloading file... (Job #\\${jobid})": "Mengunduh berkas ... (Tugas #${jobid})",
@@ -282,7 +282,7 @@
   "M: toggle manga mode (right-to-left reading)": "M: beralih ke mode komik (membaca dari kanan ke kiri)",
   "MOTD": "PHI",
   "Maintenance Scripts": "Maintenance Scripts",
-  "Max Bytes/sec": "Max Bytes/sec",
+  "Max KB/s": "Max KB/s",
   "Max Concurrent": "Max Concurrent",
   "Maximum <br>Cache Size": "Ukuran <br>Maksimum Singgahan",
   "Merge Archives into Tankoubon": "Gabungkan beberapa arsip menjadi satu Tankoubon",
@@ -533,5 +533,8 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "pages read": "halaman dibaca",
   "subfolders-to-categories": "subfolders-to-categories",
-  "unknown error": "unknown error"
+  "unknown error": "unknown error",
+  "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
+  "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
 }
