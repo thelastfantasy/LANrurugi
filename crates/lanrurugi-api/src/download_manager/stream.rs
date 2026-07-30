@@ -137,11 +137,46 @@ pub async fn download_one(
     // FR-016 snapshot: acquired once, held for this whole function's lifetime (dropped when this
     // function returns/errors, at the very end of the transfer — see `_permit` below).
     let permit = manager.acquire(&hostname, rules).await;
-    // Reuse the permit's own `matched_pattern` (already computed once inside `acquire`) as the
-    // throttle key, rather than traversing `rules` a second time — guarantees the rate-limiter map
-    // grouping and the pattern exposed via `JobStatus` always agree (issue #2).
-    let rate_limit_key = permit.matched_pattern.clone();
+    // Each download gets its own token bucket rather than sharing one per matched rule pattern —
+    // a shared pool let concurrent downloads under the same domain rule "borrow" each other's
+    // unused headroom, so a single download's observed speed would spike above the configured cap
+    // for several seconds until sibling downloads caught up and started actually competing for
+    // tokens (issue #41). Suffixing the permit's own `matched_pattern` with a per-download UUID
+    // keeps `RateLimiterMap`'s rate value resolution (still driven by the pattern's rule) while
+    // giving every concurrent download an independent, always-fully-enforced quota.
+    let rate_limit_key = format!("{}#{}", permit.matched_pattern, uuid::Uuid::new_v4());
 
+    // `RateLimiterMap` never evicts entries on its own — this download's own unique-keyed entry
+    // must be removed once it's done, on every exit path (success, HTTP/IO/network error, or a
+    // user-requested Stop), or the map grows by one permanently-dead entry per download for the
+    // life of the process. `?`/early-return inside `download_one_inner` below all funnel through
+    // this one cleanup point rather than needing an async `Drop` (which Rust doesn't support).
+    let result = download_one_inner(
+        manager,
+        req,
+        progress_tx,
+        staging_dir,
+        cancel,
+        &parsed_url,
+        &permit,
+        &rate_limit_key,
+    )
+    .await;
+    manager.rate_limiters().release(&rate_limit_key).await;
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn download_one_inner(
+    manager: &DownloadManager,
+    req: &DownloadRequest,
+    progress_tx: tokio::sync::mpsc::UnboundedSender<ProgressUpdate>,
+    staging_dir: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
+    parsed_url: &url::Url,
+    permit: &super::DownloadPermit,
+    rate_limit_key: &str,
+) -> Result<DownloadedFile, DownloadError> {
     let method = match &req.method {
         None => Method::GET,
         Some(m) => {
@@ -164,7 +199,7 @@ pub async fn download_one(
     }
 
     let total_bytes = response.content_length();
-    let filename = resolve_filename(&response, req.filename_hint.as_deref(), &parsed_url);
+    let filename = resolve_filename(&response, req.filename_hint.as_deref(), parsed_url);
 
     // Carries the resolved filename's own extension (when it has one) onto the staging file
     // itself — `lanrurugi_scanner::pipeline::catalogue_new_archive` reads *this* path (not the
@@ -230,11 +265,7 @@ pub async fn download_one(
         };
         manager
             .rate_limiters()
-            .throttle(
-                &rate_limit_key,
-                permit.max_bytes_per_sec,
-                chunk.len() as u64,
-            )
+            .throttle(rate_limit_key, permit.max_bytes_per_sec, chunk.len() as u64)
             .await;
         if let Err(e) = file.write_all(&chunk).await {
             drop(file);
@@ -521,7 +552,67 @@ mod tests {
         .await
         .expect_err("a 404 response must surface as an error, not a successful empty file");
         assert!(matches!(err, DownloadError::HttpStatus(_, status) if status == 404));
+        assert_eq!(
+            manager.rate_limiters().tracked_entry_count().await,
+            0,
+            "an errored download must still release its per-download rate-limiter entry"
+        );
 
+        server.abort();
+    }
+
+    /// Issue #41: `download_one` now gives each download its own uniquely-keyed rate-limiter
+    /// entry rather than sharing one per matched domain-rule pattern. That only avoids a permanent
+    /// per-download memory leak if the entry is actually released once the download finishes —
+    /// proven here by checking `RateLimiterMap`'s tracked entry count is back to zero after a
+    /// successful download that was actually throttled (so an entry was guaranteed to be created).
+    #[tokio::test]
+    async fn download_one_releases_its_rate_limiter_entry_after_a_throttled_download() {
+        let body = vec![b'x'; 500];
+        let router = axum::Router::new().route(
+            "/archive.zip",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let (base_url, server) = spawn_test_server(router).await;
+
+        let manager = DownloadManager::new();
+        let staging_dir = std::env::temp_dir();
+        let rules = vec![DomainRule {
+            pattern: None,
+            max_concurrent: None,
+            max_bytes_per_sec: Some(1_000_000),
+            description: None,
+        }];
+
+        let req = DownloadRequest {
+            url: format!("{base_url}/archive.zip"),
+            method: None,
+            headers: vec![],
+            filename_hint: Some("archive.zip".to_string()),
+        };
+
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = download_one(
+            &manager,
+            &rules,
+            &req,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("download must succeed");
+
+        assert_eq!(
+            manager.rate_limiters().tracked_entry_count().await,
+            0,
+            "a completed download must release its per-download rate-limiter entry, not leak it"
+        );
+
+        let _ = tokio::fs::remove_file(&result.path).await;
         server.abort();
     }
 

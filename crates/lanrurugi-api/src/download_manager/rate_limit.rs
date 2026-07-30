@@ -95,6 +95,20 @@ impl RateLimiterMap {
                 .expect("chunk slice is always within the limiter's own burst capacity");
         }
     }
+
+    /// Drops `key`'s entry, if any. Callers using a per-download-unique key (issue #41: each
+    /// download gets its own token bucket rather than sharing one per domain-rule pattern, so a
+    /// concurrent sibling can't "borrow" another download's unused headroom) must call this once
+    /// their download finishes — otherwise this map grows by one entry per download for the life
+    /// of the process, since entries are never otherwise evicted.
+    pub async fn release(&self, key: &str) {
+        self.limiters.lock().await.remove(key);
+    }
+
+    #[cfg(test)]
+    pub async fn tracked_entry_count(&self) -> usize {
+        self.limiters.lock().await.len()
+    }
 }
 
 fn new_limiter(bytes_per_sec: u64) -> ByteRateLimiter {
@@ -139,5 +153,43 @@ mod tests {
             "a 300-byte request against a 100 bytes/sec cap must wait, got {:?}",
             start.elapsed()
         );
+    }
+
+    /// Issue #41: two concurrent downloads under the same domain-rule pattern must each get the
+    /// full configured rate, not split a shared pool — proven by throttling the *same* byte count
+    /// under two distinct keys back-to-back and confirming the second call isn't slowed down by
+    /// the first having already spent its (previously shared) token bucket.
+    #[tokio::test]
+    async fn distinct_keys_each_get_their_own_independent_quota() {
+        let map = RateLimiterMap::default();
+        // Exhausts a 100 bytes/sec bucket for "download-a" (burst cap == rate, so 100 bytes is the
+        // most a fresh bucket allows instantaneously).
+        map.throttle("rule#download-a", Some(100), 100).await;
+
+        // A second, distinct key under the same matched rule must still get its own full burst
+        // capacity immediately — if this were the old shared-pool behavior (one bucket per rule
+        // pattern), this call would have to wait for "download-a"'s spend to refill.
+        let start = Instant::now();
+        map.throttle("rule#download-b", Some(100), 100).await;
+        assert!(
+            start.elapsed().as_millis() < 50,
+            "a distinct download key must not be throttled by another download's own spend, got {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn release_removes_a_keys_tracked_limiter() {
+        let map = RateLimiterMap::default();
+        map.throttle("example.com", Some(100), 10).await;
+        assert_eq!(map.tracked_entry_count().await, 1);
+        map.release("example.com").await;
+        assert_eq!(map.tracked_entry_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn release_of_an_unknown_key_is_a_noop() {
+        let map = RateLimiterMap::default();
+        map.release("never-throttled.example.com").await;
     }
 }
