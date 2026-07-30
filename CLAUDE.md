@@ -109,6 +109,26 @@ All *future* issue content (new entries, comments, edits) must be written in Chi
 own working language. Do not retroactively translate existing English entries already in the
 issue; only new content going forward needs to be in Chinese.
 
+## GitHub milestones — `m0` (first release) and `m1` (future plan)
+
+Two milestones organize all issues (created by splitting the original single running-log issue #2,
+which is now archived/closed and superseded — do not add new content to #2):
+
+- **`m0`** — first release: the baseline feature/bug-fix set that defines what "v1 shippable"
+  means for this project. Includes issues #3–#45 (the ones already closed, #3–#40, form the
+  completed record of what shipped in the initial implementation + QA-fix round; #41–#45 remain
+  open as the currently-scoped remaining work before release).
+- **`m1`** — future plan: longer-horizon features, non-blocking polish, and infrastructure that
+  don't gate the first release. Issues #46–#56.
+
+When the user references "an issue" without a number, or asks what's left before release, check
+`gh issue list --milestone m0 --state open` first — that list *is* the release-blocking work.
+`gh issue list --milestone m1 --state open` is backlog, not urgent. When triaging a *new* problem
+found mid-session (per the tracking rule above), decide `m0` vs `m1` by the same test used when
+the split was made: does this affect the baseline shippable state (→ `m0`), or is it an
+independent/long-horizon addition (→ `m1`)? Assign the milestone at creation time
+(`gh issue create --milestone m0` or `m1`), don't leave new issues unmilestoned.
+
 ## Dev container rebuild — frontend-only changes don't need one
 
 The dev container (`compose.dev.yaml`) runs the frontend via `vite dev` with `apps/frontend`
