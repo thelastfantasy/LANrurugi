@@ -79,5 +79,7 @@ export default function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t('Expired, please download again')}</span>
     case 'internal':
       return <span>{t('An internal error occurred')}</span>
+    case 'stale_after_restart':
+      return <span>{t('Download was interrupted by a server restart, please retry')}</span>
   }
 }

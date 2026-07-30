@@ -851,5 +851,6 @@
   "{{size}} downloaded": "{{size}} downloaded",
   "Rate-limited to {{limit}}/s": "Rate-limited to {{limit}}/s",
   "Matched rule: {{pattern}}": "Matched rule: {{pattern}}",
-  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings"
+  "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
+  "Download was interrupted by a server restart, please retry": "Download was interrupted by a server restart, please retry"
 }

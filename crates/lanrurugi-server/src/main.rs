@@ -219,6 +219,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let repos = Repositories::new(&redis);
     let scanner = ScannerHandle::new();
     let jobs = JobRegistry::new();
+    // Shared with `scanner.start(...)` below (same `Arc`, not two independent locks) so the
+    // download-ingest path (`AppState::lock_filename`) and the watcher's own consumer loop
+    // (`pipeline::run`) are mutually exclusive over the same filename — see
+    // `lanrurugi_core::filename_lock`'s own docs for the corruption bug this fixes.
+    let filename_locks = lanrurugi_core::filename_lock::FilenameLocks::new();
 
     let plugin_options = Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -269,8 +274,42 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         download_queue,
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
-        filename_locks: Default::default(),
+        filename_locks: filename_locks.clone(),
     };
+
+    // A queue item left `Starting`/`Downloading` when the process last exited has no chance of
+    // ever completing on its own — `JobRegistry` (the in-process progress tracker its `job_id`
+    // pointed at) is purely in-memory and was just recreated empty above, so that job is gone for
+    // good, but the persisted queue item's own `state` survived unchanged in Redis. Without this,
+    // such an item is stuck showing "Starting…" forever (`useJobs()` never finds its `job_id`
+    // again) with no retry affordance. Run synchronously here, before `build_app`/accepting
+    // connections, rather than as a spawned background job — it's a handful of Redis round trips
+    // at most, and every item should already be in its corrected state by the time the frontend's
+    // first poll lands.
+    match state.download_queue.list_all().await {
+        Ok(items) => {
+            for mut item in items {
+                if matches!(
+                    item.state,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Starting
+                        | lanrurugi_storage::download_queue::DownloadQueueState::Downloading
+                ) {
+                    item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                    item.error = Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                    if let Err(e) = state.download_queue.update(&item).await {
+                        tracing::warn!(
+                            item_id = %item.id,
+                            error = %e,
+                            "failed to mark a restart-orphaned download queue item as errored"
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list download queue for restart-orphan cleanup");
+        }
+    }
 
     {
         let state = state.clone();
@@ -307,6 +346,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 redis.search.clone(),
                 (*repos.archives).clone(),
                 Some(new_archive_tx.clone()),
+                filename_locks.clone(),
             )
             .await
         {
@@ -358,6 +398,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
+            let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
             jobs.finish(
                 &job_id,
                 serde_json::json!({
@@ -365,6 +406,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "already_known": scan_summary.already_known,
                     "newly_catalogued": scan_summary.catalogued,
                     "errors": scan_summary.errors,
+                    "pagecount_heal": {
+                        "checked": heal_summary.checked,
+                        "healed": heal_summary.healed,
+                        "failed": heal_summary.failed,
+                        "skipped_known_failed": heal_summary.skipped_known_failed,
+                        "details": heal_summary.details,
+                    },
                 }),
             )
             .await;
@@ -426,6 +474,16 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         newly_catalogued = scan_summary.catalogued,
         errors = scan_summary.errors,
         "Full scan complete"
+    );
+
+    tracing::info!("Healing pagecount/arcsize for archives left corrupted by past ingest races...");
+    let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
+    tracing::info!(
+        checked = heal_summary.checked,
+        healed = heal_summary.healed,
+        failed = heal_summary.failed,
+        skipped_known_failed = heal_summary.skipped_known_failed,
+        "Pagecount heal complete"
     );
 
     Ok(())

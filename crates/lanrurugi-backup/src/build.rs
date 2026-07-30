@@ -163,6 +163,8 @@ mod tests {
                 thumbhash: Some("abc123".into()),
                 toc: vec![],
                 stamp_ids: vec![],
+                heal_failed_at: None,
+                corrupted_pages: vec![],
             })
             .await
             .unwrap();

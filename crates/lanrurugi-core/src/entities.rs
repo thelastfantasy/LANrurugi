@@ -47,6 +47,26 @@ pub struct Archive {
     pub toc: Vec<TocEntry>,
     /// IDs of `Stamp`s attached to this archive (legacy `stamps` field, JSON array of stamp keys).
     pub stamp_ids: Vec<String>,
+    /// Unix timestamp of the last time an automatic `pagecount`/`arcsize` heal attempt
+    /// (`lanrurugi_scanner::full_scan::heal_pagecounts`) failed for this archive — `None` means
+    /// either never attempted or the most recent attempt succeeded. Prevents the heal scan from
+    /// retrying the same permanently-broken archive on every run (a startup-scan-triggered retry
+    /// loop) — set once a heal attempt fails, cleared only by a fresh catalogue of this exact
+    /// archive ID (e.g. re-downloading and overwriting it), never by another heal attempt itself.
+    #[serde(default)]
+    pub heal_failed_at: Option<u64>,
+    /// Entry names (matching `archive_format::list_pages`'s own output, and `GET .../page`'s own
+    /// `path` query param — e.g. `"page03.jpg"`) whose image bytes were found to be undecodable —
+    /// the reader serves a placeholder image for these instead of retrying decode on every request
+    /// or letting a corrupt byte stream reach the browser raw. Keyed by entry name (not a numeric
+    /// page index) since that's exactly what both the detection site
+    /// (`archives::generate_page_thumbnails`, which already iterates `list_pages`'s entry names)
+    /// and the lookup site (`archives::fetch_page`, which only ever has the entry name from its
+    /// own `path` param, never an index) naturally have on hand — avoids a second `list_pages` call
+    /// on every page request just to translate an index back to a name. Empty for the overwhelming
+    /// majority of archives that have no corrupt pages at all.
+    #[serde(default)]
+    pub corrupted_pages: Vec<String>,
 }
 
 impl Archive {

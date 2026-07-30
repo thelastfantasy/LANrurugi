@@ -20,6 +20,7 @@ use std::time::Duration;
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::Archive;
+use lanrurugi_core::filename_lock::FilenameLocks;
 use lanrurugi_storage::id::size_aware_id;
 pub(crate) use lanrurugi_storage::keys::FILEMAP_KEY;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -110,6 +111,18 @@ impl From<DuplicateReason> for lanrurugi_core::queue_error::DuplicateReasonKind 
 /// circular dependency on `lanrurugi-api`), so the actual "run every enabled metadata plugin on
 /// this id" work happens on the *other* end of this channel, in the API crate — this loop only
 /// ever reports which ids are eligible.
+///
+/// `locks` is the *same* `FilenameLocks` instance `lanrurugi-api`'s download-ingest path
+/// (`download_manager::ingest::catalogue_staged_file`) reserves a filename in around its own
+/// rename-into-`archive_dir`-then-catalogue sequence — without also acquiring it here, a file the
+/// download path just renamed into the watched directory triggers this exact loop iteration
+/// essentially simultaneously via the `notify` event for that rename, and both paths independently
+/// ingest the same file with no mutual exclusion — the root cause of a real, observed corruption
+/// bug (a 331MB archive left with `pagecount: 0` and an `arcsize` far under its real size, having
+/// been ingested three times with two racing `Rekeyed` outcomes). By the time this acquires the
+/// lock after the download path releases it, `ingest_file`'s own `Unchanged` branch (content hash
+/// unchanged since the download path already catalogued it) makes this a safe, cheap no-op rather
+/// than a second real ingestion.
 pub async fn run(
     mut rx: mpsc::UnboundedReceiver<PathBuf>,
     archives: ArchiveRepository,
@@ -117,8 +130,18 @@ pub async fn run(
     search_pool: Pool,
     thumb_dir: PathBuf,
     new_archive_tx: Option<mpsc::UnboundedSender<String>>,
+    locks: FilenameLocks,
 ) {
     while let Some(path) = rx.recv().await {
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        // Held across the entire ingest below (including its own stability wait), matching the
+        // download path's own "held for the whole cataloguing sequence" scope — dropped when this
+        // loop iteration's block ends, before the next `rx.recv()`.
+        let _guard = locks.lock(&filename).await;
+
         match tokio::time::timeout(
             INGEST_TIMEOUT,
             ingest_file(&archives, &config_pool, &search_pool, &thumb_dir, &path),
@@ -418,6 +441,8 @@ async fn catalogue_new_archive(
         thumbhash: None,
         toc: Vec::new(),
         stamp_ids: Vec::new(),
+        heal_failed_at: None,
+        corrupted_pages: Vec::new(),
     };
     archives.save(&archive).await?;
     if let Err(e) =
@@ -867,6 +892,74 @@ mod tests {
                     second_path.to_string_lossy().to_string(),
                 ],
             )
+            .await
+            .unwrap();
+    }
+
+    /// The scenario `run()`'s new `locks` parameter exists for: another caller (standing in for
+    /// `lanrurugi-api`'s download-ingest path) already holds this exact filename's lock when a
+    /// filesystem event for it arrives — `run()` must not ingest until that lock is released.
+    /// Doesn't need a real `notify` watcher — `run()` only consumes an `mpsc` receiver, so this
+    /// sends one path through a plain channel to simulate the event.
+    #[tokio::test]
+    async fn run_blocks_on_a_filename_lock_already_held_by_another_caller() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(27) else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        let path = make_zip_with_pages(dir.path(), "book.zip", 2);
+
+        let locks = lanrurugi_core::filename_lock::FilenameLocks::new();
+        // Simulates the download path already holding this filename's lock across its own
+        // rename-then-catalogue window.
+        let held_guard = locks.lock("book.zip").await;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(path.clone()).unwrap();
+        drop(tx); // Closes the channel so `run` returns once this one item is drained.
+
+        let run_locks = locks.clone();
+        let run_task = tokio::spawn(run(
+            rx,
+            archives.clone(),
+            config_pool.clone(),
+            search_pool,
+            thumb_dir.path().to_path_buf(),
+            None,
+            run_locks,
+        ));
+
+        // `run` must not have catalogued the file yet — it's blocked waiting on the lock
+        // `held_guard` still holds.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !run_task.is_finished(),
+            "run() must block on the lock rather than ingesting immediately"
+        );
+
+        drop(held_guard);
+        tokio::time::timeout(std::time::Duration::from_secs(5), run_task)
+            .await
+            .expect("run() must finish once the lock is released")
+            .unwrap();
+
+        // Sanity: the file was in fact catalogued once the lock freed up.
+        let mut conn = config_pool.get().await.unwrap();
+        let id: Option<String> = conn
+            .hget(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        assert!(
+            id.is_some(),
+            "run() must have catalogued the file after unblocking"
+        );
+
+        archives.delete(id.as_deref().unwrap()).await.unwrap();
+        let _: () = conn
+            .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
             .await
             .unwrap();
     }

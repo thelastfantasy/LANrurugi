@@ -131,6 +131,8 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
         thumbhash: None,
         toc: vec![],
         stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
     })
     .await
     .unwrap();
@@ -216,6 +218,8 @@ async fn delete_archive_matches_recorded_response_shape() {
         thumbhash: None,
         toc: vec![],
         stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
     })
     .await
     .unwrap();
@@ -566,6 +570,8 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             thumbhash: None,
             toc: vec![],
             stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
         })
         .await
         .unwrap();

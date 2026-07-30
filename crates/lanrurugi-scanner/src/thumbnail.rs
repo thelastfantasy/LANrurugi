@@ -349,4 +349,40 @@ mod tests {
         .unwrap();
         assert!(hash.is_none());
     }
+
+    /// The "some page's image bytes are corrupt" case (issue #2) — distinct from an unreadable
+    /// *archive container* (`archive_format::list_pages` itself failing, which
+    /// `full_scan::heal_pagecounts` handles): the ZIP structure is perfectly intact and
+    /// `list_pages` finds a real entry with an image extension, but that entry's bytes aren't a
+    /// decodable image at all. Must surface as `ThumbnailError::Decode`, not `Archive`/`Io`/`Join`
+    /// — `archives::generate_page_thumbnails` only marks a page `corrupted_pages` on a `Decode`
+    /// error specifically, so other failure kinds don't wrongly stick a permanent placeholder onto
+    /// a perfectly good page.
+    #[tokio::test]
+    async fn corrupt_page_bytes_fail_with_a_decode_error() {
+        let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
+        let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        writer.start_file("page1.jpg", options).unwrap();
+        use std::io::Write;
+        writer.write_all(b"not actually a jpeg").unwrap();
+        writer.finish().unwrap();
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let output = out_dir.path().join("thumb.jpg");
+
+        let result = generate(
+            file.path().to_path_buf(),
+            1,
+            output,
+            ThumbFormat::Jpeg,
+            JPEG_QUALITY_NORMAL,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ThumbnailError::Decode(_))),
+            "expected a Decode error for genuinely undecodable image bytes, got {result:?}"
+        );
+    }
 }

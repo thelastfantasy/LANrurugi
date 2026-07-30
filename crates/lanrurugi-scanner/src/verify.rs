@@ -130,6 +130,8 @@ mod tests {
             thumbhash: None,
             toc: vec![],
             stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
         };
         let id_a = "a".repeat(40);
         let id_b = "b".repeat(40);

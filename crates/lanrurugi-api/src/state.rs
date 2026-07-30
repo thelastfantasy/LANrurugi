@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use lanrurugi_core::filename_lock::{FilenameLockGuard, FilenameLocks};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
@@ -130,65 +131,26 @@ pub struct AppState {
     /// Guards the check-then-write window in `download_manager::ingest::catalogue_staged_file`
     /// (filename-collision check against the catalog, through to the new archive record actually
     /// being saved) against two concurrent downloads that resolve to the *same* destination
-    /// filename racing each other — without this, both could observe "no existing archive with
-    /// this filename" before either finished cataloguing, so both proceed, and whichever renames
-    /// its staged file into `archive_dir` last silently clobbers the other's bytes on disk while
-    /// leaving two catalog records pointing at one (partially dangling) file. Keyed by the
-    /// resolved destination filename (not archive ID, which doesn't exist yet at check time) —
-    /// see `AppState::lock_filename` for how a caller actually acquires this.
-    pub filename_locks: Arc<Mutex<HashSet<String>>>,
+    /// filename racing each other, *and* against the `notify` watcher
+    /// (`lanrurugi_scanner::pipeline::run`) independently cataloguing the exact same freshly-
+    /// renamed file at nearly the same instant — the actual real-world race this type exists to
+    /// fix (a file renamed into the watched `archive_dir` triggers a filesystem event for that
+    /// same path essentially simultaneously with this field's own caller cataloguing it). Lives in
+    /// `lanrurugi-core` (not here) precisely so `lanrurugi-scanner`'s watcher-consumer loop can
+    /// share the *same* lock instance without a circular crate dependency — `main.rs` constructs
+    /// one `FilenameLocks` and hands a clone both to this field and to `scanner.start(...)`'s
+    /// `locks` parameter; the two must be the same underlying lock, not two independent ones, or
+    /// the watcher path is left unguarded again. See `lanrurugi_core::filename_lock` for the
+    /// implementation and the full incident this fixes.
+    pub filename_locks: FilenameLocks,
 }
 
 impl AppState {
-    /// Serializes `download_manager::ingest::catalogue_staged_file`'s check-then-write sequence
-    /// per destination `filename` — blocks until no other in-flight download is currently
-    /// cataloguing the same filename, then reserves it until the returned guard drops. Thin
-    /// wrapper around [`lock_filename_in`] (split out so the actual locking logic is testable
-    /// against a bare `Arc<Mutex<HashSet<String>>>`, without needing a full `AppState`).
+    /// Thin delegate to [`FilenameLocks::lock`] — kept so `download_manager::ingest`'s existing
+    /// `state.lock_filename(filename)` call site didn't need to change when this lock moved into
+    /// `lanrurugi-core` to become shared with the watcher path too.
     pub async fn lock_filename(&self, filename: &str) -> FilenameLockGuard {
-        lock_filename_in(&self.filename_locks, filename).await
-    }
-}
-
-/// Reserves `filename` in `locks`, blocking (cooperatively, via polling with a short sleep; this
-/// is a rare, short-lived collision path, not a hot one, so a simple retry loop is preferable to
-/// pulling in a full keyed-mutex crate for one call site) until no other holder currently has it
-/// reserved. See [`AppState::filename_locks`] for why this exists at all.
-async fn lock_filename_in(
-    locks: &Arc<Mutex<HashSet<String>>>,
-    filename: &str,
-) -> FilenameLockGuard {
-    loop {
-        {
-            let mut locked = locks.lock().await;
-            if locked.insert(filename.to_string()) {
-                return FilenameLockGuard {
-                    locks: locks.clone(),
-                    filename: filename.to_string(),
-                };
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-}
-
-/// RAII guard returned by [`AppState::lock_filename`] — releases the filename reservation when
-/// dropped, including on an early `?`-propagated error from the guarded section (no explicit
-/// unlock call needed at any of `catalogue_staged_file`'s several early-return points). Holds its
-/// own `Arc` clone of the lock map (not a borrow of `AppState`) so it isn't tied to `AppState`'s
-/// own lifetime/`Clone` semantics.
-pub struct FilenameLockGuard {
-    locks: Arc<Mutex<HashSet<String>>>,
-    filename: String,
-}
-
-impl Drop for FilenameLockGuard {
-    fn drop(&mut self) {
-        let locks = self.locks.clone();
-        let filename = std::mem::take(&mut self.filename);
-        tokio::spawn(async move {
-            locks.lock().await.remove(&filename);
-        });
+        self.filename_locks.lock(filename).await
     }
 }
 
@@ -201,87 +163,3 @@ pub type PageSingleflight = lanrurugi_core::singleflight::Singleflight<
     (String, String),
     Result<(&'static str, bytes::Bytes), String>,
 >;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_second_lock_on_the_same_filename_blocks_until_the_first_guard_drops() {
-        let locks: Arc<Mutex<HashSet<String>>> = Default::default();
-
-        let first = lock_filename_in(&locks, "same-name.zip").await;
-
-        // The second attempt must not resolve while `first` is still held — race it against a
-        // short timeout rather than asserting on internal state, so this test exercises the same
-        // polling/blocking behavior a real caller relies on.
-        let second_attempt = tokio::time::timeout(std::time::Duration::from_millis(100), async {
-            lock_filename_in(&locks, "same-name.zip").await
-        });
-        assert!(
-            second_attempt.await.is_err(),
-            "a second lock on an already-held filename must not succeed while the first is held"
-        );
-
-        drop(first);
-
-        // Now that the first guard has dropped, a fresh attempt must succeed within a reasonable
-        // window (the guard's own `Drop` impl removes the reservation via a spawned task, so this
-        // isn't instantaneous).
-        let third_attempt = tokio::time::timeout(std::time::Duration::from_millis(500), async {
-            lock_filename_in(&locks, "same-name.zip").await
-        })
-        .await;
-        assert!(
-            third_attempt.is_ok(),
-            "a lock must become available again after the holding guard is dropped"
-        );
-    }
-
-    #[tokio::test]
-    async fn locks_on_different_filenames_never_block_each_other() {
-        let locks: Arc<Mutex<HashSet<String>>> = Default::default();
-
-        let _a = lock_filename_in(&locks, "a.zip").await;
-        // Must resolve immediately (well within a short timeout) since it's a different key.
-        let b = tokio::time::timeout(std::time::Duration::from_millis(50), async {
-            lock_filename_in(&locks, "b.zip").await
-        })
-        .await;
-        assert!(b.is_ok(), "locking a different filename must never block");
-    }
-
-    #[tokio::test]
-    async fn simulated_concurrent_ingests_of_the_same_filename_are_fully_serialized() {
-        // Mirrors the real bug this guards against: two concurrent "downloads" racing to
-        // catalogue the same destination filename. Each task holds the lock across a simulated
-        // check-then-write window (a short sleep) and appends to a shared log while holding it —
-        // if the lock didn't actually serialize them, both tasks' "enter"/"exit" pairs would
-        // interleave instead of nesting.
-        let locks: Arc<Mutex<HashSet<String>>> = Default::default();
-        let log: Arc<Mutex<Vec<&'static str>>> = Default::default();
-
-        let run = |locks: Arc<Mutex<HashSet<String>>>,
-                   log: Arc<Mutex<Vec<&'static str>>>,
-                   tag: &'static str| {
-            tokio::spawn(async move {
-                let _guard = lock_filename_in(&locks, "colliding.zip").await;
-                log.lock().await.push(tag);
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                log.lock().await.push(tag);
-            })
-        };
-
-        let h1 = run(locks.clone(), log.clone(), "enter1-exit1");
-        let h2 = run(locks.clone(), log.clone(), "enter2-exit2");
-        h1.await.unwrap();
-        h2.await.unwrap();
-
-        let entries = log.lock().await.clone();
-        assert_eq!(entries.len(), 4);
-        // Whichever task ran first, its two entries must be adjacent (fully nested), never
-        // interleaved with the other task's — that's what "serialized" means here.
-        assert_eq!(entries[0], entries[1], "the two halves of the first-run task must be adjacent, not interleaved with the second task");
-        assert_eq!(entries[2], entries[3], "the two halves of the second-run task must be adjacent, not interleaved with the first task");
-    }
-}

@@ -29,11 +29,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_storage::repository::ArchiveRepository;
+use serde::Serialize;
 use tokio::sync::Semaphore;
 
 use crate::pipeline::{ingest_file, IngestOutcome, FILEMAP_KEY};
@@ -193,6 +195,166 @@ pub async fn full_scan(
     summary
 }
 
+/// Why a single archive's `pagecount`/`arcsize` heal attempt in [`heal_pagecounts`] came out the
+/// way it did — kept per-archive (not just a top-level count) so `/jobs`'s `result` JSON actually
+/// names which archives were touched, per issue #2's explicit "能看到修了哪个档案" requirement.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum HealOutcome {
+    Healed {
+        old_pagecount: u32,
+        new_pagecount: u32,
+        new_arcsize: u64,
+    },
+    /// `archive_format::list_pages` itself failed or returned zero entries — this means the
+    /// *archive container* is unreadable/corrupt (or an unsupported format), not that some
+    /// individual page's image bytes are damaged. `list_pages` only inspects entry names/types
+    /// (`archive_format::list_pages`'s own docs — it `skip_data()`s every entry, never decoding
+    /// image content), so a single corrupt *page* inside an otherwise-intact archive is invisible
+    /// to this check and never lands here — that's `Archive::corrupted_pages`'s job instead
+    /// (detected when the reader/thumbnail path actually decodes a page's bytes).
+    Failed { reason: String },
+    /// Already has `heal_failed_at` set from a previous run — not retried (see this module's own
+    /// docs on why), so it doesn't even reach the point of calling `list_pages` again.
+    SkippedKnownFailed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HealDetail {
+    pub archive_id: String,
+    pub filename: String,
+    #[serde(flatten)]
+    pub outcome: HealOutcome,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HealSummary {
+    /// Archives with `pagecount == 0` and an on-disk file — the full candidate set before the
+    /// `heal_failed_at` skip-filter, so `checked == healed + failed + skipped_known_failed`.
+    pub checked: usize,
+    pub healed: usize,
+    pub failed: usize,
+    pub skipped_known_failed: usize,
+    pub details: Vec<HealDetail>,
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Detects and repairs archives whose `pagecount`/`arcsize` were corrupted by the double-ingest
+/// race this issue fixed (`lanrurugi_core::filename_lock`'s own docs have the full incident) —
+/// and, going forward, any *other* cause that leaves a tracked archive with `pagecount: 0` despite
+/// a real, readable file on disk. Re-runs `archive_format::list_pages` + a fresh `stat` against
+/// the archive's current on-disk file and writes the corrected values back.
+///
+/// Deliberately **not retried** once an attempt fails (`Archive::heal_failed_at` is set and the
+/// archive is skipped by every subsequent call to this function) — a permanently unreadable file
+/// (deleted, replaced with garbage, a format `archive_format` doesn't support) would otherwise be
+/// re-attempted on every `startup_scan`/`rebuild-index` run forever, each one just re-confirming
+/// the same failure. Only a fresh catalogue of that exact archive ID (e.g. deleting it and
+/// re-downloading, which produces a brand-new `Archive` record with `heal_failed_at: None`) clears
+/// the marker and makes it eligible again.
+pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
+    let all = match archives.list_all().await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "heal_pagecounts: failed to list archives, skipping this run");
+            return HealSummary::default();
+        }
+    };
+
+    let mut summary = HealSummary::default();
+    for mut archive in all {
+        if archive.pagecount != 0 || archive.file.is_empty() || !Path::new(&archive.file).exists() {
+            continue;
+        }
+        summary.checked += 1;
+
+        let filename = Path::new(&archive.file)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| archive.file.clone());
+
+        if archive.heal_failed_at.is_some() {
+            summary.skipped_known_failed += 1;
+            summary.details.push(HealDetail {
+                archive_id: archive.id,
+                filename,
+                outcome: HealOutcome::SkippedKnownFailed,
+            });
+            continue;
+        }
+
+        match crate::archive_format::list_pages(Path::new(&archive.file)) {
+            Ok(pages) if !pages.is_empty() => {
+                let new_arcsize = std::fs::metadata(&archive.file)
+                    .map(|m| m.len())
+                    .unwrap_or(archive.arcsize);
+                let old_pagecount = archive.pagecount;
+                let new_pagecount = pages.len() as u32;
+                archive.pagecount = new_pagecount;
+                archive.arcsize = new_arcsize;
+                if let Err(e) = archives.save(&archive).await {
+                    tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to save healed archive");
+                    summary.failed += 1;
+                    summary.details.push(HealDetail {
+                        archive_id: archive.id,
+                        filename,
+                        outcome: HealOutcome::Failed {
+                            reason: e.to_string(),
+                        },
+                    });
+                    continue;
+                }
+                tracing::info!(
+                    archive_id = %archive.id,
+                    %filename,
+                    old_pagecount,
+                    new_pagecount,
+                    new_arcsize,
+                    "heal_pagecounts: healed"
+                );
+                summary.healed += 1;
+                summary.details.push(HealDetail {
+                    archive_id: archive.id,
+                    filename,
+                    outcome: HealOutcome::Healed {
+                        old_pagecount,
+                        new_pagecount,
+                        new_arcsize,
+                    },
+                });
+            }
+            list_result => {
+                // Either an `Err` (container itself unreadable/corrupt/unsupported) or `Ok(vec![])`
+                // (readable but genuinely has no image entries) — both mean "not fixable by this
+                // pass" and get the same `heal_failed_at` treatment so neither is retried forever.
+                let reason = match list_result {
+                    Err(e) => e.to_string(),
+                    Ok(_) => "archive contains no recognized image entries".to_string(),
+                };
+                archive.heal_failed_at = Some(now_unix_secs());
+                if let Err(e) = archives.save(&archive).await {
+                    tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to persist heal_failed_at marker");
+                }
+                tracing::warn!(archive_id = %archive.id, %filename, %reason, "heal_pagecounts: failed, will not retry");
+                summary.failed += 1;
+                summary.details.push(HealDetail {
+                    archive_id: archive.id,
+                    filename,
+                    outcome: HealOutcome::Failed { reason },
+                });
+            }
+        }
+    }
+
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +438,8 @@ mod tests {
                 thumbhash: None,
                 toc: vec![],
                 stamp_ids: vec![],
+                heal_failed_at: None,
+                corrupted_pages: vec![],
             })
             .await
             .unwrap();
@@ -467,5 +631,139 @@ mod tests {
             !still_present,
             "a filemap entry for a deleted file must be pruned"
         );
+    }
+
+    fn make_zip_with_pages(dir: &std::path::Path, name: &str, n_pages: usize) -> PathBuf {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        use std::io::Write;
+        for i in 0..n_pages {
+            writer.start_file(format!("page{i}.jpg"), options).unwrap();
+            writer.write_all(b"fake image bytes").unwrap();
+        }
+        writer.finish().unwrap();
+        path
+    }
+
+    fn archive_with_zero_pagecount(
+        id: &str,
+        file: &std::path::Path,
+    ) -> lanrurugi_core::entities::Archive {
+        lanrurugi_core::entities::Archive {
+            id: id.to_string(),
+            name: "n".into(),
+            title: "t".into(),
+            file: file.to_string_lossy().to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 123, // Deliberately wrong — this is what `heal_pagecounts` must correct.
+            pagecount: 0,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn heal_pagecounts_recomputes_pagecount_and_arcsize_for_a_readable_archive() {
+        let Some((archive_pool, _, _)) = test_pools(30) else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_zip_with_pages(dir.path(), "book.zip", 5);
+        let real_size = std::fs::metadata(&path).unwrap().len();
+
+        let id = "1".repeat(40);
+        archives
+            .save(&archive_with_zero_pagecount(&id, &path))
+            .await
+            .unwrap();
+
+        let summary = heal_pagecounts(&archives).await;
+
+        assert_eq!(summary.checked, 1);
+        assert_eq!(summary.healed, 1);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.skipped_known_failed, 0);
+        assert_eq!(summary.details.len(), 1);
+        assert_eq!(summary.details[0].archive_id, id);
+        assert!(matches!(
+            summary.details[0].outcome,
+            HealOutcome::Healed {
+                new_pagecount: 5,
+                ..
+            }
+        ));
+
+        let healed = archives.get(&id).await.unwrap().unwrap();
+        assert_eq!(healed.pagecount, 5);
+        assert_eq!(healed.arcsize, real_size);
+        assert_eq!(healed.heal_failed_at, None);
+
+        archives.delete(&id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn heal_pagecounts_marks_an_unreadable_archive_failed_and_never_retries_it() {
+        let Some((archive_pool, _, _)) = test_pools(33) else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        // A file with an archive-like extension but bytes that aren't a real archive at all —
+        // `list_pages` must fail on this (the container itself is unreadable), matching the
+        // "corrupt/unsupported archive" case, not the "one page's image is corrupt" case.
+        let path = dir.path().join("broken.zip");
+        std::fs::write(&path, b"this is not a real zip file").unwrap();
+
+        let id = "2".repeat(40);
+        archives
+            .save(&archive_with_zero_pagecount(&id, &path))
+            .await
+            .unwrap();
+
+        let first = heal_pagecounts(&archives).await;
+        assert_eq!(first.checked, 1);
+        assert_eq!(first.healed, 0);
+        assert_eq!(first.failed, 1);
+        assert_eq!(first.skipped_known_failed, 0);
+        assert!(matches!(
+            first.details[0].outcome,
+            HealOutcome::Failed { .. }
+        ));
+
+        let after_first = archives.get(&id).await.unwrap().unwrap();
+        assert!(
+            after_first.heal_failed_at.is_some(),
+            "a failed heal attempt must record heal_failed_at so it isn't retried forever"
+        );
+        assert_eq!(
+            after_first.pagecount, 0,
+            "a failed heal must not touch pagecount/arcsize"
+        );
+
+        // A second run must not attempt `list_pages` on this archive again — it's already marked
+        // failed, so it's skipped outright (counted separately from a fresh failure).
+        let second = heal_pagecounts(&archives).await;
+        assert_eq!(second.checked, 1);
+        assert_eq!(second.healed, 0);
+        assert_eq!(second.failed, 0);
+        assert_eq!(second.skipped_known_failed, 1);
+        assert!(matches!(
+            second.details[0].outcome,
+            HealOutcome::SkippedKnownFailed
+        ));
+
+        archives.delete(&id).await.unwrap();
     }
 }

@@ -29,6 +29,13 @@ use lanrurugi_storage::id::ARCHIVE_ID_LEN;
 use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
 const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
+/// Served by `fetch_page` in place of a page entry name listed in `Archive::corrupted_pages` (see
+/// that field's own docs on how/where a page gets flagged) — an actual image, not a 1x1
+/// placeholder like [`PLACEHOLDER_THUMBNAIL`], since this fills the reader's *entire page area*
+/// and needs to visibly communicate "this page is broken" rather than render as blank space. SVG
+/// (not a raster format) so it stays crisp at any page/viewport size without needing its own
+/// resize handling.
+const CORRUPTED_PAGE_PLACEHOLDER: &[u8] = include_bytes!("../assets/corrupted_page.svg");
 
 /// A legitimate archive ID is always a 40-character lowercase-hex SHA-1 digest
 /// (`lanrurugi_storage::id::{legacy_id, size_aware_id}`) — anything else (in particular anything
@@ -998,16 +1005,20 @@ async fn get_page(
         }
     };
 
-    let result = state
-        .page_singleflight
-        .run((id.clone(), params.path.clone()), {
-            let state = state.clone();
-            let id = id.clone();
-            let path = params.path.clone();
-            let archive_file = archive.file.clone();
-            move || async move { fetch_page(&state, &id, &path, &archive_file).await }
-        })
-        .await;
+    let result =
+        state
+            .page_singleflight
+            .run((id.clone(), params.path.clone()), {
+                let state = state.clone();
+                let id = id.clone();
+                let path = params.path.clone();
+                let archive_file = archive.file.clone();
+                let corrupted_pages = archive.corrupted_pages.clone();
+                move || async move {
+                    fetch_page(&state, &id, &path, &archive_file, &corrupted_pages).await
+                }
+            })
+            .await;
 
     match result {
         Ok((content_type, bytes)) => {
@@ -1024,7 +1035,20 @@ async fn fetch_page(
     id: &str,
     path: &str,
     archive_file: &str,
+    corrupted_pages: &[String],
 ) -> Result<(&'static str, bytes::Bytes), String> {
+    // Short-circuits before any archive I/O — a page already known to be corrupt (flagged by
+    // `generate_page_thumbnails`'s own decode attempt) is served straight from this static asset
+    // every time, never re-attempting the decode that already failed once. `corrupted_pages` comes
+    // from the same `Archive` fetch `get_page` already did (not a second Redis round trip here).
+    // See `Archive::corrupted_pages`'s own docs for why this is keyed by entry name, not index.
+    if corrupted_pages.iter().any(|p| p == path) {
+        return Ok((
+            "image/svg+xml",
+            bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+        ));
+    }
+
     // `read_entry` does blocking libarchive FFI + file IO (constitution Principle III: never run
     // inline on an async worker thread) — `resize_if_over_threshold` below already goes through
     // `run_blocking` internally, this call didn't before this change.
@@ -1154,7 +1178,11 @@ async fn generate_page_thumbnails(
     };
 
     let shard = &id[0..2.min(id.len())];
-    for (i, _) in pages.iter().enumerate() {
+    // Newly-discovered corrupt pages this pass — collected rather than saved one at a time so a
+    // failure partway through doesn't leave `archive` and its persisted record diverging, and so
+    // the common case (no corrupt pages found) never touches the archive record at all.
+    let mut newly_corrupted: Vec<String> = Vec::new();
+    for (i, entry_name) in pages.iter().enumerate() {
         let output = state.library.thumb_dir.join(shard).join(&id).join(format!(
             "{}.{}",
             i + 1,
@@ -1173,6 +1201,24 @@ async fn generate_page_thumbnails(
         .await
         {
             tracing::warn!(%id, page = i + 1, error = %e, "page thumbnail generation failed");
+            // Only an actual image-decode failure means *this page's bytes* are corrupt — an I/O
+            // error writing the thumbnail file, a failed blocking-task join, etc. say nothing
+            // about the page itself and must not get it wrongly marked corrupted (which would
+            // make the reader serve a placeholder for a perfectly good page forever, since
+            // `heal`-style fields are sticky by design — see `Archive::corrupted_pages`'s docs).
+            if matches!(e, lanrurugi_scanner::thumbnail::ThumbnailError::Decode(_))
+                && !archive.corrupted_pages.contains(entry_name)
+                && !newly_corrupted.contains(entry_name)
+            {
+                newly_corrupted.push(entry_name.clone());
+            }
+        }
+    }
+    if !newly_corrupted.is_empty() {
+        let mut updated = archive.clone();
+        updated.corrupted_pages.extend(newly_corrupted);
+        if let Err(e) = state.repos.archives.save(&updated).await {
+            tracing::warn!(%id, error = %e, "failed to persist newly-detected corrupted pages");
         }
     }
 

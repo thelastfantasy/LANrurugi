@@ -119,6 +119,14 @@ pub enum QueueError {
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
     Internal,
+    /// A queue item was left in `Starting`/`Downloading` state when the server process restarted
+    /// (`JobRegistry` is purely in-process memory — the job tracking this download's progress was
+    /// lost, but the persisted queue item's own `state` survived in Redis unchanged) — detected
+    /// and marked at the next `serve` startup, before any download could actually resume. Distinct
+    /// from `Internal` specifically because this *is* actionable (retry), matching
+    /// `DuplicateFilenameCleaned`'s own "explain what happened, offer a real next step" design
+    /// rather than a generic "check the server logs" dead end.
+    StaleAfterRestart,
 }
 
 impl QueueError {
@@ -140,6 +148,7 @@ impl QueueError {
             QueueError::DuplicateArchive { .. } => 409,
             QueueError::DuplicateFilename { .. } => 1003,
             QueueError::DuplicateFilenameCleaned { .. } => 1004,
+            QueueError::StaleAfterRestart => 1005,
         }
     }
 }
@@ -215,6 +224,7 @@ mod tests {
             .code(),
             1004
         );
+        assert_eq!(QueueError::StaleAfterRestart.code(), 1005);
     }
 
     #[test]

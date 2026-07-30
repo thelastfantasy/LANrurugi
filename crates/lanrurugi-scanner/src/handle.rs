@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use deadpool_redis::Pool;
+use lanrurugi_core::filename_lock::FilenameLocks;
 use lanrurugi_storage::repository::ArchiveRepository;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -38,6 +39,7 @@ impl ScannerHandle {
         search_pool: Pool,
         archives: ArchiveRepository,
         new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        locks: FilenameLocks,
     ) -> Result<(), crate::watcher::WatcherError> {
         let mut guard = self.running.lock().await;
         if guard.is_some() {
@@ -51,6 +53,7 @@ impl ScannerHandle {
             search_pool,
             thumb_dir,
             new_archive_tx,
+            locks,
         ));
         *guard = Some(Running {
             _watcher: watcher,
@@ -75,6 +78,7 @@ impl ScannerHandle {
         search_pool: Pool,
         archives: ArchiveRepository,
         new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        locks: FilenameLocks,
     ) -> Result<(), crate::watcher::WatcherError> {
         self.stop().await;
         self.start(
@@ -84,6 +88,7 @@ impl ScannerHandle {
             search_pool,
             archives,
             new_archive_tx,
+            locks,
         )
         .await
     }

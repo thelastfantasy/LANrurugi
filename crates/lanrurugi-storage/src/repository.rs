@@ -106,6 +106,12 @@ impl ArchiveRepository {
                 field: "stamps",
                 source: e,
             })?;
+        let corrupted_pages_json =
+            serde_json::to_string(&archive.corrupted_pages).map_err(|e| RepositoryError::Json {
+                key: archive.id.clone(),
+                field: "corrupted_pages",
+                source: e,
+            })?;
 
         let fields: Vec<(&str, String)> = vec![
             ("name", archive.name.clone()),
@@ -123,10 +129,25 @@ impl ArchiveRepository {
             ("lastreadtime", archive.lastreadtime.to_string()),
             ("toc", toc_json),
             ("stamps", stamps_json),
+            ("corrupted_pages", corrupted_pages_json),
         ];
         let _: () = conn.hset_multiple(&archive.id, &fields).await?;
         if let Some(thumbhash) = &archive.thumbhash {
             let _: () = conn.hset(&archive.id, "thumbhash", thumbhash).await?;
+        }
+        // `HSET`, unlike `hset_multiple` above, never clears a field on its own — `heal_failed_at`
+        // needs an explicit `HDEL` when `None` so a fresh catalogue of this archive ID (e.g.
+        // re-downloading and overwriting a permanently-broken one) doesn't inherit a stale failure
+        // marker left over from whatever record previously occupied this ID.
+        match archive.heal_failed_at {
+            Some(ts) => {
+                let _: () = conn
+                    .hset(&archive.id, "heal_failed_at", ts.to_string())
+                    .await?;
+            }
+            None => {
+                let _: () = conn.hdel(&archive.id, "heal_failed_at").await?;
+            }
         }
         Ok(())
     }
@@ -196,6 +217,10 @@ fn archive_from_fields(
         .get("stamps")
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
+    let corrupted_pages: Vec<String> = fields
+        .get("corrupted_pages")
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
 
     Ok(Archive {
         id: id.to_string(),
@@ -215,6 +240,8 @@ fn archive_from_fields(
             .map(|raw| toc_from_legacy_json(raw))
             .unwrap_or_default(),
         stamp_ids,
+        heal_failed_at: fields.get("heal_failed_at").and_then(|s| s.parse().ok()),
+        corrupted_pages,
     })
 }
 
@@ -542,6 +569,8 @@ mod tests {
                 name: "Chapter 1".to_string(),
             }],
             stamp_ids: vec![],
+            heal_failed_at: Some(1_700_000_500),
+            corrupted_pages: vec!["page03.jpg".to_string(), "page07.jpg".to_string()],
         };
 
         repo.save(&archive).await.unwrap();
@@ -637,6 +666,8 @@ mod tests {
             thumbhash: None,
             toc: vec![],
             stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
         };
         archive_repo.save(&archive).await.unwrap();
 

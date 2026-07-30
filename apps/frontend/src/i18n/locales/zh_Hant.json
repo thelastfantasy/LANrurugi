@@ -680,5 +680,6 @@
   "{{n}} could not be removed.": "{{n}} 個任務無法移除。",
   "Rate-limited to {{limit}}/s": "已限速：{{limit}}/s",
   "Matched rule: {{pattern}}": "匹配規則：{{pattern}}",
-  "Edit this plugin’s rate-limit settings": "編輯該插件的限速設定"
+  "Edit this plugin’s rate-limit settings": "編輯該插件的限速設定",
+  "Download was interrupted by a server restart, please retry": "下載因伺服器重啟而中斷，請重試"
 }

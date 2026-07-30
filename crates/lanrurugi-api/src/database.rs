@@ -373,6 +373,8 @@ async fn rebuild_index(State(state): State<AppState>) -> Response {
         )
         .await;
 
+        let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
+
         jobs.finish(
             &job_id_for_task,
             json!({
@@ -382,6 +384,13 @@ async fn rebuild_index(State(state): State<AppState>) -> Response {
                 "scanned": scan_summary.scanned,
                 "newly_catalogued": scan_summary.catalogued,
                 "errors": scan_summary.errors,
+                "pagecount_heal": {
+                    "checked": heal_summary.checked,
+                    "healed": heal_summary.healed,
+                    "failed": heal_summary.failed,
+                    "skipped_known_failed": heal_summary.skipped_known_failed,
+                    "details": heal_summary.details,
+                },
             }),
         )
         .await;

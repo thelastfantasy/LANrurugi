@@ -279,6 +279,7 @@ export type QueueError =
   | { kind: 'duplicate_filename'; existing_id: string; filename: string }
   | { kind: 'duplicate_filename_cleaned'; existing_id: string; filename: string }
   | { kind: 'internal' }
+  | { kind: 'stale_after_restart' }
 
 /** Mirrors `lanrurugi_storage::download_queue::PendingFilenameConflict` — set on a queue item
  * whose download was blocked by a `Filename` collision (content is genuinely new, only the

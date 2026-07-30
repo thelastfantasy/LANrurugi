@@ -45,6 +45,7 @@ async fn shinobu_restart(State(state): State<AppState>) -> Response {
             state.redis.search.clone(),
             (*state.repos.archives).clone(),
             Some(state.new_archive_tx.clone()),
+            state.filename_locks.clone(),
         )
         .await;
     match result {
@@ -91,6 +92,7 @@ async fn shinobu_rescan(State(state): State<AppState>) -> Response {
             state.redis.search.clone(),
             (*state.repos.archives).clone(),
             Some(state.new_archive_tx.clone()),
+            state.filename_locks.clone(),
         )
         .await;
     match result {
