@@ -15,6 +15,20 @@ type ByteRateLimiter = RateLimiter<
     governor::clock::QuantaClock,
 >;
 
+/// The rate limiter's actual burst capacity, independent of the configured rate — `governor`'s
+/// `Quota::per_second(rate)` defaults the burst size to `rate` itself (a full second's worth of
+/// tokens available instantaneously to an idle limiter), which is *technically* spec-compliant
+/// ("no more than `rate` bytes/sec, averaged") but produces a visibly wrong-looking one-time spike
+/// at the very start of every download: measured directly against the raw `governor` crate
+/// (issue #41 follow-up investigation), a fresh 1,000,000 bytes/sec limiter let ~983,040 bytes
+/// through with sub-microsecond waits before the 16th call finally started blocking for the
+/// expected ~65.5ms per 65,536-byte chunk — i.e. nearly a full second's allowance duped out in a
+/// handful of iterations, right at the moment a user is watching the speed reading for the first
+/// time. Capping the burst independently via `Quota::allow_burst` bounds that one-time spike to a
+/// small, constant number of chunks' worth regardless of the configured rate, while leaving the
+/// steady-state rate (and thus long-run averaged throughput) exactly as configured.
+const MAX_BURST_BYTES: u64 = 262_144;
+
 /// A rate limiter together with the bytes/sec cap it was actually constructed with — same
 /// "governor exposes no way to read back a limiter's original quota" reasoning as
 /// `download_manager::SizedSemaphore`'s own docs, so it's tracked alongside the limiter rather
@@ -41,13 +55,12 @@ impl RateLimiterMap {
     ///
     /// **Correctness note**: `governor`'s `until_n_ready(n)` returns `Err(InsufficientCapacity)`
     /// — immediately, without waiting at all — whenever `n` exceeds the limiter's own burst
-    /// capacity (`Quota::per_second(rate)`'s burst size equals `rate`), rather than queueing and
-    /// draining it across multiple refill periods. A single `reqwest` chunk read is routinely
-    /// larger than a configured slow rate limit (e.g. a 64KB TCP read against a 10KB/sec cap) —
-    /// passing the whole `chunk_len` through in one `until_n_ready` call would silently fail to
-    /// throttle whenever that happens. Fixed by splitting `chunk_len` into sub-chunks no larger
-    /// than `bytes_per_sec` itself (guaranteed to be within the limiter's own burst capacity) and
-    /// awaiting each in turn.
+    /// capacity ([`MAX_BURST_BYTES`], not the configured rate — see that constant's own docs on
+    /// why the two are deliberately decoupled), rather than queueing and draining it across
+    /// multiple refill periods. A single `reqwest` chunk read can exceed that cap even at a
+    /// generous rate limit — passing the whole `chunk_len` through in one `until_n_ready` call
+    /// would silently fail to throttle whenever that happens. Fixed by splitting `chunk_len` into
+    /// sub-chunks no larger than the burst cap and awaiting each in turn.
     ///
     /// Same capacity-change handling as `DownloadManager::acquire`: if `bytes_per_sec` for `key`
     /// differs from the tracked limiter's own originally-declared rate, the stale limiter is
@@ -78,7 +91,10 @@ impl RateLimiterMap {
             entry.limiter.clone()
         };
 
-        let burst_cap = bytes_per_sec.min(u32::MAX as u64).max(1);
+        let burst_cap = bytes_per_sec
+            .min(MAX_BURST_BYTES)
+            .min(u32::MAX as u64)
+            .max(1);
         let mut remaining = chunk_len;
         while remaining > 0 {
             let this_slice = remaining.min(burst_cap);
@@ -112,9 +128,14 @@ impl RateLimiterMap {
 }
 
 fn new_limiter(bytes_per_sec: u64) -> ByteRateLimiter {
-    let bytes_per_sec = NonZeroU32::new(bytes_per_sec.min(u32::MAX as u64) as u32)
+    let rate = NonZeroU32::new(bytes_per_sec.min(u32::MAX as u64) as u32)
         .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
-    RateLimiter::direct(Quota::per_second(bytes_per_sec))
+    // Burst capped independently of the rate (see `MAX_BURST_BYTES`'s own docs) — without this, a
+    // fresh/idle limiter's burst size defaults to a full second's worth of the configured rate,
+    // letting nearly all of it through instantaneously the moment a download starts.
+    let burst = NonZeroU32::new(bytes_per_sec.min(MAX_BURST_BYTES).min(u32::MAX as u64) as u32)
+        .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+    RateLimiter::direct(Quota::per_second(rate).allow_burst(burst))
 }
 
 #[cfg(test)]
@@ -139,6 +160,56 @@ mod tests {
         let start = Instant::now();
         map.throttle("example.com", Some(1), 0).await;
         assert!(start.elapsed().as_millis() < 50);
+    }
+
+    /// Issue #41 follow-up: `governor`'s default burst size (a full second's worth of the
+    /// configured rate) let a fresh/idle limiter release ~98% of a whole second's allowance
+    /// instantaneously the moment a download started, before converging to the real configured
+    /// rate — this reproduced even after the shared-pool fix (per-download unique keys), since it
+    /// happens on a *single* limiter regardless of sharing. Proven here by driving one limiter
+    /// continuously for 5 seconds and asserting the average throughput stays close to the
+    /// configured rate rather than sitting ~20-30% over it the way the unbounded-burst version did.
+    #[tokio::test]
+    async fn sustained_throughput_stays_close_to_the_configured_rate() {
+        let map = RateLimiterMap::default();
+        let bytes_per_sec: u64 = 1_000_000;
+        let chunk: u64 = 65536;
+        let start = Instant::now();
+        let mut sent: u64 = 0;
+        while start.elapsed().as_secs() < 5 {
+            map.throttle("example.com", Some(bytes_per_sec), chunk)
+                .await;
+            sent += chunk;
+        }
+        let avg_rate = sent as f64 / start.elapsed().as_secs_f64();
+        assert!(
+            avg_rate < bytes_per_sec as f64 * 1.15,
+            "average throughput over 5s must stay close to the configured rate, got {avg_rate:.0} B/s against a {bytes_per_sec} B/s cap"
+        );
+    }
+
+    /// The one-time startup burst must be bounded to [`MAX_BURST_BYTES`], not the full configured
+    /// rate — proven by confirming a limiter starts blocking well before a full second's worth of
+    /// the configured rate has been spent.
+    #[tokio::test]
+    async fn startup_burst_is_bounded_independent_of_the_configured_rate() {
+        use std::num::NonZeroU32;
+        let bytes_per_sec = 1_000_000;
+        let limiter = new_limiter(bytes_per_sec);
+        let n = NonZeroU32::new(65536).unwrap();
+        let mut spent_before_blocking: u64 = 0;
+        loop {
+            let call_start = Instant::now();
+            limiter.until_n_ready(n).await.unwrap();
+            if call_start.elapsed().as_millis() > 10 {
+                break;
+            }
+            spent_before_blocking += 65536;
+        }
+        assert!(
+            spent_before_blocking < bytes_per_sec / 2,
+            "startup burst must be well under a full second's allowance, got {spent_before_blocking} bytes"
+        );
     }
 
     #[tokio::test]
