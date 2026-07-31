@@ -1,12 +1,49 @@
 import path from 'node:path'
 
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+/** Fills in `index.html`'s inline anti-flash-of-default-theme script's `id="theme-init"
+ * data-theme="..."` attribute (see that file's own docs) with the real current theme in `vite
+ * dev` too, not just in a production build served by `lanrurugi-server::app::serve_index`. Uses
+ * the `transformIndexHtml` hook — Vite's own dedicated, documented mechanism for this exact kind
+ * of "adjust the HTML Vite is about to serve" task — rather than intercepting the raw HTTP
+ * request/response in `configureServer` middleware: an earlier version of this fetched the
+ * *entire* `index.html` from the Rust backend's own `/` response and used that as the template,
+ * which seemed to work (the attribute really did come back filled in) but was actually fetching
+ * `lanrurugi-server`'s production-mode response — built from `dist/index.html`, which references
+ * bundled assets (`/assets/index-XXXX.js`) instead of the real dev-mode source entry
+ * (`/src/main.tsx`) `vite dev` itself needs — silently producing a blank page (a 404 on the
+ * bundled script vite dev never serves) confirmed live via the browser console. Only fetching the
+ * *theme value itself* here (the same `GET /api/theme` the production frontend's own
+ * `usePublicTheme()`/`useSettings()` already call) and substituting it into Vite's own
+ * already-correct dev-mode HTML sidesteps that whole class of bug — nothing about vite dev's own
+ * asset resolution is touched. */
+function injectServerTheme(): Plugin {
+  return {
+    name: 'inject-server-theme',
+    async transformIndexHtml(html) {
+      const backendPort = process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'
+      try {
+        const response = await fetch(`http://127.0.0.1:${backendPort}/api/theme`)
+        if (!response.ok) return html
+        const data = (await response.json()) as { theme?: string }
+        if (!data.theme) return html
+        return html.replace('id="theme-init" data-theme=""', `id="theme-init" data-theme="${data.theme}"`)
+      } catch {
+        // Backend unreachable (not started yet, crashed, etc.) — leave the placeholder empty, same
+        // as a production `serve_index` that couldn't reach Redis; the script's own client-side
+        // fallback chain (`localStorage` then `modern.css`) still applies.
+        return html
+      }
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), injectServerTheme()],
   server: {
     port: 3000,
     fs: {

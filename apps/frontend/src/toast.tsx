@@ -23,23 +23,43 @@ const AUTO_CLOSE_TIME: Record<ToastIcon, number | false> = {
 }
 
 /** Matches legacy's own `LRR.toast()` (`~/LANraragi/public/js/mod/common.js`'s `toast()`) call
- * shape and defaults exactly — same underlying library (`react-toastify`), just called directly
- * from React instead of through legacy's Preact wrapper around it. Requires a `<ToastContainer
- * limit={7} theme="light" />` mounted once (see `App.tsx`), matching legacy's own
- * `initializeToasts()`. */
+ * shape and defaults, with one deliberate deviation — same underlying library (`react-toastify`),
+ * just called directly from React instead of through legacy's Preact wrapper around it. Requires a
+ * `<ToastContainer limit={7} theme="light" />` mounted once (see `App.tsx`), matching legacy's own
+ * `initializeToasts()`.
+ *
+ * `position: 'bottom-right'`, not legacy's own `top-left` — that placement sits directly under
+ * the top nav/search bar, where it's both easy to miss (outside the natural reading path for most
+ * of this app's own UI, which is centered/left-to-right below the header) and easy to *mistake*
+ * for part of the page's own header content at a glance. `bottom-right` is the de facto standard
+ * placement for transient notifications (matching most modern web apps' own convention) and keeps
+ * toasts clear of every other interactive chrome on this app's pages (issue #58).
+ */
 export function toast(c: ToastConfig) {
   const type = c.icon ?? 'info'
   const isWarningOrError = type === 'warning' || type === 'error'
   const options: ToastOptions = {
     toastId: c.toastId,
     type,
-    position: 'top-left',
+    position: 'bottom-right',
     autoClose: c.hideAfter ?? AUTO_CLOSE_TIME[type] ?? 7000,
     closeOnClick: c.closeOnClick ?? !isWarningOrError,
     draggable: c.draggable ?? !isWarningOrError,
   }
   return emitToast(
-    <div>
+    // `Toastify__toast-body` class + `textAlign: 'left'` inline — `lrr.css` already carries a real
+    // `.Toastify__toast-body h2` rule (14px, weight 600, `margin: 0; padding: 4px 0 8px`) sized
+    // correctly for this exact toast, but this app's actual `react-toastify` version (11.x) never
+    // renders a `.Toastify__toast-body` wrapper on its own (confirmed live via `innerHTML`
+    // inspection — the content div is an unclassed direct child of `.Toastify__toast` instead), so
+    // that selector never matched and the `<h2>` fell through to the bare browser default
+    // (`font-size: 16px`, `margin: 13.28px 0` — issue #58's "ugly whitespace above the heading").
+    // Adding the class back here (rather than re-declaring the same typography inline) makes
+    // legacy's own rule apply again, matching its intent exactly. `textAlign: 'left'` still needed
+    // on top of that: the active theme's own `body { text-align: center }` (`g.css` etc., legacy's
+    // real global centering convention for un-positioned elements like images) inherits all the way
+    // down into the portal, and `lrr.css`'s `.Toastify__toast-body` rule doesn't itself override it.
+    <div className="Toastify__toast-body" style={{ textAlign: 'left' }}>
       {c.heading && <h2>{c.heading}</h2>}
       {c.text && <div dangerouslySetInnerHTML={{ __html: c.text }} />}
     </div>,

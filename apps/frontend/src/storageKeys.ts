@@ -48,3 +48,14 @@ export const INDEX_VIEW_MODE_KEY = 'indexViewMode'
 export const INDEX_SORT_KEY = 'indexSort'
 
 export const INDEX_ORDER_KEY = 'indexOrder'
+
+/** Last-applied legacy theme filename (e.g. `"modern.css"`) — written by `theme.ts`'s
+ * `useApplyTheme` once the real value comes back from `/settings`/`/theme`. Read synchronously by
+ * a same-named inline script in `index.html` (that file can't `import` this constant — it isn't a
+ * module, and it has to run before any JS module even starts loading), so this string literal and
+ * the one hardcoded there must be kept in sync by hand; this is the only other place either one is
+ * allowed to change. Exists purely to close the "flash of default theme" gap between first paint
+ * and `useApplyTheme`'s own effect actually running (issue #58 follow-up) — the inline script
+ * applies this cached value immediately, synchronously, before the browser paints anything at all,
+ * and `useApplyTheme` silently corrects it later if the real settings ever disagree. */
+export const THEME_STORAGE_KEY = 'lrrTheme'

@@ -481,6 +481,17 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    // Explicit `hdel` before asserting the default — this shares one real Redis instance with
+    // every other test binary in the workspace (`LANRURUGI_TEST_REDIS_URL`, run concurrently by
+    // `cargo test`), so a `theme` value another test wrote and didn't clean up in time (a real,
+    // observed race with `serve_index.rs`'s own theme-substitution tests) could otherwise leak in
+    // and fail this test's own "confirms the true default" assertion for reasons that have nothing
+    // to do with what this test is actually checking.
+    {
+        use deadpool_redis::redis::AsyncCommands;
+        let mut conn = redis.config.get().await.unwrap();
+        let _: () = conn.hdel("LRR_CONFIG", "theme").await.unwrap();
+    }
 
     let (status, json) = get_json(&app, "/api/settings").await;
     assert_eq!(status, axum::http::StatusCode::OK);

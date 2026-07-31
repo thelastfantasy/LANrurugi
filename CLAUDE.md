@@ -137,7 +137,11 @@ bind-mounted from the host, not a pre-built static bundle — so a pure frontend
 dev-rebuild && dev-down && dev-up` is only needed when a change touches something baked into the
 image at build time: Rust code (`crates/`), plugin `.ts` files under `plugins/` (copied into the
 image, not bind-mounted), or the Dockerfile/compose files themselves. Don't reflexively rebuild
-after every change — check whether the edit was frontend-only first.
+after every change — check whether the edit was frontend-only first. This includes
+`apps/frontend/index.html` itself — `vite.config.ts`'s `injectServerTheme` plugin (the dev-mode
+half of the server-side anti-flash-of-default-theme mechanism — see that file's own docs) uses
+Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
+any other Vite-served frontend file; no build step of its own to go stale.
 
 ## Before pushing — check whether README.md needs updating
 

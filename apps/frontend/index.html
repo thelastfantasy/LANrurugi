@@ -9,6 +9,54 @@
     <meta name="apple-mobile-web-status-bar-style" content="black" />
     <link rel="manifest" href="/app.webappmanifest" />
     <title>LANrurugi</title>
+    <!--
+      Synchronous, blocking (deliberately not `type="module"`/`defer`/`async`) — applies a theme
+      before the browser paints anything at all, so `src/theme.ts`'s own `useApplyTheme` (which
+      only runs after React mounts and its `/settings`/`/theme` fetch resolves — late enough for a
+      real flash of unstyled content on a slow connection) never gets the chance to visibly change
+      it (issue #58 follow-up: "flash of default theme").
+
+      `data-theme` on this `<script>` tag itself (read via `document.currentScript`, not a JS
+      string literal inside the script body) is what `lanrurugi-server` fills in with the real
+      theme — looked up from the same `LRR_CONFIG` Redis hash `GET /api/theme` reads,
+      `crates/lanrurugi-api/src/settings.rs::get_theme` — when it serves this file
+      (`crates/lanrurugi-server/src/app.rs`'s `serve_index` handler, replacing the plain `ServeFile`
+      the SPA fallback used before). An HTML attribute rather than a placeholder string embedded in
+      the script body: the server-side substitution only ever needs to replace one attribute value
+      inside one well-formed tag, not hunt down and pattern-match a specific line of JS syntax
+      elsewhere in this file (a real, previously-shipped bug: an earlier version of this comment
+      block happened to also mention the placeholder's exact text, and the naive first-match string
+      replace silently rewrote *that* instead of the real assignment, confirmed live via a real curl
+      against a real running server) — an attribute is unambiguous regardless of what prose
+      surrounds it. Empty by default (`vite build` never fills this in — only `lanrurugi-server`
+      does, at serve time), so *every* request — including a brand-new browser/device with nothing
+      cached yet — gets the correct theme synchronously, not just a repeat visit from the same
+      browser. Dev-server requests (`vite dev`, no Rust process in front of this file) leave it
+      empty, so the script falls back to the localStorage-cached value from last run, and finally to
+      `modern.css`, the same way it always did — this is a pure enhancement over that path, not a
+      replacement for it. `useApplyTheme` still runs as normal afterwards and silently corrects the
+      `<link>` if a session's real setting differs.
+    -->
+    <script id="theme-init" data-theme="">
+      (function () {
+        var theme = document.currentScript.dataset.theme || null
+        if (!theme) {
+          try {
+            theme = localStorage.getItem('lrrTheme')
+          } catch (e) {
+            // localStorage can throw (private browsing, disabled storage, etc.) — falls through to
+            // the hardcoded default below, same as a lookup miss.
+          }
+        }
+        theme = theme || 'modern.css'
+        var link = document.createElement('link')
+        link.id = 'legacy-theme-css'
+        link.rel = 'stylesheet'
+        link.href = '/legacy/themes/' + theme
+        document.head.appendChild(link)
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

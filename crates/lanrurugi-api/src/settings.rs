@@ -50,29 +50,54 @@ pub fn public_router() -> Router<AppState> {
     Router::new().route("/theme", get(get_theme))
 }
 
+/// Every legacy theme filename this app ships CSS for (`apps/frontend/public/legacy/themes/`),
+/// mirroring the frontend's own `theme.ts::THEMES` list — the one other place this exact set is
+/// declared (that file can't be imported from Rust, so the two must be kept in sync by hand). Used
+/// only by `fetch_theme_for_html_injection` below — plain `fetch_theme`/`get_theme` deliberately
+/// stay permissive (any string round-trips through `/settings`/`/theme`, matching every other
+/// generic settings field), since a value the *React* Login page consumes and renders through
+/// ordinary JSX has no injection surface of its own to defend.
+const KNOWN_THEME_FILES: &[&str] = &[
+    "modern.css",
+    "modern_red.css",
+    "modern_clear.css",
+    "g.css",
+    "ex.css",
+];
+
+/// Raw `theme` field lookup, no validation — `None` only on an actual failure to reach Redis or
+/// read the field (connection pool exhausted, command error, etc.), never on the *value* found.
+async fn fetch_theme(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let theme: Option<String> = conn.hget(CONFIG_KEY, "theme").await.ok()?;
+    Some(theme.unwrap_or_else(|| "modern.css".to_string()))
+}
+
+/// Used by `lanrurugi-server`'s own `serve_index` handler (the `index.html`-serving SPA fallback),
+/// which substitutes this value directly into that file's inline anti-flash-of-default-theme
+/// `<script>` body via a plain string replace — not an HTML/JS-aware templating step — so an
+/// unconstrained value would be a real reflected-script-injection vector for anyone able to write
+/// an arbitrary string to `LRR_CONFIG`'s `theme` field (an authenticated action via `PUT
+/// /settings` today, which never validates `theme` against `KNOWN_THEME_FILES`; this check costs
+/// nothing and turns that into a no-op rather than counting on every future caller of the raw
+/// field to have independently remembered it's about to land inside a `<script>` tag). `None`
+/// whenever `fetch_theme` itself fails *or* the stored value isn't recognized — both already mean
+/// "fall back to `serve_index`'s own built-in default", so this doesn't distinguish them either.
+pub async fn fetch_theme_for_html_injection(state: &AppState) -> Option<String> {
+    fetch_theme(state)
+        .await
+        .filter(|theme| KNOWN_THEME_FILES.contains(&theme.as_str()))
+}
+
 async fn get_theme(State(state): State<AppState>) -> Response {
-    let mut conn = match state.redis.config.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "get_theme",
-                e.to_string(),
-            )
-        }
-    };
-    let theme: Option<String> = match conn.hget(CONFIG_KEY, "theme").await {
-        Ok(t) => t,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "get_theme",
-                e.to_string(),
-            )
-        }
-    };
-    axum::Json(json!({ "theme": theme.unwrap_or_else(|| "modern.css".to_string()) }))
-        .into_response()
+    match fetch_theme(&state).await {
+        Some(theme) => axum::Json(json!({ "theme": theme })).into_response(),
+        None => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "get_theme",
+            "failed to reach redis".to_string(),
+        ),
+    }
 }
 
 /// `(field, default)` pairs for every `LRR_CONFIG` value the Settings page's Global/Security/

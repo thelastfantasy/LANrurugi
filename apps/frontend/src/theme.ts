@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { usePublicTheme, useSettings } from './api/hooks'
+import { THEME_STORAGE_KEY } from './storageKeys'
 
 // Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
 // css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
@@ -174,5 +175,18 @@ export function useApplyTheme() {
     const theme = settings.data?.theme ?? publicTheme.data?.theme ?? DEFAULT_THEME_ID
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
+    // Cache for `index.html`'s own inline script (see that file's own docs) to apply synchronously,
+    // before paint, on the *next* visit — this run is always too late for that to help this one.
+    // Only once a real theme value has actually arrived (not the `DEFAULT_THEME_ID` fallback used
+    // while both queries are still pending) — caching the fallback would let a slow network turn
+    // one single slow load into a permanently-wrong cached theme for every visit after it.
+    if (settings.data?.theme ?? publicTheme.data?.theme) {
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, theme)
+      } catch {
+        // localStorage can throw (private browsing, disabled storage, etc.) — losing the cache is
+        // harmless, just means the next visit won't get the synchronous head start.
+      }
+    }
   }, [settings.data?.theme, publicTheme.data?.theme])
 }
