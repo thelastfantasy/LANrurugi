@@ -269,4 +269,37 @@ mod tests {
             vec![tok("female:anal intercourse", false, true)]
         );
     }
+
+    // Negation (`-` prefix) is parsed once per token, before either the quoted or unquoted branch
+    // — unaffected by the space-delimiter/mid-token-quote additions above, but worth locking down
+    // explicitly now that a token can be built two different ways.
+    #[test]
+    fn negation_combines_with_space_separated_tokens() {
+        let tokens = compute_search_filter("language:chinese -female:milf");
+        assert_eq!(
+            tokens,
+            vec![
+                tok("language:chinese", false, false),
+                tok("female:milf", true, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn negation_combines_with_the_value_only_quote_form() {
+        let tokens = compute_search_filter("-female:\"huge breasts\"");
+        assert_eq!(tokens, vec![tok("female:huge breasts", true, true)]);
+    }
+
+    #[test]
+    fn negation_combines_with_a_bare_space_separated_keyword() {
+        let tokens = compute_search_filter("-ジロウ 堕とされたい熟女達");
+        assert_eq!(
+            tokens,
+            vec![
+                tok("ジロウ", true, false),
+                tok("堕とされたい熟女達", false, false)
+            ]
+        );
+    }
 }

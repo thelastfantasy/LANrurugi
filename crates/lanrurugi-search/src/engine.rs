@@ -606,6 +606,18 @@ mod tests {
             .unwrap();
         assert!(!unquoted_result.ids.contains(&id));
 
+        // Negation (`-`) combined with the value-only quote form — still excludes the archive it
+        // matches, same as any other token, whether quoted or not.
+        let negated_params = SearchParams {
+            filter: "-female:\"huge breasts\"".to_string(),
+            groupby_tanks: true,
+            ..Default::default()
+        };
+        let negated_result = search(&archive_pool, &search_pool, &negated_params)
+            .await
+            .unwrap();
+        assert!(!negated_result.ids.contains(&id));
+
         let _: () = aconn.del(&id).await.unwrap();
         let mut sconn = search_pool.get().await.unwrap();
         let _: () = sconn.del("INDEX_female:huge breasts").await.unwrap();
