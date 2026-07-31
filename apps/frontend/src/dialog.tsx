@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useStats } from './api/hooks'
 import { PopupMenu, PopupMenuItem } from './components/PopupMenu'
+import Tooltip from './components/Tooltip'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from './theme'
 
 // Real, themed replacements for `window.prompt`/`window.confirm` — same call shape as those
@@ -92,12 +93,14 @@ function TagSearchField({
   onChange,
   autoFocus,
   onEnter,
+  placeholder,
 }: {
   id: string
   value: string
   onChange: (next: string) => void
   autoFocus: boolean
   onEnter: () => void
+  placeholder?: string
 }) {
   const stats = useStats()
   const [open, setOpen] = useState(false)
@@ -120,8 +123,9 @@ function TagSearchField({
         id={id}
         type="text"
         className="stdinput"
-        style={{ width: '100%', boxSizing: 'border-box' }}
+        style={{ width: '100%', height: 25, boxSizing: 'border-box' }}
         value={value}
+        placeholder={placeholder}
         autoComplete="off"
         autoFocus={autoFocus}
         onChange={(e) => {
@@ -174,7 +178,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
 
   return (
     <div onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-      <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('Enter a name for the new category')}</p>
+      <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('New Category')}</p>
       {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
           `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
           than native radio inputs (visually inconsistent with the rest of the themed UI). */}
@@ -200,24 +204,43 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           {t('Dynamic Category')}
         </button>
       </div>
-      <input
-        ref={nameRef}
-        type="text"
-        className="stdinput"
-        style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
-        value={name}
-        placeholder={t('My Category') ?? undefined}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !isDynamic) submit()
-        }}
-      />
+      <div style={{ textAlign: 'left', marginBottom: 12 }}>
+        <label htmlFor="new-category-name" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+          {t('Enter a name for the new category')}
+        </label>
+        {/* `height: 25` — matches the tab buttons/`Edit.tsx`'s own `.stdinput`/`<select>` override
+            (issue #45), since legacy theme CSS's own `.stdinput` rule is a much shorter ~18px by
+            default and looks visually cramped next to this dialog's other, taller controls. */}
+        <input
+          ref={nameRef}
+          id="new-category-name"
+          type="text"
+          className="stdinput"
+          style={{ width: '100%', height: 25, boxSizing: 'border-box' }}
+          value={name}
+          placeholder={t('My Category') ?? undefined}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !isDynamic) submit()
+          }}
+        />
+      </div>
       {isDynamic && (
         <div style={{ textAlign: 'left', marginBottom: 12 }}>
-          <label htmlFor="new-category-search" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+          <label htmlFor="new-category-search" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, marginBottom: 4 }}>
             {t('Search Predicate')}
+            <Tooltip label={t('Dynamic Categories contain all archives matching a given predicate, and automatically update alongside your library.') ?? undefined}>
+              <i className="fas fa-question-circle" style={{ fontSize: 14, cursor: 'help' }} aria-hidden="true"></i>
+            </Tooltip>
           </label>
-          <TagSearchField id="new-category-search" value={search} onChange={setSearch} autoFocus={false} onEnter={submit} />
+          <TagSearchField
+            id="new-category-search"
+            value={search}
+            onChange={setSearch}
+            autoFocus={false}
+            onEnter={submit}
+            placeholder="language:chinese"
+          />
         </div>
       )}
       <div className="swal2-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
