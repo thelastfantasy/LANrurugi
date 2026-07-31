@@ -591,20 +591,19 @@ mod tests {
             );
         }
 
-        // The unquoted, hand-typed form is the one deliberate behavior change (issue #59's own
-        // docs) — `female:huge breasts` now splits into two ANDed tokens (`female:huge`,
-        // `breasts`), neither of which is a real indexed tag on this fixture archive, so it
-        // correctly finds nothing rather than silently matching via the old single-token
-        // substring behavior.
-        let unquoted_params = SearchParams {
-            filter: "female:huge breasts".to_string(),
-            groupby_tanks: true,
-            ..Default::default()
-        };
-        let unquoted_result = search(&archive_pool, &search_pool, &unquoted_params)
-            .await
-            .unwrap();
-        assert!(!unquoted_result.ids.contains(&id));
+        // Deliberately NOT asserted here: "the unquoted form finds nothing". That was the
+        // original claim, but it's false for *this* fixture specifically — `female:huge breasts`
+        // splits into `female:huge` and `breasts`, and both fragments independently re-match the
+        // very same tag they were cut from (`female:huge` prefix-globs `INDEX_female:huge
+        // breasts*`; `breasts` substring-fuzzy-matches the same tag text), so the AND of the two
+        // still finds this archive — not a coincidence of leftover data, an unavoidable structural
+        // property of any fixture whose multi-word value contains its own prefix/substring as a
+        // token boundary. (A local run against the host's own persistent test Redis happened to
+        // "pass" this assertion — an artifact of unrelated pre-existing data in `filtered`'s scope
+        // masking the real logic, not evidence the assertion was ever correct; CI's clean-slate
+        // Redis exposed it immediately.) Space genuinely being a token delimiter now is already
+        // covered without this trap by grammar.rs's own `space_separates_tokens_like_comma`
+        // (token-level, no shared-substring fixture involved).
 
         // Negation (`-`) combined with the value-only quote form — still excludes the archive it
         // matches, same as any other token, whether quoted or not.
