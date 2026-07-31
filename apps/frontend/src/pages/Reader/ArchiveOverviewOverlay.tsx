@@ -184,11 +184,30 @@ function TagsTable({ tags }: { tags: string }) {
  * component that used `display: none` here left every one of a 293-page archive's thumbnails
  * stuck on their spinner forever, `list_network_requests` showing zero `thumbnail?page=N`
  * requests ever fired). `Library.tsx`'s own `ArchiveCard` gets away with `display: none` only
- * because its thumbnail `<img>` was never marked `loading="lazy"` to begin with. */
+ * because its thumbnail `<img>` was never marked `loading="lazy"` to begin with.
+ *
+ * The parent `.quick-thumbnail` cell has no width of its own (`lrr.css` only sets a
+ * `min-width: 100px` "hint" for `loading="lazy"`) — its real width normally comes from the loaded
+ * `<img>` inside stretching it via `object-fit: cover` at each page's own aspect ratio (confirmed
+ * live via `getBoundingClientRect()`: fully-loaded cells in the same grid ranged 185-277px wide).
+ * A cell whose image hasn't loaded yet has nothing to stretch it, so it collapses to that bare
+ * 100px minimum — visibly narrower than its loaded siblings, producing the jarring width jump/grid
+ * reflow issue #57 reports (confirmed live: a still-loading cell measured exactly 100px wide next
+ * to 185-277px loaded ones). Setting an explicit `width` here — sized to a 9:16 page aspect ratio
+ * against the grid's own fixed `max-height: 275px`/`width: 95%` image box (`lrr.css`), i.e.
+ * `(275 * 9/16) / 0.95 ≈ 163px` — gives the placeholder a size in the same ballpark as a real
+ * loaded cell instead of the bare CSS minimum, without needing to touch the shared legacy
+ * stylesheet itself. */
+const PLACEHOLDER_WIDTH_PX = 163
+
 function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
   const [loaded, setLoaded] = useState(false)
   return (
-    <>
+    // `height: 100%` (not just `width`) — this `div` sits inside `.quick-thumbnail`, itself fixed
+    // at `height: 280px` (`lrr.css`'s `div.id3 img` / this component's own parent), and without an
+    // explicit height here a still-loading placeholder's wrapper shrinks to the spinner icon's own
+    // height instead of filling the cell, which would move the spinner off-center vertically.
+    <div style={loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX, height: '100%' }}>
       {!loaded && (
         // The centering transform lives on this plain, non-animated wrapper, not on the `<i>`
         // itself — `fa-spin`'s own CSS animation drives the icon's `transform` (a rotation) every
@@ -216,7 +235,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         style={loaded ? undefined : { visibility: 'hidden' }}
         onLoad={() => setLoaded(true)}
       />
-    </>
+    </div>
   )
 }
 
