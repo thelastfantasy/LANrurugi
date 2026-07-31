@@ -12,6 +12,7 @@ import {
 } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
 import TagInput from '../components/TagInput'
+import Tooltip from '../components/Tooltip'
 import { confirmDialog } from '../dialog'
 import { routes } from '../routes'
 import { toast } from '../toast'
@@ -146,14 +147,20 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         onSubmit={(e) => e.preventDefault()}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, textAlign: 'left' }}>
+          {/* `maxWidth: 'none'` on every `.stdinput` below — legacy theme CSS's own `.stdinput`
+              rule (`g.css` etc.) caps it at `max-width: 450px`, which is fine at legacy's own
+              narrower page width but visibly wastes the right-hand two-thirds of this page's
+              wider card once the form itself was widened (this and `.ido`'s own `maxWidth` above,
+              issue #45) — the input just stops growing at 450px while the grid column it sits in
+              keeps stretching. Overriding it lets every field genuinely fill the column instead. */}
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
             <span>{t('Current File Name:')}</span>
-            <input readOnly className="stdinput" type="text" style={{ width: '100%' }} value={archive.filename} />
+            <input readOnly className="stdinput" type="text" style={{ width: '100%', maxWidth: 'none' }} value={archive.filename} />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
             <span>{t('ID:')}</span>
-            <input readOnly className="stdinput" type="text" style={{ width: '100%' }} maxLength={255} value={archiveId} />
+            <input readOnly className="stdinput" type="text" style={{ width: '100%', maxWidth: 'none' }} maxLength={255} value={archiveId} />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
@@ -162,7 +169,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
               id="title"
               className="stdinput"
               type="text"
-              style={{ width: '100%' }}
+              style={{ width: '100%', maxWidth: 'none' }}
               maxLength={255}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -174,7 +181,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
             <textarea
               id="summary"
               className="stdinput"
-              style={{ width: '100%', minHeight: 72, boxSizing: 'border-box' }}
+              style={{ width: '100%', maxWidth: 'none', minHeight: 72, boxSizing: 'border-box' }}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
             />
@@ -190,9 +197,16 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
             <span>{t('Import Tags from Plugin :')}</span>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start', textAlign: 'left' }}>
-              <div style={{ display: 'flex', gap: 6 }}>
+              {/* The help icon+tooltip sits after the button, at the row's own height, replacing
+                  legacy's own separate "Help" button (`edit.js`'s `Edit.showHelp`, a click-triggered
+                  33s toast) with a lighter hover-tooltip — mirrors the exact same
+                  `EditHelpTitle`/`EditHelp` copy (issue #45). `height: 25` on both the `<select>`
+                  and the button (matched to the select's own real rendered height) fixes the two
+                  visibly not lining up/the button reading shorter than the dropdown next to it. */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select
                   className="favtag-btn"
+                  style={{ height: 25, boxSizing: 'border-box' }}
                   value={selectedPlugin}
                   onChange={(e) => setSelectedPlugin(e.target.value)}
                 >
@@ -207,11 +221,39 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                 <input
                   className="stdbtn"
                   type="button"
-                  style={{ minWidth: 90 }}
+                  style={{ minWidth: 90, height: 25, boxSizing: 'border-box' }}
                   disabled={!selectedPlugin || pluginRunning}
                   onClick={() => void runPlugin()}
                   value={t('Go!') ?? undefined}
                 />
+
+                <Tooltip
+                  label={
+                    <>
+                      <strong>{t('About Plugins')}</strong>
+                      <br />
+                      {/* `dangerouslySetInnerHTML` — same pattern already used throughout
+                          Settings.tsx/Plugins.tsx for legacy-sourced translation strings that
+                          embed real markup (here, `<br/>`) in their own msgid, matching every
+                          other locale file's real translated value (`zh.json`/`ja.json`/etc.,
+                          migrated verbatim from legacy's own `.po` files) rather than a
+                          hand-rolled paraphrase that wouldn't line up with those. */}
+                      <span
+                        dangerouslySetInnerHTML={{
+                          __html: t(
+                            "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.",
+                          ),
+                        }}
+                      />
+                    </>
+                  }
+                >
+                  {/* No FA size class (`fa-lg`'s ~1.33em read too small next to the row's own
+                      25px-tall select/button; `fa-2x`, matching the warning icon below, read too
+                      large for an inline row icon) — a literal `fontSize` instead, chosen to sit
+                      visually in between and roughly fill the row's own height. */}
+                  <i className="fas fa-question-circle" style={{ fontSize: 20, cursor: 'help' }} aria-hidden="true"></i>
+                </Tooltip>
               </div>
 
               {selectedPluginData?.oneshot_arg && (

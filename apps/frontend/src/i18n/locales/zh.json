@@ -878,6 +878,7 @@
   "You can drag and drop files into this window, or click the upload button.": "您可以将文件拖放到此窗口中，或点击上传按钮。",
   "You can edit your Tag Rules in Server Configuration.": "您可以在服务器配置中编辑您的标签规则。",
   "You can navigate between pages using:": "您可以使用以下方式在页面之间切换：",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "可以通过插件自动获取此档案的元数据。<br/>从下拉框中选择插件并点击开始！<br/>有些插件可能需要设置额外的参数。这种情况下，会有一个文本框用于输入参数。",
   "You can use the rules dropdown below to pre-select archives for deletion.": "可选择下拉框中的规则来预选中要删除的档案。",
   "You do not have enough GP to download this URL.": "您没有足够的 GP 来下载此 URL。",
   "You have an active selection. Exiting will clear it. Continue?": "当前有未清空的选择，退出将清除它。是否继续？",

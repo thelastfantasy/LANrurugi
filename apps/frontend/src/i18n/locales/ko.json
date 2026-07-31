@@ -608,6 +608,7 @@
   "You can drag and drop files into this window, or click the upload button.": "이 창에 파일을 끌어서 놓거나 업로드 버튼을 클릭할 수 있습니다.",
   "You can edit your Tag Rules in Server Configuration.": "서버 설정에서 태그 규칙을 편집할 수 있습니다.",
   "You can navigate between pages using:": "다음을 이용해 페이지를 이동할 수 있습니다:",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "플러그인을 사용하여 이 아카이브에 대한 메타데이터를 자동으로 가져올 수 있습니다. <br/> 드롭다운에서 플러그인을 선택하고 시작! 을 클릭하세요. <br/> 일부 플러그인은 선택적 인수를 제공할 수 있습니다. 그런 경우 텍스트 상자가 있어 해당 인수를 입력할 수 있습니다.",
   "You can use the rules dropdown below to pre-select archives for deletion.": "아래의 드롭다운을 사용하여 삭제할 아카이브를 미리 선택할 수 있습니다.",
   "You seem to have some local progression hanging around -- Please wait warmly while we migrate it to the server for you.": "로컬 진행 상황이 남아 있는 것 같습니다 -- 서버로 마이그레이션하는 동안 ",
   "You'll have to reopen archives in the Reader to see the migrated progression values.": "읽기 진행 상황을 보려면 리더에서 아카이브를 다시 열어야 합니다.",

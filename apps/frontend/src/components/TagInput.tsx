@@ -21,6 +21,23 @@ import { useMemo, useState } from 'react'
  * Controlled on the same flat `"namespace:tag, namespace:tag"` string shape `archive.tags` already
  * uses — a drop-in replacement for a plain `<textarea>` without changing the caller's state shape.
  */
+
+// Display-order-only sort (never rewrites the underlying comma-joined `value`/`onChange` string, so
+// removing a tag or committing a new one still operates on the plain, unsorted form `archive.tags`
+// already uses elsewhere) — `category:` namespace first (the highest-level classification),
+// `source:`/`date_added:`/`timestamp:`/`uploader:` last (metadata about the archive record itself,
+// not descriptive content tags), everything else (including bare, namespace-less tags)
+// alphabetically in between by namespace. Module-level (not a component-body closure) since it's a
+// pure function of its argument with no reactive dependencies of its own.
+const NAMESPACE_PRIORITY_FIRST = ['category']
+const NAMESPACE_PRIORITY_LAST = ['source', 'date_added', 'timestamp', 'uploader']
+function tagSortKey(tag: string): [number, string] {
+  const namespace = tag.includes(':') ? tag.slice(0, tag.indexOf(':')) : ''
+  if (NAMESPACE_PRIORITY_FIRST.includes(namespace)) return [0, tag]
+  if (NAMESPACE_PRIORITY_LAST.includes(namespace)) return [2, tag]
+  return [1, tag]
+}
+
 export default function TagInput({
   value,
   onChange,
@@ -39,7 +56,12 @@ export default function TagInput({
       value
         .split(/,\s?/)
         .map((t) => t.trim())
-        .filter(Boolean),
+        .filter(Boolean)
+        .sort((a, b) => {
+          const [tierA, keyA] = tagSortKey(a)
+          const [tierB, keyB] = tagSortKey(b)
+          return tierA !== tierB ? tierA - tierB : keyA.localeCompare(keyB)
+        }),
     [value],
   )
 
@@ -91,7 +113,23 @@ export default function TagInput({
 
   return (
     <div style={{ position: 'relative' }}>
-      <div className="tagger" style={{ minHeight: 125 }}>
+      {/* `display: 'block'` override — legacy theme CSS's own `.tagger` rule (`g.css` etc.)
+          declares `display: table-cell` plus `max-width: 450px`/`width: 60%`, but a lone
+          `table-cell` div with no real `<table>`/`<tr>` ancestor doesn't actually respect either
+          under the anonymous-table layout algorithm browsers fall back to — confirmed live via
+          `getBoundingClientRect()`: it rendered 572px wide against a 574px grid column regardless
+          of the declared 450px cap, visibly not lining up with the other fields sharing that same
+          column (issue #45; those fields are also widened past legacy's original 450px cap — see
+          `Edit.tsx`'s own `maxWidth: 'none'` override on each `.stdinput`). No explicit `width`
+          needed here — an ordinary block element with none set is `width: auto`, which already
+          fills its parent's content box on its own; forcing `display: block` (clearing the
+          `table-cell` value) plus `maxWidth: 'none'` (clearing the 450px cap) is enough for that
+          default to take over, without needing to touch the shared legacy stylesheet
+          (`background`/`border`/`color`/`font-size` etc. still come from the same `.tagger`
+          rule). Clearing `width` (the theme rule's own `width: 60%`) too, for the same reason as
+          `maxWidth` — otherwise 60% of the 574px column is 344px, still short of the other
+          fields' full width. */}
+      <div className="tagger" style={{ minHeight: 125, width: 'auto', maxWidth: 'none', display: 'block', boxSizing: 'border-box' }}>
         <ul
           style={{
             display: 'flex',
@@ -140,7 +178,14 @@ export default function TagInput({
             </li>
           ))}
           {!disabled && (
-            <li style={{ flexGrow: 1, position: 'relative', margin: '0.4rem 0', paddingLeft: 10, minWidth: 80 }}>
+            // `tagger-new` — legacy theme CSS's real background/border/radius for the suggestion
+            // dropdown below targets exactly `.tagger .tagger-new ul` (verified against `g.css`'s
+            // own rule, `background: #F2EFDF; border: 1px solid #806769; border-radius: 5px`); this
+            // `<li>` lacking that class meant the selector never matched at all, so the dropdown's
+            // own `background: 'inherit'` inline style resolved through fully transparent ancestors
+            // instead, rendering suggestion text with no backing surface to read it against
+            // (issue #45).
+            <li className="tagger-new" style={{ flexGrow: 1, position: 'relative', margin: '0.4rem 0', paddingLeft: 10, minWidth: 80 }}>
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -164,6 +209,12 @@ export default function TagInput({
                 }}
               />
               {filteredSuggestions.length > 0 && (
+                // No `background`/`border`/`borderRadius` here — deliberately left to the
+                // `.tagger .tagger-new ul` theme CSS rule the parent `<li>`'s `tagger-new` class
+                // now matches (see that class's own docs above), which is where legacy's real
+                // per-theme background/border/radius for this exact dropdown actually lives; an
+                // inline value here would just override it with a fixed color that doesn't follow
+                // theme/dark-mode switching.
                 <ul
                   style={{
                     position: 'absolute',
@@ -174,9 +225,6 @@ export default function TagInput({
                     margin: 0,
                     padding: 5,
                     listStyle: 'none',
-                    background: 'inherit',
-                    border: 'inherit',
-                    borderRadius: 3,
                   }}
                 >
                   {filteredSuggestions.map((s) => (

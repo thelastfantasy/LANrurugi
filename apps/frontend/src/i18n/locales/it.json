@@ -215,6 +215,7 @@
   "You can create new categories here or edit existing ones.": "Qui puoi creare nuove categorie o modificare quelle esistenti.",
   "You can edit your Tag Rules in Server Configuration.": "Puoi modificare le tue Regole Tag in Configurazione Server.",
   "You can navigate between pages using:": "Tu puoi navigare le pagine usando:",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.",
   "You\\'re using the default password and that\\'s super baka of you": "Stai usando la password predefinita e questo è super baka da parte tua",
   "Your Reading Progression is now saved on the server!": "La tua Progressione di Lettura è adesso salvata sul server!",
   "nHentai Source Converter": "nHentai Source Converter",

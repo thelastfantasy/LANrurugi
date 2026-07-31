@@ -452,6 +452,7 @@
   "You can create new categories here or edit existing ones.": "Acá puedes crear nuevas categorías o modificar alguna existente.",
   "You can edit your Tag Rules in Server Configuration.": "Puedes editar las reglas de etiquetas en la configuración del servidor.",
   "You can navigate between pages using:": "Puedes navegar entre páginas usando:",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "Puedes utilizar complementos para obtener metadatos de forma automática para este archivo.<br/> ¡Solo selecciona un complemento de la lista y ejecútalo!<br/> Algunos complementos pueden utilizar un argumento opcional. Si es el caso, una caja de texto aparecerá para que puedas ingresar dicho argumento.",
   "You're running in Debug Mode!": "¡Estás en modo depuración!",
   "You\\'re using the default password and that\\'s super baka of you": "Baka deja de utilizar la contraseña inicial",
   "Your Reading Progression is now saved on the server!": "¡La progresión de lectura ahora se guarda en el servidor!",

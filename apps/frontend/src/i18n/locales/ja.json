@@ -556,6 +556,7 @@
   "You can download files from remote URLs directly into LANrurugi from here.": "ここからURLを指定して、ファイルを直接 LANrurugi にダウンロードできます。",
   "You can edit your Tag Rules in Server Configuration.": "タグルールはサーバー設定画面で編集できます。",
   "You can navigate between pages using:": "以下の方法でページ間を移動できます :",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "プラグインを使用すると、このアーカイブのメタデータを自動取得できます。 <br/> ドロップダウンからプラグインを選択し、「実行！」を押してください <br/> プラグインによっては、任意の引数を指定できる場合があります。その場合は、引数入力用のテキストボックスが表示されます。",
   "You'll have to reopen archives in the Reader to see the migrated progression values.": "移行後の進捗を反映するには、リーダーでアーカイブを再度開いてください。",
   "You're running in Debug Mode!": "デバッグモードで動作しています！",
   "Your Reading Progression is now saved on the server!": "読書進捗をサーバーに保存しました！",

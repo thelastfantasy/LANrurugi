@@ -655,6 +655,7 @@
   "You can drag and drop files into this window, or click the upload button.": "您可以將檔案拖曳進此視窗，或點擊上傳按鈕。",
   "You can edit your Tag Rules in Server Configuration.": "您可以在伺服器設定中編輯標籤規則。",
   "You can navigate between pages using:": "您可以透過以下方式切換頁面：",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "您可以使用外掛自動抓取此檔案的中繼資料。<br/>只要從下拉選單中選擇一個外掛並按下 '執行！'<br/>部分外掛可能需要額外參數，屆時會顯示輸入欄位供您填寫。",
   "You can use the rules dropdown below to pre-select archives for deletion.": "您可以使用下方的下拉選單選擇規則，預先選取要刪除的檔案。",
   "You seem to have some local progression hanging around -- Please wait warmly while we migrate it to the server for you.": "偵測到您仍有本地的閱讀進度紀錄 -- 請稍候，我們將為您遷移至伺服器端。",
   "You'll have to reopen archives in the Reader to see the migrated progression values.": "您需要重新開啟檔案才能看到已遷移的進度。",

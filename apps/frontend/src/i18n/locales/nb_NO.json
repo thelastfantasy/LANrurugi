@@ -463,6 +463,7 @@
   "You can create new categories here or edit existing ones.": "Du kan lage nye kategorier her eller redigere eksisterende.",
   "You can edit your Tag Rules in Server Configuration.": "Du kan redigere dine Taggregler i serverkonfigurasjon.",
   "You can navigate between pages using:": "Du kan navigere mellom sider med:",
+  "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.": "Du kan bruke programvaretillegg for automatisk å hente metadata for dette arkivet. <br/> Bare velg et tillegg fra nedtrekksmenyen og trykk på \"Kjør\"! <br/> Noen tillegg kan ha et valgfritt felt der du kan spesifisere et argument. Hvis det er tilfelle, vil det dukke opp en tekstboks hvor du kan skrive inn argumentet.",
   "You're running in Debug Mode!": "Du kjører i Feilsøkingsmodus!",
   "You\\'re using the default password and that\\'s super baka of you": "Du bruker standardpassordet, og det er skikkelig baka av deg",
   "Your Reading Progression is now saved on the server!": "Din leseprogresjon er nå lagret på serveren!",
