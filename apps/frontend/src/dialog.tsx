@@ -229,7 +229,13 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
         <div style={{ textAlign: 'left', marginBottom: 12 }}>
           <label htmlFor="new-category-search" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, marginBottom: 4 }}>
             {t('Search Predicate')}
-            <Tooltip label={t('Dynamic Categories contain all archives matching a given predicate, and automatically update alongside your library.') ?? undefined}>
+            <Tooltip
+              label={
+                t(
+                  "Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. Example: language:chinese, -tag:full color, or just a keyword like 旗袍",
+                ) ?? undefined
+              }
+            >
               <i className="fas fa-question-circle" style={{ fontSize: 14, cursor: 'help' }} aria-hidden="true"></i>
             </Tooltip>
           </label>
