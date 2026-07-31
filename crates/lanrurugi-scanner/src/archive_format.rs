@@ -363,6 +363,73 @@ pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
     Err(ArchiveFormatError::EntryNotFound(entry_name.to_string()))
 }
 
+/// Reads natural pixel dimensions for just the first `count` pages (natural-sort order, same as
+/// [`list_pages`] — so callers can zip this 1:1 against a prior `list_pages`/`/files` result by
+/// index), leaving every page beyond that entirely unread. Used only for infinite-scroll's resume-
+/// position jump: an unloaded `<img>` needs a real height reserved for every page *before* wherever
+/// tracked progress is about to scroll to, or the jump lands short/long depending on how wrong the
+/// generic loading-placeholder guess was for that archive — but nothing after the resume point
+/// needs measuring up front at all, it's reached by the reader's own normal lazy-scroll from there.
+/// Reading `count` unconditionally instead (or literally every page) would make this endpoint's
+/// cost scale with however deep someone's progress happens to be — or with total archive size
+/// regardless of progress — defeating the same "don't fetch more than what's about to be shown"
+/// reasoning that motivated lazy-loading the actual page images in the first place, just moved
+/// server-side.
+///
+/// Two passes, deliberately: libarchive is a forward-only stream with no cheap random access, so
+/// pass one (every entry's name, `skip_data`-ing all of them — the same cheap walk [`list_pages`]
+/// already does) is what makes "the first `count` pages" a well-defined, natural-sort-stable set
+/// before pass two re-opens the archive and actually reads bytes for only that set, `skip_data`-ing
+/// everything else. Total work is proportional to `count`, not to how far into the archive those
+/// `count` wanted entries physically sit.
+///
+/// `into_dimensions` reads just enough of each wanted entry to parse its header (no full pixel
+/// decode/color-conversion — the expensive part `resize.rs`/`thumbnail.rs` both pay for real
+/// thumbnail generation, and pointless overhead here since only the width/height ever get used). A
+/// single corrupted/unrecognized-format entry yields `None` at its position rather than failing the
+/// whole batch, matching `fetch_page`'s own per-page tolerance for corrupted pages elsewhere in
+/// this codebase.
+pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32, u32)>>> {
+    if !is_supported_archive(path) {
+        return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut names = list_pages(path)?;
+    names.truncate(count);
+    let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+
+    let mut found: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    let mut archive = RawArchiveReader::open(path)?;
+    while let Some(entry) = archive.next_entry()? {
+        if entry.is_regular_file {
+            let name = decode_archive_name(&entry.name_bytes);
+            if wanted.contains(name.as_str()) {
+                found.insert(name, archive.read_data_to_vec()?);
+                if found.len() == wanted.len() {
+                    break;
+                }
+                continue;
+            }
+        }
+        archive.skip_data()?;
+    }
+
+    Ok(names
+        .into_iter()
+        .map(|name| {
+            found.remove(&name).and_then(|bytes| {
+                image::ImageReader::new(std::io::Cursor::new(bytes))
+                    .with_guessed_format()
+                    .ok()
+                    .and_then(|reader| reader.into_dimensions().ok())
+            })
+        })
+        .collect())
+}
+
 /// Finds the first entry whose basename ends with `wanted_suffix` — matches legacy
 /// `is_file_in_archive`'s own matching rule exactly (`Utils/Archive.pm`: `"$name$suffix" =~
 /// /$wantedname$/`, i.e. a basename-suffix match, not a full-name equality check — so e.g.

@@ -107,6 +107,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/archives/{id}/page", get(get_page))
         .route("/archives/{id}/files", get(get_files))
+        .route("/archives/{id}/page-dimensions", get(get_page_dimensions))
         .route(
             "/archives/{id}/files/thumbnails",
             axum::routing::post(generate_page_thumbnails),
@@ -1129,6 +1130,73 @@ async fn get_files(State(state): State<AppState>, Path(id): Path<String>) -> Res
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "get_file_list",
+            e.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PageDimensionsParams {
+    /// How many pages, from the start, to actually measure — see [`read_page_dimensions`]'s own
+    /// docs for why this is a required, bounded count rather than "all of them."
+    ///
+    /// [`read_page_dimensions`]: lanrurugi_scanner::archive_format::read_page_dimensions
+    count: usize,
+}
+
+/// `GET /archives/{id}/page-dimensions?count=N` — natural pixel width/height for the first `N`
+/// pages only, in the same order as `/files`'s own `pages` array (so the frontend can zip them
+/// together by index without a separate name-matching step). Additive to `/files`, not folded into
+/// it — existing callers of `/files` (the third-party-compatible file-list contract) shouldn't have
+/// to pay for an archive pass with per-entry image-header parsing they never asked for; only the
+/// infinite-scroll reader view (the one caller that actually needs this, to size not-yet-loaded
+/// `<img>`s accurately before jumping to a resume position — see `read_page_dimensions`'s own docs
+/// for why it's bounded to just the pages before that jump, not the whole archive) calls this
+/// endpoint at all.
+async fn get_page_dimensions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<PageDimensionsParams>,
+) -> Response {
+    let archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return not_found("get_page_dimensions", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_page_dimensions",
+                e.to_string(),
+            )
+        }
+    };
+    let archive_file = archive.file.clone();
+    let count = params.count;
+    let result = lanrurugi_core::concurrency::run_blocking(move || {
+        lanrurugi_scanner::archive_format::read_page_dimensions(
+            std::path::Path::new(&archive_file),
+            count,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(dimensions)) => {
+            let json_dims: Vec<serde_json::Value> = dimensions
+                .into_iter()
+                .map(|dim| match dim {
+                    Some((width, height)) => json!({ "width": width, "height": height }),
+                    None => serde_json::Value::Null,
+                })
+                .collect();
+            axum::Json(json!({ "dimensions": json_dims })).into_response()
+        }
+        Ok(Err(e)) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "get_page_dimensions",
+            e.to_string(),
+        ),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "get_page_dimensions",
             e.to_string(),
         ),
     }

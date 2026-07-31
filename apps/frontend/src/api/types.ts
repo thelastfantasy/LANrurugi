@@ -360,6 +360,10 @@ export interface ArchiveFilesResponse {
   pages: string[]
 }
 
+export interface PageDimensionsResponse {
+  dimensions: ({ width: number; height: number } | null)[]
+}
+
 export interface SearchResponse {
   data: ArchiveMetadata[]
   recordsTotal: number

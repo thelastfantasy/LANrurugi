@@ -40,6 +40,7 @@ export default function Tooltip({
   children,
   anchor = 'element',
   wrapperStyle,
+  maxWidth = 320,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -50,6 +51,9 @@ export default function Tooltip({
    * `flex: '1 1 180px'`) can pass that through here instead of adding an extra wrapping element
    * of their own just to carry the flex sizing. */
   wrapperStyle?: React.CSSProperties
+  /** Overrides the bubble's default 320px cap — for content that reads worse wrapped that narrow
+   * (e.g. a multi-column list of keyboard shortcuts). */
+  maxWidth?: number
 }) {
   const [visible, setVisible] = useState(false)
   // `position: 'fixed'` (not just `visibility: 'hidden'`) from the very first render — a bubble
@@ -173,7 +177,7 @@ export default function Tooltip({
                 fontSize: FONT_SIZE_9PT,
                 lineHeight: 1.5,
                 whiteSpace: 'normal',
-                maxWidth: 320,
+                maxWidth,
                 textAlign: 'left',
                 borderRadius: 4,
                 boxShadow: '0 2px 8px rgba(0,0,0,0.3)',

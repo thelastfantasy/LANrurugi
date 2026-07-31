@@ -117,3 +117,27 @@ input[type="checkbox"]:disabled {
   0%, 100% { outline-color: #3b97ea; }
   50% { outline-color: transparent; }
 }
+
+/* Additive: infinite-scroll mode (`Reader.tsx`) renders one native `loading="lazy"` `<img>` per
+ * page up front, so most of an archive sits blank/un-decoded off-screen until scrolled near —
+ * with no reserved size and no visual placeholder, each one popping in as its real, wildly
+ * differently-sized image replaces nothing at all, making the whole page height jump around while
+ * scrolling. No legacy equivalent to match here (legacy's own infinite-scroll instead eagerly
+ * creates every `<img>` up front with a real `src`, no lazy loading at all, pre-sized to a fixed,
+ * often-wrong 800x600 guess) — this is a smaller, honestly-approximate placeholder instead: a
+ * fixed min-height (just enough to read as "something is here," not a real aspect-ratio guess,
+ * since no per-page width/height is available before decode) plus a pulsing skeleton fill so a
+ * not-yet-loaded page reads as "loading," not "missing."
+ */
+.reader-image.loading-placeholder {
+  display: block;
+  min-height: 40vh;
+  background: linear-gradient(90deg, rgba(127, 127, 127, 0.08) 25%, rgba(127, 127, 127, 0.15) 37%, rgba(127, 127, 127, 0.08) 63%);
+  background-size: 400% 100%;
+  animation: lrr-loading-placeholder-pulse 1.4s ease infinite;
+}
+
+@keyframes lrr-loading-placeholder-pulse {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}

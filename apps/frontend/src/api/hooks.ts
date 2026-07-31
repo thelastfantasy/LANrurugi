@@ -214,6 +214,19 @@ export function useArchivePages(id: string | null) {
   })
 }
 
+/** Only ever called from the infinite-scroll reader view, and only for `count` = however many
+ * pages precede wherever tracked progress is about to resume-scroll to — see the backend's own
+ * `read_page_dimensions` docs for why this is a bounded count, not "every page." `enabled` is the
+ * caller's job (gate it on infinite-scroll actually being on and a real target being known) rather
+ * than baked in here, same pattern as `useArchiveMetadata`'s own `id !== null` gate. */
+export function usePageDimensions(id: string | null, count: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ['archive-page-dimensions', id, count],
+    queryFn: () => fetchJson<PageDimensionsResponse>(`/archives/${id}/page-dimensions?count=${count}`),
+    enabled: enabled && id !== null && count > 0,
+  })
+}
+
 export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
