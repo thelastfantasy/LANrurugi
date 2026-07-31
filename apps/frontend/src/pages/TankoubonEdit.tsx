@@ -10,6 +10,7 @@ import {
 } from '../api/hooks'
 import type { TankoubonMetadata } from '../api/types'
 import { routes } from '../routes'
+import { useDocumentTitle } from '../useDocumentTitle'
 
 export default function TankoubonEdit() {
   const { t } = useTranslation()
@@ -46,6 +47,10 @@ export default function TankoubonEdit() {
 function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: TankoubonMetadata }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // Matches this page's own real heading text below ("Editing %1 (Tankoubon)") — no legacy
+  // equivalent to cross-check against (Tankoubon editing is additive to this rewrite), so this
+  // just keeps the tab title and the on-page heading in sync with each other.
+  useDocumentTitle(t('Editing %1 (Tankoubon)').replace('%1', tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
   const addToTankoubon = useAddToTankoubon(tankId)

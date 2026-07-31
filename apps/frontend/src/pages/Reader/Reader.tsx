@@ -15,9 +15,11 @@ import {
 } from '../../api/hooks'
 import Footer from '../../components/Footer'
 import { promptDialog } from '../../dialog'
+import { getTagSearchURL } from '../../lib/tagFormat'
 import { routes } from '../../routes'
 import { useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
+import { useDocumentTitle } from '../../useDocumentTitle'
 import ArchiveOverviewOverlay from './ArchiveOverviewOverlay'
 import {
   type ArchiveNavState,
@@ -55,6 +57,17 @@ export default function Reader() {
 
   const metadata = useArchiveMetadata(archiveId)
   const pages = useArchivePages(archiveId)
+  // Matches legacy's own real `reader.js` behavior exactly (confirmed against the Perl source
+  // *and* live via `~/LANraragi/templates/reader.html.tt2`'s `<title>[% title %]</title>` initial
+  // server-rendered placeholder, which legacy's own client-side `reader.js` unconditionally
+  // overwrites with `document.title = content.title` once the archive's metadata finishes
+  // loading — the server-rendered value only ever survives the brief pre-JS window, and was never
+  // meant to be this page's real, steady-state tab title. An earlier version of this file got
+  // that wrong, assuming the server-rendered `<title>` value was the final one and setting this
+  // page's tab title to the plain site title with no archive name at all — a real, user-reported
+  // regression.) — just the bare title, once loaded; `undefined` (falls back to the site's own
+  // `htmltitle`, matching the pre-load state) while still loading.
+  useDocumentTitle(metadata.data?.title)
   const settings = useSettings()
   const loginStatus = useLoginStatus()
   const categories = useCategories()
@@ -70,6 +83,13 @@ export default function Reader() {
   const startPage = Number(params.get('p')) || null
 
   const [pageOverride, setPageOverride] = useState<number | null>(startPage)
+  // Whether the overlay's initial value came from `showOverlayByDefault` auto-opening it (true on
+  // mount, before any click) rather than a real click on the grid button — only the latter should
+  // auto-scroll/highlight the current page's thumbnail (`ArchiveOverviewOverlay`'s own `autoFocus`
+  // prop below): auto-opening on every single page load *and* also yanking the scroll position to
+  // hunt down the current page every time was a real, reported annoyance, even though auto-opening
+  // itself is an intentional, user-requested feature (no legacy equivalent) worth keeping as-is.
+  const openedByDefaultSetting = useRef(readerSettings.showOverlayByDefault)
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault ? 'archive' : null,
   )
@@ -673,6 +693,7 @@ export default function Reader() {
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
+            openedByDefaultSetting.current = false
             setOverlay((prev) => (prev === 'archive' ? null : 'archive'))
           }}
         />
@@ -753,12 +774,29 @@ export default function Reader() {
     </div>
   )
 
+  // Matches legacy's own real `reader.js` exactly: `content.tags.match(/artist:([^,]+)(?:,|$)/i)`
+  // — case-insensitive, the value runs up to the next comma or end of string. When present, the
+  // heading reads "{title} by {artist}" with the artist name as a real link to that artist's own
+  // search results (`getTagSearchURL`, the same helper `TagTable.tsx`'s tag chips already use);
+  // otherwise just the bare title, same as before. The literal `" by "` is not run through `t()`
+  // — verified against legacy's own real source (`reader.js` and every `locales/template/*.po`):
+  // this exact string was never internationalized there either, always a plain hardcoded English
+  // JS string concatenation regardless of the active UI language.
+  const artistMatch = metadata.data.tags.match(/artist:([^,]+)(?:,|$)/i)
+  const archiveHeading = artistMatch ? (
+    <>
+      {metadata.data.title} by <a href={getTagSearchURL('artist', artistMatch[1])}>{artistMatch[1]}</a>
+    </>
+  ) : (
+    metadata.data.title
+  )
+
   return (
     <>
     <div id="i1" className="sni" ref={containerRef} style={outerStyle}>
       {!readerSettings.hideHeader && (
         <div id="i2">
-          <h1 id="archive-title">{metadata.data.title}</h1>
+          <h1 id="archive-title">{archiveHeading}</h1>
           {pagesel}
           {arrows}
           {fileinfo}
@@ -898,6 +936,7 @@ export default function Reader() {
           currentPage={currentPage}
           onClose={() => setOverlay(null)}
           onSelectPage={selectPage}
+          autoFocus={!openedByDefaultSetting.current}
         />
       )}
 

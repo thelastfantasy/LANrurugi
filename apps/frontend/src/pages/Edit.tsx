@@ -16,6 +16,7 @@ import Tooltip from '../components/Tooltip'
 import { confirmDialog } from '../dialog'
 import { routes } from '../routes'
 import { toast } from '../toast'
+import { useDocumentTitle } from '../useDocumentTitle'
 
 export default function Edit() {
   const { t } = useTranslation()
@@ -53,6 +54,10 @@ export default function Edit() {
 function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveMetadata }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
+  // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
+  // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
+  useDocumentTitle(t('Editing %1').replace('%1', archive.title))
   const plugins = usePlugins('metadata')
   const settings = useSettings()
   const stats = useStats(2)

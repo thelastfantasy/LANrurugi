@@ -205,11 +205,25 @@ const PLACEHOLDER_WIDTH_PX = 205
 function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
   const [loaded, setLoaded] = useState(false)
   return (
-    // `height: 100%` (not just `width`) — this `div` sits inside `.quick-thumbnail`, itself fixed
-    // at `height: 280px` (`lrr.css`'s `div.id3 img` / this component's own parent), and without an
-    // explicit height here a still-loading placeholder's wrapper shrinks to the spinner icon's own
-    // height instead of filling the cell, which would move the spinner off-center vertically.
-    <div style={loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX, height: '100%' }}>
+    // `height: 100%` always applies, loaded or not — this `div` sits inside `.quick-thumbnail`
+    // (`.id3`, fixed at `height: 280px` via the active theme's own CSS), and the real `<img>`
+    // inside relies on inheriting a concrete (non-`auto`) height through this wrapper for its own
+    // `height: 100%` (`div.id3:not(.nocrop) img`, `lrr.css`) to resolve against — dropping this
+    // wrapper's height once `loaded` flips true (an earlier version did `loaded ? undefined :
+    // {...}`, removing the style entirely) left the wrapper's own height as "auto" (shrunk to the
+    // image's natural content size, since nothing else constrains it), which broke that percentage
+    // chain: `height: 100%` inside a wrapper whose own height depends on that same image both
+    // being `auto` resolves to nothing sensible, and the image silently fell back to rendering at
+    // its own natural aspect ratio instead of `object-fit: cover`-filling the cell — confirmed live
+    // via `getBoundingClientRect()`: the image rendered visibly shorter than the 280px cell, with
+    // real gaps top/bottom, and every position/size that assumes the image fills the cell (the
+    // three corner action icons, the "第 N 页" label, the pulsing highlight outline) landed
+    // relative to the *cell*'s own true bounds, not the visually-short image inside it — issue
+    // (from a live screenshot) reported as icons "off in the corners" and background/position
+    // looking shifted. `width` only needs to be set before load (see `PLACEHOLDER_WIDTH_PX`'s own
+    // docs) — once loaded, `width: 95%` off the now-properly-tall wrapper is what actually
+    // determines the image's rendered width, exactly matching a real loaded cell in this same grid.
+    <div style={{ height: '100%', ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
       {!loaded && (
         // The centering transform lives on this plain, non-animated wrapper, not on the `<i>`
         // itself — `fa-spin`'s own CSS animation drives the icon's `transform` (a rotation) every
@@ -695,6 +709,7 @@ export default function ArchiveOverviewOverlay({
   currentPage,
   onClose,
   onSelectPage,
+  autoFocus = false,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -702,6 +717,12 @@ export default function ArchiveOverviewOverlay({
   currentPage: number
   onClose: () => void
   onSelectPage: (page: number) => void
+  /** Scroll/briefly-highlight the current page's own thumbnail right after this overlay mounts
+   * (see the effect below) — only meaningful for a real user click on the grid-toggle button;
+   * `false` (the default) when `Reader.tsx`'s own `showOverlayByDefault` setting is what opened
+   * this overlay instead, so a fresh page load doesn't also yank the scroll position on top of
+   * auto-opening. */
+  autoFocus?: boolean
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -881,12 +902,16 @@ export default function ArchiveOverviewOverlay({
   const pageCount = archive.pagecount
 
   // Scrolls to and briefly outlines the current page's own thumbnail once, right after the
-  // overlay opens — otherwise the reader has to hunt for it by eye across a grid that can run
-  // into the hundreds of cells for a long archive, with no indication at all of where "here" is.
-  // Additive; legacy's own `#archivePagesOverlay` has no equivalent (it opens already scrolled to
-  // the top, same as this port without this effect).
+  // overlay opens from a real click (`autoFocus`, see this component's own prop docs) — otherwise
+  // the reader has to hunt for it by eye across a grid that can run into the hundreds of cells for
+  // a long archive, with no indication at all of where "here" is. Additive; legacy's own
+  // `#archivePagesOverlay` has no equivalent (it opens already scrolled to the top, same as this
+  // port without this effect). Skipped entirely when `showOverlayByDefault` auto-opened this
+  // overlay instead (`autoFocus` false) — auto-scrolling on every single page load in addition to
+  // auto-opening was a real, reported annoyance, even though auto-opening itself is intentional.
   const [highlightedPage, setHighlightedPage] = useState<number | null>(null)
   useEffect(() => {
+    if (!autoFocus) return
     // Deferred a tick rather than calling `setHighlightedPage` synchronously in the effect body
     // (the project's own lint rules flag that as cascading-render-prone) — also conveniently lets
     // the just-mounted grid finish its first paint before `scrollIntoView` runs against it.
