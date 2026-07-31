@@ -32,6 +32,20 @@ export function buildNamespacedTag(namespace: string, tag: string): string {
   return namespace !== '' && namespace !== 'other' ? `${namespace}:${tag}` : tag
 }
 
+/** Builds a `namespace:value` (or bare `value`) *search-query* token — distinct from
+ * `buildNamespacedTag`, which is only for the archive's own stored `tags` field and must never be
+ * quoted. Space is a real AND-separator in the search grammar (`grammar.rs::compute_search_filter`,
+ * matching e-hentai's own `f_search` syntax — issue #59), so a multi-word `value` gets wrapped in
+ * double quotes here to protect its internal spaces from being split into separate, wrong tokens;
+ * quoting already implies an exact-tag match, so `exact` (the `$`-suffix behavior) only applies to
+ * the unquoted, single-word case. Visible tag text elsewhere in the UI is built from `value`
+ * directly, never from this function's output, so the quotes never show up on-screen. */
+export function buildSearchToken(namespace: string, value: string, exact = false): string {
+  const namespacedTag = buildNamespacedTag(namespace, value)
+  if (value.includes(' ')) return `"${namespacedTag}"`
+  return exact ? `${namespacedTag}$` : namespacedTag
+}
+
 /** Regex matching the timestamp namespaces legacy treats as date values (`buildTagsDiv`:
  * `/^(date|time)/`). Kept here so callers that need to know "is this namespace a timestamp?" for
  * display/search-URL decisions don't each re-derive it. */
@@ -129,10 +143,11 @@ export function getTagSearchURL(namespace: string, tag: string, timezone?: strin
   // and that syntax (`date_added:2026-07-20`) must NOT carry a trailing `$`, since `$` would make
   // the grammar treat it as an exact tag match (against an `INDEX_date?added:2026-07-20` key that
   // doesn't exist) instead of the date-range branch in `token_matches`. Plain (non-timestamp)
-  // namespaces keep the `$` exact-match suffix as before.
+  // namespaces keep the `$` exact-match suffix as before (`buildSearchToken`'s `exact` param) —
+  // `yyyy-mm-dd` never contains a space, so it never hits `buildSearchToken`'s own quoting branch
+  // either way.
   const isTimestamp = timezone !== undefined && TIMESTAMP_NAMESPACE.test(namespace)
   const searchValue = isTimestamp ? tagValueForSearch(namespace, tag, timezone) : tag
-  const suffix = isTimestamp ? '' : '$'
-  const namespacedTag = buildNamespacedTag(namespace, searchValue)
-  return `/?q=${encodeURIComponent(namespacedTag)}${suffix}`
+  const query = buildSearchToken(namespace, searchValue, !isTimestamp)
+  return `/?q=${encodeURIComponent(query)}`
 }

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useStats } from './api/hooks'
 import { PopupMenu, PopupMenuItem } from './components/PopupMenu'
 import Tooltip from './components/Tooltip'
+import { buildSearchToken } from './lib/tagFormat'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from './theme'
 
 // Real, themed replacements for `window.prompt`/`window.confirm` — same call shape as those
@@ -111,8 +112,13 @@ function TagSearchField({
     if (!currentFragment) return []
     const needle = currentFragment.toLowerCase()
     return (stats.data ?? [])
-      .map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
-      .filter((label) => label.toLowerCase().includes(needle))
+      .map((s) => ({
+        label: s.namespace ? `${s.namespace}:${s.text}` : s.text,
+        // Quoted when `s.text` has a space, unlike `label` (plain text shown in the dropdown) —
+        // space is a real AND-separator in the search grammar now (issue #59).
+        insertValue: buildSearchToken(s.namespace ?? '', s.text),
+      }))
+      .filter((s) => s.label.toLowerCase().includes(needle))
       .slice(0, 15)
   }, [stats.data, currentFragment])
 
@@ -141,17 +147,17 @@ function TagSearchField({
       />
       {open && suggestions.length > 0 && (
         <PopupMenu portal={false} style={{ position: 'absolute', top: '100%', left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: '100%', maxHeight: 180, overflowY: 'auto' }}>
-          {suggestions.map((label) => (
+          {suggestions.map((s) => (
             <PopupMenuItem
-              key={label}
+              key={s.label}
               onMouseDown={(e) => {
                 e.preventDefault()
-                onChange(`${value.replace(/[^,\s-]*$/, '')}${label}`)
+                onChange(`${value.replace(/[^,\s-]*$/, '')}${s.insertValue}`)
                 setOpen(false)
                 inputRef.current?.focus()
               }}
             >
-              {label}
+              {s.label}
             </PopupMenuItem>
           ))}
         </PopupMenu>
@@ -232,7 +238,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
             <Tooltip
               label={
                 t(
-                  "Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. Example: language:chinese, -tag:full color, or just a keyword like 旗袍",
+                  'Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. "female:huge breasts". Example: language:chinese, -tag:full color, or just a keyword like 旗袍',
                 ) ?? undefined
               }
             >

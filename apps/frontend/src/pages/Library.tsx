@@ -29,13 +29,14 @@ import TagTable from '../components/TagTable'
 import Tooltip from '../components/Tooltip'
 import { confirmDialog, promptDialog } from '../dialog'
 import {
-  buildNamespacedTag,
+  buildSearchToken,
   buildTagList,
   colorCodeTags,
   formatTimestampForDisplay,
   getTagSearchURL,
   splitTagsByNamespace,
   tagValueForSearch,
+  TIMESTAMP_NAMESPACE,
 } from '../lib/tagFormat'
 import { routes } from '../routes'
 import {
@@ -190,7 +191,7 @@ function TagLine({
 
   return (
     <Tooltip
-      label={<TagTable tags={tags} onSearchTag={(ns, v) => onSearchTag(buildNamespacedTag(ns, v))} />}
+      label={<TagTable tags={tags} onSearchTag={(ns, v) => onSearchTag(buildSearchToken(ns, v, !TIMESTAMP_NAMESPACE.test(ns)))} />}
       wrapperStyle={{ display: 'block' }}
     >
       <span className="tags tag-tooltip">
@@ -1111,7 +1112,7 @@ function CustomColumnCell({
                 // are the `yyyy-mm-dd` day-range syntax, not its bare Unix-seconds form (which
                 // never matches, `date_added` isn't tag-indexed). This in-app click path bypassed
                 // the same conversion the `href` above already applies.
-                onSearchTag(buildNamespacedTag(namespace, tagValueForSearch(namespace, raw, timezone)))
+                onSearchTag(buildSearchToken(namespace, tagValueForSearch(namespace, raw, timezone), !isDate))
               }}
             >
               {text}
@@ -1527,11 +1528,18 @@ export default function Library() {
     if (!currentFragment) return []
     const needle = currentFragment.toLowerCase()
     return (stats.data ?? [])
-      .map((s) => ({ label: s.namespace ? `${s.namespace}:${s.text}` : s.text, weight: s.weight }))
+      .map((s) => ({
+        label: s.namespace ? `${s.namespace}:${s.text}` : s.text,
+        // What actually gets inserted into the search box on click — quoted when `s.text` has a
+        // space, unlike `label` (the plain, human-readable text shown in the dropdown itself),
+        // since space is now a real token delimiter in the search grammar (issue #59).
+        insertValue: buildSearchToken(s.namespace ?? '', s.text),
+        weight: s.weight,
+      }))
       .filter((s) => s.label.toLowerCase().includes(needle))
       .sort((a, b) => b.weight - a.weight)
       .slice(0, 15)
-     
+
   }, [stats.data, currentFragment])
 
   function toggleCategory(id: string) {
@@ -1806,7 +1814,7 @@ export default function Library() {
                       // dropdown to the blur handler first.
                       e.preventDefault()
                       const upToCursor = filterInput.replace(/[^,\s-]*$/, '')
-                      const next = `${upToCursor}${s.label}`
+                      const next = `${upToCursor}${s.insertValue}`
                       setFilterInputOverride(next)
                       setAutocompleteOpen(false)
                       searchInputRef.current?.focus()

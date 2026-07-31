@@ -1,8 +1,22 @@
-//! Search query grammar parser (research.md §8), verified against
+//! Search query grammar parser (research.md §8), originally verified against
 //! `~/LANraragi/lib/LANraragi/Model/Search.pm::compute_search_filter`.
 //!
-//! Legacy syntax, all preserved here:
-//! - Comma-separated tags, each an independent token, ANDed together.
+//! Legacy syntax (mostly preserved here — see the one deliberate deviation below):
+//! - Comma- **or space**-separated tags, each an independent token, ANDed together. Legacy only
+//!   treats comma as a real delimiter (a bare space inside an unquoted token is preserved as part
+//!   of that token's own text, matching how most tag values here are naturally multi-word, e.g.
+//!   `female:huge breasts`) — but that also means legacy has no way to AND together two *separate*
+//!   `namespace:value` terms without a comma, which real users don't reach for (issue #59: `female:
+//!   huge breasts female:milf` typed with a plain space, the natural way, silently became one
+//!   single nonsense token instead of two ANDed ones). Adopts e-hentai's own real search-box
+//!   convention instead (`f_search=female:"double+penetration$"+female:"ryona"` — verified against
+//!   a real e-hentai search): space is a real delimiter just like comma, and a multi-word tag
+//!   *value* must be quoted to protect its internal spaces from being split. Every call site that
+//!   *generates* a `namespace:value` search string (tag-click links, autocomplete insertion) quotes
+//!   a multi-word value automatically, so this only becomes the user's own problem for a raw,
+//!   hand-typed, unquoted multi-word query — which used to work and now doesn't; a real, deliberate
+//!   parity break, not a silent one, and called out in-product wherever a predicate/search field's
+//!   own help text explains the syntax.
 //! - `-` prefix on a tag negates it (must be absent).
 //! - `"..."` (or a trailing `$`) marks an exact-tag match instead of a fuzzy substring match.
 //! - `?`/`_` become single-character glob wildcards; `*`/`%` become multi-character wildcards.
@@ -54,7 +68,7 @@ pub fn compute_search_filter(filter: &str) -> Vec<Token> {
         } else {
             let mut s = String::new();
             for c in chars.by_ref() {
-                if c == ',' {
+                if c == ',' || c == ' ' {
                     break;
                 }
                 s.push(c);
@@ -156,5 +170,52 @@ mod tests {
     fn empty_filter_yields_no_tokens() {
         assert_eq!(compute_search_filter(""), Vec::new());
         assert_eq!(compute_search_filter("   "), Vec::new());
+    }
+
+    // Issue #59: a plain space between two distinct `namespace:value` terms, typed the way a user
+    // naturally would (no comma), used to silently collapse into one nonsense token that matched
+    // nothing — verified live via `female:huge breasts female:milf` returning 0 results despite
+    // each half independently matching 1. Space is now a real delimiter, same as comma.
+    #[test]
+    fn space_separates_tokens_like_comma() {
+        let tokens = compute_search_filter("female:milf language:chinese");
+        assert_eq!(
+            tokens,
+            vec![
+                tok("female:milf", false, false),
+                tok("language:chinese", false, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_keywords_space_separated() {
+        let tokens = compute_search_filter("ジロウ 堕とされたい熟女達");
+        assert_eq!(
+            tokens,
+            vec![
+                tok("ジロウ", false, false),
+                tok("堕とされたい熟女達", false, false)
+            ]
+        );
+    }
+
+    // The other half of the fix: a multi-word tag *value* (still a real, common shape —
+    // `female:huge breasts` is one tag, not two) must still be searchable as a single token now
+    // that a bare space would otherwise split it — by quoting the whole `namespace:value` pair
+    // (what every app-generated search string now does via `buildSearchToken` on the frontend),
+    // not just the value half (e-hentai's own literal syntax quotes only the value, but that form
+    // requires the parser to recognize a quote appearing *mid*-token after a colon, which this
+    // grammar's quote-detection — anchored at the very start of a token — does not support).
+    #[test]
+    fn quoted_whole_token_preserves_internal_space_and_still_ands_with_the_next_token() {
+        let tokens = compute_search_filter("\"female:huge breasts\" female:milf");
+        assert_eq!(
+            tokens,
+            vec![
+                tok("female:huge breasts", false, true),
+                tok("female:milf", false, false)
+            ]
+        );
     }
 }
