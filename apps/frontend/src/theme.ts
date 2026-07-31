@@ -171,16 +171,30 @@ export function useApplyTheme() {
     ensureLink(LEGACY_COLLAPSIBLE_CSS_ID, '/legacy/allcollapsible.css')
   }, [])
 
+  // `settings`/`publicTheme` are both `undefined` for one or more renders after mount, before
+  // either query has actually resolved — naively falling back to `DEFAULT_THEME_ID` during that
+  // window overwrites the theme `index.html`'s own inline script already applied synchronously
+  // (from the server-injected `data-theme` attribute, or a cached `localStorage` value) with the
+  // hardcoded default, then swaps it back once the real value arrives: a real, live-confirmed
+  // flash-of-default-theme regression (issue #58 follow-up), not a hypothetical one — the *fix*
+  // for that flash was itself re-introducing it. Only apply the `DEFAULT_THEME_ID` fallback once
+  // both queries have actually settled (succeeded or errored) with no real value between them —
+  // until then, leave whatever's already applied alone rather than guessing.
+  const publicThemeEnabled = settings.data === undefined
+  const settingsSettled = settings.isSuccess || settings.isError
+  const publicThemeSettled = !publicThemeEnabled || publicTheme.isSuccess || publicTheme.isError
+  const resolvedTheme = settings.data?.theme ?? publicTheme.data?.theme
   useEffect(() => {
-    const theme = settings.data?.theme ?? publicTheme.data?.theme ?? DEFAULT_THEME_ID
+    if (!resolvedTheme && !(settingsSettled && publicThemeSettled)) return
+    const theme = resolvedTheme ?? DEFAULT_THEME_ID
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
     // Cache for `index.html`'s own inline script (see that file's own docs) to apply synchronously,
     // before paint, on the *next* visit — this run is always too late for that to help this one.
-    // Only once a real theme value has actually arrived (not the `DEFAULT_THEME_ID` fallback used
-    // while both queries are still pending) — caching the fallback would let a slow network turn
-    // one single slow load into a permanently-wrong cached theme for every visit after it.
-    if (settings.data?.theme ?? publicTheme.data?.theme) {
+    // Only once a real theme value has actually arrived (not the `DEFAULT_THEME_ID` fallback) —
+    // caching the fallback would let a slow network turn one single slow load into a permanently-
+    // wrong cached theme for every visit after it.
+    if (resolvedTheme) {
       try {
         localStorage.setItem(THEME_STORAGE_KEY, theme)
       } catch {
@@ -188,5 +202,5 @@ export function useApplyTheme() {
         // harmless, just means the next visit won't get the synchronous head start.
       }
     }
-  }, [settings.data?.theme, publicTheme.data?.theme])
+  }, [resolvedTheme, settingsSettled, publicThemeSettled])
 }
