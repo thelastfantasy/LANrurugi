@@ -193,12 +193,14 @@ function TagsTable({ tags }: { tags: string }) {
  * A cell whose image hasn't loaded yet has nothing to stretch it, so it collapses to that bare
  * 100px minimum — visibly narrower than its loaded siblings, producing the jarring width jump/grid
  * reflow issue #57 reports (confirmed live: a still-loading cell measured exactly 100px wide next
- * to 185-277px loaded ones). Setting an explicit `width` here — sized to a 9:16 page aspect ratio
- * against the grid's own fixed `max-height: 275px`/`width: 95%` image box (`lrr.css`), i.e.
- * `(275 * 9/16) / 0.95 ≈ 163px` — gives the placeholder a size in the same ballpark as a real
- * loaded cell instead of the bare CSS minimum, without needing to touch the shared legacy
- * stylesheet itself. */
-const PLACEHOLDER_WIDTH_PX = 163
+ * to 185-277px loaded ones). Setting an explicit `width` here — sized to a 1:√2 (ISO 216 A4/B4)
+ * page aspect ratio against the grid's own fixed `max-height: 275px`/`width: 95%` image box
+ * (`lrr.css`) rather than a phone-screen-like 9:16 (an earlier version of this fix used 9:16,
+ * visibly too narrow against real manga scans, which are almost always printed on A4/B4 paper —
+ * 1:√2 ≈ 0.707:1, not 9:16's 0.5625:1), i.e. `(275 / sqrt(2)) / 0.95 ≈ 205px` — gives the
+ * placeholder a size in the same ballpark as a real loaded cell instead of the bare CSS minimum,
+ * without needing to touch the shared legacy stylesheet itself. */
+const PLACEHOLDER_WIDTH_PX = 205
 
 function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
   const [loaded, setLoaded] = useState(false)
