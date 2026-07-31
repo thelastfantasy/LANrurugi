@@ -143,6 +143,18 @@ half of the server-side anti-flash-of-default-theme mechanism — see that file'
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
 any other Vite-served frontend file; no build step of its own to go stale.
 
+## UI-only changes require human verification before commit
+
+When a change is purely UI (visual layout, spacing, styling, tooltip/overlay behavior — no
+backend/logic change riding along), do not `git commit` it yourself after your own browser
+verification. Implement it, verify it works with the browser tools as usual, then stop and hand it
+to the user to look at and confirm before committing. This is stricter than the general "only
+commit when explicitly asked" rule elsewhere — even an explicit earlier "go ahead and commit your
+fixes" for a session does not cover a purely-visual change encountered later in that same session;
+ask again. A change that's mostly logic but happens to touch a `.tsx` file's styling too is not
+"purely UI" — this rule is about changes where the entire diff is visual polish with no functional
+risk to independently verify against.
+
 ## Before pushing — check whether README.md needs updating
 
 Before any `git push`, review what the commit(s) being pushed actually changed and ask: does this
