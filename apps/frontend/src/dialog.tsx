@@ -175,18 +175,6 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   return (
     <div onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
       <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('Enter a name for the new category')}</p>
-      <input
-        ref={nameRef}
-        type="text"
-        className="stdinput"
-        style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
-        value={name}
-        placeholder={t('My Category') ?? undefined}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !isDynamic) submit()
-        }}
-      />
       {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
           `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
           than native radio inputs (visually inconsistent with the rest of the themed UI). */}
@@ -212,6 +200,18 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           {t('Dynamic Category')}
         </button>
       </div>
+      <input
+        ref={nameRef}
+        type="text"
+        className="stdinput"
+        style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
+        value={name}
+        placeholder={t('My Category') ?? undefined}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !isDynamic) submit()
+        }}
+      />
       {isDynamic && (
         <div style={{ textAlign: 'left', marginBottom: 12 }}>
           <label htmlFor="new-category-search" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
