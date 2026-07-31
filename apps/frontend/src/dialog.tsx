@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
+import { useStats } from './api/hooks'
+import { PopupMenu, PopupMenuItem } from './components/PopupMenu'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from './theme'
 
 // Real, themed replacements for `window.prompt`/`window.confirm` — same call shape as those
@@ -26,6 +28,8 @@ import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from './theme'
 // call sites need this to work from plain event handlers exactly like `window.prompt` did, not
 // only from inside a component's own render.
 
+export type NewCategoryResult = { name: string; isDynamic: boolean; search: string }
+
 type DialogRequest =
   | {
       kind: 'prompt'
@@ -37,6 +41,10 @@ type DialogRequest =
       kind: 'confirm'
       message: string
       resolve: (value: boolean) => void
+    }
+  | {
+      kind: 'newCategory'
+      resolve: (value: NewCategoryResult | null) => void
     }
 
 let currentRequest: DialogRequest | null = null
@@ -63,10 +71,167 @@ export function confirmDialog(message: string): Promise<boolean> {
   })
 }
 
+/** One combined "New Category" dialog (name + a static/dynamic tab switcher, with a predicate
+ * field that only appears in dynamic mode) shared by every quick-create entry point (the Reader
+ * overview overlay, the Upload page, and — in spirit — `Categories.tsx`'s own longer-standing
+ * pair of "New Static/New Dynamic" buttons), rather than two separate single-purpose buttons each
+ * call site would otherwise have to lay out and wire up itself. Resolves `null` if cancelled. */
+export function newCategoryDialog(): Promise<NewCategoryResult | null> {
+  return new Promise((resolve) => {
+    setRequest({ kind: 'newCategory', resolve })
+  })
+}
+
+// Same fragment-matching/sort rule as `Library.tsx`'s own search-bar autocomplete
+// (`loadTagSuggestions`): only the piece after the last `,`/`-`/whitespace, case-insensitive
+// substring, sorted by tag weight descending. Used for the dynamic-category predicate field,
+// whose value is itself a LANraragi search-query string, not a plain name.
+function TagSearchField({
+  id,
+  value,
+  onChange,
+  autoFocus,
+  onEnter,
+}: {
+  id: string
+  value: string
+  onChange: (next: string) => void
+  autoFocus: boolean
+  onEnter: () => void
+}) {
+  const stats = useStats()
+  const [open, setOpen] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const currentFragment = value.match(/[^,\s-]*$/)?.[0] ?? ''
+  const suggestions = useMemo(() => {
+    if (!currentFragment) return []
+    const needle = currentFragment.toLowerCase()
+    return (stats.data ?? [])
+      .map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
+      .filter((label) => label.toLowerCase().includes(needle))
+      .slice(0, 15)
+  }, [stats.data, currentFragment])
+
+  return (
+    <span style={{ position: 'relative', display: 'block' }}>
+      <input
+        ref={inputRef}
+        id={id}
+        type="text"
+        className="stdinput"
+        style={{ width: '100%', boxSizing: 'border-box' }}
+        value={value}
+        autoComplete="off"
+        autoFocus={autoFocus}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onEnter()
+          if (e.key === 'Escape') setOpen(false)
+        }}
+      />
+      {open && suggestions.length > 0 && (
+        <PopupMenu portal={false} style={{ position: 'absolute', top: '100%', left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: '100%', maxHeight: 180, overflowY: 'auto' }}>
+          {suggestions.map((label) => (
+            <PopupMenuItem
+              key={label}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                onChange(`${value.replace(/[^,\s-]*$/, '')}${label}`)
+                setOpen(false)
+                inputRef.current?.focus()
+              }}
+            >
+              {label}
+            </PopupMenuItem>
+          ))}
+        </PopupMenu>
+      )}
+    </span>
+  )
+}
+
+function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategoryResult) => void; onCancel: () => void }) {
+  const { t } = useTranslation()
+  const [name, setName] = useState('')
+  const [isDynamic, setIsDynamic] = useState(false)
+  const [search, setSearch] = useState('')
+  const nameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    nameRef.current?.select()
+  }, [])
+
+  function submit() {
+    if (!name.trim()) return
+    onSubmit({ name: name.trim(), isDynamic, search: isDynamic ? search : '' })
+  }
+
+  return (
+    <div onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
+      <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('Enter a name for the new category')}</p>
+      <input
+        ref={nameRef}
+        type="text"
+        className="stdinput"
+        style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
+        value={name}
+        placeholder={t('My Category') ?? undefined}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !isDynamic) submit()
+        }}
+      />
+      {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
+          `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
+          than native radio inputs (visually inconsistent with the rest of the themed UI). */}
+      <div role="tablist" style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!isDynamic}
+          className={`favtag-btn${!isDynamic ? ' toggled' : ''}`}
+          style={{ flex: 1 }}
+          onClick={() => setIsDynamic(false)}
+        >
+          {t('Static Category')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isDynamic}
+          className={`favtag-btn${isDynamic ? ' toggled' : ''}`}
+          style={{ flex: 1 }}
+          onClick={() => setIsDynamic(true)}
+        >
+          {t('Dynamic Category')}
+        </button>
+      </div>
+      {isDynamic && (
+        <div style={{ textAlign: 'left', marginBottom: 12 }}>
+          <label htmlFor="new-category-search" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+            {t('Search Predicate')}
+          </label>
+          <TagSearchField id="new-category-search" value={search} onChange={setSearch} autoFocus={false} onEnter={submit} />
+        </div>
+      )}
+      <div className="swal2-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+        <input type="button" className="stdbtn" value={t('Cancel') ?? 'Cancel'} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t('OK') ?? 'OK'} onClick={submit} />
+      </div>
+    </div>
+  )
+}
+
 /** Mounted once, app-wide (see `App.tsx`) — matches `toast.tsx`'s own `<ToastContainer>`
  * convention exactly: a single always-present host that any file's plain `promptDialog`/
- * `confirmDialog` call can push a request into, regardless of which component tree is currently
- * mounted where. */
+ * `confirmDialog`/`newCategoryDialog` call can push a request into, regardless of which component
+ * tree is currently mounted where. */
 export function DialogHost() {
   const { t } = useTranslation()
   const [, forceUpdate] = useState(0)
@@ -115,6 +280,47 @@ export function DialogHost() {
     if (request?.kind !== 'confirm') return
     request.resolve(false)
     close()
+  }
+
+  function cancelNewCategory() {
+    if (request?.kind !== 'newCategory') return
+    request.resolve(null)
+    close()
+  }
+
+  function submitNewCategory(value: NewCategoryResult) {
+    if (request?.kind !== 'newCategory') return
+    request.resolve(value)
+    close()
+  }
+
+  if (request.kind === 'newCategory') {
+    return createPortal(
+      <>
+        <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: 'rgba(0,0,0,0.4)' }} onClick={cancelNewCategory} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="swal2-popup"
+          style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: Z_OVERLAY_CONTENT,
+            display: 'block',
+            width: 360,
+            padding: 20,
+            textAlign: 'center',
+            borderRadius: '.2em',
+            boxShadow: '0 2px 10px rgba(0,0,0,.4)',
+          }}
+        >
+          <NewCategoryForm onSubmit={submitNewCategory} onCancel={cancelNewCategory} />
+        </div>
+      </>,
+      document.body,
+    )
   }
 
   const onCancel = request.kind === 'prompt' ? cancelPrompt : confirmNo

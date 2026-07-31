@@ -57,6 +57,28 @@ export function useCategories() {
   })
 }
 
+/** Legacy's own `Category.addNewCategory(isDynamic)` (`category.js`) — a static category has an
+ * empty `search`; a dynamic (smart) one stores its filter expression there instead. Only the
+ * Categories management page had this (`Categories.tsx`'s own `handleNewCategory`, ported first);
+ * this is the same `PUT /categories` call factored out so the "添加到:" dropdown elsewhere
+ * (`ArchiveOverviewOverlay.tsx`, `Upload/index.tsx`) can offer it inline too, without a detour to
+ * that separate page (issue #42 — legacy itself never offered this shortcut either; verified
+ * against `reader.html.tt2`/`index_contextmenu.js`, whose own "添加到:" `#add-category` button
+ * only ever adds the *current* archive to an already-selected category, not creates a new one). */
+export function useCreateCategory() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { name: string; isDynamic: boolean; search?: string }) =>
+      sendForm<{ category_id: string }>('PUT', '/categories', {
+        name: params.name,
+        // Falls back to legacy's own "bogus search" placeholder (`category.js`'s
+        // `addNewCategory`) when the caller doesn't supply a real predicate up front.
+        search: params.isDynamic ? (params.search?.trim() || 'language:english') : '',
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories'] }),
+  })
+}
+
 export function useTankoubons() {
   return useQuery({
     queryKey: ['tankoubons'],

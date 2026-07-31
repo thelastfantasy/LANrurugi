@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   useAddTocEntry,
   useArchivePages,
+  useCreateCategory,
   useRemoveTocEntry,
   useSetArchiveThumbnail,
   useSettings,
@@ -17,7 +18,7 @@ import { PopupMenu, PopupMenuItem, useMenuPalette } from '../../components/Popup
 import RatingWidget from '../../components/RatingWidget'
 import StarRatingDisplay from '../../components/StarRating'
 import Tooltip from '../../components/Tooltip'
-import { confirmDialog, promptDialog } from '../../dialog'
+import { confirmDialog, newCategoryDialog, promptDialog } from '../../dialog'
 import { parseRating } from '../../lib/rating'
 import { formatTimestampForDisplay, getTagSearchURL, TIMESTAMP_NAMESPACE } from '../../lib/tagFormat'
 import {
@@ -727,6 +728,7 @@ export default function ArchiveOverviewOverlay({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const createCategory = useCreateCategory()
   const staticCategories = (categories ?? []).filter((c) => !c.search)
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
 
@@ -882,6 +884,17 @@ export default function ArchiveOverviewOverlay({
     await queryClient.invalidateQueries({ queryKey: ['categories'] })
   }
 
+  async function handleNewCategory() {
+    const result = await newCategoryDialog()
+    if (result === null) return
+    try {
+      const data = await createCategory.mutateAsync(result)
+      if (!result.isDynamic) await addToCategory(data.category_id)
+    } catch {
+      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
+    }
+  }
+
   async function removeFromCategory(categoryId: string) {
     await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: 'DELETE' })
     await queryClient.invalidateQueries({ queryKey: ['categories'] })
@@ -1022,6 +1035,18 @@ export default function ArchiveOverviewOverlay({
                     </option>
                   ))}
                 </select>
+                <Tooltip label={t('New Category') ?? undefined}>
+                  <a
+                    href="#"
+                    style={{ marginLeft: 6 }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      void handleNewCategory()
+                    }}
+                  >
+                    <i className="fas fa-plus" />
+                  </a>
+                </Tooltip>
 
                 <h2>{t('Rating')}</h2>
                 <RatingWidget archiveId={archive.arcid} tags={archive.tags} />

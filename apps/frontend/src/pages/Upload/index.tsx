@@ -4,11 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { fetchJson } from '../../api/client'
-import { useAddToQueue, useCategories, useDownloadQueue, usePlugins } from '../../api/hooks'
+import { useAddToQueue, useCategories, useCreateCategory, useDownloadQueue, usePlugins } from '../../api/hooks'
 import type { PluginInfo } from '../../api/types'
 import { STATE_COLOR } from '../../components/JobProgress'
+import Tooltip from '../../components/Tooltip'
+import { newCategoryDialog } from '../../dialog'
 import { routes } from '../../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
+import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import DownloadQueuePanel from './DownloadQueuePanel'
 import { findMatchingPlugin } from './shared'
@@ -24,6 +27,7 @@ export default function Upload() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const categories = useCategories()
+  const createCategory = useCreateCategory()
   const downloadPlugins = usePlugins('download')
   const metadataPlugins = usePlugins('metadata')
   const downloadQueue = useDownloadQueue()
@@ -126,6 +130,17 @@ export default function Upload() {
     await addToQueue.mutateAsync(resolved)
   }
 
+  async function handleNewCategory() {
+    const result = await newCategoryDialog()
+    if (result === null) return
+    try {
+      const data = await createCategory.mutateAsync(result)
+      setCategory(data.category_id)
+    } catch {
+      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
+    }
+  }
+
   return (
     <div className="ido" style={{ textAlign: 'center', fontSize: FONT_SIZE_8PT }}>
       <h1 className="ih" style={{ textAlign: 'center' }}>
@@ -147,6 +162,18 @@ export default function Upload() {
               </option>
             ))}
           </select>
+          <Tooltip label={t('New Category') ?? undefined}>
+            <a
+              href="#"
+              style={{ marginLeft: 6 }}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleNewCategory()
+              }}
+            >
+              <i className="fas fa-plus" />
+            </a>
+          </Tooltip>
           <br />
           <br />
 

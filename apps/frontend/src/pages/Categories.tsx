@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
-import { useArchives, useCategories } from '../api/hooks'
-import { confirmDialog, promptDialog } from '../dialog'
+import { useArchives, useCategories, useCreateCategory } from '../api/hooks'
+import { confirmDialog, newCategoryDialog } from '../dialog'
 import { routes } from '../routes'
 import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
 import { toast } from '../toast'
@@ -35,6 +35,7 @@ export default function Categories() {
   const categories = useCategories()
   const archives = useArchives()
   const queryClient = useQueryClient()
+  const createCategory = useCreateCategory()
 
   const [selectedId, setSelectedId] = useState('')
   const [name, setName] = useState('')
@@ -91,19 +92,11 @@ export default function Categories() {
     }
   }
 
-  async function handleNewCategory(isDynamic: boolean) {
-    const value = await promptDialog(t('Enter a name for the new category') ?? '', t('My Category') ?? '')
-    if (value === null) return
-    if (!value.trim()) {
-      toast({ text: t('Please enter a category name.') ?? undefined, icon: 'error' })
-      return
-    }
+  async function handleNewCategory() {
+    const result = await newCategoryDialog()
+    if (result === null) return
     try {
-      const data = await sendForm<{ category_id: string }>('PUT', '/categories', {
-        name: value,
-        search: isDynamic ? 'language:english' : '',
-      })
-      await refresh()
+      const data = await createCategory.mutateAsync(result)
       setSelectedId(data.category_id)
     } catch {
       toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
@@ -194,20 +187,7 @@ export default function Categories() {
           <br />
           <br />
           <div style={{ textAlign: 'center' }}>
-            <input
-              type="button"
-              id="new-static"
-              className="stdbtn"
-              value={t('New Static Category') ?? undefined}
-              onClick={() => void handleNewCategory(false)}
-            />
-            <input
-              type="button"
-              id="new-dynamic"
-              className="stdbtn"
-              value={t('New Dynamic Category') ?? undefined}
-              onClick={() => void handleNewCategory(true)}
-            />
+            <input type="button" id="new-category" className="stdbtn" value={t('New Category') ?? undefined} onClick={() => void handleNewCategory()} />
           </div>
           <br />
           {t('Select a category in the combobox below to edit its name, the archives it contains, or its predicate.')}
