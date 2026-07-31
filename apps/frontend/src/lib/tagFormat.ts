@@ -36,13 +36,16 @@ export function buildNamespacedTag(namespace: string, tag: string): string {
  * `buildNamespacedTag`, which is only for the archive's own stored `tags` field and must never be
  * quoted. Space is a real AND-separator in the search grammar (`grammar.rs::compute_search_filter`,
  * matching e-hentai's own `f_search` syntax — issue #59), so a multi-word `value` gets wrapped in
- * double quotes here to protect its internal spaces from being split into separate, wrong tokens;
- * quoting already implies an exact-tag match, so `exact` (the `$`-suffix behavior) only applies to
- * the unquoted, single-word case. Visible tag text elsewhere in the UI is built from `value`
- * directly, never from this function's output, so the quotes never show up on-screen. */
+ * double quotes here to protect its internal spaces from being split into separate, wrong tokens —
+ * only the *value* itself, e.g. `female:"anal intercourse"`, not the whole `namespace:value` pair
+ * (matching e-hentai's own literal syntax; the grammar accepts both spellings and treats them
+ * identically, but this is the one that keeps `namespace` readable outside the quotes). Quoting
+ * already implies an exact-tag match, so `exact` (the `$`-suffix behavior) only applies to the
+ * unquoted, single-word case. Visible tag text elsewhere in the UI is built from `value` directly,
+ * never from this function's output, so the quotes never show up on-screen. */
 export function buildSearchToken(namespace: string, value: string, exact = false): string {
+  if (value.includes(' ')) return buildNamespacedTag(namespace, `"${value}"`)
   const namespacedTag = buildNamespacedTag(namespace, value)
-  if (value.includes(' ')) return `"${namespacedTag}"`
   return exact ? `${namespacedTag}$` : namespacedTag
 }
 

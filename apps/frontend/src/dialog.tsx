@@ -238,7 +238,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
             <Tooltip
               label={
                 t(
-                  'Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. "female:huge breasts". Example: language:chinese, -tag:full color, or just a keyword like 旗袍',
+                  'Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. female:"huge breasts". Example: language:chinese, -tag:full color, or just a keyword like 旗袍',
                 ) ?? undefined
               }
             >

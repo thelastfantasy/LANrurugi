@@ -18,7 +18,11 @@
 //!   parity break, not a silent one, and called out in-product wherever a predicate/search field's
 //!   own help text explains the syntax.
 //! - `-` prefix on a tag negates it (must be absent).
-//! - `"..."` (or a trailing `$`) marks an exact-tag match instead of a fuzzy substring match.
+//! - `"..."` (or a trailing `$`) marks an exact-tag match instead of a fuzzy substring match — the
+//!   quotes can wrap either the *whole* token (`"female:anal intercourse"`) or, matching
+//!   e-hentai's own literal syntax, just the value half of a namespaced tag
+//!   (`female:"anal intercourse"`, colon outside the quotes) — both spellings produce the exact
+//!   same token.
 //! - `?`/`_` become single-character glob wildcards; `*`/`%` become multi-character wildcards.
 //! - Tags are lowercased and trimmed.
 
@@ -67,13 +71,48 @@ pub fn compute_search_filter(filter: &str) -> Vec<Token> {
             (s, true)
         } else {
             let mut s = String::new();
-            for c in chars.by_ref() {
-                if c == ',' || c == ' ' {
-                    break;
+            let mut isexact = false;
+            loop {
+                match chars.peek() {
+                    None | Some(',') | Some(' ') => break,
+                    // `namespace:"value with spaces"` — matches e-hentai's own real search-box
+                    // syntax (`female:"double+penetration$"`), where only the *value* half is
+                    // quoted, not the whole `namespace:value` pair. The colon itself stays outside
+                    // the quotes in the raw input but ends up as a normal character in `s` either
+                    // way, so the resulting token is identical either way (`female:anal
+                    // intercourse` whether written as `female:"anal intercourse"` or the
+                    // whole-token `"female:anal intercourse"` form the top-level quote branch
+                    // above already handles) — this is purely an *additional accepted spelling*,
+                    // not a new distinct semantic.
+                    Some(':') => {
+                        s.push(':');
+                        chars.next();
+                        if chars.peek() == Some(&'"') {
+                            chars.next();
+                            for c in chars.by_ref() {
+                                if c == '"' {
+                                    break;
+                                }
+                                s.push(c);
+                            }
+                            isexact = true;
+                            // Optional trailing `$` after the closing quote is accepted but
+                            // redundant, same as the top-level quote branch above.
+                            if chars.peek() == Some(&'$') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                    Some(&c) => {
+                        s.push(c);
+                        chars.next();
+                    }
                 }
-                s.push(c);
             }
-            if let Some(stripped) = s.strip_suffix('$') {
+            if isexact {
+                (s, true)
+            } else if let Some(stripped) = s.strip_suffix('$') {
                 (stripped.to_string(), true)
             } else {
                 (s, false)
@@ -202,11 +241,8 @@ mod tests {
 
     // The other half of the fix: a multi-word tag *value* (still a real, common shape —
     // `female:huge breasts` is one tag, not two) must still be searchable as a single token now
-    // that a bare space would otherwise split it — by quoting the whole `namespace:value` pair
-    // (what every app-generated search string now does via `buildSearchToken` on the frontend),
-    // not just the value half (e-hentai's own literal syntax quotes only the value, but that form
-    // requires the parser to recognize a quote appearing *mid*-token after a colon, which this
-    // grammar's quote-detection — anchored at the very start of a token — does not support).
+    // that a bare space would otherwise split it. Quoting the *whole* token still works (top-level
+    // quote branch, unchanged) and still ANDs correctly with a following unquoted token.
     #[test]
     fn quoted_whole_token_preserves_internal_space_and_still_ands_with_the_next_token() {
         let tokens = compute_search_filter("\"female:huge breasts\" female:milf");
@@ -216,6 +252,21 @@ mod tests {
                 tok("female:huge breasts", false, true),
                 tok("female:milf", false, false)
             ]
+        );
+    }
+
+    // e-hentai's own real search-box syntax quotes only the *value* half, colon outside the
+    // quotes (`female:"double+penetration$"`) — now also accepted, and produces the identical
+    // token either way (not a different, narrower kind of match).
+    #[test]
+    fn quoted_value_only_form_matches_quoted_whole_token_form_exactly() {
+        assert_eq!(
+            compute_search_filter("female:\"anal intercourse\""),
+            compute_search_filter("\"female:anal intercourse\""),
+        );
+        assert_eq!(
+            compute_search_filter("female:\"anal intercourse\""),
+            vec![tok("female:anal intercourse", false, true)]
         );
     }
 }

@@ -8,11 +8,11 @@ describe('buildSearchToken', () => {
     expect(buildSearchToken('female', 'milf', false)).toBe('female:milf')
   })
 
-  it('quotes a multi-word value so it survives space being a real token delimiter (issue #59)', () => {
-    expect(buildSearchToken('female', 'huge breasts', true)).toBe('"female:huge breasts"')
+  it('quotes only the value half (namespace stays outside), matching e-hentai own syntax (issue #59)', () => {
+    expect(buildSearchToken('female', 'huge breasts', true)).toBe('female:"huge breasts"')
     // Quoting already implies an exact match server-side — the `$` suffix would be redundant, so
     // `exact` has no separate effect once the value contains a space.
-    expect(buildSearchToken('female', 'huge breasts', false)).toBe('"female:huge breasts"')
+    expect(buildSearchToken('female', 'huge breasts', false)).toBe('female:"huge breasts"')
   })
 
   it('quotes a bare (non-namespaced) multi-word value the same way', () => {
@@ -27,7 +27,7 @@ describe('getTagSearchURL', () => {
   })
 
   it('quotes a multi-word tag value instead of leaving a bare space in the query', () => {
-    expect(getTagSearchURL('female', 'huge breasts')).toBe('/?q=%22female%3Ahuge%20breasts%22')
+    expect(getTagSearchURL('female', 'huge breasts')).toBe('/?q=female%3A%22huge%20breasts%22')
   })
 
   it('leaves source tags as external links, untouched by quoting', () => {

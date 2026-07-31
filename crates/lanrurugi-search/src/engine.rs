@@ -539,4 +539,83 @@ mod tests {
             .await
             .unwrap();
     }
+
+    // Issue #59, end-to-end (not just token-level, unlike grammar.rs's own tests): a real archive
+    // with a genuinely multi-word tag value, searched via both accepted quoting spellings plus a
+    // second, space-separated ANDed term — through the actual `search()` entry point, hitting real
+    // Redis indexes, the same way a live request does.
+    #[tokio::test]
+    async fn multi_word_tag_value_is_findable_both_quoted_forms_and_ands_with_a_second_term() {
+        let Some((archive_pool, search_pool)) = test_pools() else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let id = "3".repeat(40);
+        let tags = "female:huge breasts,female:milf";
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        let _: () = aconn
+            .hset_multiple(
+                &id,
+                &[("tags", tags), ("pagecount", "10"), ("progress", "0")],
+            )
+            .await
+            .unwrap();
+
+        crate::indexer::index_new_archive(&search_pool, &id, "Book C")
+            .await
+            .unwrap();
+        crate::indexer::update_tag_indexes(&search_pool, &id, "", tags)
+            .await
+            .unwrap();
+
+        for filter in [
+            // Whole-token quote form.
+            "\"female:huge breasts\"",
+            // Value-only quote form (e-hentai's own literal syntax).
+            "female:\"huge breasts\"",
+            // Space-separated AND with a second, unquoted single-word term — the exact shape of
+            // the originally-reported bug (`female:huge breasts female:milf` returning 0).
+            "female:\"huge breasts\" female:milf",
+        ] {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &params).await.unwrap();
+            assert_eq!(
+                result.ids,
+                vec![id.clone()],
+                "filter {filter:?} should match"
+            );
+        }
+
+        // The unquoted, hand-typed form is the one deliberate behavior change (issue #59's own
+        // docs) — `female:huge breasts` now splits into two ANDed tokens (`female:huge`,
+        // `breasts`), neither of which is a real indexed tag on this fixture archive, so it
+        // correctly finds nothing rather than silently matching via the old single-token
+        // substring behavior.
+        let unquoted_params = SearchParams {
+            filter: "female:huge breasts".to_string(),
+            groupby_tanks: true,
+            ..Default::default()
+        };
+        let unquoted_result = search(&archive_pool, &search_pool, &unquoted_params)
+            .await
+            .unwrap();
+        assert!(!unquoted_result.ids.contains(&id));
+
+        let _: () = aconn.del(&id).await.unwrap();
+        let mut sconn = search_pool.get().await.unwrap();
+        let _: () = sconn.del("INDEX_female:huge breasts").await.unwrap();
+        let _: () = sconn.del("INDEX_female:milf").await.unwrap();
+        let _: () = sconn.del(UNTAGGED_KEY).await.unwrap();
+        let _: () = sconn.del(NEW_KEY).await.unwrap();
+        let _: () = sconn.del(TANKGROUPED_KEY).await.unwrap();
+        let _: () = sconn
+            .zrem(TITLES_KEY, "book c\0".to_string() + &id)
+            .await
+            .unwrap();
+    }
 }

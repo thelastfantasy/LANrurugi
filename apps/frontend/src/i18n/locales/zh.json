@@ -660,7 +660,7 @@
   "Save Security Settings": "保存安全设置",
   "Save Settings": "保存设置",
   "Saved!": "已保存！",
-  "Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. \"female:huge breasts\". Example: language:chinese, -tag:full color, or just a keyword like 旗袍": "语法与顶部搜索框完全相同——不带命名空间的裸关键字会同时匹配标题和所有标签，就像直接在那个搜索框里输入一样。多个条件用逗号或空格分隔表示同时满足（与），条件前加 - 表示排除。多词的标签值需要用双引号包起来才能保持在一起，例如 \"female:huge breasts\"。例如：language:chinese, -tag:full color（中文且不带 full color 标签），或者直接写一个关键字，比如「旗袍」",
+  "Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. female:\"huge breasts\". Example: language:chinese, -tag:full color, or just a keyword like 旗袍": "语法与顶部搜索框完全相同——不带命名空间的裸关键字会同时匹配标题和所有标签，就像直接在那个搜索框里输入一样。多个条件用逗号或空格分隔表示同时满足（与），条件前加 - 表示排除。多词的标签值需要用双引号包起来才能保持在一起，例如 female:\"huge breasts\"。例如：language:chinese, -tag:full color（中文且不带 full color 标签），或者直接写一个关键字，比如「旗袍」",
   "Sayonara! Redirecting you...": "再见！正在为您跳转...",
   "Scan your Content Folder and automatically create Static Categories for each subfolder.": "扫描您的内容文件夹，并为每个子文件夹自动创建静态分类。",
   "Script failed with error: \\${error}": "脚本运行失败，错误信息：${error}",
