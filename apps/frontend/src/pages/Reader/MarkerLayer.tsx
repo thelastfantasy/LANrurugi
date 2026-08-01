@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
 import type { StampJson } from '../../api/types'
 import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
+import Tooltip from '../../components/Tooltip'
 import {
   anchorPercent,
   formatStampRect,
@@ -1119,89 +1120,105 @@ export default function MarkerLayer({
                       })}
                   </div>
                 )}
-                <div
-                  className="marker"
-                  style={{
-                    left: `${iconPos.x}%`,
-                    top: `${iconPos.y}%`,
-                    cursor: rect ? (isSelected ? 'grab' : 'pointer') : isDragging ? 'grabbing' : 'grab',
-                    pointerEvents: 'auto',
-                    // A custom icon replaces `.marker`'s own CSS `background-image` (the default
-                    // favicon pin) entirely, rather than rendering on top of it — showing both at
-                    // once would just look like visual noise, not a real combined icon.
-                    ...(stamp.icon && { backgroundImage: 'none' }),
-                  }}
-                  title={stamp.content}
-                  onMouseEnter={() => rect && setHoveredStampId(stamp.id)}
-                  onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
-                  // A rect stamp's icon is only draggable once selected — before that, a plain
-                  // click on it should just select (not immediately start a drag on the same
-                  // press). `draggedRef.current` is still reset here unconditionally for the
-                  // point-stamp branch, for the reason its own docs below explain.
-                  onMouseDown={(e) => {
-                    if (rect) {
-                      // Reset unconditionally, same reasoning as the rect body's own
-                      // `onMouseDown` above — `rectEditedRef` left `true` by an earlier *actual*
-                      // rect-body/handle/icon drag anywhere would otherwise permanently block
-                      // `onClick`'s own guard below from ever selecting this icon again.
-                      rectEditedRef.current = false
-                      if (isSelected) handleIconAnchorDragPointerDown(e, stamp.id, rect)
-                      return
-                    }
-                    // `draggedRef.current` is reset here unconditionally (not only inside
-                    // `handleMarkerPointerDown`) — otherwise a rect stamp's icon could never be
-                    // selected at all once `draggedRef` had ever been left `true` by an earlier
-                    // *point* stamp's real drag anywhere on the page: the `onClick` guard below
-                    // reads the same shared ref, so a stale `true` from a previous, entirely
-                    // unrelated stamp's drag would silently swallow every future click on this
-                    // stamp's icon, forever, with no drag on this icon ever having happened.
-                    draggedRef.current = false
-                    handleMarkerPointerDown(e, stamp.id, iconPos.x, iconPos.y)
-                  }}
-                  onClick={(e) => {
-                    // A drag that actually moved the pin/rect shouldn't also re-trigger selection
-                    // or open the rename prompt via a trailing click — mouseup after dragging
-                    // still fires a click event.
-                    if (draggedRef.current || rectEditedRef.current) {
+                {/* Wraps `.marker` itself (not a separate wrapping `<span>` around it) with a
+                    themed `Tooltip` instead of a plain `title` attribute — the browser's native
+                    tooltip can't be restyled and has its own multi-second show delay, unlike this
+                    app's other icon-only tooltips. `wrapperStyle={{ position: 'static' }}` +
+                    `anchor="cursor"` mirrors `ArchiveOverviewOverlay.tsx`'s identical fix for the
+                    same underlying issue: `Tooltip`'s own default wrapper is `position: relative`,
+                    which would silently become `.marker`'s *new* positioning containing block
+                    (`.marker` itself is `position: absolute; left/top: <percent>` relative to the
+                    page image) — without the override the pin's `left`/`top` percentages would
+                    resolve against the wrapper's own tiny shrink-to-fit box instead of the real
+                    page image, moving every marker to the wrong spot. With no `position: relative`/
+                    `absolute` of its own, that `static` wrapper's bounding box also collapses
+                    around nothing once `.marker` escapes into absolute layout, so the default
+                    `anchor="element"` mode would place the bubble at the wrong spot too —
+                    `anchor="cursor"` sidesteps needing a meaningful wrapper box at all. */}
+                <Tooltip label={stamp.content} wrapperStyle={{ position: 'static' }} anchor="cursor">
+                  <div
+                    className="marker"
+                    style={{
+                      left: `${iconPos.x}%`,
+                      top: `${iconPos.y}%`,
+                      cursor: rect ? (isSelected ? 'grab' : 'pointer') : isDragging ? 'grabbing' : 'grab',
+                      pointerEvents: 'auto',
+                      // A custom icon replaces `.marker`'s own CSS `background-image` (the default
+                      // favicon pin) entirely, rather than rendering on top of it — showing both at
+                      // once would just look like visual noise, not a real combined icon.
+                      ...(stamp.icon && { backgroundImage: 'none' }),
+                    }}
+                    onMouseEnter={() => rect && setHoveredStampId(stamp.id)}
+                    onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
+                    // A rect stamp's icon is only draggable once selected — before that, a plain
+                    // click on it should just select (not immediately start a drag on the same
+                    // press). `draggedRef.current` is still reset here unconditionally for the
+                    // point-stamp branch, for the reason its own docs below explain.
+                    onMouseDown={(e) => {
+                      if (rect) {
+                        // Reset unconditionally, same reasoning as the rect body's own
+                        // `onMouseDown` above — `rectEditedRef` left `true` by an earlier *actual*
+                        // rect-body/handle/icon drag anywhere would otherwise permanently block
+                        // `onClick`'s own guard below from ever selecting this icon again.
+                        rectEditedRef.current = false
+                        if (isSelected) handleIconAnchorDragPointerDown(e, stamp.id, rect)
+                        return
+                      }
+                      // `draggedRef.current` is reset here unconditionally (not only inside
+                      // `handleMarkerPointerDown`) — otherwise a rect stamp's icon could never be
+                      // selected at all once `draggedRef` had ever been left `true` by an earlier
+                      // *point* stamp's real drag anywhere on the page: the `onClick` guard below
+                      // reads the same shared ref, so a stale `true` from a previous, entirely
+                      // unrelated stamp's drag would silently swallow every future click on this
+                      // stamp's icon, forever, with no drag on this icon ever having happened.
+                      draggedRef.current = false
+                      handleMarkerPointerDown(e, stamp.id, iconPos.x, iconPos.y)
+                    }}
+                    onClick={(e) => {
+                      // A drag that actually moved the pin/rect shouldn't also re-trigger selection
+                      // or open the rename prompt via a trailing click — mouseup after dragging
+                      // still fires a click event.
+                      if (draggedRef.current || rectEditedRef.current) {
+                        e.preventDefault()
+                        return
+                      }
+                      if (rect) setSelectedStampId(stamp.id)
+                    }}
+                    // Only a double-click opens the full editor dialog — a single click is instead
+                    // "select for adjustment" (handled by `onClick` above), matching the requested
+                    // three-tier interaction (hover preview / single-click adjust / double-click
+                    // edit) rather than single-click doing both at once.
+                    onDoubleClick={() => {
+                      void openEditorForExisting(stamp.id)
+                    }}
+                    onContextMenu={(e) => {
                       e.preventDefault()
-                      return
-                    }
-                    if (rect) setSelectedStampId(stamp.id)
-                  }}
-                  // Only a double-click opens the full editor dialog — a single click is instead
-                  // "select for adjustment" (handled by `onClick` above), matching the requested
-                  // three-tier interaction (hover preview / single-click adjust / double-click
-                  // edit) rather than single-click doing both at once.
-                  onDoubleClick={() => {
-                    void openEditorForExisting(stamp.id)
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setMenu({ stampId: stamp.id, x: e.clientX, y: e.clientY })
-                  }}
-                >
-                  {stamp.icon && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        // `.marker`'s own real box is a fixed 24x24px (`lrr.css`) — 20px fills most
-                        // of that (leaving a couple px of margin so the glyph doesn't visibly clip
-                        // against the pin's own rounded silhouette) without needing to touch that
-                        // box's real size, which stays shared with the default (no custom icon)
-                        // favicon pin.
-                        fontSize: 20,
-                        lineHeight: 1,
-                        pointerEvents: 'none',
-                      }}
-                    >
-                      {renderStampIcon(stamp.icon)}
-                    </span>
-                  )}
-                </div>
+                      setMenu({ stampId: stamp.id, x: e.clientX, y: e.clientY })
+                    }}
+                  >
+                    {stamp.icon && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          // `.marker`'s own real box is a fixed 24x24px (`lrr.css`) — 20px fills most
+                          // of that (leaving a couple px of margin so the glyph doesn't visibly clip
+                          // against the pin's own rounded silhouette) without needing to touch that
+                          // box's real size, which stays shared with the default (no custom icon)
+                          // favicon pin.
+                          fontSize: 20,
+                          lineHeight: 1,
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        {renderStampIcon(stamp.icon)}
+                      </span>
+                    )}
+                  </div>
+                </Tooltip>
               </div>
             )
           })}
