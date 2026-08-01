@@ -14,6 +14,7 @@ import type {
   JobRecord,
   JobsResponse,
   LoginStatus,
+  PageDimensionsResponse,
   PluginInfo,
   PluginOptions,
   PluginOptionsUpdate,

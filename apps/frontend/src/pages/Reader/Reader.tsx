@@ -740,6 +740,7 @@ export default function Reader() {
     function updateCurrentPageFromScroll() {
       rafId = null
       if (performance.now() < reflowGuardUntil) return
+      if (!root) return
       const viewportMid = window.innerHeight / 2
       const images = root.querySelectorAll<HTMLElement>('[data-page]')
       for (const img of images) {
