@@ -20,6 +20,8 @@ pub struct StampJson {
     pub id: String,
     pub position: String,
     pub content: String,
+    pub icon: String,
+    pub rect: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -104,6 +106,8 @@ async fn stamps_by_page(
                 id: s.stamp_id,
                 position: s.position,
                 content: s.content,
+                icon: s.icon,
+                rect: s.rect,
             });
         }
     }
@@ -114,6 +118,8 @@ async fn stamps_by_page(
 pub struct StampParams {
     content: Option<String>,
     position: Option<String>,
+    icon: Option<String>,
+    rect: Option<String>,
 }
 
 async fn add_stamp(
@@ -159,6 +165,8 @@ async fn add_stamp(
             index,
             params.content.as_deref().unwrap_or_default(),
             params.position.as_deref().unwrap_or_default(),
+            params.icon.as_deref().unwrap_or_default(),
+            params.rect.as_deref().unwrap_or_default(),
             now_millis,
         )
         .await
@@ -183,6 +191,8 @@ async fn get_stamp(State(state): State<AppState>, Path(id): Path<String>) -> Res
             id: s.stamp_id,
             position: s.position,
             content: s.content,
+            icon: s.icon,
+            rect: s.rect,
         })
         .into_response(),
         Ok(None) => not_found("get_stamp", format!("{id} doesn't exist in the database!")),
@@ -202,7 +212,13 @@ async fn update_stamp(
     match state
         .repos
         .stamps
-        .update(&id, params.content.as_deref(), params.position.as_deref())
+        .update(
+            &id,
+            params.content.as_deref(),
+            params.position.as_deref(),
+            params.icon.as_deref(),
+            params.rect.as_deref(),
+        )
         .await
     {
         Ok(()) => axum::Json(json!({ "operation": "update_stamp", "success": 1 })).into_response(),

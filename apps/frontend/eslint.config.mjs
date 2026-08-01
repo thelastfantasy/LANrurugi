@@ -12,6 +12,16 @@ export default [
   { ignores: ['dist/**'] },
   js.configs.recommended,
   {
+    // One-off Node build scripts (e.g. `generate-emoji-zh-names.mjs`) — not part of the app
+    // bundle, so they get Node's own globals (`process`/`console`/`URL`/CommonJS `require` via
+    // `createRequire`) instead of `src/**`'s browser ones below, matching the environment they
+    // actually run in (`node scripts/foo.mjs`, never a browser).
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsParser,

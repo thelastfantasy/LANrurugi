@@ -127,6 +127,21 @@ pub struct Stamp {
     pub content: String,
     pub position: String,
     pub archive_id: String,
+    /// User-picked icon shown in place of the default marker pin — either a literal emoji
+    /// character, or a Font Awesome class name prefixed `fa:` (e.g. `fa:fa-heart`, disambiguating
+    /// it from a literal emoji string at render time). Empty string (the zero value, so every
+    /// pre-existing stamp created before this field existed round-trips as "no custom icon" without
+    /// a migration) falls back to the default marker.
+    #[serde(default)]
+    pub icon: String,
+    /// Optional selection rectangle a stamp can carry in addition to its plain `position` point —
+    /// `"x,y,width,height,anchor,color"` (`x`/`y`/`width`/`height` percent of the page image,
+    /// `anchor` one of 8 short codes for where the icon sits on the rect's own border — `tl`/`t`/
+    /// `tr`/`r`/`br`/`b`/`bl`/`l` — and `color` a `#rrggbb` hex string for the rect's own outline).
+    /// Empty string (same zero-value convention as `icon`) means this stamp is a plain point with
+    /// no rectangle, which is how every stamp existed before this field was added.
+    #[serde(default)]
+    pub rect: String,
 }
 
 impl Stamp {

@@ -558,11 +558,28 @@ export function useStampsForPage(id: string | null, page: number) {
 export function useAddStamp(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ page, content, position }: { page: number; content: string; position: string }) =>
-      sendJson(
-        'PUT',
-        `/archives/${id}/stamps/${page}?content=${encodeURIComponent(content)}&position=${encodeURIComponent(position)}`,
-      ),
+    mutationFn: ({
+      page,
+      content,
+      position,
+      icon,
+      rect,
+    }: {
+      page: number
+      content: string
+      position: string
+      icon?: string
+      rect?: string
+    }) => {
+      const params = new URLSearchParams({ content, position })
+      if (icon) params.set('icon', icon)
+      if (rect) params.set('rect', rect)
+      // The response's own `stamp_id` is the new stamp's real ID (`crates/lanrurugi-api::stamps::
+      // add_stamp` — matches legacy's own `add_stamp` response shape) — declared here (not left
+      // as the untyped default) so a call site can read it back out of `mutate`'s own `onSuccess`
+      // callback, e.g. to select a stamp immediately after creating it via Ctrl+drag copy.
+      return sendJson<{ stamp_id: string }>('PUT', `/archives/${id}/stamps/${page}?${params.toString()}`)
+    },
     onSuccess: (_data, { page }) => {
       queryClient.invalidateQueries({ queryKey: ['stamps', id, page] })
       queryClient.invalidateQueries({ queryKey: ['stamped-pages', id] })
@@ -577,14 +594,20 @@ export function useUpdateStamp() {
       stampId,
       content,
       position,
+      icon,
+      rect,
     }: {
       stampId: string
       content?: string
       position?: string
+      icon?: string
+      rect?: string
     }) => {
       const params = new URLSearchParams()
       if (content !== undefined) params.set('content', content)
       if (position !== undefined) params.set('position', position)
+      if (icon !== undefined) params.set('icon', icon)
+      if (rect !== undefined) params.set('rect', rect)
       return sendJson('PUT', `/stamps/${stampId}?${params.toString()}`)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stamps'] }),

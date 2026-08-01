@@ -387,6 +387,14 @@ export interface StampJson {
   id: string
   position: string
   content: string
+  /** A literal emoji character, or a Font Awesome class name prefixed `fa:` (e.g. `fa:fa-heart`)
+   * — see the backend's own `Stamp::icon` docs. Empty string means "no custom icon, use the
+   * default marker pin," true for every stamp created before this field existed. */
+  icon: string
+  /** `"x,y,width,height,anchor,color"` (percent x/y/w/h, an 8-way anchor code, `#rrggbb` outline
+   * color) — see the backend's own `Stamp::rect` docs. Empty string means this stamp is a plain
+   * point with no selection rectangle, true for every stamp created before this field existed. */
+  rect: string
 }
 
 export interface StampedPagesResponse {

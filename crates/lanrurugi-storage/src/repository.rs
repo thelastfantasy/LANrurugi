@@ -442,6 +442,8 @@ impl StampRepository {
             content: fields.get("content").cloned().unwrap_or_default(),
             position: fields.get("position").cloned().unwrap_or_default(),
             archive_id: fields.get("archive_id").cloned().unwrap_or_default(),
+            icon: fields.get("icon").cloned().unwrap_or_default(),
+            rect: fields.get("rect").cloned().unwrap_or_default(),
         }))
     }
 
@@ -455,6 +457,8 @@ impl StampRepository {
             ("content", &stamp.content),
             ("position", &stamp.position),
             ("archive_id", &stamp.archive_id),
+            ("icon", &stamp.icon),
+            ("rect", &stamp.rect),
         ];
         let _: () = conn.hset_multiple(&stamp.stamp_id, &fields).await?;
         Ok(())
@@ -462,12 +466,15 @@ impl StampRepository {
 
     /// Creates a new stamp for `archive_id`'s page `page` and appends it to that archive's
     /// `stamps` JSON list (legacy `add_stamp`), returning the new stamp's key.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         archive_id: &str,
         page: u32,
         content: &str,
         position: &str,
+        icon: &str,
+        rect: &str,
         now_millis: u64,
     ) -> Result<String> {
         let mut conn = self.pool.get().await?;
@@ -477,6 +484,8 @@ impl StampRepository {
             ("content", content),
             ("position", position),
             ("archive_id", archive_id),
+            ("icon", icon),
+            ("rect", rect),
         ];
         let _: () = conn.hset_multiple(&stamp_id, &fields).await?;
 
@@ -500,6 +509,8 @@ impl StampRepository {
         stamp_id: &str,
         content: Option<&str>,
         position: Option<&str>,
+        icon: Option<&str>,
+        rect: Option<&str>,
     ) -> Result<()> {
         let mut conn = self.pool.get().await?;
         if let Some(content) = content {
@@ -507,6 +518,12 @@ impl StampRepository {
         }
         if let Some(position) = position {
             let _: () = conn.hset(stamp_id, "position", position).await?;
+        }
+        if let Some(icon) = icon {
+            let _: () = conn.hset(stamp_id, "icon", icon).await?;
+        }
+        if let Some(rect) = rect {
+            let _: () = conn.hset(stamp_id, "rect", rect).await?;
         }
         Ok(())
     }
@@ -672,7 +689,15 @@ mod tests {
         archive_repo.save(&archive).await.unwrap();
 
         let stamp_id = stamp_repo
-            .create(&archive_id, 3, "hello", "10,20", 1_700_000_000_000)
+            .create(
+                &archive_id,
+                3,
+                "hello",
+                "10,20",
+                "🎯",
+                "10,20,30,40,tl,#ff0000",
+                1_700_000_000_000,
+            )
             .await
             .unwrap();
         assert_eq!(stamp_id, format!("STAMPS_3_1700000000000"));
@@ -681,6 +706,8 @@ mod tests {
         assert_eq!(fetched.content, "hello");
         assert_eq!(fetched.archive_id, archive_id);
         assert_eq!(fetched.page(), Some(3));
+        assert_eq!(fetched.icon, "🎯");
+        assert_eq!(fetched.rect, "10,20,30,40,tl,#ff0000");
 
         let updated_archive = archive_repo.get(&archive_id).await.unwrap().unwrap();
         assert_eq!(updated_archive.stamp_ids, vec![stamp_id.clone()]);

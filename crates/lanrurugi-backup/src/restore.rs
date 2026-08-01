@@ -83,6 +83,8 @@ pub async fn restore(
                 content: backup_stamp.content.clone(),
                 position: backup_stamp.position.clone(),
                 archive_id: backup_stamp.archive_id.clone(),
+                icon: backup_stamp.icon.clone(),
+                rect: backup_stamp.rect.clone(),
             })
             .await?;
         summary.stamps_restored += 1;

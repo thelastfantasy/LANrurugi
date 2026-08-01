@@ -593,6 +593,15 @@ export default function Reader() {
           navigate(routes.library())
           return
         case 'Escape':
+          // Legacy's own keydown handler (`reader_stamps.js`) checks `state.markerMode` before
+          // anything else and, if armed, only ever cancels *that* — it doesn't also happen to
+          // close some other overlay in the same keystroke. Matches that priority: an Escape while
+          // placing a stamp cancels the placement and stops there, same as pressing it with no
+          // overlay open at all does nothing further.
+          if (markerPlacementMode) {
+            setMarkerPlacementMode(false)
+            return
+          }
           setOverlay(null)
           return
         case ' ':
@@ -652,7 +661,11 @@ export default function Reader() {
           void goRandom()
           return
         case 's':
-          if (!readerSettings.infiniteScroll) setMarkerPlacementMode(true)
+          // Matches legacy's own `addStamp()` guard (`if (!LRR.isUserLogged()) return;`) — stamps
+          // are a per-user API resource, so arming placement mode while logged out would only ever
+          // end in the `addStamp` mutation itself failing after the user already went to the
+          // trouble of picking a spot and typing a name.
+          if (!readerSettings.infiniteScroll && loggedIn) setMarkerPlacementMode(true)
           return
         default:
       }
@@ -671,6 +684,7 @@ export default function Reader() {
     isBookmarked,
     bookmarkCategoryId,
     loggedIn,
+    markerPlacementMode,
   ])
 
   // Infinite scroll: tracks which mounted page is nearest the viewport center and treats that as
@@ -837,6 +851,16 @@ export default function Reader() {
       outerStyle.maxWidth = '1200px'
     }
   }
+
+  // Legacy's real `addStamp()` (`~/LANraragi/public/js/mod/reader_stamps.js`) bumps only the
+  // *left* image's own `z-index` above `.focus-overlay`'s while placing a stamp — not the
+  // double-page-mode right image (`#img_doublepage` keeps `imageStyle` as-is, unmodified), matching
+  // `MarkerLayer`'s own `imageRef` only ever pointing at this one. `zIndex: 22` beats the
+  // overlay's own 21 (`.focus-overlay` in `/legacy/lrr.css`) so the image stays fully visible and
+  // clickable above the dimmed backdrop instead of getting dimmed along with everything else.
+  const placementImageStyle: React.CSSProperties = markerPlacementMode
+    ? { ...imageStyle, zIndex: 22, cursor: 'cell' }
+    : imageStyle
 
   const bookmarkLinkConfigured = Boolean(bookmarkCategoryId)
 
@@ -1200,7 +1224,7 @@ export default function Reader() {
                 fetchPriority="high"
                 onLoad={(e) => onImageLoad(spread.left, e)}
                 draggable={false}
-                style={imageStyle}
+                style={placementImageStyle}
               />
               {rightUrl && (
                 <img

@@ -48,6 +48,10 @@ pub struct BackupStamp {
     pub content: String,
     pub position: String,
     pub archive_id: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub rect: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +124,8 @@ fn to_backup_stamp(s: &Stamp) -> BackupStamp {
         content: s.content.clone(),
         position: s.position.clone(),
         archive_id: s.archive_id.clone(),
+        icon: s.icon.clone(),
+        rect: s.rect.clone(),
     }
 }
 
@@ -169,7 +175,7 @@ mod tests {
             .await
             .unwrap();
         let stamp_id = stamp_repo
-            .create(&id, 1, "hi", "1,2", 1_700_000_000_000)
+            .create(&id, 1, "hi", "1,2", "", "", 1_700_000_000_000)
             .await
             .unwrap();
 
