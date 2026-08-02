@@ -34,6 +34,27 @@ pub enum RepositoryError {
 
 type Result<T> = std::result::Result<T, RepositoryError>;
 
+/// Shared shape behind `ArchiveRepository`/`CategoryRepository`/`GroupingRepository`'s own
+/// `list_all`: list every key matching `glob`, then fetch+collect each one that still exists by
+/// the time its own `get` runs (a key can disappear between the `KEYS` scan and the per-id fetch
+/// under concurrent writes — same race tolerated by each repository's own hand-written loop this
+/// replaces, not a new behavior).
+async fn list_all_by_glob<T, F, Fut>(pool: &Pool, glob: &str, get: F) -> Result<Vec<T>>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<T>>>,
+{
+    let mut conn = pool.get().await?;
+    let ids: Vec<String> = conn.keys(glob).await?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(item) = get(id).await? {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
 /// 40 lowercase-hex-char pattern, matching legacy `$redis->keys('????????????????????????????????????????')`.
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
@@ -54,7 +75,7 @@ impl ArchiveRepository {
             return Ok(None);
         }
         let fields: std::collections::HashMap<String, String> = conn.hgetall(id).await?;
-        Ok(Some(archive_from_fields(id, &fields)?))
+        Ok(Some(archive_from_fields(id, fields)?))
     }
 
     /// All archive IDs currently in the database (legacy 40-hex-char key glob).
@@ -65,14 +86,10 @@ impl ArchiveRepository {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Archive>> {
-        let ids = self.list_ids().await?;
-        let mut archives = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(a) = self.get(&id).await? {
-                archives.push(a);
-            }
-        }
-        Ok(archives)
+        list_all_by_glob(&self.pool, ARCHIVE_KEY_GLOB, |id| async move {
+            self.get(&id).await
+        })
+        .await
     }
 
     /// Finds the archive whose stored `file` path has `filename` as its basename, if any. No
@@ -202,13 +219,13 @@ fn toc_from_legacy_json(raw: &str) -> Vec<TocEntry> {
 
 fn archive_from_fields(
     id: &str,
-    fields: &std::collections::HashMap<String, String>,
+    mut fields: std::collections::HashMap<String, String>,
 ) -> Result<Archive> {
-    let get = |k: &str| fields.get(k).cloned().unwrap_or_default();
+    let name = fields.remove("name").unwrap_or_default();
     let title = {
-        let t = get("title");
+        let t = fields.remove("title").unwrap_or_default();
         if t.trim().is_empty() {
-            get("name")
+            name.clone()
         } else {
             t
         }
@@ -218,29 +235,35 @@ fn archive_from_fields(
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
     let corrupted_pages: Vec<String> = fields
-        .get("corrupted_pages")
-        .and_then(|s| serde_json::from_str(s).ok())
+        .remove("corrupted_pages")
+        .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    let arcsize = fields.remove("arcsize").unwrap_or_default();
+    let pagecount = fields.remove("pagecount").unwrap_or_default();
+    let isnew = fields.remove("isnew").unwrap_or_default();
+    let progress = fields.remove("progress").unwrap_or_default();
+    let lastreadtime = fields.remove("lastreadtime").unwrap_or_default();
+    let heal_failed_at = fields.remove("heal_failed_at").and_then(|s| s.parse().ok());
 
     Ok(Archive {
         id: id.to_string(),
-        name: get("name"),
+        name,
         title,
-        file: get("file"),
-        tags: get("tags"),
-        summary: get("summary"),
-        arcsize: get("arcsize").parse().unwrap_or(0),
-        pagecount: get("pagecount").parse().unwrap_or(0),
-        isnew: get("isnew") == "true",
-        lastreadpage: get("progress").parse().unwrap_or(0),
-        lastreadtime: get("lastreadtime").parse().unwrap_or(0),
-        thumbhash: fields.get("thumbhash").cloned(),
+        file: fields.remove("file").unwrap_or_default(),
+        tags: fields.remove("tags").unwrap_or_default(),
+        summary: fields.remove("summary").unwrap_or_default(),
+        arcsize: arcsize.parse().unwrap_or(0),
+        pagecount: pagecount.parse().unwrap_or(0),
+        isnew: isnew == "true",
+        lastreadpage: progress.parse().unwrap_or(0),
+        lastreadtime: lastreadtime.parse().unwrap_or(0),
+        thumbhash: fields.remove("thumbhash"),
         toc: fields
             .get("toc")
             .map(|raw| toc_from_legacy_json(raw))
             .unwrap_or_default(),
         stamp_ids,
-        heal_failed_at: fields.get("heal_failed_at").and_then(|s| s.parse().ok()),
+        heal_failed_at,
         corrupted_pages,
     })
 }
@@ -282,15 +305,10 @@ impl CategoryRepository {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Category>> {
-        let mut conn = self.pool.get().await?;
-        let ids: Vec<String> = conn.keys("SET_??????????").await?;
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(c) = self.get(&id).await? {
-                out.push(c);
-            }
-        }
-        Ok(out)
+        list_all_by_glob(&self.pool, "SET_??????????", |id| async move {
+            self.get(&id).await
+        })
+        .await
     }
 
     /// Creates a new static (non-dynamic) category or overwrites metadata on an existing one.
@@ -379,15 +397,10 @@ impl GroupingRepository {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Grouping>> {
-        let mut conn = self.pool.get().await?;
-        let ids: Vec<String> = conn.keys("TANK_??????????").await?;
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(g) = self.get(&id).await? {
-                out.push(g);
-            }
-        }
-        Ok(out)
+        list_all_by_glob(&self.pool, "TANK_??????????", |id| async move {
+            self.get(&id).await
+        })
+        .await
     }
 
     /// Writes metadata members and the ordered archive-membership members in one call. Intended

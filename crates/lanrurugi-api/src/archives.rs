@@ -1283,7 +1283,7 @@ async fn generate_page_thumbnails(
         }
     }
     if !newly_corrupted.is_empty() {
-        let mut updated = archive.clone();
+        let mut updated = archive;
         updated.corrupted_pages.extend(newly_corrupted);
         if let Err(e) = state.repos.archives.save(&updated).await {
             tracing::warn!(%id, error = %e, "failed to persist newly-detected corrupted pages");

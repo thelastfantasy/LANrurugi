@@ -76,56 +76,56 @@ pub async fn build(
     for archive in &archive_list {
         for stamp_id in &archive.stamp_ids {
             if let Some(stamp) = stamps.get(stamp_id).await? {
-                stamp_docs.push(to_backup_stamp(&stamp));
+                stamp_docs.push(to_backup_stamp(stamp));
             }
         }
     }
 
     Ok(BackupDocument {
         archives: archive_list
-            .iter()
+            .into_iter()
             .map(|a| BackupArchive {
-                arcid: a.id.clone(),
-                title: a.title.clone(),
-                tags: a.tags.clone(),
-                summary: (!a.summary.is_empty()).then(|| a.summary.clone()),
-                thumbhash: a.thumbhash.clone(),
-                filename: a.name.clone(),
+                arcid: a.id,
+                title: a.title,
+                tags: a.tags,
+                summary: (!a.summary.is_empty()).then_some(a.summary),
+                thumbhash: a.thumbhash,
+                filename: a.name,
             })
             .collect(),
-        categories: category_list.iter().map(to_backup_category).collect(),
-        tankoubons: grouping_list.iter().map(to_backup_tankoubon).collect(),
+        categories: category_list.into_iter().map(to_backup_category).collect(),
+        tankoubons: grouping_list.into_iter().map(to_backup_tankoubon).collect(),
         stamps: stamp_docs,
     })
 }
 
-fn to_backup_category(c: &Category) -> BackupCategory {
+fn to_backup_category(c: Category) -> BackupCategory {
     BackupCategory {
-        catid: c.catid.clone(),
-        name: c.name.clone(),
-        search: c.search.clone(),
-        archives: c.archives.clone(),
+        catid: c.catid,
+        name: c.name,
+        search: c.search,
+        archives: c.archives,
     }
 }
 
-fn to_backup_tankoubon(g: &Grouping) -> BackupTankoubon {
+fn to_backup_tankoubon(g: Grouping) -> BackupTankoubon {
     BackupTankoubon {
-        tankid: g.tankid.clone(),
-        name: g.name.clone(),
-        summary: g.summary.clone(),
-        tags: g.tags.clone(),
-        archives: g.archives.clone(),
+        tankid: g.tankid,
+        name: g.name,
+        summary: g.summary,
+        tags: g.tags,
+        archives: g.archives,
     }
 }
 
-fn to_backup_stamp(s: &Stamp) -> BackupStamp {
+fn to_backup_stamp(s: Stamp) -> BackupStamp {
     BackupStamp {
-        stamp_id: s.stamp_id.clone(),
-        content: s.content.clone(),
-        position: s.position.clone(),
-        archive_id: s.archive_id.clone(),
-        icon: s.icon.clone(),
-        rect: s.rect.clone(),
+        stamp_id: s.stamp_id,
+        content: s.content,
+        position: s.position,
+        archive_id: s.archive_id,
+        icon: s.icon,
+        rect: s.rect,
     }
 }
 
