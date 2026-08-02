@@ -141,6 +141,21 @@ export function removeLink(id: string) {
   document.getElementById(id)?.remove()
 }
 
+const LEGACY_CONFIG_CSS_ID = 'legacy-config-css'
+
+/** `config.css` (real vendor file, `~/LANraragi/public/css/config.css`) is only ever linked by
+ * legacy's own `config.html.tt2`/`plugins.html.tt2` — it globally restyles every
+ * `input[type=checkbox]` on the page into the ON/OFF toggle look. Legacy gets this "for free"
+ * since navigating away is a full page load; an SPA has to link/unlink it by hand so those rules
+ * don't leak onto other routes. Shared by `Settings` and `Plugins` (the only two real legacy pages
+ * that link it) rather than each hand-rolling the identical `useEffect`. */
+export function useLegacyConfigCss() {
+  useEffect(() => {
+    ensureLink(LEGACY_CONFIG_CSS_ID, '/legacy/config.css')
+    return () => removeLink(LEGACY_CONFIG_CSS_ID)
+  }, [])
+}
+
 /** Links in legacy's own real stylesheets — `lrr.css` (structural, theme-independent, loaded
  * once) and whichever theme file is currently selected (swapped by changing one `<link>`'s
  * `href`, exactly how legacy's own settings page switches themes — not a CSS-variable

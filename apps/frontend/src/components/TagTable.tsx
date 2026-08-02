@@ -1,17 +1,7 @@
 import { useSettings } from '../api/hooks'
 import { parseRating } from '../lib/rating'
-import { formatTimestampForDisplay, getTagSearchURL, splitTagsByNamespace, tagValueForSearch, TIMESTAMP_NAMESPACE } from '../lib/tagFormat'
+import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from '../lib/tagFormat'
 import StarRatingDisplay from './StarRating'
-
-function displayNamespace(namespace: string): string {
-  if (namespace === 'date_added') return 'Date Added'
-  return namespace.charAt(0).toUpperCase() + namespace.slice(1)
-}
-
-function formatTagValue(namespace: string, value: string, timezone: string): string {
-  if (!TIMESTAMP_NAMESPACE.test(namespace)) return value
-  return formatTimestampForDisplay(value, timezone)
-}
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
  * (`~/LANraragi/public/js/mod/common.js`) renders inside a hover tooltip: one row per namespace

@@ -1,0 +1,298 @@
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
+
+import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from '../../api/hooks'
+import type { Settings as SettingsType } from '../../api/types'
+import CollapsibleSection from '../../components/CollapsibleSection'
+import LanguageSelector from '../../components/LanguageSelector'
+import { routes } from '../../routes'
+import { DEFAULT_THEME_ID, FONT_SIZE_10PT, THEMES, useApplyTheme, useLegacyConfigCss } from '../../theme'
+import { useDocumentTitle } from '../../useDocumentTitle'
+import ArchiveFilesSection from './ArchiveFilesSection'
+import GlobalSection from './GlobalSection'
+import SecuritySection from './SecuritySection'
+import TagsThumbnailsSection from './TagsThumbnailsSection'
+import WorkersSection from './WorkersSection'
+
+export default function Settings() {
+  const { t } = useTranslation()
+  const settings = useSettings()
+  useApplyTheme()
+  useLegacyConfigCss()
+
+  if (settings.isLoading) {
+    return <div className="ido">{t('Loading library…')}</div>
+  }
+
+  if (settings.isError || !settings.data) {
+    return (
+      <div className="ido">{t('Failed to load archives: {{error}}', { error: String(settings.error) })}</div>
+    )
+  }
+
+  return <SettingsForm settings={settings.data} />
+}
+
+function SettingsForm({ settings }: { settings: SettingsType }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  useDocumentTitle(t('Admin Settings') ?? undefined)
+  const logout = useLogout()
+  const info = useServerInfo()
+  const updateSettings = useUpdateSettings()
+  const changePassword = useChangePassword()
+
+  const currentTheme = settings.theme ?? DEFAULT_THEME_ID
+
+  const [htmltitle, setHtmltitle] = useState(settings.htmltitle)
+  const [motd, setMotd] = useState(settings.motd)
+  const [language, setLanguage] = useState(settings.language)
+  const [pagesize, setPagesize] = useState(settings.pagesize)
+  const [enableresize, setEnableresize] = useState(settings.enableresize)
+  const [sizethreshold, setSizethreshold] = useState(settings.sizethreshold)
+  const [readerquality, setReaderquality] = useState(settings.readerquality)
+  const [localprogress, setLocalprogress] = useState(settings.localprogress)
+  const [authprogress, setAuthprogress] = useState(settings.authprogress)
+
+  const [enablepass, setEnablepass] = useState(settings.enablepass)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPassword2, setNewPassword2] = useState('')
+  const [nofunmode, setNofunmode] = useState(settings.nofunmode)
+  const [apikey, setApikey] = useState(settings.apikey)
+  const [enablecors, setEnablecors] = useState(settings.enablecors)
+
+  const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
+  const [replacedupe, setReplacedupe] = useState(settings.replacedupe)
+
+  const [hqthumbpages, setHqthumbpages] = useState(settings.hqthumbpages)
+  const [enablewebp, setEnablewebp] = useState(settings.enablewebp)
+  const [webpquality, setWebpquality] = useState(settings.webpquality)
+  const [excludednamespaces, setExcludednamespaces] = useState(settings.excludednamespaces)
+  const [tagruleson, setTagruleson] = useState(settings.tagruleson)
+  const [tagrules, setTagrules] = useState(settings.tagrules)
+  const [usedateadded, setUsedateadded] = useState(settings.usedateadded)
+  const [usedatemodified, setUsedatemodified] = useState(settings.usedatemodified)
+  const [timezone, setTimezone] = useState(settings.timezone)
+
+  const [status, setStatus] = useState('')
+
+  async function handleSave() {
+    if (enablepass && newPassword) {
+      if (newPassword !== newPassword2) {
+        setStatus(t("Passwords don't match!") ?? '')
+        return
+      }
+      await changePassword.mutateAsync(newPassword)
+      setNewPassword('')
+      setNewPassword2('')
+    }
+    await updateSettings.mutateAsync({
+      htmltitle,
+      motd,
+      language,
+      pagesize,
+      enableresize,
+      sizethreshold,
+      readerquality,
+      localprogress,
+      authprogress,
+      enablepass,
+      nofunmode,
+      apikey,
+      enablecors,
+      tempmaxsize,
+      replacedupe,
+      hqthumbpages,
+      enablewebp,
+      webpquality,
+      excludednamespaces,
+      tagruleson,
+      tagrules,
+      usedateadded,
+      usedatemodified,
+      timezone,
+    })
+    setStatus(t('Settings saved!') ?? '')
+  }
+
+  async function handleLogout() {
+    await logout.mutateAsync()
+    navigate(routes.login())
+  }
+
+  return (
+    <div className="ido">
+      <h2 className="ih" style={{ textAlign: 'center' }}>
+        {t('Admin Settings')}
+      </h2>
+      <br />
+
+      <div className="left-column">
+        <img className="logo-container" src="/legacy/img/logo.png" alt="LANrurugi" />
+        <br />
+        <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
+        {t('Version {{version}} {{vername}}', {
+          version: info.data?.version ?? '',
+          vername: info.data?.version_name ?? '',
+        })}
+        <br />
+        <h2>{t('Select a category to show the matching settings.')}</h2>
+        <br />
+        <input id="save" className="stdbtn" type="button" value={t('Save Settings') ?? undefined} onClick={() => void handleSave()} />
+        <br />
+        <input
+          id="plugin-config"
+          className="stdbtn"
+          type="button"
+          value={t('Plugin Configuration') ?? undefined}
+          onClick={() => navigate(routes.pluginSettings())}
+        />{' '}
+        <input
+          id="backup"
+          className="stdbtn"
+          type="button"
+          value={t('Database Backup/Restore') ?? undefined}
+          onClick={() => navigate(routes.backup())}
+        />{' '}
+        <input id="batch" className="stdbtn" type="button" value={t('Batch Operations') ?? undefined} onClick={() => navigate(routes.batch())} />
+        <br />
+        <br />
+        <input id="return" className="stdbtn" type="button" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
+
+        {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
+
+        {/* Not part of legacy's own left-column (legacy has no visible logout affordance — its
+            session just expires — and only one site-wide language, set below in Global
+            Settings). Kept minimal and visually separate since this SPA needs both. */}
+        <hr style={{ margin: '12px 0' }} />
+        <LanguageSelector />{' '}
+        <input id="logout" className="stdbtn" type="button" value={t('Logout') ?? undefined} onClick={() => void handleLogout()} />
+      </div>
+
+      <form className="right-column" onSubmit={(e) => e.preventDefault()}>
+        <ul className="collapsible extensible with-right-caret">
+          <GlobalSection
+            htmltitle={htmltitle}
+            setHtmltitle={setHtmltitle}
+            motd={motd}
+            setMotd={setMotd}
+            language={language}
+            setLanguage={setLanguage}
+            pagesize={pagesize}
+            setPagesize={setPagesize}
+            enableresize={enableresize}
+            setEnableresize={setEnableresize}
+            sizethreshold={sizethreshold}
+            setSizethreshold={setSizethreshold}
+            readerquality={readerquality}
+            setReaderquality={setReaderquality}
+            localprogress={localprogress}
+            setLocalprogress={setLocalprogress}
+            authprogress={authprogress}
+            setAuthprogress={setAuthprogress}
+            onStatus={setStatus}
+          />
+
+          <CollapsibleSection icon="fa-paint-brush" title={t('Theme')}>
+              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
+                <tbody>
+                  <tr>
+                    <td></td>
+                    <td className="config-td">
+                      <br />
+                      {t('The selected theme will apply to the entire application and be shown to all users.')}
+                      <br />
+                      {t('If you\'re using a browser that supports "theme-color", the theme\'s primary color will also be applied there.')}
+                      <br />
+                      <br />
+                      {t('Click on a theme to preview it before saving!')}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2}>
+                      {THEMES.map((theme) => (
+                        <div key={theme.id} style={{ display: 'inline-block' }}>
+                          <input
+                            type="radio"
+                            id={theme.id}
+                            className="theme-switch"
+                            name="theme"
+                            title={theme.name}
+                            value={theme.id}
+                            checked={currentTheme === theme.id}
+                            onChange={() => {
+                              document.documentElement.dataset.theme = theme.id
+                              updateSettings.mutate({ theme: theme.id })
+                            }}
+                          />
+                          <label htmlFor={theme.id}>
+                            <div
+                              id={`${theme.id}-div`}
+                              className="theme-switch"
+                              title={theme.name}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <img title={theme.name} src={`/legacy/img/theme_preview/${theme.id.replace('.css', '')}.png`} className="theme-preview" />
+                              <h3>{theme.name}</h3>
+                            </div>
+                          </label>
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+          </CollapsibleSection>
+
+          <SecuritySection
+            enablepass={enablepass}
+            setEnablepass={setEnablepass}
+            newPassword={newPassword}
+            setNewPassword={setNewPassword}
+            newPassword2={newPassword2}
+            setNewPassword2={setNewPassword2}
+            nofunmode={nofunmode}
+            setNofunmode={setNofunmode}
+            apikey={apikey}
+            setApikey={setApikey}
+            enablecors={enablecors}
+            setEnablecors={setEnablecors}
+          />
+
+          <ArchiveFilesSection
+            tempmaxsize={tempmaxsize}
+            setTempmaxsize={setTempmaxsize}
+            replacedupe={replacedupe}
+            setReplacedupe={setReplacedupe}
+            onStatus={setStatus}
+          />
+
+          <TagsThumbnailsSection
+            hqthumbpages={hqthumbpages}
+            setHqthumbpages={setHqthumbpages}
+            enablewebp={enablewebp}
+            setEnablewebp={setEnablewebp}
+            webpquality={webpquality}
+            setWebpquality={setWebpquality}
+            excludednamespaces={excludednamespaces}
+            setExcludednamespaces={setExcludednamespaces}
+            tagruleson={tagruleson}
+            setTagruleson={setTagruleson}
+            tagrules={tagrules}
+            setTagrules={setTagrules}
+            usedateadded={usedateadded}
+            setUsedateadded={setUsedateadded}
+            usedatemodified={usedatemodified}
+            setUsedatemodified={setUsedatemodified}
+            timezone={timezone}
+            setTimezone={setTimezone}
+            onStatus={setStatus}
+          />
+
+          <WorkersSection onStatus={setStatus} />
+        </ul>
+      </form>
+    </div>
+  )
+}

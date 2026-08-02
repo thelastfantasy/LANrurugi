@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { sendJson, sleep } from '../api/client'
 import { useArchives, useCategories, usePlugins, useSettings } from '../api/hooks'
 import type { ArchiveMetadata } from '../api/types'
+import ArchiveChecklistItem from '../components/ArchiveChecklistItem'
 import { routes } from '../routes'
 import { MSM_SELECTION_KEY } from '../storageKeys'
 import { useApplyTheme } from '../theme'
@@ -316,11 +317,12 @@ export default function Batch() {
           <div id="arclist-container">
             <ul className="checklist" style={{ listStyle: 'none' }}>
               {archives.data?.map((a) => (
-                <li key={a.arcid}>
-                  <label>
-                    <input type="checkbox" checked={selected.has(a.arcid)} onChange={() => toggle(a.arcid)} /> {a.title}
-                  </label>
-                </li>
+                <ArchiveChecklistItem
+                  key={a.arcid}
+                  title={a.title}
+                  checked={selected.has(a.arcid)}
+                  onChange={() => toggle(a.arcid)}
+                />
               ))}
             </ul>
           </div>

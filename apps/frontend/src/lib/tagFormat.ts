@@ -54,6 +54,30 @@ export function buildSearchToken(namespace: string, value: string, exact = false
  * display/search-URL decisions don't each re-derive it. */
 export const TIMESTAMP_NAMESPACE = /^(date|time)/i
 
+/** Capitalizes a namespace key for display, special-casing `date_added` → `Date Added` rather
+ * than the generic capitalize-first-letter rule's own `Date_added`. Was independently duplicated
+ * (byte-for-byte identical) in both `components/TagTable.tsx` and
+ * `pages/Reader/ArchiveOverviewOverlay.tsx`'s own `TagsTable` before both were consolidated to
+ * import this shared copy instead. */
+export function displayNamespace(key: string): string {
+  if (key === 'date_added') return 'Date Added'
+  return key.charAt(0).toUpperCase() + key.slice(1)
+}
+
+/** Formats a tag *value* for display — passes non-timestamp namespaces through unchanged, routes
+ * timestamp namespaces through `formatTimestampForDisplay`. Distinct from `tagValueForSearch`
+ * below (same timestamp branch, but that one's non-timestamp passthrough and this one's are used
+ * for different purposes — display text here, search-query value there — even though they
+ * currently compute the identical result, keeping them as separate named functions documents that
+ * at each call site rather than relying on one function serving two different-sounding purposes by
+ * coincidence). Was independently duplicated (byte-for-byte identical) in both
+ * `components/TagTable.tsx` and `pages/Reader/ArchiveOverviewOverlay.tsx`'s own `TagsTable` before
+ * both were consolidated to import this shared copy instead. */
+export function formatTagValue(namespace: string, value: string, timezone: string): string {
+  if (!TIMESTAMP_NAMESPACE.test(namespace)) return value
+  return formatTimestampForDisplay(value, timezone)
+}
+
 /** Formats a Unix-seconds timestamp as `yyyy-mm-dd` in the given IANA timezone, using the
  * browser's native `Intl.DateTimeFormat` (which understands any IANA id `chrono-tz` on the
  * backend also accepts — `Asia/Tokyo`, `UTC`, etc.). Falls back to the raw value if it isn't a

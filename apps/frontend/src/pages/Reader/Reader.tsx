@@ -17,6 +17,7 @@ import {
 import Footer from '../../components/Footer'
 import Tooltip from '../../components/Tooltip'
 import { promptDialog } from '../../dialog'
+import { fetchContentLengthKb } from '../../lib/imageMeta'
 import { getTagSearchURL } from '../../lib/tagFormat'
 import { routes } from '../../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
@@ -427,14 +428,9 @@ export default function Reader() {
       [page]: { width: img.naturalWidth, height: img.naturalHeight },
     }))
     if (pageSizesKb[page] === undefined) {
-      fetch(img.src, { method: 'HEAD' })
-        .then((res) => {
-          const bytes = Number(res.headers.get('Content-Length'))
-          if (!Number.isNaN(bytes)) {
-            setPageSizesKb((prev) => ({ ...prev, [page]: Math.floor(bytes / 1024) }))
-          }
-        })
-        .catch(() => undefined)
+      void fetchContentLengthKb(img.src).then((kb) => {
+        if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }))
+      })
     }
   }
 

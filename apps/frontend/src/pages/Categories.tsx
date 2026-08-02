@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
 import { useArchives, useCategories, useCreateCategory } from '../api/hooks'
+import ArchiveChecklistItem from '../components/ArchiveChecklistItem'
 import { confirmDialog, newCategoryDialog } from '../dialog'
 import { routes } from '../routes'
 import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
@@ -331,15 +332,12 @@ export default function Categories() {
                 <ul id="archivelist" style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
                   {archives.data?.length ? (
                     archives.data.map((a) => (
-                      <li key={a.arcid}>
-                        <input
-                          type="checkbox"
-                          id={a.arcid}
-                          checked={selected.archives.includes(a.arcid)}
-                          onChange={(e) => void handleArchiveToggle(a.arcid, e.target.checked)}
-                        />{' '}
-                        <label htmlFor={a.arcid}>{a.title}</label>
-                      </li>
+                      <ArchiveChecklistItem
+                        key={a.arcid}
+                        title={a.title}
+                        checked={selected.archives.includes(a.arcid)}
+                        onChange={(checked) => void handleArchiveToggle(a.arcid, checked)}
+                      />
                     ))
                   ) : (
                     <li style={{ fontStyle: 'italic' }}>{t('No Archives in your library yet.')}</li>
