@@ -55,10 +55,11 @@ export function SettingsMenu({
   }, [open])
 
   return (
-    <span ref={ref} style={{ position: 'relative', marginLeft: 6 }}>
+    <span ref={ref} style={{ position: 'relative', marginLeft: 6, top: 2 }}>
       <a
         href="#"
         className="fa fa-cog fa-2x table-option"
+        style={{ position: 'relative', }}
         title={t('Index Settings') ?? undefined}
         onClick={(e) => {
           e.preventDefault()
@@ -102,14 +103,37 @@ export function SettingsMenu({
             <input type="radio" readOnly checked={viewMode === 'compact'} /> {t('Compact')}
           </PopupMenuItem>
           <PopupMenuSeparator />
+          {/* `marginLeft: 0` overrides the browser's own native checkbox UA-stylesheet margin
+              (Chrome: 4px) — left as default, these sit ~4px right of the icon column above
+              (`索引设置`/`显示模式`'s `<i style={{ width: 18 }}>`, which has no such margin),
+              even though these three are top-level toggles (siblings of Display Mode), not
+              sub-items nested under it the way the radio pair above them is. */}
           <PopupMenuItem onClick={() => setCropThumbs(!cropThumbs)}>
-            <input type="checkbox" readOnly checked={cropThumbs} /> {t('Crop thumbnails')}
+            <input
+              type="checkbox"
+              readOnly
+              checked={cropThumbs}
+              style={{ marginLeft: 0 }}
+            />{' '}
+            {t('Crop thumbnails')}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setHideCompleted(!hideCompleted)}>
-            <input type="checkbox" readOnly checked={hideCompleted} /> {t('Hide completed Archives')}
+            <input
+              type="checkbox"
+              readOnly
+              checked={hideCompleted}
+              style={{ marginLeft: 0 }}
+            />{' '}
+            {t('Hide completed Archives')}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setGroupbyTanks(!groupbyTanks)}>
-            <input type="checkbox" readOnly checked={groupbyTanks} /> {t('Group Tankoubons')}
+            <input
+              type="checkbox"
+              readOnly
+              checked={groupbyTanks}
+              style={{ marginLeft: 0 }}
+            />{' '}
+            {t('Group Tankoubons')}
           </PopupMenuItem>
         </PopupMenu>
       )}

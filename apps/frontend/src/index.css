@@ -141,3 +141,84 @@ input[type="checkbox"]:disabled {
   0% { background-position: 100% 50%; }
   100% { background-position: 0 50%; }
 }
+
+/* Additive: `Library/index.tsx`'s `.table-options` toolbar row (Sort by/Columns, the count-text-
+ * plus-numbered-pager unit, Go to Page+gear) — the whole flex layout, not just the breakpoint
+ * override, lives here as real CSS classes rather than inline `style` objects, since a genuinely
+ * different flex `order` per breakpoint can only be expressed with a real conditional media-query
+ * rule in the first place (an inline `style` object has no conditional/media-query mechanism at
+ * all), and keeping the rest of the same layout's properties split across both inline styles and
+ * this file made the one layout harder to read as a whole than necessary.
+ *
+ * `.table-options-row`: the flex container itself.
+ *
+ * `.table-options-result-unit`: the count-text-plus-numbered-pager unit (`ResultInfoAndPager`) —
+ * deliberately merged into one component rather than two independent flex children (see that
+ * component's own docs) so it always moves as one block. `order: 1` sits it between the left group
+ * (default `order: 0`) and the right group (`.table-options-goto`, `order: 2`) on a wide row;
+ * `flex-grow: 1` lets it fill the space between them once there's room. `flex-shrink: 0` + a real
+ * `flex-basis` (not `flex: 1`'s own implicit `flex-basis: 0%`/`flex-shrink: 1`) is what actually
+ * makes `flex-wrap` trigger a genuine line-break for this unit once it doesn't fit — a real, live-
+ * confirmed bug from `flex: 1` alone: with `flex-shrink: 1`, the browser found this unit's own
+ * content *could* still be squeezed (by wrapping its own inner text down to a sliver of a column)
+ * into whatever scraps of space were left over between the left/right groups on the same line,
+ * rather than ever triggering a genuine wrap onto its own line — `flex-wrap` only breaks a line
+ * when an item truly doesn't fit at its basis width, and an infinitely-shrinkable text block
+ * essentially never "doesn't fit." A concrete `flex-basis` gives the wrapping algorithm a real
+ * minimum size to test against instead. `flex-basis` value chosen empirically against this
+ * component's own real rendered content width (not copied from any legacy value).
+ *
+ * Below 640px (chosen empirically against this component's own real rendered widths, not copied
+ * from any legacy value — the point where the three toolbar groups' combined natural width first
+ * exceeds a typical narrow viewport), `.table-options-result-unit` reorders to `order: 3` — *after*
+ * `.table-options-goto`'s own `order: 2` instead of between it and the left group — so the left and
+ * right groups can share the wrapped row's first line together, leaving this unit alone on its own
+ * full-width line beneath both. Plain `flex-wrap` without this per-breakpoint `order` change can't
+ * achieve that on its own: an item can only ever wrap onto a *later* line than the ones before it
+ * in `order`, never pull a later item back onto an earlier line that still has room — a real,
+ * live-confirmed layout bug from an earlier version of this fix that left `order` fixed across
+ * breakpoints (the result unit wrapped to its own line correctly, but dragged the right group down
+ * onto that same wrapped line with it instead of leaving it up on the first line). */
+.table-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  margin-bottom: 0;
+}
+
+.table-options-result-unit {
+  order: 1;
+  flex-grow: 1;
+  flex-shrink: 0;
+  flex-basis: 260px;
+}
+
+.table-options-goto {
+  order: 2;
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .table-options-result-unit {
+    order: 3 !important;
+  }
+}
+
+/* Additive, and meant to be applied ALONGSIDE `.favtag-btn` (not instead of it) — the "Go to Page"
+ * `<select>` shares the exact `.favtag-btn` class with every other themed dropdown/button in this
+ * app (the "Sort by" dropdown, category filter buttons, ...), and that's still correct for the
+ * colour/border/background part: every one of the 5 vendored themes (`modern.css`/`modern_red.css`/
+ * `modern_clear.css`/`ex.css`/`g.css`) defines its own completely different `.favtag-btn` colour
+ * scheme, so hardcoding any one theme's colours into a standalone replacement class here would
+ * silently break every other theme's own look for this one control the moment a user switches
+ * themes (confirmed by actually reading all 5 vendored `.favtag-btn` rules — none of the colour
+ * values match across themes). This class only overrides the non-colour sizing/spacing properties
+ * that the page-number picker's own needs (few, short numeric options, sitting in a tight toolbar
+ * corner next to the gear icon) don't share with `.favtag-btn`'s general-purpose defaults, letting
+ * `.favtag-btn` itself keep supplying the real theme-driven colours underneath. */
+.table-options-goto-select {
+  min-width: 0;
+}

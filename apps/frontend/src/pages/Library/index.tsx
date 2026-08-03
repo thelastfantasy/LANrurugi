@@ -63,6 +63,118 @@ import { CATEGORY_BUTTON_CAP, type ContextMenuState, isTankoubonId, NEW_ONLY, PA
 // screen given its long `hideAfter: 25000` with no de-dup.
 let defaultPasswordToastShownThisPageLoad = false
 
+/** DataTables' own `pagingType: "simple_numbers"` window — the default it falls back to since
+ * `index_datatables.js` never sets `pagingType` explicitly. Always includes the first and last
+ * page, a run of pages centered on the current one, and `null` markers (rendered as "…") for any
+ * gap wider than one page — e.g. total 31, current (0-based) 0 → `[0,1,2,3,4,null,30]`, matching
+ * the real "1 2 3 4 5 … 31" a live legacy instance shows on page 1 of a 31-page result set. `page`/
+ * the returned numbers are 0-based (this app's own convention); only the rendered label is +1. */
+function pagingWindow(page: number, pageCount: number): (number | null)[] {
+  // Pages shown on each side of the current one — 4 matches DataTables' own real default
+  // `simple_numbers` window, live-confirmed against a real legacy instance's own "1 2 3 4 5 …
+  // 31" (31 total pages, viewing page 1: current ± 4 == pages 1-5, then a gap straight to 31).
+  const windowSize = 4
+  const result: (number | null)[] = []
+  let prev: number | null = null
+  for (let p = 0; p < pageCount; p++) {
+    const show = p === 0 || p === pageCount - 1 || Math.abs(p - page) <= windowSize
+    if (!show) continue
+    if (prev !== null && p - prev > 1) result.push(null)
+    result.push(p)
+    prev = p
+  }
+  return result
+}
+
+/** The count text (`.dataTables_info`) and the numbered pager (`.dataTables_paginate`) as ONE
+ * indivisible unit — real legacy's own `dom` config (`<"top"ip>rt...`) generates them as two
+ * separate sibling divs, but this port deliberately merges them into a single component so they
+ * always move/wrap together as a block inside the shared `.table-options` flex row below, instead
+ * of being two independent flex children that can drift apart and re-order relative to each other
+ * on narrow viewports (a real, live-reported layout bug from an earlier version of this fix that
+ * kept them as siblings — the count text and pager ended up on visually unrelated lines once the
+ * row wrapped, instead of staying stacked as one block the way legacy's own tightly-packed look
+ * actually reads). Internally still two stacked lines (count text above, pager below) — only the
+ * outer boundary is unified. `flex: 1` at the call site is what makes this whole unit expand to
+ * fill the toolbar row's middle slot on wide viewports and become its own full-width row when
+ * the row wraps on narrow ones — the exact PC/mobile behavior asked for, achieved by `order` on
+ * this one flex child rather than by juggling two.
+ *
+ * DataTables also appends its own `infoFiltered` template — literally `"(filtered from _MAX_
+ * total entries)"`, never overridden in legacy's own i18n templates (confirmed against
+ * `~/LANraragi/templates/i18n.html.tt2`, `public/js/mod/index_datatables.js`) — whenever the
+ * filtered count differs from the true unfiltered total, so it renders in raw English even on a
+ * fully localized instance; reproduced verbatim here rather than translated, since translating it
+ * would be a real deviation from the actual legacy string every user of this feature has always
+ * seen. The pager itself renders even at a single page (a lone, non-interactive "1" button) —
+ * DataTables' own real pager does the same (`lrr.css`'s own `.paginate_button`/`.ellipsis` rules
+ * have no `.disabled` variant to hide behind, and `index_datatables.js` sets no `pagingType`/
+ * page-count guard), and is a completely separate control from the toolbar's own "Go to Page"
+ * dropdown — legacy runs both at once (only the prev/next arrow buttons are CSS-hidden, per
+ * `lrr.css`'s `.paginate_button.previous/next{display:none}`, not the numbered ones). */
+function ResultInfoAndPager({
+  rangeStart,
+  rangeEnd,
+  totalFiltered,
+  totalRecords,
+  page,
+  pageCount,
+  onPage,
+}: {
+  rangeStart: number
+  rangeEnd: number
+  totalFiltered: number
+  totalRecords: number
+  page: number
+  pageCount: number
+  onPage: (page: number) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div>
+      {/* A `<div>`, deliberately NOT a `<p>` — real legacy's own `.dataTables_info` is a DataTables-
+          generated `<div>`, and every vendored theme's own global `p { margin: 0; padding: 3px 1px
+          }` rule (`g.css`, confirmed for every theme) only ever targets bare `<p>` elements, never
+          `<div>`s. An earlier version of this fix used a `<p>` here, which silently picked up that
+          rule's `3px 1px` padding anyway (nothing about it is `<p>`-specific in *this* app's own
+          markup, it just happens to match the tag) — a real, live-confirmed 6px-taller-than-legacy
+          gap purely from that unintended padding, not from any deliberate spacing choice; switching
+          the tag to `<div>` removes it entirely instead of trying to cancel it back out with a
+          matching negative padding/margin hack. */}
+      <div style={{ textAlign: 'center', opacity: 0.7 }}>
+        {t('Showing {{start}} to {{end}} of {{total}} archives.', {
+          start: rangeStart,
+          end: rangeEnd,
+          total: totalFiltered,
+        })}
+        {totalRecords > totalFiltered && ` (filtered from ${totalRecords} total entries)`}
+      </div>
+      <div style={{ textAlign: 'center' }}>
+        {pagingWindow(page, pageCount).map((p, i) =>
+          p === null ? (
+            <span key={`ellipsis-${i}`} className="ellipsis">
+              …
+            </span>
+          ) : (
+            <a
+              key={p}
+              href="#"
+              className={`paginate_button${p === page ? ' current' : ''}`}
+              style={{ margin: '4px 0' }}
+              onClick={(e) => {
+                e.preventDefault()
+                onPage(p)
+              }}
+            >
+              {p + 1}
+            </a>
+          ),
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Library() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -321,6 +433,7 @@ export default function Library() {
 
   const shown = search.data?.data ?? []
   const totalFiltered = search.data?.recordsFiltered ?? 0
+  const totalRecords = search.data?.recordsTotal ?? 0
   const pageCount = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE))
   const rangeStart = totalFiltered === 0 ? 0 : page * PAGE_SIZE + 1
   const rangeEnd = Math.min(totalFiltered, page * PAGE_SIZE + PAGE_SIZE)
@@ -674,168 +787,206 @@ export default function Library() {
             onClick={() => void handleToggleMultiSelect()}
           />
         </div>
-      </div>
 
-      <RecentlyAddedCarousel
-        filter={appliedFilter}
-        category={selectedCategory}
-        hideCompleted={hideCompleted}
-        groupbyTanks={groupbyTanks}
-        cropThumbs={cropThumbs}
-        onContextMenu={handleContextMenu}
-        onOpen={handleOpenArchive}
-        multiSelect={multiSelect}
-        selectedIds={selectedIds}
-        onToggleSelected={toggleSelected}
-        onSelectPage={selectAllOnPage}
-        onClearSelection={clearSelection}
-        onRunBatch={runBatchOnSelection}
-        onMerge={() => void mergeSelectionIntoTankoubon()}
-        canMerge={canMerge}
-        onSearchTag={applyTagSearch}
-        refreshKey={carouselRefreshKey}
-      />
+        <RecentlyAddedCarousel
+          filter={appliedFilter}
+          category={selectedCategory}
+          hideCompleted={hideCompleted}
+          groupbyTanks={groupbyTanks}
+          cropThumbs={cropThumbs}
+          onContextMenu={handleContextMenu}
+          onOpen={handleOpenArchive}
+          multiSelect={multiSelect}
+          selectedIds={selectedIds}
+          onToggleSelected={toggleSelected}
+          onSelectPage={selectAllOnPage}
+          onClearSelection={clearSelection}
+          onRunBatch={runBatchOnSelection}
+          onMerge={() => void mergeSelectionIntoTankoubon()}
+          canMerge={canMerge}
+          onSearchTag={applyTagSearch}
+          refreshKey={carouselRefreshKey}
+        />
 
-      {/* The real 4%-side inset comes from each theme's own `.table-options` rule (e.g.
-          `modern.css`'s `margin-right/left: 4%; margin-bottom: -64px`). The theme's own
-          `margin-bottom: -64px` is NOT reused: that value only makes sense against legacy's own
-          jQuery DataTables layout, which reserves invisible header space this app's grid doesn't
-          have — inheriting it verbatim pulls the toolbar out of view behind the grid below.
-          Explicit `marginBottom: 0` overrides just that one property back off. */}
-      <div className="table-options" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginBottom: 0 }}>
-        <div className="thumbnail-options">
-          {t('Sort by:')}{' '}
-          <select
-            className="favtag-btn"
-            value={sortby}
-            onChange={(e) => {
-              navigateSearch({ sortby: e.target.value, page: 0 })
-            }}
-          >
-            <option value="title">{t('Title')}</option>
-            <option value="date_added">{t('Date')}</option>
-            {/* Every real tag namespace with weight >= 2 (`useStats(2)`, matching legacy's own
-                `loadTagSuggestions` weight floor) becomes a sortable field too — legacy's own
-                sort-by dropdown isn't fixed to just Title/Date either. */}
-            {[...new Set((stats.data ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== 'date_added'))]
-              .sort()
-              .map((ns) => (
-                // legacy capitalizes only the display label, not the `value` (`index.js:341`).
-                <option key={ns} value={ns}>
-                  {ns.charAt(0).toUpperCase() + ns.slice(1)}
-                </option>
-              ))}
-          </select>
-          {/* Real legacy markup: `class="fa fa-sort-alpha-down fa-2x table-option"`. */}
-          <a
-            className={`fa fa-2x fa-sort-alpha-${order === 'asc' ? 'down' : 'up'} table-option`}
-            href="#"
-            title={t('Sort Order') ?? undefined}
-            onClick={(e) => {
-              e.preventDefault()
-              navigateSearch({ order: order === 'asc' ? 'desc' : 'asc' })
-            }}
-          ></a>
+        {/* A proper flex layout instead of legacy's own negative-margin-overlap trick (its real
+            `.table-options { margin-bottom: -38px/-64px }`, calibrated only against its own
+            DataTables-generated markup's exact internal whitespace and needing a dedicated
+            `@media (max-width: 1024px)` override to switch itself off below that breakpoint rather
+            than adapting on its own — a real, fragile technique, confirmed live against a running
+            reference instance, but not one worth reproducing here). This container holds every
+            toolbar control — Sort by/Columns, the `ResultInfoAndPager` unit, and Go to Page+gear —
+            as flex children of ONE shared row; see `index.css`'s own `.table-options-row`/`.table-
+            options-result-unit`/`.table-options-goto` rules for the full layout (moved out of
+            inline `style` objects into real CSS classes, since the per-breakpoint `order` change
+            those rules also need can only be expressed as a real conditional media-query rule in
+            the first place — an inline `style` object has no such mechanism at all — and splitting
+            the rest of the same layout's properties across both inline styles and a stylesheet made
+            the one layout harder to read as a whole than necessary). */}
+        <div className="table-options table-options-row">
+          {/* `.thumbnail-options`/`.compact-options` are mutually exclusive, gated on view mode
+              (`updateTableControls`, `index.js`) — real legacy only shows "Sort by:" in thumbnail-
+              grid view, since compact/table view has real clickable column headers to sort by
+              instead (`CompactTable.tsx`'s own header click-to-sort). A real, live-confirmed bug
+              this port had: "Sort by:" rendered unconditionally in both view modes. */}
+          {viewMode === 'thumbnail' && (
+            <div className="thumbnail-options">
+              {t('Sort by:')}{' '}
+              <select
+                className="favtag-btn"
+                value={sortby}
+                onChange={(e) => {
+                  navigateSearch({ sortby: e.target.value, page: 0 })
+                }}
+              >
+                <option value="title">{t('Title')}</option>
+                <option value="date_added">{t('Date')}</option>
+                {/* Every real tag namespace with weight >= 2 (`useStats(2)`, matching legacy's own
+                  `loadTagSuggestions` weight floor) becomes a sortable field too — legacy's own
+                  sort-by dropdown isn't fixed to just Title/Date either.
+                  `sortby` itself is force-included even when its own weight falls under that floor
+                  (or it's not a real tag namespace at all, e.g. `artist`/`series` from clicking a
+                  compact-table column header below) — a real, live-confirmed bug otherwise: this
+                  `<select>`'s `value={sortby}` had no matching `<option>` for that case, so the
+                  browser silently fell back to displaying the *first* option ("Title") instead,
+                  showing a completely wrong sort field even though the actual sort (and every
+                  other part of the page) was correctly using it. This app's compact-table header
+                  click and this dropdown intentionally share the one `sortby` state (a deliberate
+                  simplification over legacy's own two-separate-mechanisms design — see
+                  `CompactTable.tsx`'s own docs), so this list has to cover both sources. */}
+                {[...new Set([
+                  ...(stats.data ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== 'date_added'),
+                  ...(sortby !== 'title' && sortby !== 'date_added' ? [sortby] : []),
+                ])]
+                  .sort()
+                  .map((ns) => (
+                    // legacy capitalizes only the display label, not the `value` (`index.js:341`).
+                    <option key={ns} value={ns}>
+                      {ns.charAt(0).toUpperCase() + ns.slice(1)}
+                    </option>
+                  ))}
+              </select>
+              {/* Real legacy markup: `class="fa fa-sort-alpha-down fa-2x table-option"`. */}
+              <a
+                className={`fa fa-2x fa-sort-alpha-${order === 'asc' ? 'down' : 'up'} table-option`}
+                href="#"
+                title={t('Sort Order') ?? undefined}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigateSearch({ order: order === 'asc' ? 'desc' : 'asc' })
+                }}
+              ></a>
+            </div>
+          )}
+          {viewMode === 'compact' && (
+            <div className="compact-options">
+              {t('Columns:')}{' '}
+              {/* Legacy semantics — NOT a thumbnail-grid column count (that grid has no such
+                  setting). It's how many extra namespace columns (Artist, Series, ...) the compact
+                  table shows beyond Title. */}
+              <select className="favtag-btn" value={columns} onChange={(e) => setColumns(Number(e.target.value))}>
+                {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {/* Layout for this unit — `order`/`flex-grow`/`flex-shrink`/`flex-basis`, plus the
+              per-breakpoint `order` override — lives in `index.css`'s own `.table-options-result-
+              unit` rule (see that rule's own docs for the full reasoning). */}
+          {totalFiltered > 0 && (
+            <div className="table-options-result-unit">
+              <ResultInfoAndPager
+                rangeStart={rangeStart}
+                rangeEnd={rangeEnd}
+                totalFiltered={totalFiltered}
+                totalRecords={totalRecords}
+                page={page}
+                pageCount={pageCount}
+                onPage={(p) => navigateSearch({ page: p })}
+              />
+            </div>
+          )}
+          <div className="table-options-goto">
+            <div style={{ display: 'flex', alignItems: 'center',  }}>
+              {t('Go to Page:')}{' '}
+              <select className="favtag-btn table-options-goto-select" style={{ marginTop: 6, marginBottom: 6 }} value={page} onChange={(e) => navigateSearch({ page: Number(e.target.value) })}>
+                {Array.from({ length: pageCount }, (_, i) => i).map((p) => (
+                  <option key={p} value={p}>
+                    {p + 1}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <SettingsMenu
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              cropThumbs={cropThumbs}
+              setCropThumbs={setCropThumbs}
+              hideCompleted={hideCompleted}
+              setHideCompleted={setHideCompleted}
+              groupbyTanks={groupbyTanks}
+              setGroupbyTanks={setGroupbyTanks}
+            />
+            </div>
+          </div>
         </div>
-        {viewMode === 'compact' && (
-          <div className="compact-options">
-            {t('Columns:')}{' '}
-            {/* Legacy semantics — NOT a thumbnail-grid column count (that grid has no such
-                setting). It's how many extra namespace columns (Artist, Series, ...) the compact
-                table shows beyond Title. */}
-            <select className="favtag-btn" value={columns} onChange={(e) => setColumns(Number(e.target.value))}>
-              {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
+
+        {search.isLoading ? (
+          <p>{t('Loading library…')}</p>
+        ) : shown.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <i className="fas fa-sad-cry fa-4x" aria-hidden="true"></i>
+            <h1>
+              {t('No archives to show you! Try')}{' '}
+              <a href={routes.upload()} onClick={(e) => { e.preventDefault(); navigate(routes.upload()) }}>
+                {t('uploading some')}
+              </a>
+              ?
+            </h1>
+          </div>
+        ) : viewMode === 'compact' ? (
+          <CompactTable
+            shown={shown}
+            columns={columns}
+            selectedIds={selectedIds}
+            multiSelect={multiSelect}
+            sortby={sortby}
+            order={order}
+            onSort={(key) => navigateSearch({ sortby: key, page: 0 })}
+            onSearchTag={applyTagSearch}
+            onToggleSelected={toggleSelected}
+            onOpen={handleOpenArchive}
+            onContextMenu={handleContextMenu}
+          />
+        ) : (
+          <div
+            id="thumbs_container"
+            // Legacy's real thumbnail grid: `#thumbs_container` has no layout CSS of its own —
+            // plain block flow, each card (`div.id1`) is `display: inline-block` with its own
+            // `margin`, wrapping the same way inline text would. A `display: flex` version
+            // measurably fits fewer cards per row at the same container width, so this needs to be
+            // the real thing, not a flex approximation.
+            style={{ textAlign: 'center' }}
+          >
+            {shown.map((a) => (
+              <ArchiveCard
+                key={a.arcid}
+                archive={a}
+                multiSelect={multiSelect}
+                selected={selectedIds.has(a.arcid)}
+                cropThumbs={cropThumbs}
+                onToggleSelect={toggleSelected}
+                onContextMenu={handleContextMenu}
+                onOpen={handleOpenArchive}
+                onSearchTag={applyTagSearch}
+              />
+            ))}
           </div>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
-          {t('Go to Page:')}{' '}
-          <select className="favtag-btn" value={page} onChange={(e) => navigateSearch({ page: Number(e.target.value) })}>
-            {Array.from({ length: pageCount }, (_, i) => i).map((p) => (
-              <option key={p} value={p}>
-                {p + 1}
-              </option>
-            ))}
-          </select>
-          <SettingsMenu
-            viewMode={viewMode}
-            setViewMode={setViewMode}
-            cropThumbs={cropThumbs}
-            setCropThumbs={setCropThumbs}
-            hideCompleted={hideCompleted}
-            setHideCompleted={setHideCompleted}
-            groupbyTanks={groupbyTanks}
-            setGroupbyTanks={setGroupbyTanks}
-          />
-        </div>
       </div>
-
-      {search.isLoading ? (
-        <p>{t('Loading library…')}</p>
-      ) : shown.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 40 }}>
-          <i className="fas fa-sad-cry fa-4x" aria-hidden="true"></i>
-          <h1>
-            {t('No archives to show you! Try')}{' '}
-            <a href={routes.upload()} onClick={(e) => { e.preventDefault(); navigate(routes.upload()) }}>
-              {t('uploading some')}
-            </a>
-            ?
-          </h1>
-        </div>
-      ) : viewMode === 'compact' ? (
-        <CompactTable
-          shown={shown}
-          columns={columns}
-          selectedIds={selectedIds}
-          multiSelect={multiSelect}
-          onSearchTag={applyTagSearch}
-          onToggleSelected={toggleSelected}
-          onOpen={handleOpenArchive}
-          onContextMenu={handleContextMenu}
-        />
-      ) : (
-        <div
-          id="thumbs_container"
-          // Legacy's real thumbnail grid: `#thumbs_container` has no layout CSS of its own —
-          // plain block flow, each card (`div.id1`) is `display: inline-block` with its own
-          // `margin`, wrapping the same way inline text would. A `display: flex` version
-          // measurably fits fewer cards per row at the same container width, so this needs to be
-          // the real thing, not a flex approximation.
-          style={{ textAlign: 'center' }}
-        >
-          {shown.map((a) => (
-            <ArchiveCard
-              key={a.arcid}
-              archive={a}
-              multiSelect={multiSelect}
-              selected={selectedIds.has(a.arcid)}
-              cropThumbs={cropThumbs}
-              onToggleSelect={toggleSelected}
-              onContextMenu={handleContextMenu}
-              onOpen={handleOpenArchive}
-              onSearchTag={applyTagSearch}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Legacy's own DataTables `info` string (`I18N.IndexPageCount`, "Showing _START_ to _END_
-          of _TOTAL_ ...") — sits below the results, not as a heading above them; there is no
-          legacy equivalent of a big "Archives (N)" title over the grid. */}
-      {totalFiltered > 0 && (
-        <p style={{ textAlign: 'center', opacity: 0.7, margin: '10px' }}>
-          {t('Showing {{start}} to {{end}} of {{total}} archives.', {
-            start: rangeStart,
-            end: rangeEnd,
-            total: totalFiltered,
-          })}
-        </p>
-      )}
 
       {contextMenu && (
         <ArchiveContextMenu
