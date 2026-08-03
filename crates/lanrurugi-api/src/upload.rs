@@ -57,7 +57,7 @@ fn sanitize_filename(name: &str) -> String {
 }
 
 async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart) -> Response {
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_bytes: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut checksum: Option<String> = None;
     let mut category: Option<String> = None;
@@ -76,7 +76,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
             "file" => {
                 file_name = field.file_name().map(sanitize_filename);
                 match field.bytes().await {
-                    Ok(b) => file_bytes = Some(b.to_vec()),
+                    Ok(b) => file_bytes = Some(b),
                     Err(e) => return error(StatusCode::BAD_REQUEST, "upload", e.to_string()),
                 }
             }
@@ -95,9 +95,21 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
     let file_name = file_name.unwrap_or_else(|| "upload.zip".to_string());
 
     if let Some(expected) = checksum.as_deref().filter(|s| !s.is_empty()) {
-        let mut hasher = Sha1::new();
-        hasher.update(&bytes);
-        let actual = hex_encode(&hasher.finalize());
+        // Full-file SHA-1 (archives run up to `MAX_UPLOAD_BYTES` = 2 GB) — off the async reactor
+        // per constitution Principle III; a synchronous inline hash here would stall whichever
+        // Tokio worker is running this handler for the hash's entire duration. `bytes::Bytes`'s
+        // own `.clone()` is a cheap Arc refcount bump, not a buffer copy.
+        let hash_bytes = bytes.clone();
+        let actual = match lanrurugi_core::concurrency::run_blocking(move || {
+            let mut hasher = Sha1::new();
+            hasher.update(&hash_bytes);
+            hex_encode(&hasher.finalize())
+        })
+        .await
+        {
+            Ok(actual) => actual,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string()),
+        };
         if !actual.eq_ignore_ascii_case(expected) {
             return (
                 StatusCode::EXPECTATION_FAILED,

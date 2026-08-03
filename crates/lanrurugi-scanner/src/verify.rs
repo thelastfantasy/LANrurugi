@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use lanrurugi_core::concurrency::run_blocking;
+use lanrurugi_core::concurrency::parallel_map;
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_storage::id::legacy_id;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -39,11 +39,26 @@ pub async fn run(jobs: JobRegistry, job_id: String, archives: ArchiveRepository)
     };
     let total = all.len().max(1);
 
+    // Legacy sample hash (a 512000-byte read + SHA-1 per archive) is the CPU-bound part of this
+    // pass — computed for every tracked archive in parallel, off the async reactor, per
+    // constitution Principle III. Progress reporting resumes in the (cheap, HashMap-insertion-
+    // only) bucketing loop below, mirroring `lanrurugi_storage::rebuild::rekey_all`'s own
+    // established shape: report progress across the sequential pass, not mid-parallel-batch.
+    let files: Vec<PathBuf> = all.iter().map(|a| PathBuf::from(&a.file)).collect();
+    let hashes: Vec<Option<String>> = match parallel_map(files, |file| legacy_id(&file).ok()).await
+    {
+        Ok(hashes) => hashes,
+        Err(e) => {
+            jobs.fail(&job_id, e.to_string()).await;
+            return;
+        }
+    };
+
     // Bucket by legacy sample hash (cheap fingerprint) — anything with >1 member is a candidate
     // for the false-merge defect and needs the stronger check.
     let mut buckets: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
-    for (i, archive) in all.iter().enumerate() {
-        if let Ok(hash) = legacy_id(std::path::Path::new(&archive.file)) {
+    for (i, (archive, hash)) in all.iter().zip(hashes).enumerate() {
+        if let Some(hash) = hash {
             buckets
                 .entry(hash)
                 .or_default()
@@ -53,21 +68,30 @@ pub async fn run(jobs: JobRegistry, job_id: String, archives: ArchiveRepository)
             .await;
     }
 
-    let mut groups = Vec::new();
-    for (hash, members) in buckets {
-        if members.len() < 2 {
-            continue;
-        }
-        let archive_ids: Vec<String> = members.iter().map(|(id, _)| id.clone()).collect();
-        let fully_identical = run_blocking(move || files_all_identical(&members))
-            .await
-            .unwrap_or(false);
-        groups.push(SuspectGroup {
+    // Full-byte comparison per suspect group (>1 member sharing a sample hash) — also CPU/IO-bound
+    // (reads every member's complete file), also parallelized across groups rather than one at a
+    // time; suspect groups are normally rare (only real legacy-collision candidates), but a large
+    // migrated library could still have many.
+    let suspect_groups: Vec<(String, Vec<(String, PathBuf)>)> = buckets
+        .into_iter()
+        .filter(|(_, members)| members.len() >= 2)
+        .collect();
+    let groups: Vec<SuspectGroup> = match parallel_map(suspect_groups, |(hash, members)| {
+        let fully_identical = files_all_identical(&members);
+        SuspectGroup {
             legacy_sample_hash: hash,
-            archive_ids,
+            archive_ids: members.into_iter().map(|(id, _)| id).collect(),
             fully_identical,
-        });
-    }
+        }
+    })
+    .await
+    {
+        Ok(groups) => groups,
+        Err(e) => {
+            jobs.fail(&job_id, e.to_string()).await;
+            return;
+        }
+    };
 
     jobs.finish(&job_id, json!({ "suspect_groups": groups }))
         .await;

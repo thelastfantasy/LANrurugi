@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageEncoder;
-use lanrurugi_core::concurrency::run_blocking;
+use lanrurugi_core::concurrency::{parallel_map, run_blocking, BlockingTaskError};
 use sha1::{Digest, Sha1};
 use thiserror::Error;
 
@@ -141,6 +141,22 @@ pub async fn generate(
     quality: u8,
 ) -> Result<Option<String>, ThumbnailError> {
     run_blocking(move || generate_sync(&archive_path, page, &output_path, format, quality)).await?
+}
+
+/// Like [`generate`], but for many `(archive_path, page, output_path)` jobs at once, run across
+/// rayon's whole thread pool in one batch rather than one `spawn_blocking` round-trip per job —
+/// for a library-wide regen or a many-page archive, the difference is real parallelism (multiple
+/// images decoding/resizing/encoding at once) instead of serialized one-at-a-time throughput.
+/// Results come back in the same order as `jobs`.
+pub async fn generate_batch(
+    jobs: Vec<(PathBuf, usize, PathBuf)>,
+    format: ThumbFormat,
+    quality: u8,
+) -> Result<Vec<Result<Option<String>, ThumbnailError>>, BlockingTaskError> {
+    parallel_map(jobs, move |(archive_path, page, output_path)| {
+        generate_sync(&archive_path, page, &output_path, format, quality)
+    })
+    .await
 }
 
 fn generate_sync(

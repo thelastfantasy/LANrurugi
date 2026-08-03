@@ -73,7 +73,21 @@ async fn scan_duplicates(
             .into_iter()
             .filter_map(|a| a.thumbhash.map(|h| (a.id.into_string(), h)))
             .collect();
-        let groups = group_by_hamming_distance(&thumbhashes, threshold);
+        // O(n²) all-pairs Hamming-distance comparison over every thumbhash in the library — off
+        // the async reactor per constitution Principle III. `tokio::spawn` alone only gets this
+        // off the *request-handling* task; it still runs cooperatively on a shared Tokio worker
+        // and can starve other tasks scheduled there for its whole duration on a large library.
+        let groups = match lanrurugi_core::concurrency::run_blocking(move || {
+            group_by_hamming_distance(&thumbhashes, threshold)
+        })
+        .await
+        {
+            Ok(groups) => groups,
+            Err(e) => {
+                jobs.fail(&job_id_for_task, e.to_string()).await;
+                return;
+            }
+        };
 
         match redis.get().await {
             Ok(mut conn) => {

@@ -840,15 +840,57 @@ pub async fn spawn_regen_thumbnails_job(
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
         let total = archives.len().max(1);
-        for (i, mut archive) in archives.into_iter().enumerate() {
-            let shard = archive.id[0..2.min(archive.id.len())].to_string();
-            let output = thumb_dir.join(&shard).join(format!(
+
+        // Which archives actually need a freshly generated cover (force, or the file for the
+        // *current* format doesn't exist yet) — only these pay the CPU-heavy decode/resize/encode
+        // cost below. `regen_jobs` keeps each one's index into `archives` so results can be
+        // zipped back in the sequential pass afterward; every other archive is a no-op there.
+        let mut regen_jobs: Vec<(usize, std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+        for (i, archive) in archives.iter().enumerate() {
+            let shard = &archive.id[0..2.min(archive.id.len())];
+            let output = thumb_dir.join(shard).join(format!(
                 "{}.{}",
                 archive.id,
                 thumb_settings.format.extension()
             ));
             if force || !output.exists() {
-                match regenerate_one(&archive.file, output, thumb_settings).await {
+                regen_jobs.push((i, std::path::PathBuf::from(&archive.file), output));
+            }
+        }
+
+        // Decode/resize/encode every needed cover in one batch, spread across rayon's whole
+        // thread pool, instead of one `spawn_blocking` round-trip per archive run sequentially —
+        // this job runs library-wide (every automatic `enablewebp` toggle triggers it), so this is
+        // the highest-impact place in the codebase for constitution Principle III's "off the
+        // async reactor" requirement to also mean genuine parallelism, not just serialized
+        // off-reactor dispatch.
+        let job_inputs: Vec<(std::path::PathBuf, usize, std::path::PathBuf)> = regen_jobs
+            .iter()
+            .map(|(_, path, output)| (path.clone(), 1, output.clone()))
+            .collect();
+        let results = match lanrurugi_scanner::thumbnail::generate_batch(
+            job_inputs,
+            thumb_settings.format,
+            thumb_settings.quality,
+        )
+        .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                jobs.fail(&job_id_for_task, e.to_string()).await;
+                return;
+            }
+        };
+        let mut results_by_index: std::collections::HashMap<usize, _> = regen_jobs
+            .into_iter()
+            .map(|(i, ..)| i)
+            .zip(results)
+            .collect();
+
+        for (i, mut archive) in archives.into_iter().enumerate() {
+            if let Some(result) = results_by_index.remove(&i) {
+                let shard = archive.id[0..2.min(archive.id.len())].to_string();
+                match result {
                     Ok(thumbhash) => {
                         archive.thumbhash = thumbhash;
                         if let Err(e) = archive_repo.save(&archive).await {
@@ -882,21 +924,6 @@ pub async fn spawn_regen_thumbnails_job(
     });
 
     job_id
-}
-
-async fn regenerate_one(
-    archive_file: &str,
-    output: std::path::PathBuf,
-    thumb_settings: lanrurugi_scanner::thumbnail::ThumbSettings,
-) -> Result<Option<String>, lanrurugi_scanner::thumbnail::ThumbnailError> {
-    lanrurugi_scanner::thumbnail::generate(
-        std::path::PathBuf::from(archive_file),
-        1,
-        output,
-        thumb_settings.format,
-        thumb_settings.quality,
-    )
-    .await
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1281,41 +1308,61 @@ async fn generate_page_thumbnails(
     };
 
     let shard = &id[0..2.min(id.len())];
+    // Every missing page's thumbnail is generated in one batch, spread across rayon's whole
+    // thread pool, instead of one page at a time each paying its own `spawn_blocking` round-trip
+    // — a real difference for large-page-count volumes (constitution Principle III: CPU-bound
+    // decode/resize/encode work belongs off the async reactor, and batched here for genuine
+    // parallelism rather than just serialized off-reactor dispatch).
+    let jobs: Vec<(std::path::PathBuf, usize, std::path::PathBuf)> = pages
+        .iter()
+        .enumerate()
+        .filter_map(|(i, _)| {
+            let output = state
+                .library
+                .thumb_dir
+                .join(shard)
+                .join(id.as_str())
+                .join(format!("{}.{}", i + 1, thumb_settings.format.extension()));
+            (!output.exists()).then(|| (std::path::PathBuf::from(&archive.file), i + 1, output))
+        })
+        .collect();
+    let page_indices: Vec<usize> = jobs.iter().map(|(_, page, _)| *page).collect();
+
+    let results = match lanrurugi_scanner::thumbnail::generate_batch(
+        jobs,
+        thumb_settings.format,
+        thumb_settings.quality,
+    )
+    .await
+    {
+        Ok(results) => results,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "generate_page_thumbnails",
+                e.to_string(),
+            )
+        }
+    };
+
     // Newly-discovered corrupt pages this pass — collected rather than saved one at a time so a
     // failure partway through doesn't leave `archive` and its persisted record diverging, and so
     // the common case (no corrupt pages found) never touches the archive record at all.
     let mut newly_corrupted: Vec<String> = Vec::new();
-    for (i, entry_name) in pages.iter().enumerate() {
-        let output = state
-            .library
-            .thumb_dir
-            .join(shard)
-            .join(id.as_str())
-            .join(format!("{}.{}", i + 1, thumb_settings.format.extension()));
-        if output.exists() {
-            continue;
-        }
-        if let Err(e) = lanrurugi_scanner::thumbnail::generate(
-            std::path::PathBuf::from(&archive.file),
-            i + 1,
-            output,
-            thumb_settings.format,
-            thumb_settings.quality,
-        )
-        .await
+    for (page, result) in page_indices.into_iter().zip(results) {
+        let Err(e) = result else { continue };
+        let entry_name = &pages[page - 1];
+        tracing::warn!(%id, page, error = %e, "page thumbnail generation failed");
+        // Only an actual image-decode failure means *this page's bytes* are corrupt — an I/O
+        // error writing the thumbnail file, a failed blocking-task join, etc. say nothing
+        // about the page itself and must not get it wrongly marked corrupted (which would
+        // make the reader serve a placeholder for a perfectly good page forever, since
+        // `heal`-style fields are sticky by design — see `Archive::corrupted_pages`'s docs).
+        if matches!(e, lanrurugi_scanner::thumbnail::ThumbnailError::Decode(_))
+            && !archive.corrupted_pages.contains(entry_name)
+            && !newly_corrupted.contains(entry_name)
         {
-            tracing::warn!(%id, page = i + 1, error = %e, "page thumbnail generation failed");
-            // Only an actual image-decode failure means *this page's bytes* are corrupt — an I/O
-            // error writing the thumbnail file, a failed blocking-task join, etc. say nothing
-            // about the page itself and must not get it wrongly marked corrupted (which would
-            // make the reader serve a placeholder for a perfectly good page forever, since
-            // `heal`-style fields are sticky by design — see `Archive::corrupted_pages`'s docs).
-            if matches!(e, lanrurugi_scanner::thumbnail::ThumbnailError::Decode(_))
-                && !archive.corrupted_pages.contains(entry_name)
-                && !newly_corrupted.contains(entry_name)
-            {
-                newly_corrupted.push(entry_name.clone());
-            }
+            newly_corrupted.push(entry_name.clone());
         }
     }
     if !newly_corrupted.is_empty() {
