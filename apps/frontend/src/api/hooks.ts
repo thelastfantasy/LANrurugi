@@ -379,7 +379,7 @@ export function useTankoubon(id: string) {
 export function useCreateTankoubon() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => sendForm<{ tankid: string }>('PUT', '/tankoubons', { name }),
+    mutationFn: (name: string) => sendForm<{ tankoubon_id: string }>('PUT', '/tankoubons', { name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubons'] }),
   })
 }

@@ -11,6 +11,7 @@ import {
 } from '@dnd-kit/core'
 import {
   arrayMove,
+  horizontalListSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -79,6 +80,7 @@ export default function SortableList<T>({
   getId,
   onReorder,
   renderItem,
+  direction = 'vertical',
 }: {
   items: T[]
   getId: (item: T) => string
@@ -87,6 +89,12 @@ export default function SortableList<T>({
    * replacement rather than an incremental patch. */
   onReorder: (newOrder: string[]) => void
   renderItem: (item: T, dragHandleProps: DragHandleProps) => React.ReactNode
+  /** `'vertical'` (default) relies on each row's own block-level element stacking normally — no
+   * wrapping flex container needed, matching the Plugins page's original usage. `'horizontal'`
+   * additionally wraps the rows in a `display: flex` row with `overflow-x: auto` (scrolls rather
+   * than wraps when there isn't room, matching a card-row/carousel-style list) and switches
+   * dnd-kit's own sorting strategy to match — items only reorder left/right, not vertically. */
+  direction?: 'vertical' | 'horizontal'
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const byId = new Map(items.map((item) => [getId(item), item]))
@@ -111,6 +119,14 @@ export default function SortableList<T>({
   }
 
   const activeItem = activeId ? byId.get(activeId) : undefined
+  const items_ = (
+    <>
+      {items.map((item) => {
+        const id = getId(item)
+        return <SortableRow key={id} id={id} item={item} renderItem={renderItem} />
+      })}
+    </>
+  )
 
   return (
     <DndContext
@@ -120,11 +136,15 @@ export default function SortableList<T>({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveId(null)}
     >
-      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-        {items.map((item) => {
-          const id = getId(item)
-          return <SortableRow key={id} id={id} item={item} renderItem={renderItem} />
-        })}
+      <SortableContext
+        items={ids}
+        strategy={direction === 'horizontal' ? horizontalListSortingStrategy : verticalListSortingStrategy}
+      >
+        {direction === 'horizontal' ? (
+          <div style={{ display: 'flex', flexDirection: 'row', overflowX: 'auto' }}>{items_}</div>
+        ) : (
+          items_
+        )}
       </SortableContext>
       <DragOverlay>{activeItem && renderItem(activeItem, { isDragging: true })}</DragOverlay>
     </DndContext>

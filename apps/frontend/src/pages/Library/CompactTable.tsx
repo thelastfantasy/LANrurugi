@@ -198,7 +198,7 @@ export function CompactTable({
 }: {
   shown: ArchiveMetadata[]
   columns: number
-  selectedIds: Set<string>
+  selectedIds: string[]
   multiSelect: boolean
   /** Current sort namespace/direction, threaded straight from `Library()`'s own `sortby`/`order`
    * URL-driven state (the same state the "Sort by:" dropdown above this table already reads/
@@ -239,14 +239,14 @@ export function CompactTable({
         {shown.map((a) => (
           <tr
             key={a.arcid}
-            className={selectedIds.has(a.arcid) ? 'msm-selected' : undefined}
+            className={selectedIds.includes(a.arcid) ? 'msm-selected' : undefined}
             onContextMenu={(e) => onContextMenu(e, a)}
           >
             <td className="itd title" style={{ textAlign: 'left' }}>
               {multiSelect && (
                 <input
                   type="checkbox"
-                  checked={selectedIds.has(a.arcid)}
+                  checked={selectedIds.includes(a.arcid)}
                   onChange={() => onToggleSelected(a.arcid)}
                   style={{ marginRight: 6 }}
                 />
@@ -272,6 +272,7 @@ export function CompactTable({
                     style={{ height: 300, display: 'block' }}
                   />
                 }
+                anchor="cursor"
                 wrapperStyle={{ display: 'inline' }}
               >
                 <a

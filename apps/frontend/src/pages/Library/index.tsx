@@ -295,7 +295,10 @@ export default function Library() {
     return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl - 1 : 0
   })()
   const [multiSelect, setMultiSelect] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Ordered (not a Set) so the selection carousel's drag-to-reorder has a real order to persist —
+  // this order becomes the merged Tankoubon's own volume order (`Grouping.archives`, which is
+  // itself order-significant) rather than whatever arbitrary order clicking happened in.
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; isTank: boolean } | null>(null)
   // See `RecentlyAddedCarousel`'s own `refreshKey` prop docs — bumped after "Mark as Read"/"Mark
@@ -478,31 +481,25 @@ export default function Library() {
   }
 
   function toggleSelected(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
   function selectAllOnPage() {
     setSelectedIds((prev) => {
-      const next = new Set(prev)
-      for (const a of shown) next.add(a.arcid)
-      return next
+      const additions = shown.map((a) => a.arcid).filter((id) => !prev.includes(id))
+      return [...prev, ...additions]
     })
   }
 
   function clearSelection() {
-    setSelectedIds(new Set())
+    setSelectedIds([])
   }
 
   // Legacy's own MSM toggle confirms before clearing a non-empty selection when turning
   // multi-select *off* (`index.js`'s `toggleMultiSelectMode`) — turning it *on* never needs
   // confirmation since there's nothing to lose yet.
   async function handleToggleMultiSelect() {
-    if (multiSelect && selectedIds.size > 0) {
+    if (multiSelect && selectedIds.length > 0) {
       if (!(await confirmDialog(t('You have an active selection. Exiting will clear it. Continue?') ?? ''))) {
         return
       }
@@ -512,11 +509,11 @@ export default function Library() {
   }
 
   function runBatchOnSelection() {
-    if (selectedIds.size === 0) return
+    if (selectedIds.length === 0) return
     // Matches legacy's own hand-off exactly (`~/LANraragi/public/js/mod/index.js`'s
     // `openBatchOnSelection`/`updateSelectionCount`): stash the selection in `localStorage` under
     // the same key, open `/batch` in a new tab to read (and immediately clear) it.
-    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify([...selectedIds]))
+    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(selectedIds))
     window.open('/batch', '_blank')
   }
 
@@ -524,15 +521,15 @@ export default function Library() {
   // than always creating a new one; 2+ tanks selected makes the whole operation ambiguous, so the
   // merge action is hidden for that case entirely (both matching legacy's own
   // `index.js` merge-button logic).
-  const selectedTankIds = [...selectedIds].filter(isTankoubonId)
-  const canMerge = selectedTankIds.length < 2 && selectedIds.size > 0
+  const selectedTankIds = selectedIds.filter(isTankoubonId)
+  const canMerge = selectedTankIds.length < 2 && selectedIds.length > 0
 
   async function mergeSelectionIntoTankoubon() {
     if (!canMerge) return
     try {
       if (selectedTankIds.length === 1) {
         const targetTank = selectedTankIds[0]
-        const archiveIds = [...selectedIds].filter((id) => id !== targetTank)
+        const archiveIds = selectedIds.filter((id) => id !== targetTank)
         const existing = tankoubons.data?.result.find((tk) => tk.id === targetTank)
         const merged = [...(existing?.archives ?? []), ...archiveIds]
         await fetch(`/api/tankoubons/${targetTank}`, {
@@ -547,13 +544,13 @@ export default function Library() {
       const name = await promptDialog(t('Enter a name for the new Tankoubon.') ?? '')
       if (!name?.trim()) return
       const result = await createTankoubon.mutateAsync(name.trim())
-      await fetch(`/api/tankoubons/${result.tankid}`, {
+      await fetch(`/api/tankoubons/${result.tankoubon_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ archives: [...selectedIds] }),
+        body: JSON.stringify({ archives: selectedIds }),
       })
       clearSelection()
-      navigate(routes.tankoubonEdit(result.tankid))
+      navigate(routes.tankoubonEdit(result.tankoubon_id))
     } catch {
       toast({ heading: t('Error creating Tankoubon') ?? undefined, icon: 'error' })
     }
@@ -781,7 +778,7 @@ export default function Library() {
           />
           <input
             id="msm-toggle"
-            className="searchbtn stdbtn"
+            className={`searchbtn stdbtn${multiSelect ? ' toggled' : ''}`}
             type="button"
             value={t('Select Archives') ?? undefined}
             onClick={() => void handleToggleMultiSelect()}
@@ -799,6 +796,7 @@ export default function Library() {
           multiSelect={multiSelect}
           selectedIds={selectedIds}
           onToggleSelected={toggleSelected}
+          onReorderSelection={setSelectedIds}
           onSelectPage={selectAllOnPage}
           onClearSelection={clearSelection}
           onRunBatch={runBatchOnSelection}
@@ -976,7 +974,7 @@ export default function Library() {
                 key={a.arcid}
                 archive={a}
                 multiSelect={multiSelect}
-                selected={selectedIds.has(a.arcid)}
+                selected={selectedIds.includes(a.arcid)}
                 cropThumbs={cropThumbs}
                 onToggleSelect={toggleSelected}
                 onContextMenu={handleContextMenu}
@@ -1003,7 +1001,7 @@ export default function Library() {
             if (!multiSelect) setMultiSelect(true)
             toggleSelected(id)
           }}
-          isSelected={selectedIds.has(contextMenu.archive.arcid)}
+          isSelected={selectedIds.includes(contextMenu.archive.arcid)}
           onSetProgress={handleSetProgress}
         />
       )}

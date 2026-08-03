@@ -954,6 +954,7 @@
   "{{count}} deleted entries.": "已删除 {{count}} 个条目。",
   "{{count}} unlinked entries — their file went missing.": "{{count}} 个条目已解除链接——其文件已丢失。",
   "{{n}} could not be removed.": "{{n}} 个任务无法移除。",
+  "{{n}} selected": "已选择 {{n}} 项",
   "{{rate}}/s": "{{rate}}/s",
   "{{size}} downloaded": "已下载 {{size}}",
   "Rate-limited to {{limit}}/s": "已限速：{{limit}}/s",

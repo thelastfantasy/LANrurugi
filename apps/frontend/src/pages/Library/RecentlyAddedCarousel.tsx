@@ -10,6 +10,7 @@ import { Swiper, SwiperSlide } from 'swiper/react'
 import { useArchiveMetadata } from '../../api/hooks'
 import type { ArchiveMetadata } from '../../api/types'
 import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
+import SortableList from '../../components/SortableList'
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from '../../storageKeys'
 import { Z_OVERLAY_CONTENT } from '../../theme'
 import { ArchiveCard } from './ArchiveCard'
@@ -30,7 +31,7 @@ function CarouselCard({
   cropThumbs: boolean
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
-  /** Optional — `SelectedArchiveSlide`'s own multi-select-mode selection list doesn't have a
+  /** Optional — `SelectedArchiveSlideContent`'s own multi-select-mode selection list doesn't have a
    * meaningful "search" action for its slides (clicking there removes the archive from the
    * selection instead, via `onOpen`), so it's fine to omit and fall back to a no-op. The
    * On Deck/Random/Inbox/Untagged carousel *does* wire this through to the real in-app search —
@@ -67,8 +68,18 @@ function CarouselCard({
  * hook-in-a-loop isn't possible for a variable-length `selectedIds` set, hence its own
  * component) — used by the multi-select mode's selection-list body. Renders nothing while its
  * own fetch is in flight rather than a per-slide spinner (matches the small, session-scale
- * selection sizes this is meant for). */
-function SelectedArchiveSlide({
+ * selection sizes this is meant for).
+ *
+ * Deliberately renders only the *content*, not the `<SwiperSlide>` itself — `swiper/react`
+ * requires every `SwiperSlide` to be a direct JSX child of `<Swiper>` (it inspects `Swiper`'s own
+ * `children` prop structurally to find slides to move into its internal `.swiper-wrapper`); a
+ * `SwiperSlide` returned from *inside* a custom component one level down is invisible to that
+ * check, so Swiper never moves it into `.swiper-wrapper` and it falls back to plain block-level
+ * layout — a real, live-confirmed bug (every selected-archive "slide" rendered full-width, one
+ * per row, instead of side by side). The `<SwiperSlide>` wrapper below now lives directly in the
+ * `.map()` inside `<Swiper>`'s own children in `RecentlyAddedCarousel`; this component only
+ * supplies what goes *inside* it, which Swiper doesn't care about. */
+function SelectedArchiveSlideContent({
   id,
   cropThumbs,
   onContextMenu,
@@ -82,14 +93,12 @@ function SelectedArchiveSlide({
   const metadata = useArchiveMetadata(id)
   if (!metadata.data) return null
   return (
-    <SwiperSlide style={{ width: 228 }}>
-      <CarouselCard
-        archive={metadata.data}
-        cropThumbs={cropThumbs}
-        onContextMenu={onContextMenu}
-        onOpen={() => onRemove(id)}
-      />
-    </SwiperSlide>
+    <CarouselCard
+      archive={metadata.data}
+      cropThumbs={cropThumbs}
+      onContextMenu={onContextMenu}
+      onOpen={() => onRemove(id)}
+    />
   )
 }
 
@@ -104,6 +113,7 @@ export function RecentlyAddedCarousel({
   multiSelect,
   selectedIds,
   onToggleSelected,
+  onReorderSelection,
   onSelectPage,
   onClearSelection,
   onRunBatch,
@@ -120,8 +130,13 @@ export function RecentlyAddedCarousel({
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata, source: 'carousel') => void
   onOpen: (id: string) => void
   multiSelect: boolean
-  selectedIds: Set<string>
+  selectedIds: string[]
   onToggleSelected: (id: string) => void
+  /** Drag-to-reorder in the selection list below — additive (legacy has no such capability at
+   * all, its own selection list is a plain unordered `Set`). The new order becomes the merged
+   * Tankoubon's own volume order (`archives`, itself order-significant) when `onMerge` folds the
+   * selection into one, rather than whatever arbitrary order clicking each archive happened in. */
+  onReorderSelection: (newOrder: string[]) => void
   onSelectPage: () => void
   onClearSelection: () => void
   onRunBatch: () => void
@@ -273,12 +288,12 @@ export function RecentlyAddedCarousel({
             {/* Legacy's real 4-button MSM toolbar lives in this exact `.collapsible-right`
                 slot, replacing the refresh/more-options icons. `updateSelectionCount` hides
                 batch-ops/merge/clear at zero selected — only select-page stays visible. */}
-            {selectedIds.size > 0 && (
-              <span>{t('{{n}} selected', { n: selectedIds.size })}</span>
+            {selectedIds.length > 0 && (
+              <span>{t('{{n}} selected', { n: selectedIds.length })}</span>
             )}
             {/* No `marginBottom` offset on these four, unlike the refresh/more-options icons
                 below (`margin-bottom: 0px` vs. `-4px` in legacy's real computed style). */}
-            {selectedIds.size > 0 && (
+            {selectedIds.length > 0 && (
               <a
                 href="#"
                 className="fa fa-2x fa-hammer"
@@ -302,7 +317,7 @@ export function RecentlyAddedCarousel({
                 }}
               ></a>
             )}
-            {selectedIds.size > 0 && (
+            {selectedIds.length > 0 && (
               <a
                 href="#"
                 className="fa fa-2x fa-eject"
@@ -382,7 +397,7 @@ export function RecentlyAddedCarousel({
           // gives it `padding: 10px !important`, which under content-box sizing would add on top
           // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
           <div className="collapsible-body" style={{ width: '100%', boxSizing: 'border-box' }}>
-            {selectedIds.size === 0 ? (
+            {selectedIds.length === 0 ? (
               /* Real legacy `#carousel-empty`: a fixed `height: 344px` flex column, centered both
                  axes, not a content-flow `<p>` with a `<br>`. */
               <div style={{ height: 344, display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
@@ -392,31 +407,39 @@ export function RecentlyAddedCarousel({
                 </span>
               </div>
             ) : (
-              <Swiper
-                modules={[Navigation, Mousewheel]}
-                navigation={{ nextEl: '.carousel-next', prevEl: '.carousel-prev' }}
-                mousewheel
-                spaceBetween={8}
-                slidesPerView="auto"
-                // No side padding — legacy's `.index-carousel-container` has `padding: 0`; the
-                // prev/next arrows overlay the slide track's own edge rather than a reserved gutter.
-                style={{ padding: '8px 0' }}
-              >
-                {[...selectedIds].map((id) => (
-                  <SelectedArchiveSlide
-                    key={id}
-                    id={id}
-                    cropThumbs={cropThumbs}
-                    onContextMenu={(e, archive) => onContextMenu(e, archive, 'carousel')}
-                    onRemove={onToggleSelected}
-                  />
-                ))}
-                {/* `top: 136` (not `50%`) matches legacy's real `.carousel-prev`/`.carousel-next`
-                    rule (`lrr.css`: `position: absolute; top: 136px; left/right: 0; z-index: 20`)
-                    — a fixed pixel offset, not vertically-centered. */}
-                <a href="#" className="fa fa-3x fa-chevron-left carousel-prev" style={{ position: 'absolute', left: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
-                <a href="#" className="fa fa-3x fa-chevron-right carousel-next" style={{ position: 'absolute', right: 0, top: 136, cursor: 'pointer', zIndex: 20 }}></a>
-              </Swiper>
+              // Deliberately not the `<Swiper>` the read-only carousel modes below use — `swiper/
+              // react` requires `SwiperSlide` to be a direct JSX child of `Swiper` (see
+              // `SelectedArchiveSlideContent`'s own docs for the real bug that comes from breaking
+              // that), and combining Swiper's own slide-transform positioning with dnd-kit's
+              // sortable transforms on the *same* elements would be fighting two libraries over the
+              // same job. `SortableList`'s `horizontal` direction gives the same "row of cards,
+              // scrolls instead of wrapping" look via a plain `overflow-x: auto` flex row.
+              <div style={{ padding: '8px 0' }}>
+                <SortableList
+                  items={selectedIds}
+                  getId={(id) => id}
+                  direction="horizontal"
+                  onReorder={onReorderSelection}
+                  renderItem={(id, dragHandleProps) => (
+                    <div
+                      {...dragHandleProps.attributes}
+                      {...dragHandleProps.listeners}
+                      style={{
+                        width: 228,
+                        marginRight: 8,
+                        cursor: dragHandleProps.isDragging ? 'grabbing' : 'grab',
+                      }}
+                    >
+                      <SelectedArchiveSlideContent
+                        id={id}
+                        cropThumbs={cropThumbs}
+                        onContextMenu={(e, archive) => onContextMenu(e, archive, 'carousel')}
+                        onRemove={onToggleSelected}
+                      />
+                    </div>
+                  )}
+                />
+              </div>
             )}
           </div>
         )}
