@@ -202,7 +202,11 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
             }
 
             if title.is_some() || summary.is_some() || tags.is_some() {
-                if let Ok(Some(mut archive)) = state.repos.archives.get(&ingested.archive_id).await
+                if let Ok(Some(mut archive)) = state
+                    .repos
+                    .archives
+                    .get(&lanrurugi_core::ids::ArchiveId(ingested.archive_id.clone()))
+                    .await
                 {
                     if let Some(t) = title {
                         archive.title = t;

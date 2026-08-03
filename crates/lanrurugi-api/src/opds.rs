@@ -78,7 +78,13 @@ pub struct OpdsQuery {
 
 async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>) -> Response {
     let category = match &q.category {
-        Some(id) => state.repos.categories.get(id).await.ok().flatten(),
+        Some(id) => state
+            .repos
+            .categories
+            .get(&lanrurugi_core::ids::CategoryId(id.clone()))
+            .await
+            .ok()
+            .flatten(),
         None => None,
     };
     let params = SearchParams {
@@ -102,7 +108,12 @@ async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>)
         if id.starts_with("TANK") {
             continue;
         }
-        if let Ok(Some(a)) = state.repos.archives.get(id).await {
+        if let Ok(Some(a)) = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+            .await
+        {
             entries.push_str(&entry_xml(&a));
             entries.push('\n');
         }
@@ -139,7 +150,10 @@ async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>)
     ([(header::CONTENT_TYPE, "application/xml")], xml).into_response()
 }
 
-async fn opds_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn opds_item(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     match state.repos.archives.get(&id).await {
         Ok(Some(a)) => {
             let xml = format!(
@@ -166,7 +180,7 @@ pub struct PseQuery {
 /// Serves the raw image for `page` (1-indexed), matching the `pse:stream` link's contract.
 async fn opds_page(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(q): Query<PseQuery>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {

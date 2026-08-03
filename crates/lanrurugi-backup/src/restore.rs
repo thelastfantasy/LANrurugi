@@ -5,6 +5,7 @@
 //! information, only metadata keyed by archive ID.
 
 use lanrurugi_core::entities::{Category, Grouping, Stamp};
+use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError, StampRepository,
 };
@@ -30,7 +31,10 @@ pub async fn restore(
     let mut summary = RestoreSummary::default();
 
     for backup_archive in &doc.archives {
-        let Some(mut archive) = archives.get(&backup_archive.arcid).await? else {
+        let Some(mut archive) = archives
+            .get(&ArchiveId(backup_archive.arcid.clone()))
+            .await?
+        else {
             // Per Backup/Export document semantics: restore only re-attaches metadata to
             // archives that already exist on this instance (matched by ID); it never fabricates
             // an Archive record for content that isn't actually present on disk.
@@ -48,10 +52,15 @@ pub async fn restore(
     for backup_category in &doc.categories {
         categories
             .save(&Category {
-                catid: backup_category.catid.clone(),
+                catid: CategoryId(backup_category.catid.clone()),
                 name: backup_category.name.clone(),
                 search: backup_category.search.clone(),
-                archives: backup_category.archives.clone(),
+                archives: backup_category
+                    .archives
+                    .iter()
+                    .cloned()
+                    .map(ArchiveId)
+                    .collect(),
                 pinned: false,
             })
             .await?;
@@ -61,12 +70,17 @@ pub async fn restore(
     for backup_tank in &doc.tankoubons {
         groupings
             .save(&Grouping {
-                tankid: backup_tank.tankid.clone(),
+                tankid: TankId(backup_tank.tankid.clone()),
                 name: backup_tank.name.clone(),
                 summary: backup_tank.summary.clone(),
                 tags: backup_tank.tags.clone(),
                 progress: 0,
-                archives: backup_tank.archives.clone(),
+                archives: backup_tank
+                    .archives
+                    .iter()
+                    .cloned()
+                    .map(ArchiveId)
+                    .collect(),
             })
             .await?;
         summary.tankoubons_restored += 1;
@@ -79,10 +93,10 @@ pub async fn restore(
         // Stamp/Archive records independently) stays consistent with what's referenced elsewhere.
         stamps
             .restore_raw(&Stamp {
-                stamp_id: backup_stamp.stamp_id.clone(),
+                stamp_id: StampId(backup_stamp.stamp_id.clone()),
                 content: backup_stamp.content.clone(),
                 position: backup_stamp.position.clone(),
-                archive_id: backup_stamp.archive_id.clone(),
+                archive_id: ArchiveId(backup_stamp.archive_id.clone()),
                 icon: backup_stamp.icon.clone(),
                 rect: backup_stamp.rect.clone(),
             })
@@ -102,12 +116,12 @@ pub async fn relink_stamp_ids(
 ) -> Result<(), RepositoryError> {
     use std::collections::HashMap;
 
-    let mut by_archive: HashMap<String, Vec<String>> = HashMap::new();
+    let mut by_archive: HashMap<ArchiveId, Vec<StampId>> = HashMap::new();
     for stamp in &doc.stamps {
         by_archive
-            .entry(stamp.archive_id.clone())
+            .entry(ArchiveId(stamp.archive_id.clone()))
             .or_default()
-            .push(stamp.stamp_id.clone());
+            .push(StampId(stamp.stamp_id.clone()));
     }
 
     for (archive_id, stamp_ids) in by_archive {
@@ -144,7 +158,7 @@ mod tests {
         let stamps = StampRepository::new(pool.clone());
 
         // Archive already exists on "this instance" (as if freshly re-scanned, no metadata yet).
-        let id = "7".repeat(40);
+        let id = ArchiveId("7".repeat(40));
         archives
             .save(&Archive {
                 id: id.clone(),
@@ -169,7 +183,7 @@ mod tests {
 
         let doc = build::BackupDocument {
             archives: vec![BackupArchive {
-                arcid: id.clone(),
+                arcid: id.to_string(),
                 title: "Restored Title".into(),
                 tags: "artist:restored".into(),
                 summary: Some("restored summary".into()),

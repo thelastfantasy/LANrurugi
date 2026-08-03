@@ -21,6 +21,7 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::Archive;
 use lanrurugi_core::filename_lock::FilenameLocks;
+use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_storage::id::size_aware_id;
 pub(crate) use lanrurugi_storage::keys::FILEMAP_KEY;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -52,16 +53,19 @@ pub enum PipelineError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestOutcome {
     /// A brand-new archive was catalogued.
-    Catalogued { id: String },
+    Catalogued { id: ArchiveId },
     /// The path was already tracked under this same ID — no change (e.g. duplicate inotify
     /// events, or a byte-identical rewrite).
-    Unchanged { id: String },
+    Unchanged { id: ArchiveId },
     /// The path's content changed; its existing Archive record was re-keyed to the new ID.
-    Rekeyed { old_id: String, new_id: String },
+    Rekeyed {
+        old_id: ArchiveId,
+        new_id: ArchiveId,
+    },
     /// [`DuplicatePolicy::Reject`] found a colliding archive (by content hash or by
     /// `intended_filename`) and left it untouched — the caller's new file was not catalogued.
     Rejected {
-        existing_id: String,
+        existing_id: ArchiveId,
         reason: DuplicateReason,
     },
 }
@@ -150,7 +154,7 @@ pub async fn run(
         {
             Ok(Ok(outcome)) => {
                 if let (IngestOutcome::Catalogued { id }, Some(tx)) = (&outcome, &new_archive_tx) {
-                    let _ = tx.send(id.clone());
+                    let _ = tx.send(id.to_string());
                 }
                 tracing::info!(?path, ?outcome, "ingested file")
             }
@@ -226,13 +230,13 @@ pub async fn ingest_file_with_policy(
         title_filename,
     } = options;
 
-    let id = size_aware_id(path)?;
+    let id = ArchiveId(size_aware_id(path)?);
     let path_str = path.to_string_lossy().to_string();
 
     let mut config_conn = config_pool.get().await?;
     let previous_id: Option<String> = config_conn.hget(FILEMAP_KEY, &path_str).await?;
 
-    if let Some(previous_id) = previous_id {
+    if let Some(previous_id) = previous_id.map(ArchiveId) {
         if previous_id == id {
             return Ok(IngestOutcome::Unchanged { id });
         }
@@ -241,7 +245,9 @@ pub async fn ingest_file_with_policy(
         // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
         match archives.rename_id(&previous_id, &id).await {
             Ok(()) => {
-                let _: () = config_conn.hset(FILEMAP_KEY, &path_str, &id).await?;
+                let _: () = config_conn
+                    .hset(FILEMAP_KEY, &path_str, id.as_str())
+                    .await?;
                 return Ok(IngestOutcome::Rekeyed {
                     old_id: previous_id,
                     new_id: id,
@@ -290,7 +296,9 @@ pub async fn ingest_file_with_policy(
         }
     }
 
-    let _: () = config_conn.hset(FILEMAP_KEY, &path_str, &id).await?;
+    let _: () = config_conn
+        .hset(FILEMAP_KEY, &path_str, id.as_str())
+        .await?;
 
     let catalogue_settings = CatalogueSettings {
         thumb: crate::thumbnail::read_settings(&mut config_conn).await,
@@ -369,7 +377,7 @@ async fn catalogue_new_archive(
     archives: &ArchiveRepository,
     search_pool: &Pool,
     thumb_dir: &Path,
-    id: &str,
+    id: &ArchiveId,
     path: &Path,
     title_filename: Option<&str>,
     settings: CatalogueSettings,
@@ -427,7 +435,7 @@ async fn catalogue_new_archive(
     };
 
     let mut archive = Archive {
-        id: id.to_string(),
+        id: id.clone(),
         name: name.clone(),
         title: name,
         file: path.to_string_lossy().to_string(),
@@ -446,13 +454,13 @@ async fn catalogue_new_archive(
     };
     archives.save(&archive).await?;
     if let Err(e) =
-        lanrurugi_search::indexer::index_new_archive(search_pool, id, &archive.title).await
+        lanrurugi_search::indexer::index_new_archive(search_pool, id.as_str(), &archive.title).await
     {
         tracing::warn!(%id, error = %e, "failed to index new archive for search");
     }
 
     if pagecount > 0 {
-        let shard = &id[0..2.min(id.len())];
+        let shard = &id.as_str()[0..2.min(id.len())];
         let output = thumb_dir
             .join(shard)
             .join(format!("{id}.{}", thumb_settings.format.extension()));
@@ -957,7 +965,7 @@ mod tests {
             "run() must have catalogued the file after unblocking"
         );
 
-        archives.delete(id.as_deref().unwrap()).await.unwrap();
+        archives.delete(&ArchiveId(id.unwrap())).await.unwrap();
         let _: () = conn
             .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
             .await

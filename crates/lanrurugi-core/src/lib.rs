@@ -1,6 +1,7 @@
 pub mod concurrency;
 pub mod entities;
 pub mod filename_lock;
+pub mod ids;
 pub mod jobs;
 pub mod logging;
 pub mod password;

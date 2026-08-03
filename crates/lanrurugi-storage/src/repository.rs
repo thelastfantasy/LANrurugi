@@ -11,6 +11,7 @@
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::{Archive, Category, Grouping, Stamp, TocEntry};
+use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -68,26 +69,26 @@ impl ArchiveRepository {
         Self { pool }
     }
 
-    pub async fn get(&self, id: &str) -> Result<Option<Archive>> {
+    pub async fn get(&self, id: &ArchiveId) -> Result<Option<Archive>> {
         let mut conn = self.pool.get().await?;
-        let exists: bool = conn.exists(id).await?;
+        let exists: bool = conn.exists(id.as_str()).await?;
         if !exists {
             return Ok(None);
         }
-        let fields: std::collections::HashMap<String, String> = conn.hgetall(id).await?;
+        let fields: std::collections::HashMap<String, String> = conn.hgetall(id.as_str()).await?;
         Ok(Some(archive_from_fields(id, fields)?))
     }
 
     /// All archive IDs currently in the database (legacy 40-hex-char key glob).
-    pub async fn list_ids(&self) -> Result<Vec<String>> {
+    pub async fn list_ids(&self) -> Result<Vec<ArchiveId>> {
         let mut conn = self.pool.get().await?;
         let ids: Vec<String> = conn.keys(ARCHIVE_KEY_GLOB).await?;
-        Ok(ids)
+        Ok(ids.into_iter().map(ArchiveId).collect())
     }
 
     pub async fn list_all(&self) -> Result<Vec<Archive>> {
         list_all_by_glob(&self.pool, ARCHIVE_KEY_GLOB, |id| async move {
-            self.get(&id).await
+            self.get(&ArchiveId(id)).await
         })
         .await
     }
@@ -112,20 +113,20 @@ impl ArchiveRepository {
         let mut conn = self.pool.get().await?;
         let toc_json = serde_json::to_string(&toc_to_legacy_map(&archive.toc)).map_err(|e| {
             RepositoryError::Json {
-                key: archive.id.clone(),
+                key: archive.id.to_string(),
                 field: "toc",
                 source: e,
             }
         })?;
         let stamps_json =
             serde_json::to_string(&archive.stamp_ids).map_err(|e| RepositoryError::Json {
-                key: archive.id.clone(),
+                key: archive.id.to_string(),
                 field: "stamps",
                 source: e,
             })?;
         let corrupted_pages_json =
             serde_json::to_string(&archive.corrupted_pages).map_err(|e| RepositoryError::Json {
-                key: archive.id.clone(),
+                key: archive.id.to_string(),
                 field: "corrupted_pages",
                 source: e,
             })?;
@@ -148,9 +149,11 @@ impl ArchiveRepository {
             ("stamps", stamps_json),
             ("corrupted_pages", corrupted_pages_json),
         ];
-        let _: () = conn.hset_multiple(&archive.id, &fields).await?;
+        let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
         if let Some(thumbhash) = &archive.thumbhash {
-            let _: () = conn.hset(&archive.id, "thumbhash", thumbhash).await?;
+            let _: () = conn
+                .hset(archive.id.as_str(), "thumbhash", thumbhash)
+                .await?;
         }
         // `HSET`, unlike `hset_multiple` above, never clears a field on its own — `heal_failed_at`
         // needs an explicit `HDEL` when `None` so a fresh catalogue of this archive ID (e.g.
@@ -159,40 +162,40 @@ impl ArchiveRepository {
         match archive.heal_failed_at {
             Some(ts) => {
                 let _: () = conn
-                    .hset(&archive.id, "heal_failed_at", ts.to_string())
+                    .hset(archive.id.as_str(), "heal_failed_at", ts.to_string())
                     .await?;
             }
             None => {
-                let _: () = conn.hdel(&archive.id, "heal_failed_at").await?;
+                let _: () = conn.hdel(archive.id.as_str(), "heal_failed_at").await?;
             }
         }
         Ok(())
     }
 
-    pub async fn delete(&self, id: &str) -> Result<()> {
+    pub async fn delete(&self, id: &ArchiveId) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let _: () = conn.del(id).await?;
+        let _: () = conn.del(id.as_str()).await?;
         Ok(())
     }
 
     /// Reading-progress accessors: legacy stores this as plain fields on the Archive hash, not a
     /// separate entity (verified: `Utils::Database::build_json` reads `progress`/`lastreadtime`
     /// straight off the archive's own hash).
-    pub async fn set_progress(&self, id: &str, page: u32, read_at_unix: u64) -> Result<()> {
+    pub async fn set_progress(&self, id: &ArchiveId, page: u32, read_at_unix: u64) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let fields: Vec<(&str, String)> = vec![
             ("progress", page.to_string()),
             ("lastreadtime", read_at_unix.to_string()),
         ];
-        let _: () = conn.hset_multiple(id, &fields).await?;
+        let _: () = conn.hset_multiple(id.as_str(), &fields).await?;
         Ok(())
     }
 
-    pub async fn rename_id(&self, old_id: &str, new_id: &str) -> Result<()> {
+    pub async fn rename_id(&self, old_id: &ArchiveId, new_id: &ArchiveId) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let _: () = deadpool_redis::redis::cmd("RENAME")
-            .arg(old_id)
-            .arg(new_id)
+            .arg(old_id.as_str())
+            .arg(new_id.as_str())
             .query_async(&mut conn)
             .await?;
         Ok(())
@@ -218,7 +221,7 @@ fn toc_from_legacy_json(raw: &str) -> Vec<TocEntry> {
 }
 
 fn archive_from_fields(
-    id: &str,
+    id: &ArchiveId,
     mut fields: std::collections::HashMap<String, String>,
 ) -> Result<Archive> {
     let name = fields.remove("name").unwrap_or_default();
@@ -230,7 +233,7 @@ fn archive_from_fields(
             t
         }
     };
-    let stamp_ids: Vec<String> = fields
+    let stamp_ids: Vec<StampId> = fields
         .get("stamps")
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
@@ -246,7 +249,7 @@ fn archive_from_fields(
     let heal_failed_at = fields.remove("heal_failed_at").and_then(|s| s.parse().ok());
 
     Ok(Archive {
-        id: id.to_string(),
+        id: id.clone(),
         name,
         title,
         file: fields.remove("file").unwrap_or_default(),
@@ -279,24 +282,25 @@ impl CategoryRepository {
         Self { pool }
     }
 
-    pub async fn get(&self, catid: &str) -> Result<Option<Category>> {
+    pub async fn get(&self, catid: &CategoryId) -> Result<Option<Category>> {
         let mut conn = self.pool.get().await?;
-        let exists: bool = conn.exists(catid).await?;
+        let exists: bool = conn.exists(catid.as_str()).await?;
         if !exists {
             return Ok(None);
         }
-        let fields: std::collections::HashMap<String, String> = conn.hgetall(catid).await?;
+        let fields: std::collections::HashMap<String, String> =
+            conn.hgetall(catid.as_str()).await?;
         let search = fields.get("search").cloned().filter(|s| !s.is_empty());
-        let archives = if search.is_none() {
+        let archives: Vec<ArchiveId> = if search.is_none() {
             fields
                 .get("archives")
-                .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+                .and_then(|raw| serde_json::from_str(raw).ok())
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
         Ok(Some(Category {
-            catid: catid.to_string(),
+            catid: catid.clone(),
             name: fields.get("name").cloned().unwrap_or_default(),
             search,
             archives,
@@ -306,7 +310,7 @@ impl CategoryRepository {
 
     pub async fn list_all(&self) -> Result<Vec<Category>> {
         list_all_by_glob(&self.pool, "SET_??????????", |id| async move {
-            self.get(&id).await
+            self.get(&CategoryId(id)).await
         })
         .await
     }
@@ -316,7 +320,7 @@ impl CategoryRepository {
         let mut conn = self.pool.get().await?;
         let archives_json =
             serde_json::to_string(&category.archives).map_err(|e| RepositoryError::Json {
-                key: category.catid.clone(),
+                key: category.catid.to_string(),
                 field: "archives",
                 source: e,
             })?;
@@ -329,13 +333,13 @@ impl CategoryRepository {
                 if category.pinned { "1" } else { "0" }.to_string(),
             ),
         ];
-        let _: () = conn.hset_multiple(&category.catid, &fields).await?;
+        let _: () = conn.hset_multiple(category.catid.as_str(), &fields).await?;
         Ok(())
     }
 
-    pub async fn delete(&self, catid: &str) -> Result<()> {
+    pub async fn delete(&self, catid: &CategoryId) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let _: () = conn.del(catid).await?;
+        let _: () = conn.del(catid.as_str()).await?;
         Ok(())
     }
 }
@@ -358,15 +362,15 @@ impl GroupingRepository {
         Self { pool }
     }
 
-    pub async fn get(&self, tankid: &str) -> Result<Option<Grouping>> {
+    pub async fn get(&self, tankid: &TankId) -> Result<Option<Grouping>> {
         let mut conn = self.pool.get().await?;
-        let exists: bool = conn.exists(tankid).await?;
+        let exists: bool = conn.exists(tankid.as_str()).await?;
         if !exists {
             return Ok(None);
         }
 
         let metadata_members: Vec<String> = conn
-            .zrangebyscore(tankid, SCORE_PROGRESS, SCORE_NAME)
+            .zrangebyscore(tankid.as_str(), SCORE_PROGRESS, SCORE_NAME)
             .await?;
         let mut name = String::new();
         let mut summary = String::new();
@@ -384,10 +388,11 @@ impl GroupingRepository {
             }
         }
 
-        let archives: Vec<String> = conn.zrangebyscore(tankid, 1, "+inf").await?;
+        let archive_strs: Vec<String> = conn.zrangebyscore(tankid.as_str(), 1, "+inf").await?;
+        let archives: Vec<ArchiveId> = archive_strs.into_iter().map(ArchiveId).collect();
 
         Ok(Some(Grouping {
-            tankid: tankid.to_string(),
+            tankid: tankid.clone(),
             name,
             summary,
             tags,
@@ -398,7 +403,7 @@ impl GroupingRepository {
 
     pub async fn list_all(&self) -> Result<Vec<Grouping>> {
         list_all_by_glob(&self.pool, "TANK_??????????", |id| async move {
-            self.get(&id).await
+            self.get(&TankId(id)).await
         })
         .await
     }
@@ -408,7 +413,7 @@ impl GroupingRepository {
     /// service that also maintains `LRR_TANKGROUPED`/`LRR_TITLES` (lanrurugi-search).
     pub async fn save(&self, grouping: &Grouping) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let _: () = conn.del(&grouping.tankid).await?;
+        let _: () = conn.del(grouping.tankid.as_str()).await?;
 
         let mut members: Vec<(isize, String)> = vec![
             (SCORE_NAME, format!("name_{}", grouping.name)),
@@ -417,17 +422,19 @@ impl GroupingRepository {
             (SCORE_PROGRESS, format!("progress_{}", grouping.progress)),
         ];
         for (i, archive_id) in grouping.archives.iter().enumerate() {
-            members.push(((i + 1) as isize, archive_id.clone()));
+            members.push(((i + 1) as isize, archive_id.to_string()));
         }
         // deadpool-redis's ZADD takes (score, member) pairs.
         let zadd_args: Vec<(isize, String)> = members;
-        let _: () = conn.zadd_multiple(&grouping.tankid, &zadd_args).await?;
+        let _: () = conn
+            .zadd_multiple(grouping.tankid.as_str(), &zadd_args)
+            .await?;
         Ok(())
     }
 
-    pub async fn delete(&self, tankid: &str) -> Result<()> {
+    pub async fn delete(&self, tankid: &TankId) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let _: () = conn.del(tankid).await?;
+        let _: () = conn.del(tankid.as_str()).await?;
         Ok(())
     }
 }
@@ -443,18 +450,19 @@ impl StampRepository {
         Self { pool }
     }
 
-    pub async fn get(&self, stamp_id: &str) -> Result<Option<Stamp>> {
+    pub async fn get(&self, stamp_id: &StampId) -> Result<Option<Stamp>> {
         let mut conn = self.pool.get().await?;
-        let exists: bool = conn.exists(stamp_id).await?;
+        let exists: bool = conn.exists(stamp_id.as_str()).await?;
         if !exists {
             return Ok(None);
         }
-        let fields: std::collections::HashMap<String, String> = conn.hgetall(stamp_id).await?;
+        let fields: std::collections::HashMap<String, String> =
+            conn.hgetall(stamp_id.as_str()).await?;
         Ok(Some(Stamp {
-            stamp_id: stamp_id.to_string(),
+            stamp_id: stamp_id.clone(),
             content: fields.get("content").cloned().unwrap_or_default(),
             position: fields.get("position").cloned().unwrap_or_default(),
-            archive_id: fields.get("archive_id").cloned().unwrap_or_default(),
+            archive_id: ArchiveId(fields.get("archive_id").cloned().unwrap_or_default()),
             icon: fields.get("icon").cloned().unwrap_or_default(),
             rect: fields.get("rect").cloned().unwrap_or_default(),
         }))
@@ -469,11 +477,11 @@ impl StampRepository {
         let fields: Vec<(&str, &str)> = vec![
             ("content", &stamp.content),
             ("position", &stamp.position),
-            ("archive_id", &stamp.archive_id),
+            ("archive_id", stamp.archive_id.as_str()),
             ("icon", &stamp.icon),
             ("rect", &stamp.rect),
         ];
-        let _: () = conn.hset_multiple(&stamp.stamp_id, &fields).await?;
+        let _: () = conn.hset_multiple(stamp.stamp_id.as_str(), &fields).await?;
         Ok(())
     }
 
@@ -482,28 +490,28 @@ impl StampRepository {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
-        archive_id: &str,
+        archive_id: &ArchiveId,
         page: u32,
         content: &str,
         position: &str,
         icon: &str,
         rect: &str,
         now_millis: u64,
-    ) -> Result<String> {
+    ) -> Result<StampId> {
         let mut conn = self.pool.get().await?;
-        let stamp_id = format!("STAMPS_{page}_{now_millis}");
+        let stamp_id = StampId(format!("STAMPS_{page}_{now_millis}"));
 
         let fields: Vec<(&str, &str)> = vec![
             ("content", content),
             ("position", position),
-            ("archive_id", archive_id),
+            ("archive_id", archive_id.as_str()),
             ("icon", icon),
             ("rect", rect),
         ];
-        let _: () = conn.hset_multiple(&stamp_id, &fields).await?;
+        let _: () = conn.hset_multiple(stamp_id.as_str(), &fields).await?;
 
-        let existing: Option<String> = conn.hget(archive_id, "stamps").await?;
-        let mut stamps: Vec<String> = existing
+        let existing: Option<String> = conn.hget(archive_id.as_str(), "stamps").await?;
+        let mut stamps: Vec<StampId> = existing
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
         stamps.push(stamp_id.clone());
@@ -512,14 +520,16 @@ impl StampRepository {
             field: "stamps",
             source: e,
         })?;
-        let _: () = conn.hset(archive_id, "stamps", stamps_json).await?;
+        let _: () = conn
+            .hset(archive_id.as_str(), "stamps", stamps_json)
+            .await?;
 
         Ok(stamp_id)
     }
 
     pub async fn update(
         &self,
-        stamp_id: &str,
+        stamp_id: &StampId,
         content: Option<&str>,
         position: Option<&str>,
         icon: Option<&str>,
@@ -527,26 +537,26 @@ impl StampRepository {
     ) -> Result<()> {
         let mut conn = self.pool.get().await?;
         if let Some(content) = content {
-            let _: () = conn.hset(stamp_id, "content", content).await?;
+            let _: () = conn.hset(stamp_id.as_str(), "content", content).await?;
         }
         if let Some(position) = position {
-            let _: () = conn.hset(stamp_id, "position", position).await?;
+            let _: () = conn.hset(stamp_id.as_str(), "position", position).await?;
         }
         if let Some(icon) = icon {
-            let _: () = conn.hset(stamp_id, "icon", icon).await?;
+            let _: () = conn.hset(stamp_id.as_str(), "icon", icon).await?;
         }
         if let Some(rect) = rect {
-            let _: () = conn.hset(stamp_id, "rect", rect).await?;
+            let _: () = conn.hset(stamp_id.as_str(), "rect", rect).await?;
         }
         Ok(())
     }
 
-    pub async fn delete(&self, stamp_id: &str) -> Result<()> {
+    pub async fn delete(&self, stamp_id: &StampId) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let archive_id: Option<String> = conn.hget(stamp_id, "archive_id").await?;
+        let archive_id: Option<String> = conn.hget(stamp_id.as_str(), "archive_id").await?;
         if let Some(archive_id) = archive_id {
             let existing: Option<String> = conn.hget(&archive_id, "stamps").await?;
-            let mut stamps: Vec<String> = existing
+            let mut stamps: Vec<StampId> = existing
                 .and_then(|raw| serde_json::from_str(&raw).ok())
                 .unwrap_or_default();
             stamps.retain(|s| s != stamp_id);
@@ -554,7 +564,7 @@ impl StampRepository {
                 let _: () = conn.hset(&archive_id, "stamps", stamps_json).await?;
             }
         }
-        let _: () = conn.del(stamp_id).await?;
+        let _: () = conn.del(stamp_id.as_str()).await?;
         Ok(())
     }
 }
@@ -580,7 +590,7 @@ mod tests {
             return;
         };
         let repo = ArchiveRepository::new(pool);
-        let id = "a".repeat(40);
+        let id = ArchiveId("a".repeat(40));
         let archive = Archive {
             id: id.clone(),
             name: "some manga v1".to_string(),
@@ -618,14 +628,18 @@ mod tests {
             return;
         };
         let repo = GroupingRepository::new(pool);
-        let tankid = "TANK_1700000000".to_string();
+        let tankid = TankId("TANK_1700000000".to_string());
         let grouping = Grouping {
             tankid: tankid.clone(),
             name: "My Series".to_string(),
             summary: "series summary".to_string(),
             tags: "series:my series".to_string(),
             progress: 42,
-            archives: vec!["b".repeat(40), "c".repeat(40), "d".repeat(40)],
+            archives: vec![
+                ArchiveId("b".repeat(40)),
+                ArchiveId("c".repeat(40)),
+                ArchiveId("d".repeat(40)),
+            ],
         };
 
         repo.save(&grouping).await.unwrap();
@@ -643,18 +657,18 @@ mod tests {
             return;
         };
         let repo = CategoryRepository::new(pool);
-        let catid = "SET_1700000001".to_string();
+        let catid = CategoryId("SET_1700000001".to_string());
         let category = Category {
             catid: catid.clone(),
             name: "Favorites".to_string(),
             search: None,
-            archives: vec!["e".repeat(40)],
+            archives: vec![ArchiveId("e".repeat(40))],
             pinned: true,
         };
         repo.save(&category).await.unwrap();
         assert_eq!(repo.get(&catid).await.unwrap().unwrap(), category);
 
-        let dyn_catid = "SET_1700000002".to_string();
+        let dyn_catid = CategoryId("SET_1700000002".to_string());
         let dynamic = Category {
             catid: dyn_catid.clone(),
             name: "Recently added".to_string(),
@@ -680,7 +694,7 @@ mod tests {
         let archive_repo = ArchiveRepository::new(pool.clone());
         let stamp_repo = StampRepository::new(pool);
 
-        let archive_id = "f".repeat(40);
+        let archive_id = ArchiveId("f".repeat(40));
         let archive = Archive {
             id: archive_id.clone(),
             name: "n".to_string(),
@@ -713,7 +727,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(stamp_id, format!("STAMPS_3_1700000000000"));
+        assert_eq!(stamp_id.as_str(), "STAMPS_3_1700000000000");
 
         let fetched = stamp_repo.get(&stamp_id).await.unwrap().unwrap();
         assert_eq!(fetched.content, "hello");

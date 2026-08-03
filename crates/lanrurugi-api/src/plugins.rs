@@ -724,7 +724,12 @@ async fn get_other_archive_tags(state: &AppState, plugin: &str, arg: Option<&str
     let Some(other_id) = arg.and_then(extract_archive_id) else {
         return Value::Null;
     };
-    match state.repos.archives.get(&other_id).await {
+    match state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(other_id))
+        .await
+    {
         Ok(Some(archive)) => json!(archive.tags),
         _ => Value::Null,
     }
@@ -829,7 +834,12 @@ async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) 
         ) else {
             continue;
         };
-        if let Ok(Some(mut archive)) = state.repos.archives.get(id).await {
+        if let Ok(Some(mut archive)) = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
+            .await
+        {
             archive.tags = tags.to_string();
             let _ = state.repos.archives.save(&archive).await;
         }
@@ -891,7 +901,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
         ) else {
             continue;
         };
-        let mut catid = format!("SET_{next_candidate}");
+        let mut catid = lanrurugi_core::ids::CategoryId(format!("SET_{next_candidate}"));
         while state
             .repos
             .categories
@@ -902,7 +912,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
             .is_some()
         {
             next_candidate += 1;
-            catid = format!("SET_{next_candidate}");
+            catid = lanrurugi_core::ids::CategoryId(format!("SET_{next_candidate}"));
         }
         next_candidate += 1;
 
@@ -913,7 +923,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
             archives: archive_ids
                 .iter()
                 .filter_map(Value::as_str)
-                .map(String::from)
+                .map(|s| lanrurugi_core::ids::ArchiveId(s.to_string()))
                 .collect(),
             pinned: false,
         };
@@ -991,7 +1001,13 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         // plugin in this same run may have just updated `title`/`tags` — the next plugin should
         // see that plugin's own output as its "existing" state, matching legacy's own sequential
         // `set_tags(..., append=1)` behavior across `exec_enabled_plugins_on_file`'s loop.
-        let archive = state.repos.archives.get(archive_id).await.ok().flatten();
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+            .await
+            .ok()
+            .flatten();
         let file_path = archive.as_ref().map(|a| a.file.clone());
         let file_modified_time = file_path.as_deref().and_then(|p| {
             std::fs::metadata(p)
@@ -1033,7 +1049,12 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             continue;
         }
 
-        let Ok(Some(mut archive)) = state.repos.archives.get(archive_id).await else {
+        let Ok(Some(mut archive)) = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+            .await
+        else {
             summary.failures += 1;
             continue;
         };
@@ -1147,7 +1168,13 @@ async fn use_plugin_sync(
     // (confirmed live: every one of those plugins crashed with "Cannot read properties of
     // undefined" whenever called without an explicit `arg`, including every auto-run invocation).
     let queried_archive = match &params.id {
-        Some(id) => state.repos.archives.get(id).await.ok().flatten(),
+        Some(id) => state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+            .await
+            .ok()
+            .flatten(),
         None => None,
     };
     let file_path = queried_archive.as_ref().map(|a| a.file.clone());
@@ -1251,7 +1278,12 @@ async fn use_plugin_async(
             }
         };
         let file_path = match &archive_id {
-            Some(id) => archives.get(id).await.ok().flatten().map(|a| a.file),
+            Some(id) => archives
+                .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+                .await
+                .ok()
+                .flatten()
+                .map(|a| a.file),
             None => None,
         };
         let method = plugin_method(&info.kind);

@@ -70,7 +70,7 @@ pub struct TocJson {
 impl From<&Archive> for ArchiveMetadataJson {
     fn from(a: &Archive) -> Self {
         Self {
-            arcid: a.id.clone(),
+            arcid: a.id.to_string(),
             title: a.title.clone(),
             filename: a.name.clone(),
             tags: a.tags.clone(),
@@ -151,7 +151,7 @@ async fn untagged_archives(State(state): State<AppState>) -> Response {
             let untagged: Vec<String> = archives
                 .into_iter()
                 .filter(|a| !has_meaningful_tags(&a.tags))
-                .map(|a| a.id)
+                .map(|a| a.id.into_string())
                 .collect();
             axum::Json(untagged).into_response()
         }
@@ -194,8 +194,11 @@ fn has_meaningful_tags(tags: &str) -> bool {
 /// Tankoubon's own metadata could never be fetched by ID at all (only ever seen indirectly via a
 /// search result already containing one). This is the same latent bug the search endpoints had,
 /// just on a different endpoint.
-async fn get_archive_metadata(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match crate::search::resolve_search_entry(&state, &id).await {
+async fn get_archive_metadata(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
+    match crate::search::resolve_search_entry(&state, id.as_str()).await {
         Some(json) => axum::Json(json).into_response(),
         None => not_found("get_archive_metadata", format!("{id} does not exist.")),
     }
@@ -203,11 +206,17 @@ async fn get_archive_metadata(State(state): State<AppState>, Path(id): Path<Stri
 
 /// `GET /archives/{id}` — deprecated alias of `/archives/{id}/metadata` (verified: both map to
 /// `api-archive#serve_metadata` in the legacy router).
-async fn get_archive_deprecated(state: State<AppState>, path: Path<String>) -> Response {
+async fn get_archive_deprecated(
+    state: State<AppState>,
+    path: Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     get_archive_metadata(state, path).await
 }
 
-async fn delete_archive(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_archive(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("delete_archive", format!("{id} does not exist.")),
@@ -263,7 +272,7 @@ async fn delete_archive(State(state): State<AppState>, Path(id): Path<String>) -
                     .join(format!("{id}.{}", format.extension()));
                 let _ = tokio::fs::remove_file(&thumb_path).await;
             }
-            let pages_dir = state.library.thumb_dir.join(shard).join(&id);
+            let pages_dir = state.library.thumb_dir.join(shard).join(id.as_str());
             let _ = tokio::fs::remove_dir_all(&pages_dir).await;
             axum::Json(json!({
                 "operation": "delete_archive",
@@ -281,7 +290,10 @@ async fn delete_archive(State(state): State<AppState>, Path(id): Path<String>) -
     }
 }
 
-async fn get_archive_categories(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_archive_categories(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     match state.repos.categories.list_all().await {
         Ok(categories) => {
             let matching: Vec<_> = categories
@@ -312,13 +324,16 @@ async fn get_archive_categories(State(state): State<AppState>, Path(id): Path<St
     }
 }
 
-async fn get_archive_tankoubons(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_archive_tankoubons(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     match state.repos.groupings.list_all().await {
         Ok(groupings) => {
             let ids: Vec<String> = groupings
                 .into_iter()
                 .filter(|g| g.archives.contains(&id))
-                .map(|g| g.tankid)
+                .map(|g| g.tankid.into_string())
                 .collect();
             axum::Json(json!({
                 "operation": "find_arc_tankoubons",
@@ -358,7 +373,7 @@ pub struct TocParams {
 
 async fn add_toc_entry(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<TocParams>,
 ) -> Response {
     let Some(title) = params.title else {
@@ -413,7 +428,7 @@ pub struct TocDeleteParams {
 
 async fn remove_toc_entry(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<TocDeleteParams>,
 ) -> Response {
     let mut archive = match state.repos.archives.get(&id).await {
@@ -444,7 +459,10 @@ async fn remove_toc_entry(
     }
 }
 
-async fn download_archive(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn download_archive(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("download_archive", "No archive ID specified."),
@@ -496,21 +514,23 @@ pub struct GetThumbnailParams {
 
 async fn get_archive_thumbnail(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<GetThumbnailParams>,
 ) -> Response {
     // Archive IDs are always a 40-char lowercase-hex SHA-1 digest (`lanrurugi_storage::id`) —
     // enforcing that shape here, before `id` ever reaches a path-join, closes a path-traversal
     // hole: without it, an `id` containing `/` or `..` (e.g. `../../../../etc/passwd`) would let
     // a caller read arbitrary `.jpg`/`.webp` files elsewhere on the host.
-    if !is_valid_archive_id(&id) {
+    if !is_valid_archive_id(id.as_str()) {
         return not_found("serve_thumbnail", "No archive ID specified.");
     }
     let page = params.page.unwrap_or(0);
-    if let Some((content_type, bytes)) = read_thumbnail_from_disk(&state, &id, page).await {
+    if let Some((content_type, bytes)) = read_thumbnail_from_disk(&state, id.as_str(), page).await {
         return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
     }
-    if let Some((content_type, bytes)) = regenerate_thumbnail_on_demand(&state, &id, page).await {
+    if let Some((content_type, bytes)) =
+        regenerate_thumbnail_on_demand(&state, id.as_str(), page).await
+    {
         return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
     }
     ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response()
@@ -565,7 +585,13 @@ async fn regenerate_thumbnail_on_demand(
     id: &str,
     page: u32,
 ) -> Option<(&'static str, bytes::Bytes)> {
-    let archive = state.repos.archives.get(id).await.ok().flatten()?;
+    let archive = state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
+        .await
+        .ok()
+        .flatten()?;
 
     state
         .thumbnail_singleflight
@@ -617,7 +643,7 @@ pub struct UpdateThumbnailParams {
 /// intentionally leaves the existing `thumbhash` untouched rather than hashing the wrong page).
 async fn update_thumbnail(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<UpdateThumbnailParams>,
 ) -> Response {
     if !is_valid_archive_id(&id) {
@@ -676,15 +702,21 @@ async fn update_thumbnail(
     }
 }
 
-async fn set_new_flag(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn set_new_flag(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     set_isnew(&state, &id, true).await
 }
 
-async fn clear_new_flag(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn clear_new_flag(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     set_isnew(&state, &id, false).await
 }
 
-async fn set_isnew(state: &AppState, id: &str, isnew: bool) -> Response {
+async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew: bool) -> Response {
     let operation = if isnew { "add_new" } else { "clear_new" };
     let mut archive = match state.repos.archives.get(id).await {
         Ok(Some(a)) => a,
@@ -695,7 +727,8 @@ async fn set_isnew(state: &AppState, id: &str, isnew: bool) -> Response {
     match state.repos.archives.save(&archive).await {
         Ok(()) => {
             if let Err(e) =
-                lanrurugi_search::indexer::set_isnew_index(&state.redis.search, id, isnew).await
+                lanrurugi_search::indexer::set_isnew_index(&state.redis.search, id.as_str(), isnew)
+                    .await
             {
                 tracing::warn!(%id, error = %e, "failed to update isnew search index");
             }
@@ -707,7 +740,7 @@ async fn set_isnew(state: &AppState, id: &str, isnew: bool) -> Response {
 
 async fn update_progress(
     State(state): State<AppState>,
-    Path((id, page)): Path<(String, u32)>,
+    Path((id, page)): Path<(lanrurugi_core::ids::ArchiveId, u32)>,
 ) -> Response {
     if state.repos.archives.get(&id).await.ok().flatten().is_none() {
         return not_found("update_progress", format!("{id} does not exist."));
@@ -878,7 +911,7 @@ pub struct UpdateMetadataParams {
 /// `set_tags`/`set_summary`'s side effects (`Utils/Database.pm`).
 async fn update_archive_metadata(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<UpdateMetadataParams>,
 ) -> Response {
     let mut archive = match state.repos.archives.get(&id).await {
@@ -991,7 +1024,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// *different* pages at once would launch unbounded concurrent rescans of the same archive file.
 async fn get_page(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageParams>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
@@ -1006,20 +1039,19 @@ async fn get_page(
         }
     };
 
-    let result =
-        state
-            .page_singleflight
-            .run((id.clone(), params.path.clone()), {
-                let state = state.clone();
-                let id = id.clone();
-                let path = params.path.clone();
-                let archive_file = archive.file.clone();
-                let corrupted_pages = archive.corrupted_pages.clone();
-                move || async move {
-                    fetch_page(&state, &id, &path, &archive_file, &corrupted_pages).await
-                }
-            })
-            .await;
+    let result = state
+        .page_singleflight
+        .run((id.to_string(), params.path.clone()), {
+            let state = state.clone();
+            let id = id.clone();
+            let path = params.path.clone();
+            let archive_file = archive.file.clone();
+            let corrupted_pages = archive.corrupted_pages.clone();
+            move || async move {
+                fetch_page(&state, id.as_str(), &path, &archive_file, &corrupted_pages).await
+            }
+        })
+        .await;
 
     match result {
         Ok((content_type, bytes)) => {
@@ -1107,7 +1139,10 @@ async fn fetch_page(
 /// LANrurugi extracts pages on demand rather than pre-extracting to a cache directory, there's no
 /// separate background "extract" job to report here (`job` is always `0`) — pages are simply
 /// available immediately via `/archives/{id}/page`.
-async fn get_files(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_files(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("get_file_list", format!("{id} does not exist.")),
@@ -1155,7 +1190,7 @@ pub struct PageDimensionsParams {
 /// endpoint at all.
 async fn get_page_dimensions(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageDimensionsParams>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
@@ -1208,7 +1243,7 @@ async fn get_page_dimensions(
 /// LANrurugi's on-demand page serving doesn't need).
 async fn generate_page_thumbnails(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -1251,11 +1286,12 @@ async fn generate_page_thumbnails(
     // the common case (no corrupt pages found) never touches the archive record at all.
     let mut newly_corrupted: Vec<String> = Vec::new();
     for (i, entry_name) in pages.iter().enumerate() {
-        let output = state.library.thumb_dir.join(shard).join(&id).join(format!(
-            "{}.{}",
-            i + 1,
-            thumb_settings.format.extension()
-        ));
+        let output = state
+            .library
+            .thumb_dir
+            .join(shard)
+            .join(id.as_str())
+            .join(format!("{}.{}", i + 1, thumb_settings.format.extension()));
         if output.exists() {
             continue;
         }

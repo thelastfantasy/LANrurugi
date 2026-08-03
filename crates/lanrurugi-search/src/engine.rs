@@ -99,7 +99,8 @@ pub async fn search(
         if let Some(predicate) = &category.search {
             tokens.extend(compute_search_filter(predicate));
         } else {
-            let cat_set: HashSet<String> = category.archives.iter().cloned().collect();
+            let cat_set: HashSet<String> =
+                category.archives.iter().map(|a| a.to_string()).collect();
             filtered.retain(|id| cat_set.contains(id));
         }
     }

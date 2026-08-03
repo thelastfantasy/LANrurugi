@@ -14,13 +14,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ids::{ArchiveId, CategoryId, StampId, TankId};
+
 /// A single trackable manga/comic work. Redis hash keyed directly by `id` (40 hex chars).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Archive {
     /// Primary key: either the legacy `SHA-1(first 512000 bytes)` or the new size-aware
     /// `SHA-1(first 512000 bytes ++ u64 BE file size)`. Both forms coexist (Principle I); which
     /// algorithm produced a given ID is not itself stored.
-    pub id: String,
+    pub id: ArchiveId,
     /// Original filename (without extension), decoded. Legacy field `name`.
     pub name: String,
     /// User- or plugin-set display title. Falls back to `name` if blank (legacy `build_json`
@@ -46,7 +48,7 @@ pub struct Archive {
     /// Table of contents: page -> chapter name.
     pub toc: Vec<TocEntry>,
     /// IDs of `Stamp`s attached to this archive (legacy `stamps` field, JSON array of stamp keys).
-    pub stamp_ids: Vec<String>,
+    pub stamp_ids: Vec<StampId>,
     /// Unix timestamp of the last time an automatic `pagecount`/`arcsize` heal attempt
     /// (`lanrurugi_scanner::full_scan::heal_pagecounts`) failed for this archive — `None` means
     /// either never attempted or the most recent attempt succeeded. Prevents the heal scan from
@@ -89,12 +91,12 @@ pub struct TocEntry {
 /// A saved grouping of archives. Redis hash keyed by `SET_<10-digit-unix-timestamp>` (14 chars).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Category {
-    pub catid: String,
+    pub catid: CategoryId,
     pub name: String,
     /// If present, this is a dynamic/saved-search category (`archives` is not authoritative).
     pub search: Option<String>,
     /// Only meaningful for static categories (`search.is_none()`).
-    pub archives: Vec<String>,
+    pub archives: Vec<ArchiveId>,
     pub pinned: bool,
 }
 
@@ -108,7 +110,7 @@ impl Category {
 /// see module docs for the packed-metadata layout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Grouping {
-    pub tankid: String,
+    pub tankid: TankId,
     pub name: String,
     pub summary: String,
     pub tags: String,
@@ -116,17 +118,17 @@ pub struct Grouping {
     /// legacy `translate_global_page`) — distinct from any single archive's `lastreadpage`.
     pub progress: u32,
     /// Ordered archive IDs (order is significant: volume order).
-    pub archives: Vec<String>,
+    pub archives: Vec<ArchiveId>,
 }
 
 /// A user-placed annotation ("stamp") on a specific page of an archive. Redis hash keyed by
 /// `STAMPS_<page>_<millisecond-timestamp>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stamp {
-    pub stamp_id: String,
+    pub stamp_id: StampId,
     pub content: String,
     pub position: String,
-    pub archive_id: String,
+    pub archive_id: ArchiveId,
     /// User-picked icon shown in place of the default marker pin — either a literal emoji
     /// character, or a Font Awesome class name prefixed `fa:` (e.g. `fa:fa-heart`, disambiguating
     /// it from a literal emoji string at render time). Empty string (the zero value, so every

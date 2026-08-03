@@ -15,6 +15,7 @@
 use std::path::Path;
 
 use lanrurugi_core::concurrency::parallel_map;
+use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_core::jobs::JobRegistry;
 
 use crate::id::size_aware_id;
@@ -25,7 +26,7 @@ use crate::repository::{
 #[derive(Debug, Clone, Default)]
 pub struct RekeySummary {
     pub unchanged: usize,
-    pub rekeyed: Vec<(String, String)>,
+    pub rekeyed: Vec<(ArchiveId, ArchiveId)>,
     pub missing_file: usize,
     /// The archive was deleted (e.g. by a concurrent user action) between this pass listing it
     /// and attempting to rename it — not an error, just a record that's no longer there to fix.
@@ -63,6 +64,7 @@ pub async fn rekey_all(
             summary.missing_file += 1;
             continue;
         };
+        let new_id = ArchiveId(new_id);
         if new_id == archive.id {
             summary.unchanged += 1;
             continue;
@@ -93,18 +95,18 @@ pub async fn rekey_all(
 async fn update_references(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
-    old_id: &str,
-    new_id: &str,
+    old_id: &ArchiveId,
+    new_id: &ArchiveId,
 ) -> Result<(), RepositoryError> {
     for mut category in categories.list_all().await? {
         if let Some(pos) = category.archives.iter().position(|id| id == old_id) {
-            category.archives[pos] = new_id.to_string();
+            category.archives[pos] = new_id.clone();
             categories.save(&category).await?;
         }
     }
     for mut grouping in groupings.list_all().await? {
         if let Some(pos) = grouping.archives.iter().position(|id| id == old_id) {
-            grouping.archives[pos] = new_id.to_string();
+            grouping.archives[pos] = new_id.clone();
             groupings.save(&grouping).await?;
         }
     }
@@ -138,8 +140,8 @@ mod tests {
         std::fs::write(&path, b"some archive content for rebuild test").unwrap();
 
         // Simulate a legacy-migrated record: keyed by the OLD (legacy) id, not the size-aware one.
-        let legacy_id = crate::id::legacy_id(&path).unwrap();
-        let new_id = crate::id::size_aware_id(&path).unwrap();
+        let legacy_id = ArchiveId(crate::id::legacy_id(&path).unwrap());
+        let new_id = ArchiveId(crate::id::size_aware_id(&path).unwrap());
         assert_ne!(
             legacy_id, new_id,
             "test fixture must actually change ID under rebuild"
@@ -167,7 +169,7 @@ mod tests {
             .await
             .unwrap();
 
-        let catid = "SET_1700000099".to_string();
+        let catid = lanrurugi_core::ids::CategoryId("SET_1700000099".to_string());
         categories
             .save(&Category {
                 catid: catid.clone(),
@@ -178,7 +180,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let tankid = "TANK_1700000099".to_string();
+        let tankid = lanrurugi_core::ids::TankId("TANK_1700000099".to_string());
         groupings
             .save(&Grouping {
                 tankid: tankid.clone(),

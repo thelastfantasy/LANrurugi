@@ -10,6 +10,7 @@ use axum::routing::{get, put};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::entities::Category;
+use lanrurugi_core::ids::{ArchiveId, CategoryId};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -79,7 +80,7 @@ async fn create_category(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut catid = format!("SET_{now}");
+    let mut catid = CategoryId(format!("SET_{now}"));
     // Legacy bumps the timestamp by 1s on collision until a free key is found; mirrored here.
     let mut attempt = now;
     while state
@@ -92,7 +93,7 @@ async fn create_category(
         .is_some()
     {
         attempt += 1;
-        catid = format!("SET_{attempt}");
+        catid = CategoryId(format!("SET_{attempt}"));
     }
 
     let category = Category {
@@ -172,7 +173,10 @@ async fn remove_bookmark_link(State(state): State<AppState>) -> Response {
 /// `PUT /categories/bookmark_link/{id}` — links the bookmark icon to a *static* category only
 /// (legacy rejects dynamic/search-predicate categories here: `Model::Category::update_bookmark_link`
 /// — a dynamic category has no fixed archive list to add/remove membership from).
-async fn update_bookmark_link(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn update_bookmark_link(
+    State(state): State<AppState>,
+    Path(id): Path<CategoryId>,
+) -> Response {
     match state.repos.categories.get(&id).await {
         Ok(Some(c)) if c.search.is_some() => (
             StatusCode::BAD_REQUEST,
@@ -194,7 +198,9 @@ async fn update_bookmark_link(State(state): State<AppState>, Path(id): Path<Stri
                     )
                 }
             };
-            let _: Result<(), _> = conn.hset(CONFIG_KEY, BOOKMARK_LINK_FIELD, &id).await;
+            let _: Result<(), _> = conn
+                .hset(CONFIG_KEY, BOOKMARK_LINK_FIELD, id.as_str())
+                .await;
             axum::Json(json!({
                 "operation": "update_bookmark_link",
                 "success": 1,
@@ -219,7 +225,7 @@ async fn update_bookmark_link(State(state): State<AppState>, Path(id): Path<Stri
     }
 }
 
-async fn get_category(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_category(State(state): State<AppState>, Path(id): Path<CategoryId>) -> Response {
     match state.repos.categories.get(&id).await {
         Ok(Some(c)) => axum::Json(category_json(&c)).into_response(),
         Ok(None) => not_found(
@@ -244,7 +250,7 @@ pub struct UpdateCategoryParams {
 
 async fn update_category(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<CategoryId>,
     axum::Form(params): axum::Form<UpdateCategoryParams>,
 ) -> Response {
     let mut category = match state.repos.categories.get(&id).await {
@@ -285,7 +291,7 @@ async fn update_category(
     }
 }
 
-async fn delete_category(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_category(State(state): State<AppState>, Path(id): Path<CategoryId>) -> Response {
     match state.repos.categories.delete(&id).await {
         Ok(()) => {
             axum::Json(json!({ "operation": "delete_category", "success": 1 })).into_response()
@@ -300,9 +306,9 @@ async fn delete_category(State(state): State<AppState>, Path(id): Path<String>) 
 
 async fn add_to_category(
     State(state): State<AppState>,
-    Path((id, archive)): Path<(String, String)>,
+    Path((id, archive)): Path<(CategoryId, ArchiveId)>,
 ) -> Response {
-    match add_archive_to_category(&state, &id, &archive).await {
+    match add_archive_to_category(&state, id.as_str(), archive.as_str()).await {
         Ok(()) => {
             axum::Json(json!({ "operation": "add_to_category", "success": 1 })).into_response()
         }
@@ -345,17 +351,18 @@ pub async fn add_archive_to_category(
     let mut category = state
         .repos
         .categories
-        .get(catid)
+        .get(&CategoryId(catid.to_string()))
         .await
         .map_err(|e| AddToCategoryError::Storage(e.to_string()))?
         .ok_or(AddToCategoryError::CategoryNotFound)?;
     if category.is_dynamic() {
         return Err(AddToCategoryError::Dynamic);
     }
+    let archive_id = ArchiveId(archive.to_string());
     if state
         .repos
         .archives
-        .get(archive)
+        .get(&archive_id)
         .await
         .ok()
         .flatten()
@@ -363,8 +370,8 @@ pub async fn add_archive_to_category(
     {
         return Err(AddToCategoryError::ArchiveNotFound);
     }
-    if !category.archives.contains(&archive.to_string()) {
-        category.archives.push(archive.to_string());
+    if !category.archives.contains(&archive_id) {
+        category.archives.push(archive_id);
     }
     state
         .repos
@@ -376,7 +383,7 @@ pub async fn add_archive_to_category(
 
 async fn remove_from_category(
     State(state): State<AppState>,
-    Path((id, archive)): Path<(String, String)>,
+    Path((id, archive)): Path<(CategoryId, ArchiveId)>,
 ) -> Response {
     let mut category = match state.repos.categories.get(&id).await {
         Ok(Some(c)) => c,

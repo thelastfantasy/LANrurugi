@@ -173,7 +173,7 @@ pub async fn full_scan(
             Ok(IngestOutcome::Catalogued { id }) => {
                 summary.catalogued += 1;
                 if let Some(tx) = &new_archive_tx {
-                    let _ = tx.send(id.clone());
+                    let _ = tx.send(id.to_string());
                 }
             }
             Ok(IngestOutcome::Rekeyed { .. }) => summary.rekeyed += 1,
@@ -282,7 +282,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
         if archive.heal_failed_at.is_some() {
             summary.skipped_known_failed += 1;
             summary.details.push(HealDetail {
-                archive_id: archive.id,
+                archive_id: archive.id.to_string(),
                 filename,
                 outcome: HealOutcome::SkippedKnownFailed,
             });
@@ -302,7 +302,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to save healed archive");
                     summary.failed += 1;
                     summary.details.push(HealDetail {
-                        archive_id: archive.id,
+                        archive_id: archive.id.to_string(),
                         filename,
                         outcome: HealOutcome::Failed {
                             reason: e.to_string(),
@@ -320,7 +320,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                 );
                 summary.healed += 1;
                 summary.details.push(HealDetail {
-                    archive_id: archive.id,
+                    archive_id: archive.id.to_string(),
                     filename,
                     outcome: HealOutcome::Healed {
                         old_pagecount,
@@ -344,7 +344,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                 tracing::warn!(archive_id = %archive.id, %filename, %reason, "heal_pagecounts: failed, will not retry");
                 summary.failed += 1;
                 summary.details.push(HealDetail {
-                    archive_id: archive.id,
+                    archive_id: archive.id.to_string(),
                     filename,
                     outcome: HealOutcome::Failed { reason },
                 });
@@ -424,7 +424,7 @@ mod tests {
         // metadata (tags) reflects whatever was set while the record still looked like A/B mixed.
         archives
             .save(&Archive {
-                id: legacy_id.clone(),
+                id: lanrurugi_core::ids::ArchiveId(legacy_id.clone()),
                 name: "b".into(),
                 title: "Legacy Title".into(),
                 file: path_b.to_string_lossy().to_string(),
@@ -469,7 +469,8 @@ mod tests {
         assert_eq!(rekeyed.lastreadpage, 7);
 
         // A is still completely untracked at this point — only a fresh scan discovers it.
-        let expected_id_for_a = lanrurugi_storage::id::size_aware_id(&path_a).unwrap();
+        let expected_id_for_a =
+            lanrurugi_core::ids::ArchiveId(lanrurugi_storage::id::size_aware_id(&path_a).unwrap());
         assert!(archives.get(&expected_id_for_a).await.unwrap().is_none());
 
         let scan_job_id = jobs.create("scan").await;
@@ -577,9 +578,14 @@ mod tests {
 
         // The placeholder id is untouched — proof `size_aware_id`/`ingest_file` never ran on this
         // path (a real hash would never collide with an all-zero placeholder).
-        assert!(archives.get(placeholder_id).await.unwrap().is_none());
+        assert!(archives
+            .get(&lanrurugi_core::ids::ArchiveId(placeholder_id.to_string()))
+            .await
+            .unwrap()
+            .is_none());
 
-        let real_id = lanrurugi_storage::id::size_aware_id(&path).unwrap();
+        let real_id =
+            lanrurugi_core::ids::ArchiveId(lanrurugi_storage::id::size_aware_id(&path).unwrap());
         assert!(
             archives.get(&real_id).await.unwrap().is_none(),
             "the real content hash must never have been computed or catalogued either"
@@ -652,7 +658,7 @@ mod tests {
         file: &std::path::Path,
     ) -> lanrurugi_core::entities::Archive {
         lanrurugi_core::entities::Archive {
-            id: id.to_string(),
+            id: lanrurugi_core::ids::ArchiveId(id.to_string()),
             name: "n".into(),
             title: "t".into(),
             file: file.to_string_lossy().to_string(),
@@ -682,9 +688,9 @@ mod tests {
         let path = make_zip_with_pages(dir.path(), "book.zip", 5);
         let real_size = std::fs::metadata(&path).unwrap().len();
 
-        let id = "1".repeat(40);
+        let id = lanrurugi_core::ids::ArchiveId("1".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(&id, &path))
+            .save(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 
@@ -695,7 +701,7 @@ mod tests {
         assert_eq!(summary.failed, 0);
         assert_eq!(summary.skipped_known_failed, 0);
         assert_eq!(summary.details.len(), 1);
-        assert_eq!(summary.details[0].archive_id, id);
+        assert_eq!(summary.details[0].archive_id, id.to_string());
         assert!(matches!(
             summary.details[0].outcome,
             HealOutcome::Healed {
@@ -726,9 +732,9 @@ mod tests {
         let path = dir.path().join("broken.zip");
         std::fs::write(&path, b"this is not a real zip file").unwrap();
 
-        let id = "2".repeat(40);
+        let id = lanrurugi_core::ids::ArchiveId("2".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(&id, &path))
+            .save(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 

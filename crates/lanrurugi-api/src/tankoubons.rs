@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::Router;
 use lanrurugi_core::entities::Grouping;
+use lanrurugi_core::ids::{ArchiveId, TankId};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -107,24 +108,27 @@ async fn create_or_rename_tankoubon(
         .unwrap_or(0);
 
     let (tankid, mut grouping) = match params.tankid {
-        Some(id) => match state.repos.groupings.get(&id).await {
-            Ok(Some(g)) => (id, g),
-            Ok(None) => {
-                return not_found(
-                    "create_tankoubon",
-                    format!("{id} doesn't exist in the database!"),
-                )
+        Some(id) => {
+            let id = TankId(id);
+            match state.repos.groupings.get(&id).await {
+                Ok(Some(g)) => (id, g),
+                Ok(None) => {
+                    return not_found(
+                        "create_tankoubon",
+                        format!("{id} doesn't exist in the database!"),
+                    )
+                }
+                Err(e) => {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "create_tankoubon",
+                        e.to_string(),
+                    )
+                }
             }
-            Err(e) => {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "create_tankoubon",
-                    e.to_string(),
-                )
-            }
-        },
+        }
         None => {
-            let mut candidate = format!("TANK_{now}");
+            let mut candidate = TankId(format!("TANK_{now}"));
             let mut attempt = now;
             while state
                 .repos
@@ -136,7 +140,7 @@ async fn create_or_rename_tankoubon(
                 .is_some()
             {
                 attempt += 1;
-                candidate = format!("TANK_{attempt}");
+                candidate = TankId(format!("TANK_{attempt}"));
             }
             (
                 candidate.clone(),
@@ -168,7 +172,7 @@ async fn create_or_rename_tankoubon(
     }
 }
 
-async fn get_tankoubon(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
     match state.repos.groupings.get(&id).await {
         Ok(Some(g)) => axum::Json(tankoubon_summary_json(&g)).into_response(),
         Ok(None) => not_found(
@@ -185,7 +189,7 @@ async fn get_tankoubon(State(state): State<AppState>, Path(id): Path<String>) ->
 
 async fn get_tankoubon_full(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<TankId>,
     Query(q): Query<PageParam>,
 ) -> Response {
     let grouping = match state.repos.groupings.get(&id).await {
@@ -207,7 +211,7 @@ async fn get_tankoubon_full(
 
     let total = grouping.archives.len();
     let page = q.page.unwrap_or(-1);
-    let page_ids: Vec<String> = if page < 0 {
+    let page_ids: Vec<ArchiveId> = if page < 0 {
         grouping.archives.clone()
     } else {
         let start = (page as usize) * DEFAULT_PAGE_SIZE;
@@ -259,12 +263,12 @@ fn is_valid_tankoubon_id(id: &str) -> bool {
 /// from a member archive and isn't implemented yet (belongs with User Story 2's thumbnailing).
 async fn get_tankoubon_thumbnail(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<TankId>,
 ) -> Response {
     // See `is_valid_tankoubon_id`'s docs: this endpoint (like `archives::get_archive_thumbnail`)
     // builds a filesystem path directly from `id` without a repository lookup first, so an
     // unvalidated value containing `/` or `..` would otherwise escape `thumb_dir`.
-    if !is_valid_tankoubon_id(&id) {
+    if !is_valid_tankoubon_id(id.as_str()) {
         return ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response();
     }
     for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
@@ -282,7 +286,7 @@ async fn get_tankoubon_thumbnail(
 
 async fn update_tankoubon_progress(
     State(state): State<AppState>,
-    Path((id, page)): Path<(String, u32)>,
+    Path((id, page)): Path<(TankId, u32)>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
         Ok(Some(g)) => g,
@@ -324,7 +328,7 @@ async fn update_tankoubon_progress(
 
 async fn update_tankoubon(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<TankId>,
     axum::Json(body): axum::Json<UpdateTankoubonBody>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
@@ -360,7 +364,7 @@ async fn update_tankoubon(
         }
     }
     if let Some(archives) = body.archives {
-        grouping.archives = archives;
+        grouping.archives = archives.into_iter().map(ArchiveId).collect();
     }
 
     match state.repos.groupings.save(&grouping).await {
@@ -389,7 +393,7 @@ pub struct UpdateTankoubonMetadata {
     append: Option<bool>,
 }
 
-async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
     match state.repos.groupings.delete(&id).await {
         Ok(()) => {
             axum::Json(json!({ "operation": "delete_tankoubon", "success": 1 })).into_response()
@@ -404,7 +408,7 @@ async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<String>)
 
 async fn add_to_tankoubon(
     State(state): State<AppState>,
-    Path((id, archive)): Path<(String, String)>,
+    Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
         Ok(Some(g)) => g,
@@ -454,7 +458,7 @@ async fn add_to_tankoubon(
 
 async fn remove_from_tankoubon(
     State(state): State<AppState>,
-    Path((id, archive)): Path<(String, String)>,
+    Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
         Ok(Some(g)) => g,

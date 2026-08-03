@@ -71,7 +71,7 @@ async fn scan_duplicates(
 
         let thumbhashes: HashMap<String, String> = archives
             .into_iter()
-            .filter_map(|a| a.thumbhash.map(|h| (a.id, h)))
+            .filter_map(|a| a.thumbhash.map(|h| (a.id.into_string(), h)))
             .collect();
         let groups = group_by_hamming_distance(&thumbhashes, threshold);
 
@@ -174,7 +174,12 @@ async fn get_duplicates(State(state): State<AppState>) -> Response {
         let mut surviving = Vec::new();
         let mut archives = Vec::new();
         for id in &ids {
-            match state.repos.archives.get(id).await {
+            match state
+                .repos
+                .archives
+                .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+                .await
+            {
                 Ok(Some(archive)) => {
                     surviving.push(id.clone());
                     archives.push(json!({

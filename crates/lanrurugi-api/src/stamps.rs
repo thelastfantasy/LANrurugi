@@ -12,6 +12,8 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use lanrurugi_core::ids::{ArchiveId, StampId};
+
 use crate::common::{error, not_found};
 use crate::AppState;
 
@@ -38,7 +40,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// `GET /archives/{id}/stamps` — pages that have at least one stamp (legacy `get_stamped_pages`).
-async fn stamped_pages(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn stamped_pages(State(state): State<AppState>, Path(id): Path<ArchiveId>) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -59,7 +61,7 @@ async fn stamped_pages(State(state): State<AppState>, Path(id): Path<String>) ->
 
     let mut pages = std::collections::BTreeSet::new();
     for stamp_id in &archive.stamp_ids {
-        if let Some(page) = page_of(stamp_id) {
+        if let Some(page) = page_of(stamp_id.as_str()) {
             pages.insert(page);
         }
     }
@@ -76,7 +78,7 @@ fn page_of(stamp_id: &str) -> Option<u32> {
 
 async fn stamps_by_page(
     State(state): State<AppState>,
-    Path((id, index)): Path<(String, u32)>,
+    Path((id, index)): Path<(ArchiveId, u32)>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -98,12 +100,12 @@ async fn stamps_by_page(
 
     let mut result = Vec::new();
     for stamp_id in &archive.stamp_ids {
-        if page_of(stamp_id) != Some(index) {
+        if page_of(stamp_id.as_str()) != Some(index) {
             continue;
         }
         if let Ok(Some(s)) = state.repos.stamps.get(stamp_id).await {
             result.push(StampJson {
-                id: s.stamp_id,
+                id: s.stamp_id.into_string(),
                 position: s.position,
                 content: s.content,
                 icon: s.icon,
@@ -124,7 +126,7 @@ pub struct StampParams {
 
 async fn add_stamp(
     State(state): State<AppState>,
-    Path((id, index)): Path<(String, u32)>,
+    Path((id, index)): Path<(ArchiveId, u32)>,
     Query(params): Query<StampParams>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
@@ -185,10 +187,10 @@ async fn add_stamp(
     }
 }
 
-async fn get_stamp(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_stamp(State(state): State<AppState>, Path(id): Path<StampId>) -> Response {
     match state.repos.stamps.get(&id).await {
         Ok(Some(s)) => axum::Json(StampJson {
-            id: s.stamp_id,
+            id: s.stamp_id.into_string(),
             position: s.position,
             content: s.content,
             icon: s.icon,
@@ -206,7 +208,7 @@ async fn get_stamp(State(state): State<AppState>, Path(id): Path<String>) -> Res
 
 async fn update_stamp(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<StampId>,
     Query(params): Query<StampParams>,
 ) -> Response {
     match state
@@ -230,7 +232,7 @@ async fn update_stamp(
     }
 }
 
-async fn delete_stamp(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_stamp(State(state): State<AppState>, Path(id): Path<StampId>) -> Response {
     match state.repos.stamps.delete(&id).await {
         Ok(()) => axum::Json(json!({ "operation": "delete_stamp", "success": 1 })).into_response(),
         Err(e) => error(

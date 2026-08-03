@@ -47,7 +47,7 @@ pub async fn run(jobs: JobRegistry, job_id: String, archives: ArchiveRepository)
             buckets
                 .entry(hash)
                 .or_default()
-                .push((archive.id.clone(), PathBuf::from(&archive.file)));
+                .push((archive.id.to_string(), PathBuf::from(&archive.file)));
         }
         jobs.set_progress(&job_id, (i + 1) as f32 / total as f32)
             .await;
@@ -115,8 +115,9 @@ mod tests {
         std::fs::write(&path_b, &shared_prefix).unwrap();
 
         use lanrurugi_core::entities::Archive;
+        use lanrurugi_core::ids::ArchiveId;
         let mk = |id: &str, file: &std::path::Path| Archive {
-            id: id.to_string(),
+            id: ArchiveId(id.to_string()),
             name: "n".into(),
             title: "t".into(),
             file: file.to_string_lossy().to_string(),
@@ -133,10 +134,10 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
         };
-        let id_a = "a".repeat(40);
-        let id_b = "b".repeat(40);
-        archives.save(&mk(&id_a, &path_a)).await.unwrap();
-        archives.save(&mk(&id_b, &path_b)).await.unwrap();
+        let id_a = ArchiveId("a".repeat(40));
+        let id_b = ArchiveId("b".repeat(40));
+        archives.save(&mk(id_a.as_str(), &path_a)).await.unwrap();
+        archives.save(&mk(id_b.as_str(), &path_b)).await.unwrap();
 
         let jobs = JobRegistry::new();
         let job_id = jobs.create("verify").await;

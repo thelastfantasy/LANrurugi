@@ -116,7 +116,7 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
     let id = "c".repeat(40);
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
     repo.save(&Archive {
-        id: id.clone(),
+        id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: "Fate GO MEMO".to_string(),
         title: "Fate GO MEMO".to_string(),
         file: "/nonexistent/fate.zip".to_string(),
@@ -159,7 +159,9 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
     assert_eq!(entry["isnew"], false);
     assert_eq!(entry["extension"], "zip");
 
-    repo.delete(&id).await.unwrap();
+    repo.delete(&lanrurugi_core::ids::ArchiveId(id))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -204,7 +206,7 @@ async fn delete_archive_matches_recorded_response_shape() {
     let id = "d".repeat(40);
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
     repo.save(&Archive {
-        id: id.clone(),
+        id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: "big_chungus".to_string(),
         title: "big_chungus".to_string(),
         file: "/nonexistent/big_chungus.zip".to_string(),
@@ -567,7 +569,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let archive_repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
     archive_repo
         .save(&Archive {
-            id: id.clone(),
+            id: lanrurugi_core::ids::ArchiveId(id.clone()),
             name: "Volume 1".to_string(),
             title: "Volume 1".to_string(),
             file: archive_path.to_string_lossy().to_string(),
@@ -652,8 +654,13 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let category_repo =
         lanrurugi_storage::repository::CategoryRepository::new(redis.archive.clone());
     category_repo
-        .delete(created["id"].as_str().unwrap())
+        .delete(&lanrurugi_core::ids::CategoryId(
+            created["id"].as_str().unwrap().to_string(),
+        ))
         .await
         .unwrap();
-    archive_repo.delete(&id).await.unwrap();
+    archive_repo
+        .delete(&lanrurugi_core::ids::ArchiveId(id))
+        .await
+        .unwrap();
 }

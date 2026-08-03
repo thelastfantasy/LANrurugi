@@ -187,7 +187,7 @@ async fn catalogue_staged_file(
         IngestOutcome::Unchanged { id } => {
             let _ = tokio::fs::remove_file(staging_path).await;
             return Ok(IngestedDownload {
-                archive_id: id,
+                archive_id: id.into_string(),
                 is_new: false,
             });
         }
@@ -198,7 +198,7 @@ async fn catalogue_staged_file(
             reason,
         } => {
             return Err(IngestDownloadError::Duplicate {
-                existing_id,
+                existing_id: existing_id.into_string(),
                 reason,
             });
         }
@@ -247,7 +247,7 @@ async fn catalogue_staged_file(
         let staging_str = staging_path.to_string_lossy().to_string();
         let dest_str = dest.to_string_lossy().to_string();
         let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &staging_str).await;
-        let _: Result<(), _> = conn.hset(FILEMAP_KEY, &dest_str, &archive_id).await;
+        let _: Result<(), _> = conn.hset(FILEMAP_KEY, &dest_str, archive_id.as_str()).await;
     }
 
     // Legacy's real "自动运行"/`exec_enabled_plugins_on_file` mechanism (`Model::Upload.pm`) runs
@@ -256,9 +256,12 @@ async fn catalogue_staged_file(
     // before ever reaching here), so no extra `is_new` guard is needed. Runs *after* the source
     // tag above is saved, so a plugin like `mems.ts`/`ehentai.ts` that falls back to parsing
     // `existing_tags` for a `source:` tag actually finds the one just added.
-    crate::plugins::run_enabled_metadata_plugins_on_archive(state, &archive_id).await;
+    crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
 
-    Ok(IngestedDownload { archive_id, is_new })
+    Ok(IngestedDownload {
+        archive_id: archive_id.into_string(),
+        is_new,
+    })
 }
 
 /// Moves `staging_path` to `temp_dir/temp_{crc32}_{filename}` (never deleting the already-

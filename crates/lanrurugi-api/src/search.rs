@@ -23,7 +23,12 @@ use crate::AppState;
 /// silently dropping every grouped Tankoubon out of search results entirely.
 pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<serde_json::Value> {
     if let Some(tankid) = id.strip_prefix("TANK_").map(|_| id) {
-        let grouping = state.repos.groupings.get(tankid).await.ok()??;
+        let grouping = state
+            .repos
+            .groupings
+            .get(&lanrurugi_core::ids::TankId(tankid.to_string()))
+            .await
+            .ok()??;
         let mut aggregate_names = Vec::new();
         let mut aggregate_isnew = false;
         let mut aggregate_pagecount: u64 = 0;
@@ -59,7 +64,12 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
             "archive_count": grouping.archives.len(),
         }));
     }
-    let a = state.repos.archives.get(id).await.ok()??;
+    let a = state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
+        .await
+        .ok()??;
     let mut json = serde_json::to_value(ArchiveMetadataJson::from(&a)).ok()?;
     json.as_object_mut()?
         .insert("archive_count".into(), json!(null));
@@ -92,7 +102,13 @@ async fn build_params(
     q: &SearchQuery,
 ) -> Result<SearchParams, lanrurugi_storage::repository::RepositoryError> {
     let category = match &q.category {
-        Some(id) => state.repos.categories.get(id).await?,
+        Some(id) => {
+            state
+                .repos
+                .categories
+                .get(&lanrurugi_core::ids::CategoryId(id.clone()))
+                .await?
+        }
         None => None,
     };
     // `date_added:YYYY-MM-DD` date-range tokens resolve to a timestamp range in this timezone —

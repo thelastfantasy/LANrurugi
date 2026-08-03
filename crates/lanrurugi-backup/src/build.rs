@@ -85,7 +85,7 @@ pub async fn build(
         archives: archive_list
             .into_iter()
             .map(|a| BackupArchive {
-                arcid: a.id,
+                arcid: a.id.into_string(),
                 title: a.title,
                 tags: a.tags,
                 summary: (!a.summary.is_empty()).then_some(a.summary),
@@ -101,29 +101,29 @@ pub async fn build(
 
 fn to_backup_category(c: Category) -> BackupCategory {
     BackupCategory {
-        catid: c.catid,
+        catid: c.catid.into_string(),
         name: c.name,
         search: c.search,
-        archives: c.archives,
+        archives: c.archives.into_iter().map(|a| a.into_string()).collect(),
     }
 }
 
 fn to_backup_tankoubon(g: Grouping) -> BackupTankoubon {
     BackupTankoubon {
-        tankid: g.tankid,
+        tankid: g.tankid.into_string(),
         name: g.name,
         summary: g.summary,
         tags: g.tags,
-        archives: g.archives,
+        archives: g.archives.into_iter().map(|a| a.into_string()).collect(),
     }
 }
 
 fn to_backup_stamp(s: Stamp) -> BackupStamp {
     BackupStamp {
-        stamp_id: s.stamp_id,
+        stamp_id: s.stamp_id.into_string(),
         content: s.content,
         position: s.position,
-        archive_id: s.archive_id,
+        archive_id: s.archive_id.into_string(),
         icon: s.icon,
         rect: s.rect,
     }
@@ -152,7 +152,7 @@ mod tests {
         let groupings = GroupingRepository::new(pool.clone());
         let stamp_repo = StampRepository::new(pool.clone());
 
-        let id = "9".repeat(40);
+        let id = lanrurugi_core::ids::ArchiveId("9".repeat(40));
         archives
             .save(&Archive {
                 id: id.clone(),
@@ -182,11 +182,15 @@ mod tests {
         let doc = build(&archives, &categories, &groupings, &stamp_repo)
             .await
             .unwrap();
-        let entry = doc.archives.iter().find(|a| a.arcid == id).unwrap();
+        let entry = doc
+            .archives
+            .iter()
+            .find(|a| a.arcid == id.as_str())
+            .unwrap();
         assert_eq!(entry.title, "My Title");
         assert_eq!(entry.tags, "artist:jane");
         assert_eq!(entry.thumbhash.as_deref(), Some("abc123"));
-        assert!(doc.stamps.iter().any(|s| s.stamp_id == stamp_id));
+        assert!(doc.stamps.iter().any(|s| s.stamp_id == stamp_id.as_str()));
 
         archives.delete(&id).await.unwrap();
         stamp_repo.delete(&stamp_id).await.unwrap();

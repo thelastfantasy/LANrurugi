@@ -116,19 +116,20 @@ async fn subfolders_to_categories(
         &mut subfolders,
     );
 
-    let id_by_path: HashMap<PathBuf, String> = match state.repos.archives.list_all().await {
-        Ok(all) => all
-            .into_iter()
-            .map(|a| (PathBuf::from(a.file), a.id))
-            .collect(),
-        Err(e) => {
-            return error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "subfolders_to_categories",
-                e.to_string(),
-            )
-        }
-    };
+    let id_by_path: HashMap<PathBuf, lanrurugi_core::ids::ArchiveId> =
+        match state.repos.archives.list_all().await {
+            Ok(all) => all
+                .into_iter()
+                .map(|a| (PathBuf::from(a.file), a.id))
+                .collect(),
+            Err(e) => {
+                return error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "subfolders_to_categories",
+                    e.to_string(),
+                )
+            }
+        };
 
     // `CategoryRepository::list_all` discovers categories via a `SET_??????????` key glob
     // (verified: `Model/Category.pm`) — exactly a 10-digit timestamp, no extra suffix — so every
@@ -141,7 +142,7 @@ async fn subfolders_to_categories(
 
     let mut created_categories = Vec::new();
     for (folder_name, paths) in subfolders {
-        let mut catid = format!("SET_{next_candidate}");
+        let mut catid = lanrurugi_core::ids::CategoryId(format!("SET_{next_candidate}"));
         while state
             .repos
             .categories
@@ -152,11 +153,11 @@ async fn subfolders_to_categories(
             .is_some()
         {
             next_candidate += 1;
-            catid = format!("SET_{next_candidate}");
+            catid = lanrurugi_core::ids::CategoryId(format!("SET_{next_candidate}"));
         }
         next_candidate += 1;
 
-        let archive_ids: Vec<String> = paths
+        let archive_ids: Vec<lanrurugi_core::ids::ArchiveId> = paths
             .into_iter()
             .filter_map(|path| id_by_path.get(&path).cloned())
             .collect();
@@ -168,7 +169,7 @@ async fn subfolders_to_categories(
             pinned: false,
         };
         if state.repos.categories.save(&category).await.is_ok() {
-            created_categories.push(catid);
+            created_categories.push(catid.into_string());
         }
     }
 
