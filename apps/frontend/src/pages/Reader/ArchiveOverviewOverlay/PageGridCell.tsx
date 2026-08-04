@@ -1,9 +1,9 @@
-import type { MouseEvent, ReactNode } from 'react'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent, ReactNode } from "react"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { Tooltip } from '../../../components/Tooltip'
-import { QuickAddTocPopover } from './shared'
+import { Tooltip } from "../../../components/Tooltip"
+import { QuickAddTocPopover } from "./shared"
 
 /** One page thumbnail in the overview grid — shows a spin icon (same `fa-circle-notch fa-spin`
  * class legacy's own equivalent uses) while its `<img>` hasn't loaded yet, removed once it has.
@@ -71,7 +71,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
     // looking shifted. `width` only needs to be set before load (see `PLACEHOLDER_WIDTH_PX`'s own
     // docs) — once loaded, `width: 95%` off the now-properly-tall wrapper is what actually
     // determines the image's rendered width, exactly matching a real loaded cell in this same grid.
-    <div style={{ height: '100%', ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
+    <div style={{ height: "100%", ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
       {!loaded && (
         // The centering transform lives on this plain, non-animated wrapper, not on the `<i>`
         // itself — `fa-spin`'s own CSS animation drives the icon's `transform` (a rotation) every
@@ -83,10 +83,10 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         // is what lets both apply independently.
         <span
           style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
           }}
         >
           <i className="fa fa-4x fa-circle-notch fa-spin" aria-hidden="true"></i>
@@ -96,7 +96,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         loading="lazy"
         alt={alt}
         src={src}
-        style={loaded ? undefined : { visibility: 'hidden' }}
+        style={loaded ? undefined : { visibility: "hidden" }}
         onLoad={() => setLoaded(true)}
       />
     </div>
@@ -114,7 +114,7 @@ function PageNumberLabel({ children }: { children: ReactNode }) {
   return (
     <span
       className="page-number"
-      style={{ left: '50%', transform: 'translateX(-50%)' }}
+      style={{ left: "50%", transform: "translateX(-50%)" }}
     >
       {children}
     </span>
@@ -143,7 +143,7 @@ function PageGridActionIcon({
    * computed from the top and always `right: 2%` — verified against `reader.js`). `'bottom-left'`
    * (the lightbox magnifying-glass icon) is purely additive, no legacy equivalent, mirroring the
    * same corner/margin convention on the opposite side. */
-  corner: 'top-right' | 'bottom-right' | 'bottom-left'
+  corner: "top-right" | "bottom-right" | "bottom-left"
   title: string | undefined
   /** Lifted to the parent `.quick-thumbnail` cell rather than tracked on this element itself —
    * at rest this icon sits at `z-index: -1`, *behind* the thumbnail `<img>`, so the pointer never
@@ -158,8 +158,8 @@ function PageGridActionIcon({
    * no legacy equivalent at all. */
   onContextMenu?: (e: MouseEvent) => void
 }) {
-  const vertical = corner === 'top-right' ? 'top' : 'bottom'
-  const horizontal = corner === 'bottom-left' ? 'left' : 'right'
+  const vertical = corner === "top-right" ? "top" : "bottom"
+  const horizontal = corner === "bottom-left" ? "left" : "right"
   return (
     <a
       href="#"
@@ -168,23 +168,23 @@ function PageGridActionIcon({
       onClick={onClick}
       onContextMenu={onContextMenu}
       style={{
-        position: 'absolute',
+        position: "absolute",
         // Legacy's own two real values here are `top: 2%`/`top: 80%` (verified against
         // `reader.js`) — both computed from the top, so a `bottom`-anchored icon's exact position
         // depends on the cell's own height. `bottom: 2%` instead expresses the actually-intended
         // "pinned near this corner" relationship directly, independent of cell height — the same
         // reasoning that motivated `right`/`left` over a percentage for the horizontal axis.
-        [vertical]: '2%',
-        [horizontal]: '2%',
+        [vertical]: "2%",
+        [horizontal]: "2%",
         padding: 12,
         fontSize: 20,
-        color: 'lightskyblue',
+        color: "lightskyblue",
         // Mirrors legacy's own real `.quick-thumbnail:hover>.page-number` rule (`lrr.css`) —
         // `z-index: -1` at rest (behind the thumbnail `<img>`, effectively invisible), `300` +
         // a black backdrop once actually hovered, driven here by this component's own React
         // state rather than that shared CSS selector (see this component's own docs for why).
         zIndex: hovered ? 300 : -1,
-        backgroundColor: hovered ? '#000000' : undefined,
+        backgroundColor: hovered ? "#000000" : undefined,
       }}
     />
   )
@@ -238,32 +238,32 @@ export function PageGridCell({
       // while its own `.quick-thumbnail` child inside was only `280px`, the difference exactly
       // matching what the screenshot showed).
       data-page-cell={page}
-      style={{ display: 'inline-block', cursor: 'pointer' }}
+      style={{ display: "inline-block", cursor: "pointer" }}
       onClick={() => onSelectPage(page)}
     >
       <div
         className="id3 quick-thumbnail"
         data-stamped={isStamped || undefined}
         style={{
-          position: 'relative',
+          position: "relative",
           ...(highlighted && {
-            outline: '3px solid #3b97ea',
+            outline: "3px solid #3b97ea",
             outlineOffset: 2,
-            animation: 'lrr-overview-highlight-pulse 0.6s ease-in-out 4',
+            animation: "lrr-overview-highlight-pulse 0.6s ease-in-out 4",
           }),
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <PageNumberLabel>{t('Page {{n}}', { n: page })}</PageNumberLabel>
-        <OverviewThumbnail src={thumbnailSrc} alt={t('Page {{n}}', { n: page }) ?? undefined} />
+        <PageNumberLabel>{t("Page {{n}}", { n: page })}</PageNumberLabel>
+        <OverviewThumbnail src={thumbnailSrc} alt={t("Page {{n}}", { n: page }) ?? undefined} />
         {/* Not gated behind `loggedIn` (unlike the two icons below) — this is a read-only preview
             tool, useful regardless of edit permissions; only the quick-add-chapter section
             *inside* the lightbox itself needs a login check (see `PageLightbox`'s own render). */}
         <PageGridActionIcon
           icon="fa-magnifying-glass"
           corner="bottom-left"
-          title={t('View Full Page') ?? undefined}
+          title={t("View Full Page") ?? undefined}
           hovered={hovered}
           onClick={(e) => {
             e.preventDefault()
@@ -276,7 +276,7 @@ export function PageGridCell({
             <PageGridActionIcon
               icon="fa-file-image"
               corner="top-right"
-              title={t('Set this Page as Thumbnail') ?? undefined}
+              title={t("Set this Page as Thumbnail") ?? undefined}
               hovered={hovered}
               onClick={(e) => onSetThumbnail(e, page)}
             />
@@ -294,8 +294,8 @@ export function PageGridCell({
                 one (another real, live-reported bug). Following the cursor instead sidesteps
                 needing a meaningful wrapper box at all. */}
             <Tooltip
-              label={t('Add Chapter at this Page') + ' ' + t('(right-click for quick presets)')}
-              wrapperStyle={{ position: 'static' }}
+              label={t("Add Chapter at this Page") + " " + t("(right-click for quick presets)")}
+              wrapperStyle={{ position: "static" }}
               anchor="cursor"
             >
               <PageGridActionIcon

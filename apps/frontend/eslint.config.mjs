@@ -7,6 +7,7 @@ import tsParser from '@typescript-eslint/parser'
 import tsPlugin from '@typescript-eslint/eslint-plugin'
 import reactHooks from 'eslint-plugin-react-hooks'
 import simpleImportSort from 'eslint-plugin-simple-import-sort'
+import stylistic from '@stylistic/eslint-plugin'
 
 export default [
   { ignores: ['dist/**'] },
@@ -39,6 +40,7 @@ export default [
       '@typescript-eslint': tsPlugin,
       'react-hooks': reactHooks,
       'simple-import-sort': simpleImportSort,
+      '@stylistic': stylistic,
     },
     rules: {
       ...tsPlugin.configs.recommended.rules,
@@ -59,6 +61,8 @@ export default [
       ],
       'simple-import-sort/imports': 'warn',
 
+      '@stylistic/quotes': ['warn', 'double', { avoidEscape: true }],
+
       'react-hooks/rules-of-hooks':  'error',
       'react-hooks/exhaustive-deps': 'warn',
       // react-hooks/refs is new in plugin 7.x and misfires on this project's deliberate use of
@@ -70,6 +74,13 @@ export default [
       // maintainable — the rule is disabled project-wide until it grows a real
       // pattern-recognition story.
       'react-hooks/refs': 'off',
+    },
+  },
+  {
+    // Barrel index.ts files — only re-exports, no expressions to flag
+    files: ['src/**/index.ts'],
+    rules: {
+      '@typescript-eslint/no-unused-expressions': 'off',
     },
   },
 ]

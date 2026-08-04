@@ -1,17 +1,17 @@
-import type { PluginInfo } from '../../api/types'
-import { TagTable } from '../../components/TagTable'
-import { Tooltip } from '../../components/Tooltip'
-import { splitTagsByNamespace } from '../../lib/tagFormat'
-import { FONT_SIZE_10PT } from '../../theme'
+import type { PluginInfo } from "../../api/types"
+import { TagTable } from "../../components/TagTable"
+import { Tooltip } from "../../components/Tooltip"
+import { splitTagsByNamespace } from "../../lib/tagFormat"
+import { FONT_SIZE_10PT } from "../../theme"
 
 /** The fixed `plugin_namespace` every local-upload queue item is stored under
  * (`crates/lanrurugi-api/src/upload.rs`'s own constant of the same name) — never a real installed
  * plugin, just this item type's own grouping key on the Upload page. */
-export const LOCAL_UPLOAD_NAMESPACE = 'local_upload'
+export const LOCAL_UPLOAD_NAMESPACE = "local_upload"
 
 // Common compound extensions hardcoded, not user-configurable — rare enough in this app's actual
 // corpus that a settings surface would be over-engineering.
-const COMPOUND_EXTENSIONS = ['tar.gz', 'tar.bz2', 'tar.xz', 'tar.zst']
+const COMPOUND_EXTENSIONS = ["tar.gz", "tar.bz2", "tar.xz", "tar.zst"]
 
 /** Splits a filename into stem and extension, recognizing `COMPOUND_EXTENSIONS` as one unit
  * (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`, not `{stem: "archive.tar", ext: "gz"}`)
@@ -25,8 +25,8 @@ export function splitFilenameStemAndExt(filename: string): { stem: string; ext: 
       return { stem: filename.slice(0, start), ext: compound }
     }
   }
-  const lastDot = filename.lastIndexOf('.')
-  if (lastDot <= 0) return { stem: filename, ext: '' }
+  const lastDot = filename.lastIndexOf(".")
+  if (lastDot <= 0) return { stem: filename, ext: "" }
   return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
 }
 
@@ -53,13 +53,13 @@ export function TruncatedFilename({
 }) {
   if (!isFilename) {
     return (
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...style }}>{text}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...style }}>{text}</span>
     )
   }
   const { stem, ext } = splitFilenameStemAndExt(text)
   return (
-    <span style={{ display: 'inline-flex', minWidth: 0, maxWidth: '100%', ...style }}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{stem}</span>
+    <span style={{ display: "inline-flex", minWidth: 0, maxWidth: "100%", ...style }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{stem}</span>
       {ext && <span style={{ flexShrink: 0 }}>.{ext}</span>}
     </span>
   )
@@ -70,7 +70,7 @@ export function TruncatedFilename({
 export function matchesPattern(plugin: PluginInfo, url: string): boolean {
   if (!plugin.url_pattern) return false
   try {
-    return new RegExp(plugin.url_pattern, 'i').test(url)
+    return new RegExp(plugin.url_pattern, "i").test(url)
   } catch {
     return false
   }
@@ -93,10 +93,10 @@ export const ICON_BUTTON_STYLE: React.CSSProperties = {
   minWidth: 24,
   height: 24,
   padding: 0,
-  boxSizing: 'border-box',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
+  boxSizing: "border-box",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
   fontSize: FONT_SIZE_10PT,
 }
 
@@ -105,11 +105,11 @@ export const ICON_BUTTON_STYLE: React.CSSProperties = {
  * wrapping. */
 export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
   minWidth: 0,
-  width: 'auto',
-  flex: '0 1 auto',
-  whiteSpace: 'nowrap',
+  width: "auto",
+  flex: "0 1 auto",
+  whiteSpace: "nowrap",
   fontSize: FONT_SIZE_10PT,
-  padding: '0 6px',
+  padding: "0 6px",
 }
 
 /** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body —
@@ -117,16 +117,16 @@ export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
  * the shared `TagTable`. No separate "raw URL" line: a `source:` tag, when present, already links
  * to the same URL, so showing both would be duplication. */
 export function MetadataPreviewTooltip({ preview, url }: { preview: Record<string, unknown>; url: string }) {
-  const tags = typeof preview.tags === 'string' ? preview.tags : ''
-  const summary = typeof preview.summary === 'string' ? preview.summary : undefined
-  const hasSourceTag = 'source' in splitTagsByNamespace(tags)
+  const tags = typeof preview.tags === "string" ? preview.tags : ""
+  const summary = typeof preview.summary === "string" ? preview.summary : undefined
+  const hasSourceTag = "source" in splitTagsByNamespace(tags)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ fontWeight: 'bold', wordBreak: 'break-word' }}>
-        {typeof preview.title === 'string' ? preview.title : url}
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ fontWeight: "bold", wordBreak: "break-word" }}>
+        {typeof preview.title === "string" ? preview.title : url}
       </div>
-      {!hasSourceTag && <div style={{ wordBreak: 'break-all', opacity: 0.8, fontSize: FONT_SIZE_10PT }}>{url}</div>}
+      {!hasSourceTag && <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_10PT }}>{url}</div>}
       <TagTable tags={tags} />
       {summary && <div style={{ opacity: 0.8 }}>{summary}</div>}
     </div>
@@ -153,7 +153,7 @@ export function TooltipIfPresent({
     // branch's element shrinks to its content width instead of matching the tooltip-present
     // branch's sizing.
     return (
-      <span style={{ position: 'relative', display: 'inline-flex', ...wrapperStyle }}>{children}</span>
+      <span style={{ position: "relative", display: "inline-flex", ...wrapperStyle }}>{children}</span>
     )
   }
   return (

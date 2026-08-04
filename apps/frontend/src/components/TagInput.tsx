@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState } from "react"
 
 /** A purpose-built replacement for real legacy's third-party `tagger` jQuery plugin
  * (`vendor/tagger.js`/`tagger.css`, MIT-licensed, https://github.com/jcubic/tagger — pulled in at
@@ -29,10 +29,10 @@ import { useMemo, useState } from 'react'
 // not descriptive content tags), everything else (including bare, namespace-less tags)
 // alphabetically in between by namespace. Module-level (not a component-body closure) since it's a
 // pure function of its argument with no reactive dependencies of its own.
-const NAMESPACE_PRIORITY_FIRST = ['category']
-const NAMESPACE_PRIORITY_LAST = ['source', 'date_added', 'timestamp', 'uploader']
+const NAMESPACE_PRIORITY_FIRST = ["category"]
+const NAMESPACE_PRIORITY_LAST = ["source", "date_added", "timestamp", "uploader"]
 function tagSortKey(tag: string): [number, string] {
-  const namespace = tag.includes(':') ? tag.slice(0, tag.indexOf(':')) : ''
+  const namespace = tag.includes(":") ? tag.slice(0, tag.indexOf(":")) : ""
   if (NAMESPACE_PRIORITY_FIRST.includes(namespace)) return [0, tag]
   if (NAMESPACE_PRIORITY_LAST.includes(namespace)) return [2, tag]
   return [1, tag]
@@ -49,7 +49,7 @@ export function TagInput({
   suggestions?: string[]
   disabled?: boolean
 }) {
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState("")
 
   const tags = useMemo(
     () =>
@@ -77,19 +77,19 @@ export function TagInput({
   function commit(raw: string) {
     const next = raw.trim()
     if (!next || tags.includes(next)) return
-    onChange([...tags, next].join(', '))
+    onChange([...tags, next].join(", "))
   }
 
   function removeTag(tag: string) {
-    onChange(tags.filter((t) => t !== tag).join(', '))
+    onChange(tags.filter((t) => t !== tag).join(", "))
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter' || e.key === ',') {
+    if (e.key === "Enter" || e.key === ",") {
       e.preventDefault()
       commit(draft)
-      setDraft('')
-    } else if (e.key === 'Backspace' && draft === '' && tags.length > 0) {
+      setDraft("")
+    } else if (e.key === "Backspace" && draft === "" && tags.length > 0) {
       removeTag(tags[tags.length - 1])
     }
   }
@@ -99,20 +99,20 @@ export function TagInput({
   // the same stale `tags` closure (this render's snapshot, not yet updated by the previous
   // iteration's `onChange`), so only the last piece would ever survive.
   function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
-    const text = e.clipboardData.getData('text')
-    if (!text.includes(',')) return
+    const text = e.clipboardData.getData("text")
+    if (!text.includes(",")) return
     e.preventDefault()
     const next = [...tags]
     for (const piece of text.split(/,\s?/)) {
       const trimmed = piece.trim()
       if (trimmed && !next.includes(trimmed)) next.push(trimmed)
     }
-    onChange(next.join(', '))
-    setDraft('')
+    onChange(next.join(", "))
+    setDraft("")
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: "relative" }}>
       {/* `display: 'block'` override — legacy theme CSS's own `.tagger` rule (`g.css` etc.)
           declares `display: table-cell` plus `max-width: 450px`/`width: 60%`, but a lone
           `table-cell` div with no real `<table>`/`<tr>` ancestor doesn't actually respect either
@@ -129,29 +129,29 @@ export function TagInput({
           rule). Clearing `width` (the theme rule's own `width: 60%`) too, for the same reason as
           `maxWidth` — otherwise 60% of the 574px column is 344px, still short of the other
           fields' full width. */}
-      <div className="tagger" style={{ minHeight: 125, width: 'auto', maxWidth: 'none', display: 'block', boxSizing: 'border-box' }}>
+      <div className="tagger" style={{ minHeight: 125, width: "auto", maxWidth: "none", display: "block", boxSizing: "border-box" }}>
         <ul
           style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            width: '100%',
-            alignItems: 'center',
-            padding: '4px 0',
-            boxSizing: 'border-box',
+            display: "flex",
+            flexWrap: "wrap",
+            width: "100%",
+            alignItems: "center",
+            padding: "4px 0",
+            boxSizing: "border-box",
             margin: 0,
-            listStyle: 'none',
+            listStyle: "none",
           }}
         >
           {tags.map((tag) => (
-            <li key={tag} style={{ margin: '0.4rem 0', paddingLeft: 10, display: 'flex' }}>
+            <li key={tag} style={{ margin: "0.4rem 0", paddingLeft: 10, display: "flex" }}>
               <a
                 style={{
-                  padding: disabled ? '4px 8px' : '4px 4px 4px 8px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
+                  padding: disabled ? "4px 8px" : "4px 4px 4px 8px",
+                  display: "inline-flex",
+                  alignItems: "center",
                   gap: 4,
-                  wordBreak: 'break-all',
-                  textDecoration: 'none',
+                  wordBreak: "break-all",
+                  textDecoration: "none",
                 }}
               >
                 {tag}
@@ -161,14 +161,14 @@ export function TagInput({
                     onClick={() => removeTag(tag)}
                     aria-label="Remove tag"
                     style={{
-                      background: 'none',
-                      border: 'none',
+                      background: "none",
+                      border: "none",
                       padding: 0,
                       margin: 0,
-                      cursor: 'pointer',
-                      color: 'inherit',
+                      cursor: "pointer",
+                      color: "inherit",
                       lineHeight: 1,
-                      fontSize: '1em',
+                      fontSize: "1em",
                     }}
                   >
                     ×
@@ -185,7 +185,7 @@ export function TagInput({
             // own `background: 'inherit'` inline style resolved through fully transparent ancestors
             // instead, rendering suggestion text with no backing surface to read it against
             // (issue #45).
-            <li className="tagger-new" style={{ flexGrow: 1, position: 'relative', margin: '0.4rem 0', paddingLeft: 10, minWidth: 80 }}>
+            <li className="tagger-new" style={{ flexGrow: 1, position: "relative", margin: "0.4rem 0", paddingLeft: 10, minWidth: 80 }}>
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -194,17 +194,17 @@ export function TagInput({
                 onBlur={() => {
                   if (draft.trim()) {
                     commit(draft)
-                    setDraft('')
+                    setDraft("")
                   }
                 }}
                 style={{
-                  border: 'none',
-                  outline: 'none',
-                  boxShadow: 'none',
-                  width: '100%',
-                  background: 'transparent',
-                  color: 'inherit',
-                  font: 'inherit',
+                  border: "none",
+                  outline: "none",
+                  boxShadow: "none",
+                  width: "100%",
+                  background: "transparent",
+                  color: "inherit",
+                  font: "inherit",
                   padding: 0,
                 }}
               />
@@ -217,14 +217,14 @@ export function TagInput({
                 // theme/dark-mode switching.
                 <ul
                   style={{
-                    position: 'absolute',
+                    position: "absolute",
                     zIndex: 100,
-                    top: '100%',
+                    top: "100%",
                     left: 0,
                     right: 0,
                     margin: 0,
                     padding: 5,
-                    listStyle: 'none',
+                    listStyle: "none",
                   }}
                 >
                   {filteredSuggestions.map((s) => (
@@ -234,17 +234,17 @@ export function TagInput({
                         onMouseDown={(e) => {
                           e.preventDefault()
                           commit(s)
-                          setDraft('')
+                          setDraft("")
                         }}
                         style={{
-                          textAlign: 'left',
-                          width: '100%',
-                          background: 'none',
-                          border: 'none',
-                          padding: '4px 6px',
-                          cursor: 'pointer',
-                          color: 'inherit',
-                          font: 'inherit',
+                          textAlign: "left",
+                          width: "100%",
+                          background: "none",
+                          border: "none",
+                          padding: "4px 6px",
+                          cursor: "pointer",
+                          color: "inherit",
+                          font: "inherit",
                         }}
                       >
                         {s}

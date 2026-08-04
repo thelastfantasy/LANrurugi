@@ -1,13 +1,13 @@
-import type { MouseEvent } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useBookmarkLink, useCategories, useLoginStatus, useSettings } from '../../api/hooks'
-import type { ArchiveMetadata } from '../../api/types'
-import { TagTable } from '../../components/TagTable'
-import { Tooltip } from '../../components/Tooltip'
-import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from '../../lib/tagFormat'
-import { routes } from '../../routes'
-import { toast } from '../../toast'
+import { useBookmarkLink, useCategories, useLoginStatus, useSettings } from "../../api/hooks"
+import type { ArchiveMetadata } from "../../api/types"
+import { TagTable } from "../../components/TagTable"
+import { Tooltip } from "../../components/Tooltip"
+import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from "../../lib/tagFormat"
+import { routes } from "../../routes"
+import { toast } from "../../toast"
 
 // Matches `lanrurugi-api::search`'s fixed page size (`search.rs`'s `PAGE_SIZE` constant) —
 // server-side pagination isn't configurable per-request, so "Go to Page" paginates through these
@@ -18,32 +18,32 @@ export const PAGE_SIZE = 100
 // (`LANraragi::Controller::Api::Search::handle_databases`) — not real category ids, intercepted
 // client-side before ever reaching `category=` and turned into `newonly=true`/`untaggedonly=true`
 // instead.
-export const NEW_ONLY = 'NEW_ONLY'
+export const NEW_ONLY = "NEW_ONLY"
 
-export const UNTAGGED_ONLY = 'UNTAGGED_ONLY'
+export const UNTAGGED_ONLY = "UNTAGGED_ONLY"
 
 // Legacy caps the visible category-button row at 10 entries before spilling the rest into a
 // "..." overflow `<select>` (`index.js`'s `loadCategories`).
 export const CATEGORY_BUTTON_CAP = 10
 
-export type CarouselMode = 'ondeck' | 'random' | 'inbox' | 'untagged'
+export type CarouselMode = "ondeck" | "random" | "inbox" | "untagged"
 
 export interface ContextMenuState {
   archive: ArchiveMetadata
   x: number
   y: number
-  source: 'grid' | 'carousel'
+  source: "grid" | "carousel"
 }
 
 export const CAROUSEL_ICON: Record<CarouselMode, string> = {
-  ondeck: 'fa-book-reader',
-  random: 'fa-random',
-  inbox: 'fa-envelope-open-text',
-  untagged: 'fa-edit',
+  ondeck: "fa-book-reader",
+  random: "fa-random",
+  inbox: "fa-envelope-open-text",
+  untagged: "fa-edit",
 }
 
 export function isTankoubonId(id: string): boolean {
-  return id.startsWith('TANK_')
+  return id.startsWith("TANK_")
 }
 
 /** Bookmark star — ports `buildBookmarkIconElement`: renders nothing unless a bookmark category
@@ -69,21 +69,21 @@ export function BookmarkIcon({ archiveId }: { archiveId: string }) {
     e.stopPropagation()
     if (!loggedIn) {
       toast({
-        text: `<a href="${routes.login()}">${t('Login')}</a> ${t('to toggle bookmark feature.')}`,
-        icon: 'warning',
+        text: `<a href="${routes.login()}">${t("Login")}</a> ${t("to toggle bookmark feature.")}`,
+        icon: "warning",
       })
       return
     }
-    const method = isBookmarked ? 'DELETE' : 'PUT'
+    const method = isBookmarked ? "DELETE" : "PUT"
     await fetch(`/api/categories/${bookmarkCategoryId}/${archiveId}`, { method })
     await categories.refetch()
   }
 
   return (
     <i
-      className={`${isBookmarked ? 'fas' : 'far'} fa-bookmark thumbnail-bookmark-icon${loggedIn ? '' : ' disabled'}`}
-      title={t('Toggle Bookmark') ?? undefined}
-      style={!loggedIn ? { opacity: 0.5, cursor: 'not-allowed' } : { cursor: 'pointer' }}
+      className={`${isBookmarked ? "fas" : "far"} fa-bookmark thumbnail-bookmark-icon${loggedIn ? "" : " disabled"}`}
+      title={t("Toggle Bookmark") ?? undefined}
+      style={!loggedIn ? { opacity: 0.5, cursor: "not-allowed" } : { cursor: "pointer" }}
       onClick={(e) => void toggle(e)}
     ></i>
   )
@@ -105,21 +105,21 @@ export function TagLine({
   tags: string
   onSearchTag: (namespacedTag: string) => void
 }) {
-  const timezone = useSettings().data?.timezone ?? ''
+  const timezone = useSettings().data?.timezone ?? ""
   const coded = colorCodeTags(tags, timezone)
   if (coded.length === 0) return null
 
   return (
     <Tooltip
       label={<TagTable tags={tags} onSearchTag={(ns, v) => onSearchTag(buildSearchToken(ns, v, !TIMESTAMP_NAMESPACE.test(ns)))} />}
-      wrapperStyle={{ display: 'block' }}
+      wrapperStyle={{ display: "block" }}
     >
       <span className="tags tag-tooltip">
         {coded.map((tag, i) => (
           <span key={i}>
             <span
               className={`${tag.namespace}-tag`}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: "pointer" }}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -128,7 +128,7 @@ export function TagLine({
             >
               {tag.text}
             </span>
-            {i < coded.length - 1 && ', '}
+            {i < coded.length - 1 && ", "}
           </span>
         ))}
       </span>

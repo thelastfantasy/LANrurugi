@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from '../../components/PopupMenu'
-import { Z_OVERLAY_CONTENT } from '../../theme'
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "../../components/PopupMenu"
+import { Z_OVERLAY_CONTENT } from "../../theme"
 
 /** Settings gear menu (legacy's `#settings-menu` contextMenu, `index.js:117-199`) — bundles
  * Display Mode (thumbnail grid vs compact table), Crop Thumbnails, Hide Completed, and Group
@@ -18,8 +18,8 @@ export function SettingsMenu({
   groupbyTanks,
   setGroupbyTanks,
 }: {
-  viewMode: 'thumbnail' | 'compact'
-  setViewMode: (v: 'thumbnail' | 'compact') => void
+  viewMode: "thumbnail" | "compact"
+  setViewMode: (v: "thumbnail" | "compact") => void
   cropThumbs: boolean
   setCropThumbs: (v: boolean) => void
   hideCompleted: boolean
@@ -50,17 +50,17 @@ export function SettingsMenu({
       if (menuRef.current?.contains(target)) return
       setOpen(false)
     }
-    document.addEventListener('click', onClick)
-    return () => document.removeEventListener('click', onClick)
+    document.addEventListener("click", onClick)
+    return () => document.removeEventListener("click", onClick)
   }, [open])
 
   return (
-    <span ref={ref} style={{ position: 'relative', marginLeft: 6, top: 2 }}>
+    <span ref={ref} style={{ position: "relative", marginLeft: 6, top: 2 }}>
       <a
         href="#"
         className="fa fa-cog fa-2x table-option"
-        style={{ position: 'relative', }}
-        title={t('Index Settings') ?? undefined}
+        style={{ position: "relative", }}
+        title={t("Index Settings") ?? undefined}
         onClick={(e) => {
           e.preventDefault()
           if (!open && ref.current) {
@@ -83,24 +83,24 @@ export function SettingsMenu({
           // clipping problem `portal` would be solving here anyway.
           portal={false}
           style={{
-            position: 'absolute',
-            top: '100%',
+            position: "absolute",
+            top: "100%",
             ...(openTowardLeft ? { right: 0 } : { left: 0 }),
             zIndex: Z_OVERLAY_CONTENT,
           }}
           // The gear icon's own real title (`Index Settings`) — this menu's actual name, as
           // distinct from `Display Mode` right below, which is a sub-heading for just the
           // Thumbnail/Compact radio pair, not the whole menu.
-          mainLabel={{ icon: 'fa-cog', text: t('Index Settings') ?? 'Index Settings' }}
+          mainLabel={{ icon: "fa-cog", text: t("Index Settings") ?? "Index Settings" }}
         >
           <PopupMenuItem disabled>
-            <i className="fas fa-table" style={{ width: 18 }}></i> {t('Display Mode')}
+            <i className="fas fa-table" style={{ width: 18 }}></i> {t("Display Mode")}
           </PopupMenuItem>
-          <PopupMenuItem onClick={() => setViewMode('thumbnail')}>
-            <input type="radio" readOnly checked={viewMode === 'thumbnail'} /> {t('Thumbnail')}
+          <PopupMenuItem onClick={() => setViewMode("thumbnail")}>
+            <input type="radio" readOnly checked={viewMode === "thumbnail"} /> {t("Thumbnail")}
           </PopupMenuItem>
-          <PopupMenuItem onClick={() => setViewMode('compact')}>
-            <input type="radio" readOnly checked={viewMode === 'compact'} /> {t('Compact')}
+          <PopupMenuItem onClick={() => setViewMode("compact")}>
+            <input type="radio" readOnly checked={viewMode === "compact"} /> {t("Compact")}
           </PopupMenuItem>
           <PopupMenuSeparator />
           {/* `marginLeft: 0` overrides the browser's own native checkbox UA-stylesheet margin
@@ -114,8 +114,8 @@ export function SettingsMenu({
               readOnly
               checked={cropThumbs}
               style={{ marginLeft: 0 }}
-            />{' '}
-            {t('Crop thumbnails')}
+            />{" "}
+            {t("Crop thumbnails")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setHideCompleted(!hideCompleted)}>
             <input
@@ -123,8 +123,8 @@ export function SettingsMenu({
               readOnly
               checked={hideCompleted}
               style={{ marginLeft: 0 }}
-            />{' '}
-            {t('Hide completed Archives')}
+            />{" "}
+            {t("Hide completed Archives")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setGroupbyTanks(!groupbyTanks)}>
             <input
@@ -132,8 +132,8 @@ export function SettingsMenu({
               readOnly
               checked={groupbyTanks}
               style={{ marginLeft: 0 }}
-            />{' '}
-            {t('Group Tankoubons')}
+            />{" "}
+            {t("Group Tankoubons")}
           </PopupMenuItem>
         </PopupMenu>
       )}

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
-import type { StampJson } from '../../api/types'
-import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
-import { Tooltip } from '../../components/Tooltip'
+import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from "../../api/hooks"
+import type { StampJson } from "../../api/types"
+import { PopupMenu, PopupMenuItem } from "../../components/PopupMenu"
+import { Tooltip } from "../../components/Tooltip"
 import {
   anchorPercent,
   formatStampRect,
@@ -14,8 +14,8 @@ import {
   type StampAnchor,
   stampEditorDialog,
   type StampRect,
-} from '../../dialog'
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
+} from "../../dialog"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../theme"
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
 // `renderMarkers`/`loadStamps` + `.marker` in `lrr.css`): click-to-place a pin at a %-based
@@ -38,7 +38,7 @@ const RECT_DRAG_THRESHOLD_PX = 4
 
 /** Rectangle resize handles, matching `StampAnchor` — dragging one moves that corner/edge only,
  * keeping the opposite corner/edge fixed (standard resize-handle semantics). */
-const RESIZE_HANDLES: StampAnchor[] = ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l']
+const RESIZE_HANDLES: StampAnchor[] = ["tl", "t", "tr", "r", "br", "b", "bl", "l"]
 
 interface ContextMenuState {
   stampId: string
@@ -139,15 +139,15 @@ export function MarkerLayer({
     // can't: this effect can run (on a page-prop change) before the browser has finished loading
     // the new `src` and settled the image's final rendered size, especially crossing between very
     // different aspect ratios where the browser's own reflow takes an extra frame.
-    img.addEventListener('load', updateBounds)
+    img.addEventListener("load", updateBounds)
     const resizeObserver = new ResizeObserver(updateBounds)
     resizeObserver.observe(img)
-    window.addEventListener('resize', updateBounds)
+    window.addEventListener("resize", updateBounds)
     return () => {
       cancelAnimationFrame(rafId)
-      img.removeEventListener('load', updateBounds)
+      img.removeEventListener("load", updateBounds)
       resizeObserver.disconnect()
-      window.removeEventListener('resize', updateBounds)
+      window.removeEventListener("resize", updateBounds)
     }
   }, [imageRef, page])
 
@@ -263,7 +263,7 @@ export function MarkerLayer({
 
   async function openEditorAndCreate(point: { x: number; y: number }, rect: StampRect | null) {
     onPlaced()
-    const result = await stampEditorDialog('', '', rect)
+    const result = await stampEditorDialog("", "", rect)
     if (result === null) return
     addStamp.mutate({
       page,
@@ -280,7 +280,7 @@ export function MarkerLayer({
   async function openEditorForExisting(stampId: string) {
     const current = stamps.data?.result.find((s) => s.id === stampId)
     const currentRect = current ? parseStampRect(current.rect) : null
-    const result = await stampEditorDialog(current?.content ?? '', current?.icon ?? '', currentRect)
+    const result = await stampEditorDialog(current?.content ?? "", current?.icon ?? "", currentRect)
     if (result === null) return
     updateStamp.mutate({
       stampId,
@@ -357,8 +357,8 @@ export function MarkerLayer({
       }
 
       function onUp(upEvent: MouseEvent) {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
+        window.removeEventListener("mousemove", onMove)
+        window.removeEventListener("mouseup", onUp)
         // `mousedown`'s own `preventDefault()`/`stopPropagation()` above only ever applied to
         // that one event — completing a press-release sequence over the anchor makes the browser
         // fire a separate, later `click` event of its own, which is exactly what `#imgLink`'s own
@@ -371,7 +371,7 @@ export function MarkerLayer({
         // the page immediately after the editor dialog opened, because nothing suppressed that
         // separate `click` from ever reaching the anchor.
         img.addEventListener(
-          'click',
+          "click",
           (clickEvent) => {
             clickEvent.preventDefault()
             clickEvent.stopPropagation()
@@ -395,12 +395,12 @@ export function MarkerLayer({
         )
       }
 
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
+      window.addEventListener("mousemove", onMove)
+      window.addEventListener("mouseup", onUp)
     }
 
-    img.addEventListener('mousedown', onMouseDown)
-    return () => img.removeEventListener('mousedown', onMouseDown)
+    img.addEventListener("mousedown", onMouseDown)
+    return () => img.removeEventListener("mousedown", onMouseDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placementMode])
 
@@ -435,8 +435,8 @@ export function MarkerLayer({
     }
 
     function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
       setActiveDragStampId(null)
       if (draggedRef.current) {
         setDrag((current) => {
@@ -452,8 +452,8 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
   }
 
   /** Commits a rect edit's final `x,y,width,height` (the anchor/color segments are left as they
@@ -509,8 +509,8 @@ export function MarkerLayer({
     }
 
     function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
       setActiveRectEditStampId(null)
       if (!rectEditedRef.current) {
         setRectEdit((current) => (current && current.stampId === stampId ? null : current))
@@ -522,8 +522,8 @@ export function MarkerLayer({
       })
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
   }
 
   /** The Ctrl-held branch of `handleRectMovePointerDown` above — tracks the about-to-be-created
@@ -562,8 +562,8 @@ export function MarkerLayer({
     }
 
     function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
       if (!draggedRef.current) {
         setCopyDragPreview(null)
         return
@@ -603,8 +603,8 @@ export function MarkerLayer({
       })
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
   }
 
   /** Dragging the icon itself (only possible once a rect stamp is selected — see the icon's own
@@ -649,8 +649,8 @@ export function MarkerLayer({
     }
 
     function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
       setActiveRectEditStampId(null)
       if (rectEditedRef.current) {
         setRectEdit((current) => {
@@ -660,8 +660,8 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
   }
 
   /** Minimum rect size (percent of the page image) a resize can shrink to — prevents a handle
@@ -690,10 +690,10 @@ export function MarkerLayer({
     const startClientY = e.clientY
     const right = rect.x + rect.width
     const bottom = rect.y + rect.height
-    const affectsLeft = handle === 'tl' || handle === 'l' || handle === 'bl'
-    const affectsRight = handle === 'tr' || handle === 'r' || handle === 'br'
-    const affectsTop = handle === 'tl' || handle === 't' || handle === 'tr'
-    const affectsBottom = handle === 'bl' || handle === 'b' || handle === 'br'
+    const affectsLeft = handle === "tl" || handle === "l" || handle === "bl"
+    const affectsRight = handle === "tr" || handle === "r" || handle === "br"
+    const affectsTop = handle === "tl" || handle === "t" || handle === "tr"
+    const affectsBottom = handle === "bl" || handle === "b" || handle === "br"
 
     function onMove(moveEvent: MouseEvent) {
       const img = imageRef.current
@@ -773,8 +773,8 @@ export function MarkerLayer({
     }
 
     function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
       setActiveRectEditStampId(null)
       if (rectEditedRef.current) {
         setRectEdit((current) => {
@@ -784,8 +784,8 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
   }
 
   // Keyboard shortcuts for whichever stamp is currently selected (edit mode — see the effect's
@@ -825,8 +825,8 @@ export function MarkerLayer({
       // the *pre-first-press* position, silently dropping the first press's own movement.
       const rect = rectEdit?.stampId === selectedStampId ? rectEdit.rect : storedRect
       switch (e.key) {
-        case 't':
-        case 'T':
+        case "t":
+        case "T":
           if (!stamp || !rect) return
           e.preventDefault()
           // `b`/`B` below collides with `Reader.tsx`'s own bookmark-toggle shortcut, `Backspace`
@@ -843,29 +843,29 @@ export function MarkerLayer({
           e.stopImmediatePropagation()
           updateStamp.mutate({ stampId: stamp.id, rect: formatStampRect({ ...rect, layer: maxLayerOnPage() + 1 }) })
           return
-        case 'b':
-        case 'B':
+        case "b":
+        case "B":
           if (!stamp || !rect) return
           e.preventDefault()
           e.stopImmediatePropagation()
           updateStamp.mutate({ stampId: stamp.id, rect: formatStampRect({ ...rect, layer: minLayerOnPage() - 1 }) })
           return
-        case 'Delete':
-        case 'Backspace':
+        case "Delete":
+        case "Backspace":
           e.preventDefault()
           e.stopImmediatePropagation()
           setSelectedStampId(null)
           deleteStamp.mutate(selectedStampId)
           return
-        case 'Enter':
+        case "Enter":
           e.preventDefault()
           e.stopImmediatePropagation()
           void openEditorForExisting(selectedStampId)
           return
-        case 'ArrowLeft':
-        case 'ArrowRight':
-        case 'ArrowUp':
-        case 'ArrowDown': {
+        case "ArrowLeft":
+        case "ArrowRight":
+        case "ArrowUp":
+        case "ArrowDown": {
           if (!stamp || !rect) return
           const img = imageRef.current
           if (!img) return
@@ -896,16 +896,16 @@ export function MarkerLayer({
             // handler in this file clamps that way — a plain 0-100 clamp on `x` alone would still
             // let the rect's own *right edge* run off the image once `x + width > 100`.
             switch (e.key) {
-              case 'ArrowLeft':
+              case "ArrowLeft":
                 x = Math.max(x - stepXPercent, 0)
                 break
-              case 'ArrowRight':
+              case "ArrowRight":
                 x = Math.min(x + stepXPercent, 100 - base.width)
                 break
-              case 'ArrowUp':
+              case "ArrowUp":
                 y = Math.max(y - stepYPercent, 0)
                 break
-              case 'ArrowDown':
+              case "ArrowDown":
                 y = Math.min(y + stepYPercent, 100 - base.height)
                 break
             }
@@ -931,8 +931,8 @@ export function MarkerLayer({
     // listener anywhere in the tree, independent of registration order — matches the same fix
     // `ArchiveOverviewOverlay.tsx` already uses for its own arrow-key handling, for the identical
     // "must reliably win over `Reader.tsx`'s own page-nav keydown" reason.
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStampId, stamps.data, rectEdit])
 
@@ -970,7 +970,7 @@ export function MarkerLayer({
           only ever intercepts clicks that would otherwise have reached something *else*. */}
       {selectedStampId && (
         <div
-          style={{ position: 'fixed', inset: 0, zIndex: 20, cursor: 'default' }}
+          style={{ position: "fixed", inset: 0, zIndex: 20, cursor: "default" }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setSelectedStampId(null)}
         />
@@ -992,7 +992,7 @@ export function MarkerLayer({
       <div
         ref={wrapperRef}
         style={{
-          position: 'absolute',
+          position: "absolute",
           left: imgBounds?.left ?? 0,
           top: imgBounds?.top ?? 0,
           width: imgBounds?.width ?? 0,
@@ -1001,7 +1001,7 @@ export function MarkerLayer({
           // ever intercept a click — the rest of this box is otherwise-empty space overlaying
           // the image, and shouldn't swallow clicks meant for the image itself (page-turning,
           // or — while `placementMode` is armed — placing a new stamp).
-          pointerEvents: 'none',
+          pointerEvents: "none",
           // `.marker`'s own real CSS (`lrr.css`) already hardcodes `z-index: 23`, which is why a
           // plain point marker's icon has always painted above the page image without this
           // wrapper needing its own z-index — but the rect outline/resize-handle `<div>`s rendered
@@ -1026,7 +1026,7 @@ export function MarkerLayer({
           [...(stamps.data?.result ?? [])]
             .sort((a, b) => (parseStampRect(a.rect)?.layer ?? 0) - (parseStampRect(b.rect)?.layer ?? 0))
             .map((stamp) => {
-            const [xStr, yStr] = stamp.position.split(',')
+            const [xStr, yStr] = stamp.position.split(",")
             const stored = { x: Number(xStr), y: Number(yStr) }
             if (Number.isNaN(stored.x) || Number.isNaN(stored.y)) return null
             const isDragging = activeDragStampId === stamp.id
@@ -1058,7 +1058,7 @@ export function MarkerLayer({
                     on the icon opens the full rename/re-icon/rect-style editor dialog. Deliberately
                     behind the icon in DOM order (rendered first) so the icon's own hit area stays
                     on top. */}
-                {rect && (rect.display === 'always' || isHovered || isSelected) && (
+                {rect && (rect.display === "always" || isHovered || isSelected) && (
                   <div
                     onMouseDown={(e) => {
                       // Reset unconditionally, not only inside `handleRectMovePointerDown` (which
@@ -1082,16 +1082,16 @@ export function MarkerLayer({
                     onMouseEnter={() => setHoveredStampId(stamp.id)}
                     onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
                     style={{
-                      position: 'absolute',
+                      position: "absolute",
                       left: `${rect.x}%`,
                       top: `${rect.y}%`,
                       width: `${rect.width}%`,
                       height: `${rect.height}%`,
                       border: `2px solid ${rect.color}`,
-                      borderRadius: rect.corner === 'round' ? 12 : 0,
-                      boxSizing: 'border-box',
-                      cursor: isSelected ? 'move' : 'pointer',
-                      pointerEvents: 'auto',
+                      borderRadius: rect.corner === "round" ? 12 : 0,
+                      boxSizing: "border-box",
+                      cursor: isSelected ? "move" : "pointer",
+                      pointerEvents: "auto",
                       ...rectFillStyle(rect),
                     }}
                   >
@@ -1103,17 +1103,17 @@ export function MarkerLayer({
                             key={h}
                             onMouseDown={(e) => handleResizeHandlePointerDown(e, stamp.id, rect, h)}
                             style={{
-                              position: 'absolute',
+                              position: "absolute",
                               left: `${p.x}%`,
                               top: `${p.y}%`,
-                              transform: 'translate(-50%, -50%)',
+                              transform: "translate(-50%, -50%)",
                               width: 10,
                               height: 10,
-                              boxSizing: 'border-box',
+                              boxSizing: "border-box",
                               border: `1px solid ${rect.color}`,
-                              background: 'white',
+                              background: "white",
                               cursor: resizeCursor(h),
-                              pointerEvents: 'auto',
+                              pointerEvents: "auto",
                             }}
                           />
                         )
@@ -1135,18 +1135,18 @@ export function MarkerLayer({
                     around nothing once `.marker` escapes into absolute layout, so the default
                     `anchor="element"` mode would place the bubble at the wrong spot too —
                     `anchor="cursor"` sidesteps needing a meaningful wrapper box at all. */}
-                <Tooltip label={stamp.content} wrapperStyle={{ position: 'static' }} anchor="cursor">
+                <Tooltip label={stamp.content} wrapperStyle={{ position: "static" }} anchor="cursor">
                   <div
                     className="marker"
                     style={{
                       left: `${iconPos.x}%`,
                       top: `${iconPos.y}%`,
-                      cursor: rect ? (isSelected ? 'grab' : 'pointer') : isDragging ? 'grabbing' : 'grab',
-                      pointerEvents: 'auto',
+                      cursor: rect ? (isSelected ? "grab" : "pointer") : isDragging ? "grabbing" : "grab",
+                      pointerEvents: "auto",
                       // A custom icon replaces `.marker`'s own CSS `background-image` (the default
                       // favicon pin) entirely, rather than rendering on top of it — showing both at
                       // once would just look like visual noise, not a real combined icon.
-                      ...(stamp.icon && { backgroundImage: 'none' }),
+                      ...(stamp.icon && { backgroundImage: "none" }),
                     }}
                     onMouseEnter={() => rect && setHoveredStampId(stamp.id)}
                     onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
@@ -1199,11 +1199,11 @@ export function MarkerLayer({
                     {stamp.icon && (
                       <span
                         style={{
-                          position: 'absolute',
+                          position: "absolute",
                           inset: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
                           // `.marker`'s own real box is a fixed 24x24px (`lrr.css`) — 20px fills most
                           // of that (leaving a couple px of margin so the glyph doesn't visibly clip
                           // against the pin's own rounded silhouette) without needing to touch that
@@ -1211,7 +1211,7 @@ export function MarkerLayer({
                           // favicon pin.
                           fontSize: 20,
                           lineHeight: 1,
-                          pointerEvents: 'none',
+                          pointerEvents: "none",
                         }}
                       >
                         {renderStampIcon(stamp.icon)}
@@ -1236,7 +1236,7 @@ export function MarkerLayer({
           {placementDrag && (
             <div
               style={{
-                position: 'absolute',
+                position: "absolute",
                 left: `${Math.min(placementDrag.startX, placementDrag.curX)}%`,
                 top: `${Math.min(placementDrag.startY, placementDrag.curY)}%`,
                 width: `${Math.abs(placementDrag.curX - placementDrag.startX)}%`,
@@ -1250,8 +1250,8 @@ export function MarkerLayer({
                 // preview next to already-confirmed rects in a different (blue/purple) color.
                 border: `2px dashed ${lastPickedRectStyle().color}`,
                 background: `${lastPickedRectStyle().color}33`,
-                boxSizing: 'border-box',
-                pointerEvents: 'none',
+                boxSizing: "border-box",
+                pointerEvents: "none",
                 zIndex: Z_OVERLAY_CONTENT,
               }}
             />
@@ -1265,16 +1265,16 @@ export function MarkerLayer({
           {copyDragPreview && (
             <div
               style={{
-                position: 'absolute',
+                position: "absolute",
                 left: `${copyDragPreview.rect.x}%`,
                 top: `${copyDragPreview.rect.y}%`,
                 width: `${copyDragPreview.rect.width}%`,
                 height: `${copyDragPreview.rect.height}%`,
                 border: `2px dashed ${copyDragPreview.rect.color}`,
-                borderRadius: copyDragPreview.rect.corner === 'round' ? 12 : 0,
+                borderRadius: copyDragPreview.rect.corner === "round" ? 12 : 0,
                 background: `${copyDragPreview.rect.color}33`,
-                boxSizing: 'border-box',
-                pointerEvents: 'none',
+                boxSizing: "border-box",
+                pointerEvents: "none",
                 zIndex: Z_OVERLAY_CONTENT,
               }}
             />
@@ -1286,12 +1286,12 @@ export function MarkerLayer({
           above this one's), matching legacy's real `#overlay-page.focus-overlay` — this element
           itself is a pure backdrop now, not the click target; the click that actually places a
           stamp is bound directly to the image. */}
-      {placementMode && <div className="focus-overlay" style={{ display: 'block' }} />}
+      {placementMode && <div className="focus-overlay" style={{ display: "block" }} />}
 
       {menu && (
         <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setMenu(null)} />
-          <PopupMenu style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT }}>
+          <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setMenu(null)} />
+          <PopupMenu style={{ position: "fixed", top: menu.y, left: menu.x, zIndex: Z_OVERLAY_CONTENT }}>
             <PopupMenuItem
               onClick={() => {
                 const stampId = menu.stampId
@@ -1299,7 +1299,7 @@ export function MarkerLayer({
                 void openEditorForExisting(stampId)
               }}
             >
-              {t('Edit Marker')}
+              {t("Edit Marker")}
             </PopupMenuItem>
             <PopupMenuItem
               onClick={() => {
@@ -1307,7 +1307,7 @@ export function MarkerLayer({
                 deleteStamp.mutate(menu.stampId)
               }}
             >
-              {t('Delete Marker')}
+              {t("Delete Marker")}
             </PopupMenuItem>
           </PopupMenu>
         </>
@@ -1336,18 +1336,18 @@ function anchorOnRect(rect: StampRect): { x: number; y: number } {
  * `ew-resize` for an edge midpoint running along one axis only). */
 function resizeCursor(handle: StampAnchor): string {
   switch (handle) {
-    case 'tl':
-    case 'br':
-      return 'nwse-resize'
-    case 'tr':
-    case 'bl':
-      return 'nesw-resize'
-    case 't':
-    case 'b':
-      return 'ns-resize'
-    case 'r':
-    case 'l':
-      return 'ew-resize'
+    case "tl":
+    case "br":
+      return "nwse-resize"
+    case "tr":
+    case "bl":
+      return "nesw-resize"
+    case "t":
+    case "b":
+      return "ns-resize"
+    case "r":
+    case "l":
+      return "ew-resize"
   }
 }
 
@@ -1368,15 +1368,15 @@ function resizeCursor(handle: StampAnchor): string {
  * just blurring what's behind it. */
 function rectFillStyle(rect: StampRect): { background: string; backdropFilter?: string } {
   switch (rect.fill) {
-    case 'solid':
+    case "solid":
       return { background: `${rect.color}33` }
-    case 'stripes':
+    case "stripes":
       return {
         background: `repeating-linear-gradient(45deg, ${rect.color}66 0, ${rect.color}66 4px, ${rect.color}00 4px, ${rect.color}00 8px)`,
       }
-    case 'mosaic':
-      return { background: `${rect.color}1a`, backdropFilter: 'blur(14px)' }
-    case 'blur':
-      return { background: `${rect.color}1a`, backdropFilter: 'blur(6px)' }
+    case "mosaic":
+      return { background: `${rect.color}1a`, backdropFilter: "blur(14px)" }
+    case "blur":
+      return { background: `${rect.color}1a`, backdropFilter: "blur(6px)" }
   }
 }

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate, useParams } from "react-router-dom"
 
 import {
   useAddToTankoubon,
@@ -10,15 +10,15 @@ import {
   useStats,
   useTankoubon,
   useUpdateTankoubon,
-} from '../api/hooks'
-import type { TankoubonMetadata } from '../api/types'
-import { PopupMenu, PopupMenuItem } from '../components/PopupMenu'
-import { SortableList } from '../components/SortableList'
-import { TagInput } from '../components/TagInput'
-import { Tooltip } from '../components/Tooltip'
-import { routes } from '../routes'
-import { toast } from '../toast'
-import { useDocumentTitle } from '../useDocumentTitle'
+} from "../api/hooks"
+import type { TankoubonMetadata } from "../api/types"
+import { PopupMenu, PopupMenuItem } from "../components/PopupMenu"
+import { SortableList } from "../components/SortableList"
+import { TagInput } from "../components/TagInput"
+import { Tooltip } from "../components/Tooltip"
+import { routes } from "../routes"
+import { toast } from "../toast"
+import { useDocumentTitle } from "../useDocumentTitle"
 
 /** Resolves an archive ID to its real title for the archive-list row below, with a
  * hover-thumbnail tooltip — matching real legacy's own `edit.html.tt2` (`is_tank` branch, line
@@ -33,12 +33,12 @@ function ArchiveTitle({ archiveId }: { archiveId: string }) {
   return (
     <Tooltip
       anchor="cursor"
-      wrapperStyle={{ display: 'inline' }}
+      wrapperStyle={{ display: "inline" }}
       label={
         <img
           src={`/api/archives/${archiveId}/thumbnail?no_fallback=true`}
           alt=""
-          style={{ height: 300, display: 'block' }}
+          style={{ height: 300, display: "block" }}
         />
       }
     >
@@ -50,27 +50,27 @@ function ArchiveTitle({ archiveId }: { archiveId: string }) {
 export function TankoubonEdit() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { tankId = '' } = useParams<{ tankId: string }>()
+  const { tankId = "" } = useParams<{ tankId: string }>()
   const tankoubon = useTankoubon(tankId)
 
   if (tankoubon.isLoading) {
     return (
-      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', color: 'var(--theme-muted)' }}>
-        {t('Loading library…')}
+      <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", color: "var(--theme-muted)" }}>
+        {t("Loading library…")}
       </div>
     )
   }
 
   if (tankoubon.isError || !tankoubon.data) {
     return (
-      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+      <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">
-          {t('Failed to load archives: {{error}}', { error: String(tankoubon.error) })}
+          {t("Failed to load archives: {{error}}", { error: String(tankoubon.error) })}
         </p>
         <input
           className="stdbtn"
           type="button"
-          value={t('Return to Library') ?? undefined}
+          value={t("Return to Library") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -88,7 +88,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   // Matches this page's own real heading text below ("Editing %1 (Tankoubon)") — no legacy
   // equivalent to cross-check against (Tankoubon editing is additive to this rewrite), so this
   // just keeps the tab title and the on-page heading in sync with each other.
-  useDocumentTitle(t('Editing %1 (Tankoubon)').replace('%1', tankoubon.name))
+  useDocumentTitle(t("Editing %1 (Tankoubon)").replace("%1", tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
   const addToTankoubon = useAddToTankoubon(tankId)
@@ -102,12 +102,12 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   const [summary, setSummary] = useState(tankoubon.summary)
   const [tags, setTags] = useState(tankoubon.tags)
   const [archives, setArchives] = useState(tankoubon.archives)
-  const [newArchiveId, setNewArchiveId] = useState('')
+  const [newArchiveId, setNewArchiveId] = useState("")
   const [archiveSearchOpen, setArchiveSearchOpen] = useState(false)
 
   // Debounced so the title-search dropdown below doesn't fire one request per keystroke —
   // additive on top of the raw-ID input, which still works unchanged (see `addArchiveId`).
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState("")
   useEffect(() => {
     const timeout = setTimeout(() => setDebouncedQuery(newArchiveId.trim()), 250)
     return () => clearTimeout(timeout)
@@ -128,7 +128,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   // `updateTankoubon` doesn't have that generic per-call toasting, so it's shown explicitly here.
   async function handleSave() {
     await updateTankoubon.mutateAsync({ metadata: { name, summary, tags } })
-    toast({ heading: t('Metadata saved!') ?? undefined, icon: 'success' })
+    toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
   }
 
   // Real legacy's own `edit.html.tt2` (`is_tank` branch) reorders this list via drag (`Sortable.
@@ -157,7 +157,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   async function addArchiveId(archiveId: string) {
     await addToTankoubon.mutateAsync(archiveId)
     setArchives((prev) => [...prev, archiveId])
-    setNewArchiveId('')
+    setNewArchiveId("")
     setArchiveSearchOpen(false)
   }
 
@@ -168,78 +168,78 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   }
 
   return (
-    <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto' }}>
-      <h2 className="ih" style={{ textAlign: 'center' }}>
-        {t('Editing %1 (Tankoubon)').replace('%1', tankoubon.name)}
+    <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto" }}>
+      <h2 className="ih" style={{ textAlign: "center" }}>
+        {t("Editing %1 (Tankoubon)").replace("%1", tankoubon.name)}
       </h2>
 
       <form
         autoComplete="off"
-        style={{ width: '98%', maxWidth: 700, margin: '0 auto', fontSize: '8pt' }}
+        style={{ width: "98%", maxWidth: 700, margin: "0 auto", fontSize: "8pt" }}
         onSubmit={(e) => e.preventDefault()}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, textAlign: 'left' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
-            <span>{t('Title:')}</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+            <span>{t("Title:")}</span>
             <input
               className="stdinput"
               type="text"
-              style={{ width: '100%', maxWidth: 'none' }}
+              style={{ width: "100%", maxWidth: "none" }}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
-            <span>{t('Summary:')}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
+            <span>{t("Summary:")}</span>
             <textarea
               className="stdinput"
-              style={{ width: '100%', maxWidth: 'none', minHeight: 72, boxSizing: 'border-box' }}
+              style={{ width: "100%", maxWidth: "none", minHeight: 72, boxSizing: "border-box" }}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>
-              {t('Tags')} <span style={{ fontSize: '6pt' }}>{t('(separated by hyphens, i.e : tag1, tag2)')}</span> :
+              {t("Tags")} <span style={{ fontSize: "6pt" }}>{t("(separated by hyphens, i.e : tag1, tag2)")}</span> :
             </span>
             <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
-            <span>{t('Archives:')}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
+            <span>{t("Archives:")}</span>
             {/* `SortableList`'s own `DndContext`/`SortableContext` render transparently (no DOM
                 wrapper of their own), so without this wrapping div each row's bare element would
                 land as a direct child of this `grid` container and get independently
                 auto-placed instead of staying confined to this one column — a real observed bug
                 (the two rows ended up at unrelated x-positions instead of stacked in column 2). */}
-            <div style={{ width: '100%' }}>
+            <div style={{ width: "100%" }}>
               <SortableList
                 items={archives}
                 getId={(archiveId) => archiveId}
                 onReorder={handleReorder}
                 renderItem={(archiveId, dragHandleProps) => (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '2px 0' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "2px 0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, overflow: "hidden" }}>
                       <span
                         {...dragHandleProps.attributes}
                         {...dragHandleProps.listeners}
                         style={{
                           flexShrink: 0,
-                          display: 'flex',
-                          cursor: dragHandleProps.isDragging ? 'grabbing' : 'grab',
-                          touchAction: 'none',
+                          display: "flex",
+                          cursor: dragHandleProps.isDragging ? "grabbing" : "grab",
+                          touchAction: "none",
                           opacity: 0.6,
                         }}
                       >
                         <i className="fa fa-grip-vertical" aria-hidden="true"></i>
                       </span>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         <ArchiveTitle archiveId={archiveId} />
                       </span>
                     </div>
-                    <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                       {/* `.stdbtn`'s own legacy CSS sets `min-width: 150px` (sized for the
                           standalone, spread-out action rows below, e.g. "Save Metadata") —
                           packed into one compact per-archive row instead would demand way more
@@ -255,13 +255,13 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                         onClick={() => navigate(routes.edit(archiveId))}
                         style={{ minWidth: 32 }}
                       >
-                        {t('Edit')}
+                        {t("Edit")}
                       </button>
                       <button
                         type="button"
                         className="stdbtn"
                         onClick={() => removeArchive(archiveId)}
-                        title={t('Remove from Tankoubon') ?? undefined}
+                        title={t("Remove from Tankoubon") ?? undefined}
                         style={{ minWidth: 32 }}
                       >
                         ✕
@@ -273,14 +273,14 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
-            <span>{t('Add Archive to Tankoubon:')}</span>
-            <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+            <span>{t("Add Archive to Tankoubon:")}</span>
+            <div style={{ display: "flex", gap: 6 }}>
               {/* The raw-ID paste-and-click-Add flow below is unchanged; this additionally
                   live-searches by title as the user types (debounced, `archiveSearch` above) and
                   offers a click-to-add dropdown with a thumbnail preview per match — for anyone
                   who doesn't already have the 40-char ID copied. */}
-              <span style={{ position: 'relative', width: '100%' }}>
+              <span style={{ position: "relative", width: "100%" }}>
                 <input
                   className="stdinput"
                   type="text"
@@ -295,7 +295,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                   // (21px, border-box, both already `boxSizing: 'border-box'` from the theme
                   // CSS) — matches the button next to it exactly rather than sitting visibly
                   // shorter.
-                  style={{ width: '100%', maxWidth: 'none', height: 21, boxSizing: 'border-box' }}
+                  style={{ width: "100%", maxWidth: "none", height: 21, boxSizing: "border-box" }}
                   value={newArchiveId}
                   onChange={(e) => {
                     setNewArchiveId(e.target.value)
@@ -311,9 +311,9 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                   onFocus={() => setArchiveSearchOpen(true)}
                   onBlur={() => setTimeout(() => setArchiveSearchOpen(false), 150)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Escape') setArchiveSearchOpen(false)
+                    if (e.key === "Escape") setArchiveSearchOpen(false)
                   }}
-                  placeholder={t('Archive ID (40-character long)') ?? undefined}
+                  placeholder={t("Archive ID (40-character long)") ?? undefined}
                 />
                 {archiveSearchOpen && archiveSearchResults.length > 0 && (
                   <PopupMenu
@@ -333,15 +333,15 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                     // of its own), confirmed via `getBoundingClientRect()` (input left 497 vs.
                     // an unadjusted `left: 0` menu at 496).
                     style={{
-                      position: 'absolute',
-                      top: '100%',
+                      position: "absolute",
+                      top: "100%",
                       left: 1,
                       margin: 0,
                       zIndex: 1,
-                      minWidth: '100%',
+                      minWidth: "100%",
                       maxHeight: 320,
-                      overflowY: 'auto',
-                      boxSizing: 'border-box',
+                      overflowY: "auto",
+                      boxSizing: "border-box",
                     }}
                   >
                     {archiveSearchResults.map((a) => (
@@ -356,12 +356,12 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                       >
                         <Tooltip
                           anchor="cursor"
-                          wrapperStyle={{ display: 'inline' }}
+                          wrapperStyle={{ display: "inline" }}
                           label={
                             <img
                               src={`/api/archives/${a.arcid}/thumbnail?no_fallback=true`}
                               alt=""
-                              style={{ height: 300, display: 'block' }}
+                              style={{ height: 300, display: "block" }}
                             />
                           }
                         >
@@ -376,7 +376,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                 className="stdbtn"
                 type="button"
                 style={{ minWidth: 32 }}
-                value={t('Add') ?? undefined}
+                value={t("Add") ?? undefined}
                 onClick={() => void handleAddArchive()}
               />
             </div>
@@ -397,29 +397,29 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
               immediately on each action (unlike legacy, which only saves them as part of this same
               click), so "Save Metadata" undersells what's already been saved by the time this
               button exists purely to commit name/summary/tags. */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 10 }}>
             <input
               className="stdbtn"
               type="button"
-              value={t('Update') ?? undefined}
+              value={t("Update") ?? undefined}
               onClick={() => void handleSave()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Delete Tankoubon') ?? undefined}
+              value={t("Delete Tankoubon") ?? undefined}
               onClick={() => void handleDelete()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Read Tankoubon') ?? undefined}
+              value={t("Read Tankoubon") ?? undefined}
               onClick={() => navigate(routes.reader(tankId))}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Return to Library') ?? undefined}
+              value={t("Return to Library") ?? undefined}
               onClick={() => navigate(routes.library())}
             />
           </div>

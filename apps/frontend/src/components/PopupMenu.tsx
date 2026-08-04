@@ -1,9 +1,9 @@
-import type { CSSProperties, ReactNode } from 'react'
-import { forwardRef } from 'react'
-import { createPortal } from 'react-dom'
+import type { CSSProperties, ReactNode } from "react"
+import { forwardRef } from "react"
+import { createPortal } from "react-dom"
 
-import { useSettings } from '../api/hooks'
-import { DEFAULT_THEME_ID, MENU_PALETTE } from '../theme'
+import { useSettings } from "../api/hooks"
+import { DEFAULT_THEME_ID, MENU_PALETTE } from "../theme"
 
 /** Reads the current theme's popup-menu palette — the single place every `PopupMenu` consumer
  * pulls colours from, so a right-click menu, the index settings gear menu, etc. all reskin
@@ -108,7 +108,7 @@ export function PopupMenuItem({
     <li
       className="relative box-content whitespace-nowrap select-none px-4 py-[.3em]"
       style={{
-        cursor: disabled ? 'default' : 'pointer',
+        cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.6 : 1,
         ...style,
       }}
@@ -122,7 +122,7 @@ export function PopupMenuItem({
       }}
       onMouseLeave={(e) => {
         if (disabled) return
-        e.currentTarget.style.background = 'transparent'
+        e.currentTarget.style.background = "transparent"
         e.currentTarget.style.color = palette.text
         onMouseLeave?.()
       }}

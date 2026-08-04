@@ -1,20 +1,20 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { sendForm, sendJson } from '../api/client'
-import { useArchives, useCategories, useCreateCategory, useTankoubons } from '../api/hooks'
-import type { TankoubonMetadata } from '../api/types'
-import { ArchiveChecklistItem } from '../components/ArchiveChecklistItem'
-import { Tooltip } from '../components/Tooltip'
-import { confirmDialog, newCategoryDialog } from '../dialog'
-import { routes } from '../routes'
-import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
-import { toast } from '../toast'
-import { useDocumentTitle } from '../useDocumentTitle'
+import { sendForm, sendJson } from "../api/client"
+import { useArchives, useCategories, useCreateCategory, useTankoubons } from "../api/hooks"
+import type { TankoubonMetadata } from "../api/types"
+import { ArchiveChecklistItem } from "../components/ArchiveChecklistItem"
+import { Tooltip } from "../components/Tooltip"
+import { confirmDialog, newCategoryDialog } from "../dialog"
+import { routes } from "../routes"
+import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from "../theme"
+import { toast } from "../toast"
+import { useDocumentTitle } from "../useDocumentTitle"
 
-const BOOKMARK_CATEGORY_STORAGE_KEY = 'bookmarkCategoryId'
+const BOOKMARK_CATEGORY_STORAGE_KEY = "bookmarkCategoryId"
 
 // Mirrors legacy's `~/LANraragi/templates/category.html.tt2` + `public/js/category.js` — a
 // select-then-edit-in-place form (not a create/delete-only list): picking a category from the
@@ -45,15 +45,15 @@ export function Categories() {
   const queryClient = useQueryClient()
   const createCategory = useCreateCategory()
 
-  const [selectedId, setSelectedId] = useState('')
-  const [name, setName] = useState('')
-  const [search, setSearch] = useState('')
+  const [selectedId, setSelectedId] = useState("")
+  const [name, setName] = useState("")
+  const [search, setSearch] = useState("")
   const [pinned, setPinned] = useState(false)
   const [bookmarkLinked, setBookmarkLinked] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle")
 
   useApplyTheme()
-  useDocumentTitle(t('Modify Categories') ?? undefined)
+  useDocumentTitle(t("Modify Categories") ?? undefined)
 
   const selected = categories.data?.find((c) => c.id === selectedId)
   const isStatic = !!selected && !selected.search
@@ -84,14 +84,14 @@ export function Categories() {
   const [syncedId, setSyncedId] = useState(selectedId)
   if (syncedId !== selectedId) {
     setSyncedId(selectedId)
-    setName(selected?.name ?? '')
-    setSearch(selected?.search ?? '')
+    setName(selected?.name ?? "")
+    setSearch(selected?.search ?? "")
     setPinned(selected?.pinned === 1)
     setBookmarkLinked(!!selected && localStorage.getItem(BOOKMARK_CATEGORY_STORAGE_KEY) === selected.id)
   }
 
   function refresh() {
-    return queryClient.invalidateQueries({ queryKey: ['categories'] })
+    return queryClient.invalidateQueries({ queryKey: ["categories"] })
   }
 
   // Always sends the *full* current name/search/pinned triple, not just the one field that
@@ -100,22 +100,22 @@ export function Categories() {
   // silently un-pin an already-pinned category.
   async function saveDetails(next: { name?: string; search?: string; pinned?: boolean }) {
     if (!selectedId) return
-    setStatus('saving')
+    setStatus("saving")
     try {
-      await sendForm('PUT', `/categories/${selectedId}`, {
+      await sendForm("PUT", `/categories/${selectedId}`, {
         name: next.name ?? name,
         search: next.search ?? search,
         // `pinned` deserializes as a plain Rust `bool` on the backend
         // (`crates/lanrurugi-api/src/categories.rs::UpdateCategoryParams`) via axum's Form
         // extractor (serde_urlencoded), which only accepts the literal strings "true"/"false" —
         // "1"/"0" fail deserialization with a 422.
-        pinned: (next.pinned ?? pinned) ? 'true' : 'false',
+        pinned: (next.pinned ?? pinned) ? "true" : "false",
       })
-      setStatus('saved')
+      setStatus("saved")
       await refresh()
     } catch {
-      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
-      setStatus('idle')
+      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      setStatus("idle")
     }
   }
 
@@ -126,100 +126,100 @@ export function Categories() {
       const data = await createCategory.mutateAsync(result)
       setSelectedId(data.category_id)
     } catch {
-      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
+      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
     }
   }
 
   async function handleDelete() {
     if (!selectedId) return
-    if (!(await confirmDialog(t('The category will be deleted permanently.') ?? ''))) return
+    if (!(await confirmDialog(t("The category will be deleted permanently.") ?? ""))) return
     try {
-      await sendJson('DELETE', `/categories/${selectedId}`)
-      toast({ text: t('Category deleted!') ?? undefined, icon: 'success' })
-      setSelectedId('')
+      await sendJson("DELETE", `/categories/${selectedId}`)
+      toast({ text: t("Category deleted!") ?? undefined, icon: "success" })
+      setSelectedId("")
       await refresh()
     } catch {
-      toast({ heading: t('Error deleting category') ?? undefined, icon: 'error' })
+      toast({ heading: t("Error deleting category") ?? undefined, icon: "error" })
     }
   }
 
   async function handleBookmarkLinkChange(checked: boolean) {
     if (!selectedId) return
     setBookmarkLinked(checked)
-    setStatus('saving')
+    setStatus("saving")
     try {
       if (checked) {
-        await sendJson('PUT', `/categories/bookmark_link/${selectedId}`)
+        await sendJson("PUT", `/categories/bookmark_link/${selectedId}`)
         localStorage.setItem(BOOKMARK_CATEGORY_STORAGE_KEY, selectedId)
       } else {
-        await sendJson('DELETE', '/categories/bookmark_link')
+        await sendJson("DELETE", "/categories/bookmark_link")
         localStorage.removeItem(BOOKMARK_CATEGORY_STORAGE_KEY)
       }
-      setStatus('saved')
+      setStatus("saved")
     } catch {
-      toast({ heading: t('Error linking bookmark button:') ?? undefined, icon: 'error' })
-      setStatus('idle')
+      toast({ heading: t("Error linking bookmark button:") ?? undefined, icon: "error" })
+      setStatus("idle")
     }
   }
 
   async function handleArchiveToggle(archiveId: string, checked: boolean) {
     if (!selectedId) return
-    setStatus('saving')
+    setStatus("saving")
     try {
-      await sendJson(checked ? 'PUT' : 'DELETE', `/categories/${selectedId}/${archiveId}`)
-      setStatus('saved')
+      await sendJson(checked ? "PUT" : "DELETE", `/categories/${selectedId}/${archiveId}`)
+      setStatus("saved")
       await refresh()
     } catch {
-      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
-      setStatus('idle')
+      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      setStatus("idle")
     }
   }
 
   function predicateHelp() {
     toast({
-      toastId: 'predicateHelp',
-      heading: t('Writing a Predicate') ?? undefined,
+      toastId: "predicateHelp",
+      heading: t("Writing a Predicate") ?? undefined,
       text:
         t(
-          'Predicates follow the same syntax as searches in the Archive Index. Check the Documentation for more information.',
+          "Predicates follow the same syntax as searches in the Archive Index. Check the Documentation for more information.",
         ) ?? undefined,
-      icon: 'info',
+      icon: "info",
       hideAfter: 20000,
     })
   }
 
   return (
-    <div className="ido" style={{ textAlign: 'center' }}>
-      <h2 className="ih" style={{ textAlign: 'center' }}>
-        {t('Categories')}
+    <div className="ido" style={{ textAlign: "center" }}>
+      <h2 className="ih" style={{ textAlign: "center" }}>
+        {t("Categories")}
       </h2>
       <br />
       <br />
-      <div style={{ marginLeft: 'auto', marginRight: 'auto' }}>
-        <div className="left-column" style={{ textAlign: 'left', fontSize: FONT_SIZE_10PT, width: 400 }}>
-          {t('Categories appear at the top of your window when browsing the Library.')}
+      <div style={{ marginLeft: "auto", marginRight: "auto" }}>
+        <div className="left-column" style={{ textAlign: "left", fontSize: FONT_SIZE_10PT, width: 400 }}>
+          {t("Categories appear at the top of your window when browsing the Library.")}
           <br />
-          {t('There are two distinct kinds:')}
+          {t("There are two distinct kinds:")}
           <ul>
             <li>
-              <i className="fas fa-2x fa-folder-open" style={{ marginLeft: -30, width: 30 }}></i>{' '}
-              {t('Static Categories are arbitrary collections of Archives, where you can add as many items as you want.')}
+              <i className="fas fa-2x fa-folder-open" style={{ marginLeft: -30, width: 30 }}></i>{" "}
+              {t("Static Categories are arbitrary collections of Archives, where you can add as many items as you want.")}
             </li>
             <li>
-              <i className="fas fa-2x fa-bolt" style={{ marginLeft: -25, width: 25 }}></i>{' '}
-              {t('Dynamic Categories contain all archives matching a given predicate, and automatically update alongside your library.')}
+              <i className="fas fa-2x fa-bolt" style={{ marginLeft: -25, width: 25 }}></i>{" "}
+              {t("Dynamic Categories contain all archives matching a given predicate, and automatically update alongside your library.")}
             </li>
           </ul>
-          {t('You can create new categories here or edit existing ones.')}
+          {t("You can create new categories here or edit existing ones.")}
           <br />
           <br />
-          <div style={{ textAlign: 'center' }}>
-            <input type="button" id="new-category" className="stdbtn" value={t('New Category') ?? undefined} onClick={() => void handleNewCategory()} />
+          <div style={{ textAlign: "center" }}>
+            <input type="button" id="new-category" className="stdbtn" value={t("New Category") ?? undefined} onClick={() => void handleNewCategory()} />
           </div>
           <br />
-          {t('Select a category in the combobox below to edit its name, the archives it contains, or its predicate.')}
+          {t("Select a category in the combobox below to edit its name, the archives it contains, or its predicate.")}
           <br />
-          <b>{t('All your modifications are saved automatically.')}</b>
+          <b>{t("All your modifications are saved automatically.")}</b>
           <br />
           <br />
 
@@ -227,7 +227,7 @@ export function Categories() {
             <tbody>
               <tr>
                 <td>
-                  <h2>{t('Category:')}</h2>
+                  <h2>{t("Category:")}</h2>
                 </td>
                 <td>
                   <select
@@ -236,7 +236,7 @@ export function Categories() {
                     value={selectedId}
                     onChange={(e) => setSelectedId(e.target.value)}
                   >
-                    <option value="">{t(' -- No Category -- ')}</option>
+                    <option value="">{t(" -- No Category -- ")}</option>
                     {categories.data?.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
@@ -248,19 +248,19 @@ export function Categories() {
               {selected && (
                 <>
                   <tr className="tag-options">
-                    <td style={{ textAlign: 'right' }}>{t('Name:')}</td>
+                    <td style={{ textAlign: "right" }}>{t("Name:")}</td>
                     <td>
                       <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => void saveDetails({ name })} />
                     </td>
                   </tr>
                   {!isStatic && (
                     <tr id="predicatefield" className="tag-options">
-                      <td style={{ textAlign: 'right' }}>{t('Predicate:')}</td>
+                      <td style={{ textAlign: "right" }}>{t("Predicate:")}</td>
                       <td>
-                        <input value={search} onChange={(e) => setSearch(e.target.value)} onBlur={() => void saveDetails({ search })} />{' '}
+                        <input value={search} onChange={(e) => setSearch(e.target.value)} onBlur={() => void saveDetails({ search })} />{" "}
                         <i
                           id="predicate-help"
-                          style={{ cursor: 'pointer' }}
+                          style={{ cursor: "pointer" }}
                           className="fas fa-question-circle"
                           onClick={predicateHelp}
                         ></i>
@@ -281,7 +281,7 @@ export function Categories() {
                           void saveDetails({ pinned: e.target.checked })
                         }}
                       />
-                      <label htmlFor="pinned">{t('Pin this Category')}</label>
+                      <label htmlFor="pinned">{t("Pin this Category")}</label>
                     </td>
                   </tr>
                   {isStatic && (
@@ -296,7 +296,7 @@ export function Categories() {
                           checked={bookmarkLinked}
                           onChange={(e) => void handleBookmarkLinkChange(e.target.checked)}
                         />
-                        <label htmlFor="bookmark-link">{t('Store Bookmarks in this Category')}</label>
+                        <label htmlFor="bookmark-link">{t("Store Bookmarks in this Category")}</label>
                       </td>
                     </tr>
                   )}
@@ -306,7 +306,7 @@ export function Categories() {
                       <input
                         id="delete"
                         type="button"
-                        value={t('Delete Category') ?? undefined}
+                        value={t("Delete Category") ?? undefined}
                         className="stdbtn"
                         onClick={() => void handleDelete()}
                       />
@@ -315,14 +315,14 @@ export function Categories() {
                   <tr className="tag-options">
                     <td></td>
                     <td id="status" style={{ fontSize: FONT_SIZE_9PT }}>
-                      {status === 'saving' && (
+                      {status === "saving" && (
                         <>
-                          <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t('Saving your modifications...')}
+                          <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t("Saving your modifications...")}
                         </>
                       )}
-                      {status === 'saved' && (
+                      {status === "saved" && (
                         <>
-                          <i className="fas fa-2x fa-check-circle"></i> {t('Saved!')}
+                          <i className="fas fa-2x fa-check-circle"></i> {t("Saved!")}
                         </>
                       )}
                     </td>
@@ -333,22 +333,22 @@ export function Categories() {
           </table>
         </div>
 
-        <div className="category-panel right-column" style={{ textAlign: 'center', minWidth: 400, width: '60%', height: 500 }}>
+        <div className="category-panel right-column" style={{ textAlign: "center", minWidth: 400, width: "60%", height: 500 }}>
           {!selected || !isStatic ? (
             <div
               id="dynamicplaceholder"
-              style={{ alignContent: 'center', top: 150, position: 'relative', marginLeft: 'auto', marginRight: 'auto', width: '90%' }}
+              style={{ alignContent: "center", top: 150, position: "relative", marginLeft: "auto", marginRight: "auto", width: "90%" }}
             >
               <i className="fas fa-8x fa-air-freshener"></i>
               <br />
               <br />
-              <h2>{t('If you select a Static Category, your archives will appear here so you can add/remove them from the category.')}</h2>
+              <h2>{t("If you select a Static Category, your archives will appear here so you can add/remove them from the category.")}</h2>
             </div>
           ) : (
             <div id="staticcontent" className="checklist">
               <div id="tankoubonsection" style={{ marginBottom: 10 }}>
-                <h3 style={{ marginTop: 0 }}>{t('Tankoubons')}</h3>
-                <ul id="tankoubonlist" style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
+                <h3 style={{ marginTop: 0 }}>{t("Tankoubons")}</h3>
+                <ul id="tankoubonlist" style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
                   {tankoubons.data?.result.length ? (
                     tankoubons.data.result.map((tank) => (
                       <ArchiveChecklistItem
@@ -359,14 +359,14 @@ export function Categories() {
                       />
                     ))
                   ) : (
-                    <li style={{ fontStyle: 'italic' }}>{t('No Tankoubons in your library yet.')}</li>
+                    <li style={{ fontStyle: "italic" }}>{t("No Tankoubons in your library yet.")}</li>
                   )}
                 </ul>
               </div>
 
               <div id="archivesection">
-                <h3>{t('Archives')}</h3>
-                <ul id="archivelist" style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
+                <h3>{t("Archives")}</h3>
+                <ul id="archivelist" style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
                   {archives.data?.length ? (
                     archives.data.map((a) => {
                       const memberTanks = tanksByArchiveId.get(a.arcid)
@@ -381,7 +381,7 @@ export function Categories() {
                         <Tooltip
                           label={
                             <>
-                              {t('This archive belongs to the following Tankoubon(s):')}
+                              {t("This archive belongs to the following Tankoubon(s):")}
                               {memberTanks.map((tank) => (
                                 <div key={tank.id}>
                                   {tank.name} (
@@ -418,12 +418,12 @@ export function Categories() {
                           // needs to swap correctly when the active theme changes, the same way
                           // every other themed color here does (see those files' own docs on this
                           // class for the full reasoning).
-                          className={memberTanks?.length ? 'tankoubon-member-row' : undefined}
+                          className={memberTanks?.length ? "tankoubon-member-row" : undefined}
                         />
                       )
                     })
                   ) : (
-                    <li style={{ fontStyle: 'italic' }}>{t('No Archives in your library yet.')}</li>
+                    <li style={{ fontStyle: "italic" }}>{t("No Archives in your library yet.")}</li>
                   )}
                 </ul>
               </div>
@@ -434,7 +434,7 @@ export function Categories() {
         <br />
       </div>
 
-      <input type="button" id="return" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

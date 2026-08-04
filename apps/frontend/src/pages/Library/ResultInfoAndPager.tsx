@@ -1,4 +1,4 @@
-import { useTranslation } from 'react-i18next'
+import { useTranslation } from "react-i18next"
 
 /** DataTables' own `pagingType: "simple_numbers"` window — the default it falls back to since
  * `index_datatables.js` never sets `pagingType` explicitly. Always includes the first and last
@@ -43,15 +43,15 @@ export function ResultInfoAndPager({
   const { t } = useTranslation()
   return (
     <div>
-      <div style={{ textAlign: 'center', opacity: 0.7 }}>
-        {t('Showing {{start}} to {{end}} of {{total}} archives.', {
+      <div style={{ textAlign: "center", opacity: 0.7 }}>
+        {t("Showing {{start}} to {{end}} of {{total}} archives.", {
           start: rangeStart,
           end: rangeEnd,
           total: totalFiltered,
         })}
         {totalRecords > totalFiltered && ` (filtered from ${totalRecords} total entries)`}
       </div>
-      <div style={{ textAlign: 'center' }}>
+      <div style={{ textAlign: "center" }}>
         {pagingWindow(page, pageCount).map((p, i) =>
           p === null ? (
             <span key={`ellipsis-${i}`} className="ellipsis">
@@ -61,8 +61,8 @@ export function ResultInfoAndPager({
             <a
               key={p}
               href="#"
-              className={`paginate_button${p === page ? ' current' : ''}`}
-              style={{ margin: '4px 0' }}
+              className={`paginate_button${p === page ? " current" : ""}`}
+              style={{ margin: "4px 0" }}
               onClick={(e) => {
                 e.preventDefault()
                 onPage(p)

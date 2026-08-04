@@ -1,20 +1,20 @@
-import { useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from '../../api/hooks'
-import type { Settings as SettingsType } from '../../api/types'
-import { CollapsibleSection } from '../../components/CollapsibleSection'
-import { LanguageSelector } from '../../components/LanguageSelector'
-import { routes } from '../../routes'
-import { DEFAULT_THEME_ID, FONT_SIZE_10PT, THEMES, useApplyTheme, useLegacyConfigCss } from '../../theme'
-import { toast } from '../../toast'
-import { useDocumentTitle } from '../../useDocumentTitle'
-import { ArchiveFilesSection } from './ArchiveFilesSection'
-import { GlobalSection } from './GlobalSection'
-import { SecuritySection } from './SecuritySection'
-import { TagsThumbnailsSection } from './TagsThumbnailsSection'
-import { WorkersSection } from './WorkersSection'
+import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from "../../api/hooks"
+import type { Settings as SettingsType } from "../../api/types"
+import { CollapsibleSection } from "../../components/CollapsibleSection"
+import { LanguageSelector } from "../../components/LanguageSelector"
+import { routes } from "../../routes"
+import { DEFAULT_THEME_ID, FONT_SIZE_10PT, THEMES, useApplyTheme, useLegacyConfigCss } from "../../theme"
+import { toast } from "../../toast"
+import { useDocumentTitle } from "../../useDocumentTitle"
+import { ArchiveFilesSection } from "./ArchiveFilesSection"
+import { GlobalSection } from "./GlobalSection"
+import { SecuritySection } from "./SecuritySection"
+import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
+import { WorkersSection } from "./WorkersSection"
 
 export function Settings() {
   const { t } = useTranslation()
@@ -23,12 +23,12 @@ export function Settings() {
   useLegacyConfigCss()
 
   if (settings.isLoading) {
-    return <div className="ido">{t('Loading library…')}</div>
+    return <div className="ido">{t("Loading library…")}</div>
   }
 
   if (settings.isError || !settings.data) {
     return (
-      <div className="ido">{t('Failed to load archives: {{error}}', { error: String(settings.error) })}</div>
+      <div className="ido">{t("Failed to load archives: {{error}}", { error: String(settings.error) })}</div>
     )
   }
 
@@ -38,7 +38,7 @@ export function Settings() {
 function SettingsForm({ settings }: { settings: SettingsType }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  useDocumentTitle(t('Admin Settings') ?? undefined)
+  useDocumentTitle(t("Admin Settings") ?? undefined)
   const logout = useLogout()
   const info = useServerInfo()
   const updateSettings = useUpdateSettings()
@@ -60,11 +60,11 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [saveTick, setSaveTick] = useState(0)
   // The real key is never sent to the frontend — `llm_api_key_set` is a boolean only.
   // `keyInput` holds whatever the user types when they actively choose to set/change it.
-  const [keyInput, setKeyInput] = useState('')
+  const [keyInput, setKeyInput] = useState("")
 
   const [enablepass, setEnablepass] = useState(settings.enablepass)
-  const [newPassword, setNewPassword] = useState('')
-  const [newPassword2, setNewPassword2] = useState('')
+  const [newPassword, setNewPassword] = useState("")
+  const [newPassword2, setNewPassword2] = useState("")
   const [nofunmode, setNofunmode] = useState(settings.nofunmode)
   const [apikey, setApikey] = useState(settings.apikey)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
@@ -82,7 +82,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [usedatemodified, setUsedatemodified] = useState(settings.usedatemodified)
   const [timezone, setTimezone] = useState(settings.timezone)
 
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState("")
 
   // Dirty tracking for the bottom save bar: any field the Save button submits differing from
   // the server-loaded snapshot means there's something to save. `theme` is deliberately NOT in
@@ -126,12 +126,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   async function handleSave() {
     if (enablepass && newPassword) {
       if (newPassword !== newPassword2) {
-        setStatus(t("Passwords don't match!") ?? '')
+        setStatus(t("Passwords don't match!") ?? "")
         return
       }
       await changePassword.mutateAsync(newPassword)
-      setNewPassword('')
-      setNewPassword2('')
+      setNewPassword("")
+      setNewPassword2("")
     }
     await updateSettings.mutateAsync({
       htmltitle,
@@ -161,9 +161,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       newbadgemode,
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
-    setKeyInput('')
+    setKeyInput("")
     setSaveTick((n) => n + 1)
-    toast({ heading: t('Settings saved!') ?? undefined, icon: 'success' })
+    toast({ heading: t("Settings saved!") ?? undefined, icon: "success" })
   }
 
   async function handleLogout() {
@@ -173,8 +173,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
   return (
     <div className="ido">
-      <h2 className="ih" style={{ textAlign: 'center' }}>
-        {t('Admin Settings')}
+      <h2 className="ih" style={{ textAlign: "center" }}>
+        {t("Admin Settings")}
       </h2>
       <br />
 
@@ -182,40 +182,40 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <img className="logo-container" src="/legacy/img/logo.png" alt="LANrurugi" />
         <br />
         <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
-        {t('Version {{version}} {{vername}}', {
-          version: info.data?.version ?? '',
-          vername: info.data?.version_name ?? '',
+        {t("Version {{version}} {{vername}}", {
+          version: info.data?.version ?? "",
+          vername: info.data?.version_name ?? "",
         })}
         <br />
-        <h2>{t('Select a category to show the matching settings.')}</h2>
+        <h2>{t("Select a category to show the matching settings.")}</h2>
         <br />
         <input
           id="plugin-config"
           className="stdbtn"
           type="button"
-          value={t('Plugin Configuration') ?? undefined}
+          value={t("Plugin Configuration") ?? undefined}
           onClick={() => navigate(routes.pluginSettings())}
-        />{' '}
+        />{" "}
         <input
           id="backup"
           className="stdbtn"
           type="button"
-          value={t('Database Backup/Restore') ?? undefined}
+          value={t("Database Backup/Restore") ?? undefined}
           onClick={() => navigate(routes.backup())}
-        />{' '}
-        <input id="batch" className="stdbtn" type="button" value={t('Batch Operations') ?? undefined} onClick={() => navigate(routes.batch())} />
+        />{" "}
+        <input id="batch" className="stdbtn" type="button" value={t("Batch Operations") ?? undefined} onClick={() => navigate(routes.batch())} />
         <br />
         <br />
-        <input id="return" className="stdbtn" type="button" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
+        <input id="return" className="stdbtn" type="button" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
 
         {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
 
         {/* Not part of legacy's own left-column (legacy has no visible logout affordance — its
             session just expires — and only one site-wide language, set below in Global
             Settings). Kept minimal and visually separate since this SPA needs both. */}
-        <hr style={{ margin: '12px 0' }} />
-        <LanguageSelector />{' '}
-        <input id="logout" className="stdbtn" type="button" value={t('Logout') ?? undefined} onClick={() => void handleLogout()} />
+        <hr style={{ margin: "12px 0" }} />
+        <LanguageSelector />{" "}
+        <input id="logout" className="stdbtn" type="button" value={t("Logout") ?? undefined} onClick={() => void handleLogout()} />
       </div>
 
       <form
@@ -253,25 +253,25 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             onStatus={setStatus}
           />
 
-          <CollapsibleSection icon="fa-paint-brush" title={t('Theme')}>
-              <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
+          <CollapsibleSection icon="fa-paint-brush" title={t("Theme")}>
+              <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
                 <tbody>
                   <tr>
                     <td></td>
                     <td className="config-td">
                       <br />
-                      {t('The selected theme will apply to the entire application and be shown to all users.')}
+                      {t("The selected theme will apply to the entire application and be shown to all users.")}
                       <br />
                       {t('If you\'re using a browser that supports "theme-color", the theme\'s primary color will also be applied there.')}
                       <br />
                       <br />
-                      {t('Click on a theme to preview it before saving!')}
+                      {t("Click on a theme to preview it before saving!")}
                     </td>
                   </tr>
                   <tr>
                     <td colSpan={2}>
                       {THEMES.map((theme) => (
-                        <div key={theme.id} style={{ display: 'inline-block' }}>
+                        <div key={theme.id} style={{ display: "inline-block" }}>
                           <input
                             type="radio"
                             id={theme.id}
@@ -290,9 +290,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                               id={`${theme.id}-div`}
                               className="theme-switch"
                               title={theme.name}
-                              style={{ cursor: 'pointer' }}
+                              style={{ cursor: "pointer" }}
                             >
-                              <img title={theme.name} src={`/legacy/img/theme_preview/${theme.id.replace('.css', '')}.png`} className="theme-preview" />
+                              <img title={theme.name} src={`/legacy/img/theme_preview/${theme.id.replace(".css", "")}.png`} className="theme-preview" />
                               <h3>{theme.name}</h3>
                             </div>
                           </label>
@@ -360,8 +360,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           is always mounted so the transition isn't a mount/unmount flash, the bar itself is
           hidden when clean. `pointer-events: none` when hidden so an invisible bar can't block
           clicks on content beneath it. */}
-      <div className="settings-save-bar" style={isDirty ? undefined : { display: 'none' }}>
-        <input id="save" className="stdbtn" type="button" value={t('Save Settings') ?? undefined} onClick={() => void handleSave()} />
+      <div className="settings-save-bar" style={isDirty ? undefined : { display: "none" }}>
+        <input id="save" className="stdbtn" type="button" value={t("Save Settings") ?? undefined} onClick={() => void handleSave()} />
       </div>
     </div>
   )

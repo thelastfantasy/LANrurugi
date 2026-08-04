@@ -10,10 +10,10 @@ export type TagsByNamespace = Record<string, string[]>
  * tags and its `trim()` on both halves of the split. */
 export function splitTagsByNamespace(tags: string | null | undefined): TagsByNamespace {
   const byNamespace: TagsByNamespace = {}
-  if (tags === null || tags === undefined || tags === '') return byNamespace
+  if (tags === null || tags === undefined || tags === "") return byNamespace
   for (const tag of tags.split(/,\s?/)) {
     const match = /^([^:]*):(.*)$/.exec(tag)
-    const namespace = match ? match[1].trim() : 'other'
+    const namespace = match ? match[1].trim() : "other"
     const value = match ? match[2].trim() : tag.trim()
     if (!value) continue
     ;(byNamespace[namespace] ??= []).push(value)
@@ -29,7 +29,7 @@ export function buildTagList(byNamespace: TagsByNamespace): string[] {
 }
 
 export function buildNamespacedTag(namespace: string, tag: string): string {
-  return namespace !== '' && namespace !== 'other' ? `${namespace}:${tag}` : tag
+  return namespace !== "" && namespace !== "other" ? `${namespace}:${tag}` : tag
 }
 
 /** Builds a `namespace:value` (or bare `value`) *search-query* token — distinct from
@@ -44,7 +44,7 @@ export function buildNamespacedTag(namespace: string, tag: string): string {
  * unquoted, single-word case. Visible tag text elsewhere in the UI is built from `value` directly,
  * never from this function's output, so the quotes never show up on-screen. */
 export function buildSearchToken(namespace: string, value: string, exact = false): string {
-  if (value.includes(' ')) return buildNamespacedTag(namespace, `"${value}"`)
+  if (value.includes(" ")) return buildNamespacedTag(namespace, `"${value}"`)
   const namespacedTag = buildNamespacedTag(namespace, value)
   return exact ? `${namespacedTag}$` : namespacedTag
 }
@@ -60,7 +60,7 @@ export const TIMESTAMP_NAMESPACE = /^(date|time)/i
  * `pages/Reader/ArchiveOverviewOverlay.tsx`'s own `TagsTable` before both were consolidated to
  * import this shared copy instead. */
 export function displayNamespace(key: string): string {
-  if (key === 'date_added') return 'Date Added'
+  if (key === "date_added") return "Date Added"
   return key.charAt(0).toUpperCase() + key.slice(1)
 }
 
@@ -87,17 +87,17 @@ export function formatTimestampForDisplay(value: string, timezone: string): stri
   const seconds = Number(value)
   if (!Number.isFinite(seconds)) return value
   const options: Intl.DateTimeFormatOptions = {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     timeZone: timezone || undefined,
   }
   // `Intl` emits in the locale's own field order (e.g. `7/20/2026` for en-US); force `yyyy-mm-dd`
   // by reading the parts back out and reassembling — `formatToParts` is the stable way to do this
   // regardless of locale.
-  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(new Date(seconds * 1000))
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${get('year')}-${get('month')}-${get('day')}`
+  const parts = new Intl.DateTimeFormat("en-US", options).formatToParts(new Date(seconds * 1000))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ""
+  return `${get("year")}-${get("month")}-${get("day")}`
 }
 
 /** Inverse of `formatTimestampForDisplay` for search-URL purposes: a timestamp namespace's
@@ -163,7 +163,7 @@ export function colorCodeTags(tags: string | null | undefined, timezone?: string
  * bare second-level timestamp the tag actually stores — so clicking a displayed `2026-07-20`
  * finds every archive added that day, not just the exact second this one was. */
 export function getTagSearchURL(namespace: string, tag: string, timezone?: string): string {
-  if (namespace === 'source') {
+  if (namespace === "source") {
     return /^https?:\/\//.test(tag) ? tag : `https://${tag}`
   }
   // Timestamp namespaces get rerouted through the date-range syntax when a timezone is available —

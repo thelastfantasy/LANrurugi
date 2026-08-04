@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from "react"
 
-import type { StatTag } from '../api/types'
+import type { StatTag } from "../api/types"
 
 /** Faithful port of jQCloud 2.0.3's real word-placement algorithm (`~/LANraragi/public/js/vendor/
  * jqcloud.min.js`, decompiled and verified line-by-line against the actual minified source — no
@@ -96,7 +96,7 @@ export function TagCloud({ tags }: { tags: StatTag[] }) {
 
     const result: PlacedWord[] = []
     sortedDesc.forEach((tag, index) => {
-      const key = `${tag.namespace ?? ''}:${tag.text}`
+      const key = `${tag.namespace ?? ""}:${tag.text}`
       const el = measureRefs.current.get(key)
       if (!el) return
       const boxWidth = el.offsetWidth
@@ -152,25 +152,25 @@ export function TagCloud({ tags }: { tags: StatTag[] }) {
       ref={containerRef}
       className="jqcloud"
       style={{
-        position: 'relative',
-        width: '100%',
-        height: '100%',
-        overflow: 'hidden',
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
         // jqcloud.min.css's own real `.jqcloud { font: 10px Helvetica,Arial,sans-serif; line-
         // height: normal }` — every word's `100%`-`550%` font-size below is relative to *this*
         // base, not the page's own ambient font-size, so it has to be reproduced exactly (a
         // missing/different base would scale the entire cloud uniformly wrong).
-        font: '10px Helvetica, Arial, sans-serif',
-        lineHeight: 'normal',
+        font: "10px Helvetica, Arial, sans-serif",
+        lineHeight: "normal",
       }}
     >
       {/* Invisible measurement pass — real DOM nodes (so `offsetWidth`/`offsetHeight` reflect the
           actual font/size, not an estimate) rendered off-screen until `layout()` has measured and
           positioned them. Kept mounted (not removed) after that so a later `ResizeObserver`-driven
           re-layout can re-measure the same real elements rather than needing a fresh mount cycle. */}
-      <div style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none' }}>
+      <div style={{ position: "absolute", visibility: "hidden", pointerEvents: "none" }}>
         {sortedDesc.map((tag) => {
-          const key = `${tag.namespace ?? ''}:${tag.text}`
+          const key = `${tag.namespace ?? ""}:${tag.text}`
           const level = levelFor(tag.weight, minWeight, maxWeight)
           return (
             <span
@@ -180,7 +180,7 @@ export function TagCloud({ tags }: { tags: StatTag[] }) {
                 else measureRefs.current.delete(key)
               }}
               className={`jqcloud-word w${level}`}
-              style={{ fontSize: `${FONT_SIZE_PERCENT[level - 1]}%`, whiteSpace: 'nowrap', display: 'inline-block' }}
+              style={{ fontSize: `${FONT_SIZE_PERCENT[level - 1]}%`, whiteSpace: "nowrap", display: "inline-block" }}
             >
               {tag.text}
             </span>
@@ -189,17 +189,17 @@ export function TagCloud({ tags }: { tags: StatTag[] }) {
       </div>
 
       {placed?.map((word) => {
-        const key = `${word.tag.namespace ?? ''}:${word.tag.text}`
+        const key = `${word.tag.namespace ?? ""}:${word.tag.text}`
         return (
           <span
             key={key}
             className={`jqcloud-word w${word.level}`}
             style={{
-              position: 'absolute',
+              position: "absolute",
               left: word.left,
               top: word.top,
               fontSize: `${FONT_SIZE_PERCENT[word.level - 1]}%`,
-              whiteSpace: 'nowrap',
+              whiteSpace: "nowrap",
             }}
           >
             {word.tag.text}

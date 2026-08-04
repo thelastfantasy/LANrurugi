@@ -1,11 +1,11 @@
-import type { MouseEvent } from 'react'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from "react"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useUpdateArchiveMetadata } from '../api/hooks'
-import { formatRating, parseRating } from '../lib/rating'
-import { StarSprite } from './StarRating'
-import { Tooltip } from './Tooltip'
+import { useUpdateArchiveMetadata } from "../api/hooks"
+import { formatRating, parseRating } from "../lib/rating"
+import { StarSprite } from "./StarRating"
+import { Tooltip } from "./Tooltip"
 
 // Mirrors legacy's Raty-based rating widget (`~/LANraragi/public/js/reader.js:315-337`) — there is
 // no dedicated rating field or column anywhere in legacy's own data model; a rating is just a tag
@@ -34,8 +34,8 @@ const CLICK_STEP = 0.5
 // own, so it's paired with an explanatory `Tooltip` on the star row (see the `return` below).
 
 export function currentRating(tags: string): number {
-  const match = tags.split(',').find((t) => t.trim().toLowerCase().startsWith('rating:'))
-  return match ? (parseRating(match.split(':').slice(1).join(':')) ?? 0) : 0
+  const match = tags.split(",").find((t) => t.trim().toLowerCase().startsWith("rating:"))
+  return match ? (parseRating(match.split(":").slice(1).join(":")) ?? 0) : 0
 }
 
 export function RatingWidget({
@@ -67,12 +67,12 @@ export function RatingWidget({
 
   function setRating(score: number | null) {
     const withoutRating = tags
-      .split(',')
-      .filter((t) => !t.trim().toLowerCase().startsWith('rating:'))
+      .split(",")
+      .filter((t) => !t.trim().toLowerCase().startsWith("rating:"))
       .map((t) => t.trim())
       .filter(Boolean)
     const next = score ? [...withoutRating, `rating:${formatRating(score)}`] : withoutRating
-    const nextTags = next.join(',')
+    const nextTags = next.join(",")
     if (onChange) onChange(nextTags)
     else updateMetadata.mutate({ tags: nextTags })
   }
@@ -91,9 +91,9 @@ export function RatingWidget({
   }
 
   return (
-    <Tooltip label={t('Click a star to rate. Right-click to clear the rating.')}>
+    <Tooltip label={t("Click a star to rate. Right-click to clear the rating.")}>
       <span
-        style={{ display: 'inline-flex' }}
+        style={{ display: "inline-flex" }}
         onMouseLeave={() => setPreviewRating(null)}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -103,7 +103,7 @@ export function RatingWidget({
         {Array.from({ length: MAX_STARS }, (_, i) => i).map((i) => (
           <span
             key={i}
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: "pointer" }}
             onMouseMove={(e) => setPreviewRating(scoreFromPointer(e, i))}
             onClick={(e) => setRating(scoreFromPointer(e, i))}
           >

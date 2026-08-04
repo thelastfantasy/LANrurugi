@@ -1,15 +1,15 @@
-import { useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import type { ArchiveMetadata } from '../../api/types'
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator, useMenuPalette } from '../../components/PopupMenu'
-import { RatingWidget } from '../../components/RatingWidget'
-import { splitTagsByNamespace } from '../../lib/tagFormat'
-import { routes } from '../../routes'
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
-import { toast } from '../../toast'
-import { type ContextMenuState, isTankoubonId } from './shared'
+import type { ArchiveMetadata } from "../../api/types"
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator, useMenuPalette } from "../../components/PopupMenu"
+import { RatingWidget } from "../../components/RatingWidget"
+import { splitTagsByNamespace } from "../../lib/tagFormat"
+import { routes } from "../../routes"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../theme"
+import { toast } from "../../toast"
+import { type ContextMenuState, isTankoubonId } from "./shared"
 
 /** Ports legacy's own right-click menu (`~/LANraragi/public/js/mod/index_contextmenu.js`) — same
  * action set and same login-gating (Edit/Delete/Rating/Category only shown when `useLoginStatus`
@@ -74,9 +74,9 @@ export function ArchiveContextMenu({
   // context-menu behavior generally) rather than click. A short close delay absorbs the mouse
   // briefly leaving the trigger row while crossing the gap into the submenu itself.
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  function openSubmenu(which: 'category') {
+  function openSubmenu(which: "category") {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-    setCategoryMenuOpen(which === 'category')
+    setCategoryMenuOpen(which === "category")
   }
   function scheduleCloseSubmenus() {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
@@ -89,8 +89,8 @@ export function ArchiveContextMenu({
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`
     navigator.clipboard
       .writeText(url)
-      .then(() => toast({ heading: t('Link copied to clipboard!') ?? undefined, icon: 'info', hideAfter: 3000 }))
-      .catch(() => toast({ heading: t('Failed to copy link.') ?? undefined, icon: 'error' }))
+      .then(() => toast({ heading: t("Link copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 }))
+      .catch(() => toast({ heading: t("Failed to copy link.") ?? undefined, icon: "error" }))
   }
 
   return (
@@ -98,14 +98,14 @@ export function ArchiveContextMenu({
       {/* Full-viewport transparent overlay — the standard "click outside to dismiss" pattern for
           a positioned popup, cheaper than a document-level listener + ref check. */}
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
+        style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
         onClick={onClose}
         onContextMenu={(e) => {
           e.preventDefault()
           onClose()
         }}
       />
-      <PopupMenu style={{ position: 'fixed', top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
+      <PopupMenu style={{ position: "fixed", top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
         {loggedIn && (
           <>
             {/* A compact icon-only row at the very top of the menu (Firefox's own right-click
@@ -116,7 +116,7 @@ export function ArchiveContextMenu({
                 sense for a row of independent controls). */}
             <li
               className="flex items-center justify-center gap-1 px-2 pt-1"
-              style={{ paddingBottom: '.45em', borderBottom: `1px solid ${palette.separator}`, marginBottom: '.35em' }}
+              style={{ paddingBottom: ".45em", borderBottom: `1px solid ${palette.separator}`, marginBottom: ".35em" }}
             >
               <RatingWidget
                 archiveId={archive.arcid}
@@ -137,7 +137,7 @@ export function ArchiveContextMenu({
             onOpen(archive.arcid)
           }}
         >
-          <i className="fa fa-book-open" style={{ width: 18 }}></i> {t('Read')}
+          <i className="fa fa-book-open" style={{ width: 18 }}></i> {t("Read")}
         </PopupMenuItem>
         {/* Not offered on a Tankoubon — it's an aggregate container with no single `progress`/
             `pagecount` of its own (each member archive tracks its own separately), so "mark this
@@ -153,8 +153,8 @@ export function ArchiveContextMenu({
               onSetProgress(archive.arcid, archive.progress > 0 ? 0 : archive.pagecount)
             }}
           >
-            <i className={`fa ${archive.progress > 0 ? 'fa-eye-slash' : 'fa-eye'}`} style={{ width: 18 }}></i>{' '}
-            {archive.progress > 0 ? t('Mark as Unread') : t('Mark as Read')}
+            <i className={`fa ${archive.progress > 0 ? "fa-eye-slash" : "fa-eye"}`} style={{ width: 18 }}></i>{" "}
+            {archive.progress > 0 ? t("Mark as Unread") : t("Mark as Read")}
           </PopupMenuItem>
         )}
         {!isTank && (
@@ -164,7 +164,7 @@ export function ArchiveContextMenu({
               window.location.assign(`/api/archives/${archive.arcid}/download`)
             }}
           >
-            <i className="fa fa-download" style={{ width: 18 }}></i> {t('Download')}
+            <i className="fa fa-download" style={{ width: 18 }}></i> {t("Download")}
           </PopupMenuItem>
         )}
         <PopupMenuItem
@@ -173,7 +173,7 @@ export function ArchiveContextMenu({
             copyLink()
           }}
         >
-          <i className="fa fa-link" style={{ width: 18 }}></i> {t('Copy Link')}
+          <i className="fa fa-link" style={{ width: 18 }}></i> {t("Copy Link")}
         </PopupMenuItem>
         <PopupMenuItem
           onClick={() => {
@@ -181,8 +181,8 @@ export function ArchiveContextMenu({
             onToggleSelection(archive.arcid)
           }}
         >
-          <i className="fa fa-check-square" style={{ width: 18 }}></i>{' '}
-          {isSelected ? t('Remove from Selection') : t('Add to Selection')}
+          <i className="fa fa-check-square" style={{ width: 18 }}></i>{" "}
+          {isSelected ? t("Remove from Selection") : t("Add to Selection")}
         </PopupMenuItem>
         {loggedIn && (
           <>
@@ -193,26 +193,26 @@ export function ArchiveContextMenu({
                 navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))
               }}
             >
-              <i className="fa fa-pen" style={{ width: 18 }}></i>{' '}
-              {isTank ? t('Edit Tankoubon') : t('Edit Metadata')}
+              <i className="fa fa-pen" style={{ width: 18 }}></i>{" "}
+              {isTank ? t("Edit Tankoubon") : t("Edit Metadata")}
             </PopupMenuItem>
-            <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('category')} onMouseLeave={scheduleCloseSubmenus}>
-              <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t('Add to Category')}
+            <PopupMenuItem style={{ position: "relative" }} onMouseEnter={() => openSubmenu("category")} onMouseLeave={scheduleCloseSubmenus}>
+              <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t("Add to Category")}
               {categoryMenuOpen && (
                 <PopupMenu
                   portal={false}
-                  style={{ position: 'absolute', left: '100%', top: 0, maxHeight: 220, overflowY: 'auto' }}
-                  onMouseEnter={() => openSubmenu('category')}
+                  style={{ position: "absolute", left: "100%", top: 0, maxHeight: 220, overflowY: "auto" }}
+                  onMouseEnter={() => openSubmenu("category")}
                   onMouseLeave={scheduleCloseSubmenus}
                 >
                   {staticCategories.length === 0 && (
-                    <PopupMenuItem disabled>{t('No categories found.')}</PopupMenuItem>
+                    <PopupMenuItem disabled>{t("No categories found.")}</PopupMenuItem>
                   )}
                   {staticCategories.map((c) => {
                     const currentlyIn = c.archives.includes(archive.arcid)
                     return (
                       <PopupMenuItem key={c.id} onClick={() => onToggleCategory(c.id, archive.arcid, currentlyIn)}>
-                        <input type="checkbox" readOnly checked={currentlyIn} style={{ verticalAlign: 'middle' }} /> {c.name}
+                        <input type="checkbox" readOnly checked={currentlyIn} style={{ verticalAlign: "middle" }} /> {c.name}
                       </PopupMenuItem>
                     )
                   })}
@@ -226,7 +226,7 @@ export function ArchiveContextMenu({
                 onDelete(archive.arcid, isTank)
               }}
             >
-              <i className="fa fa-trash" style={{ width: 18 }}></i> {t('Delete')}
+              <i className="fa fa-trash" style={{ width: 18 }}></i> {t("Delete")}
             </PopupMenuItem>
           </>
         )}
@@ -250,36 +250,36 @@ export function DeleteConfirmDialog({
   const { t } = useTranslation()
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: 'rgba(0,0,0,0.4)' }} onClick={onCancel} />
+      <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={onCancel} />
       <div
         style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
           zIndex: Z_OVERLAY_CONTENT,
           width: 360,
           padding: 20,
-          textAlign: 'center',
-          background: '#fff',
-          border: '1px solid #bebebe',
-          borderRadius: '.2em',
-          boxShadow: '0 2px 5px rgba(0,0,0,.5)',
+          textAlign: "center",
+          background: "#fff",
+          border: "1px solid #bebebe",
+          borderRadius: ".2em",
+          boxShadow: "0 2px 5px rgba(0,0,0,.5)",
         }}
       >
-        <i className="fa fa-exclamation-triangle fa-2x" style={{ color: '#d33' }} aria-hidden="true"></i>
+        <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
         <p>
           {isTank
-            ? t('This will delete this Tankoubon grouping (archives inside it are not deleted).')
-            : t('This will delete both metadata and matching files from your system! Please use with caution.')}
+            ? t("This will delete this Tankoubon grouping (archives inside it are not deleted).")
+            : t("This will delete both metadata and matching files from your system! Please use with caution.")}
         </p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 12 }}>
-          <input type="button" className="stdbtn" value={t('Cancel') ?? undefined} onClick={onCancel} />
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 12 }}>
+          <input type="button" className="stdbtn" value={t("Cancel") ?? undefined} onClick={onCancel} />
           <input
             type="button"
             className="stdbtn"
-            style={{ background: '#d33', color: 'white' }}
-            value={t('Yes, delete it') ?? undefined}
+            style={{ background: "#d33", color: "white" }}
+            value={t("Yes, delete it") ?? undefined}
             onClick={onConfirm}
           />
         </div>

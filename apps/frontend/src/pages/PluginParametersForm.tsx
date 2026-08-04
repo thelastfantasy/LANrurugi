@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { usePluginSettings, useUpdatePluginSettings } from '../api/hooks'
-import type { PluginSettings } from '../api/types'
+import { usePluginSettings, useUpdatePluginSettings } from "../api/hooks"
+import type { PluginSettings } from "../api/types"
 
 // Per-plugin custom-parameter settings (e.g. E-Hentai login's cookie fields) — one text input per
 // `PluginInfo.parameters` entry, dynamically rendered from the plugin's own declared metadata,
@@ -24,16 +24,16 @@ export function PluginParametersForm({
   return (
     <>
       <div
-        className={`collapsible-title caret-right${open ? ' active' : ''}`}
-        style={{ padding: '5px 0 0 5px', cursor: 'pointer' }}
+        className={`collapsible-title caret-right${open ? " active" : ""}`}
+        style={{ padding: "5px 0 0 5px", cursor: "pointer" }}
         onClick={() => setOpen((o) => !o)}
       >
         <i className="fas fa-sliders-h fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
-        <b style={{ verticalAlign: 'super' }}>{t('Plugin Settings')}</b>
+        <b style={{ verticalAlign: "super" }}>{t("Plugin Settings")}</b>
       </div>
       {open && (
-        <div className="collapsible-body" style={{ padding: '5px 0 0 0' }}>
-          {settings.isLoading && <p>{t('Loading…')}</p>}
+        <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
+          {settings.isLoading && <p>{t("Loading…")}</p>}
           {settings.data && (
             <PluginParametersFormBody
               namespace={namespace}
@@ -59,7 +59,7 @@ function PluginParametersFormBody({
   const { t } = useTranslation()
   const update = useUpdatePluginSettings(namespace)
   const [values, setValues] = useState<string[]>(() =>
-    parameters.map((_, i) => initial.customargs[i] ?? ''),
+    parameters.map((_, i) => initial.customargs[i] ?? ""),
   )
 
   function setValue(index: number, value: string) {
@@ -70,7 +70,7 @@ function PluginParametersFormBody({
     <table>
       <tbody>
         {parameters.map((param, i) =>
-          param.type === 'bool' ? (
+          param.type === "bool" ? (
             // Real legacy markup (`~/LANraragi/templates/plugins.html.tt2`): `type="checkbox"
             // value="1" class="fa"`, `checked` iff the saved value is truthy — the literal string
             // `"1"` is legacy's own real "checked" storage value (matching what an HTML form
@@ -78,21 +78,21 @@ function PluginParametersFormBody({
             // font-family `config.css`'s `::before`/`::after` glyph content needs to actually
             // render as the ON/OFF switch look, not a bare native checkbox.
             <tr key={param.name}>
-              <td style={{ verticalAlign: 'middle' }}>
+              <td style={{ verticalAlign: "middle" }}>
                 <b>{t(param.desc)} :</b>
               </td>
               <td>
                 <input
                   type="checkbox"
                   className="fa"
-                  checked={values[i] === '1'}
-                  onChange={(e) => setValue(i, e.target.checked ? '1' : '')}
+                  checked={values[i] === "1"}
+                  onChange={(e) => setValue(i, e.target.checked ? "1" : "")}
                 />
               </td>
             </tr>
           ) : (
             <tr key={param.name}>
-              <td style={{ verticalAlign: 'middle' }}>
+              <td style={{ verticalAlign: "middle" }}>
                 <b>{t(param.desc)} :</b>
               </td>
               <td>
@@ -113,7 +113,7 @@ function PluginParametersFormBody({
               type="button"
               className="stdbtn"
               disabled={update.isPending}
-              value={t('Save Plugin Settings') ?? undefined}
+              value={t("Save Plugin Settings") ?? undefined}
               onClick={() => void update.mutateAsync({ customargs: values })}
             />
           </td>

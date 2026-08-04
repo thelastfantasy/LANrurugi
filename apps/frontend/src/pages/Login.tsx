@@ -1,12 +1,12 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { useLogin } from '../api/hooks'
-import { Footer } from '../components/Footer'
-import { routes } from '../routes'
-import { FONT_SIZE_8PT, useApplyTheme } from '../theme'
-import { useDocumentTitle } from '../useDocumentTitle'
+import { useLogin } from "../api/hooks"
+import { Footer } from "../components/Footer"
+import { routes } from "../routes"
+import { FONT_SIZE_8PT, useApplyTheme } from "../theme"
+import { useDocumentTitle } from "../useDocumentTitle"
 
 // Mirrors legacy's `~/LANraragi/templates/login.html.tt2` line-for-line: a plain centered `.ido`
 // form, "Admin Password:"/input on one table row (not stacked), the wrong-password row only when
@@ -18,9 +18,9 @@ export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const login = useLogin()
-  const [password, setPassword] = useState('')
+  const [password, setPassword] = useState("")
   useApplyTheme()
-  useDocumentTitle(t('Admin Login') ?? undefined)
+  useDocumentTitle(t("Admin Login") ?? undefined)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -34,14 +34,14 @@ export function Login() {
 
   return (
     <>
-      <div className="ido" style={{ textAlign: 'center' }}>
-        <p>{t('This page requires you to log on.')}</p>
+      <div className="ido" style={{ textAlign: "center" }}>
+        <p>{t("This page requires you to log on.")}</p>
 
         <form onSubmit={handleSubmit} name="loginForm" method="post">
-          <table style={{ margin: 'auto', textAlign: 'left', fontSize: FONT_SIZE_8PT }}>
+          <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_8PT }}>
             <tbody>
               <tr>
-                <td>{t('Admin Password:')}</td>
+                <td>{t("Admin Password:")}</td>
                 <td>
                   <input
                     id="pw_field"
@@ -50,7 +50,7 @@ export function Login() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="stdinput"
-                    style={{ width: '90%' }}
+                    style={{ width: "90%" }}
                     maxLength={255}
                     size={20}
                     name="password"
@@ -58,20 +58,20 @@ export function Login() {
                 </td>
               </tr>
               <tr>
-                <td colSpan={2} style={{ paddingTop: 5, textAlign: 'center', verticalAlign: 'middle' }}>
+                <td colSpan={2} style={{ paddingTop: 5, textAlign: "center", verticalAlign: "middle" }}>
                   <input
                     type="submit"
                     className="stdbtn"
                     disabled={login.isPending}
-                    value={t('Login') ?? undefined}
+                    value={t("Login") ?? undefined}
                     style={{ width: 60 }}
                   />
                 </td>
               </tr>
               {login.isError && (
                 <tr style={{ fontSize: 23 }}>
-                  <td colSpan={2} style={{ paddingTop: 5, textAlign: 'center', verticalAlign: 'middle' }}>
-                    {t('Wrong Password.')}
+                  <td colSpan={2} style={{ paddingTop: 5, textAlign: "center", verticalAlign: "middle" }}>
+                    {t("Wrong Password.")}
                   </td>
                 </tr>
               )}

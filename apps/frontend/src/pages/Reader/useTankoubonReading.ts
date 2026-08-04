@@ -1,8 +1,8 @@
-import { useQueries } from '@tanstack/react-query'
+import { useQueries } from "@tanstack/react-query"
 
-import { fetchJson } from '../../api/client'
-import { useTankoubonFull } from '../../api/hooks'
-import type { ArchiveFilesResponse, ArchiveMetadata, TocEntry } from '../../api/types'
+import { fetchJson } from "../../api/client"
+import { useTankoubonFull } from "../../api/hooks"
+import type { ArchiveFilesResponse, ArchiveMetadata, TocEntry } from "../../api/types"
 
 /** One member archive's own contribution to the concatenated page list — a slice of the whole
  * Tankoubon's global page range this archive's own pages occupy. */
@@ -39,7 +39,7 @@ export function useTankoubonReading(tankId: string | null) {
   // so a member archive's page list is shared cache with a direct single-archive read of it.
   const pageQueries = useQueries({
     queries: memberIds.map((id) => ({
-      queryKey: ['archive-pages', id],
+      queryKey: ["archive-pages", id],
       queryFn: () => fetchJson<ArchiveFilesResponse>(`/archives/${id}/files`),
       enabled: tankId !== null,
     })),
@@ -94,11 +94,11 @@ export function useTankoubonReading(tankId: string | null) {
         ? {
             arcid: tank.id,
             title: tank.name,
-            filename: '',
+            filename: "",
             tags: tank.tags,
             summary: tank.summary,
             isnew: false,
-            extension: '.tank',
+            extension: ".tank",
             progress: tank.progress,
             pagecount: pages.length,
             lastreadtime: 0,

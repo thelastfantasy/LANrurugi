@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState } from "react"
 
 /** Legacy's real `.collapsible.extensible.with-right-caret > li.option-flyout` accordion pattern
  * (`allcollapsible.js`, verified via the real vendor source) — every `.collapsible-body` starts
@@ -17,21 +17,21 @@ export function CollapsibleSection({
   icon,
   title,
   defaultOpen = false,
-  caretStyle = 'up-down',
+  caretStyle = "up-down",
   children,
 }: {
   icon: string
   title: React.ReactNode
   defaultOpen?: boolean
-  caretStyle?: 'up-down' | 'right-down'
+  caretStyle?: "up-down" | "right-down"
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const caretClass = caretStyle === 'right-down' ? 'caret-right-down' : 'caret-right'
+  const caretClass = caretStyle === "right-down" ? "caret-right-down" : "caret-right"
 
   return (
     <li className="option-flyout">
-      <div className={`collapsible-title ${caretClass}${open ? ' active' : ''}`} onClick={() => setOpen((o) => !o)}>
+      <div className={`collapsible-title ${caretClass}${open ? " active" : ""}`} onClick={() => setOpen((o) => !o)}>
         <i className={`fa ${icon}`} aria-hidden="true"></i> {title}
       </div>
       {open && <div className="collapsible-body">{children}</div>}

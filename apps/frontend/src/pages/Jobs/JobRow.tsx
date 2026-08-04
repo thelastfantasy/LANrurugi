@@ -1,20 +1,20 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import type { JobRecord, JobRecordState } from '../../api/types'
-import { CodeBlock } from '../../components/CodeBlock'
-import { JobProgressBar, STATE_COLOR } from '../../components/JobProgress'
-import { FONT_SIZE_10PT } from '../../theme'
+import type { JobRecord, JobRecordState } from "../../api/types"
+import { CodeBlock } from "../../components/CodeBlock"
+import { JobProgressBar, STATE_COLOR } from "../../components/JobProgress"
+import { FONT_SIZE_10PT } from "../../theme"
 
 /** State → i18n key (bare English word, added to the locale files in T024). */
 export const STATE_LABEL_KEYS: Record<JobRecordState, string> = {
-  queued: 'Queued',
-  active: 'Active',
-  finished: 'Finished',
-  failed: 'Failed',
+  queued: "Queued",
+  active: "Active",
+  finished: "Finished",
+  failed: "Failed",
 }
 
-export const isTerminal = (s: JobRecordState) => s === 'finished' || s === 'failed'
+export const isTerminal = (s: JobRecordState) => s === "finished" || s === "failed"
 
 /** One job row + its expandable detail (US2/T010). The leading checkbox drives multi-select clear
  * (US3); only terminal jobs are selectable, others render a disabled checkbox so the row still
@@ -34,24 +34,24 @@ export function JobRow({
 
   return (
     <>
-      <tr className={open ? 'gtr1' : undefined}>
-        <td style={{ textAlign: 'center' }}>
+      <tr className={open ? "gtr1" : undefined}>
+        <td style={{ textAlign: "center" }}>
           <input
             type="checkbox"
             checked={selected}
             disabled={!selectable}
             onChange={onToggleSelect}
-            aria-label={t('Select job') ?? undefined}
+            aria-label={t("Select job") ?? undefined}
           />
         </td>
         <td
           onClick={() => setOpen((o) => !o)}
-          style={{ cursor: 'pointer', wordBreak: 'break-word', textAlign: 'left' }}
+          style={{ cursor: "pointer", wordBreak: "break-word", textAlign: "left" }}
         >
           {job.name}
         </td>
         <td>
-          <span style={{ color: STATE_COLOR[job.state], fontWeight: 'bold' }}>
+          <span style={{ color: STATE_COLOR[job.state], fontWeight: "bold" }}>
             {t(STATE_LABEL_KEYS[job.state])}
           </span>
         </td>
@@ -59,10 +59,10 @@ export function JobRow({
           <JobProgressBar job={job} color={STATE_COLOR[job.state]} />
         </td>
         <td
-          style={{ textAlign: 'center', cursor: 'pointer' }}
+          style={{ textAlign: "center", cursor: "pointer" }}
           onClick={() => setOpen((o) => !o)}
         >
-          <i className={`fa fa-caret-${open ? 'down' : 'right'}`} aria-hidden="true"></i>
+          <i className={`fa fa-caret-${open ? "down" : "right"}`} aria-hidden="true"></i>
         </td>
       </tr>
       {open && (
@@ -82,37 +82,37 @@ export function JobRow({
  * fetch is needed. */
 function JobDetail({ job }: { job: JobRecord }) {
   const { t } = useTranslation()
-  if (job.state === 'failed') {
+  if (job.state === "failed") {
     return (
       <div style={{ fontSize: FONT_SIZE_10PT }}>
-        <strong style={{ color: STATE_COLOR.failed }}>{t('Error')}: </strong>
+        <strong style={{ color: STATE_COLOR.failed }}>{t("Error")}: </strong>
         <pre
           style={{
-            margin: '4px 0 0',
-            padding: '8px 12px',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            margin: "4px 0 0",
+            padding: "8px 12px",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
             color: STATE_COLOR.failed,
-            background: 'rgba(207, 37, 37, 0.08)',
+            background: "rgba(207, 37, 37, 0.08)",
             borderLeft: `3px solid ${STATE_COLOR.failed}`,
             borderRadius: 4,
           }}
         >
-          {job.error || t('(no error message captured)')}
+          {job.error || t("(no error message captured)")}
         </pre>
       </div>
     )
   }
-  if (job.state === 'finished') {
+  if (job.state === "finished") {
     const code =
       job.result == null
-        ? t('(no result)')
-        : typeof job.result === 'string'
+        ? t("(no result)")
+        : typeof job.result === "string"
           ? job.result
           : JSON.stringify(job.result, null, 2)
     return (
       <div style={{ fontSize: FONT_SIZE_10PT }}>
-        <strong>{t('Result')}: </strong>
+        <strong>{t("Result")}: </strong>
         <div style={{ marginTop: 4 }}>
           <CodeBlock code={code} language="json" />
         </div>
@@ -121,7 +121,7 @@ function JobDetail({ job }: { job: JobRecord }) {
   }
   return (
     <div style={{ fontSize: FONT_SIZE_10PT, color: STATE_COLOR.finished }}>
-      {t('This job is still running — no result yet.')}
+      {t("This job is still running — no result yet.")}
     </div>
   )
 }

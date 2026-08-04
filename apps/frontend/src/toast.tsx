@@ -1,6 +1,6 @@
-import { toast as emitToast, type ToastOptions } from 'react-toastify'
+import { toast as emitToast, type ToastOptions } from "react-toastify"
 
-export type ToastIcon = 'info' | 'success' | 'warning' | 'error'
+export type ToastIcon = "info" | "success" | "warning" | "error"
 
 export interface ToastConfig {
   heading?: string
@@ -36,12 +36,12 @@ const AUTO_CLOSE_TIME: Record<ToastIcon, number | false> = {
  * toasts clear of every other interactive chrome on this app's pages (issue #58).
  */
 export function toast(c: ToastConfig) {
-  const type = c.icon ?? 'info'
-  const isWarningOrError = type === 'warning' || type === 'error'
+  const type = c.icon ?? "info"
+  const isWarningOrError = type === "warning" || type === "error"
   const options: ToastOptions = {
     toastId: c.toastId,
     type,
-    position: 'bottom-right',
+    position: "bottom-right",
     autoClose: c.hideAfter ?? AUTO_CLOSE_TIME[type] ?? 7000,
     closeOnClick: c.closeOnClick ?? !isWarningOrError,
     draggable: c.draggable ?? !isWarningOrError,
@@ -59,7 +59,7 @@ export function toast(c: ToastConfig) {
     // on top of that: the active theme's own `body { text-align: center }` (`g.css` etc., legacy's
     // real global centering convention for un-positioned elements like images) inherits all the way
     // down into the portal, and `lrr.css`'s `.Toastify__toast-body` rule doesn't itself override it.
-    <div className="Toastify__toast-body" style={{ textAlign: 'left' }}>
+    <div className="Toastify__toast-body" style={{ textAlign: "left" }}>
       {c.heading && <h2>{c.heading}</h2>}
       {c.text && <div dangerouslySetInnerHTML={{ __html: c.text }} />}
     </div>,

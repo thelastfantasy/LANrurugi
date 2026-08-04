@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect } from "react"
 
-import { usePublicTheme, useSettings } from './api/hooks'
-import { THEME_STORAGE_KEY } from './storageKeys'
+import { usePublicTheme, useSettings } from "./api/hooks"
+import { THEME_STORAGE_KEY } from "./storageKeys"
 
 // Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
 // css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
@@ -9,14 +9,14 @@ import { THEME_STORAGE_KEY } from './storageKeys'
 // background colour — note that Nadeko and H-Verse are actually light themes, easy to get
 // backwards without checking the real file.
 export const THEMES = [
-  { id: 'modern.css', name: 'Hachikuji', color: '#34353B' },
-  { id: 'modern_red.css', name: 'Nadeko', color: '#E9BBC5' },
-  { id: 'modern_clear.css', name: 'Yotsugi', color: '#FCFCFC' },
-  { id: 'g.css', name: 'H-Verse', color: '#E3E0D1' },
-  { id: 'ex.css', name: 'Sad Panda', color: '#34353B' },
+  { id: "modern.css", name: "Hachikuji", color: "#34353B" },
+  { id: "modern_red.css", name: "Nadeko", color: "#E9BBC5" },
+  { id: "modern_clear.css", name: "Yotsugi", color: "#FCFCFC" },
+  { id: "g.css", name: "H-Verse", color: "#E3E0D1" },
+  { id: "ex.css", name: "Sad Panda", color: "#34353B" },
 ] as const
 
-export const DEFAULT_THEME_ID = 'modern.css'
+export const DEFAULT_THEME_ID = "modern.css"
 
 /** Popup-menu palette per theme (right-click menu, index settings gear menu) — real colour values
  * read directly off each theme's own `.context-menu-list`/`.context-menu-item`/`.context-menu-
@@ -24,53 +24,53 @@ export const DEFAULT_THEME_ID = 'modern.css'
  * `PopupMenu` component matches each theme's real popup styling without linking any menu-plugin
  * CSS file at all. */
 export const MENU_PALETTE: Record<
-  (typeof THEMES)[number]['id'],
+  (typeof THEMES)[number]["id"],
   { bg: string; border: string; text: string; hoverBg: string; hoverText: string; separator: string; shadow: string }
 > = {
-  'modern.css': {
-    bg: '#34353B',
-    border: '#363940',
-    text: '#FFFFFF',
-    hoverBg: '#43464E',
-    hoverText: '#3b97ea',
-    separator: '#43464E',
-    shadow: '0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)',
+  "modern.css": {
+    bg: "#34353B",
+    border: "#363940",
+    text: "#FFFFFF",
+    hoverBg: "#43464E",
+    hoverText: "#3b97ea",
+    separator: "#43464E",
+    shadow: "0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)",
   },
-  'modern_red.css': {
-    bg: '#DCDDCB',
-    border: 'transparent',
-    text: '#414135',
-    hoverBg: '#E9A53A',
-    hoverText: '#F1F1F1',
-    separator: '#414135',
-    shadow: '0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)',
+  "modern_red.css": {
+    bg: "#DCDDCB",
+    border: "transparent",
+    text: "#414135",
+    hoverBg: "#E9A53A",
+    hoverText: "#F1F1F1",
+    separator: "#414135",
+    shadow: "0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)",
   },
-  'modern_clear.css': {
-    bg: '#E1E7E9',
-    border: 'transparent',
-    text: '#34495E',
-    hoverBg: '#34495E',
-    hoverText: '#ed2553',
-    separator: '#34495E',
-    shadow: '0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)',
+  "modern_clear.css": {
+    bg: "#E1E7E9",
+    border: "transparent",
+    text: "#34495E",
+    hoverBg: "#34495E",
+    hoverText: "#ed2553",
+    separator: "#34495E",
+    shadow: "0 2px 5px 0 rgba(0,0,0,.16), 0 2px 10px 0 rgba(0,0,0,.12)",
   },
-  'g.css': {
-    bg: '#EDEADA',
-    border: '#5C0D11',
-    text: '#5C0D11',
-    hoverBg: '#F2EFDF',
-    hoverText: '#5C0D11',
-    separator: '#5C0D11',
-    shadow: 'none',
+  "g.css": {
+    bg: "#EDEADA",
+    border: "#5C0D11",
+    text: "#5C0D11",
+    hoverBg: "#F2EFDF",
+    hoverText: "#5C0D11",
+    separator: "#5C0D11",
+    shadow: "none",
   },
-  'ex.css': {
-    bg: '#4f535b',
-    border: '#000000',
-    text: '#DDDDDD',
-    hoverBg: '#3b97ea',
-    hoverText: '#f1f1f1',
-    separator: '#DDDDDD',
-    shadow: 'none',
+  "ex.css": {
+    bg: "#4f535b",
+    border: "#000000",
+    text: "#DDDDDD",
+    hoverBg: "#3b97ea",
+    hoverText: "#f1f1f1",
+    separator: "#DDDDDD",
+    shadow: "none",
   },
 }
 
@@ -78,11 +78,11 @@ export const MENU_PALETTE: Record<
 // the `rem` equivalents used throughout the app instead (16px root font size assumed), so a
 // pt-sized legacy rule and our own inline styles agree on the same rendered size. Naming reflects
 // the legacy pt value they replace, not the rem number, since that's the meaningful constant.
-export const FONT_SIZE_8PT = '0.667rem'
+export const FONT_SIZE_8PT = "0.667rem"
 
-export const FONT_SIZE_9PT = '0.833rem'
+export const FONT_SIZE_9PT = "0.833rem"
 
-export const FONT_SIZE_10PT = '0.75rem'
+export const FONT_SIZE_10PT = "0.75rem"
 
 // Shared full-screen-overlay layering: a fixed, click-to-dismiss backdrop behind a floating menu/
 // popup — used by Library's/the Reader's own context menus. `CONTENT` is exactly one level above
@@ -112,17 +112,17 @@ export const Z_OVERLAY_TOOLTIP = 1100
 // much higher `z-index`).
 export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
 
-const LEGACY_STRUCTURAL_CSS_ID = 'legacy-structural-css'
-const LEGACY_THEME_CSS_ID = 'legacy-theme-css'
-const LEGACY_FILEUPLOAD_CSS_ID = 'legacy-fileupload-css'
-const LEGACY_COLLAPSIBLE_CSS_ID = 'legacy-collapsible-css'
+const LEGACY_STRUCTURAL_CSS_ID = "legacy-structural-css"
+const LEGACY_THEME_CSS_ID = "legacy-theme-css"
+const LEGACY_FILEUPLOAD_CSS_ID = "legacy-fileupload-css"
+const LEGACY_COLLAPSIBLE_CSS_ID = "legacy-collapsible-css"
 
 export function ensureLink(id: string, href: string) {
   let link = document.getElementById(id) as HTMLLinkElement | null
   if (!link) {
-    link = document.createElement('link')
+    link = document.createElement("link")
     link.id = id
-    link.rel = 'stylesheet'
+    link.rel = "stylesheet"
     // Appended (not inserted at a fixed position) so it always lands after anything Tailwind's
     // own `@import`s already put in `<head>` at module-load time — same-specificity element
     // selectors (`body`, `.stdbtn`, ...) are decided by source order, and legacy's real CSS must
@@ -141,7 +141,7 @@ export function removeLink(id: string) {
   document.getElementById(id)?.remove()
 }
 
-const LEGACY_CONFIG_CSS_ID = 'legacy-config-css'
+const LEGACY_CONFIG_CSS_ID = "legacy-config-css"
 
 /** `config.css` (real vendor file, `~/LANraragi/public/css/config.css`) is only ever linked by
  * legacy's own `config.html.tt2`/`plugins.html.tt2` — it globally restyles every
@@ -151,7 +151,7 @@ const LEGACY_CONFIG_CSS_ID = 'legacy-config-css'
  * that link it) rather than each hand-rolling the identical `useEffect`. */
 export function useLegacyConfigCss() {
   useEffect(() => {
-    ensureLink(LEGACY_CONFIG_CSS_ID, '/legacy/config.css')
+    ensureLink(LEGACY_CONFIG_CSS_ID, "/legacy/config.css")
     return () => removeLink(LEGACY_CONFIG_CSS_ID)
   }, [])
 }
@@ -181,9 +181,9 @@ export function useApplyTheme() {
   const publicTheme = usePublicTheme({ enabled: settings.data === undefined })
 
   useEffect(() => {
-    ensureLink(LEGACY_STRUCTURAL_CSS_ID, '/legacy/lrr.css')
-    ensureLink(LEGACY_FILEUPLOAD_CSS_ID, '/legacy/fileupload-vendor.css')
-    ensureLink(LEGACY_COLLAPSIBLE_CSS_ID, '/legacy/allcollapsible.css')
+    ensureLink(LEGACY_STRUCTURAL_CSS_ID, "/legacy/lrr.css")
+    ensureLink(LEGACY_FILEUPLOAD_CSS_ID, "/legacy/fileupload-vendor.css")
+    ensureLink(LEGACY_COLLAPSIBLE_CSS_ID, "/legacy/allcollapsible.css")
   }, [])
 
   // `settings`/`publicTheme` are both `undefined` for one or more renders after mount, before

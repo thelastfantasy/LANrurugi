@@ -1,11 +1,11 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { ValidationError } from '../api/client'
-import { usePluginOptions, useResetPluginOptions, useUpdatePluginOptions } from '../api/hooks'
-import type { PluginOptions, PluginOptionsUpdate } from '../api/types'
-import { Tooltip } from '../components/Tooltip'
-import { ICON_BUTTON_STYLE } from './Upload/shared'
+import { ValidationError } from "../api/client"
+import { usePluginOptions, useResetPluginOptions, useUpdatePluginOptions } from "../api/hooks"
+import type { PluginOptions, PluginOptionsUpdate } from "../api/types"
+import { Tooltip } from "../components/Tooltip"
+import { ICON_BUTTON_STYLE } from "./Upload/shared"
 
 interface DomainRuleFormRow {
   pattern: string
@@ -27,7 +27,7 @@ export function PluginOptionsForm({ namespace }: { namespace: string }) {
   const { t } = useTranslation()
   const options = usePluginOptions(namespace)
 
-  if (options.isLoading) return <p>{t('Loading…')}</p>
+  if (options.isLoading) return <p>{t("Loading…")}</p>
   if (!options.data) return null
 
   // Keyed by namespace so switching which plugin's settings are open (unmount + fresh mount)
@@ -45,9 +45,9 @@ function bytesPerSecToKb(bytesPerSec: number): string {
 
 function rowsFromOptions(options: PluginOptions): DomainRuleFormRow[] {
   return options.domain_rules.map((r) => ({
-    pattern: r.pattern ?? '',
-    max_concurrent: r.max_concurrent?.toString() ?? '',
-    max_bytes_per_sec: r.max_bytes_per_sec != null ? bytesPerSecToKb(r.max_bytes_per_sec) : '',
+    pattern: r.pattern ?? "",
+    max_concurrent: r.max_concurrent?.toString() ?? "",
+    max_bytes_per_sec: r.max_bytes_per_sec != null ? bytesPerSecToKb(r.max_bytes_per_sec) : "",
     description: r.description,
   }))
 }
@@ -69,7 +69,7 @@ function PluginOptionsFormBody({
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null)
 
   function addRow() {
-    setRows((r) => [...r, { pattern: '', max_concurrent: '', max_bytes_per_sec: '' }])
+    setRows((r) => [...r, { pattern: "", max_concurrent: "", max_bytes_per_sec: "" }])
   }
 
   function removeRow(index: number) {
@@ -132,24 +132,24 @@ function PluginOptionsFormBody({
       style={{
         // A visually distinct section, not a flyout: top separator + spacing sets it apart from
         // the plugin's description/parameters above (issue #2).
-        borderTop: '1px solid rgba(128,128,128,0.3)',
+        borderTop: "1px solid rgba(128,128,128,0.3)",
         marginTop: 8,
         paddingTop: 8,
         // `transition: background-color` lets Plugins.tsx's deep-link highlight (an inline
         // backgroundColor set then cleared 2.5s later, directly on this element) fade smoothly
         // rather than snapping off (issue #2).
-        transition: 'background-color 0.6s ease',
+        transition: "background-color 0.6s ease",
       }}
     >
-      <h3 className="ih" style={{ fontSize: '1.0em', margin: '0 0 6px' }}>
-        {t('Download / Rate-limit Settings')}
+      <h3 className="ih" style={{ fontSize: "1.0em", margin: "0 0 6px" }}>
+        {t("Download / Rate-limit Settings")}
       </h3>
-      <table className="itg" style={{ width: '100%' }}>
+      <table className="itg" style={{ width: "100%" }}>
         <thead>
           <tr className="jtr0">
-            <th>{t('Domain Pattern')}</th>
-            <th>{t('Max Concurrent')}</th>
-            <th>{t('Max KB/s')}</th>
+            <th>{t("Domain Pattern")}</th>
+            <th>{t("Max Concurrent")}</th>
+            <th>{t("Max KB/s")}</th>
             <th></th>
           </tr>
         </thead>
@@ -160,7 +160,7 @@ function PluginOptionsFormBody({
                 <input
                   className="stdinput"
                   value={row.pattern}
-                  placeholder={t('*.example.com') ?? undefined}
+                  placeholder={t("*.example.com") ?? undefined}
                   onChange={(e) => updateRow(i, { pattern: e.target.value })}
                 />
               </td>
@@ -188,7 +188,7 @@ function PluginOptionsFormBody({
                     "Delete"/"Remove" `fa-times`) instead of a labeled `.stdbtn` — a one-word
                     "Remove" button at `.stdbtn`'s default min-width was far wider than the column
                     needed. */}
-                <Tooltip label={t('Remove') ?? ''}>
+                <Tooltip label={t("Remove") ?? ""}>
                   <button type="button" className="stdbtn" style={ICON_BUTTON_STYLE} onClick={() => removeRow(i)}>
                     <i className="fa fa-times" aria-hidden="true"></i>
                   </button>
@@ -198,7 +198,7 @@ function PluginOptionsFormBody({
           ))}
         </tbody>
       </table>
-      <input type="button" className="stdbtn" value={t('Add Rule') ?? undefined} onClick={addRow} />
+      <input type="button" className="stdbtn" value={t("Add Rule") ?? undefined} onClick={addRow} />
 
       {initial.bundle_as_archive && (
         <p>
@@ -208,7 +208,7 @@ function PluginOptionsFormBody({
                 toggle above — a plain unstyled checkbox renders as a bare browser checkbox in this
                 theme (a hollow red square with no check glyph), not a rendering failure per se, just
                 the wrong class. */}
-            <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{' '}
+            <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{" "}
             {t(initial.bundle_as_archive.description)}
           </label>
         </p>
@@ -217,31 +217,31 @@ function PluginOptionsFormBody({
       {initial.overwrite_on_duplicate && (
         <p>
           <label>
-            <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{' '}
+            <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{" "}
             {t(initial.overwrite_on_duplicate.description)}
           </label>
         </p>
       )}
 
       {fieldError && (
-        <p className="error" style={{ color: 'red' }}>
+        <p className="error" style={{ color: "red" }}>
           {fieldError.field}: {fieldError.message}
         </p>
       )}
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: "flex", gap: 8 }}>
         <input
           type="button"
           className="stdbtn"
           disabled={update.isPending}
-          value={t('Save Settings') ?? undefined}
+          value={t("Save Settings") ?? undefined}
           onClick={() => void save()}
         />
         <input
           type="button"
           className="stdbtn"
           disabled={reset.isPending}
-          value={t('Reset to Defaults') ?? undefined}
+          value={t("Reset to Defaults") ?? undefined}
           onClick={() => void resetToDefaults()}
         />
       </div>

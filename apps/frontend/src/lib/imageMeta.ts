@@ -7,8 +7,8 @@
  * already rendered by this point and shouldn't block or error out on this being unavailable. */
 export async function fetchContentLengthKb(url: string): Promise<number | null> {
   try {
-    const res = await fetch(url, { method: 'HEAD' })
-    const bytes = Number(res.headers.get('Content-Length'))
+    const res = await fetch(url, { method: "HEAD" })
+    const bytes = Number(res.headers.get("Content-Length"))
     if (Number.isNaN(bytes)) return null
     return Math.floor(bytes / 1024)
   } catch {

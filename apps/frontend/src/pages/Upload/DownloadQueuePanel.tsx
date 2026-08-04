@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { fetchJson, sendJson } from '../../api/client'
+import { fetchJson, sendJson } from "../../api/client"
 import {
   useClearCompletedQueue,
   useDeleteSelectedQueue,
@@ -10,15 +10,15 @@ import {
   useSettings,
   useStartSelectedQueue,
   useUpdateQueueItem,
-} from '../../api/hooks'
-import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from '../../api/types'
-import { CollapsibleSection } from '../../components/CollapsibleSection'
-import { fetchMetadataForItem,QueueItemRow } from './QueueItemRow'
+} from "../../api/hooks"
+import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "../../api/types"
+import { CollapsibleSection } from "../../components/CollapsibleSection"
+import { fetchMetadataForItem,QueueItemRow } from "./QueueItemRow"
 import {
   findMatchingPlugin,
   LOCAL_UPLOAD_NAMESPACE,
   TOOLBAR_BUTTON_STYLE,
-} from './shared'
+} from "./shared"
 
 /** Right-column panel: the persistent queue, grouped by `plugin_namespace` (one
  * `CollapsibleSection` per namespace present), with bulk Select All / Invert Selection / Start /
@@ -91,7 +91,7 @@ export function DownloadQueuePanel({
       if (!item.auto_fetch_metadata || !item.job_id) continue
       if (triggeredRef.current.has(item.job_id)) continue
       const job = jobById.get(item.job_id)
-      if (!job || job.state !== 'finished') continue
+      if (!job || job.state !== "finished") continue
       const archiveIds = (job.result as { archive_ids?: string[] } | null)?.archive_ids
       const archiveId = archiveIds?.[0]
       if (!archiveId) continue
@@ -103,7 +103,7 @@ export function DownloadQueuePanel({
           success: number
           data?: { tags?: string; title?: string; summary?: string }
         }>(
-          'POST',
+          "POST",
           `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&id=${encodeURIComponent(archiveId)}`,
         ).catch(() => null)
         // Merges into whatever tags the fresh archive already has (normally none yet) rather than
@@ -115,12 +115,12 @@ export function DownloadQueuePanel({
         const mergedTags = newTags
           ? Array.from(
               new Set(
-                [...(archive?.tags.split(',') ?? []), ...newTags.split(',')].map((tg) => tg.trim()).filter(Boolean),
+                [...(archive?.tags.split(",") ?? []), ...newTags.split(",")].map((tg) => tg.trim()).filter(Boolean),
               ),
-            ).join(', ')
+            ).join(", ")
           : undefined
         await sendJson(
-          'PUT',
+          "PUT",
           `/archives/${archiveId}/metadata?${new URLSearchParams({
             ...(mergedTags !== undefined && { tags: mergedTags }),
             ...(title && (settings.data?.replacetitles ?? true) && { title }),
@@ -137,11 +137,11 @@ export function DownloadQueuePanel({
   // first attempt; see `start_one`'s own docs on the Rust side). `downloading`/`starting`/`done`
   // are never selectable.
   const selectableIds = items
-    .filter((i) => i.state === 'queued' || i.state === 'error' || i.state === 'cancelled')
+    .filter((i) => i.state === "queued" || i.state === "error" || i.state === "cancelled")
     .map((i) => i.id)
   // Matches the backend `clear_completed` handler's filter exactly — `error` is excluded since
   // it's still-actionable, not "completed".
-  const cleared = items.filter((i) => i.state === 'done').length
+  const cleared = items.filter((i) => i.state === "done").length
 
   function selectAll() {
     setSelected(new Set(selectableIds))
@@ -152,9 +152,9 @@ export function DownloadQueuePanel({
   }
 
   return (
-    <div style={{ marginTop: 16, textAlign: 'left' }}>
-      <h2 className="ih" style={{ textAlign: 'center' }}>
-        {t('Download Queue')}
+    <div style={{ marginTop: 16, textAlign: "left" }}>
+      <h2 className="ih" style={{ textAlign: "center" }}>
+        {t("Download Queue")}
       </h2>
 
       {/* `.control-btn-group` carries no actual CSS from any theme — a plain unstyled class name —
@@ -163,7 +163,7 @@ export function DownloadQueuePanel({
           `TOOLBAR_BUTTON_STYLE` so all 5 fit on one row instead of wrapping. */}
       <div
         className="control-btn-group"
-        style={{ display: 'flex', flexWrap: 'nowrap', justifyContent: 'center', gap: 4, marginBottom: 6 }}
+        style={{ display: "flex", flexWrap: "nowrap", justifyContent: "center", gap: 4, marginBottom: 6 }}
       >
         <button
           type="button"
@@ -172,7 +172,7 @@ export function DownloadQueuePanel({
           disabled={selectableIds.length === 0}
           onClick={selectAll}
         >
-          {t('Select All')}
+          {t("Select All")}
         </button>
         <button
           type="button"
@@ -181,7 +181,7 @@ export function DownloadQueuePanel({
           disabled={selectableIds.length === 0}
           onClick={invertSelection}
         >
-          {t('Invert Selection')}
+          {t("Invert Selection")}
         </button>
         <button
           type="button"
@@ -202,7 +202,7 @@ export function DownloadQueuePanel({
             }
           }}
         >
-          {t('Start ({{n}})', { n: selected.size })}
+          {t("Start ({{n}})", { n: selected.size })}
         </button>
         <button
           type="button"
@@ -211,7 +211,7 @@ export function DownloadQueuePanel({
           disabled={cleared === 0 || clearCompleted.isPending}
           onClick={() => void clearCompleted.mutateAsync()}
         >
-          {t('Clear Completed')}
+          {t("Clear Completed")}
         </button>
         <button
           type="button"
@@ -223,11 +223,11 @@ export function DownloadQueuePanel({
             setSelected(new Set())
           }}
         >
-          {t('Delete ({{n}})', { n: selected.size })}
+          {t("Delete ({{n}})", { n: selected.size })}
         </button>
       </div>
 
-      <ul className="collapsible extensible with-right-caret" style={{ width: '100%' }}>
+      <ul className="collapsible extensible with-right-caret" style={{ width: "100%" }}>
         {/* Local uploads always pinned to the top, ahead of every download-plugin group —
             `grouped`'s own iteration order otherwise just follows whichever namespace's first
             item happened to appear earliest in `items` (queue insertion order), which puts local
@@ -241,11 +241,11 @@ export function DownloadQueuePanel({
           .map(([namespace, groupItems]) => {
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
-            const groupTitle = isLocalUpload ? t('From your computer') : (plugin?.name ?? namespace)
+            const groupTitle = isLocalUpload ? t("From your computer") : (plugin?.name ?? namespace)
             return (
               <CollapsibleSection
                 key={namespace}
-                icon={isLocalUpload ? 'fa-upload' : 'fa-cloud-download-alt'}
+                icon={isLocalUpload ? "fa-upload" : "fa-cloud-download-alt"}
                 title={`${groupTitle} (${groupItems.length})`}
                 caretStyle="right-down"
                 defaultOpen
@@ -257,7 +257,7 @@ export function DownloadQueuePanel({
                     job={item.job_id ? jobById.get(item.job_id) : undefined}
                     selected={selected.has(item.id)}
                     onToggleSelect={() => {
-                      if (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled')
+                      if (item.state !== "queued" && item.state !== "error" && item.state !== "cancelled")
                         return
                       setSelected((prev) => {
                         const next = new Set(prev)

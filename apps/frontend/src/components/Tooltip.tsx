@@ -1,14 +1,14 @@
-import { useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 
-import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from '../theme'
+import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from "../theme"
 
 /** `'element'` (default) anchors the bubble to the trigger's own bounding box, in a fixed spot
  * relative to it — the usual "attached to this button" tooltip. `'cursor'` instead follows the
  * mouse pointer's live position (updated on every `mousemove` over the trigger) — useful for a
  * trigger the pointer can move around inside of (e.g. a wide text block) where "always in the
  * same spot" feels disconnected from what's actually being hovered. */
-type Anchor = 'element' | 'cursor'
+type Anchor = "element" | "cursor"
 
 const GAP = 8
 /** Grace period between the pointer leaving the trigger/bubble and the tooltip actually closing —
@@ -38,7 +38,7 @@ const CLOSE_DELAY_MS = 150
 export function Tooltip({
   label,
   children,
-  anchor = 'element',
+  anchor = "element",
   wrapperStyle,
   maxWidth = 320,
 }: {
@@ -61,7 +61,7 @@ export function Tooltip({
   // document flow (portaled to the end of `<body>`), reporting a different width/wrapping than
   // its eventual `position: fixed` box, especially before web fonts finish loading. Parking
   // off-screen at a fixed position from the start means the first measurement is already accurate.
-  const [style, setStyle] = useState<React.CSSProperties>({ position: 'fixed', top: -9999, left: -9999, visibility: 'hidden' })
+  const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: -9999, left: -9999, visibility: "hidden" })
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
@@ -85,7 +85,7 @@ export function Tooltip({
   }
 
   function handleMouseMove(e: React.MouseEvent) {
-    if (anchor !== 'cursor') return
+    if (anchor !== "cursor") return
     cursorPos.current = { x: e.clientX, y: e.clientY }
     if (visible) recompute()
   }
@@ -99,7 +99,7 @@ export function Tooltip({
     // `'cursor'` mode (falling back to the trigger's bounds if no pointer position is known yet,
     // e.g. opened via keyboard focus), or the trigger's full bounds in `'element'` mode.
     let anchorRect: { top: number; bottom: number; left: number; right: number; width: number }
-    if (anchor === 'cursor' && cursorPos.current) {
+    if (anchor === "cursor" && cursorPos.current) {
       const { x, y } = cursorPos.current
       anchorRect = { top: y, bottom: y, left: x, right: x, width: 0 }
     } else {
@@ -119,14 +119,14 @@ export function Tooltip({
     let left = anchorRect.left
     left = Math.max(GAP, Math.min(left, window.innerWidth - bubbleRect.width - GAP))
 
-    setStyle({ position: 'fixed', top, left, visibility: 'visible' })
+    setStyle({ position: "fixed", top, left, visibility: "visible" })
   }
 
   useLayoutEffect(() => {
     if (!visible) return
     recompute()
-    window.addEventListener('scroll', recompute, true)
-    window.addEventListener('resize', recompute)
+    window.addEventListener("scroll", recompute, true)
+    window.addEventListener("resize", recompute)
     // Web fonts can still be swapping in after this first `recompute()` ran, especially on a
     // cold page load — `document.fonts.ready` resolves once that settles, so this re-measures
     // with the bubble's real, final glyph metrics.
@@ -136,8 +136,8 @@ export function Tooltip({
     })
     return () => {
       cancelled = true
-      window.removeEventListener('scroll', recompute, true)
-      window.removeEventListener('resize', recompute)
+      window.removeEventListener("scroll", recompute, true)
+      window.removeEventListener("resize", recompute)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, anchor])
@@ -145,7 +145,7 @@ export function Tooltip({
   return (
     <span
       ref={wrapperRef}
-      style={{ position: 'relative', display: 'inline-flex', ...wrapperStyle }}
+      style={{ position: "relative", display: "inline-flex", ...wrapperStyle }}
       onMouseEnter={open}
       onMouseMove={handleMouseMove}
       onMouseLeave={scheduleClose}
@@ -172,15 +172,15 @@ export function Tooltip({
             <div
               className="swal2-popup"
               style={{
-                display: 'block',
-                padding: '6px 10px',
+                display: "block",
+                padding: "6px 10px",
                 fontSize: FONT_SIZE_9PT,
                 lineHeight: 1.5,
-                whiteSpace: 'normal',
+                whiteSpace: "normal",
                 maxWidth,
-                textAlign: 'left',
+                textAlign: "left",
                 borderRadius: 4,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
               }}
             >
               {label}

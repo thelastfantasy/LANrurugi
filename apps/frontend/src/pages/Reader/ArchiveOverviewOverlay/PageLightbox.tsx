@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useArchivePages } from '../../../api/hooks'
-import { useMenuPalette } from '../../../components/PopupMenu'
-import { Tooltip } from '../../../components/Tooltip'
-import { fetchContentLengthKb } from '../../../lib/imageMeta'
-import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from '../../../lib/tocValidation'
-import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from '../../../theme'
+import { useArchivePages } from "../../../api/hooks"
+import { useMenuPalette } from "../../../components/PopupMenu"
+import { Tooltip } from "../../../components/Tooltip"
+import { fetchContentLengthKb } from "../../../lib/imageMeta"
+import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "../../../lib/tocValidation"
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "../../../theme"
 import {
   ChapterActionMenu,
   chapterForPage,
@@ -15,7 +15,7 @@ import {
   openChapterActionMenuCount,
   QuickAddTocOptions,
   tocChapterSpans,
-} from './shared'
+} from "./shared"
 
 /** One frame in `PageLightbox`'s own bottom filmstrip gallery — a small thumbnail (reuses the
  * same cheap `/thumbnail?page=N` endpoint the page grid itself already uses, not the full-size
@@ -50,15 +50,15 @@ function LightboxFilmstripFrame({
   onClick: () => void
 }) {
   return (
-    <div data-filmstrip-page={page} style={{ flex: '0 0 auto', width: 90, display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div data-filmstrip-page={page} style={{ flex: "0 0 auto", width: 90, display: "flex", flexDirection: "column", gap: 2 }}>
       <div
         onMouseEnter={onHover}
         onClick={onClick}
         style={{
-          position: 'relative',
+          position: "relative",
           width: 90,
           height: 120,
-          cursor: 'pointer',
+          cursor: "pointer",
           outline: isPreview ? `3px solid ${accentColor}` : `1px solid ${borderColor}`,
           outlineOffset: -1,
         }}
@@ -67,13 +67,13 @@ function LightboxFilmstripFrame({
           src={`/api/archives/${archiveId}/thumbnail?page=${page}`}
           alt={`${page}`}
           loading="lazy"
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
         />
       </div>
       {chapter && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }} title={chapter.label}>
-          <span style={{ flex: '0 0 auto', width: 8, height: 8, borderRadius: '50%', background: chapter.swatch }} />
-          <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 3, minWidth: 0 }} title={chapter.label}>
+          <span style={{ flex: "0 0 auto", width: 8, height: 8, borderRadius: "50%", background: chapter.swatch }} />
+          <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }}>
             {chapter.label}
           </span>
         </div>
@@ -87,11 +87,11 @@ function LightboxFilmstripFrame({
  * per click/hover), matching a real "hover the edge, it just keeps going" gallery scrubber. Visible
  * chevron buttons (rather than an invisible hover margin) so the affordance is discoverable at a
  * glance, matching the Library carousel's own real `.carousel-prev`/`.carousel-next` chevrons. */
-function LightboxFilmstripEdge({ direction, onScroll }: { direction: 'left' | 'right'; onScroll: (delta: number) => void }) {
+function LightboxFilmstripEdge({ direction, onScroll }: { direction: "left" | "right"; onScroll: (delta: number) => void }) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   function start() {
     stop()
-    intervalRef.current = setInterval(() => onScroll(direction === 'left' ? -16 : 16), 16)
+    intervalRef.current = setInterval(() => onScroll(direction === "left" ? -16 : 16), 16)
   }
   function stop() {
     if (intervalRef.current !== null) clearInterval(intervalRef.current)
@@ -103,15 +103,15 @@ function LightboxFilmstripEdge({ direction, onScroll }: { direction: 'left' | 'r
       onMouseEnter={start}
       onMouseLeave={stop}
       style={{
-        position: 'absolute',
+        position: "absolute",
         top: 0,
         bottom: 0,
         [direction]: 0,
         width: 48,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
         zIndex: 1,
         // Deliberately theme-independent (unlike the rest of the lightbox, which follows
         // `useMenuPalette()`) — this is a dark photo-viewer-style scrim overlaid *on top of* the
@@ -121,7 +121,7 @@ function LightboxFilmstripEdge({ direction, onScroll }: { direction: 'left' | 'r
         background: `linear-gradient(to ${direction}, transparent, rgba(0,0,0,0.6))`,
       }}
     >
-      <i className={`fa fa-3x fa-chevron-${direction}`} style={{ color: 'white' }} aria-hidden="true"></i>
+      <i className={`fa fa-3x fa-chevron-${direction}`} style={{ color: "white" }} aria-hidden="true"></i>
     </div>
   )
 }
@@ -220,7 +220,7 @@ export function PageLightbox({
     suppressHoverRef.current = true
     filmstripRef.current
       ?.querySelector(`[data-filmstrip-page="${previewPage}"]`)
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" })
     // `scrollIntoView` with `behavior: 'auto'` (the default, and what this container's own
     // `scrollBehavior: 'auto'` style also specifies) completes synchronously before the next
     // paint, but the resulting `mouseenter` is dispatched by the browser on its own event loop
@@ -283,7 +283,7 @@ export function PageLightbox({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const { totalPages, loggedIn, onQuickAddToc, onClose } = latest.current
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         // Skip entirely if a `ChapterActionMenu` (edit/delete chapter) is currently open above
         // this lightbox — see `openChapterActionMenuCount`'s own docs for why a plain counter
         // check, not `stopImmediatePropagation`, is what actually solves this: this listener is
@@ -305,7 +305,7 @@ export function PageLightbox({
         onClose()
         return
       }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.stopImmediatePropagation()
         e.preventDefault()
         scrollFilmstripOnNextPage.current = true
@@ -315,7 +315,7 @@ export function PageLightbox({
         // ref-cached value (a real, live-confirmed bug: rapid ArrowRight presses could jump
         // backward mid-chapter when a stale `previewPage` snapshot got used for the next update
         // before the ref had synced past it).
-        setPreviewPage((p) => Math.min(totalPages, Math.max(1, p + (e.key === 'ArrowLeft' ? -1 : 1))))
+        setPreviewPage((p) => Math.min(totalPages, Math.max(1, p + (e.key === "ArrowLeft" ? -1 : 1))))
         return
       }
       // Point 6: 0-9 (top row or numpad) sets a chapter at the current preview page — 0 = Table of
@@ -325,12 +325,12 @@ export function PageLightbox({
         const n = e.code.slice(-1)
         e.stopImmediatePropagation()
         e.preventDefault()
-        const title = n === '0' ? TOC_IDENTIFIER_TABLE_OF_CONTENTS : tocChapterIdentifier(Number(n))
+        const title = n === "0" ? TOC_IDENTIFIER_TABLE_OF_CONTENTS : tocChapterIdentifier(Number(n))
         onQuickAddToc(latest.current.previewPage, title)
       }
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [])
 
   const chapterSpans = tocChapterSpans(toc, totalPages)
@@ -360,7 +360,7 @@ export function PageLightbox({
           `rgba(0,0,0,...)` scrim) — still reads as "dim what's behind", but the dimming color
           itself now follows the theme instead of always going pure black regardless of it. */}
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_ABOVE_LEGACY_MODAL, background: palette.bg, opacity: 0.9 }}
+        style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_ABOVE_LEGACY_MODAL, background: palette.bg, opacity: 0.9 }}
         onClick={(e) => {
           // `stopPropagation` — same real, live-confirmed bug class as `QuickAddTocPopover`'s own
           // backdrop earlier in this file: without it, this click bubbles up to `#overlay-shade`
@@ -372,29 +372,29 @@ export function PageLightbox({
       />
       <div
         style={{
-          position: 'fixed',
-          inset: '3vh 3vw',
+          position: "fixed",
+          inset: "3vh 3vw",
           zIndex: Z_OVERLAY_ABOVE_LEGACY_MODAL + 1,
-          display: 'flex',
-          flexDirection: 'column',
+          display: "flex",
+          flexDirection: "column",
           background: palette.bg,
           color: palette.text,
           border: `1px solid ${palette.border}`,
           borderRadius: 8,
-          overflow: 'hidden',
+          overflow: "hidden",
         }}
         onClick={(e) => e.stopPropagation()}
       >
 
         {/* Large preview + info bar + flattened quick-add-chapter row. */}
-        <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', minHeight: 0, padding: 16 }}>
-          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", minHeight: 0, padding: 16 }}>
+          <div style={{ flex: "1 1 auto", minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
             {pageUrl && (
               <img
                 key={pageUrl}
                 src={pageUrl}
-                alt={t('Page {{n}}', { n: previewPage }) ?? undefined}
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                alt={t("Page {{n}}", { n: previewPage }) ?? undefined}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
                 onLoad={(e) => {
                   const img = e.currentTarget
                   const page = previewPage
@@ -407,40 +407,40 @@ export function PageLightbox({
             )}
           </div>
 
-          <div style={{ flex: '0 0 auto', textAlign: 'center', padding: '8px 0', fontSize: 13 }}>
-            {t('Page {{n}}', { n: previewPage })}
-            {' :: '}
-            {pageUrl ? (new URL(pageUrl, window.location.origin).searchParams.get('path') ?? '') : ''}
+          <div style={{ flex: "0 0 auto", textAlign: "center", padding: "8px 0", fontSize: 13 }}>
+            {t("Page {{n}}", { n: previewPage })}
+            {" :: "}
+            {pageUrl ? (new URL(pageUrl, window.location.origin).searchParams.get("path") ?? "") : ""}
             {dimensions && ` :: ${dimensions.width} x ${dimensions.height}`}
             {dimensions?.sizeKb !== null && dimensions?.sizeKb !== undefined && ` :: ${dimensions.sizeKb} KB`}
             {currentChapter && (
               <>
-                {' :: '}
+                {" :: "}
                 {/* Bold/accent color only on the chapter's own start page — later pages belonging
                     to the same chapter show it in plain text plus a "(N)" total-page-count
                     suffix, so scrubbing through a long chapter still shows which one you're in
                     without visually implying *this* page is where it was set. */}
                 {currentChapter.isStart ? (
-                  <span style={{ fontWeight: 'bold', color: palette.hoverText }}>{displayTocName(currentChapter.name, t)}</span>
+                  <span style={{ fontWeight: "bold", color: palette.hoverText }}>{displayTocName(currentChapter.name, t)}</span>
                 ) : (
-                  <span>{t('{{name}} ({{count}})', { name: displayTocName(currentChapter.name, t), count: currentChapter.count })}</span>
+                  <span>{t("{{name}} ({{count}})", { name: displayTocName(currentChapter.name, t), count: currentChapter.count })}</span>
                 )}
               </>
             )}
           </div>
 
           {loggedIn && (
-            <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '4px 0' }}>
+            <div style={{ flex: "0 0 auto", display: "flex", justifyContent: "center", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "4px 0" }}>
               {/* Same icon+text pairing as `QuickAddTocPopover`'s own `mainLabel` header (the
                   popover version of this same preset row) — reusing that already-translated
                   string here too instead of introducing a second, differently-worded label for
                   what is otherwise the identical feature just rendered inline. */}
-              <span style={{ fontWeight: 'bold', opacity: 0.85 }}>
-                <i className="fa fa-bolt" style={{ width: 18 }} aria-hidden="true"></i> {t('Quick Add Chapter')}
+              <span style={{ fontWeight: "bold", opacity: 0.85 }}>
+                <i className="fa fa-bolt" style={{ width: 18 }} aria-hidden="true"></i> {t("Quick Add Chapter")}
               </span>
               <QuickAddTocOptions asMenuItems={false} onPick={(title) => onQuickAddToc(previewPage, title)} />
-              <Tooltip label={t("Press 0 for Table of Contents, or 1-9 for that chapter number, to set the current page as that chapter's start.") ?? ''}>
-                <i className="fa fa-keyboard" aria-hidden="true" style={{ cursor: 'help', color: palette.text, opacity: 0.7 }}></i>
+              <Tooltip label={t("Press 0 for Table of Contents, or 1-9 for that chapter number, to set the current page as that chapter's start.") ?? ""}>
+                <i className="fa fa-keyboard" aria-hidden="true" style={{ cursor: "help", color: palette.text, opacity: 0.7 }}></i>
               </Tooltip>
               {toc.length > 0 && (
                 <>
@@ -448,7 +448,7 @@ export function PageLightbox({
                     className="fas fa-pencil-alt"
                     href="#"
                     style={{ padding: 4, fontSize: 14, color: palette.text }}
-                    title={t('Edit Chapter name') ?? undefined}
+                    title={t("Edit Chapter name") ?? undefined}
                     onClick={(e) => {
                       e.preventDefault()
                       setEditTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -471,7 +471,7 @@ export function PageLightbox({
                     className="fas fa-trash-alt"
                     href="#"
                     style={{ padding: 4, fontSize: 14, color: palette.text }}
-                    title={t('Delete Chapter') ?? undefined}
+                    title={t("Delete Chapter") ?? undefined}
                     onClick={(e) => {
                       e.preventDefault()
                       setRemoveTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -501,12 +501,12 @@ export function PageLightbox({
             each `LightboxFilmstripFrame` now renders beneath its thumbnail (point 2) — without
             the extra room, that label row pushed total content past the old fixed 136px and
             triggered an unwanted vertical scrollbar (confirmed live via a real screenshot). */}
-        <div style={{ position: 'relative', flex: '0 0 auto', height: 158, background: palette.bg, borderTop: `1px solid ${palette.separator}` }}>
+        <div style={{ position: "relative", flex: "0 0 auto", height: 158, background: palette.bg, borderTop: `1px solid ${palette.separator}` }}>
           <LightboxFilmstripEdge direction="left" onScroll={scrollFilmstrip} />
           <LightboxFilmstripEdge direction="right" onScroll={scrollFilmstrip} />
           <div
             ref={filmstripRef}
-            style={{ display: 'flex', gap: 4, height: '100%', overflowX: 'auto', padding: '8px 48px', scrollBehavior: 'auto' }}
+            style={{ display: "flex", gap: 4, height: "100%", overflowX: "auto", padding: "8px 48px", scrollBehavior: "auto" }}
             // Mouse wheel scrolls the filmstrip horizontally (a plain vertical wheel gesture,
             // which browsers don't natively redirect into horizontal scroll on this element) —
             // `stopPropagation` so the wheel event doesn't also reach the Archive Overview modal's
@@ -528,7 +528,7 @@ export function PageLightbox({
                   page={resolved.localPage}
                   isPreview={page === previewPage}
                   accentColor={palette.hoverText}
-                  borderColor={palette.border === 'transparent' ? palette.text : palette.border}
+                  borderColor={palette.border === "transparent" ? palette.text : palette.border}
                   chapter={
                     chapter && {
                       // Swatch color is keyed on the raw stored `chapter.name` (the identifier,
@@ -537,7 +537,7 @@ export function PageLightbox({
                       // which language the UI happens to be showing at the moment.
                       label: chapter.isStart
                         ? displayTocName(chapter.name, t)
-                        : (t('{{name}} ({{count}})', { name: displayTocName(chapter.name, t), count: chapter.ordinal }) ?? displayTocName(chapter.name, t)),
+                        : (t("{{name}} ({{count}})", { name: displayTocName(chapter.name, t), count: chapter.ordinal }) ?? displayTocName(chapter.name, t)),
                       swatch: chapterSwatchColor(chapter.name, onDarkBg),
                     }
                   }

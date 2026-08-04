@@ -1,10 +1,10 @@
-import type { MouseEvent } from 'react'
-import { useEffect, useLayoutEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from '../../../components/PopupMenu'
-import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from '../../../lib/tocValidation'
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../../theme'
+import { PopupMenu, PopupMenuItem } from "../../../components/PopupMenu"
+import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "../../../lib/tocValidation"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../../theme"
 
 // How many `ChapterActionMenu` instances are currently mounted/open — a plain module-level
 // counter, not React state, since it exists purely to answer one synchronous yes/no question
@@ -112,7 +112,7 @@ export function isDarkColor(css: string): boolean {
  * own right edge rendered partly outside it). */
 export function anchorPopupToOverviewModal(anchor: DOMRect, width: number, height: number): { top: number; left: number } {
   const margin = 8
-  const bounds = document.getElementById('archivePagesOverlay')?.getBoundingClientRect()
+  const bounds = document.getElementById("archivePagesOverlay")?.getBoundingClientRect()
   const minLeft = (bounds?.left ?? 0) + margin
   const maxLeft = (bounds?.right ?? window.innerWidth) - width - margin
   const minTop = (bounds?.top ?? 0) + margin
@@ -162,15 +162,15 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
   // requirement (a user might legitimately want two "Color Pages" entries at different points in
   // a volume) and keep storing real display text exactly as before.
   const presets: { icon: string; title: string; value: string }[] = [
-    { icon: 'fa-file-image', title: t('Cover') ?? 'Cover', value: t('Cover') ?? 'Cover' },
-    { icon: 'fa-file-image', title: t('Back Cover') ?? 'Back Cover', value: t('Back Cover') ?? 'Back Cover' },
-    { icon: 'fa-list', title: t('Table of Contents') ?? 'Table of Contents', value: TOC_IDENTIFIER_TABLE_OF_CONTENTS },
-    { icon: 'fa-palette', title: t('Color Pages') ?? 'Color Pages', value: t('Color Pages') ?? 'Color Pages' },
-    { icon: 'fa-gift', title: t('Omake') ?? 'Omake', value: t('Omake') ?? 'Omake' },
-    { icon: 'fa-pen-nib', title: t('Afterword') ?? 'Afterword', value: t('Afterword') ?? 'Afterword' },
-    { icon: 'fa-image', title: t('Illustration') ?? 'Illustration', value: t('Illustration') ?? 'Illustration' },
+    { icon: "fa-file-image", title: t("Cover") ?? "Cover", value: t("Cover") ?? "Cover" },
+    { icon: "fa-file-image", title: t("Back Cover") ?? "Back Cover", value: t("Back Cover") ?? "Back Cover" },
+    { icon: "fa-list", title: t("Table of Contents") ?? "Table of Contents", value: TOC_IDENTIFIER_TABLE_OF_CONTENTS },
+    { icon: "fa-palette", title: t("Color Pages") ?? "Color Pages", value: t("Color Pages") ?? "Color Pages" },
+    { icon: "fa-gift", title: t("Omake") ?? "Omake", value: t("Omake") ?? "Omake" },
+    { icon: "fa-pen-nib", title: t("Afterword") ?? "Afterword", value: t("Afterword") ?? "Afterword" },
+    { icon: "fa-image", title: t("Illustration") ?? "Illustration", value: t("Illustration") ?? "Illustration" },
   ]
-  const Row = asMenuItems ? PopupMenuItem : 'div'
+  const Row = asMenuItems ? PopupMenuItem : "div"
   const chapterSelect = (
     <select
       className="favtag-btn"
@@ -180,15 +180,15 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
       onChange={(e) => {
         if (!e.target.value) return
         onPick(tocChapterIdentifier(Number(e.target.value)))
-        e.target.value = ''
+        e.target.value = ""
       }}
     >
       <option value="" disabled>
-        {t('Chapter…')}
+        {t("Chapter…")}
       </option>
       {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
         <option key={n} value={n}>
-          {t('Chapter {{n}}', { n })}
+          {t("Chapter {{n}}", { n })}
         </option>
       ))}
     </select>
@@ -205,7 +205,7 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
             e.stopPropagation()
             onPick(value)
           }}
-          {...(asMenuItems ? {} : { style: { cursor: 'pointer', padding: '4px 8px', display: 'flex', alignItems: 'center' } })}
+          {...(asMenuItems ? {} : { style: { cursor: "pointer", padding: "4px 8px", display: "flex", alignItems: "center" } })}
         >
           <i className={`fa ${icon}`} style={{ width: 18 }}></i> {title}
         </Row>
@@ -214,7 +214,7 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
           default vertical metrics (a form control, not inline text) sit slightly off from the
           preset rows' plain icon+text baseline alignment above, a real visible mismatch confirmed
           on screenshot even though both rows use the same padding. */}
-      <Row {...(asMenuItems ? { style: { cursor: 'default' } } : { style: { padding: '4px 8px', display: 'flex', alignItems: 'center' } })}>
+      <Row {...(asMenuItems ? { style: { cursor: "default" } } : { style: { padding: "4px 8px", display: "flex", alignItems: "center" } })}>
         <i className="fa fa-book-medical" style={{ width: 18 }}></i>
         {chapterSelect}
       </Row>
@@ -246,7 +246,7 @@ export function QuickAddTocPopover({
           ancestor/descendant of the other that a plain click could be scoped to (confirmed live:
           clicking outside this popover closed the whole overview modal along with it). */}
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
+        style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
         onClick={(e) => {
           e.stopPropagation()
           onClose()
@@ -258,8 +258,8 @@ export function QuickAddTocPopover({
       />
       <PopupMenu
         ref={setMenuEl}
-        style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}
-        mainLabel={{ icon: 'fa-bolt', text: t('Quick Add Chapter') ?? 'Quick Add Chapter' }}
+        style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}
+        mainLabel={{ icon: "fa-bolt", text: t("Quick Add Chapter") ?? "Quick Add Chapter" }}
       >
         <QuickAddTocOptions
           asMenuItems
@@ -303,7 +303,7 @@ export function ChapterActionMenu({
   onPick,
   onClose,
 }: {
-  mode: 'edit' | 'delete'
+  mode: "edit" | "delete"
   anchor: DOMRect
   chapters: { page: number; name: string }[]
   zIndexBase?: number
@@ -312,8 +312,8 @@ export function ChapterActionMenu({
 }) {
   const { t } = useTranslation()
   const { setMenuEl, pos } = useAnchoredMenuPosition(anchor)
-  const icon = mode === 'edit' ? 'fa-pencil-alt' : 'fa-trash-alt'
-  const label = mode === 'edit' ? (t('Edit Chapter name') ?? 'Edit Chapter name') : (t('Delete Chapter') ?? 'Delete Chapter')
+  const icon = mode === "edit" ? "fa-pencil-alt" : "fa-trash-alt"
+  const label = mode === "edit" ? (t("Edit Chapter name") ?? "Edit Chapter name") : (t("Delete Chapter") ?? "Delete Chapter")
   // Tracks this menu's own open/closed lifetime in `openChapterActionMenuCount` (see that
   // constant's own docs for why a plain module-level counter, and the full registration-order
   // bug this exists to sidestep) — incremented on mount, decremented on unmount, so any
@@ -333,17 +333,17 @@ export function ChapterActionMenu({
   // for the other half of the real fix, on `PageLightbox`'s own side).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return
+      if (e.key !== "Escape") return
       e.stopImmediatePropagation()
       onClose()
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [onClose])
   return (
     <>
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: zIndexBase }}
+        style={{ position: "fixed", inset: 0, zIndex: zIndexBase }}
         onClick={(e) => {
           e.stopPropagation()
           onClose()
@@ -355,7 +355,7 @@ export function ChapterActionMenu({
       />
       <PopupMenu
         ref={setMenuEl}
-        style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: zIndexBase + 1, maxHeight: 260, overflowY: 'auto' }}
+        style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: zIndexBase + 1, maxHeight: 260, overflowY: "auto" }}
         mainLabel={{ icon, text: label }}
       >
         {chapters.map((entry) => {
@@ -365,7 +365,7 @@ export function ChapterActionMenu({
           // one here would silently convert it into an unrelated free-text entry rather than
           // actually renaming the preset. Changing one of these is done by deleting it and
           // re-applying a (possibly different) preset instead, not by editing it in place.
-          const isPreset = mode === 'edit' && isReservedTocIdentifier(entry.name)
+          const isPreset = mode === "edit" && isReservedTocIdentifier(entry.name)
           return (
             <PopupMenuItem
               key={entry.page}

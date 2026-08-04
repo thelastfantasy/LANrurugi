@@ -12,7 +12,7 @@
 // (`scripts/migrate-ratings.ts`) converts existing stored tags to the new format directly in
 // Redis, so old-format reads are a permanent-but-rarely-hit compatibility path, not the norm.
 
-const STAR = '⭐'
+const STAR = "⭐"
 
 /** `rating:` tag value → a 0-5 float, or `null` if `raw` is empty/unparseable. Tries the new
  * decimal format first (`"4.5"` → `4.5`), then falls back to counting repeated star characters

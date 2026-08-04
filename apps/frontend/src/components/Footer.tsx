@@ -1,4 +1,4 @@
-import { useServerInfo } from '../api/hooks'
+import { useServerInfo } from "../api/hooks"
 
 // Mirrors legacy's own `~/LANraragi/templates/footer.html.tt2`, included at the bottom of every
 // page there — `p.ip` with an optional `descstr` line (a fixed, per-release tagline, not user

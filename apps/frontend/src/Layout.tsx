@@ -1,10 +1,10 @@
-import { useTranslation } from 'react-i18next'
-import { NavLink, Outlet } from 'react-router-dom'
+import { useTranslation } from "react-i18next"
+import { NavLink, Outlet } from "react-router-dom"
 
-import { useLoginStatus } from './api/hooks'
-import { Footer } from './components/Footer'
-import { UpdateBanner } from './components/UpdateBanner'
-import { useApplyTheme } from './theme'
+import { useLoginStatus } from "./api/hooks"
+import { Footer } from "./components/Footer"
+import { UpdateBanner } from "./components/UpdateBanner"
+import { useApplyTheme } from "./theme"
 
 // Legacy's own top nav (`~/LANraragi/templates/index.html.tt2`'s `<p id="nb">`, reused across
 // every page) is a single centered text line of links — Font Awesome caret icons separating bold
@@ -27,16 +27,16 @@ export function Layout() {
 
   const links: Array<{ to: string; label: string; end?: boolean }> = loggedIn
     ? [
-        { to: '/upload', label: t('Add Archives') },
-        { to: '/duplicates', label: t('Duplicate Detection') },
-        { to: '/config', label: t('Settings') },
-        { to: '/config/categories', label: t('Modify Categories') },
-        { to: '/stats', label: t('Statistics') },
-        { to: '/logs', label: t('Logs') },
+        { to: "/upload", label: t("Add Archives") },
+        { to: "/duplicates", label: t("Duplicate Detection") },
+        { to: "/config", label: t("Settings") },
+        { to: "/config/categories", label: t("Modify Categories") },
+        { to: "/stats", label: t("Statistics") },
+        { to: "/logs", label: t("Logs") },
       ]
     : [
-        { to: '/login', label: t('Admin Login') },
-        { to: '/stats', label: t('Statistics') },
+        { to: "/login", label: t("Admin Login") },
+        { to: "/stats", label: t("Statistics") },
       ]
 
   return (

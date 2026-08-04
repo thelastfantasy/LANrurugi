@@ -5,7 +5,7 @@
 // back to single-page display and re-anchors. All 1-indexed, matching legacy and the rest of this
 // app's archive-page API.
 
-export type ChangePageTarget = 'prev' | 'next' | 'first' | 'last'
+export type ChangePageTarget = "prev" | "next" | "first" | "last"
 
 export interface Spread {
   /** The page shown in the left DOM slot (`#img`). */
@@ -26,10 +26,10 @@ export function computeNextPage(
   doublePageMode: boolean,
   isShowingSpread: boolean,
 ): number {
-  if (target === 'first') return mangaMode ? totalPages : 1
-  if (target === 'last') return mangaMode ? 1 : totalPages
+  if (target === "first") return mangaMode ? totalPages : 1
+  if (target === "last") return mangaMode ? 1 : totalPages
 
-  let offset = target === 'next' ? 1 : -1
+  let offset = target === "next" ? 1 : -1
   if (doublePageMode && isShowingSpread) offset *= 2
   if (mangaMode) offset = -offset
 

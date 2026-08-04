@@ -6,24 +6,24 @@
 // steps across archive boundaries. All key names match legacy exactly since they're pure
 // per-browser scratch state, not synced with any server value.
 
-const SEARCH_IDS_KEY = 'currArchiveIds'
-const PREV_IDS_KEY = 'previousArchiveIds'
-const NEXT_IDS_KEY = 'nextArchiveIds'
-const DT_PAGE_KEY = 'currDatatablesPage'
-const NAV_STATE_KEY = 'navigationState' // sessionStorage, not localStorage — legacy's own choice
-const CURRENT_SEARCH_KEY = 'currentSearch'
-const SELECTED_CATEGORY_KEY = 'selectedCategory'
-const INDEX_SORT_KEY = 'indexSort'
-const INDEX_ORDER_KEY = 'indexOrder'
-const DT_PAGE_SIZE_KEY = 'datatablesPageSize'
-const GROUP_TANKS_KEY = 'grouptanks'
-const HIDE_COMPLETED_KEY = 'hidecompleted'
+const SEARCH_IDS_KEY = "currArchiveIds"
+const PREV_IDS_KEY = "previousArchiveIds"
+const NEXT_IDS_KEY = "nextArchiveIds"
+const DT_PAGE_KEY = "currDatatablesPage"
+const NAV_STATE_KEY = "navigationState" // sessionStorage, not localStorage — legacy's own choice
+const CURRENT_SEARCH_KEY = "currentSearch"
+const SELECTED_CATEGORY_KEY = "selectedCategory"
+const INDEX_SORT_KEY = "indexSort"
+const INDEX_ORDER_KEY = "indexOrder"
+const DT_PAGE_SIZE_KEY = "datatablesPageSize"
+const GROUP_TANKS_KEY = "grouptanks"
+const HIDE_COMPLETED_KEY = "hidecompleted"
 
 export interface IndexSearchState {
   filter: string
   category: string
   sortby: string
-  order: 'asc' | 'desc'
+  order: "asc" | "desc"
   pageSize: number
   groupbyTanks: boolean
   hidecompleted: boolean
@@ -46,18 +46,18 @@ export function recordSearchNavigation(ids: string[], datatablesPage: number, st
   // re-fetches instead of cross-linking two different searches' results.
   localStorage.removeItem(PREV_IDS_KEY)
   localStorage.removeItem(NEXT_IDS_KEY)
-  sessionStorage.setItem(NAV_STATE_KEY, 'datatables')
+  sessionStorage.setItem(NAV_STATE_KEY, "datatables")
 }
 
 function readIndexSearchState(): IndexSearchState {
   return {
-    filter: localStorage.getItem(CURRENT_SEARCH_KEY) ?? '',
-    category: localStorage.getItem(SELECTED_CATEGORY_KEY) ?? '',
-    sortby: localStorage.getItem(INDEX_SORT_KEY) ?? 'title',
-    order: localStorage.getItem(INDEX_ORDER_KEY) === 'desc' ? 'desc' : 'asc',
+    filter: localStorage.getItem(CURRENT_SEARCH_KEY) ?? "",
+    category: localStorage.getItem(SELECTED_CATEGORY_KEY) ?? "",
+    sortby: localStorage.getItem(INDEX_SORT_KEY) ?? "title",
+    order: localStorage.getItem(INDEX_ORDER_KEY) === "desc" ? "desc" : "asc",
     pageSize: Number(localStorage.getItem(DT_PAGE_SIZE_KEY)) || 100,
-    groupbyTanks: localStorage.getItem(GROUP_TANKS_KEY) !== 'false',
-    hidecompleted: localStorage.getItem(HIDE_COMPLETED_KEY) === 'true',
+    groupbyTanks: localStorage.getItem(GROUP_TANKS_KEY) !== "false",
+    hidecompleted: localStorage.getItem(HIDE_COMPLETED_KEY) === "true",
   }
 }
 
@@ -70,9 +70,9 @@ async function fetchSearchIds(state: IndexSearchState, start: number): Promise<s
     groupby_tanks: String(state.groupbyTanks),
     hidecompleted: String(state.hidecompleted),
   })
-  if (state.category === 'NEW_ONLY') params.set('newonly', 'true')
-  else if (state.category === 'UNTAGGED_ONLY') params.set('untaggedonly', 'true')
-  else if (state.category) params.set('category', state.category)
+  if (state.category === "NEW_ONLY") params.set("newonly", "true")
+  else if (state.category === "UNTAGGED_ONLY") params.set("untaggedonly", "true")
+  else if (state.category) params.set("category", state.category)
 
   const response = await fetch(`/api/search/ids?${params}`)
   if (!response.ok) return null
@@ -80,14 +80,14 @@ async function fetchSearchIds(state: IndexSearchState, start: number): Promise<s
   return result.data.length > 0 ? result.data : null
 }
 
-async function loadAdjacentDatatablesArchives(direction: 'prev' | 'next'): Promise<string[] | null> {
-  const cacheKey = direction === 'prev' ? PREV_IDS_KEY : NEXT_IDS_KEY
+async function loadAdjacentDatatablesArchives(direction: "prev" | "next"): Promise<string[] | null> {
+  const cacheKey = direction === "prev" ? PREV_IDS_KEY : NEXT_IDS_KEY
   const cached = localStorage.getItem(cacheKey)
   if (cached) return JSON.parse(cached) as string[]
 
   const currentPage = Number(localStorage.getItem(DT_PAGE_KEY)) || 1
-  if (direction === 'prev' && currentPage <= 1) return null
-  const targetPage = direction === 'prev' ? currentPage - 1 : currentPage + 1
+  if (direction === "prev" && currentPage <= 1) return null
+  const targetPage = direction === "prev" ? currentPage - 1 : currentPage + 1
   const state = readIndexSearchState()
   return fetchSearchIds(state, (targetPage - 1) * state.pageSize)
 }
@@ -111,7 +111,7 @@ export async function setupArchiveNavigation(archiveId: string): Promise<Archive
     return { ids: [], index: -1 }
   }
 
-  if (sessionStorage.getItem(NAV_STATE_KEY) !== 'datatables') {
+  if (sessionStorage.getItem(NAV_STATE_KEY) !== "datatables") {
     return { ids: [], index: -1 }
   }
 
@@ -128,11 +128,11 @@ export async function setupArchiveNavigation(archiveId: string): Promise<Archive
   if (index === -1) return { ids: [], index: -1 }
 
   if (index === 0) {
-    const prev = await loadAdjacentDatatablesArchives('prev')
+    const prev = await loadAdjacentDatatablesArchives("prev")
     if (prev) localStorage.setItem(PREV_IDS_KEY, JSON.stringify(prev))
   }
   if (index === ids.length - 1) {
-    const next = await loadAdjacentDatatablesArchives('next')
+    const next = await loadAdjacentDatatablesArchives("next")
     if (next) localStorage.setItem(NEXT_IDS_KEY, JSON.stringify(next))
   }
 
@@ -144,16 +144,16 @@ export async function setupArchiveNavigation(archiveId: string): Promise<Archive
  * `null` (and lets the caller show a toast) when there's nowhere further to go. */
 export function resolveAdjacentArchive(
   nav: ArchiveNavState,
-  direction: 'prev' | 'next',
+  direction: "prev" | "next",
 ): string | null {
   if (nav.ids.length === 0) return null
 
-  const atEdge = direction === 'prev' ? nav.index === 0 : nav.index === nav.ids.length - 1
+  const atEdge = direction === "prev" ? nav.index === 0 : nav.index === nav.ids.length - 1
   if (!atEdge) {
-    return nav.ids[direction === 'prev' ? nav.index - 1 : nav.index + 1]
+    return nav.ids[direction === "prev" ? nav.index - 1 : nav.index + 1]
   }
 
-  const cacheKey = direction === 'prev' ? PREV_IDS_KEY : NEXT_IDS_KEY
+  const cacheKey = direction === "prev" ? PREV_IDS_KEY : NEXT_IDS_KEY
   const cachedJson = localStorage.getItem(cacheKey)
   if (!cachedJson) return null
   const cachedIds = JSON.parse(cachedJson) as string[]
@@ -162,7 +162,7 @@ export function resolveAdjacentArchive(
   const currentIdsJson = JSON.stringify(nav.ids)
   const currentPage = Number(localStorage.getItem(DT_PAGE_KEY)) || 1
 
-  if (direction === 'prev') {
+  if (direction === "prev") {
     localStorage.removeItem(PREV_IDS_KEY)
     localStorage.setItem(SEARCH_IDS_KEY, cachedJson)
     localStorage.setItem(NEXT_IDS_KEY, currentIdsJson)

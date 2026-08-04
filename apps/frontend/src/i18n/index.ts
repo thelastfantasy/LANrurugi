@@ -1,40 +1,40 @@
-import i18n from 'i18next'
-import LanguageDetector from 'i18next-browser-languagedetector'
-import { initReactI18next } from 'react-i18next'
+import i18n from "i18next"
+import LanguageDetector from "i18next-browser-languagedetector"
+import { initReactI18next } from "react-i18next"
 
-import asLocale from './locales/as.json'
-import de from './locales/de.json'
-import en from './locales/en.json'
-import es from './locales/es.json'
-import fr from './locales/fr.json'
-import id from './locales/id.json'
-import it from './locales/it.json'
-import ja from './locales/ja.json'
-import ko from './locales/ko.json'
-import nbNO from './locales/nb_NO.json'
-import pt from './locales/pt.json'
-import vi from './locales/vi.json'
-import zh from './locales/zh.json'
-import zhHant from './locales/zh_Hant.json'
+import asLocale from "./locales/as.json"
+import de from "./locales/de.json"
+import en from "./locales/en.json"
+import es from "./locales/es.json"
+import fr from "./locales/fr.json"
+import id from "./locales/id.json"
+import it from "./locales/it.json"
+import ja from "./locales/ja.json"
+import ko from "./locales/ko.json"
+import nbNO from "./locales/nb_NO.json"
+import pt from "./locales/pt.json"
+import vi from "./locales/vi.json"
+import zh from "./locales/zh.json"
+import zhHant from "./locales/zh_Hant.json"
 
 // The 14 languages the legacy LANraragi shipped translation templates for
 // (verified by listing `locales/template/*.po` in the legacy source), each
 // keyed by its English source string per `research.md` #10.
 export const SUPPORTED_LANGUAGES = [
-  { code: 'en', nativeName: 'English' },
-  { code: 'ja', nativeName: '日本語' },
-  { code: 'zh', nativeName: '简体中文' },
-  { code: 'zh_Hant', nativeName: '繁體中文' },
-  { code: 'ko', nativeName: '한국어' },
-  { code: 'fr', nativeName: 'Français' },
-  { code: 'de', nativeName: 'Deutsch' },
-  { code: 'es', nativeName: 'Español' },
-  { code: 'it', nativeName: 'Italiano' },
-  { code: 'pt', nativeName: 'Português' },
-  { code: 'vi', nativeName: 'Tiếng Việt' },
-  { code: 'id', nativeName: 'Bahasa Indonesia' },
-  { code: 'nb_NO', nativeName: 'Norsk Bokmål' },
-  { code: 'as', nativeName: 'অসমীয়া' },
+  { code: "en", nativeName: "English" },
+  { code: "ja", nativeName: "日本語" },
+  { code: "zh", nativeName: "简体中文" },
+  { code: "zh_Hant", nativeName: "繁體中文" },
+  { code: "ko", nativeName: "한국어" },
+  { code: "fr", nativeName: "Français" },
+  { code: "de", nativeName: "Deutsch" },
+  { code: "es", nativeName: "Español" },
+  { code: "it", nativeName: "Italiano" },
+  { code: "pt", nativeName: "Português" },
+  { code: "vi", nativeName: "Tiếng Việt" },
+  { code: "id", nativeName: "Bahasa Indonesia" },
+  { code: "nb_NO", nativeName: "Norsk Bokmål" },
+  { code: "as", nativeName: "অসমীয়া" },
 ] as const
 
 void i18n
@@ -61,7 +61,7 @@ void i18n
     // rather than rendering blank — `as` in particular ships with zero translated strings (its
     // legacy .po template has no filled-in msgstr entries at all) so this path is exercised for
     // real, not just hypothetically.
-    fallbackLng: 'en',
+    fallbackLng: "en",
     supportedLngs: SUPPORTED_LANGUAGES.map((l) => l.code),
     interpolation: { escapeValue: false },
     // Translation keys here are literal English source sentences (legacy's own `c.lh("...")`
@@ -77,9 +77,9 @@ void i18n
     nsSeparator: false,
     keySeparator: false,
     detection: {
-      order: ['localStorage', 'navigator'],
-      caches: ['localStorage'],
-      lookupLocalStorage: 'lanrurugi_language',
+      order: ["localStorage", "navigator"],
+      caches: ["localStorage"],
+      lookupLocalStorage: "lanrurugi_language",
     },
   })
 

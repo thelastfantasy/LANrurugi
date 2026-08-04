@@ -1,9 +1,9 @@
-import { useTranslation } from 'react-i18next'
+import { useTranslation } from "react-i18next"
 
-import { useRegenThumbnails } from '../../api/hooks'
-import { CollapsibleSection } from '../../components/CollapsibleSection'
-import { FONT_SIZE_10PT } from '../../theme'
-import { ActionRow, CheckboxRow, Row } from './shared'
+import { useRegenThumbnails } from "../../api/hooks"
+import { CollapsibleSection } from "../../components/CollapsibleSection"
+import { FONT_SIZE_10PT } from "../../theme"
+import { ActionRow, CheckboxRow, Row } from "./shared"
 
 // Full IANA timezone list for the Settings-page `<select>`, grouped by continent — phpBB-style
 // (every real zone the runtime knows about, not a hand-curated subset). Built at module load from
@@ -14,10 +14,10 @@ import { ActionRow, CheckboxRow, Row } from './shared'
 // doesn't return (older browsers, or a genuinely unusual id a user typed before this UI existed)
 // still round-trips through the "Custom…" free-text fallback below.
 const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
-  const supported: string[] = (Intl.supportedValuesOf?.('timeZone') as string[] | undefined) ?? []
+  const supported: string[] = (Intl.supportedValuesOf?.("timeZone") as string[] | undefined) ?? []
   const groups = new Map<string, string[]>()
   for (const tz of supported) {
-    const area = tz.includes('/') ? tz.slice(0, tz.indexOf('/')) : 'Other'
+    const area = tz.includes("/") ? tz.slice(0, tz.indexOf("/")) : "Other"
     const bucket = groups.get(area)
     if (bucket) {
       bucket.push(tz)
@@ -25,7 +25,7 @@ const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
       groups.set(area, [tz])
     }
   }
-  const order = ['Africa', 'America', 'Antarctica', 'Asia', 'Atlantic', 'Australia', 'Europe', 'Indian', 'Pacific']
+  const order = ["Africa", "America", "Antarctica", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific"]
   const sortedAreas = [...groups.keys()].sort((a, b) => {
     const ai = order.indexOf(a)
     const bi = order.indexOf(b)
@@ -35,7 +35,7 @@ const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
 })()
 
 function isKnownTimezone(tz: string): boolean {
-  return tz === 'UTC' || TIMEZONE_GROUPS.some((g) => g.zones.includes(tz))
+  return tz === "UTC" || TIMEZONE_GROUPS.some((g) => g.zones.includes(tz))
 }
 
 export function TagsThumbnailsSection({
@@ -83,61 +83,61 @@ export function TagsThumbnailsSection({
   const regenThumbnails = useRegenThumbnails()
 
   return (
-    <CollapsibleSection icon="fa-tags" title={t('Tags and Thumbnails')}>
-      <table style={{ margin: 'auto', fontSize: FONT_SIZE_10PT }}>
+    <CollapsibleSection icon="fa-tags" title={t("Tags and Thumbnails")}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
         <tbody>
-          <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t('Use high-quality thumbnails for pages')}>
-            {t('LANraragi generates lower-quality thumbnails for archive pages for performance reasons.')}
+          <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("Use high-quality thumbnails for pages")}>
+            {t("LANraragi generates lower-quality thumbnails for archive pages for performance reasons.")}
             <br />
-            {t('If this option is checked, it will instead generate page thumbnails at the same quality as cover thumbnails.')}
+            {t("If this option is checked, it will instead generate page thumbnails at the same quality as cover thumbnails.")}
           </CheckboxRow>
-          <CheckboxRow id="enablewebp" checked={enablewebp} onChange={setEnablewebp} label={t('Use WebP for thumbnails')}>
-            {t('If checked, thumbnails are generated as WebP, which is smaller than JPEG at the same quality. If unchecked, thumbnails are generated as JPEG instead.')}
+          <CheckboxRow id="enablewebp" checked={enablewebp} onChange={setEnablewebp} label={t("Use WebP for thumbnails")}>
+            {t("If checked, thumbnails are generated as WebP, which is smaller than JPEG at the same quality. If unchecked, thumbnails are generated as JPEG instead.")}
             <br />
-            <i className="fas fa-exclamation-triangle" style={{ color: 'red' }}></i>{' '}
-            {t('Changing this regenerates every thumbnail in the library, so they all stay in the same format.')}
+            <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
+            {t("Changing this regenerates every thumbnail in the library, so they all stay in the same format.")}
           </CheckboxRow>
           {enablewebp && (
-            <Row label={t('WebP Quality')}>
+            <Row label={t("WebP Quality")}>
               <input
                 className="stdinput"
                 type="number"
                 min={0}
                 max={100}
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 maxLength={255}
                 value={webpquality}
                 onChange={(e) => setWebpquality(Number(e.target.value))}
               />
               <br />
-              {t('Quality of generated WebP thumbnails. Higher quality = larger files. (0-100)')}
+              {t("Quality of generated WebP thumbnails. Higher quality = larger files. (0-100)")}
             </Row>
           )}
           <ActionRow
             id="genthumb-button"
-            label={t('Generate Missing Thumbnails')}
+            label={t("Generate Missing Thumbnails")}
             onClick={async () => {
               await regenThumbnails.mutateAsync(false)
-              onStatus(t('Thumbnail generation queued.') ?? '')
+              onStatus(t("Thumbnail generation queued.") ?? "")
             }}
           >
             {t("Generate Thumbnails for all archives that don't have one yet.")}
           </ActionRow>
           <ActionRow
             id="forcethumb-button"
-            label={t('Regenerate all Thumbnails')}
+            label={t("Regenerate all Thumbnails")}
             onClick={async () => {
               await regenThumbnails.mutateAsync(true)
-              onStatus(t('Thumbnail regeneration queued.') ?? '')
+              onStatus(t("Thumbnail regeneration queued.") ?? "")
             }}
           >
-            {t('Regenerate all thumbnails. This might take a while!')}
+            {t("Regenerate all thumbnails. This might take a while!")}
           </ActionRow>
           <CheckboxRow
             id="usedateadded"
             checked={usedateadded}
             onChange={setUsedateadded}
-            label={t('Add Timestamp Tag')}
+            label={t("Add Timestamp Tag")}
           >
             {t('If enabled, LANrurugi will add the UNIX timestamp of the current time as a tag under the "date_added" namespace to newly added archives.')}
           </CheckboxRow>
@@ -151,7 +151,7 @@ export function TagsThumbnailsSection({
               {t('Enabling this will use file modified time instead of current time when setting "date_added" timestamps.')}
             </CheckboxRow>
           )}
-          <Row label={t('Timezone')}>
+          <Row label={t("Timezone")}>
             {/* `date_added` display + day-range search resolve in this IANA timezone so
                 every viewer agrees on which day an archive belongs to, regardless of
                 their own browser timezone (see `lanrurugi_search::engine`'s
@@ -162,9 +162,9 @@ export function TagsThumbnailsSection({
                 existed) falls through to a "Custom…" free-text input. */}
             <select
               className="stdbtn"
-              value={isKnownTimezone(timezone) ? timezone : '__custom__'}
+              value={isKnownTimezone(timezone) ? timezone : "__custom__"}
               onChange={(e) => {
-                if (e.target.value === '__custom__') return
+                if (e.target.value === "__custom__") return
                 setTimezone(e.target.value)
               }}
             >
@@ -177,13 +177,13 @@ export function TagsThumbnailsSection({
                 </optgroup>
               ))}
               {!isKnownTimezone(timezone) && (
-                <option value="__custom__">{t('Custom…')} ({timezone})</option>
+                <option value="__custom__">{t("Custom…")} ({timezone})</option>
               )}
             </select>
             {!isKnownTimezone(timezone) && (
               <input
                 className="stdinput"
-                style={{ width: '100%', marginTop: 4 }}
+                style={{ width: "100%", marginTop: 4 }}
                 value={timezone}
                 onChange={(e) => setTimezone(e.target.value)}
                 type="text"
@@ -191,53 +191,53 @@ export function TagsThumbnailsSection({
               />
             )}
             <br />
-            {t('IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to display date_added tags and resolve date_added:YYYY-MM-DD searches to a calendar day. Defaults to UTC.')}
+            {t("IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to display date_added tags and resolve date_added:YYYY-MM-DD searches to a calendar day. Defaults to UTC.")}
           </Row>
-          <Row label={t('Excluded Namespaces')}>
+          <Row label={t("Excluded Namespaces")}>
             <input
               className="stdinput"
-              style={{ width: '100%' }}
+              style={{ width: "100%" }}
               maxLength={255}
               value={excludednamespaces}
               onChange={(e) => setExcludednamespaces(e.target.value)}
               type="text"
             />
             <br />
-            {t('Comma-separated list of tag namespaces to exclude from search suggestions and tag statistics.')}
+            {t("Comma-separated list of tag namespaces to exclude from search suggestions and tag statistics.")}
             <br />
-            {t('Clients will use this list to filter out noisy tags from autocomplete and tag clouds.')}
+            {t("Clients will use this list to filter out noisy tags from autocomplete and tag clouds.")}
           </Row>
-          <Row label={t('Tag Rules')}>
+          <Row label={t("Tag Rules")}>
             <input id="tagruleson" className="fa" type="checkbox" checked={tagruleson} onChange={(e) => setTagruleson(e.target.checked)} />
             <br />
             <textarea
               className="stdinput"
-              style={{ width: '100%', height: 196 }}
+              style={{ width: "100%", height: 196 }}
               value={tagrules}
               onChange={(e) => setTagrules(e.target.value)}
             />
             <br />
-            {t('When tagging archives using Plugins, the rules specified here will be applied to the tags before saving them to the database.')}
+            {t("When tagging archives using Plugins, the rules specified here will be applied to the tags before saving them to the database.")}
             <br />
-            {t('Split rules with linebreaks.')}
+            {t("Split rules with linebreaks.")}
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t('<b>-tag | tag</b> : removes the tag (like a blacklist)') }} />
+            <span dangerouslySetInnerHTML={{ __html: t("<b>-tag | tag</b> : removes the tag (like a blacklist)") }} />
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t('<b>-namespace:*</b> : removes all tags within this namespace') }} />
+            <span dangerouslySetInnerHTML={{ __html: t("<b>-namespace:*</b> : removes all tags within this namespace") }} />
             <br />
-            {t('namespace : strips the namespace from the tags')}
+            {t("namespace : strips the namespace from the tags")}
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t('<b>tag -> new-tag</b> : replaces one tag') }} />
+            <span dangerouslySetInnerHTML={{ __html: t("<b>tag -> new-tag</b> : replaces one tag") }} />
             <br />
             <span
               dangerouslySetInnerHTML={{
                 __html: t(
-                  '<b>tag => new-tag</b> : replaces one tag, but use a hash table internally for faster performance. These rules will be executed <i>once</i> after all other rules.',
+                  "<b>tag => new-tag</b> : replaces one tag, but use a hash table internally for faster performance. These rules will be executed <i>once</i> after all other rules.",
                 ),
               }}
             />
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t('<b>namespace:* -> new-namespace:*</b> : replaces the namespace with the new one') }} />
+            <span dangerouslySetInnerHTML={{ __html: t("<b>namespace:* -> new-namespace:*</b> : replaces the namespace with the new one") }} />
           </Row>
         </tbody>
       </table>

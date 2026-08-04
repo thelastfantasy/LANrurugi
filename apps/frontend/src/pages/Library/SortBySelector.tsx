@@ -1,6 +1,6 @@
-import { useTranslation } from 'react-i18next'
+import { useTranslation } from "react-i18next"
 
-import type { StatTag } from '../../api/types'
+import type { StatTag } from "../../api/types"
 
 export function SortBySelector({
   sortby,
@@ -10,7 +10,7 @@ export function SortBySelector({
   onToggleOrder,
 }: {
   sortby: string
-  order: 'asc' | 'desc'
+  order: "asc" | "desc"
   stats: StatTag[] | undefined
   onSortBy: (key: string) => void
   onToggleOrder: () => void
@@ -19,21 +19,21 @@ export function SortBySelector({
 
   const namespaces = [
     ...new Set([
-      ...(stats ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== 'date_added'),
-      ...(sortby !== 'title' && sortby !== 'date_added' ? [sortby] : []),
+      ...(stats ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== "date_added"),
+      ...(sortby !== "title" && sortby !== "date_added" ? [sortby] : []),
     ]),
   ].sort()
 
   return (
     <div className="thumbnail-options">
-      {t('Sort by:')}{' '}
+      {t("Sort by:")}{" "}
       <select
         className="favtag-btn"
         value={sortby}
         onChange={(e) => onSortBy(e.target.value)}
       >
-        <option value="title">{t('Title')}</option>
-        <option value="date_added">{t('Date')}</option>
+        <option value="title">{t("Title")}</option>
+        <option value="date_added">{t("Date")}</option>
         {namespaces.map((ns) => (
           <option key={ns} value={ns}>
             {ns.charAt(0).toUpperCase() + ns.slice(1)}
@@ -41,9 +41,9 @@ export function SortBySelector({
         ))}
       </select>
       <a
-        className={`fa fa-2x fa-sort-alpha-${order === 'asc' ? 'down' : 'up'} table-option`}
+        className={`fa fa-2x fa-sort-alpha-${order === "asc" ? "down" : "up"} table-option`}
         href="#"
-        title={t('Sort Order') ?? undefined}
+        title={t("Sort Order") ?? undefined}
         onClick={(e) => {
           e.preventDefault()
           onToggleOrder()

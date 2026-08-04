@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
+import { useTranslation } from "react-i18next"
 
-import { useStats } from './api/hooks'
-import { PopupMenu, PopupMenuItem, useMenuPalette } from './components/PopupMenu'
-import { Tooltip } from './components/Tooltip'
-import { buildSearchToken } from './lib/tagFormat'
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from './theme'
+import { useStats } from "./api/hooks"
+import { PopupMenu, PopupMenuItem, useMenuPalette } from "./components/PopupMenu"
+import { Tooltip } from "./components/Tooltip"
+import { buildSearchToken } from "./lib/tagFormat"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
 
 // Real, themed replacements for `window.prompt`/`window.confirm` — same call shape as those
 // (`await promptDialog(message, defaultValue)` / `await confirmDialog(message)`, both resolving
@@ -35,9 +35,9 @@ export type NewCategoryResult = { name: string; isDynamic: boolean; search: stri
 /** One of the 8 points along a stamp's own selection-rectangle border (4 corners + 4 edge
  * midpoints) the icon can be anchored to — matches `Stamp::rect`'s own `anchor` segment on the
  * backend exactly (short codes, not full names, to keep the stored string compact). */
-export type StampAnchor = 'tl' | 't' | 'tr' | 'r' | 'br' | 'b' | 'bl' | 'l'
+export type StampAnchor = "tl" | "t" | "tr" | "r" | "br" | "b" | "bl" | "l"
 
-const STAMP_ANCHORS: StampAnchor[] = ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l']
+const STAMP_ANCHORS: StampAnchor[] = ["tl", "t", "tr", "r", "br", "b", "bl", "l"]
 
 /** A stamp's optional selection rectangle — percent `x`/`y`/`width`/`height` of the page image
  * (matching `position`'s own percent convention), which of the 8 border points the icon sits on,
@@ -51,10 +51,10 @@ const STAMP_ANCHORS: StampAnchor[] = ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'
  * arbitrary backdrop content, so `mosaic` is a strong-blur approximation of an obscuring effect
  * rather than true square-block pixelation). A per-stamp choice, not a global reader setting,
  * same as `anchor`/`color`. */
-export type StampFill = 'solid' | 'stripes' | 'mosaic' | 'blur'
+export type StampFill = "solid" | "stripes" | "mosaic" | "blur"
 
 /** Sharp (right-angle) vs rounded corners on the rect's own outline. */
-export type StampCorner = 'sharp' | 'round'
+export type StampCorner = "sharp" | "round"
 
 /** Whether the rect's own outline/fill is visible only while hovering the stamp's icon (`hover`,
  * the original/default behavior — a rect that's otherwise invisible clutter until you're actually
@@ -62,7 +62,7 @@ export type StampCorner = 'sharp' | 'round'
  * for a rect meant to be a permanent, visible annotation rather than a hidden-until-inspected
  * one). Selecting a stamp (single-click, entering resize/adjust mode) always shows the outline
  * either way — this only governs the plain, unselected resting state. */
-export type StampDisplay = 'hover' | 'always'
+export type StampDisplay = "hover" | "always"
 
 export interface StampRect {
   x: number
@@ -90,10 +90,10 @@ export interface StampRect {
 // rect the icon sits" has no sensible cross-stamp meaning — reported live as a real gap once it
 // turned out users do expect it to carry over exactly like the other three, so it's included here
 // too now.
-let lastPickedAnchor: StampAnchor = 'tl'
-let lastPickedFill: StampFill = 'solid'
-let lastPickedCorner: StampCorner = 'sharp'
-let lastPickedDisplay: StampDisplay = 'hover'
+let lastPickedAnchor: StampAnchor = "tl"
+let lastPickedFill: StampFill = "solid"
+let lastPickedCorner: StampCorner = "sharp"
+let lastPickedDisplay: StampDisplay = "hover"
 
 /** `"x,y,width,height,anchor,color,fill,corner,display,layer"` → `StampRect`, or `null` for an
  * empty/malformed string — matches `Stamp::rect`'s own wire format exactly (see that field's docs
@@ -104,17 +104,17 @@ let lastPickedDisplay: StampDisplay = 'hover'
  * already established. */
 export function parseStampRect(rect: string): StampRect | null {
   if (!rect) return null
-  const [xStr, yStr, wStr, hStr, anchorStr, color, fillStr, cornerStr, displayStr, layerStr] = rect.split(',')
+  const [xStr, yStr, wStr, hStr, anchorStr, color, fillStr, cornerStr, displayStr, layerStr] = rect.split(",")
   const x = Number(xStr)
   const y = Number(yStr)
   const width = Number(wStr)
   const height = Number(hStr)
   if ([x, y, width, height].some((n) => Number.isNaN(n))) return null
-  const anchor = STAMP_ANCHORS.includes(anchorStr as StampAnchor) ? (anchorStr as StampAnchor) : 'tl'
+  const anchor = STAMP_ANCHORS.includes(anchorStr as StampAnchor) ? (anchorStr as StampAnchor) : "tl"
   const fill: StampFill =
-    fillStr === 'stripes' || fillStr === 'mosaic' || fillStr === 'blur' ? fillStr : 'solid'
-  const corner: StampCorner = cornerStr === 'round' ? 'round' : 'sharp'
-  const display: StampDisplay = displayStr === 'always' ? 'always' : 'hover'
+    fillStr === "stripes" || fillStr === "mosaic" || fillStr === "blur" ? fillStr : "solid"
+  const corner: StampCorner = cornerStr === "round" ? "round" : "sharp"
+  const display: StampDisplay = displayStr === "always" ? "always" : "hover"
   const layer = Number(layerStr)
   return {
     x,
@@ -122,7 +122,7 @@ export function parseStampRect(rect: string): StampRect | null {
     width,
     height,
     anchor,
-    color: color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#ff0000',
+    color: color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#ff0000",
     fill,
     corner,
     display,
@@ -142,21 +142,21 @@ export function formatStampRect(rect: StampRect): string {
  * UI below, so the two can't drift on what e.g. `'t'` actually means. */
 export function anchorPercent(anchor: StampAnchor): { x: number; y: number } {
   switch (anchor) {
-    case 'tl':
+    case "tl":
       return { x: 0, y: 0 }
-    case 't':
+    case "t":
       return { x: 50, y: 0 }
-    case 'tr':
+    case "tr":
       return { x: 100, y: 0 }
-    case 'r':
+    case "r":
       return { x: 100, y: 50 }
-    case 'br':
+    case "br":
       return { x: 100, y: 100 }
-    case 'b':
+    case "b":
       return { x: 50, y: 100 }
-    case 'bl':
+    case "bl":
       return { x: 0, y: 100 }
-    case 'l':
+    case "l":
       return { x: 0, y: 50 }
   }
 }
@@ -165,22 +165,22 @@ export type StampEditorResult = { content: string; icon: string; rect: StampRect
 
 type DialogRequest =
   | {
-      kind: 'prompt'
+      kind: "prompt"
       message: string
       defaultValue: string
       resolve: (value: string | null) => void
     }
   | {
-      kind: 'confirm'
+      kind: "confirm"
       message: string
       resolve: (value: boolean) => void
     }
   | {
-      kind: 'newCategory'
+      kind: "newCategory"
       resolve: (value: NewCategoryResult | null) => void
     }
   | {
-      kind: 'stampEditor'
+      kind: "stampEditor"
       defaultContent: string
       defaultIcon: string
       defaultRect: StampRect | null
@@ -198,16 +198,16 @@ function setRequest(request: DialogRequest | null) {
 /** Drop-in replacement for `window.prompt(message, defaultValue)` — resolves to the entered
  * string, or `null` if cancelled (matches the native function's own return shape exactly, so a
  * call site's existing `if (title && title.trim() !== '')` guard keeps working unchanged). */
-export function promptDialog(message: string, defaultValue = ''): Promise<string | null> {
+export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
   return new Promise((resolve) => {
-    setRequest({ kind: 'prompt', message, defaultValue, resolve })
+    setRequest({ kind: "prompt", message, defaultValue, resolve })
   })
 }
 
 /** Drop-in replacement for `window.confirm(message)`. */
 export function confirmDialog(message: string): Promise<boolean> {
   return new Promise((resolve) => {
-    setRequest({ kind: 'confirm', message, resolve })
+    setRequest({ kind: "confirm", message, resolve })
   })
 }
 
@@ -218,7 +218,7 @@ export function confirmDialog(message: string): Promise<boolean> {
  * call site would otherwise have to lay out and wire up itself. Resolves `null` if cancelled. */
 export function newCategoryDialog(): Promise<NewCategoryResult | null> {
   return new Promise((resolve) => {
-    setRequest({ kind: 'newCategory', resolve })
+    setRequest({ kind: "newCategory", resolve })
   })
 }
 
@@ -229,12 +229,12 @@ export function newCategoryDialog(): Promise<NewCategoryResult | null> {
  * click) an anchor-position + outline-color picker for that rectangle. Resolves `null` if
  * cancelled. */
 export function stampEditorDialog(
-  defaultContent = '',
-  defaultIcon = '',
+  defaultContent = "",
+  defaultIcon = "",
   defaultRect: StampRect | null = null,
 ): Promise<StampEditorResult | null> {
   return new Promise((resolve) => {
-    setRequest({ kind: 'stampEditor', defaultContent, defaultIcon, defaultRect, resolve })
+    setRequest({ kind: "stampEditor", defaultContent, defaultIcon, defaultRect, resolve })
   })
 }
 
@@ -244,7 +244,7 @@ export function stampEditorDialog(
  * between the picker here and `MarkerLayer.tsx`'s own marker rendering, so the two can't drift. */
 export function renderStampIcon(icon: string): React.ReactNode {
   if (!icon) return null
-  if (icon.startsWith('fa:')) {
+  if (icon.startsWith("fa:")) {
     const { cls, color } = parseFaIcon(icon)
     return <i className={`fas ${cls}`} style={color ? { color } : undefined} aria-hidden="true"></i>
   }
@@ -258,8 +258,8 @@ export function renderStampIcon(icon: string): React.ReactNode {
  * would've meant re-deriving the same "is the 3rd segment actually a valid hex color" check twice,
  * with two chances to drift out of sync. */
 function parseFaIcon(icon: string): { cls: string; color: string | null } {
-  const [, cls, color] = icon.split(':')
-  return { cls: cls ?? '', color: color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : null }
+  const [, cls, color] = icon.split(":")
+  return { cls: cls ?? "", color: color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : null }
 }
 
 interface EmojiEntry {
@@ -281,20 +281,20 @@ interface EmojiGroup {
 // 320px-wide dialog. Loaded lazily (see `useEmojiGroups` below) — ~400KB of JSON nobody needs
 // until they actually open this picker shouldn't ride along in the app's main bundle.
 const EMOJI_GROUP_TAB_ICON: Record<string, string> = {
-  smileys_emotion: '😀',
-  people_body: '👋',
-  animals_nature: '🐻',
-  food_drink: '🍔',
-  travel_places: '🚗',
-  activities: '⚽',
-  objects: '💡',
-  symbols: '❤️',
-  flags: '🏳️',
+  smileys_emotion: "😀",
+  people_body: "👋",
+  animals_nature: "🐻",
+  food_drink: "🍔",
+  travel_places: "🚗",
+  activities: "⚽",
+  objects: "💡",
+  symbols: "❤️",
+  flags: "🏳️",
 }
 
 // Excluded from the Flags category specifically (not a general moderation list — everything else
 // in the full unicode.org set stays as-is).
-const EXCLUDED_EMOJI_SLUGS = new Set(['flag_taiwan'])
+const EXCLUDED_EMOJI_SLUGS = new Set(["flag_taiwan"])
 
 // Remembers the last color picked for a Font Awesome icon across dialog opens within the same
 // session (module-level, not persisted to storage) — picking a color once per stamp would get old
@@ -302,7 +302,7 @@ const EXCLUDED_EMOJI_SLUGS = new Set(['flag_taiwan'])
 // separate from `lastPickedRectColor` below (`dialog.tsx`'s own `StampFill`/`StampCorner` section)
 // — an icon's color and a selection rectangle's outline color are conceptually different choices;
 // picking one shouldn't silently change the other's own remembered default.
-let lastPickedColor = '#000000'
+let lastPickedColor = "#000000"
 
 /** Last-picked rect anchor/outline color/fill/corner/display style, applied as the starting point
  * for a *newly drawn* rectangle (`MarkerLayer.tsx`'s `openEditorAndCreate`) — same "shouldn't have
@@ -328,7 +328,7 @@ export function lastPickedRectStyle(): {
     display: lastPickedDisplay,
   }
 }
-let lastPickedRectColor = '#ff0000'
+let lastPickedRectColor = "#ff0000"
 
 /** Maximum number of recently-*submitted* colors remembered per picker (a 3-column x 2-row
  * swatch grid, requested explicitly at that exact shape) — old entries fall off the end as new
@@ -381,8 +381,8 @@ function useEmojiGroups(): EmojiGroup[] | null {
     // both JSON chunks are already warmed in the browser cache after the first load), not worth
     // fighting the lint rule for.
     void Promise.all([
-      import('unicode-emoji-json/data-by-group.json'),
-      language === 'zh' ? import('./i18n/emoji-names-zh.json') : Promise.resolve(null),
+      import("unicode-emoji-json/data-by-group.json"),
+      language === "zh" ? import("./i18n/emoji-names-zh.json") : Promise.resolve(null),
     ]).then(([mod, zhMod]) => {
       if (cancelled) return
       // TypeScript's own JSON-module inference reads this file's `{"0": {...}, "1": {...}, ...}`
@@ -411,9 +411,9 @@ function useEmojiGroups(): EmojiGroup[] | null {
 // reusing it here for the "icon library" half of the picker costs nothing extra to load, unlike
 // adding a whole new icon-set dependency for a curated subset.
 const STAMP_FA_ICONS = [
-  'fa-star', 'fa-heart', 'fa-fire', 'fa-check', 'fa-xmark', 'fa-question', 'fa-exclamation',
-  'fa-thumbtack', 'fa-bookmark', 'fa-flag', 'fa-eye', 'fa-comment', 'fa-bell', 'fa-bolt',
-  'fa-crown', 'fa-gem', 'fa-skull', 'fa-paw', 'fa-leaf', 'fa-music', 'fa-circle', 'fa-triangle-exclamation',
+  "fa-star", "fa-heart", "fa-fire", "fa-check", "fa-xmark", "fa-question", "fa-exclamation",
+  "fa-thumbtack", "fa-bookmark", "fa-flag", "fa-eye", "fa-comment", "fa-bell", "fa-bolt",
+  "fa-crown", "fa-gem", "fa-skull", "fa-paw", "fa-leaf", "fa-music", "fa-circle", "fa-triangle-exclamation",
 ]
 
 // Both button components below are declared at module scope, not inside `IconPicker`'s own body
@@ -446,10 +446,10 @@ function OptionButton({
         height: 32,
         fontSize: 16,
         flexShrink: 0,
-        boxSizing: 'border-box',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         // A 2px `currentColor` border (this dialog's own themed text color) rather than
         // `palette.hoverBg`, whose actual color in this theme reads as too close to the
         // unselected/hover background to tell apart at a glance — reported live for the Fill
@@ -459,11 +459,11 @@ function OptionButton({
         // fix) since this button's children are already visually rich content of their own (an
         // icon glyph, an emoji, or — for Fill/Corner — a small colored swatch) that a solid
         // background fill would compete with or obscure.
-        border: `2px solid ${selected ? 'currentColor' : 'transparent'}`,
+        border: `2px solid ${selected ? "currentColor" : "transparent"}`,
         borderRadius: 4,
-        background: selected ? palette.hoverBg : 'transparent',
-        color: selected ? palette.hoverText : 'inherit',
-        cursor: 'pointer',
+        background: selected ? palette.hoverBg : "transparent",
+        color: selected ? palette.hoverText : "inherit",
+        cursor: "pointer",
       }}
     >
       {children}
@@ -497,17 +497,17 @@ function TabButton({
         flexShrink: 0,
         fontSize: 14,
         lineHeight: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        boxSizing: 'border-box',
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        boxSizing: "border-box",
         padding: 0,
         margin: 0,
-        border: `1px solid ${selected ? palette.border : 'transparent'}`,
+        border: `1px solid ${selected ? palette.border : "transparent"}`,
         borderRadius: 3,
-        background: selected ? palette.hoverBg : 'transparent',
-        color: selected ? palette.hoverText : 'inherit',
-        cursor: 'pointer',
+        background: selected ? palette.hoverBg : "transparent",
+        color: selected ? palette.hoverText : "inherit",
+        cursor: "pointer",
       }}
     >
       {children}
@@ -520,12 +520,12 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
   const emojiGroups = useEmojiGroups()
   // Defaults to the first real emoji group once loaded, not a hardcoded slug — avoids a render
   // where the tab rail shows 9 category icons but none of them are actually selected yet.
-  const [tab, setTab] = useState<string>('icons')
+  const [tab, setTab] = useState<string>("icons")
   const palette = useMenuPalette()
   const activeGroup = emojiGroups?.find((g) => g.slug === tab)
 
   return (
-    <div style={{ textAlign: 'left', marginBottom: 12 }}>
+    <div style={{ textAlign: "left", marginBottom: 12 }}>
       {/* Icon-only tabs (one representative glyph per category, `title` carrying the real name for
           a hover tooltip) — nine emoji-group names plus "Icons" as full text labels wouldn't fit
           across this dialog's own width at all, matching why the real Windows picker this is
@@ -537,14 +537,14 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
           and wrapped onto a second row instead of fitting across in one. `flexWrap: 'nowrap'` +
           `overflowX: 'auto'` guarantees a single row (with a scrollbar as the fallback, not a
           silent second row) rather than just hoping ten 24px cells + gaps happen to fit exactly.*/}
-      <div role="tablist" style={{ display: 'flex', flexWrap: 'nowrap', overflowX: 'auto', justifyContent: 'space-between', gap: 2, marginBottom: 6 }}>
-        <TabButton selected={tab === 'icons'} title={t('Icons') ?? undefined} onClick={() => setTab('icons')} palette={palette}>
+      <div role="tablist" style={{ display: "flex", flexWrap: "nowrap", overflowX: "auto", justifyContent: "space-between", gap: 2, marginBottom: 6 }}>
+        <TabButton selected={tab === "icons"} title={t("Icons") ?? undefined} onClick={() => setTab("icons")} palette={palette}>
           <i className="fas fa-icons" aria-hidden="true"></i>
         </TabButton>
         {/* Separates the Font Awesome "Icons" tab from the nine emoji-category tabs that follow —
             those two groups aren't really the same kind of thing (a curated icon library vs. the
             full Unicode emoji set), so a plain unbroken row read as one undifferentiated list. */}
-        <div aria-hidden="true" style={{ flexShrink: 0, width: 1, alignSelf: 'stretch', background: palette.border, margin: '0 2px' }} />
+        <div aria-hidden="true" style={{ flexShrink: 0, width: 1, alignSelf: "stretch", background: palette.border, margin: "0 2px" }} />
         {emojiGroups?.map((g) => (
           <TabButton key={g.slug} selected={tab === g.slug} title={g.name} onClick={() => setTab(g.slug)} palette={palette}>
             {EMOJI_GROUP_TAB_ICON[g.slug] ?? g.emojis[0]?.emoji}
@@ -553,17 +553,17 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
       </div>
       <div
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
+          display: "flex",
+          flexWrap: "wrap",
           gap: 4,
           height: 148,
-          overflowY: 'auto',
+          overflowY: "auto",
           padding: 4,
           border: `1px solid ${palette.border}`,
           borderRadius: 4,
         }}
       >
-        {tab === 'icons'
+        {tab === "icons"
           ? STAMP_FA_ICONS.map((cls) => {
               const value = `fa:${cls}`
               return (
@@ -572,7 +572,7 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
                   selected={icon === value}
                   title={cls}
                   palette={palette}
-                  onClick={() => onChange(icon === value ? '' : value)}
+                  onClick={() => onChange(icon === value ? "" : value)}
                 >
                   <i className={`fas ${cls}`} aria-hidden="true"></i>
                 </OptionButton>
@@ -585,7 +585,7 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
                   selected={icon === e.emoji}
                   title={e.name}
                   palette={palette}
-                  onClick={() => onChange(icon === e.emoji ? '' : e.emoji)}
+                  onClick={() => onChange(icon === e.emoji ? "" : e.emoji)}
                 >
                   {e.emoji}
                 </OptionButton>
@@ -596,19 +596,19 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
                 // small enough that a real user won't see this for more than a frame or two on
                 // any connection, but showing *nothing* at all during that gap would read as the
                 // picker being broken rather than just loading.
-                <span style={{ opacity: 0.6, padding: 4 }}>{t('Loading…') ?? undefined}</span>
+                <span style={{ opacity: 0.6, padding: 4 }}>{t("Loading…") ?? undefined}</span>
               )}
       </div>
     </div>
   )
 }
 
-const FILL_STYLES: StampFill[] = ['solid', 'stripes', 'mosaic', 'blur']
+const FILL_STYLES: StampFill[] = ["solid", "stripes", "mosaic", "blur"]
 const FILL_LABEL: Record<StampFill, string> = {
-  solid: 'Solid',
-  stripes: 'Stripes',
-  mosaic: 'Mosaic',
-  blur: 'Blur',
+  solid: "Solid",
+  stripes: "Stripes",
+  mosaic: "Mosaic",
+  blur: "Blur",
 }
 
 /** A small preview square for one `StampFill` option, in the currently-picked `color` — `solid`/
@@ -620,7 +620,7 @@ const FILL_LABEL: Record<StampFill, string> = {
  * the tinted-but-transparent solid/stripes options, without pretending to preview the real effect. */
 function FillSwatch({ fill, color }: { fill: StampFill; color: string }) {
   const SIZE = 18
-  if (fill === 'solid' || fill === 'stripes') {
+  if (fill === "solid" || fill === "stripes") {
     return (
       <div
         style={{
@@ -628,7 +628,7 @@ function FillSwatch({ fill, color }: { fill: StampFill; color: string }) {
           height: SIZE,
           border: `1px solid ${color}`,
           background:
-            fill === 'solid'
+            fill === "solid"
               ? `${color}66`
               : `repeating-linear-gradient(45deg, ${color}66 0, ${color}66 2px, transparent 2px, transparent 5px)`,
         }}
@@ -641,22 +641,22 @@ function FillSwatch({ fill, color }: { fill: StampFill; color: string }) {
         width: SIZE,
         height: SIZE,
         border: `1px solid ${color}`,
-        background: 'repeating-conic-gradient(#8888 0% 25%, #ccc8 0% 50%) 0 0 / 6px 6px',
-        opacity: fill === 'mosaic' ? 0.9 : 0.6,
+        background: "repeating-conic-gradient(#8888 0% 25%, #ccc8 0% 50%) 0 0 / 6px 6px",
+        opacity: fill === "mosaic" ? 0.9 : 0.6,
       }}
     />
   )
 }
 
 const ANCHOR_LABEL: Record<StampAnchor, string> = {
-  tl: 'Top Left',
-  t: 'Top',
-  tr: 'Top Right',
-  r: 'Right',
-  br: 'Bottom Right',
-  b: 'Bottom',
-  bl: 'Bottom Left',
-  l: 'Left',
+  tl: "Top Left",
+  t: "Top",
+  tr: "Top Right",
+  r: "Right",
+  br: "Bottom Right",
+  b: "Bottom",
+  bl: "Bottom Left",
+  l: "Left",
 }
 
 /** A native `<input type="color">` wrapped in a `Tooltip` showing up to `COLOR_HISTORY_LIMIT`
@@ -693,8 +693,8 @@ function ColorPickerWithHistory({
         height: 25,
         flexShrink: 0,
         padding: 0,
-        border: 'none',
-        cursor: disabled ? 'default' : 'pointer',
+        border: "none",
+        cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.4 : 1,
       }}
     />
@@ -704,7 +704,7 @@ function ColorPickerWithHistory({
     <Tooltip
       maxWidth={100}
       label={
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, padding: 2 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, padding: 2 }}>
           {history.map((c) => (
             <button
               key={c}
@@ -715,10 +715,10 @@ function ColorPickerWithHistory({
                 width: 22,
                 height: 22,
                 padding: 0,
-                border: `1px solid ${c === value ? 'white' : 'rgba(255,255,255,0.4)'}`,
+                border: `1px solid ${c === value ? "white" : "rgba(255,255,255,0.4)"}`,
                 borderRadius: 3,
                 background: c,
-                cursor: 'pointer',
+                cursor: "pointer",
               }}
             />
           ))}
@@ -756,7 +756,7 @@ function RectAnchorPicker({
   return (
     <div
       style={{
-        position: 'relative',
+        position: "relative",
         width: SIZE,
         height: SIZE,
         flexShrink: 0,
@@ -774,7 +774,7 @@ function RectAnchorPicker({
             title={t(ANCHOR_LABEL[a]) ?? undefined}
             onClick={() => onChange(a)}
             style={{
-              position: 'absolute',
+              position: "absolute",
               left: `${pos.x}%`,
               top: `${pos.y}%`,
               // A selected dot grows and gets a colored ring (a soft tinted fill + a solid-color
@@ -788,12 +788,12 @@ function RectAnchorPicker({
               width: DOT,
               height: DOT,
               padding: 0,
-              boxSizing: 'border-box',
-              borderRadius: '50%',
+              boxSizing: "border-box",
+              borderRadius: "50%",
               border: `2px solid ${selected ? color : palette.border}`,
-              background: selected ? `${color}33` : 'transparent',
-              cursor: 'pointer',
-              transition: 'transform 0.1s ease',
+              background: selected ? `${color}33` : "transparent",
+              cursor: "pointer",
+              transition: "transform 0.1s ease",
             }}
           />
         )
@@ -825,7 +825,7 @@ function StampEditorForm({
   // region), and the default name should say which one this actually is rather than reusing the
   // point-stamp wording for both.
   const [content, setContent] = useState(
-    defaultContent || (defaultRect ? t('Selection') : t('Marker')) || 'Marker',
+    defaultContent || (defaultRect ? t("Selection") : t("Marker")) || "Marker",
   )
   // `icon` here is always the *base* value (`fa:<class>` or a plain emoji, never with a color
   // segment) — the one `IconPicker`'s own grid buttons compare their own (also always base) values
@@ -833,7 +833,7 @@ function StampEditorForm({
   // one, is tracked separately and only ever recombined into the full `fa:<class>:<#rrggbb>` form
   // at the two points that actually need it: the live preview, and submission.
   const initialParsed = useMemo(() => parseFaIcon(defaultIcon), [defaultIcon])
-  const [icon, setIcon] = useState(defaultIcon.startsWith('fa:') ? `fa:${initialParsed.cls}` : defaultIcon)
+  const [icon, setIcon] = useState(defaultIcon.startsWith("fa:") ? `fa:${initialParsed.cls}` : defaultIcon)
   // Falls back to whatever color was last picked in a previous stamp this session, not always
   // black — picking a color once shouldn't mean re-picking it for every stamp after.
   const [color, setColor] = useState(initialParsed.color ?? lastPickedColor)
@@ -855,7 +855,7 @@ function StampEditorForm({
     nameRef.current?.select()
   }, [])
 
-  const isFaIcon = icon.startsWith('fa:')
+  const isFaIcon = icon.startsWith("fa:")
   const combinedIcon = isFaIcon ? `${icon}:${color}` : icon
 
   function submit() {
@@ -872,9 +872,9 @@ function StampEditorForm({
   }
 
   return (
-    <div onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-      <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('Enter Stamp name:')}</p>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+    <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("Enter Stamp name:")}</p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         {/* A live preview of the currently-picked icon (or the default marker's own bare pin, once
             none is chosen) right next to the name field — the picker below is a whole grid to
             scroll through, so seeing what's actually selected without hunting for its highlighted
@@ -884,11 +884,11 @@ function StampEditorForm({
             width: 25,
             height: 25,
             flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             fontSize: 16,
-            border: '1px solid currentColor',
+            border: "1px solid currentColor",
             borderRadius: 4,
             opacity: icon ? 1 : 0.5,
           }}
@@ -899,13 +899,13 @@ function StampEditorForm({
           ref={nameRef}
           type="text"
           className="stdinput"
-          style={{ flex: 1, height: 25, boxSizing: 'border-box' }}
+          style={{ flex: 1, height: 25, boxSizing: "border-box" }}
           value={content}
-          placeholder={t('Marker') ?? undefined}
+          placeholder={t("Marker") ?? undefined}
           autoFocus
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') submit()
+            if (e.key === "Enter") submit()
           }}
         />
         {/* Only meaningful for a Font Awesome icon — an emoji already renders in its own fixed,
@@ -918,7 +918,7 @@ function StampEditorForm({
         <ColorPickerWithHistory
           value={color}
           disabled={!isFaIcon}
-          title={t('Icon Color') ?? undefined}
+          title={t("Icon Color") ?? undefined}
           history={iconColorHistory}
           onChange={(next) => {
             setColor(next)
@@ -935,10 +935,10 @@ function StampEditorForm({
           three narrower controls' labels ended up misaligned with each other and the whole row
           read as cramped at this dialog's 320px width (reported live: "排版太丑了"). */}
       {defaultRect && (
-        <div style={{ textAlign: 'left', marginBottom: 12, paddingTop: 12, borderTop: '1px solid currentColor' }}>
-          <p style={{ fontWeight: 'bold', margin: '0 0 10px' }}>{t('Selection Rectangle')}</p>
+        <div style={{ textAlign: "left", marginBottom: 12, paddingTop: 12, borderTop: "1px solid currentColor" }}>
+          <p style={{ fontWeight: "bold", margin: "0 0 10px" }}>{t("Selection Rectangle")}</p>
           <div style={{ marginBottom: 12 }}>
-            <span style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>{t('Icon Position')}</span>
+            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Icon Position")}</span>
             <RectAnchorPicker
               anchor={anchor}
               onChange={(a) => {
@@ -948,10 +948,10 @@ function StampEditorForm({
               color={rectColor}
             />
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
             <div>
-              <label htmlFor="stamp-rect-color" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
-                {t('Rectangle Color')}
+              <label htmlFor="stamp-rect-color" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
+                {t("Rectangle Color")}
               </label>
               <ColorPickerWithHistory
                 id="stamp-rect-color"
@@ -964,8 +964,8 @@ function StampEditorForm({
               />
             </div>
             <div>
-              <span style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>{t('Fill Style')}</span>
-              <div role="tablist" style={{ display: 'flex', gap: 2 }}>
+              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Fill Style")}</span>
+              <div role="tablist" style={{ display: "flex", gap: 2 }}>
                 {FILL_STYLES.map((f) => (
                   <OptionButton
                     key={f}
@@ -983,13 +983,13 @@ function StampEditorForm({
               </div>
             </div>
             <div>
-              <span style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>{t('Corner Style')}</span>
-              <div role="tablist" style={{ display: 'flex', gap: 2 }}>
-                {(['sharp', 'round'] as StampCorner[]).map((c) => (
+              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Corner Style")}</span>
+              <div role="tablist" style={{ display: "flex", gap: 2 }}>
+                {(["sharp", "round"] as StampCorner[]).map((c) => (
                   <OptionButton
                     key={c}
                     selected={corner === c}
-                    title={t(c === 'sharp' ? 'Sharp' : 'Round') ?? undefined}
+                    title={t(c === "sharp" ? "Sharp" : "Round") ?? undefined}
                     palette={palette}
                     onClick={() => {
                       setCorner(c)
@@ -1001,7 +1001,7 @@ function StampEditorForm({
                         width: 18,
                         height: 18,
                         border: `1px solid ${rectColor}`,
-                        borderRadius: c === 'round' ? 6 : 0,
+                        borderRadius: c === "round" ? 6 : 0,
                       }}
                     />
                   </OptionButton>
@@ -1010,29 +1010,29 @@ function StampEditorForm({
             </div>
           </div>
           <div style={{ marginTop: 12 }}>
-            <span style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>{t('Rectangle Display')}</span>
-            <div role="tablist" style={{ display: 'flex', gap: 2 }}>
-              {(['hover', 'always'] as StampDisplay[]).map((d) => (
+            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Rectangle Display")}</span>
+            <div role="tablist" style={{ display: "flex", gap: 2 }}>
+              {(["hover", "always"] as StampDisplay[]).map((d) => (
                 <OptionButton
                   key={d}
                   selected={display === d}
-                  title={t(d === 'hover' ? 'On Hover' : 'Always Visible') ?? undefined}
+                  title={t(d === "hover" ? "On Hover" : "Always Visible") ?? undefined}
                   palette={palette}
                   onClick={() => {
                     setDisplay(d)
                     lastPickedDisplay = d
                   }}
                 >
-                  <i className={`fas ${d === 'hover' ? 'fa-hand-pointer' : 'fa-eye'}`} aria-hidden="true"></i>
+                  <i className={`fas ${d === "hover" ? "fa-hand-pointer" : "fa-eye"}`} aria-hidden="true"></i>
                 </OptionButton>
               ))}
             </div>
           </div>
         </div>
       )}
-      <div className="swal2-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
-        <input type="button" className="stdbtn" value={t('Cancel') ?? 'Cancel'} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t('OK') ?? 'OK'} onClick={submit} />
+      <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -1061,7 +1061,7 @@ function TagSearchField({
   const [open, setOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const currentFragment = value.match(/[^,\s-]*$/)?.[0] ?? ''
+  const currentFragment = value.match(/[^,\s-]*$/)?.[0] ?? ""
   const suggestions = useMemo(() => {
     if (!currentFragment) return []
     const needle = currentFragment.toLowerCase()
@@ -1070,20 +1070,20 @@ function TagSearchField({
         label: s.namespace ? `${s.namespace}:${s.text}` : s.text,
         // Quoted when `s.text` has a space, unlike `label` (plain text shown in the dropdown) —
         // space is a real AND-separator in the search grammar now (issue #59).
-        insertValue: buildSearchToken(s.namespace ?? '', s.text),
+        insertValue: buildSearchToken(s.namespace ?? "", s.text),
       }))
       .filter((s) => s.label.toLowerCase().includes(needle))
       .slice(0, 15)
   }, [stats.data, currentFragment])
 
   return (
-    <span style={{ position: 'relative', display: 'block' }}>
+    <span style={{ position: "relative", display: "block" }}>
       <input
         ref={inputRef}
         id={id}
         type="text"
         className="stdinput"
-        style={{ width: '100%', height: 25, boxSizing: 'border-box' }}
+        style={{ width: "100%", height: 25, boxSizing: "border-box" }}
         value={value}
         placeholder={placeholder}
         autoComplete="off"
@@ -1095,18 +1095,18 @@ function TagSearchField({
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onEnter()
-          if (e.key === 'Escape') setOpen(false)
+          if (e.key === "Enter") onEnter()
+          if (e.key === "Escape") setOpen(false)
         }}
       />
       {open && suggestions.length > 0 && (
-        <PopupMenu portal={false} style={{ position: 'absolute', top: '100%', left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: '100%', maxHeight: 180, overflowY: 'auto' }}>
+        <PopupMenu portal={false} style={{ position: "absolute", top: "100%", left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: "100%", maxHeight: 180, overflowY: "auto" }}>
           {suggestions.map((s) => (
             <PopupMenuItem
               key={s.label}
               onMouseDown={(e) => {
                 e.preventDefault()
-                onChange(`${value.replace(/[^,\s-]*$/, '')}${s.insertValue}`)
+                onChange(`${value.replace(/[^,\s-]*$/, "")}${s.insertValue}`)
                 setOpen(false)
                 inputRef.current?.focus()
               }}
@@ -1122,9 +1122,9 @@ function TagSearchField({
 
 function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategoryResult) => void; onCancel: () => void }) {
   const { t } = useTranslation()
-  const [name, setName] = useState('')
+  const [name, setName] = useState("")
   const [isDynamic, setIsDynamic] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState("")
   const nameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1133,40 +1133,40 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
 
   function submit() {
     if (!name.trim()) return
-    onSubmit({ name: name.trim(), isDynamic, search: isDynamic ? search : '' })
+    onSubmit({ name: name.trim(), isDynamic, search: isDynamic ? search : "" })
   }
 
   return (
-    <div onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-      <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{t('New Category')}</p>
+    <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("New Category")}</p>
       {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
           `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
           than native radio inputs (visually inconsistent with the rest of the themed UI). */}
-      <div role="tablist" style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+      <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         <button
           type="button"
           role="tab"
           aria-selected={!isDynamic}
-          className={`favtag-btn${!isDynamic ? ' toggled' : ''}`}
+          className={`favtag-btn${!isDynamic ? " toggled" : ""}`}
           style={{ flex: 1 }}
           onClick={() => setIsDynamic(false)}
         >
-          {t('Static Category')}
+          {t("Static Category")}
         </button>
         <button
           type="button"
           role="tab"
           aria-selected={isDynamic}
-          className={`favtag-btn${isDynamic ? ' toggled' : ''}`}
+          className={`favtag-btn${isDynamic ? " toggled" : ""}`}
           style={{ flex: 1 }}
           onClick={() => setIsDynamic(true)}
         >
-          {t('Dynamic Category')}
+          {t("Dynamic Category")}
         </button>
       </div>
-      <div style={{ textAlign: 'left', marginBottom: 12 }}>
-        <label htmlFor="new-category-name" style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
-          {t('Enter a name for the new category')}
+      <div style={{ textAlign: "left", marginBottom: 12 }}>
+        <label htmlFor="new-category-name" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
+          {t("Enter a name for the new category")}
         </label>
         {/* `height: 25` — matches the tab buttons/`Edit.tsx`'s own `.stdinput`/`<select>` override
             (issue #45), since legacy theme CSS's own `.stdinput` rule is a much shorter ~18px by
@@ -1176,19 +1176,19 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           id="new-category-name"
           type="text"
           className="stdinput"
-          style={{ width: '100%', height: 25, boxSizing: 'border-box' }}
+          style={{ width: "100%", height: 25, boxSizing: "border-box" }}
           value={name}
-          placeholder={t('My Category') ?? undefined}
+          placeholder={t("My Category") ?? undefined}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !isDynamic) submit()
+            if (e.key === "Enter" && !isDynamic) submit()
           }}
         />
       </div>
       {isDynamic && (
-        <div style={{ textAlign: 'left', marginBottom: 12 }}>
-          <label htmlFor="new-category-search" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, marginBottom: 4 }}>
-            {t('Search Predicate')}
+        <div style={{ textAlign: "left", marginBottom: 12 }}>
+          <label htmlFor="new-category-search" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, marginBottom: 4 }}>
+            {t("Search Predicate")}
             <Tooltip
               label={
                 t(
@@ -1196,7 +1196,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
                 ) ?? undefined
               }
             >
-              <i className="fas fa-question-circle" style={{ fontSize: 14, cursor: 'help' }} aria-hidden="true"></i>
+              <i className="fas fa-question-circle" style={{ fontSize: 14, cursor: "help" }} aria-hidden="true"></i>
             </Tooltip>
           </label>
           <TagSearchField
@@ -1209,9 +1209,9 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           />
         </div>
       )}
-      <div className="swal2-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
-        <input type="button" className="stdbtn" value={t('Cancel') ?? 'Cancel'} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t('OK') ?? 'OK'} onClick={submit} />
+      <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -1237,7 +1237,7 @@ export function DialogHost() {
   const request = currentRequest
 
   useEffect(() => {
-    if (request?.kind === 'prompt') inputRef.current?.select()
+    if (request?.kind === "prompt") inputRef.current?.select()
   }, [request])
 
   if (!request) return null
@@ -1247,74 +1247,74 @@ export function DialogHost() {
   }
 
   function submitPrompt() {
-    if (request?.kind !== 'prompt') return
-    const value = inputRef.current?.value ?? ''
+    if (request?.kind !== "prompt") return
+    const value = inputRef.current?.value ?? ""
     request.resolve(value)
     close()
   }
 
   function cancelPrompt() {
-    if (request?.kind !== 'prompt') return
+    if (request?.kind !== "prompt") return
     request.resolve(null)
     close()
   }
 
   function confirmYes() {
-    if (request?.kind !== 'confirm') return
+    if (request?.kind !== "confirm") return
     request.resolve(true)
     close()
   }
 
   function confirmNo() {
-    if (request?.kind !== 'confirm') return
+    if (request?.kind !== "confirm") return
     request.resolve(false)
     close()
   }
 
   function cancelNewCategory() {
-    if (request?.kind !== 'newCategory') return
+    if (request?.kind !== "newCategory") return
     request.resolve(null)
     close()
   }
 
   function submitNewCategory(value: NewCategoryResult) {
-    if (request?.kind !== 'newCategory') return
+    if (request?.kind !== "newCategory") return
     request.resolve(value)
     close()
   }
 
   function cancelStampEditor() {
-    if (request?.kind !== 'stampEditor') return
+    if (request?.kind !== "stampEditor") return
     request.resolve(null)
     close()
   }
 
   function submitStampEditor(value: StampEditorResult) {
-    if (request?.kind !== 'stampEditor') return
+    if (request?.kind !== "stampEditor") return
     request.resolve(value)
     close()
   }
 
-  if (request.kind === 'newCategory') {
+  if (request.kind === "newCategory") {
     return createPortal(
       <>
-        <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: 'rgba(0,0,0,0.4)' }} onClick={cancelNewCategory} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelNewCategory} />
         <div
           role="dialog"
           aria-modal="true"
           className="swal2-popup"
           style={{
-            position: 'fixed',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
             zIndex: Z_OVERLAY_CONTENT,
-            display: 'block',
+            display: "block",
             width: 360,
             padding: 20,
-            textAlign: 'center',
-            borderRadius: '.2em',
-            boxShadow: '0 2px 10px rgba(0,0,0,.4)',
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
           }}
         >
           <NewCategoryForm onSubmit={submitNewCategory} onCancel={cancelNewCategory} />
@@ -1324,26 +1324,26 @@ export function DialogHost() {
     )
   }
 
-  if (request.kind === 'stampEditor') {
+  if (request.kind === "stampEditor") {
     return createPortal(
       <>
-        <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: 'rgba(0,0,0,0.4)' }} onClick={cancelStampEditor} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelStampEditor} />
         <div
           role="dialog"
           aria-modal="true"
           className="swal2-popup"
           style={{
-            position: 'fixed',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
             zIndex: Z_OVERLAY_CONTENT,
-            display: 'block',
+            display: "block",
             width: 320,
             padding: 20,
-            textAlign: 'center',
-            borderRadius: '.2em',
-            boxShadow: '0 2px 10px rgba(0,0,0,.4)',
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
           }}
         >
           <StampEditorForm
@@ -1359,36 +1359,36 @@ export function DialogHost() {
     )
   }
 
-  const onCancel = request.kind === 'prompt' ? cancelPrompt : confirmNo
-  const onConfirm = request.kind === 'prompt' ? submitPrompt : confirmYes
+  const onCancel = request.kind === "prompt" ? cancelPrompt : confirmNo
+  const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
 
   return createPortal(
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: 'rgba(0,0,0,0.4)' }} onClick={onCancel} />
+      <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={onCancel} />
       <div
         role="dialog"
         aria-modal="true"
         className="swal2-popup"
         style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
           zIndex: Z_OVERLAY_CONTENT,
-          display: 'block',
+          display: "block",
           width: 360,
           padding: 20,
-          textAlign: 'center',
-          borderRadius: '.2em',
-          boxShadow: '0 2px 10px rgba(0,0,0,.4)',
+          textAlign: "center",
+          borderRadius: ".2em",
+          boxShadow: "0 2px 10px rgba(0,0,0,.4)",
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onCancel()
-          if (e.key === 'Enter' && request.kind === 'confirm') onConfirm()
+          if (e.key === "Escape") onCancel()
+          if (e.key === "Enter" && request.kind === "confirm") onConfirm()
         }}
       >
-        <p style={{ fontWeight: 'bold', margin: '0 0 12px' }}>{request.message}</p>
-        {request.kind === 'prompt' && (
+        <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{request.message}</p>
+        {request.kind === "prompt" && (
           <input
             ref={inputRef}
             type="text"
@@ -1396,18 +1396,18 @@ export function DialogHost() {
             // `height: 25` matches `SettingsOverlay.tsx`'s own `CONTROL_HEIGHT` — legacy theme
             // CSS's own `.stdinput` rule defaults to a much shorter ~18px, which read as visibly
             // undersized/cramped for a modal whose only content is this one field.
-            style={{ width: '100%', height: 25, boxSizing: 'border-box', marginBottom: 12 }}
+            style={{ width: "100%", height: 25, boxSizing: "border-box", marginBottom: 12 }}
             defaultValue={request.defaultValue}
             placeholder={request.defaultValue || undefined}
             autoFocus
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onConfirm()
+              if (e.key === "Enter") onConfirm()
             }}
           />
         )}
-        <div className="swal2-actions" style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
-          <input type="button" className="stdbtn" value={t('Cancel') ?? 'Cancel'} onClick={onCancel} />
-          <input type="button" className="stdbtn" value={t('OK') ?? 'OK'} onClick={onConfirm} />
+        <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+          <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
+          <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={onConfirm} />
         </div>
       </div>
     </>,

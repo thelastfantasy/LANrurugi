@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z } from "zod"
 
 // Real, stored ToC-entry identifiers for the "presets" (quick-add popover/lightbox rows, and the
 // lightbox's own 0-9 keyboard shortcut) — `toc`, `c1`-`c20`. Unlike free-text chapter titles a
@@ -17,7 +17,7 @@ import { z } from 'zod'
 // storing real display text as before.
 export const TOC_CHAPTER_COUNT = 20
 
-export const TOC_IDENTIFIER_TABLE_OF_CONTENTS = 'toc'
+export const TOC_IDENTIFIER_TABLE_OF_CONTENTS = "toc"
 
 export function tocChapterIdentifier(n: number): string {
   return `c${n}`
@@ -38,10 +38,10 @@ export function isReservedTocIdentifier(value: string): boolean {
  * since it was never anything but real display text to begin with. */
 export function displayTocName(name: string, t: (key: string, opts?: Record<string, unknown>) => string | null): string {
   const lower = name.trim().toLowerCase()
-  if (lower === TOC_IDENTIFIER_TABLE_OF_CONTENTS) return t('Table of Contents') ?? 'Table of Contents'
+  if (lower === TOC_IDENTIFIER_TABLE_OF_CONTENTS) return t("Table of Contents") ?? "Table of Contents"
   if (/^c([0-9]{1,2})$/.test(lower)) {
     const n = Number(lower.slice(1))
-    if (n >= 1 && n <= TOC_CHAPTER_COUNT) return t('Chapter {{n}}', { n }) ?? `Chapter ${n}`
+    if (n >= 1 && n <= TOC_CHAPTER_COUNT) return t("Chapter {{n}}", { n }) ?? `Chapter ${n}`
   }
   return name
 }
@@ -58,5 +58,5 @@ export const tocTitleSchema = z
   .trim()
   .min(1)
   .refine((value) => !isReservedTocIdentifier(value), {
-    message: 'reserved-toc-identifier',
+    message: "reserved-toc-identifier",
   })

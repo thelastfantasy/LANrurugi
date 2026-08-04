@@ -1,15 +1,15 @@
-import type { MouseEvent } from 'react'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from "react"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useSettings } from '../../api/hooks'
-import type { ArchiveMetadata } from '../../api/types'
-import { Tooltip } from '../../components/Tooltip'
-import { promptDialog } from '../../dialog'
-import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from '../../lib/tagFormat'
-import { routes } from '../../routes'
-import { CUSTOM_COLUMN_PREFIX, DEFAULT_CUSTOM_COLUMNS } from '../../storageKeys'
-import { BookmarkIcon, isTankoubonId, TagLine } from './shared'
+import { useSettings } from "../../api/hooks"
+import type { ArchiveMetadata } from "../../api/types"
+import { Tooltip } from "../../components/Tooltip"
+import { promptDialog } from "../../dialog"
+import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from "../../lib/tagFormat"
+import { routes } from "../../routes"
+import { CUSTOM_COLUMN_PREFIX, DEFAULT_CUSTOM_COLUMNS } from "../../storageKeys"
+import { BookmarkIcon, isTankoubonId, TagLine } from "./shared"
 
 /** One compact-table custom column's chosen namespace, read/write straight to its own
  * `localStorage` key (`customColumn${index}`) — ports `generateTableHeaders`'s per-header default
@@ -70,7 +70,7 @@ function CustomColumnHeader({
 }: {
   index: number
   sortby: string
-  order: 'asc' | 'desc'
+  order: "asc" | "desc"
   onSort: (key: string) => void
 }) {
   const { t } = useTranslation()
@@ -97,8 +97,8 @@ function CustomColumnHeader({
     <th id={`customheader${index}`} style={{ width: 100 }} className={sortby === namespace ? `sorting_${order}` : undefined}>
       <i
         className="fas fa-pencil-alt edit-header-btn"
-        title={t('Edit this column') ?? undefined}
-        style={{ cursor: 'pointer' }}
+        title={t("Edit this column") ?? undefined}
+        style={{ cursor: "pointer" }}
         onClick={(e) => {
           // Distinct from the header's own sort-by-click `<a>` right next to it (real legacy
           // markup renders both siblings in the same `<th>`, `generateTableHeaders`) —
@@ -106,11 +106,11 @@ function CustomColumnHeader({
           // `<a>`), but the click must not also fall through to anything else in this `<th>`.
           e.stopPropagation()
           void (async () => {
-            const next = await promptDialog(t('Tag namespace') ?? '', namespace)
+            const next = await promptDialog(t("Tag namespace") ?? "", namespace)
             if (next?.trim()) setNamespace(next.trim())
           })()
         }}
-      ></i>{' '}
+      ></i>{" "}
       <SortableHeaderLink label={label} sortKey={namespace} onSort={onSort} />
     </th>
   )
@@ -133,9 +133,9 @@ function CustomColumnCell({
   const [namespace] = useCustomColumnNamespace(index)
   // Server timezone for `date_added`/`timestamp` custom-column display + search URL — same
   // pattern as `TagTable`/`ArchiveOverviewOverlay`'s own `TagsTable`.
-  const timezone = useSettings().data?.timezone ?? ''
-  const matches = [...tags.matchAll(new RegExp(`${namespace}:([^,]+)`, 'g'))].map((m) => m[1].trim())
-  const isDate = namespace === 'date_added' || namespace === 'timestamp'
+  const timezone = useSettings().data?.timezone ?? ""
+  const matches = [...tags.matchAll(new RegExp(`${namespace}:([^,]+)`, "g"))].map((m) => m[1].trim())
+  const isDate = namespace === "date_added" || namespace === "timestamp"
   // `customheader${index}` MUST come before `itd` in the class string — a real, live-confirmed
   // bug otherwise: `lrr.css`'s own `td[class^="customheader"] { max-width: 100px }` rule is a
   // literal *attribute-value* prefix match against the whole `class` string, not "any class in
@@ -146,14 +146,14 @@ function CustomColumnCell({
   // real 100px cap instead of silently falling back to whatever width the column's own content
   // happens to want.
   return (
-    <td className={`customheader${index} itd`} style={{ textAlign: 'left' }}>
+    <td className={`customheader${index} itd`} style={{ textAlign: "left" }}>
       {matches.map((raw, i) => {
-        const text = isDate ? formatTimestampForDisplay(raw, timezone) : namespace === 'source' ? raw : raw.replace(/\b./g, (c) => c.toUpperCase())
+        const text = isDate ? formatTimestampForDisplay(raw, timezone) : namespace === "source" ? raw : raw.replace(/\b./g, (c) => c.toUpperCase())
         return (
           <span key={i}>
             <a
               href={getTagSearchURL(namespace, raw, timezone)}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: "pointer" }}
               onClick={(e) => {
                 e.preventDefault()
                 // `tagValueForSearch`, not the raw stored value — same real bug class as
@@ -166,7 +166,7 @@ function CustomColumnCell({
             >
               {text}
             </a>
-            {i < matches.length - 1 && ', '}
+            {i < matches.length - 1 && ", "}
           </span>
         )
       })}
@@ -205,7 +205,7 @@ export function CompactTable({
    * writes) — clicking a header sorts the exact same way, matching legacy's real behavior of both
    * controls sharing one underlying DataTables sort order. */
   sortby: string
-  order: 'asc' | 'desc'
+  order: "asc" | "desc"
   onSort: (key: string) => void
   onSearchTag: (namespacedTag: string) => void
   onToggleSelected: (id: string) => void
@@ -214,7 +214,7 @@ export function CompactTable({
 }) {
   const { t } = useTranslation()
   return (
-    <table className="itg" style={{ width: '100%' }}>
+    <table className="itg" style={{ width: "100%" }}>
       <thead>
         <tr>
           {/* `id="titleheader"`/`id="tagsheader"` (matching real legacy's own `generateTableHeaders`
@@ -224,25 +224,25 @@ export function CompactTable({
               header row's own cell width, not by each body `<td>`'s own `max-width` (see
               `CustomColumnHeader`'s own matching `id="customheaderN"` fix for the full reasoning).
               Without these ids, Title/Tags had no width constraint from the header row at all. */}
-          <th id="titleheader" className={sortby === 'title' ? `sorting_${order}` : undefined}>
-            <SortableHeaderLink label={t('Title')} sortKey="title" onSort={onSort} />
+          <th id="titleheader" className={sortby === "title" ? `sorting_${order}` : undefined}>
+            <SortableHeaderLink label={t("Title")} sortKey="title" onSort={onSort} />
           </th>
           {Array.from({ length: columns }, (_, i) => i + 1).map((i) => (
             <CustomColumnHeader key={i} index={i} sortby={sortby} order={order} onSort={onSort} />
           ))}
           {/* Tags column is `orderable: false` in legacy (`index_datatables.js`'s own `columns`
               array) — plain text, no `<a>`/click handler, matching that real restriction. */}
-          <th id="tagsheader">{t('Tags')}</th>
+          <th id="tagsheader">{t("Tags")}</th>
         </tr>
       </thead>
       <tbody>
         {shown.map((a) => (
           <tr
             key={a.arcid}
-            className={selectedIds.includes(a.arcid) ? 'msm-selected' : undefined}
+            className={selectedIds.includes(a.arcid) ? "msm-selected" : undefined}
             onContextMenu={(e) => onContextMenu(e, a)}
           >
-            <td className="itd title" style={{ textAlign: 'left' }}>
+            <td className="itd title" style={{ textAlign: "left" }}>
               {multiSelect && (
                 <input
                   type="checkbox"
@@ -251,7 +251,7 @@ export function CompactTable({
                   style={{ marginRight: 6 }}
                 />
               )}
-              <BookmarkIcon archiveId={a.arcid} />{' '}
+              <BookmarkIcon archiveId={a.arcid} />{" "}
               {/* Legacy's own compact-table title link (`renderTitle`, `index_datatables.js`)
                   shows a 300px-tall cover-thumbnail preview on hover (`buildImageTooltip`) — a
                   real, live-reported gap in this port (row confirmed missing it entirely, no
@@ -269,11 +269,11 @@ export function CompactTable({
                         : `/api/archives/${a.arcid}/thumbnail?no_fallback=true`
                     }
                     alt=""
-                    style={{ height: 300, display: 'block' }}
+                    style={{ height: 300, display: "block" }}
                   />
                 }
                 anchor="cursor"
-                wrapperStyle={{ display: 'inline' }}
+                wrapperStyle={{ display: "inline" }}
               >
                 <a
                   href={routes.reader(a.arcid)}
@@ -283,7 +283,7 @@ export function CompactTable({
                     else onOpen(a.arcid)
                   }}
                 >
-                  {a.isnew && '🆕 '}
+                  {a.isnew && "🆕 "}
                   {a.title}
                 </a>
               </Tooltip>
@@ -291,7 +291,7 @@ export function CompactTable({
             {Array.from({ length: columns }, (_, i) => i + 1).map((i) => (
               <CustomColumnCell key={i} index={i} tags={a.tags} onSearchTag={onSearchTag} />
             ))}
-            <td className="itd tags" style={{ textAlign: 'left' }}>
+            <td className="itd tags" style={{ textAlign: "left" }}>
               <TagLine tags={a.tags} onSearchTag={onSearchTag} />
             </td>
           </tr>

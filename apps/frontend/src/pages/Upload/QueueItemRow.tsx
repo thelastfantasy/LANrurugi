@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { sendJson } from '../../api/client'
+import { sendJson } from "../../api/client"
 import {
   useDeleteQueueItem,
   useOverwriteQueueItem,
@@ -10,15 +10,15 @@ import {
   useStartQueueItem,
   useStopQueueItem,
   useUpdateQueueItem,
-} from '../../api/hooks'
-import type { DownloadQueueItem, JobRecord, PluginInfo } from '../../api/types'
-import { formatBytes, JobProgressBar, STATE_COLOR } from '../../components/JobProgress'
-import { QueueErrorText } from '../../components/QueueErrorText'
-import { Tooltip } from '../../components/Tooltip'
-import { routes } from '../../routes'
-import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from '../../theme'
-import { ConflictMenu, RenamePopover } from './FilenameTemplateEditor'
-import { ICON_BUTTON_STYLE, LOCAL_UPLOAD_NAMESPACE, TooltipIfPresent, TruncatedFilename } from './shared'
+} from "../../api/hooks"
+import type { DownloadQueueItem, JobRecord, PluginInfo } from "../../api/types"
+import { formatBytes, JobProgressBar, STATE_COLOR } from "../../components/JobProgress"
+import { QueueErrorText } from "../../components/QueueErrorText"
+import { Tooltip } from "../../components/Tooltip"
+import { routes } from "../../routes"
+import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from "../../theme"
+import { ConflictMenu, RenamePopover } from "./FilenameTemplateEditor"
+import { ICON_BUTTON_STYLE, LOCAL_UPLOAD_NAMESPACE, TooltipIfPresent, TruncatedFilename } from "./shared"
 
 export async function fetchMetadataForItem(
   item: DownloadQueueItem,
@@ -27,11 +27,11 @@ export async function fetchMetadataForItem(
 ) {
   if (!metadataPlugin || item.metadata_preview) return
   const result = await sendJson<{ success: number; data?: Record<string, unknown> }>(
-    'POST',
+    "POST",
     `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&arg=${encodeURIComponent(item.url)}`,
   ).catch(() => null)
   const data = result?.data
-  const title = typeof data?.title === 'string' ? data.title : undefined
+  const title = typeof data?.title === "string" ? data.title : undefined
   if (data) await update.mutateAsync({ id: item.id, title, metadata_preview: data })
 }
 
@@ -50,18 +50,18 @@ function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; plug
     <JobProgressBar
       job={job}
       speedTooltip={
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 280 }}>
-          <span>{t('Rate-limited to {{limit}}/s', { limit: formatBytes(cap) })}</span>
-          {pattern && <span style={{ opacity: 0.85 }}>{t('Matched rule: {{pattern}}', { pattern })}</span>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 280 }}>
+          <span>{t("Rate-limited to {{limit}}/s", { limit: formatBytes(cap) })}</span>
+          {pattern && <span style={{ opacity: 0.85 }}>{t("Matched rule: {{pattern}}", { pattern })}</span>}
           <a
             onClick={(e) => {
               e.preventDefault()
               navigate(routes.pluginSettings(pluginNamespace))
             }}
             href={routes.pluginSettings(pluginNamespace)}
-            style={{ textDecoration: 'underline' }}
+            style={{ textDecoration: "underline" }}
           >
-            {t('Edit this plugin\'s rate-limit settings')}
+            {t("Edit this plugin's rate-limit settings")}
           </a>
         </div>
       }
@@ -94,7 +94,7 @@ export function QueueItemRow({
   const [renamePopover, setRenamePopover] = useState<{ x: number; y: number } | null>(null)
   const [fetchingMetadata, setFetchingMetadata] = useState(false)
   const archiveId = item.archive_ids?.[0] ?? (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0]
-  const wasCancelled = item.state === 'cancelled'
+  const wasCancelled = item.state === "cancelled"
   const isLocalUpload = item.plugin_namespace === LOCAL_UPLOAD_NAMESPACE
   const fileSize = item.file_size ?? job?.total_bytes
 
@@ -116,34 +116,34 @@ export function QueueItemRow({
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
+        display: "flex",
+        alignItems: "center",
         gap: 4,
-        padding: '4px 2px',
-        borderTop: '1px solid rgba(128,128,128,0.2)',
-        flexWrap: 'wrap',
+        padding: "4px 2px",
+        borderTop: "1px solid rgba(128,128,128,0.2)",
+        flexWrap: "wrap",
       }}
     >
       <input
         type="checkbox"
         checked={selected}
-        disabled={item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled'}
+        disabled={item.state !== "queued" && item.state !== "error" && item.state !== "cancelled"}
         onChange={onToggleSelect}
       />
 
-      <TooltipIfPresent preview={item.metadata_preview} url={item.url} wrapperStyle={{ flex: '1 1 180px', minWidth: 0 }}>
+      <TooltipIfPresent preview={item.metadata_preview} url={item.url} wrapperStyle={{ flex: "1 1 180px", minWidth: 0 }}>
         <div
           style={{
-            width: '100%',
-            boxSizing: 'border-box',
-            border: '1px solid rgba(128,128,128,0.3)',
+            width: "100%",
+            boxSizing: "border-box",
+            border: "1px solid rgba(128,128,128,0.3)",
             borderRadius: 4,
-            padding: '2px 6px',
+            padding: "2px 6px",
           }}
         >
-          {item.state === 'downloading' || item.state === 'starting' ? (
+          {item.state === "downloading" || item.state === "starting" ? (
             <>
-              <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: 'break-all', display: 'block' }} title={item.metadata_preview ? undefined : item.url}>
+              <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: "break-all", display: "block" }} title={item.metadata_preview ? undefined : item.url}>
                 {item.title ?? item.url}
               </span>
               {job ? (
@@ -153,11 +153,11 @@ export function QueueItemRow({
                   <JobProgressBar job={job} />
                 )
               ) : (
-                <span style={{ fontSize: FONT_SIZE_10PT }}>{t('Starting…')}</span>
+                <span style={{ fontSize: FONT_SIZE_10PT }}>{t("Starting…")}</span>
               )}
             </>
-          ) : item.state === 'done' ? (
-            <div style={{ position: 'relative', height: 18, borderRadius: 4, overflow: 'hidden', background: STATE_COLOR.active }}>
+          ) : item.state === "done" ? (
+            <div style={{ position: "relative", height: 18, borderRadius: 4, overflow: "hidden", background: STATE_COLOR.active }}>
               <a
                 href={archiveId ? routes.reader(archiveId) : undefined}
                 onClick={(e) => {
@@ -166,15 +166,15 @@ export function QueueItemRow({
                   navigate(routes.reader(archiveId))
                 }}
                 style={{
-                  position: 'absolute',
+                  position: "absolute",
                   inset: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '0 6px',
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "0 6px",
                   fontSize: FONT_SIZE_10PT,
-                  color: '#fff',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.6)',
-                  cursor: archiveId ? 'pointer' : 'default',
+                  color: "#fff",
+                  textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+                  cursor: archiveId ? "pointer" : "default",
                 }}
               >
                 <TruncatedFilename
@@ -189,39 +189,39 @@ export function QueueItemRow({
             </div>
           ) : (
             <span
-              style={{ fontSize: FONT_SIZE_10PT, display: 'flex' }}
+              style={{ fontSize: FONT_SIZE_10PT, display: "flex" }}
               title={item.metadata_preview ? undefined : item.url}
             >
               <TruncatedFilename text={item.title ?? item.url} isFilename={!item.title} />
             </span>
           )}
-          {item.state === 'error' && item.error && (
+          {item.state === "error" && item.error && (
             <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>
               <QueueErrorText error={item.error} />
             </div>
           )}
           {wasCancelled && (
-            <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>{t('Cancelled')}</div>
+            <div style={{ fontSize: FONT_SIZE_8PT, color: STATE_COLOR.failed }}>{t("Cancelled")}</div>
           )}
         </div>
       </TooltipIfPresent>
 
       {!isLocalUpload && (
         <>
-          <Tooltip label={t('Auto Fetch Metadata') ?? ''}>
+          <Tooltip label={t("Auto Fetch Metadata") ?? ""}>
             <input
               type="checkbox"
               checked={item.auto_fetch_metadata}
-              disabled={item.state !== 'queued'}
+              disabled={item.state !== "queued"}
               onChange={(e) => void update.mutateAsync({ id: item.id, auto_fetch_metadata: e.target.checked })}
             />
           </Tooltip>
 
-          <Tooltip label={t('Overwrite Duplicate') ?? ''}>
+          <Tooltip label={t("Overwrite Duplicate") ?? ""}>
             <input
               type="checkbox"
               checked={item.overwrite_on_duplicate}
-              disabled={item.state !== 'queued'}
+              disabled={item.state !== "queued"}
               onChange={(e) => void update.mutateAsync({ id: item.id, overwrite_on_duplicate: e.target.checked })}
             />
           </Tooltip>
@@ -230,7 +230,7 @@ export function QueueItemRow({
 
       {item.pending_filename_conflict ? (
         <>
-          <Tooltip label={t('Resolve Conflict') ?? ''}>
+          <Tooltip label={t("Resolve Conflict") ?? ""}>
             <button
               type="button"
               className="stdbtn"
@@ -246,7 +246,7 @@ export function QueueItemRow({
           </Tooltip>
           {conflictMenuAnchor && (
             <>
-              <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setConflictMenuAnchor(null)} />
+              <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={() => setConflictMenuAnchor(null)} />
               <ConflictMenu
                 anchor={conflictMenuAnchor}
                 onOverwrite={() => {
@@ -275,8 +275,8 @@ export function QueueItemRow({
             />
           )}
         </>
-      ) : isLocalUpload ? null : item.state === 'starting' || item.state === 'downloading' ? (
-        <Tooltip label={t('Stop') ?? ''}>
+      ) : isLocalUpload ? null : item.state === "starting" || item.state === "downloading" ? (
+        <Tooltip label={t("Stop") ?? ""}>
           <button
             type="button"
             className="stdbtn"
@@ -288,13 +288,13 @@ export function QueueItemRow({
           </button>
         </Tooltip>
       ) : (
-        <Tooltip label={(item.state === 'error' || wasCancelled ? t('Retry') : t('Download')) ?? ''}>
+        <Tooltip label={(item.state === "error" || wasCancelled ? t("Retry") : t("Download")) ?? ""}>
           <button
             type="button"
             className="stdbtn"
             style={ICON_BUTTON_STYLE}
             disabled={
-              (item.state !== 'queued' && item.state !== 'error' && item.state !== 'cancelled') ||
+              (item.state !== "queued" && item.state !== "error" && item.state !== "cancelled") ||
               start.isPending
             }
             onClick={() => {
@@ -303,7 +303,7 @@ export function QueueItemRow({
             }}
           >
             <i
-              className={`fa ${item.state === 'error' || wasCancelled ? 'fa-redo' : 'fa-download'}`}
+              className={`fa ${item.state === "error" || wasCancelled ? "fa-redo" : "fa-download"}`}
               aria-hidden="true"
             ></i>
           </button>
@@ -314,33 +314,33 @@ export function QueueItemRow({
         <Tooltip
           label={
             metadataPlugin
-              ? `${t('Fetch Metadata')} (${metadataPlugin.name})`
-              : (t('Fetch Metadata') ?? '')
+              ? `${t("Fetch Metadata")} (${metadataPlugin.name})`
+              : (t("Fetch Metadata") ?? "")
           }
         >
           <button
             type="button"
             className="stdbtn"
             style={ICON_BUTTON_STYLE}
-            disabled={!metadataPlugin || item.state === 'done' || fetchingMetadata}
+            disabled={!metadataPlugin || item.state === "done" || fetchingMetadata}
             onClick={() => void handleFetchMetadata()}
           >
-            <i className={`fa ${fetchingMetadata ? 'fa-spinner fa-spin' : 'fa-tags'}`} aria-hidden="true"></i>
+            <i className={`fa ${fetchingMetadata ? "fa-spinner fa-spin" : "fa-tags"}`} aria-hidden="true"></i>
           </button>
         </Tooltip>
       )}
 
-      <Tooltip label={(item.state === 'done' ? t('Remove') : t('Delete')) ?? ''}>
+      <Tooltip label={(item.state === "done" ? t("Remove") : t("Delete")) ?? ""}>
         <button
           type="button"
           className="stdbtn"
           style={ICON_BUTTON_STYLE}
           disabled={
-            del.isPending || item.state === 'starting' || item.state === 'downloading'
+            del.isPending || item.state === "starting" || item.state === "downloading"
           }
           onClick={() => void del.mutateAsync(item.id)}
         >
-          <i className={`fa ${item.state === 'done' ? 'fa-eraser' : 'fa-times'}`} aria-hidden="true"></i>
+          <i className={`fa ${item.state === "done" ? "fa-eraser" : "fa-times"}`} aria-hidden="true"></i>
         </button>
       </Tooltip>
     </div>

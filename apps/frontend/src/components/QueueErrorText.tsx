@@ -1,8 +1,8 @@
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import type { QueueError } from '../api/types'
-import { routes } from '../routes'
+import type { QueueError } from "../api/types"
+import { routes } from "../routes"
 
 /** Renders a structured `QueueError` (`lanrurugi_core::queue_error::QueueError`) as translated
  * text — maps `.kind` to an i18n key and interpolates that variant's own fields into it, rather
@@ -19,36 +19,36 @@ export function QueueErrorText({ error }: { error: QueueError }) {
   const navigate = useNavigate()
 
   switch (error.kind) {
-    case 'plugin_reported':
+    case "plugin_reported":
       return <span>{t(error.error_code, error.data)}</span>
-    case 'plugin_execution_failed':
-      return <span>{t('Plugin {{plugin}} failed to run', { plugin: error.plugin })}</span>
-    case 'malformed_plugin_response':
-      return <span>{t('Plugin {{plugin}} returned an unrecognized response', { plugin: error.plugin })}</span>
-    case 'empty_plugin_result':
-      return <span>{t('Plugin {{plugin}} returned nothing usable', { plugin: error.plugin })}</span>
-    case 'invalid_url':
-      return <span>{t('Invalid URL: {{url}}', { url: error.url })}</span>
-    case 'invalid_http_method':
-      return <span>{t('Invalid HTTP method: {{method}}', { method: error.method })}</span>
-    case 'http_request_failed':
-      return <span>{t('Request failed: {{url}}', { url: error.url })}</span>
-    case 'http_status':
+    case "plugin_execution_failed":
+      return <span>{t("Plugin {{plugin}} failed to run", { plugin: error.plugin })}</span>
+    case "malformed_plugin_response":
+      return <span>{t("Plugin {{plugin}} returned an unrecognized response", { plugin: error.plugin })}</span>
+    case "empty_plugin_result":
+      return <span>{t("Plugin {{plugin}} returned nothing usable", { plugin: error.plugin })}</span>
+    case "invalid_url":
+      return <span>{t("Invalid URL: {{url}}", { url: error.url })}</span>
+    case "invalid_http_method":
+      return <span>{t("Invalid HTTP method: {{method}}", { method: error.method })}</span>
+    case "http_request_failed":
+      return <span>{t("Request failed: {{url}}", { url: error.url })}</span>
+    case "http_status":
       return (
-        <span>{t('Server responded with status {{status}}: {{url}}', { url: error.url, status: error.status })}</span>
+        <span>{t("Server responded with status {{status}}: {{url}}", { url: error.url, status: error.status })}</span>
       )
-    case 'write_failed':
-      return <span>{t('Failed to write the downloaded file to disk')}</span>
-    case 'bundle_failed':
-      return <span>{t('Failed to bundle downloaded pages into one archive')}</span>
-    case 'duplicate_archive':
+    case "write_failed":
+      return <span>{t("Failed to write the downloaded file to disk")}</span>
+    case "bundle_failed":
+      return <span>{t("Failed to bundle downloaded pages into one archive")}</span>
+    case "duplicate_archive":
       return (
         <span>
           {t(
-            error.reason === 'content_hash'
-              ? 'A matching archive already exists'
-              : 'An archive with this filename already exists',
-          )}{' '}
+            error.reason === "content_hash"
+              ? "A matching archive already exists"
+              : "An archive with this filename already exists",
+          )}{" "}
           <a
             href={routes.reader(error.existing_id)}
             onClick={(e) => {
@@ -60,10 +60,10 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           </a>
         </span>
       )
-    case 'duplicate_filename':
+    case "duplicate_filename":
       return (
         <span>
-          {t('The filename {{filename}} is already used by', { filename: error.filename })}{' '}
+          {t("The filename {{filename}} is already used by", { filename: error.filename })}{" "}
           <a
             href={routes.reader(error.existing_id)}
             onClick={(e) => {
@@ -75,11 +75,11 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           </a>
         </span>
       )
-    case 'duplicate_filename_cleaned':
-      return <span>{t('Expired, please download again')}</span>
-    case 'internal':
-      return <span>{t('An internal error occurred')}</span>
-    case 'stale_after_restart':
-      return <span>{t('Download was interrupted by a server restart, please retry')}</span>
+    case "duplicate_filename_cleaned":
+      return <span>{t("Expired, please download again")}</span>
+    case "internal":
+      return <span>{t("An internal error occurred")}</span>
+    case "stale_after_restart":
+      return <span>{t("Download was interrupted by a server restart, please retry")}</span>
   }
 }

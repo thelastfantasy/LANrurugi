@@ -137,7 +137,7 @@ export type DuplicateGroup = DuplicateArchive[]
 
 export interface PluginInfo {
   namespace: string
-  type: 'metadata' | 'login' | 'download' | 'script'
+  type: "metadata" | "login" | "download" | "script"
   name: string
   author: string
   description: string
@@ -178,7 +178,7 @@ export interface PluginSettingsUpdate {
 // contracts/download-settings-api.md) — a download plugin's effective concurrency/rate-limit/
 // bundling settings (its own `pluginOptions()` declared defaults merged with any persisted user
 // override). `source` on each field distinguishes an inherited default from a user customization.
-export type PluginOptionsSource = 'plugin_default' | 'user_override'
+export type PluginOptionsSource = "plugin_default" | "user_override"
 
 export interface EffectiveDomainRule {
   pattern?: string
@@ -233,7 +233,7 @@ export interface StatTag {
 
 export interface JobStatus {
   task: string
-  state: 'inactive' | 'active' | 'finished' | 'failed'
+  state: "inactive" | "active" | "finished" | "failed"
   notes: unknown
   error: string | null
 }
@@ -241,7 +241,7 @@ export interface JobStatus {
 // Native job-console shape (specs/002-job-console `GET /api/jobs`), distinct from the legacy-
 // mimicking `JobStatus` above: real field names straight off `lanrurugi_core::jobs::JobStatus`
 // (`serde(rename_all = "snake_case")`), no legacy translation layer (contracts/jobs-api.md).
-export type JobRecordState = 'queued' | 'active' | 'finished' | 'failed'
+export type JobRecordState = "queued" | "active" | "finished" | "failed"
 
 export interface JobRecord {
   id: string
@@ -273,7 +273,7 @@ export interface JobsResponse {
 // mirrors `lanrurugi_storage::download_queue::DownloadQueueItem` field-for-field. Backed by
 // Redis so a queued/in-progress item survives a page refresh or a different browser tab; the
 // actual download itself is a `JobRecord` (`job_id` below links the two once started).
-export type DownloadQueueState = 'queued' | 'starting' | 'downloading' | 'done' | 'error' | 'cancelled'
+export type DownloadQueueState = "queued" | "starting" | "downloading" | "done" | "error" | "cancelled"
 
 /** An interpolation value in a `QueueError`'s `data` map — mirrors
  * `lanrurugi_core::queue_error::PluginErrorValue`'s untagged `String | Number` union. */
@@ -284,21 +284,21 @@ export type PluginErrorValue = string | number
  * can produce, structured (no free-text `detail`) so `QueueErrorText` (`components/`) can map
  * `kind` to a translated string and interpolate each variant's own fields into it. */
 export type QueueError =
-  | { kind: 'plugin_reported'; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
-  | { kind: 'plugin_execution_failed'; plugin: string }
-  | { kind: 'malformed_plugin_response'; plugin: string }
-  | { kind: 'empty_plugin_result'; plugin: string }
-  | { kind: 'invalid_url'; url: string }
-  | { kind: 'invalid_http_method'; method: string }
-  | { kind: 'http_request_failed'; url: string }
-  | { kind: 'http_status'; url: string; status: number }
-  | { kind: 'write_failed' }
-  | { kind: 'bundle_failed' }
-  | { kind: 'duplicate_archive'; existing_id: string; reason: 'content_hash' | 'filename' }
-  | { kind: 'duplicate_filename'; existing_id: string; filename: string }
-  | { kind: 'duplicate_filename_cleaned'; existing_id: string; filename: string }
-  | { kind: 'internal' }
-  | { kind: 'stale_after_restart' }
+  | { kind: "plugin_reported"; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
+  | { kind: "plugin_execution_failed"; plugin: string }
+  | { kind: "malformed_plugin_response"; plugin: string }
+  | { kind: "empty_plugin_result"; plugin: string }
+  | { kind: "invalid_url"; url: string }
+  | { kind: "invalid_http_method"; method: string }
+  | { kind: "http_request_failed"; url: string }
+  | { kind: "http_status"; url: string; status: number }
+  | { kind: "write_failed" }
+  | { kind: "bundle_failed" }
+  | { kind: "duplicate_archive"; existing_id: string; reason: "content_hash" | "filename" }
+  | { kind: "duplicate_filename"; existing_id: string; filename: string }
+  | { kind: "duplicate_filename_cleaned"; existing_id: string; filename: string }
+  | { kind: "internal" }
+  | { kind: "stale_after_restart" }
 
 /** Mirrors `lanrurugi_storage::download_queue::PendingFilenameConflict` — set on a queue item
  * whose download was blocked by a `Filename` collision (content is genuinely new, only the
@@ -315,7 +315,7 @@ export interface PendingFilenameConflict {
 
 // `#[serde(default)]` on the Rust side — absent on any record written before this field existed,
 // which always means 'download' (the only kind that could have produced them).
-export type QueueItemOrigin = 'download' | 'local_upload'
+export type QueueItemOrigin = "download" | "local_upload"
 
 export interface DownloadQueueItem {
   id: string

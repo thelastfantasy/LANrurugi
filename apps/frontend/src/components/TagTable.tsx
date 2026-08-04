@@ -1,7 +1,7 @@
-import { useSettings } from '../api/hooks'
-import { parseRating } from '../lib/rating'
-import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from '../lib/tagFormat'
-import { StarRatingDisplay } from './StarRating'
+import { useSettings } from "../api/hooks"
+import { parseRating } from "../lib/rating"
+import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from "../lib/tagFormat"
+import { StarRatingDisplay } from "./StarRating"
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
  * (`~/LANraragi/public/js/mod/common.js`) renders inside a hover tooltip: one row per namespace
@@ -27,37 +27,37 @@ export function TagTable({
   // Server timezone for timestamp-namespace display + search-URL conversion — see
   // `ArchiveOverviewOverlay.tsx`'s own `TagsTable` for the same pattern.
   const settings = useSettings()
-  const timezone = settings.data?.timezone ?? ''
+  const timezone = settings.data?.timezone ?? ""
   const byNamespace = splitTagsByNamespace(tags)
   const namespaces = Object.keys(byNamespace).sort()
   if (namespaces.length === 0) return null
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {namespaces.map((namespace) => (
-        <div key={namespace} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+        <div key={namespace} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
           <div
             className={`caption-namespace ${namespace.toLowerCase()}-tag`}
-            style={{ fontWeight: 'bold', flex: '0 0 auto', whiteSpace: 'nowrap', padding: 0 }}
+            style={{ fontWeight: "bold", flex: "0 0 auto", whiteSpace: "nowrap", padding: 0 }}
           >
             {displayNamespace(namespace)}:
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-            {namespace.toLowerCase() === 'rating' ? (
+          <div style={{ display: "flex", flexWrap: "wrap" }}>
+            {namespace.toLowerCase() === "rating" ? (
               // Still a real, working search-link chip (legacy's own real rating chip *is*
               // clickable — see `TagsTable`'s own docs in `ArchiveOverviewOverlay.tsx` for the
               // live-verified detail) — just no underline on it specifically, which reads like a
               // broken/dead link at a glance and the star icons alone don't need to invite.
               <div className="gt">
                 <a
-                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? '', timezone)}
+                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? "", timezone)}
                   onClick={(e) => {
                     if (!onSearchTag) return
                     e.preventDefault()
                     e.stopPropagation()
-                    onSearchTag(namespace, byNamespace[namespace][0] ?? '')
+                    onSearchTag(namespace, byNamespace[namespace][0] ?? "")
                   }}
-                  style={{ textDecoration: 'none', cursor: onSearchTag ? 'pointer' : undefined }}
+                  style={{ textDecoration: "none", cursor: onSearchTag ? "pointer" : undefined }}
                 >
                   <StarRatingDisplay rating={parseRating(byNamespace[namespace][0]) ?? 0} size={14} />
                 </a>
@@ -65,13 +65,13 @@ export function TagTable({
             ) : (
               byNamespace[namespace].map((value, i) => (
                 <div key={i} className="gt">
-                  {namespace === 'source' ? (
+                  {namespace === "source" ? (
                     <a
                       href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      style={{ wordBreak: 'break-all' }}
+                      style={{ wordBreak: "break-all" }}
                     >
                       {value}
                     </a>
@@ -99,7 +99,7 @@ export function TagTable({
                         e.stopPropagation()
                         onSearchTag(namespace, tagValueForSearch(namespace, value, timezone))
                       }}
-                      style={{ wordBreak: 'break-all', cursor: onSearchTag ? 'pointer' : undefined }}
+                      style={{ wordBreak: "break-all", cursor: onSearchTag ? "pointer" : undefined }}
                     >
                       {formatTagValue(namespace, value, timezone)}
                     </a>

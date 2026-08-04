@@ -1,9 +1,9 @@
-import type { MouseEvent } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useLocation, useNavigate } from 'react-router-dom'
+import type { MouseEvent } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useLocation, useNavigate } from "react-router-dom"
 
-import { sendJson } from '../../api/client'
+import { sendJson } from "../../api/client"
 import {
   useCategories,
   useCreateTankoubon,
@@ -14,11 +14,11 @@ import {
   useSettings,
   useStats,
   useTankoubons,
-} from '../../api/hooks'
-import type { ArchiveMetadata } from '../../api/types'
-import { confirmDialog, promptDialog } from '../../dialog'
-import { buildSearchToken, buildTagList, splitTagsByNamespace } from '../../lib/tagFormat'
-import { routes } from '../../routes'
+} from "../../api/hooks"
+import type { ArchiveMetadata } from "../../api/types"
+import { confirmDialog, promptDialog } from "../../dialog"
+import { buildSearchToken, buildTagList, splitTagsByNamespace } from "../../lib/tagFormat"
+import { routes } from "../../routes"
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -29,11 +29,11 @@ import {
   INDEX_SORT_KEY,
   INDEX_VIEW_MODE_KEY,
   MSM_SELECTION_KEY,
-} from '../../storageKeys'
-import { toast } from '../../toast'
-import { useDocumentTitle } from '../../useDocumentTitle'
-import { recordSearchNavigation } from '../Reader/crossArchiveNav'
-import { type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
+} from "../../storageKeys"
+import { toast } from "../../toast"
+import { useDocumentTitle } from "../../useDocumentTitle"
+import { recordSearchNavigation } from "../Reader/crossArchiveNav"
+import { type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "./shared"
 
 let defaultPasswordToastShownThisPageLoad = false
 
@@ -65,7 +65,7 @@ const urlParams = useMemo(() => new URLSearchParams(location.search), [location.
 // (rather than a `key`-remount trick) keeps the textbox in sync with browser back/forward
 // without racing which render the remount's initializer happens to read stale `location` from.
 const [filterInputOverride, setFilterInputOverride] = useState<string | null>(null)
-const appliedFilter = urlParams.get('q') ?? ''
+const appliedFilter = urlParams.get("q") ?? ""
 const filterInput = filterInputOverride ?? appliedFilter
 // Legacy's own `index_datatables.js` appends the current search term to the tab title — useful
 // for scanning browser history for which search produced which page.
@@ -74,7 +74,7 @@ useDocumentTitle(appliedFilter || undefined)
 function buildSearch(overrides: {
   page?: number
   sortby?: string
-  order?: 'asc' | 'desc'
+  order?: "asc" | "desc"
   appliedFilter?: string
   selectedCategory?: string
 }): string {
@@ -84,21 +84,21 @@ function buildSearch(overrides: {
   const nextFilter = overrides.appliedFilter ?? appliedFilter
   const nextCategory = overrides.selectedCategory ?? selectedCategory
   const params = new URLSearchParams()
-  if (nextPage !== 0) params.set('p', String(nextPage + 1))
-  if (nextSortby !== 'title') params.set('sort', nextSortby)
-  if (nextOrder !== 'asc') params.set('sortdir', nextOrder)
-  if (nextFilter) params.set('q', nextFilter)
-  if (nextCategory) params.set('c', nextCategory)
+  if (nextPage !== 0) params.set("p", String(nextPage + 1))
+  if (nextSortby !== "title") params.set("sort", nextSortby)
+  if (nextOrder !== "asc") params.set("sortdir", nextOrder)
+  if (nextFilter) params.set("q", nextFilter)
+  if (nextCategory) params.set("c", nextCategory)
   return params.toString()
 }
 
-const selectedCategory = urlParams.get('c') ?? ''
+const selectedCategory = urlParams.get("c") ?? ""
 const [autocompleteOpen, setAutocompleteOpen] = useState(false)
-const sortby = urlParams.get('sort') ?? localStorage.getItem(INDEX_SORT_KEY) ?? 'title'
-const order: 'asc' | 'desc' = (() => {
-  const fromUrl = urlParams.get('sortdir')
-  if (fromUrl === 'asc' || fromUrl === 'desc') return fromUrl
-  return (localStorage.getItem(INDEX_ORDER_KEY) as 'asc' | 'desc' | null) ?? 'asc'
+const sortby = urlParams.get("sort") ?? localStorage.getItem(INDEX_SORT_KEY) ?? "title"
+const order: "asc" | "desc" = (() => {
+  const fromUrl = urlParams.get("sortdir")
+  if (fromUrl === "asc" || fromUrl === "desc") return fromUrl
+  return (localStorage.getItem(INDEX_ORDER_KEY) as "asc" | "desc" | null) ?? "asc"
 })()
 // The one and only setter for every URL-driven field — every call site below passes every
 // field it's changing in a single call (e.g. `navigateSearch({ appliedFilter: '', page: 0 })`,
@@ -109,7 +109,7 @@ const order: 'asc' | 'desc' = (() => {
 function navigateSearch(overrides: {
   page?: number
   sortby?: string
-  order?: 'asc' | 'desc'
+  order?: "asc" | "desc"
   appliedFilter?: string
   selectedCategory?: string
 }) {
@@ -117,24 +117,24 @@ function navigateSearch(overrides: {
   if (overrides.order !== undefined) localStorage.setItem(INDEX_ORDER_KEY, overrides.order)
   navigate({ search: buildSearch(overrides) })
 }
-const [viewMode, setViewModeState] = useState<'thumbnail' | 'compact'>(
-  () => (localStorage.getItem(INDEX_VIEW_MODE_KEY) === '0' ? 'compact' : 'thumbnail'),
+const [viewMode, setViewModeState] = useState<"thumbnail" | "compact">(
+  () => (localStorage.getItem(INDEX_VIEW_MODE_KEY) === "0" ? "compact" : "thumbnail"),
 )
-function setViewMode(v: 'thumbnail' | 'compact') {
+function setViewMode(v: "thumbnail" | "compact") {
   setViewModeState(v)
-  localStorage.setItem(INDEX_VIEW_MODE_KEY, v === 'compact' ? '0' : '1')
+  localStorage.setItem(INDEX_VIEW_MODE_KEY, v === "compact" ? "0" : "1")
 }
-const [cropThumbs, setCropThumbsState] = useState(() => localStorage.getItem(CROP_THUMBS_KEY) !== 'false')
+const [cropThumbs, setCropThumbsState] = useState(() => localStorage.getItem(CROP_THUMBS_KEY) !== "false")
 function setCropThumbs(v: boolean) {
   setCropThumbsState(v)
   localStorage.setItem(CROP_THUMBS_KEY, String(v))
 }
-const [hideCompleted, setHideCompletedState] = useState(() => localStorage.getItem(HIDE_COMPLETED_KEY) === 'true')
+const [hideCompleted, setHideCompletedState] = useState(() => localStorage.getItem(HIDE_COMPLETED_KEY) === "true")
 function setHideCompleted(v: boolean) {
   setHideCompletedState(v)
   localStorage.setItem(HIDE_COMPLETED_KEY, String(v))
 }
-const [groupbyTanks, setGroupbyTanksState] = useState(() => localStorage.getItem(GROUP_TANKS_KEY) !== 'false')
+const [groupbyTanks, setGroupbyTanksState] = useState(() => localStorage.getItem(GROUP_TANKS_KEY) !== "false")
 function setGroupbyTanks(v: boolean) {
   setGroupbyTanksState(v)
   localStorage.setItem(GROUP_TANKS_KEY, String(v))
@@ -152,7 +152,7 @@ const setColumns = (value: number) => {
   localStorage.setItem(COLUMN_COUNT_KEY, String(value))
 }
 const page = (() => {
-  const fromUrl = Number(urlParams.get('p'))
+  const fromUrl = Number(urlParams.get("p"))
   return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl - 1 : 0
 })()
 const [multiSelect, setMultiSelect] = useState(false)
@@ -188,7 +188,7 @@ useEffect(() => {
         t(
           'Login with password "kamimamita" and change that shit on the double. ...Or just disable it! Why not check the configuration options afterwards, while you\'re at it?',
         ) ?? undefined,
-      icon: 'warning',
+      icon: "warning",
       hideAfter: 25000,
       closeOnClick: false,
       draggable: false,
@@ -197,12 +197,12 @@ useEffect(() => {
 }, [loginStatus.data?.using_default_password, t])
 
 useEffect(() => {
-  const seenKey = 'seenContextMenuTutorial'
+  const seenKey = "seenContextMenuTutorial"
   if (localStorage.getItem(seenKey)) return
-  localStorage.setItem(seenKey, '1')
+  localStorage.setItem(seenKey, "1")
   toast({
-    heading: t('Tip: right-click an archive for more actions!') ?? undefined,
-    icon: 'info',
+    heading: t("Tip: right-click an archive for more actions!") ?? undefined,
+    icon: "info",
     hideAfter: 8000,
   })
 }, [t])
@@ -215,14 +215,14 @@ useEffect(() => {
   if (!settings.data || loginStatus.data === undefined) return
   if (settings.data.localprogress || (settings.data.authprogress && !loggedIn)) return
   const keys = Object.keys(localStorage)
-    .filter((k) => k.endsWith('-reader'))
-    .map((k) => k.slice(0, -'-reader'.length))
+    .filter((k) => k.endsWith("-reader"))
+    .map((k) => k.slice(0, -"-reader".length))
   if (keys.length === 0) return
 
   toast({
-    heading: t('Migrating local reading progress to the server…') ?? undefined,
+    heading: t("Migrating local reading progress to the server…") ?? undefined,
     text: `${t("This only happens once — go grab a coffee, it won't take long.")} ☕`,
-    icon: 'info',
+    icon: "info",
     hideAfter: 23000,
   })
 
@@ -242,7 +242,7 @@ useEffect(() => {
         const data = await res.json()
         const serverProgress = data.progress as number | undefined
         if (Number.isFinite(localProgress) && serverProgress !== undefined && localProgress > serverProgress) {
-          await fetch(progressUrl, { method: 'PUT' })
+          await fetch(progressUrl, { method: "PUT" })
         }
       } finally {
         localStorage.removeItem(`${id}-reader`)
@@ -250,9 +250,9 @@ useEffect(() => {
     }),
   ).then(() => {
     toast({
-      heading: `${t('Local progress migration complete!')} 🎉`,
-      text: t('Every archive with local-only reading progress has been synced to the server.') ?? undefined,
-      icon: 'success',
+      heading: `${t("Local progress migration complete!")} 🎉`,
+      text: t("Every archive with local-only reading progress has been synced to the server.") ?? undefined,
+      icon: "success",
       hideAfter: 13000,
     })
   })
@@ -265,16 +265,16 @@ useEffect(() => {
 // `handleQuickSearch`/`handleEscapeKey`, `index.js`).
 useEffect(() => {
   function onKeyDown(e: KeyboardEvent) {
-    if (e.key === '/' && (e.target as HTMLElement)?.tagName !== 'INPUT') {
+    if (e.key === "/" && (e.target as HTMLElement)?.tagName !== "INPUT") {
       e.preventDefault()
       searchInputRef.current?.focus()
     }
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       setContextMenu(null)
     }
   }
-  document.addEventListener('keydown', onKeyDown)
-  return () => document.removeEventListener('keydown', onKeyDown)
+  document.addEventListener("keydown", onKeyDown)
+  return () => document.removeEventListener("keydown", onKeyDown)
 }, [])
 
 // A plain, unfiltered `useArchives()` isn't enough on its own to answer "how many total
@@ -315,7 +315,7 @@ const sortedCategories = useMemo(() => {
 // Search-bar tag autocomplete — ports `loadTagSuggestions`'s filter/sort rule: match against
 // only the fragment after the last `,`/`-`/whitespace (so autocomplete works mid-multi-tag-
 // search), case-insensitive substring match, sorted by tag weight descending.
-const currentFragment = filterInput.match(/[^,\s-]*$/)?.[0] ?? ''
+const currentFragment = filterInput.match(/[^,\s-]*$/)?.[0] ?? ""
 const tagSuggestions = useMemo(() => {
   if (!currentFragment) return []
   const needle = currentFragment.toLowerCase()
@@ -325,7 +325,7 @@ const tagSuggestions = useMemo(() => {
       // What actually gets inserted into the search box on click — quoted when `s.text` has a
       // space, unlike `label` (the plain, human-readable text shown in the dropdown itself),
       // since space is now a real token delimiter in the search grammar (issue #59).
-      insertValue: buildSearchToken(s.namespace ?? '', s.text),
+      insertValue: buildSearchToken(s.namespace ?? "", s.text),
       weight: s.weight,
     }))
     .filter((s) => s.label.toLowerCase().includes(needle))
@@ -335,7 +335,7 @@ const tagSuggestions = useMemo(() => {
 }, [stats.data, currentFragment])
 
 function toggleCategory(id: string) {
-  navigateSearch({ selectedCategory: selectedCategory === id ? '' : id, page: 0 })
+  navigateSearch({ selectedCategory: selectedCategory === id ? "" : id, page: 0 })
 }
 
 function toggleSelected(id: string) {
@@ -358,7 +358,7 @@ function clearSelection() {
 // confirmation since there's nothing to lose yet.
 async function handleToggleMultiSelect() {
   if (multiSelect && selectedIds.length > 0) {
-    if (!(await confirmDialog(t('You have an active selection. Exiting will clear it. Continue?') ?? ''))) {
+    if (!(await confirmDialog(t("You have an active selection. Exiting will clear it. Continue?") ?? ""))) {
       return
     }
   }
@@ -372,7 +372,7 @@ function runBatchOnSelection() {
   // `openBatchOnSelection`/`updateSelectionCount`): stash the selection in `localStorage` under
   // the same key, open `/batch` in a new tab to read (and immediately clear) it.
   localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(selectedIds))
-  window.open('/batch', '_blank')
+  window.open("/batch", "_blank")
 }
 
 // Selection containing exactly one existing Tankoubon folds the rest *into* that tank rather
@@ -391,64 +391,64 @@ async function mergeSelectionIntoTankoubon() {
       const existing = tankoubons.data?.result.find((tk) => tk.id === targetTank)
       const merged = [...(existing?.archives ?? []), ...archiveIds]
       await fetch(`/api/tankoubons/${targetTank}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ archives: merged }),
       })
       clearSelection()
       navigate(routes.tankoubonEdit(targetTank))
       return
     }
-    const name = await promptDialog(t('Enter a name for the new Tankoubon.') ?? '')
+    const name = await promptDialog(t("Enter a name for the new Tankoubon.") ?? "")
     if (!name?.trim()) return
     const result = await createTankoubon.mutateAsync(name.trim())
     await fetch(`/api/tankoubons/${result.tankoubon_id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archives: selectedIds }),
     })
     clearSelection()
     navigate(routes.tankoubonEdit(result.tankoubon_id))
   } catch {
-    toast({ heading: t('Error creating Tankoubon') ?? undefined, icon: 'error' })
+    toast({ heading: t("Error creating Tankoubon") ?? undefined, icon: "error" })
   }
 }
 
 async function toggleArchiveCategory(categoryId: string, archiveId: string, currentlyIn: boolean) {
-  await fetch(`/api/categories/${categoryId}/${archiveId}`, { method: currentlyIn ? 'DELETE' : 'PUT' })
+  await fetch(`/api/categories/${categoryId}/${archiveId}`, { method: currentlyIn ? "DELETE" : "PUT" })
   await categories.refetch()
 }
 
 async function updateRating(archiveId: string, isTank: boolean, rating: string | null) {
   const endpoint = isTank ? `/api/tankoubons/${archiveId}` : `/api/archives/${archiveId}/metadata`
   const current = shown.find((a) => a.arcid === archiveId)
-  const tagsByNamespace = splitTagsByNamespace(current?.tags ?? '')
+  const tagsByNamespace = splitTagsByNamespace(current?.tags ?? "")
   if (rating === null) delete tagsByNamespace.rating
   else tagsByNamespace.rating = [rating]
-  const newTags = buildTagList(tagsByNamespace).join(', ')
+  const newTags = buildTagList(tagsByNamespace).join(", ")
   if (isTank) {
     await fetch(endpoint, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tags: newTags }),
     })
   } else {
-    await sendJson('PUT', `/archives/${archiveId}/metadata?tags=${encodeURIComponent(newTags)}`)
+    await sendJson("PUT", `/archives/${archiveId}/metadata?tags=${encodeURIComponent(newTags)}`)
   }
   await search.refetch()
 }
 
 async function deleteArchive(archiveId: string, isTank: boolean) {
   if (isTank) {
-    await fetch(`/api/tankoubons/${archiveId}`, { method: 'DELETE' })
+    await fetch(`/api/tankoubons/${archiveId}`, { method: "DELETE" })
     await tankoubons.refetch()
   } else {
-    await fetch(`/api/archives/${archiveId}`, { method: 'DELETE' })
+    await fetch(`/api/archives/${archiveId}`, { method: "DELETE" })
   }
   await search.refetch()
 }
 
-function handleContextMenu(e: MouseEvent, archive: ArchiveMetadata, source: 'grid' | 'carousel' = 'grid') {
+function handleContextMenu(e: MouseEvent, archive: ArchiveMetadata, source: "grid" | "carousel" = "grid") {
   e.preventDefault()
   setContextMenu({ archive, x: e.clientX, y: e.clientY, source })
 }

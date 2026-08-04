@@ -8,7 +8,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-} from '@dnd-kit/core'
+} from "@dnd-kit/core"
 import {
   arrayMove,
   horizontalListSortingStrategy,
@@ -16,9 +16,9 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import { useState } from 'react'
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import { useState } from "react"
 
 /** Props a caller's `renderItem` must spread onto whatever element should act as the grab handle
  * (`{...dragHandleProps.attributes} {...dragHandleProps.listeners}`) — kept distinct from the
@@ -27,8 +27,8 @@ import { useState } from 'react'
  * `DragOverlay`'s render of `renderItem` — that copy is a purely visual stand-in, so it needs no
  * working drag listeners of its own. */
 export interface DragHandleProps {
-  attributes?: ReturnType<typeof useSortable>['attributes']
-  listeners?: ReturnType<typeof useSortable>['listeners']
+  attributes?: ReturnType<typeof useSortable>["attributes"]
+  listeners?: ReturnType<typeof useSortable>["listeners"]
   isDragging: boolean
 }
 
@@ -53,7 +53,7 @@ function SortableRow<T>({
     // The dragged row's own in-flow slot becomes invisible (not `display: none`, which would
     // collapse layout and cause everything below to jump) while `DragOverlay` shows the real,
     // undistorted content elsewhere — see this function's own docs.
-    visibility: isDragging ? 'hidden' : 'visible',
+    visibility: isDragging ? "hidden" : "visible",
   }
 
   return (
@@ -80,7 +80,7 @@ export function SortableList<T>({
   getId,
   onReorder,
   renderItem,
-  direction = 'vertical',
+  direction = "vertical",
 }: {
   items: T[]
   getId: (item: T) => string
@@ -94,7 +94,7 @@ export function SortableList<T>({
    * additionally wraps the rows in a `display: flex` row with `overflow-x: auto` (scrolls rather
    * than wraps when there isn't room, matching a card-row/carousel-style list) and switches
    * dnd-kit's own sorting strategy to match — items only reorder left/right, not vertically. */
-  direction?: 'vertical' | 'horizontal'
+  direction?: "vertical" | "horizontal"
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const byId = new Map(items.map((item) => [getId(item), item]))
@@ -138,10 +138,10 @@ export function SortableList<T>({
     >
       <SortableContext
         items={ids}
-        strategy={direction === 'horizontal' ? horizontalListSortingStrategy : verticalListSortingStrategy}
+        strategy={direction === "horizontal" ? horizontalListSortingStrategy : verticalListSortingStrategy}
       >
-        {direction === 'horizontal' ? (
-          <div className="hide-scrollbar" style={{ display: 'flex', flexDirection: 'row', overflowX: 'auto' }}>
+        {direction === "horizontal" ? (
+          <div className="hide-scrollbar" style={{ display: "flex", flexDirection: "row", overflowX: "auto" }}>
             {items_}
           </div>
         ) : (

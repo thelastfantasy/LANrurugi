@@ -1,13 +1,13 @@
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { useArchives, useServerInfo, useStats } from '../api/hooks'
-import { CollapsibleSection } from '../components/CollapsibleSection'
-import { TagCloud } from '../components/TagCloud'
-import { getTagSearchURL } from '../lib/tagFormat'
-import { routes } from '../routes'
-import { useApplyTheme } from '../theme'
-import { useDocumentTitle } from '../useDocumentTitle'
+import { useArchives, useServerInfo, useStats } from "../api/hooks"
+import { CollapsibleSection } from "../components/CollapsibleSection"
+import { TagCloud } from "../components/TagCloud"
+import { getTagSearchURL } from "../lib/tagFormat"
+import { routes } from "../routes"
+import { useApplyTheme } from "../theme"
+import { useDocumentTitle } from "../useDocumentTitle"
 
 // Mirrors legacy's `~/LANraragi/templates/stats.html.tt2` + `public/js/stats.js` structure exactly
 // — two genuinely distinct sections that an earlier version of this page had collapsed into one:
@@ -30,7 +30,7 @@ export function Stats() {
   const archives = useArchives()
   const info = useServerInfo()
   useApplyTheme()
-  useDocumentTitle(t('Library Statistics') ?? undefined)
+  useDocumentTitle(t("Library Statistics") ?? undefined)
 
   const sorted = [...(stats.data ?? [])].sort((a, b) => b.weight - a.weight)
 
@@ -49,7 +49,7 @@ export function Stats() {
           swapped (title as `<h1 className="ih">`, counters as plain `<p>` tags with no `.ih` class
           at all), which put the *title* at the tiny 10pt size and the *counters* at this app's own
           unrelated default paragraph size — reported live from a legacy screenshot comparison. */}
-      <h2 className="ih">{t('Library Statistics')}</h2>
+      <h2 className="ih">{t("Library Statistics")}</h2>
 
       {/* The whole `#stats` counter block is one real `<h1 class="ih">` in legacy (`<br><br>`
           between each line, not separate `<p>` tags) — matters because `h1.ih`'s real `font-size:
@@ -59,54 +59,54 @@ export function Stats() {
           layered on top of the 10pt base rather than replacing it). */}
       <div id="stats">
         <h1 className="ih">
-          <i className="fa fa-book fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{archiveCount}</span>{' '}
-          {t('Archives on record')}
+          <i className="fa fa-book fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{archiveCount}</span>{" "}
+          {t("Archives on record")}
           <br />
           <br />
-          <i className="fa fa-tags fa-2x"></i>{' '}
+          <i className="fa fa-tags fa-2x"></i>{" "}
           <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>
             {/* Legacy shows a spinner in place of the tag count until its own AJAX call resolves,
                 then swaps in the real count (`data.length`, i.e. the same already-`minweight`/
                 `hide_excluded_namespaces`-filtered set `#tagList`/`#tagCloud` both use) — matched
                 here instead of silently reading as "0 tags" for the whole loading window. */}
             {stats.isLoading ? <i className="fa fa-virus fa-spin"></i> : sorted.length}
-          </span>{' '}
-          {t('Different tags existing')}
+          </span>{" "}
+          {t("Different tags existing")}
           <br />
           <br />
-          <i className="fa fa-folder-open fa-2x"></i>{' '}
-          <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{contentSizeGb.toFixed(2)} GB</span> {t('in content folder')}
+          <i className="fa fa-folder-open fa-2x"></i>{" "}
+          <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{contentSizeGb.toFixed(2)} GB</span> {t("in content folder")}
           <br />
           <br />
-          <i className="fa fa-book-reader fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{pagesRead}</span>{' '}
-          {t('pages read')}
+          <i className="fa fa-book-reader fa-2x"></i> <span style={{ fontSize: STAT_VALUE_FONT_SIZE }}>{pagesRead}</span>{" "}
+          {t("pages read")}
           <br />
           <br />
           <br />
-          {t('Tag Cloud')}
+          {t("Tag Cloud")}
           <br />
         </h1>
       </div>
 
       {stats.isLoading ? (
-        <div id="statsLoading" style={{ width: '80%', marginLeft: 'auto', marginRight: 'auto', textAlign: 'center' }}>
+        <div id="statsLoading" style={{ width: "80%", marginLeft: "auto", marginRight: "auto", textAlign: "center" }}>
           <p>
             <i className="fa fa-dharmachakra fa-4x fa-spin"></i>
           </p>
-          {t('Asking the great powers that be for your tag statistics...')}
+          {t("Asking the great powers that be for your tag statistics...")}
         </div>
       ) : (
         <>
-          <div id="tagCloud" style={{ width: '80%', height: 500, marginLeft: 'auto', marginRight: 'auto' }}>
+          <div id="tagCloud" style={{ width: "80%", height: 500, marginLeft: "auto", marginRight: "auto" }}>
             <TagCloud tags={sorted} />
           </div>
 
           <ul
             className="collapsible extensible with-right-caret"
             id="detailedStats"
-            style={{ width: '80%', marginLeft: 'auto', marginRight: 'auto' }}
+            style={{ width: "80%", marginLeft: "auto", marginRight: "auto" }}
           >
-            <CollapsibleSection icon="fa-chart-bar" title={t('Detailed Stats')}>
+            <CollapsibleSection icon="fa-chart-bar" title={t("Detailed Stats")}>
               {/* Legacy's own real value here is a column-flex-wrap layout with a fixed,
                   content-count-independent height (`max-width: 80vw; display: flex; height:
                   calc(2048px - 25vw); flex-direction: column; flex-wrap: wrap`) — designed to
@@ -125,26 +125,26 @@ export function Stats() {
               <div
                 id="tagList"
                 style={{
-                  maxWidth: '80vw',
-                  display: 'flex',
-                  flexDirection: 'row',
-                  flexWrap: 'wrap',
-                  alignItems: 'flex-start',
-                  alignContent: 'flex-start',
-                  gap: '4px 16px',
+                  maxWidth: "80vw",
+                  display: "flex",
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                  alignContent: "flex-start",
+                  gap: "4px 16px",
                   maxHeight: 500,
-                  overflowY: 'auto',
+                  overflowY: "auto",
                 }}
               >
                 {sorted.map((tag) => (
                   <a
-                    key={`${tag.namespace ?? ''}:${tag.text}`}
-                    href={getTagSearchURL(tag.namespace ?? '', tag.text)}
+                    key={`${tag.namespace ?? ""}:${tag.text}`}
+                    href={getTagSearchURL(tag.namespace ?? "", tag.text)}
                     title={tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
                     className={tag.namespace ? `${tag.namespace}-tag` : undefined}
-                    style={{ maxWidth: '95%', display: 'flex' }}
+                    style={{ maxWidth: "95%", display: "flex" }}
                   >
-                    <span style={{ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}>
+                    <span style={{ textOverflow: "ellipsis", whiteSpace: "nowrap", overflow: "hidden", minWidth: 0, maxWidth: "100%" }}>
                       {tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
                     </span>
                     &nbsp;
@@ -153,14 +153,14 @@ export function Stats() {
                 ))}
               </div>
               <br />
-              {t('(These statistics only show tags that appear at least twice in your database.)')}
+              {t("(These statistics only show tags that appear at least twice in your database.)")}
             </CollapsibleSection>
           </ul>
         </>
       )}
 
       <br />
-      <input type="button" id="goback" className="stdbtn" value={t('Return to Library') ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="goback" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

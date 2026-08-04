@@ -1,6 +1,6 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, fetchJson, fetchText, sendForm, sendJson } from './client'
+import { ApiError, fetchJson, fetchText, sendForm, sendJson } from "./client"
 import type {
   AddToQueueItem,
   AddToQueueResponse,
@@ -32,7 +32,7 @@ import type {
   TankoubonListResponse,
   TankoubonMetadata,
   UpdateQueueItemBody,
-} from './types'
+} from "./types"
 
 /** Standard polling frequency for anything that needs "close to live" freshness without a
  * push/SSE mechanism (Shinobu status, log tail) — shared so both agree on the same cadence rather
@@ -47,15 +47,15 @@ const UPDATE_CHECK_STALE_TIME_MS = 60 * 60 * 1000
 
 export function useArchives() {
   return useQuery({
-    queryKey: ['archives'],
-    queryFn: () => fetchJson<ArchiveMetadata[]>('/archives'),
+    queryKey: ["archives"],
+    queryFn: () => fetchJson<ArchiveMetadata[]>("/archives"),
   })
 }
 
 export function useCategories() {
   return useQuery({
-    queryKey: ['categories'],
-    queryFn: () => fetchJson<CategoryMetadata[]>('/categories'),
+    queryKey: ["categories"],
+    queryFn: () => fetchJson<CategoryMetadata[]>("/categories"),
   })
 }
 
@@ -71,27 +71,27 @@ export function useCreateCategory() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (params: { name: string; isDynamic: boolean; search?: string }) =>
-      sendForm<{ category_id: string }>('PUT', '/categories', {
+      sendForm<{ category_id: string }>("PUT", "/categories", {
         name: params.name,
         // Falls back to legacy's own "bogus search" placeholder (`category.js`'s
         // `addNewCategory`) when the caller doesn't supply a real predicate up front.
-        search: params.isDynamic ? (params.search?.trim() || 'language:english') : '',
+        search: params.isDynamic ? (params.search?.trim() || "language:english") : "",
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["categories"] }),
   })
 }
 
 export function useTankoubons() {
   return useQuery({
-    queryKey: ['tankoubons'],
-    queryFn: () => fetchJson<TankoubonListResponse>('/tankoubons?page=-1'),
+    queryKey: ["tankoubons"],
+    queryFn: () => fetchJson<TankoubonListResponse>("/tankoubons?page=-1"),
   })
 }
 
 export function useSettings() {
   return useQuery({
-    queryKey: ['settings'],
-    queryFn: () => fetchJson<Settings>('/settings'),
+    queryKey: ["settings"],
+    queryFn: () => fetchJson<Settings>("/settings"),
   })
 }
 
@@ -101,8 +101,8 @@ export function useSettings() {
  * `GET /theme`, a separate public endpoint (see `lanrurugi_api::settings::public_router`). */
 export function usePublicTheme(options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: ['theme'],
-    queryFn: () => fetchJson<{ theme: string }>('/theme'),
+    queryKey: ["theme"],
+    queryFn: () => fetchJson<{ theme: string }>("/theme"),
     enabled: options?.enabled,
   })
 }
@@ -110,14 +110,14 @@ export function usePublicTheme(options?: { enabled?: boolean }) {
 export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (partial: Partial<Settings>) => sendJson('PUT', '/settings', partial),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+    mutationFn: (partial: Partial<Settings>) => sendJson("PUT", "/settings", partial),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   })
 }
 
-export function usePlugins(kind: string = 'all') {
+export function usePlugins(kind: string = "all") {
   return useQuery({
-    queryKey: ['plugins', kind],
+    queryKey: ["plugins", kind],
     queryFn: () => fetchJson<PluginInfo[]>(`/plugins/${kind}`),
   })
 }
@@ -128,9 +128,9 @@ export function usePlugins(kind: string = 'all') {
 export function useReorderPlugins() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (body: { type: PluginInfo['type']; order: string[] }) =>
-      sendJson('POST', '/plugins/priority', body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+    mutationFn: (body: { type: PluginInfo["type"]; order: string[] }) =>
+      sendJson("POST", "/plugins/priority", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plugins"] }),
   })
 }
 
@@ -141,8 +141,8 @@ export function useReorderPlugins() {
  * guaranteed-404 call with an empty namespace. */
 export function usePluginOptions(namespace: string) {
   return useQuery({
-    queryKey: ['plugin-options', namespace],
-    enabled: namespace !== '',
+    queryKey: ["plugin-options", namespace],
+    enabled: namespace !== "",
     queryFn: async () => {
       try {
         return await fetchJson<PluginOptions>(`/plugins/options?namespace=${encodeURIComponent(namespace)}`)
@@ -158,16 +158,16 @@ export function useUpdatePluginOptions(namespace: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (update: PluginOptionsUpdate) =>
-      sendJson<PluginOptions>('PUT', `/plugins/options?namespace=${encodeURIComponent(namespace)}`, update),
-    onSuccess: (data) => queryClient.setQueryData(['plugin-options', namespace], data),
+      sendJson<PluginOptions>("PUT", `/plugins/options?namespace=${encodeURIComponent(namespace)}`, update),
+    onSuccess: (data) => queryClient.setQueryData(["plugin-options", namespace], data),
   })
 }
 
 export function useResetPluginOptions(namespace: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson<PluginOptions>('DELETE', `/plugins/options?namespace=${encodeURIComponent(namespace)}`),
-    onSuccess: (data) => queryClient.setQueryData(['plugin-options', namespace], data),
+    mutationFn: () => sendJson<PluginOptions>("DELETE", `/plugins/options?namespace=${encodeURIComponent(namespace)}`),
+    onSuccess: (data) => queryClient.setQueryData(["plugin-options", namespace], data),
   })
 }
 
@@ -176,7 +176,7 @@ export function useResetPluginOptions(namespace: string) {
  * concurrency/rate-limit/bundling settings). */
 export function usePluginSettings(namespace: string) {
   return useQuery({
-    queryKey: ['plugin-settings', namespace],
+    queryKey: ["plugin-settings", namespace],
     queryFn: () => fetchJson<PluginSettings>(`/plugins/settings?namespace=${encodeURIComponent(namespace)}`),
   })
 }
@@ -185,14 +185,14 @@ export function useUpdatePluginSettings(namespace: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (update: PluginSettingsUpdate) =>
-      sendJson<void>('PUT', `/plugins/settings?namespace=${encodeURIComponent(namespace)}`, update),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['plugin-settings', namespace] }),
+      sendJson<void>("PUT", `/plugins/settings?namespace=${encodeURIComponent(namespace)}`, update),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["plugin-settings", namespace] }),
   })
 }
 
 export function useStats(minWeight = 1) {
   return useQuery({
-    queryKey: ['stats', minWeight],
+    queryKey: ["stats", minWeight],
     queryFn: () =>
       fetchJson<StatTag[]>(
         `/database/stats?minweight=${minWeight}&hide_excluded_namespaces=true`,
@@ -202,7 +202,7 @@ export function useStats(minWeight = 1) {
 
 export function useArchiveMetadata(id: string | null) {
   return useQuery({
-    queryKey: ['archive', id],
+    queryKey: ["archive", id],
     queryFn: () => fetchJson<ArchiveMetadata>(`/archives/${id}/metadata`),
     enabled: id !== null,
   })
@@ -210,7 +210,7 @@ export function useArchiveMetadata(id: string | null) {
 
 export function useArchivePages(id: string | null) {
   return useQuery({
-    queryKey: ['archive-pages', id],
+    queryKey: ["archive-pages", id],
     queryFn: () => fetchJson<ArchiveFilesResponse>(`/archives/${id}/files`),
     enabled: id !== null,
   })
@@ -223,7 +223,7 @@ export function useArchivePages(id: string | null) {
  * than baked in here, same pattern as `useArchiveMetadata`'s own `id !== null` gate. */
 export function usePageDimensions(id: string | null, count: number, enabled: boolean) {
   return useQuery({
-    queryKey: ['archive-page-dimensions', id, count],
+    queryKey: ["archive-page-dimensions", id, count],
     queryFn: () => fetchJson<PageDimensionsResponse>(`/archives/${id}/page-dimensions?count=${count}`),
     enabled: enabled && id !== null && count > 0,
   })
@@ -232,10 +232,10 @@ export function usePageDimensions(id: string | null, count: number, enabled: boo
 export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson('PUT', `/archives/${id}/progress/${page}`),
+    mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/progress/${page}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -256,11 +256,11 @@ export function useUpdateProgress(id: string | null) {
 export function useSetArchiveProgress() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson('PUT', `/archives/${id}/progress/${page}`),
+    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson("PUT", `/archives/${id}/progress/${page}`),
     onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
-      queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === 'search' })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
     },
   })
 }
@@ -274,7 +274,7 @@ export interface SearchOptions {
    * fallback for everything else, which is what makes `"date_added"` (the other option legacy's
    * own index page dropdown offers) work with no dedicated backend support of its own. */
   sortby?: string
-  order?: 'asc' | 'desc'
+  order?: "asc" | "desc"
   /** Pagination cursor — the *index* into the filtered+sorted result set, not a page number
    * (`lanrurugi-api::search`'s own fixed 100-per-page `PAGE_SIZE`). */
   start?: number
@@ -295,17 +295,17 @@ export interface SearchOptions {
 
 export function useSearch(options: SearchOptions) {
   const params = new URLSearchParams()
-  if (options.filter) params.set('filter', options.filter)
-  if (options.category) params.set('category', options.category)
-  if (options.sortby) params.set('sortby', options.sortby)
-  if (options.order) params.set('order', options.order)
-  if (options.start !== undefined) params.set('start', String(options.start))
-  if (options.newonly) params.set('newonly', 'true')
-  if (options.untaggedonly) params.set('untaggedonly', 'true')
-  if (options.hidecompleted) params.set('hidecompleted', 'true')
-  if (options.groupbyTanks === false) params.set('groupby_tanks', 'false')
+  if (options.filter) params.set("filter", options.filter)
+  if (options.category) params.set("category", options.category)
+  if (options.sortby) params.set("sortby", options.sortby)
+  if (options.order) params.set("order", options.order)
+  if (options.start !== undefined) params.set("start", String(options.start))
+  if (options.newonly) params.set("newonly", "true")
+  if (options.untaggedonly) params.set("untaggedonly", "true")
+  if (options.hidecompleted) params.set("hidecompleted", "true")
+  if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
   return useQuery({
-    queryKey: ['search', options],
+    queryKey: ["search", options],
     queryFn: () => fetchJson<SearchResponse>(`/search?${params.toString()}`),
     enabled: options.enabled ?? true,
   })
@@ -318,12 +318,12 @@ export function useUpdateArchiveMetadata(id: string) {
       const query = new URLSearchParams(
         Object.entries(fields).filter(([, v]) => v !== undefined) as [string, string][],
       )
-      return sendJson('PUT', `/archives/${id}/metadata?${query}`)
+      return sendJson("PUT", `/archives/${id}/metadata?${query}`)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
-      queryClient.invalidateQueries({ queryKey: ['search'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["search"] })
     },
   })
 }
@@ -333,10 +333,10 @@ export function useUpdateArchiveMetadata(id: string) {
 export function useSetArchiveThumbnail(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson('PUT', `/archives/${id}/thumbnail?page=${page}`),
+    mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/thumbnail?page=${page}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -346,10 +346,10 @@ export function useAddTocEntry(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ page, title }: { page: number; title: string }) =>
-      sendJson('PUT', `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
+      sendJson("PUT", `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -358,10 +358,10 @@ export function useAddTocEntry(id: string) {
 export function useRemoveTocEntry(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson('DELETE', `/archives/${id}/toc?page=${page}`),
+    mutationFn: (page: number) => sendJson("DELETE", `/archives/${id}/toc?page=${page}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -377,10 +377,10 @@ export function useAddTocEntryForId() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, page, title }: { id: string; page: number; title: string }) =>
-      sendJson('PUT', `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
+      sendJson("PUT", `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
     onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -389,10 +389,10 @@ export function useAddTocEntryForId() {
 export function useRemoveTocEntryForId() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson('DELETE', `/archives/${id}/toc?page=${page}`),
+    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson("DELETE", `/archives/${id}/toc?page=${page}`),
     onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['archive', id] })
-      queryClient.invalidateQueries({ queryKey: ['archives'] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }
@@ -400,24 +400,24 @@ export function useRemoveTocEntryForId() {
 export function useDeleteArchive() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => sendJson('DELETE', `/archives/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['archives'] }),
+    mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["archives"] }),
   })
 }
 
 export function useTankoubon(id: string) {
   return useQuery({
-    queryKey: ['tankoubon', id],
+    queryKey: ["tankoubon", id],
     queryFn: () => fetchJson<TankoubonMetadata>(`/tankoubons/${id}`),
-    enabled: id !== '',
+    enabled: id !== "",
   })
 }
 
 export function useCreateTankoubon() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => sendForm<{ tankoubon_id: string }>('PUT', '/tankoubons', { name }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubons'] }),
+    mutationFn: (name: string) => sendForm<{ tankoubon_id: string }>("PUT", "/tankoubons", { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons"] }),
   })
 }
 
@@ -427,10 +427,10 @@ export function useUpdateTankoubon(id: string) {
     mutationFn: (body: {
       archives?: string[]
       metadata?: { name?: string; summary?: string; tags?: string }
-    }) => sendJson('PUT', `/tankoubons/${id}`, body),
+    }) => sendJson("PUT", `/tankoubons/${id}`, body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tankoubon', id] })
-      queryClient.invalidateQueries({ queryKey: ['tankoubons'] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
     },
   })
 }
@@ -438,16 +438,16 @@ export function useUpdateTankoubon(id: string) {
 export function useDeleteTankoubon() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => sendJson('DELETE', `/tankoubons/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubons'] }),
+    mutationFn: (id: string) => sendJson("DELETE", `/tankoubons/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons"] }),
   })
 }
 
 export function useAddToTankoubon(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (archiveId: string) => sendJson('PUT', `/tankoubons/${id}/${archiveId}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubon', id] }),
+    mutationFn: (archiveId: string) => sendJson("PUT", `/tankoubons/${id}/${archiveId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubon", id] }),
   })
 }
 
@@ -456,7 +456,7 @@ export function useAddToTankoubon(id: string) {
  * Used by `useTankoubonReading` to read a Tankoubon as one concatenated multi-archive book. */
 export function useTankoubonFull(id: string | null) {
   return useQuery({
-    queryKey: ['tankoubon-full', id],
+    queryKey: ["tankoubon-full", id],
     queryFn: () => fetchJson<TankoubonFullResponse>(`/tankoubons/${id}/full?page=-1`),
     enabled: id !== null,
   })
@@ -470,10 +470,10 @@ export function useTankoubonFull(id: string | null) {
 export function useUpdateTankoubonProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson('PUT', `/tankoubons/${id}/progress/${page}`),
+    mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/progress/${page}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tankoubon', id] })
-      queryClient.invalidateQueries({ queryKey: ['tankoubons'] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
     },
   })
 }
@@ -485,15 +485,15 @@ export function useUpdateTankoubonProgress(id: string | null) {
 export function useSetTankoubonThumbnail(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson('PUT', `/tankoubons/${id}/thumbnail?page=${page}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubon', id] }),
+    mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/thumbnail?page=${page}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubon", id] }),
   })
 }
 
 export function useServerInfo() {
   return useQuery({
-    queryKey: ['info'],
-    queryFn: () => fetchJson<ServerInfo>('/info'),
+    queryKey: ["info"],
+    queryFn: () => fetchJson<ServerInfo>("/info"),
   })
 }
 
@@ -528,17 +528,17 @@ function compareVersions(a: number[], b: number[]): number {
  * should surface as an error to the user. */
 export function useUpdateCheck(currentVersion: string | undefined, debugMode: boolean) {
   return useQuery({
-    queryKey: ['update-check', currentVersion],
+    queryKey: ["update-check", currentVersion],
     queryFn: async (): Promise<UpdateCheckResult | null> => {
       const response = await fetch(
-        'https://api.github.com/repos/thelastfantasy/LANrurugi/releases/latest',
+        "https://api.github.com/repos/thelastfantasy/LANrurugi/releases/latest",
       )
       if (!response.ok) return null
       const data = (await response.json()) as { tag_name?: string; html_url?: string }
       if (!data.tag_name || !data.html_url) return null
 
       const latest = extractVersionNumbers(data.tag_name)
-      const current = extractVersionNumbers(currentVersion ?? '')
+      const current = extractVersionNumbers(currentVersion ?? "")
       if (compareVersions(latest, current) <= 0) return null
 
       return { latestVersion: data.tag_name, releaseUrl: data.html_url }
@@ -551,13 +551,13 @@ export function useUpdateCheck(currentVersion: string | undefined, debugMode: bo
 
 export function useLogin() {
   return useMutation({
-    mutationFn: (password: string) => sendForm('POST', '/login', { password }),
+    mutationFn: (password: string) => sendForm("POST", "/login", { password }),
   })
 }
 
 export function useLogout() {
   return useMutation({
-    mutationFn: () => sendJson('POST', '/logout'),
+    mutationFn: () => sendJson("POST", "/logout"),
   })
 }
 
@@ -567,21 +567,21 @@ export function useLogout() {
  * for why this is its own endpoint rather than a field on `ServerInfo`. */
 export function useLoginStatus() {
   return useQuery({
-    queryKey: ['login-status'],
-    queryFn: () => fetchJson<LoginStatus>('/login/status'),
+    queryKey: ["login-status"],
+    queryFn: () => fetchJson<LoginStatus>("/login/status"),
   })
 }
 
 export function useChangePassword() {
   return useMutation({
-    mutationFn: (password: string) => sendForm('POST', '/settings/password', { password }),
+    mutationFn: (password: string) => sendForm("POST", "/settings/password", { password }),
   })
 }
 
 export function useShinobuStatus() {
   return useQuery({
-    queryKey: ['shinobu'],
-    queryFn: () => fetchJson<ShinobuStatus>('/shinobu'),
+    queryKey: ["shinobu"],
+    queryFn: () => fetchJson<ShinobuStatus>("/shinobu"),
     refetchInterval: POLL_INTERVAL_MS,
   })
 }
@@ -589,14 +589,14 @@ export function useShinobuStatus() {
 export function useShinobuAction() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (action: 'stop' | 'restart' | 'rescan') => sendJson('POST', `/shinobu/${action}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shinobu'] }),
+    mutationFn: (action: "stop" | "restart" | "rescan") => sendJson("POST", `/shinobu/${action}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["shinobu"] }),
   })
 }
 
 export function useClearNewFlags() {
   return useMutation({
-    mutationFn: () => sendJson('DELETE', '/database/isnew'),
+    mutationFn: () => sendJson("DELETE", "/database/isnew"),
   })
 }
 
@@ -606,19 +606,19 @@ export function useClearNewFlags() {
  * makes the badge disappear after a first read rather than staying "new" forever. */
 export function useClearArchiveNew() {
   return useMutation({
-    mutationFn: (id: string) => sendJson('DELETE', `/archives/${id}/isnew`),
+    mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}/isnew`),
   })
 }
 
 export function useRegenThumbnails() {
   return useMutation({
-    mutationFn: (force: boolean) => sendJson('POST', `/regen_thumbs?force=${force}`),
+    mutationFn: (force: boolean) => sendJson("POST", `/regen_thumbs?force=${force}`),
   })
 }
 
 export function useDiscardSearchCache() {
   return useMutation({
-    mutationFn: () => sendJson('DELETE', '/search/cache'),
+    mutationFn: () => sendJson("DELETE", "/search/cache"),
   })
 }
 
@@ -627,7 +627,7 @@ export function useDiscardSearchCache() {
 
 export function useStampedPages(id: string | null) {
   return useQuery({
-    queryKey: ['stamped-pages', id],
+    queryKey: ["stamped-pages", id],
     queryFn: () => fetchJson<StampedPagesResponse>(`/archives/${id}/stamps`),
     enabled: id !== null,
   })
@@ -643,7 +643,7 @@ export function useStampedPages(id: string | null) {
 export function useStampedPagesForArchives(ids: string[]) {
   return useQueries({
     queries: ids.map((id) => ({
-      queryKey: ['stamped-pages', id],
+      queryKey: ["stamped-pages", id],
       queryFn: () => fetchJson<StampedPagesResponse>(`/archives/${id}/stamps`),
     })),
   })
@@ -651,7 +651,7 @@ export function useStampedPagesForArchives(ids: string[]) {
 
 export function useStampsForPage(id: string | null, page: number) {
   return useQuery({
-    queryKey: ['stamps', id, page],
+    queryKey: ["stamps", id, page],
     queryFn: () => fetchJson<StampsByPageResponse>(`/archives/${id}/stamps/${page}`),
     enabled: id !== null && page > 0,
   })
@@ -674,17 +674,17 @@ export function useAddStamp(id: string) {
       rect?: string
     }) => {
       const params = new URLSearchParams({ content, position })
-      if (icon) params.set('icon', icon)
-      if (rect) params.set('rect', rect)
+      if (icon) params.set("icon", icon)
+      if (rect) params.set("rect", rect)
       // The response's own `stamp_id` is the new stamp's real ID (`crates/lanrurugi-api::stamps::
       // add_stamp` — matches legacy's own `add_stamp` response shape) — declared here (not left
       // as the untyped default) so a call site can read it back out of `mutate`'s own `onSuccess`
       // callback, e.g. to select a stamp immediately after creating it via Ctrl+drag copy.
-      return sendJson<{ stamp_id: string }>('PUT', `/archives/${id}/stamps/${page}?${params.toString()}`)
+      return sendJson<{ stamp_id: string }>("PUT", `/archives/${id}/stamps/${page}?${params.toString()}`)
     },
     onSuccess: (_data, { page }) => {
-      queryClient.invalidateQueries({ queryKey: ['stamps', id, page] })
-      queryClient.invalidateQueries({ queryKey: ['stamped-pages', id] })
+      queryClient.invalidateQueries({ queryKey: ["stamps", id, page] })
+      queryClient.invalidateQueries({ queryKey: ["stamped-pages", id] })
     },
   })
 }
@@ -706,23 +706,23 @@ export function useUpdateStamp() {
       rect?: string
     }) => {
       const params = new URLSearchParams()
-      if (content !== undefined) params.set('content', content)
-      if (position !== undefined) params.set('position', position)
-      if (icon !== undefined) params.set('icon', icon)
-      if (rect !== undefined) params.set('rect', rect)
-      return sendJson('PUT', `/stamps/${stampId}?${params.toString()}`)
+      if (content !== undefined) params.set("content", content)
+      if (position !== undefined) params.set("position", position)
+      if (icon !== undefined) params.set("icon", icon)
+      if (rect !== undefined) params.set("rect", rect)
+      return sendJson("PUT", `/stamps/${stampId}?${params.toString()}`)
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stamps'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stamps"] }),
   })
 }
 
 export function useDeleteStamp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (stampId: string) => sendJson('DELETE', `/stamps/${stampId}`),
+    mutationFn: (stampId: string) => sendJson("DELETE", `/stamps/${stampId}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stamps'] })
-      queryClient.invalidateQueries({ queryKey: ['stamped-pages'] })
+      queryClient.invalidateQueries({ queryKey: ["stamps"] })
+      queryClient.invalidateQueries({ queryKey: ["stamped-pages"] })
     },
   })
 }
@@ -734,7 +734,7 @@ export function useDeleteStamp() {
 
 export function useGenerateThumbnails(id: string) {
   return useMutation({
-    mutationFn: () => sendJson('POST', `/archives/${id}/files/thumbnails`),
+    mutationFn: () => sendJson("POST", `/archives/${id}/files/thumbnails`),
   })
 }
 
@@ -746,7 +746,7 @@ export function useGenerateThumbnails(id: string) {
 export function useGenerateThumbnailsForArchives() {
   return useMutation({
     mutationFn: (ids: string[]) =>
-      Promise.all(ids.map((id) => sendJson('POST', `/archives/${id}/files/thumbnails`))),
+      Promise.all(ids.map((id) => sendJson("POST", `/archives/${id}/files/thumbnails`))),
   })
 }
 
@@ -754,7 +754,7 @@ export function useGenerateThumbnailsForArchives() {
 // Legacy's reader just links `<a href="/random">` (plain navigation). Not a react-query hook —
 // every call must pick a fresh random archive, there's nothing to cache.
 export async function fetchRandomArchiveId(): Promise<string | null> {
-  const result = await fetchJson<RandomArchivesResponse>('/search/random?count=1')
+  const result = await fetchJson<RandomArchivesResponse>("/search/random?count=1")
   return result.data[0]?.arcid ?? null
 }
 
@@ -764,58 +764,58 @@ export async function fetchRandomArchiveId(): Promise<string | null> {
 
 export function useBookmarkLink() {
   return useQuery({
-    queryKey: ['bookmark-link'],
-    queryFn: () => fetchJson<BookmarkLinkResponse>('/categories/bookmark_link'),
+    queryKey: ["bookmark-link"],
+    queryFn: () => fetchJson<BookmarkLinkResponse>("/categories/bookmark_link"),
   })
 }
 
 export function useCleanTempfolder() {
   return useMutation({
-    mutationFn: () => sendJson('DELETE', '/tempfolder'),
+    mutationFn: () => sendJson("DELETE", "/tempfolder"),
   })
 }
 
 export function useCleanDatabase() {
   return useMutation({
-    mutationFn: () => sendJson<{ deleted: number; unlinked: number }>('POST', '/database/clean'),
+    mutationFn: () => sendJson<{ deleted: number; unlinked: number }>("POST", "/database/clean"),
   })
 }
 
 export function useDropDatabase() {
   return useMutation({
-    mutationFn: () => sendJson('POST', '/database/drop'),
+    mutationFn: () => sendJson("POST", "/database/drop"),
   })
 }
 
 export function useDuplicates() {
   return useQuery({
-    queryKey: ['duplicates'],
-    queryFn: () => fetchJson<DuplicateGroup[]>('/database/duplicates'),
+    queryKey: ["duplicates"],
+    queryFn: () => fetchJson<DuplicateGroup[]>("/database/duplicates"),
   })
 }
 
 export function useScanDuplicates() {
   return useMutation({
     mutationFn: (threshold: number) =>
-      sendJson<{ job: string }>('POST', `/database/duplicates/scan?threshold=${threshold}`),
+      sendJson<{ job: string }>("POST", `/database/duplicates/scan?threshold=${threshold}`),
   })
 }
 
 export function useClearDuplicates() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson('DELETE', '/database/duplicates'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['duplicates'] }),
+    mutationFn: () => sendJson("DELETE", "/database/duplicates"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["duplicates"] }),
   })
 }
 
-export const LOG_CATEGORIES = ['general', 'shinobu', 'plugins', 'redis', 'mojo'] as const
+export const LOG_CATEGORIES = ["general", "shinobu", "plugins", "redis", "mojo"] as const
 
 export type LogCategory = (typeof LOG_CATEGORIES)[number]
 
 export function useLogLines(category: LogCategory, lines = 100) {
   return useQuery({
-    queryKey: ['logs', category, lines],
+    queryKey: ["logs", category, lines],
     queryFn: () => fetchText(`/logs/${category}?lines=${lines}`),
     refetchInterval: POLL_INTERVAL_MS,
   })
@@ -827,8 +827,8 @@ export function useLogLines(category: LogCategory, lines = 100) {
 
 export function useJobs() {
   return useQuery({
-    queryKey: ['jobs'],
-    queryFn: () => fetchJson<JobsResponse>('/jobs'),
+    queryKey: ["jobs"],
+    queryFn: () => fetchJson<JobsResponse>("/jobs"),
     // `select` unwraps the `{ jobs: [...] }` envelope so consumers get the array directly.
     select: (data) => data.jobs as JobRecord[],
     // Shares `DOWNLOAD_QUEUE_POLL_INTERVAL_MS`'s own faster cadence (not the shared
@@ -853,7 +853,7 @@ export function useClearJobs() {
       await Promise.all(
         ids.map(async (id) => {
           try {
-            await sendJson('DELETE', `/jobs/${encodeURIComponent(id)}`)
+            await sendJson("DELETE", `/jobs/${encodeURIComponent(id)}`)
             succeeded += 1
           } catch {
             failed += 1
@@ -862,7 +862,7 @@ export function useClearJobs() {
       )
       return { succeeded, failed }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 
@@ -872,8 +872,8 @@ export function useClearJobs() {
 export function useClearFinishedJobs() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson<{ cleared: number }>('DELETE', '/jobs?state=finished'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    mutationFn: () => sendJson<{ cleared: number }>("DELETE", "/jobs?state=finished"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 
@@ -885,8 +885,8 @@ export function useClearFinishedJobs() {
 
 export function useDownloadQueue() {
   return useQuery({
-    queryKey: ['download-queue'],
-    queryFn: () => fetchJson<DownloadQueueListResponse>('/download_queue'),
+    queryKey: ["download-queue"],
+    queryFn: () => fetchJson<DownloadQueueListResponse>("/download_queue"),
     select: (data) => data.items,
     refetchInterval: DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
   })
@@ -896,8 +896,8 @@ export function useAddToQueue() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (items: AddToQueueItem[]) =>
-      sendJson<AddToQueueResponse>('POST', '/download_queue', { items }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+      sendJson<AddToQueueResponse>("POST", "/download_queue", { items }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -905,16 +905,16 @@ export function useUpdateQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, ...update }: UpdateQueueItemBody & { id: string }) =>
-      sendJson<{ item: DownloadQueueItem }>('PATCH', `/download_queue/${encodeURIComponent(id)}`, update),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+      sendJson<{ item: DownloadQueueItem }>("PATCH", `/download_queue/${encodeURIComponent(id)}`, update),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
 export function useDeleteQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => sendJson('DELETE', `/download_queue/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+    mutationFn: (id: string) => sendJson("DELETE", `/download_queue/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -922,10 +922,10 @@ export function useStartQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) =>
-      sendJson<{ job: string }>('POST', `/download_queue/${encodeURIComponent(id)}/start`),
+      sendJson<{ job: string }>("POST", `/download_queue/${encodeURIComponent(id)}/start`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
   })
 }
@@ -934,20 +934,20 @@ export function useStopQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) =>
-      sendJson('POST', `/download_queue/${encodeURIComponent(id)}/stop`),
+      sendJson("POST", `/download_queue/${encodeURIComponent(id)}/stop`),
     // Optimistic: cancellation is cooperative (the download task has to notice the token and
     // clean up before server-side state actually flips), so waiting for a poll round-trip made the
     // button swap feel laggy. Flips `state` to `cancelled` in the cache synchronously on click; the
     // eventual real poll overwrites this with the server's matching value regardless. `cancelled`
     // is a real, persisted queue state, so this also survives a page refresh.
     onMutate: async (id: string) => {
-      await queryClient.cancelQueries({ queryKey: ['download-queue'] })
-      const previous = queryClient.getQueryData<DownloadQueueListResponse>(['download-queue'])
-      queryClient.setQueryData<DownloadQueueListResponse>(['download-queue'], (data) =>
+      await queryClient.cancelQueries({ queryKey: ["download-queue"] })
+      const previous = queryClient.getQueryData<DownloadQueueListResponse>(["download-queue"])
+      queryClient.setQueryData<DownloadQueueListResponse>(["download-queue"], (data) =>
         data
           ? {
               items: data.items.map((item) =>
-                item.id === id ? { ...item, state: 'cancelled' } : item,
+                item.id === id ? { ...item, state: "cancelled" } : item,
               ),
             }
           : data,
@@ -955,11 +955,11 @@ export function useStopQueueItem() {
       return { previous }
     },
     onError: (_err, _id, context) => {
-      if (context?.previous) queryClient.setQueryData(['download-queue'], context.previous)
+      if (context?.previous) queryClient.setQueryData(["download-queue"], context.previous)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
   })
 }
@@ -968,10 +968,10 @@ export function useOverwriteQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) =>
-      sendJson<{ archive_id: string }>('POST', `/download_queue/${encodeURIComponent(id)}/overwrite`),
+      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/overwrite`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
   })
 }
@@ -980,12 +980,12 @@ export function useRenameQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, filename }: { id: string; filename: string }) =>
-      sendJson<{ archive_id: string }>('POST', `/download_queue/${encodeURIComponent(id)}/rename`, {
+      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/rename`, {
         filename,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
   })
 }
@@ -993,10 +993,10 @@ export function useRenameQueueItem() {
 export function useStartSelectedQueue() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (ids: string[]) => sendJson('POST', '/download_queue/start_selected', { ids }),
+    mutationFn: (ids: string[]) => sendJson("POST", "/download_queue/start_selected", { ids }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['download-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
   })
 }
@@ -1004,8 +1004,8 @@ export function useStartSelectedQueue() {
 export function useClearCompletedQueue() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson<{ cleared: number }>('POST', '/download_queue/clear_completed'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+    mutationFn: () => sendJson<{ cleared: number }>("POST", "/download_queue/clear_completed"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -1013,7 +1013,7 @@ export function useDeleteSelectedQueue() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (ids: string[]) =>
-      sendJson<{ deleted: string[] }>('POST', '/download_queue/delete_selected', { ids }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['download-queue'] }),
+      sendJson<{ deleted: string[] }>("POST", "/download_queue/delete_selected", { ids }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }

@@ -1,10 +1,10 @@
-import type { MouseEvent } from 'react'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from "react"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import type { ArchiveMetadata } from '../../api/types'
-import { routes } from '../../routes'
-import { BookmarkIcon, isTankoubonId, TagLine } from './shared'
+import type { ArchiveMetadata } from "../../api/types"
+import { routes } from "../../routes"
+import { BookmarkIcon, isTankoubonId, TagLine } from "./shared"
 
 /** Read-crown/new/tankoubon status badges — ports `buildStatusDiv` exactly, including its
  * mutual-exclusion rule (an archive shows 🆕 XOR 👑, never both; a Tankoubon can show both plus
@@ -19,9 +19,9 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   if (!showNew && !showCrown && !isTank) return null
   return (
     <div className="isnew status-icons">
-      {showNew && <span title={t('New!') ?? undefined}>🆕</span>}
-      {showCrown && <span title={t('Read') ?? undefined}>👑</span>}
-      {isTank && <span title={t('Tankoubon') ?? undefined}>📚</span>}
+      {showNew && <span title={t("New!") ?? undefined}>🆕</span>}
+      {showCrown && <span title={t("Read") ?? undefined}>👑</span>}
+      {isTank && <span title={t("Tankoubon") ?? undefined}>📚</span>}
     </div>
   )
 }
@@ -36,7 +36,7 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   const isTank = isTankoubonId(archive.arcid) && archive.archive_count != null
   return (
     <div className="isnew">
-      <sup title={(isTank ? t('Tankoubon Page Count') : t('Page Count')) ?? undefined}>
+      <sup title={(isTank ? t("Tankoubon Page Count") : t("Page Count")) ?? undefined}>
         {isTank
           ? `${archive.progress}/${archive.pagecount}/${archive.archive_count}`
           : `${archive.progress}/${archive.pagecount}`}
@@ -89,7 +89,7 @@ export function ArchiveCard({
 
   return (
     <div
-      className={`id1${selected ? ' msm-selected' : ''}`}
+      className={`id1${selected ? " msm-selected" : ""}`}
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
     >
@@ -99,26 +99,26 @@ export function ArchiveCard({
           {archive.title}
         </a>
       </div>
-      <div className={cropThumbs ? 'id3' : 'id3 nocrop'} style={{ position: 'relative' }}>
+      <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
         {multiSelect && (
           <input
             type="checkbox"
             checked={selected}
             onChange={() => onToggleSelect(id)}
-            style={{ position: 'absolute', top: 6, left: 6, zIndex: 1, width: 20, height: 20 }}
+            style={{ position: "absolute", top: 6, left: 6, zIndex: 1, width: 20, height: 20 }}
           />
         )}
         <a href={routes.reader(id)} title={archive.title} onClick={handleOpen}>
           {!thumbLoaded && !thumbFailed && (
             <>
-              <img style={{ position: 'relative' }} src="/legacy/img/wait_warmly.jpg" alt="" />
+              <img style={{ position: "relative" }} src="/legacy/img/wait_warmly.jpg" alt="" />
               <i className="fa fa-4x fa-cog fa-spin ttspinner" aria-hidden="true"></i>
             </>
           )}
           <img
-            src={thumbFailed ? '/legacy/img/noThumb.png' : thumbSrc}
+            src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
-            style={thumbLoaded || thumbFailed ? undefined : { display: 'none' }}
+            style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
             onLoad={() => setThumbLoaded(true)}
             onError={() => setThumbFailed(true)}
           />

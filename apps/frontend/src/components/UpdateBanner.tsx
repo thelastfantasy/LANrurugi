@@ -1,8 +1,8 @@
-import { useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect } from "react"
+import { useTranslation } from "react-i18next"
 
-import { useServerInfo, useUpdateCheck } from '../api/hooks'
-import { toast } from '../toast'
+import { useServerInfo, useUpdateCheck } from "../api/hooks"
+import { toast } from "../toast"
 
 /** Fires legacy's own update-available toast (`~/LANraragi/public/js/mod/index.js::checkVersion`'s
  * `LRR.toast({ heading: I18N.IndexUpdateNotif(...), ... })`) once a newer release is detected —
@@ -17,11 +17,11 @@ export function UpdateBanner() {
   useEffect(() => {
     if (!check.data) return
     toast({
-      heading: t('A new version of LANrurugi ({{version}}) is available!', {
+      heading: t("A new version of LANrurugi ({{version}}) is available!", {
         version: check.data.latestVersion,
       }),
-      text: `<a href="${check.data.releaseUrl}" target="_blank" rel="noreferrer">${t('Click here to check it out.')}</a>`,
-      icon: 'info',
+      text: `<a href="${check.data.releaseUrl}" target="_blank" rel="noreferrer">${t("Click here to check it out.")}</a>`,
+      icon: "info",
       closeOnClick: false,
       draggable: false,
       hideAfter: 7000,

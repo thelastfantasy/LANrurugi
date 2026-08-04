@@ -1,8 +1,8 @@
-import { useQueryClient } from '@tanstack/react-query'
-import type { MouseEvent } from 'react'
-import { useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from "@tanstack/react-query"
+import type { MouseEvent } from "react"
+import { useEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
 import {
   useAddTocEntry,
@@ -16,20 +16,20 @@ import {
   useStampedPages,
   useStampedPagesForArchives,
   useUpdateTankoubon,
-} from '../../../api/hooks'
-import type { ArchiveMetadata, CategoryMetadata } from '../../../api/types'
-import { RatingWidget } from '../../../components/RatingWidget'
-import { Tooltip } from '../../../components/Tooltip'
-import { confirmDialog, newCategoryDialog, promptDialog } from '../../../dialog'
-import { displayTocName, isReservedTocIdentifier } from '../../../lib/tocValidation'
-import { routes } from '../../../routes'
-import { toast } from '../../../toast'
-import { isTankoubonId } from '../../Library/shared'
-import type { TankoubonChapter } from '../useTankoubonReading'
-import { PageGridCell } from './PageGridCell'
-import { PageLightbox } from './PageLightbox'
-import { ChapterActionMenu } from './shared'
-import { TagsTable } from './TagsTable'
+} from "../../../api/hooks"
+import type { ArchiveMetadata, CategoryMetadata } from "../../../api/types"
+import { RatingWidget } from "../../../components/RatingWidget"
+import { Tooltip } from "../../../components/Tooltip"
+import { confirmDialog, newCategoryDialog, promptDialog } from "../../../dialog"
+import { displayTocName, isReservedTocIdentifier } from "../../../lib/tocValidation"
+import { routes } from "../../../routes"
+import { toast } from "../../../toast"
+import { isTankoubonId } from "../../Library/shared"
+import type { TankoubonChapter } from "../useTankoubonReading"
+import { PageGridCell } from "./PageGridCell"
+import { PageLightbox } from "./PageLightbox"
+import { ChapterActionMenu } from "./shared"
+import { TagsTable } from "./TagsTable"
 
 // Mirrors legacy's `#archivePagesOverlay` (`updateArchiveOverlay`/`generateThumbnails` in
 // `~/LANraragi/public/js/reader.js`) — thumbnail (left) + Admin Options/Categories/Rating (right)
@@ -123,10 +123,10 @@ export function ArchiveOverviewOverlay({
     ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
     : undefined
 
-  const setThumbnail = useSetArchiveThumbnail(isTank ? '' : archive.arcid)
+  const setThumbnail = useSetArchiveThumbnail(isTank ? "" : archive.arcid)
   const setTankoubonThumbnail = useSetTankoubonThumbnail(archive.arcid)
-  const addTocEntry = useAddTocEntry(isTank ? '' : archive.arcid)
-  const removeTocEntry = useRemoveTocEntry(isTank ? '' : archive.arcid)
+  const addTocEntry = useAddTocEntry(isTank ? "" : archive.arcid)
+  const removeTocEntry = useRemoveTocEntry(isTank ? "" : archive.arcid)
   const addTocEntryForId = useAddTocEntryForId()
   const removeTocEntryForId = useRemoveTocEntryForId()
   const deleteTankoubon = useDeleteTankoubon()
@@ -159,9 +159,9 @@ export function ArchiveOverviewOverlay({
     mutation.mutate(page, {
       onSuccess: () => {
         setThumbnailVersion((v) => v + 1)
-        toast({ text: t('Successfully set page {{n}} as the thumbnail!', { n: page }) ?? undefined })
+        toast({ text: t("Successfully set page {{n}} as the thumbnail!", { n: page }) ?? undefined })
       },
-      onError: () => toast({ text: t('Error updating thumbnail') ?? undefined, icon: 'error' }),
+      onError: () => toast({ text: t("Error updating thumbnail") ?? undefined, icon: "error" }),
     })
   }
 
@@ -172,16 +172,16 @@ export function ArchiveOverviewOverlay({
   // identifier itself rather than real chapter text is almost certainly confused about what the
   // field expects, not intentionally naming a chapter "c1" — real display text like "目录"/"第 1
   // 章" is left completely unrestricted, matching legacy's own free-text ToC title storage.
-  async function promptTocTitle(defaultValue = ''): Promise<string | null> {
-    let message = t('Enter a title for this chapter/section:') ?? ''
+  async function promptTocTitle(defaultValue = ""): Promise<string | null> {
+    let message = t("Enter a title for this chapter/section:") ?? ""
     let value = defaultValue
     for (;;) {
       const input = await promptDialog(message, value)
       if (input === null) return null
       const trimmed = input.trim()
-      if (trimmed === '') return null
+      if (trimmed === "") return null
       if (isReservedTocIdentifier(trimmed)) {
-        message = t('"{{value}}" is a reserved identifier and can\'t be used as a chapter title. Enter a title for this chapter/section:', { value: trimmed }) ?? ''
+        message = t('"{{value}}" is a reserved identifier and can\'t be used as a chapter title. Enter a title for this chapter/section:', { value: trimmed }) ?? ""
         value = trimmed
         continue
       }
@@ -202,7 +202,7 @@ export function ArchiveOverviewOverlay({
     if (!title) return
     const target = resolve(page)
     if (!target) return
-    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    const onError = () => toast({ text: t("Error adding/removing chapter:") ?? undefined, icon: "error" })
     if (isTank) {
       addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
     } else {
@@ -219,7 +219,7 @@ export function ArchiveOverviewOverlay({
   function handleQuickAddToc(page: number, title: string) {
     const target = resolve(page)
     if (!target) return
-    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    const onError = () => toast({ text: t("Error adding/removing chapter:") ?? undefined, icon: "error" })
     if (isTank) {
       addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
     } else {
@@ -252,7 +252,7 @@ export function ArchiveOverviewOverlay({
     if (!title) return
     const target = resolve(entry.page)
     if (!target) return
-    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    const onError = () => toast({ text: t("Error adding/removing chapter:") ?? undefined, icon: "error" })
     if (isTank) {
       addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
     } else {
@@ -268,10 +268,10 @@ export function ArchiveOverviewOverlay({
   // delete button now opens `ChapterActionMenu` listing every chapter in the archive, so deleting one
   // that isn't the currently-viewed one doesn't require first scrolling/navigating to it.
   async function handleRemoveToc(entry: { page: number; name: string }) {
-    if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? ''))) return
+    if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? ""))) return
     const target = resolve(entry.page)
     if (!target) return
-    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    const onError = () => toast({ text: t("Error adding/removing chapter:") ?? undefined, icon: "error" })
     if (isTank) {
       removeTocEntryForId.mutate({ id: target.arcId, page: target.localPage }, { onError })
     } else {
@@ -280,8 +280,8 @@ export function ArchiveOverviewOverlay({
   }
 
   async function addToCategory(categoryId: string) {
-    await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: 'PUT' })
-    await queryClient.invalidateQueries({ queryKey: ['categories'] })
+    await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: "PUT" })
+    await queryClient.invalidateQueries({ queryKey: ["categories"] })
   }
 
   async function handleNewCategory() {
@@ -291,13 +291,13 @@ export function ArchiveOverviewOverlay({
       const data = await createCategory.mutateAsync(result)
       if (!result.isDynamic) await addToCategory(data.category_id)
     } catch {
-      toast({ heading: t('Error modifying category') ?? undefined, icon: 'error' })
+      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
     }
   }
 
   async function removeFromCategory(categoryId: string) {
-    await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: 'DELETE' })
-    await queryClient.invalidateQueries({ queryKey: ['categories'] })
+    await fetch(`/api/categories/${categoryId}/${archive.arcid}`, { method: "DELETE" })
+    await queryClient.invalidateQueries({ queryKey: ["categories"] })
   }
 
   // Deleting a Tankoubon removes the grouping record itself, not any of its member archives'
@@ -314,8 +314,8 @@ export function ArchiveOverviewOverlay({
       if (
         !(await confirmDialog(
           t(
-            'Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.',
-          ) ?? '',
+            "Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.",
+          ) ?? "",
         ))
       ) {
         return
@@ -326,12 +326,12 @@ export function ArchiveOverviewOverlay({
     }
     if (
       !(await confirmDialog(
-        t('This will delete both metadata and matching files from your system! Please use with caution.') ?? '',
+        t("This will delete both metadata and matching files from your system! Please use with caution.") ?? "",
       ))
     ) {
       return
     }
-    await fetch(`/api/archives/${archive.arcid}`, { method: 'DELETE' })
+    await fetch(`/api/archives/${archive.arcid}`, { method: "DELETE" })
     navigate(routes.library())
   }
 
@@ -354,7 +354,7 @@ export function ArchiveOverviewOverlay({
     const startTimer = setTimeout(() => {
       const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
       if (!cell) return
-      cell.scrollIntoView({ block: 'center' })
+      cell.scrollIntoView({ block: "center" })
       setHighlightedPage(currentPage)
     }, 0)
     const clearTimer = setTimeout(() => setHighlightedPage(null), 3000)
@@ -375,10 +375,10 @@ export function ArchiveOverviewOverlay({
           needs the same explicit override or clicking it (or even seeing it) does nothing. */}
       {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
           opaque black, so content behind the shade stays faintly visible. */}
-      <div id="overlay-shade" style={{ display: 'block', opacity: 0.6 }} onClick={onClose} />
+      <div id="overlay-shade" style={{ display: "block", opacity: 0.6 }} onClick={onClose} />
       <div id="archivePagesOverlay" className="id1 base-overlay page-overlay">
-        <h2 className="ih" style={{ textAlign: 'center' }}>
-          {t('Archive Overview')}
+        <h2 className="ih" style={{ textAlign: "center" }}>
+          {t("Archive Overview")}
         </h2>
 
         <div id="tagContainer" className="caption caption-tags caption-reader">
@@ -398,31 +398,31 @@ export function ArchiveOverviewOverlay({
             <div className="id3 nocrop reader-thumbnail" style={{ maxWidth: 200 }}>
               <img
                 alt=""
-                src={`${isTank ? `/api/tankoubons/${archive.arcid}/thumbnail` : `/api/archives/${archive.arcid}/thumbnail`}${thumbnailVersion > 0 ? `?v=${thumbnailVersion}` : ''}`}
-                style={{ maxWidth: '100%' }}
+                src={`${isTank ? `/api/tankoubons/${archive.arcid}/thumbnail` : `/api/archives/${archive.arcid}/thumbnail`}${thumbnailVersion > 0 ? `?v=${thumbnailVersion}` : ""}`}
+                style={{ maxWidth: "100%" }}
               />
             </div>
 
             {loggedIn && (
-              <div style={{ display: 'inline-block', verticalAlign: 'middle' }}>
-                <h2>{t('Admin Options')}</h2>
+              <div style={{ display: "inline-block", verticalAlign: "middle" }}>
+                <h2>{t("Admin Options")}</h2>
 
                 <input
                   className="stdbtn"
                   type="button"
-                  value={(isTank ? t('Edit Tankoubon') : t('Edit Archive Metadata')) ?? undefined}
+                  value={(isTank ? t("Edit Tankoubon") : t("Edit Archive Metadata")) ?? undefined}
                   onClick={() => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))}
                 />
                 <input
                   className="stdbtn"
                   type="button"
-                  value={(isTank ? t('Delete Tankoubon') : t('Delete Archive')) ?? undefined}
+                  value={(isTank ? t("Delete Tankoubon") : t("Delete Archive")) ?? undefined}
                   onClick={() => void deleteArchive()}
                 />
                 <br />
 
-                <h2>{t('Categories')}</h2>
-                <div style={{ display: 'inline-block' }}>
+                <h2>{t("Categories")}</h2>
+                <div style={{ display: "inline-block" }}>
                   {archiveCategories.map((c) => (
                     <div key={c.id} className="gt" style={{ fontSize: 14, padding: 4 }}>
                       <span className="label">{c.name}</span>
@@ -441,7 +441,7 @@ export function ArchiveOverviewOverlay({
                 </div>
 
                 <br />
-                <span>{t('Add to : ')}</span>
+                <span>{t("Add to : ")}</span>
                 <select
                   id="category"
                   className="favtag-btn"
@@ -451,14 +451,14 @@ export function ArchiveOverviewOverlay({
                     if (e.target.value) void addToCategory(e.target.value)
                   }}
                 >
-                  <option value="">{t(' -- No Category -- ')}</option>
+                  <option value="">{t(" -- No Category -- ")}</option>
                   {staticCategories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
                 </select>
-                <Tooltip label={t('New Category') ?? undefined}>
+                <Tooltip label={t("New Category") ?? undefined}>
                   <a
                     href="#"
                     style={{ marginLeft: 6 }}
@@ -471,7 +471,7 @@ export function ArchiveOverviewOverlay({
                   </a>
                 </Tooltip>
 
-                <h2>{t('Rating')}</h2>
+                <h2>{t("Rating")}</h2>
                 <RatingWidget
                   archiveId={archive.arcid}
                   tags={archive.tags}
@@ -496,11 +496,11 @@ export function ArchiveOverviewOverlay({
           <div className="overlay-bar-left">
             {stampedPageSet.size > 0 && (
               <a
-                className={`fas fa-stamp${filterStamped ? ' toggled' : ''}`}
+                className={`fas fa-stamp${filterStamped ? " toggled" : ""}`}
                 id="filter-stamped"
                 href="#"
                 style={{ padding: 8, fontSize: 14 }}
-                title={t('Filter stamped pages') ?? undefined}
+                title={t("Filter stamped pages") ?? undefined}
                 onClick={(e) => {
                   e.preventDefault()
                   setFilterStamped((v) => !v)
@@ -508,7 +508,7 @@ export function ArchiveOverviewOverlay({
               />
             )}
           </div>
-          <h2 className="ih">{chapters ? t('Chapters') : t('Pages')}</h2>
+          <h2 className="ih">{chapters ? t("Chapters") : t("Pages")}</h2>
           <div className="chapter-selector">
             {chapters && (
               <select
@@ -538,8 +538,8 @@ export function ArchiveOverviewOverlay({
                 <a
                   className="fas fa-pencil-alt edit-toc"
                   href="#"
-                  style={{ padding: 8, fontSize: 14, position: 'relative', top: 6 }}
-                  title={t('Edit Chapter name') ?? undefined}
+                  style={{ padding: 8, fontSize: 14, position: "relative", top: 6 }}
+                  title={t("Edit Chapter name") ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
                     setEditTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -557,8 +557,8 @@ export function ArchiveOverviewOverlay({
                 <a
                   className="fas fa-trash-alt remove-toc"
                   href="#"
-                  style={{ padding: 8, fontSize: 14, position: 'relative', top: 6 }}
-                  title={t('Delete Chapter') ?? undefined}
+                  style={{ padding: 8, fontSize: 14, position: "relative", top: 6 }}
+                  title={t("Delete Chapter") ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
                     setRemoveTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -578,7 +578,7 @@ export function ArchiveOverviewOverlay({
           </div>
         </div>
 
-        <div id="pages-section" style={{ textAlign: 'center' }}>
+        <div id="pages-section" style={{ textAlign: "center" }}>
           {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => {
             const isStamped = stampedPageSet.has(String(page))
             if (filterStamped && !isStamped) return null

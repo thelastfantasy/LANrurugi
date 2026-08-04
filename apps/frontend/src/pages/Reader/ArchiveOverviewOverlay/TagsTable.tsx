@@ -1,7 +1,7 @@
-import { useSettings } from '../../../api/hooks'
-import { StarRatingDisplay } from '../../../components/StarRating'
-import { parseRating } from '../../../lib/rating'
-import { displayNamespace, formatTagValue, getTagSearchURL } from '../../../lib/tagFormat'
+import { useSettings } from "../../../api/hooks"
+import { StarRatingDisplay } from "../../../components/StarRating"
+import { parseRating } from "../../../lib/rating"
+import { displayNamespace, formatTagValue, getTagSearchURL } from "../../../lib/tagFormat"
 
 /** Mirrors legacy's `splitTagsByNamespace` + `buildTagsDiv` (`~/LANraragi/public/js/mod/common.js`)
  * — groups a flat comma-separated tag string by its `namespace:value` prefix (untagged values fall
@@ -25,14 +25,14 @@ export function TagsTable({ tags }: { tags: string }) {
   // (see `lib/tagFormat.ts`'s `formatTimestampForDisplay`/`getTagSearchURL`). Falls back to the
   // browser's local timezone if settings haven't loaded yet, matching the pre-feature behavior.
   const settings = useSettings()
-  const timezone = settings.data?.timezone ?? ''
+  const timezone = settings.data?.timezone ?? ""
   if (!tags) return null
   const byNamespace = new Map<string, string[]>()
-  for (const raw of tags.split(',')) {
+  for (const raw of tags.split(",")) {
     const tag = raw.trim()
     if (!tag) continue
-    const idx = tag.indexOf(':')
-    const namespace = idx === -1 ? 'other' : tag.slice(0, idx).trim()
+    const idx = tag.indexOf(":")
+    const namespace = idx === -1 ? "other" : tag.slice(0, idx).trim()
     const value = idx === -1 ? tag : tag.slice(idx + 1).trim()
     const list = byNamespace.get(namespace) ?? []
     list.push(value)
@@ -43,7 +43,7 @@ export function TagsTable({ tags }: { tags: string }) {
   if (namespaces.length === 0) return null
 
   return (
-    <table className="itg" style={{ boxShadow: 'none', border: 'none', borderRadius: 0 }}>
+    <table className="itg" style={{ boxShadow: "none", border: "none", borderRadius: 0 }}>
       <tbody>
         {namespaces.map((namespace) => (
           <tr key={namespace}>
@@ -51,12 +51,12 @@ export function TagsTable({ tags }: { tags: string }) {
               {displayNamespace(namespace)}:
             </td>
             <td>
-              {namespace.toLowerCase() === 'rating' ? (
+              {namespace.toLowerCase() === "rating" ? (
                 <div className="gt">
                   <a
-                    href={getTagSearchURL(namespace, (byNamespace.get(namespace) ?? [])[0] ?? '')}
+                    href={getTagSearchURL(namespace, (byNamespace.get(namespace) ?? [])[0] ?? "")}
                     onClick={(e) => e.stopPropagation()}
-                    style={{ textDecoration: 'none' }}
+                    style={{ textDecoration: "none" }}
                   >
                     <StarRatingDisplay rating={parseRating((byNamespace.get(namespace) ?? [])[0]) ?? 0} size={16} />
                   </a>
@@ -69,7 +69,7 @@ export function TagsTable({ tags }: { tags: string }) {
                         `TagTable.tsx`'s own real `source` branch (this table predates that shared
                         component and never got the same split when it landed there; this was a
                         real, independently-discovered bug, not a copy of an already-fixed one). */}
-                    {namespace === 'source' ? (
+                    {namespace === "source" ? (
                       <a
                         href={getTagSearchURL(namespace, value, timezone)}
                         target="_blank"

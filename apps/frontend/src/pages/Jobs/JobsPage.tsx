@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
-import { useClearFinishedJobs, useClearJobs, useJobs } from '../../api/hooks'
-import type { JobRecord, JobRecordState } from '../../api/types'
-import { STATE_COLOR } from '../../components/JobProgress'
-import { routes } from '../../routes'
-import { FONT_SIZE_10PT, useApplyTheme } from '../../theme'
-import { useDocumentTitle } from '../../useDocumentTitle'
-import { FilterChip } from './FilterChip'
-import { isTerminal, JobRow, STATE_LABEL_KEYS } from './JobRow'
+import { useClearFinishedJobs, useClearJobs, useJobs } from "../../api/hooks"
+import type { JobRecord, JobRecordState } from "../../api/types"
+import { STATE_COLOR } from "../../components/JobProgress"
+import { routes } from "../../routes"
+import { FONT_SIZE_10PT, useApplyTheme } from "../../theme"
+import { useDocumentTitle } from "../../useDocumentTitle"
+import { FilterChip } from "./FilterChip"
+import { isTerminal, JobRow, STATE_LABEL_KEYS } from "./JobRow"
 
 // Background Job Console (specs/002-job-console). Surfaces the existing in-process
 // `lanrurugi_core::jobs::JobRegistry` as a browsable admin UI: list every tracked job with live
@@ -27,7 +27,7 @@ const PAGE_SIZES = [10, 20, 50, 100]
 const DEFAULT_PAGE_SIZE = 50
 
 /** Render order for states in the stat bar + filter. */
-const STATE_ORDER: JobRecordState[] = ['active', 'queued', 'finished', 'failed']
+const STATE_ORDER: JobRecordState[] = ["active", "queued", "finished", "failed"]
 
 export function Jobs() {
   const { t } = useTranslation()
@@ -36,7 +36,7 @@ export function Jobs() {
   const clearJobs = useClearJobs()
   const clearFinished = useClearFinishedJobs()
   useApplyTheme()
-  useDocumentTitle(t('Background Jobs') ?? undefined)
+  useDocumentTitle(t("Background Jobs") ?? undefined)
 
   // Stabilize the array identity so the derived `useMemo`s below don't recompute every render when
   // `jobs.data` is referentially unchanged.
@@ -50,18 +50,18 @@ export function Jobs() {
     return c
   }, [all])
 
-  const [stateFilter, setStateFilter] = useState<JobRecordState | 'all'>('all')
-  const [search, setSearch] = useState('')
+  const [stateFilter, setStateFilter] = useState<JobRecordState | "all">("all")
+  const [search, setSearch] = useState("")
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState("")
 
   // US4 (T021/T022): state + name filters applied to the rendered list.
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase()
     return all.filter((job) => {
-      if (stateFilter !== 'all' && job.state !== stateFilter) return false
+      if (stateFilter !== "all" && job.state !== stateFilter) return false
       if (needle && !job.name.toLowerCase().includes(needle)) return false
       return true
     })
@@ -125,15 +125,15 @@ export function Jobs() {
     const { succeeded, failed } = await clearJobs.mutateAsync(ids)
     setSelected(new Set())
     setStatus(
-      t('Removed {{n}} jobs.', { n: succeeded }) +
-        (failed > 0 ? ' ' + t('{{n}} could not be removed.', { n: failed }) : ''),
+      t("Removed {{n}} jobs.", { n: succeeded }) +
+        (failed > 0 ? " " + t("{{n}} could not be removed.", { n: failed }) : ""),
     )
   }
 
   async function handleClearFinished() {
     const result = await clearFinished.mutateAsync()
     setSelected(new Set())
-    setStatus(t('Cleared {{n}} finished jobs.', { n: result.cleared }) ?? '')
+    setStatus(t("Cleared {{n}} finished jobs.", { n: result.cleared }) ?? "")
   }
 
   const isEmpty = !jobs.isLoading && all.length === 0
@@ -141,19 +141,19 @@ export function Jobs() {
 
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12 }}>
-      <h1 className="ih">{t('Background Jobs')}</h1>
+      <h1 className="ih">{t("Background Jobs")}</h1>
       <p style={{ fontSize: FONT_SIZE_10PT }}>
-        {t('The background job console shows currently running and recently concluded tasks.')}
+        {t("The background job console shows currently running and recently concluded tasks.")}
       </p>
 
       {/* US4 stat bar (T020) — each count is a clickable state filter (T021). */}
-      <div className="control-btn-group" style={{ flexWrap: 'wrap', gap: 4 }}>
+      <div className="control-btn-group" style={{ flexWrap: "wrap", gap: 4 }}>
         <FilterChip
-          active={stateFilter === 'all'}
-          label={t('All') ?? ''}
+          active={stateFilter === "all"}
+          label={t("All") ?? ""}
           count={all.length}
           onClick={() => {
-            setStateFilter('all')
+            setStateFilter("all")
             setPage(0)
           }}
         />
@@ -161,7 +161,7 @@ export function Jobs() {
           <FilterChip
             key={state}
             active={stateFilter === state}
-            label={t(STATE_LABEL_KEYS[state]) ?? ''}
+            label={t(STATE_LABEL_KEYS[state]) ?? ""}
             count={counts[state]}
             color={STATE_COLOR[state]}
             onClick={() => {
@@ -172,12 +172,12 @@ export function Jobs() {
         ))}
       </div>
 
-      <div className="control-btn-group" style={{ marginTop: 8, alignItems: 'center' }}>
+      <div className="control-btn-group" style={{ marginTop: 8, alignItems: "center" }}>
         <input
           className="stdinput"
           type="text"
           style={{ flexGrow: 1, minWidth: 160 }}
-          placeholder={t('Search by name…') ?? ''}
+          placeholder={t("Search by name…") ?? ""}
           value={search}
           onChange={(e) => {
             setSearch(e.target.value)
@@ -194,8 +194,8 @@ export function Jobs() {
           onClick={() => void handleRemoveSelected()}
         >
           {removing
-            ? t('Removing…')
-            : t('Remove selected ({{n}})', { n: liveSelected.size })}
+            ? t("Removing…")
+            : t("Remove selected ({{n}})", { n: liveSelected.size })}
         </button>
         {/* Unscoped nuclear option (research.md §5 / FR-004): always every finished+failed job
             server-side, regardless of the active filter or selection. */}
@@ -205,13 +205,13 @@ export function Jobs() {
           disabled={clearFinished.isPending}
           onClick={() => void handleClearFinished()}
         >
-          {clearFinished.isPending ? t('Clearing…') : t('Clear all finished')}
+          {clearFinished.isPending ? t("Clearing…") : t("Clear all finished")}
         </button>
         <input
           type="button"
           id="return"
           className="stdbtn"
-          value={t('Return to Library') ?? undefined}
+          value={t("Return to Library") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -226,12 +226,12 @@ export function Jobs() {
 
       {/* FR-007: explicit empty state, not a blank page or error. */}
       {isEmpty && (
-        <div id="nojobs" style={{ textAlign: 'center', margin: '24px 0' }}>
+        <div id="nojobs" style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-inbox"></i>
-          <p>{t('No background jobs yet.')}</p>
+          <p>{t("No background jobs yet.")}</p>
           <p style={{ fontSize: FONT_SIZE_10PT }}>
             {t(
-              'Jobs will appear here as you trigger thumbnail regeneration, backups, restores, duplicate scans, and other background work.',
+              "Jobs will appear here as you trigger thumbnail regeneration, backups, restores, duplicate scans, and other background work.",
             )}
           </p>
         </div>
@@ -240,9 +240,9 @@ export function Jobs() {
       {/* Filter/search yielded nothing (but jobs exist) — a targeted hint, distinct from the
           fresh-server empty state above (FR-007 covers all-empty; this covers all>0 && none match). */}
       {all.length > 0 && filtered.length === 0 && (
-        <div style={{ textAlign: 'center', margin: '24px 0' }}>
+        <div style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-search"></i>
-          <p>{t('No jobs match the current filter.')}</p>
+          <p>{t("No jobs match the current filter.")}</p>
         </div>
       )}
 
@@ -251,22 +251,22 @@ export function Jobs() {
           {/* `overflow-x: auto` wrapper is the bulletproof guard against any column content (long
               unbreakable job names, the progress bar) ever escaping the `.ido` container — the
               original per-row `.stdbtn` column overflowed without it. */}
-          <div style={{ overflowX: 'auto', marginTop: 16 }}>
-            <table className="itg" style={{ width: '100%', minWidth: 560 }}>
+          <div style={{ overflowX: "auto", marginTop: 16 }}>
+            <table className="itg" style={{ width: "100%", minWidth: 560 }}>
               <thead>
                 <tr>
-                  <th style={{ width: 32, textAlign: 'center' }}>
+                  <th style={{ width: 32, textAlign: "center" }}>
                     <input
                       ref={selectAllRef}
                       type="checkbox"
-                      aria-label={t('Select all') ?? undefined}
+                      aria-label={t("Select all") ?? undefined}
                       checked={allPageSelected}
                       onChange={toggleAll}
                     />
                   </th>
-                  <th style={{ textAlign: 'left' }}>{t('Name')}</th>
-                  <th style={{ width: 100, textAlign: 'center' }}>{t('State')}</th>
-                  <th style={{ width: 180, textAlign: 'center' }}>{t('Progress')}</th>
+                  <th style={{ textAlign: "left" }}>{t("Name")}</th>
+                  <th style={{ width: 100, textAlign: "center" }}>{t("State")}</th>
+                  <th style={{ width: 180, textAlign: "center" }}>{t("Progress")}</th>
                   <th style={{ width: 28 }}></th>
                 </tr>
               </thead>
@@ -286,7 +286,7 @@ export function Jobs() {
           {/* US4 pagination (T023). */}
           <div
             className="control-btn-group"
-            style={{ marginTop: 8, justifyContent: 'center', alignItems: 'center' }}
+            style={{ marginTop: 8, justifyContent: "center", alignItems: "center" }}
           >
             <button
               type="button"
@@ -294,10 +294,10 @@ export function Jobs() {
               disabled={safePage === 0}
               onClick={() => setPage(safePage - 1)}
             >
-              {t('Previous')}
+              {t("Previous")}
             </button>
             <span style={{ fontSize: FONT_SIZE_10PT }}>
-              {t('Page {{n}} of {{total}}', { n: safePage + 1, total: pageCount })}
+              {t("Page {{n}} of {{total}}", { n: safePage + 1, total: pageCount })}
             </span>
             <button
               type="button"
@@ -305,13 +305,13 @@ export function Jobs() {
               disabled={safePage >= pageCount - 1}
               onClick={() => setPage(safePage + 1)}
             >
-              {t('Next')}
+              {t("Next")}
             </button>
             <label style={{ fontSize: FONT_SIZE_10PT }}>
-              {t('per page')}
+              {t("per page")}
               <select
                 className="stdinput"
-                style={{ marginLeft: 6, width: 'auto' }}
+                style={{ marginLeft: 6, width: "auto" }}
                 value={pageSize}
                 onChange={(e) => {
                   setPageSize(Number(e.target.value))

@@ -1,6 +1,6 @@
-import { Highlight, themes } from 'prism-react-renderer'
+import { Highlight, themes } from "prism-react-renderer"
 
-import { FONT_SIZE_10PT } from '../theme'
+import { FONT_SIZE_10PT } from "../theme"
 
 /** Syntax-highlighted code block for the job detail view (finished jobs' JSON `result`).
  *
@@ -11,7 +11,7 @@ import { FONT_SIZE_10PT } from '../theme'
  * overkill for tiny job-result payloads). */
 export function CodeBlock({
   code,
-  language = 'json',
+  language = "json",
 }: {
   code: string
   language?: string
@@ -24,12 +24,12 @@ export function CodeBlock({
           style={{
             ...style,
             margin: 0,
-            padding: '8px 12px',
+            padding: "8px 12px",
             fontSize: FONT_SIZE_10PT,
             lineHeight: 1.4,
-            overflow: 'auto',
+            overflow: "auto",
             borderRadius: 4,
-            maxWidth: '100%',
+            maxWidth: "100%",
           }}
         >
           {tokens.map((line, i) => (

@@ -1,10 +1,10 @@
-import { useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect } from "react"
+import { useTranslation } from "react-i18next"
 
-import { ensureLink, FONT_SIZE_8PT, FONT_SIZE_9PT, removeLink } from '../../theme'
-import type { FitMode, ReaderSettings } from './useReaderSettings'
+import { ensureLink, FONT_SIZE_8PT, FONT_SIZE_9PT, removeLink } from "../../theme"
+import type { FitMode, ReaderSettings } from "./useReaderSettings"
 
-const CONFIG_CSS_ID = 'reader-config-css'
+const CONFIG_CSS_ID = "reader-config-css"
 
 /** One labeled group of controls (a button row, or an input + Apply button) — a from-scratch
  * flex layout replacing legacy's own `.config-panel` (`float: left; width: 90%`), which put every
@@ -23,10 +23,10 @@ function SettingSection({
   children: React.ReactNode
 }) {
   return (
-    <div style={{ textAlign: 'left', marginBottom: 20 }}>
-      <h2 style={{ margin: '0 0 4px', fontSize: FONT_SIZE_9PT, fontWeight: 'bold' }}>{title}</h2>
+    <div style={{ textAlign: "left", marginBottom: 20 }}>
+      <h2 style={{ margin: "0 0 4px", fontSize: FONT_SIZE_9PT, fontWeight: "bold" }}>{title}</h2>
       {description && <div style={{ fontSize: FONT_SIZE_8PT, opacity: 0.6, marginBottom: 6 }}>{description}</div>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>{children}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>{children}</div>
     </div>
   )
 }
@@ -56,7 +56,7 @@ export function SettingsOverlay({
   const { t } = useTranslation()
 
   useEffect(() => {
-    ensureLink(CONFIG_CSS_ID, '/legacy/config.css')
+    ensureLink(CONFIG_CSS_ID, "/legacy/config.css")
     return () => removeLink(CONFIG_CSS_ID)
   }, [])
 
@@ -66,7 +66,7 @@ export function SettingsOverlay({
   // (`~/LANraragi/public/themes/*.css`'s `.toggled` rule), not an ad-hoc inline style. No longer
   // stacked with `config-btn` (see `CONTROL_HEIGHT`'s own docs above).
   function btnClass(active: boolean) {
-    return `favtag-btn${active ? ' toggled' : ''}`
+    return `favtag-btn${active ? " toggled" : ""}`
   }
 
   return (
@@ -75,7 +75,7 @@ export function SettingsOverlay({
           `ArchiveOverviewOverlay`'s copy of this element. */}
       {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
           opaque black, so content behind the shade stays faintly visible. */}
-      <div id="overlay-shade" style={{ display: 'block', opacity: 0.6 }} onClick={onClose} />
+      <div id="overlay-shade" style={{ display: "block", opacity: 0.6 }} onClick={onClose} />
       {/* No longer `small-overlay` — that class's real theme CSS (`width: 35% !important`, `left:
           32.5%` to match) isn't actually responsive: `width` on an `inline-block` (`.id1`'s own
           `display`) still yields to its content's real `min-content` size when 35% of a narrow
@@ -94,13 +94,13 @@ export function SettingsOverlay({
         id="settingsOverlay"
         className="id1 base-overlay"
         style={{
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 'min(90vw, 480px)',
-          maxHeight: '90vh',
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: "min(90vw, 480px)",
+          maxHeight: "90vh",
         }}
       >
         {/* `width: '100%'` — this flex child wasn't actually being stretched to the parent's full
@@ -108,25 +108,25 @@ export function SettingsOverlay({
             verified live via `getBoundingClientRect`: it sat 87px short of the rounded outer
             box's own right edge, so the scrollbar (which tracks *this* element's own box, not the
             outer one) rendered nowhere near the actual rounded corner it needs to stay clear of. */}
-        <div style={{ width: '100%', boxSizing: 'border-box', overflowY: 'auto', padding: '0 16px' }}>
-          <h2 style={{ textAlign: 'center' }}>{t('Reader Options')}</h2>
-          <h1 style={{ textAlign: 'center', fontSize: FONT_SIZE_9PT, marginBottom: 16 }}>
-            {t('Those options save automatically -- Click around and find out!')}
+        <div style={{ width: "100%", boxSizing: "border-box", overflowY: "auto", padding: "0 16px" }}>
+          <h2 style={{ textAlign: "center" }}>{t("Reader Options")}</h2>
+          <h1 style={{ textAlign: "center", fontSize: FONT_SIZE_9PT, marginBottom: 16 }}>
+            {t("Those options save automatically -- Click around and find out!")}
           </h1>
 
-          <SettingSection title={t('Fit display to') ?? ''}>
+          <SettingSection title={t("Fit display to") ?? ""}>
             {(
               [
-                ['container', t('Container')],
-                ['fit-width', t('Width')],
-                ['fit-height', t('Height')],
+                ["container", t("Container")],
+                ["fit-width", t("Width")],
+                ["fit-height", t("Height")],
               ] as [FitMode, string][]
             ).map(([mode, label]) => (
               <input
                 key={mode}
                 className={btnClass(settings.fitMode === mode)}
                 type="button"
-                style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
+                style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
                 value={label}
                 onClick={() => update({ fitMode: mode })}
               />
@@ -138,10 +138,10 @@ export function SettingsOverlay({
               (`isFitContainerMode`/`notInfiniteScroll` `computed()` signals, verified via
               `git show` against `Difegue/LANraragi@a373e339`, the current tip for that file) —
               this component previously rendered all of them unconditionally. */}
-          {settings.fitMode === 'container' && (
+          {settings.fitMode === "container" && (
             <SettingSection
-              title={t('Container Width (in pixels or percentage)') ?? ''}
-              description={t('The default value is 1200px, or 90% in Double Page Mode.') ?? undefined}
+              title={t("Container Width (in pixels or percentage)") ?? ""}
+              description={t("The default value is 1200px, or 90% in Double Page Mode.") ?? undefined}
             >
               {/* A short `placeholder` (not the full sentence removed from here — that's the
                   `description` above now, since it didn't fit this field's narrower width) so an
@@ -150,18 +150,18 @@ export function SettingsOverlay({
               <input
                 id="container-width-input"
                 className="stdinput"
-                style={{ width: '8em', height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
+                style={{ width: "8em", height: CONTROL_HEIGHT, boxSizing: "border-box" }}
                 placeholder="1200px"
                 defaultValue={settings.containerWidth}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') update({ containerWidth: e.currentTarget.value })
+                  if (e.key === "Enter") update({ containerWidth: e.currentTarget.value })
                 }}
               />
               <input
                 className="favtag-btn"
                 type="button"
-                style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                value={t('Apply') ?? undefined}
+                style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                value={t("Apply") ?? undefined}
                 onClick={(e) => {
                   const input = e.currentTarget.previousElementSibling as HTMLInputElement
                   update({ containerWidth: input.value })
@@ -172,59 +172,59 @@ export function SettingsOverlay({
 
           {!settings.infiniteScroll && (
             <>
-              <SettingSection title={t('Page Rendering') ?? ''}>
+              <SettingSection title={t("Page Rendering") ?? ""}>
                 <input
                   className={btnClass(!settings.doublePageMode)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Single') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Single") ?? undefined}
                   onClick={() => update({ doublePageMode: false })}
                 />
                 <input
                   className={btnClass(settings.doublePageMode)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Double') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Double") ?? undefined}
                   onClick={() => update({ doublePageMode: true })}
                 />
               </SettingSection>
 
-              <SettingSection title={t('Reading Direction') ?? ''}>
+              <SettingSection title={t("Reading Direction") ?? ""}>
                 <input
                   className={btnClass(!settings.mangaMode)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Left to Right') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Left to Right") ?? undefined}
                   onClick={() => update({ mangaMode: false })}
                 />
                 <input
                   className={btnClass(settings.mangaMode)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Right to Left') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Right to Left") ?? undefined}
                   onClick={() => update({ mangaMode: true })}
                 />
               </SettingSection>
 
               <SettingSection
-                title={t('How many images to preload') ?? ''}
-                description={t('The default is two images.') ?? undefined}
+                title={t("How many images to preload") ?? ""}
+                description={t("The default is two images.") ?? undefined}
               >
                 <input
                   id="preload-input"
                   className="stdinput"
-                  style={{ width: '4em', height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
+                  style={{ width: "4em", height: CONTROL_HEIGHT, boxSizing: "border-box" }}
                   type="number"
                   defaultValue={settings.preloadCount}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') update({ preloadCount: Number(e.currentTarget.value) || 2 })
+                    if (e.key === "Enter") update({ preloadCount: Number(e.currentTarget.value) || 2 })
                   }}
                 />
                 <input
                   className="favtag-btn"
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Apply') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Apply") ?? undefined}
                   onClick={(e) => {
                     const input = e.currentTarget.previousElementSibling as HTMLInputElement
                     update({ preloadCount: Number(input.value) || 2 })
@@ -232,19 +232,19 @@ export function SettingsOverlay({
                 />
               </SettingSection>
 
-              <SettingSection title={t('Header') ?? ''}>
+              <SettingSection title={t("Header") ?? ""}>
                 <input
                   className={btnClass(!settings.hideHeader)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Visible') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Visible") ?? undefined}
                   onClick={() => update({ hideHeader: false })}
                 />
                 <input
                   className={btnClass(settings.hideHeader)}
                   type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-                  value={t('Hidden') ?? undefined}
+                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                  value={t("Hidden") ?? undefined}
                   onClick={() => update({ hideHeader: true })}
                 />
               </SettingSection>
@@ -252,76 +252,76 @@ export function SettingsOverlay({
           )}
 
           <SettingSection
-            title={t('Show Archive Overlay by default') ?? ''}
-            description={t('This will show the overlay with thumbnails every time you open a new Reader page.') ?? undefined}
+            title={t("Show Archive Overlay by default") ?? ""}
+            description={t("This will show the overlay with thumbnails every time you open a new Reader page.") ?? undefined}
           >
             <input
               className={btnClass(settings.showOverlayByDefault)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Enabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Enabled") ?? undefined}
               onClick={() => update({ showOverlayByDefault: true })}
             />
             <input
               className={btnClass(!settings.showOverlayByDefault)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Disabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Disabled") ?? undefined}
               onClick={() => update({ showOverlayByDefault: false })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t('Progression Tracking') ?? ''}
-            description={t('Disabling tracking will restart reading from page one every time you reopen the reader.') ?? undefined}
+            title={t("Progression Tracking") ?? ""}
+            description={t("Disabling tracking will restart reading from page one every time you reopen the reader.") ?? undefined}
           >
             <input
               className={btnClass(!settings.ignoreProgress)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Enabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Enabled") ?? undefined}
               onClick={() => update({ ignoreProgress: false })}
             />
             <input
               className={btnClass(settings.ignoreProgress)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Disabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Disabled") ?? undefined}
               onClick={() => update({ ignoreProgress: true })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t('Infinite Scrolling') ?? ''}
-            description={t('Display all images in a vertical view in the same page.') ?? undefined}
+            title={t("Infinite Scrolling") ?? ""}
+            description={t("Display all images in a vertical view in the same page.") ?? undefined}
           >
             <input
               className={btnClass(settings.infiniteScroll)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Enabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Enabled") ?? undefined}
               onClick={() => update({ infiniteScroll: true })}
             />
             <input
               className={btnClass(!settings.infiniteScroll)}
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Disabled') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Disabled") ?? undefined}
               onClick={() => update({ infiniteScroll: false })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t('Auto next page interval in seconds') ?? ''}
-            description={t('The default is 10 seconds.') ?? undefined}
+            title={t("Auto next page interval in seconds") ?? ""}
+            description={t("The default is 10 seconds.") ?? undefined}
           >
             <input
               id="auto-next-page-input"
               className="stdinput"
-              style={{ width: '8em', height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
+              style={{ width: "8em", height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               defaultValue={settings.autoNextPageInterval}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === "Enter") {
                   update({ autoNextPageInterval: Number(e.currentTarget.value) || 10 })
                 }
               }}
@@ -329,8 +329,8 @@ export function SettingsOverlay({
             <input
               className="favtag-btn"
               type="button"
-              style={{ height: CONTROL_HEIGHT, boxSizing: 'border-box' }}
-              value={t('Apply') ?? undefined}
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("Apply") ?? undefined}
               onClick={(e) => {
                 const input = e.currentTarget.previousElementSibling as HTMLInputElement
                 update({ autoNextPageInterval: Number(input.value) || 10 })
@@ -339,7 +339,7 @@ export function SettingsOverlay({
           </SettingSection>
 
           {!settings.infiniteScroll && (
-            <SettingSection title={t('Toggle Stamps') ?? ''}>
+            <SettingSection title={t("Toggle Stamps") ?? ""}>
               <input
                 className="fa"
                 type="checkbox"

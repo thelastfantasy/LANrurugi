@@ -1,7 +1,7 @@
-import { useTranslation } from 'react-i18next'
+import { useTranslation } from "react-i18next"
 
-import type { CategoryMetadata } from '../../api/types'
-import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from './shared'
+import type { CategoryMetadata } from "../../api/types"
+import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from "./shared"
 
 export function CategoryBar({
   selectedCategory,
@@ -20,28 +20,28 @@ export function CategoryBar({
     <div id="category-container">
       <button
         type="button"
-        className={`favtag-btn${selectedCategory === NEW_ONLY ? ' toggled' : ''}`}
-        title={t('Archives added within the last day') ?? undefined}
+        className={`favtag-btn${selectedCategory === NEW_ONLY ? " toggled" : ""}`}
+        title={t("Archives added within the last day") ?? undefined}
         onClick={() => onToggleCategory(NEW_ONLY)}
       >
-        🆕 {t('New Archives')}
+        🆕 {t("New Archives")}
       </button>
       <button
         type="button"
-        className={`favtag-btn${selectedCategory === UNTAGGED_ONLY ? ' toggled' : ''}`}
-        title={t('Archives with no tags at all') ?? undefined}
+        className={`favtag-btn${selectedCategory === UNTAGGED_ONLY ? " toggled" : ""}`}
+        title={t("Archives with no tags at all") ?? undefined}
         onClick={() => onToggleCategory(UNTAGGED_ONLY)}
       >
-        🏷️ {t('Untagged Archives')}
+        🏷️ {t("Untagged Archives")}
       </button>
       {visible.map((c) => (
         <button
           key={c.id}
           type="button"
-          className={`favtag-btn${selectedCategory === c.id ? ' toggled' : ''}`}
+          className={`favtag-btn${selectedCategory === c.id ? " toggled" : ""}`}
           onClick={() => onToggleCategory(c.id)}
         >
-          {c.pinned ? '📌 ' : ''}
+          {c.pinned ? "📌 " : ""}
           {c.name}
         </button>
       ))}
@@ -55,11 +55,11 @@ export function CategoryBar({
           }}
         >
           <option value="" disabled>
-            {t('More categories…')}
+            {t("More categories…")}
           </option>
           {overflow.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.pinned ? '📌 ' : ''}
+              {c.pinned ? "📌 " : ""}
               {c.name}
             </option>
           ))}

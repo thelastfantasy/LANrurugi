@@ -17,9 +17,9 @@ export function FilterChip({
       className="stdbtn"
       onClick={onClick}
       style={{
-        fontWeight: active ? 'bold' : 'normal',
-        outline: active ? '2px solid currentColor' : 'none',
-        color: color ?? 'inherit',
+        fontWeight: active ? "bold" : "normal",
+        outline: active ? "2px solid currentColor" : "none",
+        color: color ?? "inherit",
       }}
     >
       {label} ({count})

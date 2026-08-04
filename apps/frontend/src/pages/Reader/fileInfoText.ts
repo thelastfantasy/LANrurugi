@@ -1,4 +1,4 @@
-import type { Spread } from './useReaderNavigation'
+import type { Spread } from "./useReaderNavigation"
 
 interface PageDimensions {
   width: number
@@ -16,7 +16,7 @@ export function fileInfoText(
   origin: string,
 ): string {
   const nameFromUrl = (url: string | undefined) =>
-    url ? (new URL(url, origin).searchParams.get('path') ?? '') : ''
+    url ? (new URL(url, origin).searchParams.get("path") ?? "") : ""
 
   const leftUrl = pageUrls[spread.left - 1]
   const leftName = nameFromUrl(leftUrl)

@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState } from "react"
 
-import { useReorderPlugins } from '../../api/hooks'
-import type { PluginInfo } from '../../api/types'
-import { SortableList } from '../../components/SortableList'
-import { PluginCard } from './PluginCard'
+import { useReorderPlugins } from "../../api/hooks"
+import type { PluginInfo } from "../../api/types"
+import { SortableList } from "../../components/SortableList"
+import { PluginCard } from "./PluginCard"
 
 /** One `type` group's drag-to-reorder plugin list (additive — legacy has no concept of plugin
  * priority at all). Local `order` state is seeded from (and re-synced with) the server's already
@@ -12,10 +12,10 @@ import { PluginCard } from './PluginCard'
  * via `useReorderPlugins` — this matters because `findMatchingPlugin` (Upload.tsx) picks the first
  * URL-pattern match in this exact order, so dragging one plugin above another is what makes it the
  * one actually used for a URL both could handle. */
-export function SortablePluginGroup({ type, plugins }: { type: PluginInfo['type']; plugins: PluginInfo[] }) {
+export function SortablePluginGroup({ type, plugins }: { type: PluginInfo["type"]; plugins: PluginInfo[] }) {
   const reorder = useReorderPlugins()
   const serverOrder = plugins.map((p) => p.namespace)
-  const serverOrderKey = serverOrder.join(',')
+  const serverOrderKey = serverOrder.join(",")
 
   // Local `order` state only reflects an in-progress/just-finished drag ahead of the server round
   // trip — reset during render (React's pattern for "adjust state when a prop changes", not a

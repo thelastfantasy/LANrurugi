@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate, useParams } from "react-router-dom"
 
 import {
   useArchiveMetadata,
@@ -9,39 +9,39 @@ import {
   useSettings,
   useStats,
   useUpdateArchiveMetadata,
-} from '../api/hooks'
-import type { ArchiveMetadata } from '../api/types'
-import { TagInput } from '../components/TagInput'
-import { Tooltip } from '../components/Tooltip'
-import { confirmDialog } from '../dialog'
-import { routes } from '../routes'
-import { toast } from '../toast'
-import { useDocumentTitle } from '../useDocumentTitle'
+} from "../api/hooks"
+import type { ArchiveMetadata } from "../api/types"
+import { TagInput } from "../components/TagInput"
+import { Tooltip } from "../components/Tooltip"
+import { confirmDialog } from "../dialog"
+import { routes } from "../routes"
+import { toast } from "../toast"
+import { useDocumentTitle } from "../useDocumentTitle"
 
 export function Edit() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { archiveId = '' } = useParams<{ archiveId: string }>()
+  const { archiveId = "" } = useParams<{ archiveId: string }>()
   const metadata = useArchiveMetadata(archiveId)
 
   if (metadata.isLoading) {
     return (
-      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', color: 'var(--theme-muted)' }}>
-        {t('Loading library…')}
+      <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", color: "var(--theme-muted)" }}>
+        {t("Loading library…")}
       </div>
     )
   }
 
   if (metadata.isError || !metadata.data) {
     return (
-      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+      <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">
-          {t('Failed to load archives: {{error}}', { error: String(metadata.error) })}
+          {t("Failed to load archives: {{error}}", { error: String(metadata.error) })}
         </p>
         <input
           className="stdbtn"
           type="button"
-          value={t('Return to Library') ?? undefined}
+          value={t("Return to Library") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -60,18 +60,18 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
   // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
   // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
-  useDocumentTitle(t('Editing %1').replace('%1', archive.title))
-  const plugins = usePlugins('metadata')
+  useDocumentTitle(t("Editing %1").replace("%1", archive.title))
+  const plugins = usePlugins("metadata")
   const settings = useSettings()
   const stats = useStats(2)
   const updateMetadata = useUpdateArchiveMetadata(archiveId)
   const deleteArchive = useDeleteArchive()
 
   const [title, setTitle] = useState(archive.title)
-  const [summary, setSummary] = useState(archive.summary ?? '')
+  const [summary, setSummary] = useState(archive.summary ?? "")
   const [tags, setTags] = useState(archive.tags)
-  const [selectedPlugin, setSelectedPlugin] = useState('')
-  const [pluginArg, setPluginArg] = useState('')
+  const [selectedPlugin, setSelectedPlugin] = useState("")
+  const [pluginArg, setPluginArg] = useState("")
   const [pluginRunning, setPluginRunning] = useState(false)
 
   // Real legacy's own suggestion list (`Edit.suggestions`, `edit.js:49-54`): every tag used at
@@ -82,13 +82,13 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   // successful save via `Server.callAPIBody`'s built-in success-message handling.
   async function handleSave() {
     await updateMetadata.mutateAsync({ title, summary, tags })
-    toast({ heading: t('Metadata saved!') ?? undefined, icon: 'success' })
+    toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
   }
 
   async function handleDelete() {
-    if (!(await confirmDialog(t('Are you sure you want to delete this archive?') ?? ''))) return
+    if (!(await confirmDialog(t("Are you sure you want to delete this archive?") ?? ""))) return
     await deleteArchive.mutateAsync(archiveId)
-    navigate('/')
+    navigate("/")
   }
 
   // Real legacy's `Edit.runPlugin` always saves current form state FIRST, then fetches+merges
@@ -102,7 +102,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
       await updateMetadata.mutateAsync({ title, summary, tags })
       const response = await fetch(
         `/api/plugins/use?plugin=${encodeURIComponent(selectedPlugin)}&id=${encodeURIComponent(archiveId)}&arg=${encodeURIComponent(pluginArg)}`,
-        { method: 'POST' },
+        { method: "POST" },
       )
       const data = (await response.json()) as {
         success: number
@@ -120,20 +120,20 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         // only title).
         if (result.title && (settings.data?.replacetitles ?? true)) {
           setTitle(result.title)
-          toast({ heading: t('Archive title changed to') ?? undefined, text: result.title, icon: 'info' })
+          toast({ heading: t("Archive title changed to") ?? undefined, text: result.title, icon: "info" })
         }
         if (result.summary) {
           setSummary(result.summary)
-          toast({ heading: t('Archive summary updated!') ?? undefined, icon: 'info' })
+          toast({ heading: t("Archive summary updated!") ?? undefined, icon: "info" })
         }
         if (result.tags) {
-          setTags((prev) => [prev, result.tags].filter(Boolean).join(', '))
-          toast({ heading: t('Added the following tags') ?? undefined, text: result.tags, icon: 'info', hideAfter: 7000 })
+          setTags((prev) => [prev, result.tags].filter(Boolean).join(", "))
+          toast({ heading: t("Added the following tags") ?? undefined, text: result.tags, icon: "info", hideAfter: 7000 })
         } else {
-          toast({ heading: t('No new tags added!') ?? undefined, icon: 'info' })
+          toast({ heading: t("No new tags added!") ?? undefined, icon: "info" })
         }
       } else {
-        toast({ text: data.error ?? t('unknown error') ?? undefined, icon: 'error' })
+        toast({ text: data.error ?? t("unknown error") ?? undefined, icon: "error" })
       }
     } finally {
       setPluginRunning(false)
@@ -143,85 +143,85 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const selectedPluginData = plugins.data?.find((p) => p.namespace === selectedPlugin)
 
   return (
-    <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto' }}>
+    <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto" }}>
       {/* Real legacy's `Edit.pm::index` (the plain-archive, non-Tankoubon branch this page covers)
           never passes an `artist` template var at all — only `edit_tankoubon` does — so the
           "Editing %1 by %2" heading variant never actually fires for a plain archive; always the
           plain "Editing %1" form. */}
-      <h2 className="ih" style={{ textAlign: 'center' }}>
-        {t('Editing %1').replace('%1', archive.title)}
+      <h2 className="ih" style={{ textAlign: "center" }}>
+        {t("Editing %1").replace("%1", archive.title)}
       </h2>
 
       <form
         autoComplete="off"
-        style={{ width: '98%', maxWidth: 700, margin: '0 auto', fontSize: '8pt' }}
+        style={{ width: "98%", maxWidth: 700, margin: "0 auto", fontSize: "8pt" }}
         onSubmit={(e) => e.preventDefault()}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, textAlign: 'left' }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
           {/* `maxWidth: 'none'` on every `.stdinput` below — legacy theme CSS's own `.stdinput`
               rule (`g.css` etc.) caps it at `max-width: 450px`, which is fine at legacy's own
               narrower page width but visibly wastes the right-hand two-thirds of this page's
               wider card once the form itself was widened (this and `.ido`'s own `maxWidth` above,
               issue #45) — the input just stops growing at 450px while the grid column it sits in
               keeps stretching. Overriding it lets every field genuinely fill the column instead. */}
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
-            <span>{t('Current File Name:')}</span>
-            <input readOnly className="stdinput" type="text" style={{ width: '100%', maxWidth: 'none' }} value={archive.filename} />
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+            <span>{t("Current File Name:")}</span>
+            <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} value={archive.filename} />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
-            <span>{t('ID:')}</span>
-            <input readOnly className="stdinput" type="text" style={{ width: '100%', maxWidth: 'none' }} maxLength={255} value={archiveId} />
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+            <span>{t("ID:")}</span>
+            <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} maxLength={255} value={archiveId} />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
-            <span>{t('Title:')}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+            <span>{t("Title:")}</span>
             <input
               id="title"
               className="stdinput"
               type="text"
-              style={{ width: '100%', maxWidth: 'none' }}
+              style={{ width: "100%", maxWidth: "none" }}
               maxLength={255}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
-            <span>{t('Summary:')}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
+            <span>{t("Summary:")}</span>
             <textarea
               id="summary"
               className="stdinput"
-              style={{ width: '100%', maxWidth: 'none', minHeight: 72, boxSizing: 'border-box' }}
+              style={{ width: "100%", maxWidth: "none", minHeight: 72, boxSizing: "border-box" }}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>
-              {t('Tags')} <span style={{ fontSize: '6pt' }}>{t('(separated by hyphens, i.e : tag1, tag2)')}</span> :
+              {t("Tags")} <span style={{ fontSize: "6pt" }}>{t("(separated by hyphens, i.e : tag1, tag2)")}</span> :
             </span>
             <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'start', gap: 6 }}>
-            <span>{t('Import Tags from Plugin :')}</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start', textAlign: 'left' }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
+            <span>{t("Import Tags from Plugin :")}</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", textAlign: "left" }}>
               {/* The help icon+tooltip sits after the button, at the row's own height, replacing
                   legacy's own separate "Help" button (`edit.js`'s `Edit.showHelp`, a click-triggered
                   33s toast) with a lighter hover-tooltip — mirrors the exact same
                   `EditHelpTitle`/`EditHelp` copy (issue #45). `height: 25` on both the `<select>`
                   and the button (matched to the select's own real rendered height) fixes the two
                   visibly not lining up/the button reading shorter than the dropdown next to it. */}
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <select
                   className="favtag-btn"
-                  style={{ height: 25, boxSizing: 'border-box' }}
+                  style={{ height: 25, boxSizing: "border-box" }}
                   value={selectedPlugin}
                   onChange={(e) => setSelectedPlugin(e.target.value)}
                 >
-                  <option value="">{t(' -- No Category -- ')}</option>
+                  <option value="">{t(" -- No Category -- ")}</option>
                   {plugins.data?.map((p) => (
                     <option key={p.namespace} value={p.namespace}>
                       {p.name}
@@ -232,16 +232,16 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                 <input
                   className="stdbtn"
                   type="button"
-                  style={{ minWidth: 90, height: 25, boxSizing: 'border-box' }}
+                  style={{ minWidth: 90, height: 25, boxSizing: "border-box" }}
                   disabled={!selectedPlugin || pluginRunning}
                   onClick={() => void runPlugin()}
-                  value={t('Go!') ?? undefined}
+                  value={t("Go!") ?? undefined}
                 />
 
                 <Tooltip
                   label={
                     <>
-                      <strong>{t('About Plugins')}</strong>
+                      <strong>{t("About Plugins")}</strong>
                       <br />
                       {/* `dangerouslySetInnerHTML` — same pattern already used throughout
                           Settings.tsx/Plugins.tsx for legacy-sourced translation strings that
@@ -263,53 +263,53 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                       25px-tall select/button; `fa-2x`, matching the warning icon below, read too
                       large for an inline row icon) — a literal `fontSize` instead, chosen to sit
                       visually in between and roughly fill the row's own height. */}
-                  <i className="fas fa-question-circle" style={{ fontSize: 20, cursor: 'help' }} aria-hidden="true"></i>
+                  <i className="fas fa-question-circle" style={{ fontSize: 20, cursor: "help" }} aria-hidden="true"></i>
                 </Tooltip>
               </div>
 
               {selectedPluginData?.oneshot_arg && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                   <span>{selectedPluginData.oneshot_arg} :</span>
                   <input
                     className="stdinput"
                     type="text"
-                    style={{ width: '100%', boxSizing: 'border-box' }}
+                    style={{ width: "100%", boxSizing: "border-box" }}
                     value={pluginArg}
                     onChange={(e) => setPluginArg(e.target.value)}
                   />
                 </div>
               )}
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <i className="fa fa-2x fa-exclamation-circle"></i>
-                {t('Using a Plugin will save any modifications to archive metadata you might have made !')}
+                {t("Using a Plugin will save any modifications to archive metadata you might have made !")}
               </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 10 }}>
             <input
               className="stdbtn"
               type="button"
-              value={t('Save Metadata') ?? undefined}
+              value={t("Save Metadata") ?? undefined}
               onClick={() => void handleSave()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Delete Archive') ?? undefined}
+              value={t("Delete Archive") ?? undefined}
               onClick={() => void handleDelete()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Read Archive') ?? undefined}
+              value={t("Read Archive") ?? undefined}
               onClick={() => navigate(routes.reader(archiveId))}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t('Return to Library') ?? undefined}
+              value={t("Return to Library") ?? undefined}
               onClick={() => navigate(routes.library())}
             />
           </div>

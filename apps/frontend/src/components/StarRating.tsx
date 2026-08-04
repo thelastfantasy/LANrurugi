@@ -27,7 +27,7 @@ export function StarRatingDisplay({
   size?: number
 }) {
   return (
-    <span style={{ display: 'inline-flex' }}>
+    <span style={{ display: "inline-flex" }}>
       {Array.from({ length: MAX_STARS }, (_, i) => (
         <StarSprite key={i} fraction={starFraction(rating, i)} size={size} />
       ))}
@@ -41,29 +41,29 @@ export function StarRatingDisplay({
  * itself is always rendered at full `size`; only its containing box is narrower). */
 export function StarSprite({ fraction, size }: { fraction: number; size: number }) {
   return (
-    <span style={{ position: 'relative', display: 'inline-block', width: size, height: size }}>
+    <span style={{ position: "relative", display: "inline-block", width: size, height: size }}>
       <img
         src="/legacy/img/star-empty.svg"
         alt=""
         draggable={false}
-        style={{ position: 'absolute', top: 0, left: 0, width: size, height: size }}
+        style={{ position: "absolute", top: 0, left: 0, width: size, height: size }}
       />
       {fraction > 0 && (
         <span
           style={{
-            position: 'absolute',
+            position: "absolute",
             top: 0,
             left: 0,
             width: `${fraction * 100}%`,
             height: size,
-            overflow: 'hidden',
+            overflow: "hidden",
           }}
         >
           <img
             src="/legacy/img/star-full.svg"
             alt=""
             draggable={false}
-            style={{ width: size, height: size, display: 'block' }}
+            style={{ width: size, height: size, display: "block" }}
           />
         </span>
       )}

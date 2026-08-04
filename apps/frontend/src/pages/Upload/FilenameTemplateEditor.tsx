@@ -1,19 +1,19 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
-import type { PendingFilenameConflict } from '../../api/types'
-import { PopupMenu, PopupMenuItem, useMenuPalette } from '../../components/PopupMenu'
-import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'
-import { splitFilenameStemAndExt } from './shared'
+import type { PendingFilenameConflict } from "../../api/types"
+import { PopupMenu, PopupMenuItem, useMenuPalette } from "../../components/PopupMenu"
+import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../theme"
+import { splitFilenameStemAndExt } from "./shared"
 
 const TEMPLATE_VARS = [
-  'filename',
-  'crc',
-  'title',
-  'ext',
-  'date-yyyymmdd',
-  'date-yyyy-mm-dd',
-  'namespace',
+  "filename",
+  "crc",
+  "title",
+  "ext",
+  "date-yyyymmdd",
+  "date-yyyy-mm-dd",
+  "namespace",
 ] as const
 
 /** `YYYYMMDD`/`YYYY-MM-DD` (local time, computed fresh each render — the moment the rename is
@@ -22,11 +22,11 @@ const TEMPLATE_VARS = [
 function dateTemplateValues(): Record<string, string> {
   const now = new Date()
   const yyyy = String(now.getFullYear())
-  const mm = String(now.getMonth() + 1).padStart(2, '0')
-  const dd = String(now.getDate()).padStart(2, '0')
+  const mm = String(now.getMonth() + 1).padStart(2, "0")
+  const dd = String(now.getDate()).padStart(2, "0")
   return {
-    'date-yyyymmdd': `${yyyy}${mm}${dd}`,
-    'date-yyyy-mm-dd': `${yyyy}-${mm}-${dd}`,
+    "date-yyyymmdd": `${yyyy}${mm}${dd}`,
+    "date-yyyy-mm-dd": `${yyyy}-${mm}-${dd}`,
   }
 }
 
@@ -42,7 +42,7 @@ function substituteFilenameTemplate(template: string, vars: Record<string, strin
  * extension is never meaningfully wrapped in parentheses and a plain click already omits the `.`
  * separator. */
 function shiftClickInsertion(key: string): string {
-  return key === 'ext' ? '.{ext}' : `({${key}})`
+  return key === "ext" ? ".{ext}" : `({${key}})`
 }
 
 /** The dropdown offering both resolutions for a `PendingFilenameConflict` — "Overwrite" runs
@@ -61,14 +61,14 @@ export function ConflictMenu({
   const { t } = useTranslation()
   const pos = anchoredPosition(anchor, 160)
   return (
-    <PopupMenu style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}>
+    <PopupMenu style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}>
       <PopupMenuItem onClick={onOverwrite}>
         <i className="fa fa-clone" aria-hidden="true" style={{ marginRight: 6 }}></i>
-        {t('Overwrite')}
+        {t("Overwrite")}
       </PopupMenuItem>
       <PopupMenuItem onClick={onRename}>
         <i className="fa fa-i-cursor" aria-hidden="true" style={{ marginRight: 6 }}></i>
-        {t('Rename and Catalog')}
+        {t("Rename and Catalog")}
       </PopupMenuItem>
     </PopupMenu>
   )
@@ -115,7 +115,7 @@ function anchoredPosition(
  *
  * `key` is a stable per-render React key distinct from `value` — two chips with the same literal
  * token text (`{filename}_{filename}`) would otherwise collide on `value` alone. */
-type TemplateSegment = { type: 'text'; value: string; key: string } | { type: 'token'; value: string; key: string }
+type TemplateSegment = { type: "text"; value: string; key: string } | { type: "token"; value: string; key: string }
 
 /** A zero-visual-width but genuinely-present text-node character, inserted before and after
  * every chip `<span>` in `renderSegments` so a native browser caret has a text-node anchor to land
@@ -123,7 +123,7 @@ type TemplateSegment = { type: 'text'; value: string; key: string } | { type: 't
  * start/end of the editor) otherwise give the browser's caret-placement logic no text-node landing
  * spot at all, leaving clicks there silently placing no visible caret. Filtered back out in
  * `extractTemplateFromDom`/skipped in `setCursorAtOffset`'s length accounting. */
-const CURSOR_ANCHOR = '\u200b'
+const CURSOR_ANCHOR = "\u200b"
 
 /** Splits a template string into alternating text/token segments — `token` segments capture the
  * optional wrapping `(`/`)` and leading `.` a Shift-click insertion can add (see
@@ -136,13 +136,13 @@ function parseTemplateSegments(template: string): TemplateSegment[] {
   for (const match of template.matchAll(/\.?\(?\{[\w-]+\}\)?/g)) {
     const start = match.index
     if (start > lastIndex) {
-      segments.push({ type: 'text', value: template.slice(lastIndex, start), key: `t${lastIndex}` })
+      segments.push({ type: "text", value: template.slice(lastIndex, start), key: `t${lastIndex}` })
     }
-    segments.push({ type: 'token', value: match[0], key: `k${start}` })
+    segments.push({ type: "token", value: match[0], key: `k${start}` })
     lastIndex = start + match[0].length
   }
   if (lastIndex < template.length) {
-    segments.push({ type: 'text', value: template.slice(lastIndex), key: `t${lastIndex}` })
+    segments.push({ type: "text", value: template.slice(lastIndex), key: `t${lastIndex}` })
   }
   return segments
 }
@@ -165,24 +165,24 @@ function TemplateChip({
 }) {
   const palette = useMenuPalette()
   const [hovered, setHovered] = useState(false)
-  const removeColor = palette.border === 'transparent' ? palette.text : palette.border
+  const removeColor = palette.border === "transparent" ? palette.text : palette.border
 
   return (
     <span
       contentEditable={false}
       data-token={value}
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
+        display: "inline-flex",
+        alignItems: "center",
         gap: 3,
-        padding: '0 2px 0 5px',
-        margin: '0 3px', // wide enough to make the gap between adjacent chips actually clickable
+        padding: "0 2px 0 5px",
+        margin: "0 3px", // wide enough to make the gap between adjacent chips actually clickable
         borderRadius: 3,
-        background: hovered ? 'rgba(0,0,0,0.16)' : 'rgba(0,0,0,0.08)',
-        border: '1px solid rgba(128,128,128,0.4)', // neutral grey, not the theme accent, so it isn't mistaken for the text caret
-        fontFamily: 'monospace',
-        userSelect: 'none',
-        whiteSpace: 'nowrap',
+        background: hovered ? "rgba(0,0,0,0.16)" : "rgba(0,0,0,0.08)",
+        border: "1px solid rgba(128,128,128,0.4)", // neutral grey, not the theme accent, so it isn't mistaken for the text caret
+        fontFamily: "monospace",
+        userSelect: "none",
+        whiteSpace: "nowrap",
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -197,13 +197,13 @@ function TemplateChip({
           onRemove(e.currentTarget.parentElement as HTMLElement)
         }}
         style={{
-          border: 'none',
-          background: 'none',
+          border: "none",
+          background: "none",
           padding: 0,
           margin: 0,
-          cursor: 'pointer',
+          cursor: "pointer",
           color: removeColor,
-          fontSize: '0.85em',
+          fontSize: "0.85em",
           lineHeight: 1,
         }}
       >
@@ -318,15 +318,15 @@ function TemplateInput({
   function extractTemplateFromDom(): string {
     const root = editorRef.current
     if (!root) return template
-    let result = ''
+    let result = ""
     for (const node of root.childNodes) {
       if (node.nodeType === Node.TEXT_NODE) {
-        result += node.textContent ?? ''
+        result += node.textContent ?? ""
       } else if (node instanceof HTMLElement && node.dataset.token) {
         result += node.dataset.token
       }
     }
-    return result.split(CURSOR_ANCHOR).join('')
+    return result.split(CURSOR_ANCHOR).join("")
   }
 
   /** Sums the flat-offset contribution of the editor's direct children up to (but not including)
@@ -404,7 +404,7 @@ function TemplateInput({
     // default (start of the field) — the stem/CRC portion is what a user typically wants to edit
     // first. Only correct because the default template's shape (`{filename}_{crc}.{ext}`) is
     // fixed, so this offset doesn't need to know anything about the actual filename.
-    setCursorAtOffset(template.length - '.{ext}'.length)
+    setCursorAtOffset(template.length - ".{ext}".length)
     // Runs once on mount only — subsequent re-renders are handled by the `renderedTemplate`-keyed
     // effect above; re-running this on every render would re-focus/move the cursor on every
     // keystroke.
@@ -439,16 +439,16 @@ function TemplateInput({
       aria-multiline="false"
       className="stdinput"
       style={{
-        width: '100%',
-        boxSizing: 'border-box',
-        background: '#e8e8e8',
-        color: '#000',
+        width: "100%",
+        boxSizing: "border-box",
+        background: "#e8e8e8",
+        color: "#000",
         // A distinct caret color (the theme accent, falling back to `palette.text` on themes
         // where `border` is transparent) so it isn't mistaken for a chip's neutral grey border.
-        caretColor: palette.border === 'transparent' ? palette.text : palette.border,
-        minHeight: '1.6em',
-        outline: 'none',
-        wordBreak: 'break-all',
+        caretColor: palette.border === "transparent" ? palette.text : palette.border,
+        minHeight: "1.6em",
+        outline: "none",
+        wordBreak: "break-all",
       }}
       onInput={() => {
         // Deliberately does NOT update `renderedTemplate` — see that state's own docs above for
@@ -459,11 +459,11 @@ function TemplateInput({
       onKeyDown={(e) => {
         // A plain `Enter` inside a single-line field should submit the form, not insert a
         // newline `contentEditable` would otherwise happily create.
-        if (e.key === 'Enter') e.preventDefault()
+        if (e.key === "Enter") e.preventDefault()
       }}
     >
       {segments.map((segment) =>
-        segment.type === 'text' ? (
+        segment.type === "text" ? (
           segment.value
         ) : (
           // See `CURSOR_ANCHOR`'s own docs for why a chip needs one on both sides — added
@@ -514,17 +514,17 @@ function TemplateVarButton({
       type="button"
       style={{
         fontSize: FONT_SIZE_8PT,
-        padding: '1px 5px',
+        padding: "1px 5px",
         minWidth: 0,
-        width: 'auto',
-        border: '1px solid rgba(128,128,128,0.4)',
+        width: "auto",
+        border: "1px solid rgba(128,128,128,0.4)",
         borderRadius: 3,
-        background: 'transparent',
-        cursor: 'pointer',
+        background: "transparent",
+        cursor: "pointer",
         // `palette.border` is `transparent` on 2 of this app's 5 themes — an outline in that
         // color would be invisible on hover, so `palette.text` is used instead.
-        outline: hovered ? `1px solid ${palette.text}` : 'none',
-        outlineOffset: '1px',
+        outline: hovered ? `1px solid ${palette.text}` : "none",
+        outlineOffset: "1px",
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -562,7 +562,7 @@ export function RenamePopover({
   const { t } = useTranslation()
   const palette = useMenuPalette()
   const { stem, ext } = splitFilenameStemAndExt(conflict.original_filename)
-  const [template, setTemplate] = useState('{filename}_{crc}.{ext}')
+  const [template, setTemplate] = useState("{filename}_{crc}.{ext}")
   // 280px keeps the default `{filename}_{crc}.{ext}` template on one line once each token
   // renders as its own bordered/padded chip.
   const width = 280
@@ -575,7 +575,7 @@ export function RenamePopover({
   const vars: Record<string, string> = {
     filename: stem,
     crc: conflict.crc32,
-    title: itemTitle ?? '',
+    title: itemTitle ?? "",
     ext,
     ...dateTemplateValues(),
     // Uppercased since a plugin namespace (e.g. `ehdl`) reads more like a stable identifier/tag
@@ -591,10 +591,10 @@ export function RenamePopover({
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={onCancel} />
-      <PopupMenu style={{ position: 'fixed', top, left, zIndex: Z_OVERLAY_CONTENT }}>
-        <li style={{ listStyle: 'none', padding: '6px 10px', width }}>
-          <div style={{ fontSize: FONT_SIZE_10PT, marginBottom: 4 }}>{t('New filename')}</div>
+      <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={onCancel} />
+      <PopupMenu style={{ position: "fixed", top, left, zIndex: Z_OVERLAY_CONTENT }}>
+        <li style={{ listStyle: "none", padding: "6px 10px", width }}>
+          <div style={{ fontSize: FONT_SIZE_10PT, marginBottom: 4 }}>{t("New filename")}</div>
           <TemplateInput
             template={template}
             onChange={setTemplate}
@@ -602,7 +602,7 @@ export function RenamePopover({
               insertRef.current = insert
             }}
           />
-          <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+          <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
             {TEMPLATE_VARS.map((key) => (
               <TemplateVarButton
                 key={key}
@@ -615,40 +615,40 @@ export function RenamePopover({
           {/* `{ext}` is an exception to the general "wrapped in parentheses" rule (see
               `shiftClickInsertion`), so it needs its own explanatory line. */}
           <div style={{ fontSize: FONT_SIZE_8PT, opacity: 0.6, marginTop: 4 }}>
-            <div>{t('Shift-click to insert wrapped in parentheses')}</div>
-            <div>{t('Shift-click {{ext}} to insert with a leading dot instead', { ext: '{ext}' })}</div>
+            <div>{t("Shift-click to insert wrapped in parentheses")}</div>
+            <div>{t("Shift-click {{ext}} to insert with a leading dot instead", { ext: "{ext}" })}</div>
           </div>
           <code
             style={{
-              display: 'block',
+              display: "block",
               fontSize: FONT_SIZE_8PT,
               marginTop: 6,
-              padding: '3px 5px',
-              background: 'rgba(0,0,0,0.06)',
+              padding: "3px 5px",
+              background: "rgba(0,0,0,0.06)",
               borderRadius: 3,
-              wordBreak: 'break-all',
-              minHeight: '1.2em',
+              wordBreak: "break-all",
+              minHeight: "1.2em",
             }}
           >
             {resolved}
           </code>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 8 }}>
             <button
               type="button"
               className="stdbtn"
-              style={{ minWidth: 0, width: 'auto', padding: '2px 8px' }}
+              style={{ minWidth: 0, width: "auto", padding: "2px 8px" }}
               onClick={onCancel}
             >
-              {t('Cancel')}
+              {t("Cancel")}
             </button>
             <button
               type="button"
               className="stdbtn"
-              style={{ minWidth: 0, width: 'auto', padding: '2px 8px' }}
+              style={{ minWidth: 0, width: "auto", padding: "2px 8px" }}
               disabled={pending || !resolved.trim()}
               onClick={() => onConfirm(resolved)}
             >
-              {t('Rename and Catalog')}
+              {t("Rename and Catalog")}
             </button>
           </div>
         </li>
