@@ -701,11 +701,25 @@ export default function Library() {
               </span>
             )}
           </div>
-          <span style={{ position: 'relative', display: 'inline-block' }}>
+          {/* Legacy's own `#search-input` (`index.html.tt2`) is a *direct* child of `.idi`, with
+              no wrapper — `.stdinput`'s own `width: 80%` therefore resolves against `.idi`'s
+              content box. This port needs a wrapping element as the `position: relative` anchor
+              for the autocomplete dropdown below, but an `inline-block` wrapper with no explicit
+              width of its own becomes the input's *actual* containing block for that same `80%`
+              rule (an inline-block establishes a new block formatting context for its children) —
+              its own shrink-to-fit sizing doesn't match `.idi`'s content width, and the input ends
+              up wider than `.idi` itself, overflowing it (visible on narrow/mobile viewports where
+              `.idi`'s padding takes up a larger share of the available width). Moving the `80%`/
+              `450px` sizing onto the wrapper itself (so it resolves against `.idi`, exactly like
+              legacy's own unwrapped input did) and having the input fill `100%` of that
+              already-correctly-sized wrapper restores the same effective width legacy computes,
+              while keeping the wrapper as the dropdown's positioning anchor. */}
+          <span style={{ position: 'relative', display: 'inline-block', width: '80%', maxWidth: 450, boxSizing: 'border-box' }}>
             <input
               id="search-input"
               ref={searchInputRef}
               className="search stdinput"
+              style={{ width: '100%', maxWidth: 'none' }}
               value={filterInput}
               autoComplete="off"
               onChange={(e) => {

@@ -359,15 +359,32 @@ pub async fn add_archive_to_category(
         return Err(AddToCategoryError::Dynamic);
     }
     let archive_id = ArchiveId(archive.to_string());
-    if state
-        .repos
-        .archives
-        .get(&archive_id)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
+    // Legacy's own `Model::Category::add_to_category` (`$redis->exists($arc_id)`) is a generic
+    // Redis key-existence test, not "must specifically be an archive hash" — a `TANK_`-prefixed
+    // Tankoubon key satisfies it just as well, so legacy genuinely supports adding a Tankoubon to
+    // a category. Mirrored here as an explicit branch (rather than a single generic `EXISTS`
+    // call) since this port's repositories are already split by entity type; the practical result
+    // is the same permissive check.
+    let exists = if crate::tankoubons::is_valid_tankoubon_id(archive) {
+        state
+            .repos
+            .groupings
+            .get(&lanrurugi_core::ids::TankId(archive.to_string()))
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        state
+            .repos
+            .archives
+            .get(&archive_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+    };
+    if !exists {
         return Err(AddToCategoryError::ArchiveNotFound);
     }
     if !category.archives.contains(&archive_id) {

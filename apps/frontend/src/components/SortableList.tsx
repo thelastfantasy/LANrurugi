@@ -141,7 +141,9 @@ export default function SortableList<T>({
         strategy={direction === 'horizontal' ? horizontalListSortingStrategy : verticalListSortingStrategy}
       >
         {direction === 'horizontal' ? (
-          <div style={{ display: 'flex', flexDirection: 'row', overflowX: 'auto' }}>{items_}</div>
+          <div className="hide-scrollbar" style={{ display: 'flex', flexDirection: 'row', overflowX: 'auto' }}>
+            {items_}
+          </div>
         ) : (
           items_
         )}

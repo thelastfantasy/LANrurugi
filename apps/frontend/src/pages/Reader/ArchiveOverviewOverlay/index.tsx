@@ -4,7 +4,19 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
-import { useAddTocEntry, useCreateCategory, useRemoveTocEntry, useSetArchiveThumbnail, useStampedPages } from '../../../api/hooks'
+import {
+  useAddTocEntry,
+  useAddTocEntryForId,
+  useCreateCategory,
+  useDeleteTankoubon,
+  useRemoveTocEntry,
+  useRemoveTocEntryForId,
+  useSetArchiveThumbnail,
+  useSetTankoubonThumbnail,
+  useStampedPages,
+  useStampedPagesForArchives,
+  useUpdateTankoubon,
+} from '../../../api/hooks'
 import type { ArchiveMetadata, CategoryMetadata } from '../../../api/types'
 import RatingWidget from '../../../components/RatingWidget'
 import Tooltip from '../../../components/Tooltip'
@@ -12,6 +24,8 @@ import { confirmDialog, newCategoryDialog, promptDialog } from '../../../dialog'
 import { displayTocName, isReservedTocIdentifier } from '../../../lib/tocValidation'
 import { routes } from '../../../routes'
 import { toast } from '../../../toast'
+import { isTankoubonId } from '../../Library/shared'
+import type { TankoubonChapter } from '../useTankoubonReading'
 import { PageGridCell } from './PageGridCell'
 import { PageLightbox } from './PageLightbox'
 import { ChapterActionMenu } from './shared'
@@ -30,6 +44,9 @@ export default function ArchiveOverviewOverlay({
   onClose,
   onSelectPage,
   autoFocus = false,
+  resolvePage,
+  tankChapters,
+  tankPages,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -43,6 +60,26 @@ export default function ArchiveOverviewOverlay({
    * this overlay instead, so a fresh page load doesn't also yank the scroll position on top of
    * auto-opening. */
   autoFocus?: boolean
+  /** Only passed when `archive` is actually the synthetic multi-archive object
+   * `useTankoubonReading` builds (`archive.arcid` is then the Tankoubon's own id, not a real
+   * archive) — resolves one of `archive`'s own *global* page numbers back to the real member
+   * archive (and that archive's own *local* page number) it actually belongs to. Every per-page
+   * action below (thumbnail URLs, "set as cover", ToC add/remove) needs this instead of using
+   * `archive.arcid`/the raw page number directly, since ToC/thumbnails are still real per-archive
+   * resources even when reading the Tankoubon as one concatenated book — legacy's own
+   * `getArchiveForPage` is used the exact same way throughout `reader_archive_overlay.js`.
+   * `undefined` in the plain single-archive case, where every callback below already falls back
+   * to `{ arcId: archive.arcid, localPage: page }` (the identity mapping — unchanged behavior). */
+  resolvePage?: (globalPage: number) => { arcId: string; localPage: number } | null
+  /** Same Tankoubon-mode-only condition as `resolvePage` — needed separately (not derivable from
+   * `resolvePage` alone) for the "filter stamped pages" toggle, which has to fetch every member
+   * archive's own stamped-page list up front to build the filter, not resolve one page at a time. */
+  tankChapters?: TankoubonChapter[]
+  /** Tankoubon-mode only: the already-concatenated multi-archive page list
+   * (`useTankoubonReading`'s own `pages.data.pages`) — passed straight through to `PageLightbox`'s
+   * own `pagesOverride` so its large preview doesn't re-fetch `archive.arcid`'s own pages (wrong;
+   * that id is the Tankoubon's, not a real archive's). */
+  tankPages?: string[]
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -50,12 +87,28 @@ export default function ArchiveOverviewOverlay({
   const createCategory = useCreateCategory()
   const staticCategories = (categories ?? []).filter((c) => !c.search)
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
+  const isTank = isTankoubonId(archive.arcid)
+
+  function resolve(page: number): { arcId: string; localPage: number } | null {
+    return resolvePage ? resolvePage(page) : { arcId: archive.arcid, localPage: page }
+  }
 
   // Legacy's `#filter-stamped` (`reader.js`'s `checkStampedPages`/`filterStampedOverlay`) — marks
   // each thumbnail `data-stamped=true` if `GET /archives/{id}/stamps` includes its page number,
   // then a toggle hides every non-stamped thumbnail so the grid becomes a stamped-pages-only view.
-  const stampedPages = useStampedPages(archive.arcid)
-  const stampedPageSet = new Set(stampedPages.data?.result ?? [])
+  // In Tankoubon mode this has to merge stamped-page lists across every member archive, each
+  // converted from that archive's own local page numbers back into the Tankoubon's global
+  // numbering via its own chapter's `startPage` — matches legacy's own tank-mode
+  // `checkStampedPages` doing the same conversion the other direction (`getArchiveForPage`).
+  const singleStampedPages = useStampedPages(isTank ? null : archive.arcid)
+  const tankStampedPageQueries = useStampedPagesForArchives(isTank ? (tankChapters ?? []).map((c) => c.arcId) : [])
+  const stampedPageSet = isTank
+    ? new Set(
+        (tankChapters ?? []).flatMap((chapter, i) =>
+          (tankStampedPageQueries[i]?.data?.result ?? []).map((localPage) => String(chapter.startPage + Number(localPage) - 1)),
+        ),
+      )
+    : new Set(singleStampedPages.data?.result ?? [])
   const [filterStamped, setFilterStamped] = useState(false)
   const [removeTocMenuAt, setRemoveTocMenuAt] = useState<DOMRect | null>(null)
   const [editTocMenuAt, setEditTocMenuAt] = useState<DOMRect | null>(null)
@@ -70,9 +123,14 @@ export default function ArchiveOverviewOverlay({
     ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
     : undefined
 
-  const setThumbnail = useSetArchiveThumbnail(archive.arcid)
-  const addTocEntry = useAddTocEntry(archive.arcid)
-  const removeTocEntry = useRemoveTocEntry(archive.arcid)
+  const setThumbnail = useSetArchiveThumbnail(isTank ? '' : archive.arcid)
+  const setTankoubonThumbnail = useSetTankoubonThumbnail(archive.arcid)
+  const addTocEntry = useAddTocEntry(isTank ? '' : archive.arcid)
+  const removeTocEntry = useRemoveTocEntry(isTank ? '' : archive.arcid)
+  const addTocEntryForId = useAddTocEntryForId()
+  const removeTocEntryForId = useRemoveTocEntryForId()
+  const deleteTankoubon = useDeleteTankoubon()
+  const updateTankoubon = useUpdateTankoubon(archive.arcid)
 
   // `useSetArchiveThumbnail`'s own `onSuccess` invalidates the *metadata* query, but the cover
   // `<img>` below points at a plain, param-free `/api/archives/{id}/thumbnail` URL — a browser
@@ -89,11 +147,16 @@ export default function ArchiveOverviewOverlay({
 
   // Legacy's `.set-thumbnail` click handler (`reader.js`) — regenerates the cover thumbnail from
   // this page and shows a toast; `e.stopPropagation()` so the click doesn't also trigger the
-  // thumbnail's own `onSelectPage` navigation.
+  // thumbnail's own `onSelectPage` navigation. In Tankoubon mode this always sets the Tankoubon's
+  // *own* cover (never a specific member archive's) from `page` interpreted as a global page
+  // number — the backend resolves which member archive that actually falls in itself
+  // (`update_tankoubon_thumbnail`), matching legacy's own tank-mode `.set-thumbnail` handler
+  // (`reader_archive_overlay.js`).
   function handleSetThumbnail(e: MouseEvent, page: number) {
     e.preventDefault()
     e.stopPropagation()
-    setThumbnail.mutate(page, {
+    const mutation = isTank ? setTankoubonThumbnail : setThumbnail
+    mutation.mutate(page, {
       onSuccess: () => {
         setThumbnailVersion((v) => v + 1)
         toast({ text: t('Successfully set page {{n}} as the thumbnail!', { n: page }) ?? undefined })
@@ -128,16 +191,22 @@ export default function ArchiveOverviewOverlay({
 
   // Legacy's `.add-toc` click handler + `addTocSection` (`reader.js`) — prompts for a chapter
   // title, then PUTs the new ToC entry. Empty/cancelled input adds nothing (matches legacy's own
-  // `result.value.trim() !== ""` guard).
+  // `result.value.trim() !== ""` guard). `page` is a *global* page number in Tankoubon mode; ToC
+  // entries are still real per-archive data even when reading a Tankoubon as one concatenated
+  // book (matches legacy's own `addTocSection`'s `getArchiveForPage(page)` call), so this resolves
+  // the real owning archive + that archive's own local page number before writing.
   async function handleAddToc(e: MouseEvent, page: number) {
     e.preventDefault()
     e.stopPropagation()
     const title = await promptTocTitle()
-    if (title) {
-      addTocEntry.mutate(
-        { page, title },
-        { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
-      )
+    if (!title) return
+    const target = resolve(page)
+    if (!target) return
+    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    if (isTank) {
+      addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
+    } else {
+      addTocEntry.mutate({ page: target.localPage, title }, { onError })
     }
   }
 
@@ -148,10 +217,14 @@ export default function ArchiveOverviewOverlay({
   // pick — no separate confirm step, matching this popover's own single-click-and-done feel
   // rather than a form the user has to explicitly submit.
   function handleQuickAddToc(page: number, title: string) {
-    addTocEntry.mutate(
-      { page, title },
-      { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
-    )
+    const target = resolve(page)
+    if (!target) return
+    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    if (isTank) {
+      addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
+    } else {
+      addTocEntry.mutate({ page: target.localPage, title }, { onError })
+    }
   }
 
   // Legacy's `.edit-toc` click handler (`reader.js`: `addTocSection(currentChapter.startPage,
@@ -176,11 +249,14 @@ export default function ArchiveOverviewOverlay({
   async function handleEditToc(entry = currentChapter) {
     if (!entry || isReservedTocIdentifier(entry.name)) return
     const title = await promptTocTitle(displayTocName(entry.name, t))
-    if (title) {
-      addTocEntry.mutate(
-        { page: entry.page, title },
-        { onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }) },
-      )
+    if (!title) return
+    const target = resolve(entry.page)
+    if (!target) return
+    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    if (isTank) {
+      addTocEntryForId.mutate({ id: target.arcId, page: target.localPage, title }, { onError })
+    } else {
+      addTocEntry.mutate({ page: target.localPage, title }, { onError })
     }
   }
 
@@ -193,9 +269,14 @@ export default function ArchiveOverviewOverlay({
   // that isn't the currently-viewed one doesn't require first scrolling/navigating to it.
   async function handleRemoveToc(entry: { page: number; name: string }) {
     if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? ''))) return
-    removeTocEntry.mutate(entry.page, {
-      onError: () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' }),
-    })
+    const target = resolve(entry.page)
+    if (!target) return
+    const onError = () => toast({ text: t('Error adding/removing chapter:') ?? undefined, icon: 'error' })
+    if (isTank) {
+      removeTocEntryForId.mutate({ id: target.arcId, page: target.localPage }, { onError })
+    } else {
+      removeTocEntry.mutate(target.localPage, { onError })
+    }
   }
 
   async function addToCategory(categoryId: string) {
@@ -219,7 +300,30 @@ export default function ArchiveOverviewOverlay({
     await queryClient.invalidateQueries({ queryKey: ['categories'] })
   }
 
+  // Deleting a Tankoubon removes the grouping record itself, not any of its member archives'
+  // files (matches legacy's own `Server.deleteTankoubon` vs `Server.deleteArchive` split in
+  // `reader_archive_overlay.js`) — a different, much less permanent operation than deleting a
+  // real archive, so it gets its own (milder) confirmation copy rather than reusing the
+  // file-deletion warning below verbatim.
   async function deleteArchive() {
+    if (isTank) {
+      // Existing translation key (already in every locale file, previously unused anywhere in the
+      // app) — more accurate than a generic "are you sure" for this operation specifically, since
+      // it clarifies member archives themselves aren't touched, unlike the real-file-deletion
+      // warning below.
+      if (
+        !(await confirmDialog(
+          t(
+            'Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.',
+          ) ?? '',
+        ))
+      ) {
+        return
+      }
+      await deleteTankoubon.mutateAsync(archive.arcid)
+      navigate(routes.library())
+      return
+    }
     if (
       !(await confirmDialog(
         t('This will delete both metadata and matching files from your system! Please use with caution.') ?? '',
@@ -294,7 +398,7 @@ export default function ArchiveOverviewOverlay({
             <div className="id3 nocrop reader-thumbnail" style={{ maxWidth: 200 }}>
               <img
                 alt=""
-                src={`/api/archives/${archive.arcid}/thumbnail${thumbnailVersion > 0 ? `?v=${thumbnailVersion}` : ''}`}
+                src={`${isTank ? `/api/tankoubons/${archive.arcid}/thumbnail` : `/api/archives/${archive.arcid}/thumbnail`}${thumbnailVersion > 0 ? `?v=${thumbnailVersion}` : ''}`}
                 style={{ maxWidth: '100%' }}
               />
             </div>
@@ -306,13 +410,13 @@ export default function ArchiveOverviewOverlay({
                 <input
                   className="stdbtn"
                   type="button"
-                  value={t('Edit Archive Metadata') ?? undefined}
-                  onClick={() => navigate(routes.edit(archive.arcid))}
+                  value={(isTank ? t('Edit Tankoubon') : t('Edit Archive Metadata')) ?? undefined}
+                  onClick={() => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))}
                 />
                 <input
                   className="stdbtn"
                   type="button"
-                  value={t('Delete Archive') ?? undefined}
+                  value={(isTank ? t('Delete Tankoubon') : t('Delete Archive')) ?? undefined}
                   onClick={() => void deleteArchive()}
                 />
                 <br />
@@ -368,7 +472,16 @@ export default function ArchiveOverviewOverlay({
                 </Tooltip>
 
                 <h2>{t('Rating')}</h2>
-                <RatingWidget archiveId={archive.arcid} tags={archive.tags} />
+                <RatingWidget
+                  archiveId={archive.arcid}
+                  tags={archive.tags}
+                  // The default `useUpdateArchiveMetadata`-backed persistence PUTs
+                  // `/archives/{archiveId}/metadata` — wrong for a Tankoubon, whose tags live on
+                  // its own `/tankoubons/{id}` record instead (`RatingWidget`'s own `onChange`
+                  // prop exists specifically for this — same override the Library context menu's
+                  // tankoubon rows already use).
+                  onChange={isTank ? (nextTags) => updateTankoubon.mutate({ metadata: { tags: nextTags } }) : undefined}
+                />
               </div>
             )}
           </div>
@@ -425,7 +538,7 @@ export default function ArchiveOverviewOverlay({
                 <a
                   className="fas fa-pencil-alt edit-toc"
                   href="#"
-                  style={{ padding: 8, fontSize: 14 }}
+                  style={{ padding: 8, fontSize: 14, position: 'relative', top: 6 }}
                   title={t('Edit Chapter name') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
@@ -444,7 +557,7 @@ export default function ArchiveOverviewOverlay({
                 <a
                   className="fas fa-trash-alt remove-toc"
                   href="#"
-                  style={{ padding: 8, fontSize: 14 }}
+                  style={{ padding: 8, fontSize: 14, position: 'relative', top: 6 }}
                   title={t('Delete Chapter') ?? undefined}
                   onClick={(e) => {
                     e.preventDefault()
@@ -469,6 +582,8 @@ export default function ArchiveOverviewOverlay({
           {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => {
             const isStamped = stampedPageSet.has(String(page))
             if (filterStamped && !isStamped) return null
+            const target = resolve(page)
+            if (!target) return null
             return (
               <PageGridCell
                 key={page}
@@ -476,7 +591,7 @@ export default function ArchiveOverviewOverlay({
                 isStamped={isStamped}
                 loggedIn={loggedIn}
                 highlighted={page === highlightedPage}
-                thumbnailSrc={`/api/archives/${archive.arcid}/thumbnail?page=${page}`}
+                thumbnailSrc={`/api/archives/${target.arcId}/thumbnail?page=${target.localPage}`}
                 onSelectPage={onSelectPage}
                 onSetThumbnail={handleSetThumbnail}
                 onAddToc={handleAddToc}
@@ -497,6 +612,8 @@ export default function ArchiveOverviewOverlay({
           onEditToc={(entry) => void handleEditToc(entry)}
           onRemoveToc={(entry) => void handleRemoveToc(entry)}
           onClose={() => setLightboxPage(null)}
+          pagesOverride={isTank ? tankPages : undefined}
+          resolvePage={resolvePage}
         />
       )}
     </>

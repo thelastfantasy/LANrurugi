@@ -11,5 +11,12 @@ pub const UNTAGGED_KEY: &str = "LRR_UNTAGGED";
 /// Set of archive IDs still marked "new" (unread since being added).
 pub const NEW_KEY: &str = "LRR_NEW";
 
-/// Set of archive IDs that belong to a tankoubon grouping.
+/// Set of ids eligible to appear standalone in a `groupby_tanks=true` search (the default) —
+/// despite the legacy-inherited name, membership means "not *currently folded into* a tank
+/// display," not "belongs to a tankoubon." Every freshly-catalogued archive starts a member
+/// (`index_new_archive`, confirmed by that function's own test naming this same check
+/// `ungrouped`); a Tankoubon's member archives are removed from this set for as long as they stay
+/// members (so only the tank's own aggregate entry shows up in a grouped search, not both it and
+/// every member individually), and the Tankoubon's own id is added once it has at least one
+/// member (`sync_tank_membership`).
 pub const TANKGROUPED_KEY: &str = "LRR_TANKGROUPED";

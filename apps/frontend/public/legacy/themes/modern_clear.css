@@ -771,3 +771,10 @@ div.id4 a:hover {
 .datatables tbody tr.msm-selected td {
     background-color: rgba(237, 37, 83, 0.15) !important;
 }
+/* Additive — no legacy equivalent (this port's own Categories page, "this archive is also a
+   Tankoubon member" checklist-row highlight). Reuses this theme's own accent hue, same value as
+   .msm-selected above, for visual consistency with this theme's existing "this row is special"
+   language rather than a hardcoded color that wouldn't adapt across themes. */
+.tankoubon-member-row {
+    background-color: rgba(237, 37, 83, 0.15);
+}

@@ -410,7 +410,26 @@ async fn sort_ids(
     if sortkey == "lastread" {
         let mut pairs: Vec<(String, u64)> = Vec::new();
         for id in filtered {
-            let t: u64 = archive_conn.hget(id, "lastreadtime").await.unwrap_or(0);
+            let t: u64 = if id.starts_with("TANK") {
+                // A Tankoubon has no `lastreadtime` field of its own — matches legacy's own
+                // Lua-scripted sort (`Model/Search.pm`'s `sort_results`): its effective sort key
+                // is the MAX `lastreadtime` across its member archives (`ZRANGEBYSCORE id 1
+                // '+inf'`, the same score range `GroupingRepository::get` uses to read real
+                // member archive ids back out of the tank's own zset — scores 0 and below are
+                // reserved for the tank's own name/summary/tags/progress fields).
+                let members: Vec<String> = archive_conn
+                    .zrangebyscore(id, 1, "+inf")
+                    .await
+                    .unwrap_or_default();
+                let mut max_time = 0u64;
+                for member in &members {
+                    let t: u64 = archive_conn.hget(member, "lastreadtime").await.unwrap_or(0);
+                    max_time = max_time.max(t);
+                }
+                max_time
+            } else {
+                archive_conn.hget(id, "lastreadtime").await.unwrap_or(0)
+            };
             if t > 0 {
                 pairs.push((id.clone(), t));
             }

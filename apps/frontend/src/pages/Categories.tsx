@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { sendForm, sendJson } from '../api/client'
-import { useArchives, useCategories, useCreateCategory } from '../api/hooks'
+import { useArchives, useCategories, useCreateCategory, useTankoubons } from '../api/hooks'
+import type { TankoubonMetadata } from '../api/types'
 import ArchiveChecklistItem from '../components/ArchiveChecklistItem'
+import Tooltip from '../components/Tooltip'
 import { confirmDialog, newCategoryDialog } from '../dialog'
 import { routes } from '../routes'
 import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from '../theme'
@@ -26,15 +28,20 @@ const BOOKMARK_CATEGORY_STORAGE_KEY = 'bookmarkCategoryId'
 // own theme ever actually controls (a coincidental resemblance on some Linux desktop themes was
 // mistaken for real theming during an earlier pass — corrected app-wide, see `dialog.tsx`'s own
 // docs for the full list of call sites this affected).
-// The Tankoubons sub-list always renders empty: nothing links a Tankoubon to a Category yet on
-// the host side (`lanrurugi-api::categories::add_to_category` only accepts real archive IDs), a
-// real gap beyond this page's own markup — kept as an always-shown placeholder so the layout
-// still matches legacy's, rather than omitting the section outright.
+// The Tankoubons sub-list is a real, functioning checklist: legacy's own `add_to_category`
+// (`$redis->exists($arc_id)`, a generic key-existence check — verified against
+// `~/LANraragi/lib/LANraragi/Model/Category.pm`) accepts a `TANK_`-prefixed id just as readily as
+// a real archive id, so legacy genuinely supports static categories containing Tankoubons. The
+// host-side gap that used to make this permanently empty (`add_archive_to_category` only checking
+// `state.repos.archives`) is fixed; this list reuses the exact same
+// `PUT`/`DELETE /categories/{id}/{archiveId}` toggle endpoint as the Archives checklist below,
+// just passing a tank id instead of an archive id.
 export default function Categories() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const categories = useCategories()
   const archives = useArchives()
+  const tankoubons = useTankoubons()
   const queryClient = useQueryClient()
   const createCategory = useCreateCategory()
 
@@ -50,6 +57,25 @@ export default function Categories() {
 
   const selected = categories.data?.find((c) => c.id === selectedId)
   const isStatic = !!selected && !selected.search
+
+  // Which Tankoubon(s) (if any) each archive is currently folded into — an archive shows here
+  // fine even while it's "hidden" from the default grouped Library view for exactly that reason,
+  // since this checklist reflects the category's real membership, not a grouped search result
+  // (see this file's own module doc comment). Surfaced as a hover tooltip so that isn't
+  // mysterious: "this archive's checkbox is checked but I don't see it on the homepage" is
+  // otherwise a real, reported point of confusion, not something this checklist should silently
+  // paper over by hiding rows or changing what the category itself contains.
+  const tanksByArchiveId = new Map<string, TankoubonMetadata[]>()
+  for (const tank of tankoubons.data?.result ?? []) {
+    for (const memberId of tank.archives) {
+      const existing = tanksByArchiveId.get(memberId)
+      if (existing) {
+        existing.push(tank)
+      } else {
+        tanksByArchiveId.set(memberId, [tank])
+      }
+    }
+  }
 
   // Re-syncs the editable fields whenever the *selection itself* changes — the React-recommended
   // "adjusting state when a prop changes" pattern (calling setState directly during render, not
@@ -307,7 +333,7 @@ export default function Categories() {
           </table>
         </div>
 
-        <div className="id1 right-column" style={{ textAlign: 'center', minWidth: 400, width: '60%', height: 500 }}>
+        <div className="category-panel right-column" style={{ textAlign: 'center', minWidth: 400, width: '60%', height: 500 }}>
           {!selected || !isStatic ? (
             <div
               id="dynamicplaceholder"
@@ -323,7 +349,18 @@ export default function Categories() {
               <div id="tankoubonsection" style={{ marginBottom: 10 }}>
                 <h3 style={{ marginTop: 0 }}>{t('Tankoubons')}</h3>
                 <ul id="tankoubonlist" style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
-                  <li style={{ fontStyle: 'italic' }}>{t('No Tankoubons in your library yet.')}</li>
+                  {tankoubons.data?.result.length ? (
+                    tankoubons.data.result.map((tank) => (
+                      <ArchiveChecklistItem
+                        key={tank.id}
+                        title={tank.name}
+                        checked={selected.archives.includes(tank.id)}
+                        onChange={(checked) => void handleArchiveToggle(tank.id, checked)}
+                      />
+                    ))
+                  ) : (
+                    <li style={{ fontStyle: 'italic' }}>{t('No Tankoubons in your library yet.')}</li>
+                  )}
                 </ul>
               </div>
 
@@ -331,14 +368,60 @@ export default function Categories() {
                 <h3>{t('Archives')}</h3>
                 <ul id="archivelist" style={{ listStyle: 'none', paddingLeft: 0, margin: 0 }}>
                   {archives.data?.length ? (
-                    archives.data.map((a) => (
-                      <ArchiveChecklistItem
-                        key={a.arcid}
-                        title={a.title}
-                        checked={selected.archives.includes(a.arcid)}
-                        onChange={(checked) => void handleArchiveToggle(a.arcid, checked)}
-                      />
-                    ))
+                    archives.data.map((a) => {
+                      const memberTanks = tanksByArchiveId.get(a.arcid)
+                      const title = memberTanks?.length ? (
+                        // Not `anchor="cursor"`: this label has real, clickable links in it, and
+                        // cursor-following repositions the bubble on every mousemove over the
+                        // trigger — moving the pointer down toward the link (through these very
+                        // short, tightly-packed checklist rows) crosses into the next row before
+                        // it gets there, closing the tooltip out from under the cursor. The default
+                        // `'element'` anchor keeps the bubble in one fixed spot instead, so the
+                        // pointer can actually travel to and click the link.
+                        <Tooltip
+                          label={
+                            <>
+                              {t('This archive belongs to the following Tankoubon(s):')}
+                              {memberTanks.map((tank) => (
+                                <div key={tank.id}>
+                                  {tank.name} (
+                                  <a
+                                    href={routes.tankoubonEdit(tank.id)}
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      navigate(routes.tankoubonEdit(tank.id))
+                                    }}
+                                  >
+                                    {tank.id}
+                                  </a>
+                                  )
+                                </div>
+                              ))}
+                            </>
+                          }
+                        >
+                          {a.title}
+                        </Tooltip>
+                      ) : (
+                        a.title
+                      )
+                      return (
+                        <ArchiveChecklistItem
+                          key={a.arcid}
+                          title={title}
+                          checked={selected.archives.includes(a.arcid)}
+                          onChange={(checked) => void handleArchiveToggle(a.arcid, checked)}
+                          // `.tankoubon-member-row` — a real per-theme class (each of the 5 real
+                          // theme files under `public/legacy/themes/`), not a hardcoded color: this
+                          // page is written directly against legacy's own classnames, so a color
+                          // needs to swap correctly when the active theme changes, the same way
+                          // every other themed color here does (see those files' own docs on this
+                          // class for the full reasoning).
+                          className={memberTanks?.length ? 'tankoubon-member-row' : undefined}
+                        />
+                      )
+                    })
                   ) : (
                     <li style={{ fontStyle: 'italic' }}>{t('No Archives in your library yet.')}</li>
                   )}

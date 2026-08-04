@@ -189,6 +189,9 @@ mod tests {
                 tags: String::new(),
                 progress: 0,
                 archives: vec![legacy_id.clone()],
+                thumbnail_manual: false,
+                thumbnail_source_archive: None,
+                thumbnail_source_page: None,
             })
             .await
             .unwrap();

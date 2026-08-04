@@ -147,6 +147,8 @@ export function PageLightbox({
   onEditToc,
   onRemoveToc,
   onClose,
+  pagesOverride,
+  resolvePage,
 }: {
   archiveId: string
   initialPage: number
@@ -156,10 +158,20 @@ export function PageLightbox({
   onEditToc: (entry: { page: number; name: string }) => void
   onRemoveToc: (entry: { page: number; name: string }) => void
   onClose: () => void
+  /** Tankoubon-mode only: the already-concatenated multi-archive page list
+   * (`useTankoubonReading`'s own `pages.data.pages`) — used instead of fetching `archiveId`'s own
+   * pages internally, since `archiveId` is then the Tankoubon's own id, not a real archive's. */
+  pagesOverride?: string[]
+  /** Tankoubon-mode only companion to `pagesOverride` — resolves one of its own *global* page
+   * numbers back to the real member archive (and that archive's own local page number) whose
+   * thumbnail the filmstrip should actually show for it. `undefined` in the plain single-archive
+   * case, where every frame already just uses `archiveId`/the raw page number directly. */
+  resolvePage?: (globalPage: number) => { arcId: string; localPage: number } | null
 }) {
   const { t } = useTranslation()
   const palette = useMenuPalette()
-  const pages = useArchivePages(archiveId)
+  const singlePages = useArchivePages(pagesOverride ? null : archiveId)
+  const pages = pagesOverride ? { data: { pages: pagesOverride } } : singlePages
   const totalPages = pages.data?.pages.length ?? 0
   const [previewPage, setPreviewPage] = useState(initialPage)
   // Same `ChapterActionMenu` the overview's own chapter-selector row uses (see that JSX further
@@ -507,11 +519,13 @@ export function PageLightbox({
             {(pages.data?.pages ?? []).map((_, i) => {
               const page = i + 1
               const chapter = filmstripChapterByPage.get(page)
+              const resolved = resolvePage ? resolvePage(page) : { arcId: archiveId, localPage: page }
+              if (!resolved) return null
               return (
                 <LightboxFilmstripFrame
                   key={i}
-                  archiveId={archiveId}
-                  page={page}
+                  archiveId={resolved.arcId}
+                  page={resolved.localPage}
                   isPreview={page === previewPage}
                   accentColor={palette.hoverText}
                   borderColor={palette.border === 'transparent' ? palette.text : palette.border}

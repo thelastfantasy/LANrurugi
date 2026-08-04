@@ -81,6 +81,9 @@ pub async fn restore(
                     .cloned()
                     .map(ArchiveId)
                     .collect(),
+                thumbnail_manual: false,
+                thumbnail_source_archive: None,
+                thumbnail_source_page: None,
             })
             .await?;
         summary.tankoubons_restored += 1;

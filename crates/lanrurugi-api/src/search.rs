@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
+use futures_util::future::join_all;
 use lanrurugi_search::engine::{search, SearchParams};
 use serde::Deserialize;
 use serde_json::json;
@@ -29,16 +30,26 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
             .get(&lanrurugi_core::ids::TankId(tankid.to_string()))
             .await
             .ok()??;
+        // Fetches every member archive in parallel (`join_all`), not a sequential `await`-per-
+        // iteration loop — issue #66: `groupby_tanks` defaults to `true`, so this is on the
+        // Library homepage's own default page-load path, and a sequential loop over a library
+        // with multiple multi-volume Tankoubons could mean hundreds of serial Redis round trips
+        // just to render one page of search results.
+        let members = join_all(
+            grouping
+                .archives
+                .iter()
+                .map(|archive_id| state.repos.archives.get(archive_id)),
+        )
+        .await;
+
         let mut aggregate_names = Vec::new();
         let mut aggregate_isnew = false;
         let mut aggregate_pagecount: u64 = 0;
         let mut aggregate_size: u64 = 0;
         let mut latest_readtime: u64 = 0;
         let mut tags: Vec<String> = Vec::new();
-        for archive_id in &grouping.archives {
-            let Ok(Some(a)) = state.repos.archives.get(archive_id).await else {
-                continue;
-            };
+        for a in members.into_iter().flatten().flatten() {
             aggregate_names.push(a.title.clone());
             aggregate_isnew = aggregate_isnew || a.isnew;
             aggregate_pagecount += u64::from(a.pagecount);

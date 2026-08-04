@@ -49,6 +49,18 @@ export interface TankoubonListResponse {
   filtered: number
 }
 
+/** `GET /tankoubons/{id}/full` — same fields as `TankoubonMetadata` plus `full_data`, one
+ * `ArchiveMetadata` per entry in `archives`, in the same (reading) order — used to build the
+ * concatenated multi-archive page list a Tankoubon "read" session needs (`useTankoubonReading`).
+ * `full_data.length` can be `< archives.length`: the backend silently drops any member archive
+ * missing from the archive repository (a stale grouping entry) rather than erroring, so a
+ * consumer must match entries by their own `arcid`, not assume index alignment with `archives`. */
+export interface TankoubonFullResponse {
+  result: TankoubonMetadata & { full_data: ArchiveMetadata[] }
+  total: number
+  filtered: number
+}
+
 export interface Settings {
   theme: string
   language: string

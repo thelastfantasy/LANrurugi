@@ -155,6 +155,36 @@ ask again. A change that's mostly logic but happens to touch a `.tsx` file's sty
 "purely UI" — this rule is about changes where the entire diff is visual polish with no functional
 risk to independently verify against.
 
+## Custom colors must be theme-aware, never a hardcoded value
+
+Any new UI element that needs its own color (a highlight, a status background, an accent —
+anything beyond what an existing legacy-derived class already supplies) MUST adapt across all 5
+themes, not just whichever one happens to be active during development. Concretely:
+
+- Add a real CSS class carrying the color to **each** of the 5 real theme files under
+  `apps/frontend/public/legacy/themes/` (`g.css`, `ex.css`, `modern.css`, `modern_red.css`,
+  `modern_clear.css`), one rule per file, each using a color that fits *that* theme (in practice:
+  reuse that same theme's own existing accent hue for an analogous "this is special" state —
+  e.g. `.msm-selected`'s row-highlight color — for visual consistency within the theme, not a
+  color invented from scratch). Reference the class from the component via `className`, not an
+  inline `style` with a literal color value — an inline style can't vary per theme at all.
+- This is a deliberate exception to the general "don't edit the copied theme files, they mirror
+  legacy verbatim" rule elsewhere in this doc: that rule protects existing legacy-derived rules so
+  they stay diffable against real legacy. A *new* class for a concept legacy doesn't have at all
+  (no legacy equivalent to stay diffable against) doesn't conflict with that — it's additive,
+  appended at the end of each file, never modifying anything legacy actually wrote.
+- Do NOT reach for the `--theme-*` CSS custom properties defined in `apps/frontend/src/index.css`
+  for this — that block's own doc comment marks it an explicitly transitional fallback, kept only
+  for components not yet migrated to legacy's own real classnames, meant to be deleted (not grown)
+  as migration proceeds. A page already written against legacy's own classnames (`.checklist`,
+  `.favtag-btn`, `.stdbtn`, etc. — e.g. `Categories.tsx`) is exactly the "already migrated" case
+  that variable block is waiting to lose its last reader, so adding new usage of it there would be
+  a step backward.
+- Precedent: `.tankoubon-member-row` (a Categories-page checklist-row highlight for an archive
+  that's also a Tankoubon member) — added to all 5 theme files this way, reusing each theme's own
+  `.msm-selected` accent color, after an initial attempt hardcoded a single `rgba(...)` value that
+  only looked right on the one theme it was eyeballed against.
+
 ## Before pushing — check whether README.md needs updating
 
 Before any `git push`, review what the commit(s) being pushed actually changed and ask: does this

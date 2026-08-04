@@ -101,6 +101,16 @@ pub async fn remove_archive_index(
     Ok(())
 }
 
+/// Strips a single title-index entry (legacy Tankoubon delete's own `LRR_TITLES` cleanup — an
+/// archive's own delete path removes it as part of `remove_archive_index`'s bigger multi-set
+/// pipeline instead, since an archive has more than just a title entry to clean up).
+pub async fn remove_title_index(search_pool: &Pool, id: &str, title: &str) -> Result<()> {
+    let mut conn = search_pool.get().await?;
+    let key = format!("{}\0{}", title.to_lowercase(), id);
+    let _: () = conn.zrem(TITLES_KEY, key).await?;
+    Ok(())
+}
+
 /// Moves an archive's title-index entry when its title changes (legacy `set_title`).
 pub async fn update_title_index(
     search_pool: &Pool,
@@ -160,6 +170,53 @@ pub async fn set_isnew_index(search_pool: &Pool, id: &str, isnew: bool) -> Resul
     } else {
         let _: () = conn.srem(NEW_KEY, id).await?;
     }
+    Ok(())
+}
+
+/// Keeps `LRR_TANKGROUPED` consistent with a Tankoubon's own member-archive list whenever it
+/// changes (create/rename with an initial archive list, bulk archive-list replace, single add,
+/// single remove, delete — see `TANKGROUPED_KEY`'s own doc comment for the set's real semantics).
+///
+/// Takes pre-computed deltas rather than diffing a before/after list itself: `joined` (archives
+/// pulled out of the pool because they're now folded into this tank) and `left` (archives put
+/// back because they no longer are) — because "no longer a member of *this* tank" isn't the same
+/// as "should rejoin the pool." An archive can belong to more than one Tankoubon at once (real,
+/// observed data, not just a theoretical edge case), so a caller must first confirm an archive
+/// isn't still a member of some *other* tank before including it in `left` — matches legacy's own
+/// `get_tankoubons_containing_archive` guard in `delete_tankoubon` — otherwise it would wrongly
+/// reappear as a standalone search result while still visually folded into its other tank(s).
+/// `tank_was_empty`/`tank_is_empty` drive the tank's own id add/remove on the empty ↔ non-empty
+/// transition, independent of the per-archive deltas above.
+pub async fn sync_tank_membership(
+    search_pool: &Pool,
+    tank_id: &str,
+    tank_was_empty: bool,
+    tank_is_empty: bool,
+    joined: &[String],
+    left: &[String],
+) -> Result<()> {
+    let mut conn = search_pool.get().await?;
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    for id in joined {
+        pipe.srem(TANKGROUPED_KEY, id.as_str());
+    }
+    for id in left {
+        pipe.sadd(TANKGROUPED_KEY, id.as_str());
+    }
+    match (tank_was_empty, tank_is_empty) {
+        (true, false) => {
+            // Gained its first member: the tank now represents a real group, so its own id
+            // becomes a valid standalone candidate in a `groupby_tanks=true` search.
+            pipe.sadd(TANKGROUPED_KEY, tank_id);
+        }
+        (false, true) => {
+            // Lost its last member: nothing left to display as a group.
+            pipe.srem(TANKGROUPED_KEY, tank_id);
+        }
+        _ => {}
+    }
+    let _: () = pipe.query_async(&mut conn).await?;
     Ok(())
 }
 

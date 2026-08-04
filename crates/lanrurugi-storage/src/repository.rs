@@ -356,6 +356,14 @@ const SCORE_NAME: isize = 0;
 const SCORE_SUMMARY: isize = -1;
 const SCORE_TAGS: isize = -2;
 const SCORE_PROGRESS: isize = -3;
+/// Additive beyond legacy's own `%TANK_METADATA` layout (`name`/`summary`/`tags`/`progress` only)
+/// — see `Grouping::thumbnail_manual`'s own docs for what this tracks.
+const SCORE_THUMBNAIL_MANUAL: isize = -4;
+/// See `Grouping::thumbnail_source_archive`/`thumbnail_source_page`'s own docs. Always written
+/// (matching every other metadata slot's own convention), empty string meaning `None` rather than
+/// omitting the zset member entirely — simpler `get`/`save` symmetry than an optional member.
+const SCORE_THUMBNAIL_SOURCE_ARCHIVE: isize = -5;
+const SCORE_THUMBNAIL_SOURCE_PAGE: isize = -6;
 
 impl GroupingRepository {
     pub fn new(pool: Pool) -> Self {
@@ -370,12 +378,15 @@ impl GroupingRepository {
         }
 
         let metadata_members: Vec<String> = conn
-            .zrangebyscore(tankid.as_str(), SCORE_PROGRESS, SCORE_NAME)
+            .zrangebyscore(tankid.as_str(), SCORE_THUMBNAIL_SOURCE_PAGE, SCORE_NAME)
             .await?;
         let mut name = String::new();
         let mut summary = String::new();
         let mut tags = String::new();
         let mut progress = 0u32;
+        let mut thumbnail_manual = false;
+        let mut thumbnail_source_archive = None;
+        let mut thumbnail_source_page = None;
         for member in metadata_members {
             if let Some(v) = member.strip_prefix("name_") {
                 name = v.to_string();
@@ -385,6 +396,12 @@ impl GroupingRepository {
                 tags = v.to_string();
             } else if let Some(v) = member.strip_prefix("progress_") {
                 progress = v.parse().unwrap_or(0);
+            } else if let Some(v) = member.strip_prefix("thumbnail_manual_") {
+                thumbnail_manual = v == "1";
+            } else if let Some(v) = member.strip_prefix("thumbnail_source_archive_") {
+                thumbnail_source_archive = (!v.is_empty()).then(|| ArchiveId(v.to_string()));
+            } else if let Some(v) = member.strip_prefix("thumbnail_source_page_") {
+                thumbnail_source_page = v.parse().ok();
             }
         }
 
@@ -398,6 +415,9 @@ impl GroupingRepository {
             tags,
             progress,
             archives,
+            thumbnail_manual,
+            thumbnail_source_archive,
+            thumbnail_source_page,
         }))
     }
 
@@ -420,6 +440,34 @@ impl GroupingRepository {
             (SCORE_SUMMARY, format!("summary_{}", grouping.summary)),
             (SCORE_TAGS, format!("tags_{}", grouping.tags)),
             (SCORE_PROGRESS, format!("progress_{}", grouping.progress)),
+            (
+                SCORE_THUMBNAIL_MANUAL,
+                format!(
+                    "thumbnail_manual_{}",
+                    if grouping.thumbnail_manual { "1" } else { "0" }
+                ),
+            ),
+            (
+                SCORE_THUMBNAIL_SOURCE_ARCHIVE,
+                format!(
+                    "thumbnail_source_archive_{}",
+                    grouping
+                        .thumbnail_source_archive
+                        .as_ref()
+                        .map(|a| a.as_str())
+                        .unwrap_or("")
+                ),
+            ),
+            (
+                SCORE_THUMBNAIL_SOURCE_PAGE,
+                format!(
+                    "thumbnail_source_page_{}",
+                    grouping
+                        .thumbnail_source_page
+                        .map(|p| p.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
         ];
         for (i, archive_id) in grouping.archives.iter().enumerate() {
             members.push(((i + 1) as isize, archive_id.to_string()));
@@ -640,6 +688,9 @@ mod tests {
                 ArchiveId("c".repeat(40)),
                 ArchiveId("d".repeat(40)),
             ],
+            thumbnail_manual: true,
+            thumbnail_source_archive: Some(ArchiveId("c".repeat(40))),
+            thumbnail_source_page: Some(7),
         };
 
         repo.save(&grouping).await.unwrap();

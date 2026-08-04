@@ -222,3 +222,83 @@ input[type="checkbox"]:disabled {
 .table-options-goto-select {
   min-width: 0;
 }
+
+/* Hides the scrollbar chrome on an `overflow-x: auto` row while leaving actual scrolling (wheel/
+ * trackpad/drag) fully working — `scrollbar-width`/`-ms-overflow-style` can't be done inline
+ * (unsupported property names in React's style object) and `::-webkit-scrollbar` is a pseudo-
+ * element, which inline styles can never target at all. Used by `SortableList.tsx`'s horizontal
+ * mode (the selection-mode carousel in `RecentlyAddedCarousel.tsx`): the rest of the app's
+ * carousels are Swiper-based, which hides overflow internally and never shows a native scrollbar
+ * track, so a bare `overflow-x: auto` div showing the browser's own scrollbar once enough cards
+ * are selected to overflow the row reads as visually inconsistent with every other carousel here. */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Neither legacy's own CSS nor this port's copied theme files set `vertical-align` on
+ * `.favtag-btn` — it defaults to `baseline`, so adjacent buttons whose *content* has different
+ * glyph metrics (an emoji + CJK text vs. an emoji + Latin text vs. a run of star-rating emoji with
+ * no text at all) end up sitting 1px apart vertically even though every button shares identical
+ * CSS — a sub-pixel browser rendering artifact of mixed-glyph inline-block baselines, not an
+ * actual layout bug. Harmless and safe to flatten with `middle` since every `.favtag-btn` already
+ * shares the same fixed height. */
+.favtag-btn {
+  vertical-align: middle;
+}
+
+/* `RecentlyAddedCarousel.tsx`'s two carousel modes — the read-only Swiper one (Recently Added/On
+ * Deck/etc.) and the drag-to-reorder `SortableList` one ("选择档案" multi-select mode) — both wrap
+ * each card in a fixed-size box that used to be a plain inline `width: 228`. An inline style can't
+ * carry a media query, so both used to stay 228px wide even once `div.id1` inside them (`lrr.css`)
+ * shrank to 164px under its own `max-width: 560px` breakpoint, leaving a large empty gap around
+ * each (now-smaller) card on narrow viewports. This class gives both the same responsive width
+ * `div.id1` itself gets — 228px unconditional, 164px to match that breakpoint (mirrored verbatim,
+ * not reinvented) — so the wrapper is always exactly the size of the card it holds.
+ *
+ * The extra `.swiper-slide.carousel-slide` selector (used by the Swiper-based mode only) exists
+ * for specificity, not semantics: `swiper/css` injects its own `.swiper-slide { width: 100% }`
+ * rule as a separate stylesheet, and Vite's dev-server module-injection order can land it *after*
+ * this file's own `<style>` tag — at equal specificity (both single-class selectors), source order
+ * decides, and swiper's rule was winning. The swiper slide element already carries both classes,
+ * so the compound selector matches the same element while outranking swiper's rule regardless of
+ * injection order; the drag-mode wrapper has no such competing rule, so the plain `.carousel-slide`
+ * selector is enough for it. */
+.carousel-slide,
+.swiper-slide.carousel-slide {
+  width: 228px;
+}
+@media all and (max-width: 560px) {
+  .carousel-slide,
+  .swiper-slide.carousel-slide {
+    width: 164px;
+  }
+}
+
+/* `Categories.tsx`'s right-hand panel (the static-category archive checklist box) borrows
+ * `div.id1`'s visual look (background/border/radius) the same way legacy's own
+ * `category.html.tt2` does (`class="id1 right-column"`, verified verbatim) — but `div.id1` is
+ * really the Library archive-card class, and its own `max-width: 560px` media query sets
+ * `height: 256px !important` for that unrelated purpose. `!important` beats any inline style
+ * (this panel sets its own explicit `height: 500` inline, same as legacy), so on a narrow
+ * viewport the panel silently shrinks to ~335px (that override, clamped back up by `.id1`'s own
+ * unconditional `min-height: 335px`) while its child `.checklist` stays a fixed, unrelated 480px
+ * tall — the child overflows the now-too-short parent with no scrollbar to catch it, spilling
+ * checklist rows over the page's own "Return to Library" button below. Legacy has this exact same
+ * class collision and very likely the same bug on a narrow viewport — not a regression this port
+ * introduced — but it's a genuine, confirmed usability break worth fixing outright rather than
+ * preserving: this class carries only `div.id1`'s *visual* properties (nothing sizing-related,
+ * since the panel already sets its own explicit width/height inline at every viewport), so it's
+ * immune to the archive-card media query entirely. */
+.category-panel {
+  background: none repeat scroll 0 0 #f2efdf;
+  border: 1px solid #e3e0d1;
+  border-radius: 9px;
+  display: inline-block;
+  margin: 3px 2px 2px 3px;
+  padding-top: 3px;
+  vertical-align: top;
+}

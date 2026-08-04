@@ -398,9 +398,16 @@ export function RecentlyAddedCarousel({
           // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
           <div className="collapsible-body" style={{ width: '100%', boxSizing: 'border-box' }}>
             {selectedIds.length === 0 ? (
-              /* Real legacy `#carousel-empty`: a fixed `height: 344px` flex column, centered both
-                 axes, not a content-flow `<p>` with a `<br>`. */
-              <div style={{ height: 344, display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
+              /* Real legacy `#carousel-empty` uses a fixed `height: 344px` (a flex column,
+                 centered both axes) to keep the panel's own height stable across the empty/
+                 populated states — but 344 is legacy's own card dimensions, not this port's:
+                 `SelectedArchiveSlideContent`'s real rendered row (the `padding: '8px 0'` wrapper
+                 below plus a 228px-wide `ArchiveCard`) measures 361px via
+                 `getBoundingClientRect()`, not 344 — the 17px gap was a real, live-confirmed
+                 layout-shift bug (selecting the first archive visibly grew the panel and pushed
+                 the page's own content below it down). 361 here matches that real measurement
+                 instead of legacy's own unrelated number. */
+              <div style={{ height: 361, display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
                 <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
                 <span style={{ marginTop: 12 }}>
                   {t('Click Archives to add them to the selection. Your selection carries over across searches.')}
@@ -424,8 +431,12 @@ export function RecentlyAddedCarousel({
                     <div
                       {...dragHandleProps.attributes}
                       {...dragHandleProps.listeners}
+                      // `.carousel-slide` (`index.css`) — same responsive-width fix as the
+                      // read-only carousel above, and the same bug: a plain inline `width: 228`
+                      // can't respond to `lrr.css`'s own `max-width: 560px` breakpoint that
+                      // `div.id1` (inside `SelectedArchiveSlideContent`) shrinks to 164px under.
+                      className="carousel-slide"
                       style={{
-                        width: 228,
                         marginRight: 8,
                         cursor: dragHandleProps.isDragging ? 'grabbing' : 'grab',
                       }}
@@ -465,9 +476,16 @@ export function RecentlyAddedCarousel({
                 style={{ padding: '8px 0' }}
               >
                 {items.map((a) => (
-                  // 228px matches `div.id1`'s real fixed width — a narrower slide box makes each
-                  // card visually spill into its neighbor.
-                  <SwiperSlide key={a.arcid} style={{ width: 228 }}>
+                  // `.carousel-slide` (`index.css`) tracks `div.id1`'s own responsive width exactly
+                  // (228px desktop / 164px under `lrr.css`'s `max-width: 560px` breakpoint) — a
+                  // plain inline `style={{ width: 228 }}` used to sit here instead, which matched
+                  // the desktop case but, being an inline style, always won over the CSS cascade
+                  // (including that same media query) on narrower viewports too, wrapping a
+                  // genuinely 164px-wide mobile card in a stale 228px slide and leaving a large
+                  // empty gap around the thumbnail. Swiper's `slidesPerView="auto"` mode needs each
+                  // slide to carry its own explicit width to size correctly — it doesn't measure a
+                  // child's rendered content width on its own.
+                  <SwiperSlide key={a.arcid} className="carousel-slide">
                     <CarouselCard
                       archive={a}
                       cropThumbs={cropThumbs}

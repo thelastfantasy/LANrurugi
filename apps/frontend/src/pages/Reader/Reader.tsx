@@ -8,11 +8,14 @@ import {
   useArchivePages,
   useBookmarkLink,
   useCategories,
+  useClearArchiveNew,
   useGenerateThumbnails,
+  useGenerateThumbnailsForArchives,
   useLoginStatus,
   usePageDimensions,
   useSettings,
   useUpdateProgress,
+  useUpdateTankoubonProgress,
 } from '../../api/hooks'
 import Footer from '../../components/Footer'
 import Tooltip from '../../components/Tooltip'
@@ -23,6 +26,7 @@ import { routes } from '../../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
+import { isTankoubonId } from '../Library/shared'
 import ArchiveOverviewOverlay from './ArchiveOverviewOverlay'
 import {
   type ArchiveNavState,
@@ -34,6 +38,7 @@ import MarkerLayer from './MarkerLayer'
 import SettingsOverlay from './SettingsOverlay'
 import { clamp, computeNextPage, computeSpread } from './useReaderNavigation'
 import { useReaderSettings } from './useReaderSettings'
+import { useTankoubonReading } from './useTankoubonReading'
 
 // Faithful port of legacy's reader page (`~/LANraragi/templates/reader.html.tt2` +
 // `~/LANraragi/public/js/reader.js`) — real DOM structure (`#i1`-`#i7`) and CSS classnames from
@@ -78,8 +83,19 @@ export default function Reader() {
   const { archiveId = null } = useParams<{ archiveId: string }>()
   useApplyTheme()
 
-  const metadata = useArchiveMetadata(archiveId)
-  const pages = useArchivePages(archiveId)
+  // A `TANK_`-prefixed id means "read this Tankoubon as one concatenated multi-archive book"
+  // (matches real legacy's own `state.id.startsWith("TANK_")` branch throughout
+  // `reader_common.js`/`reader_archive_overlay.js`) rather than a single archive. Both data-
+  // fetching paths below are always called (React's Rules of Hooks — a hook call can't be
+  // conditional), just with the *other* one's id argument forced to `null` so it's a no-op; their
+  // results are merged into the same `metadata`/`pages` variables everything downstream already
+  // reads, so the rest of this file doesn't need its own `isTank` branch for every access.
+  const isTank = isTankoubonId(archiveId ?? '')
+  const singleMetadata = useArchiveMetadata(isTank ? null : archiveId)
+  const singlePages = useArchivePages(isTank ? null : archiveId)
+  const tankReading = useTankoubonReading(isTank ? archiveId : null)
+  const metadata = isTank ? tankReading.metadata : singleMetadata
+  const pages = isTank ? tankReading.pages : singlePages
   // Matches legacy's own real `reader.js` behavior exactly (confirmed against the Perl source
   // *and* live via `~/LANraragi/templates/reader.html.tt2`'s `<title>[% title %]</title>` initial
   // server-rendered placeholder, which legacy's own client-side `reader.js` unconditionally
@@ -95,9 +111,23 @@ export default function Reader() {
   const loginStatus = useLoginStatus()
   const categories = useCategories()
   const bookmarkLink = useBookmarkLink()
-  const updateProgress = useUpdateProgress(archiveId)
-  const generateThumbnails = useGenerateThumbnails(archiveId ?? '')
+  const updateProgress = useUpdateProgress(isTank ? null : archiveId)
+  const updateTankoubonProgress = useUpdateTankoubonProgress(isTank ? archiveId : null)
+  const generateThumbnails = useGenerateThumbnails(isTank ? '' : (archiveId ?? ''))
+  const generateThumbnailsForArchives = useGenerateThumbnailsForArchives()
   const [readerSettings, updateReaderSettings] = useReaderSettings()
+
+  // Legacy fires this unconditionally the moment the reader loads (`reader_common.js`'s init
+  // sequence: `DELETE /api/archives/{id}/isnew`, skipped only for a `TANK_` id since tanks have no
+  // `isnew` flag of their own) — not tied to finishing the archive or any elapsed time, just
+  // "was it opened at least once." Without this call the badge has no way to ever clear itself.
+  const clearArchiveNew = useClearArchiveNew()
+  const clearArchiveNewRef = useRef(clearArchiveNew.mutate)
+  clearArchiveNewRef.current = clearArchiveNew.mutate
+  useEffect(() => {
+    if (!archiveId || isTank) return
+    clearArchiveNewRef.current(archiveId)
+  }, [archiveId, isTank])
 
   const totalPages = pages.data?.pages.length ?? 0
   const loggedIn = loginStatus.data?.logged_in ?? false
@@ -274,10 +304,18 @@ export default function Reader() {
 
   // Progress persistence decision tree (verified against legacy's `updateProgress`):
   // authprogress+logged_in -> server; localprogress -> localStorage; neither -> server anyway.
+  // `${archiveId}-reader`'s localStorage key already works unchanged for tank mode — `archiveId`
+  // is whatever's in the URL, tank or archive id alike, same as legacy's own `${state.id}-reader`.
+  // Only the *server* mutation needs to pick the right endpoint: a Tankoubon's own progress is a
+  // single global page number stored directly on its own record (`useUpdateTankoubonProgress` ->
+  // `PUT /tankoubons/{id}/progress/{page}`), not resolved back to any one member archive's own
+  // progress field.
   useEffect(() => {
     if (!archiveId || totalPages === 0) return
     if (settings.data?.localprogress && !(settings.data?.authprogress && loggedIn)) {
       localStorage.setItem(`${archiveId}-reader`, String(currentPage))
+    } else if (isTank) {
+      updateTankoubonProgress.mutate(currentPage)
     } else {
       updateProgress.mutate(currentPage)
     }
@@ -456,7 +494,14 @@ export default function Reader() {
   }
 
   function cleanCache() {
-    generateThumbnails.mutate()
+    // Matches legacy's own tank-mode `generateThumbnails` (`reader_common.js`): loops every
+    // member archive's own thumbnail-regen endpoint, not a single call — there's no one "the
+    // archive" to regenerate thumbnails for while reading a concatenated Tankoubon.
+    if (isTank) {
+      generateThumbnailsForArchives.mutate(tankReading.chapters.map((c) => c.arcId))
+    } else {
+      generateThumbnails.mutate()
+    }
     window.location.reload()
   }
 
@@ -817,8 +862,51 @@ export default function Reader() {
     )
   }
 
+  // A Tankoubon with zero member archives has nothing to concatenate into a book — `totalPages`
+  // is genuinely `0`, not a loading/error state. Rendering the normal page-view JSX below for that
+  // case used to fall through to a broken "1 / 0" reader with no image (a real, observed bug — see
+  // `TANK_...`'s own incident this session where a Tankoubon's archive list emptied out and its
+  // reader page silently showed this), rather than a real explanation. `isTank` gates this (a
+  // plain archive's own `totalPages` is only ever `0` mid-load, already handled by the loading
+  // check above) — an intentionally-empty Tankoubon is a real, reachable state (freshly created
+  // and not yet populated, or emptied via archive removal), not an error.
+  if (isTank && totalPages === 0) {
+    return (
+      <div className="ido" style={{ textAlign: 'center', padding: 40 }}>
+        <i className="fas fa-8x fa-box-open" aria-hidden="true"></i>
+        <h2 style={{ marginTop: 16 }}>{t('This Tankoubon has no archives yet.')}</h2>
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'center' }}>
+          <input
+            type="button"
+            className="stdbtn"
+            value={t('Edit Tankoubon') ?? undefined}
+            onClick={() => archiveId && navigate(routes.tankoubonEdit(archiveId))}
+          />
+          <input
+            type="button"
+            className="stdbtn"
+            value={t('Return to Library') ?? undefined}
+            onClick={() => navigate(routes.library())}
+          />
+        </div>
+      </div>
+    )
+  }
+
   const leftUrl = pages.data.pages[spread.left - 1]
   const rightUrl = spread.right !== null ? pages.data.pages[spread.right - 1] : null
+
+  // `MarkerLayer` (stamps) is a per-real-archive resource — in tank mode, the current global page
+  // has to be resolved back to which member archive (and that archive's own local page number)
+  // it actually belongs to first, matching legacy's own `getArchiveForPage` used the same way in
+  // `reader_stamps.js`. `null` (nothing rendered) if that resolution fails — a member archive that
+  // vanished from the repo after the Tankoubon's own `full_data` was fetched (see
+  // `TankoubonFullResponse`'s own docs), a real if rare edge case.
+  const markerTarget = isTank
+    ? tankReading.getArchiveForPage(spread.left)
+    : archiveId
+      ? { arcId: archiveId, localPage: spread.left }
+      : null
 
   // Mirrors legacy's `applyContainerWidth` (reader.js:1502) exactly: fit mode drives two
   // *different* styles on two *different* elements — `.reader-image` (each `<img>`) and `.sni`
@@ -1235,10 +1323,10 @@ export default function Reader() {
                 />
               )}
             </a>
-            {archiveId && (
+            {markerTarget && (
               <MarkerLayer
-                archiveId={archiveId}
-                page={spread.left}
+                archiveId={markerTarget.arcId}
+                page={markerTarget.localPage}
                 imageRef={leftImgRef}
                 visible={readerSettings.markersVisible}
                 placementMode={markerPlacementMode}
@@ -1296,6 +1384,9 @@ export default function Reader() {
           onClose={() => setOverlay(null)}
           onSelectPage={selectPage}
           autoFocus={!openedByDefaultSetting.current}
+          resolvePage={isTank ? tankReading.getArchiveForPage : undefined}
+          tankChapters={isTank ? tankReading.chapters : undefined}
+          tankPages={isTank ? pages.data.pages : undefined}
         />
       )}
 

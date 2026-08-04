@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { ApiError, fetchJson, fetchText, sendForm, sendJson } from './client'
 import type {
@@ -28,6 +28,7 @@ import type {
   StampedPagesResponse,
   StampsByPageResponse,
   StatTag,
+  TankoubonFullResponse,
   TankoubonListResponse,
   TankoubonMetadata,
   UpdateQueueItemBody,
@@ -286,6 +287,10 @@ export interface SearchOptions {
    * every search so both the main grid and (if built) the carousel stay in sync with them. */
   hidecompleted?: boolean
   groupbyTanks?: boolean
+  /** Defaults to `true`. Set `false` to skip firing the request entirely — e.g. a live
+   * search-as-you-type dropdown (`TankoubonEdit.tsx`'s archive picker) that shouldn't query the
+   * whole library while its input is empty. */
+  enabled?: boolean
 }
 
 export function useSearch(options: SearchOptions) {
@@ -302,6 +307,7 @@ export function useSearch(options: SearchOptions) {
   return useQuery({
     queryKey: ['search', options],
     queryFn: () => fetchJson<SearchResponse>(`/search?${params.toString()}`),
+    enabled: options.enabled ?? true,
   })
 }
 
@@ -360,6 +366,37 @@ export function useRemoveTocEntry(id: string) {
   })
 }
 
+/** Unbound counterpart to `useAddTocEntry` — the target archive id is only known once a
+ * Tankoubon-wide global page number has been resolved back to its real member archive at call
+ * time (`ArchiveOverviewOverlay`'s own `resolvePage` prop), not fixed at mount like the bound
+ * version above. Matches `useUpdateProgress`/`useSetArchiveProgress`'s own bound/unbound pairing.
+ * (Setting a *cover* thumbnail has no equivalent unbound variant: Tankoubon-mode "set as cover"
+ * always targets the Tankoubon's own cover via `useSetTankoubonThumbnail`, never a specific
+ * member archive's — matches legacy's own `reader_archive_overlay.js`.) */
+export function useAddTocEntryForId() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, page, title }: { id: string; page: number; title: string }) =>
+      sendJson('PUT', `/archives/${id}/toc?page=${page}&title=${encodeURIComponent(title)}`),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
+    },
+  })
+}
+
+/** Unbound counterpart to `useRemoveTocEntry` — see `useSetArchiveThumbnailForId`'s own docs. */
+export function useRemoveTocEntryForId() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, page }: { id: string; page: number }) => sendJson('DELETE', `/archives/${id}/toc?page=${page}`),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['archive', id] })
+      queryClient.invalidateQueries({ queryKey: ['archives'] })
+    },
+  })
+}
+
 export function useDeleteArchive() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -410,6 +447,45 @@ export function useAddToTankoubon(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (archiveId: string) => sendJson('PUT', `/tankoubons/${id}/${archiveId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubon', id] }),
+  })
+}
+
+/** `GET /tankoubons/{id}/full` — every member archive's own full metadata (including `pagecount`,
+ * needed to build the cumulative page-offset table), not just the summary `useTankoubon` returns.
+ * Used by `useTankoubonReading` to read a Tankoubon as one concatenated multi-archive book. */
+export function useTankoubonFull(id: string | null) {
+  return useQuery({
+    queryKey: ['tankoubon-full', id],
+    queryFn: () => fetchJson<TankoubonFullResponse>(`/tankoubons/${id}/full?page=-1`),
+    enabled: id !== null,
+  })
+}
+
+/** Same shape as `useUpdateProgress`, but for a Tankoubon read as one concatenated book — `page`
+ * is the *global* page number across every member archive, matching the backend's own
+ * `PUT /tankoubons/{id}/progress/{page}` (`update_tankoubon_progress`), which stores it directly
+ * on the Tankoubon's own record rather than resolving it back to any one member archive's
+ * progress. */
+export function useUpdateTankoubonProgress(id: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (page: number) => sendJson('PUT', `/tankoubons/${id}/progress/${page}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tankoubon', id] })
+      queryClient.invalidateQueries({ queryKey: ['tankoubons'] })
+    },
+  })
+}
+
+/** Sets a Tankoubon's own cover thumbnail from a page within one of its member archives,
+ * addressed by *global* page number — the backend (`update_tankoubon_thumbnail`) resolves which
+ * member archive that page actually falls in server-side (matching legacy's own
+ * `translate_global_page`), so the caller doesn't need to do that resolution itself first. */
+export function useSetTankoubonThumbnail(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (page: number) => sendJson('PUT', `/tankoubons/${id}/thumbnail?page=${page}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tankoubon', id] }),
   })
 }
@@ -524,6 +600,16 @@ export function useClearNewFlags() {
   })
 }
 
+/** Clears a single archive's own "new" badge — legacy's reader fires the equivalent
+ * `DELETE /api/archives/{id}/isnew` the moment it loads (`reader_common.js`'s init sequence,
+ * unconditionally, not tied to finishing the archive or any elapsed time), which is what actually
+ * makes the badge disappear after a first read rather than staying "new" forever. */
+export function useClearArchiveNew() {
+  return useMutation({
+    mutationFn: (id: string) => sendJson('DELETE', `/archives/${id}/isnew`),
+  })
+}
+
 export function useRegenThumbnails() {
   return useMutation({
     mutationFn: (force: boolean) => sendJson('POST', `/regen_thumbs?force=${force}`),
@@ -544,6 +630,22 @@ export function useStampedPages(id: string | null) {
     queryKey: ['stamped-pages', id],
     queryFn: () => fetchJson<StampedPagesResponse>(`/archives/${id}/stamps`),
     enabled: id !== null,
+  })
+}
+
+/** Fetches stamped-page lists for several archives in parallel — used by
+ * `ArchiveOverviewOverlay`'s "filter stamped pages" toggle in Tankoubon-read mode, where the
+ * stamped-pages indicator has to cover every member archive, not just one. Query keys match
+ * `useStampedPages`'s own (`['stamped-pages', id]`), so this shares cache with a single-archive
+ * read of the same archive elsewhere. Returns the raw per-archive results in `ids`' own order —
+ * the caller (which already has each archive's own global-page offset) is what converts each
+ * entry's local page numbers into the Tankoubon's global page numbering. */
+export function useStampedPagesForArchives(ids: string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ['stamped-pages', id],
+      queryFn: () => fetchJson<StampedPagesResponse>(`/archives/${id}/stamps`),
+    })),
   })
 }
 
@@ -633,6 +735,18 @@ export function useDeleteStamp() {
 export function useGenerateThumbnails(id: string) {
   return useMutation({
     mutationFn: () => sendJson('POST', `/archives/${id}/files/thumbnails`),
+  })
+}
+
+/** Same endpoint as `useGenerateThumbnails`, but not bound to one archive at mount time — used by
+ * the reader's "Clean Archive Cache" link when reading a Tankoubon as one concatenated book
+ * (`useTankoubonReading`'s own `chapters`), where "the archive" is actually N member archives
+ * decided at render time, not a single id `Reader.tsx` is mounted with. Matches
+ * `useUpdateProgress`/`useSetArchiveProgress`'s own bound/unbound pairing. */
+export function useGenerateThumbnailsForArchives() {
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      Promise.all(ids.map((id) => sendJson('POST', `/archives/${id}/files/thumbnails`))),
   })
 }
 

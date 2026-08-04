@@ -95,7 +95,16 @@ pub struct Category {
     pub name: String,
     /// If present, this is a dynamic/saved-search category (`archives` is not authoritative).
     pub search: Option<String>,
-    /// Only meaningful for static categories (`search.is_none()`).
+    /// Only meaningful for static categories (`search.is_none()`). Despite the field name and
+    /// type, members are not restricted to real archive ids — legacy's own `add_to_category`
+    /// (`Model::Category`) only checks `$redis->exists($id)`, a generic key-existence test that a
+    /// `TANK_`-prefixed Tankoubon id satisfies just as well as an archive id, so legacy genuinely
+    /// supports static categories containing Tankoubons. `ArchiveId` stays the field's type rather
+    /// than introducing a dedicated archive-or-tank enum: it's a transparent `String` newtype with
+    /// no validation of its own (see `ids.rs`'s own docs — the newtype exists to prevent
+    /// *cross-signature* mixups, e.g. a `CategoryId` landing where an `ArchiveId` was expected, not
+    /// to restrict what a given id conceptually refers to), so a `TankId`-shaped value inside it is
+    /// not the type confusion that principle guards against.
     pub archives: Vec<ArchiveId>,
     pub pinned: bool,
 }
@@ -119,6 +128,34 @@ pub struct Grouping {
     pub progress: u32,
     /// Ordered archive IDs (order is significant: volume order).
     pub archives: Vec<ArchiveId>,
+    /// `true` once someone has explicitly picked a cover via `PUT /tankoubons/{id}/thumbnail`
+    /// (the reader overview overlay's "set as cover" action). Additive beyond legacy (which has no
+    /// such flag): while `false`, the tank's own cached cover thumbnail is kept in sync with its
+    /// first member archive's cover whenever the archive list changes — matches the same "use the
+    /// first volume's cover" default a freshly-generated thumbnail already has, just kept live
+    /// instead of going stale the moment volume order changes. Once `true`, the cover is sticky
+    /// across archive-list edits — *unless* `thumbnail_source_archive` itself stops being a member
+    /// (see that field's own docs), which forces a reset back to auto-follow regardless of this
+    /// flag; a manually-picked cover whose source page no longer exists in the tank at all isn't
+    /// "sticky", it's stale.
+    pub thumbnail_manual: bool,
+    /// Which member archive `thumbnail_manual`'s cover was extracted from, and which of that
+    /// archive's own local pages — both only meaningful while `thumbnail_manual` is `true`
+    /// (`None` otherwise). Kept as a full "recipe" (archive *and* page), not just the archive,
+    /// even though only the archive half is needed to answer "is the source still valid" — the
+    /// page is what would let the exact same cover be regenerated later (cache invalidation, a
+    /// thumbnail-format change, ...) without re-asking the user, and storing an incomplete recipe
+    /// once it's already this cheap to store the real one isn't a savings worth making.
+    ///
+    /// Checked (against `archives`, and against the source archive's own *current* `pagecount` —
+    /// deliberately not stored redundantly here, since it can change out from under a stale
+    /// snapshot on a rescan) whenever the archive list changes: if the source archive is no longer
+    /// a member, or its own page count has shrunk past the stored page, the manual cover is no
+    /// longer valid for *this* Tankoubon and gets reset — back to auto-following the new first
+    /// member's own cover if one remains, or cleared entirely (falling back to the placeholder) if
+    /// the tank is now empty.
+    pub thumbnail_source_archive: Option<ArchiveId>,
+    pub thumbnail_source_page: Option<u32>,
 }
 
 /// A user-placed annotation ("stamp") on a specific page of an archive. Redis hash keyed by

@@ -26,7 +26,7 @@ export default function Edit() {
 
   if (metadata.isLoading) {
     return (
-      <div className="p-6" style={{ color: 'var(--theme-muted)' }}>
+      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', color: 'var(--theme-muted)' }}>
         {t('Loading library…')}
       </div>
     )
@@ -34,13 +34,16 @@ export default function Edit() {
 
   if (metadata.isError || !metadata.data) {
     return (
-      <div className="p-6 flex flex-col gap-3">
+      <div className="ido" style={{ textAlign: 'center', maxWidth: 800, margin: '10px auto', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
         <p className="text-red-500">
           {t('Failed to load archives: {{error}}', { error: String(metadata.error) })}
         </p>
-        <button type="button" onClick={() => navigate(routes.library())} className="self-start underline">
-          {t('Return to Library')}
-        </button>
+        <input
+          className="stdbtn"
+          type="button"
+          value={t('Return to Library') ?? undefined}
+          onClick={() => navigate(routes.library())}
+        />
       </div>
     )
   }
@@ -75,8 +78,11 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   // least twice across the library (`useStats(2)`), rendered as `namespace:text` when namespaced.
   const tagSuggestions = (stats.data ?? []).map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
 
+  // Legacy's own `Edit.saveMetadata` (`edit.js`) shows a "Metadata saved!" toast on every
+  // successful save via `Server.callAPIBody`'s built-in success-message handling.
   async function handleSave() {
     await updateMetadata.mutateAsync({ title, summary, tags })
+    toast({ heading: t('Metadata saved!') ?? undefined, icon: 'success' })
   }
 
   async function handleDelete() {

@@ -190,10 +190,11 @@ export function ArchiveContextMenu({
             <PopupMenuItem
               onClick={() => {
                 onClose()
-                navigate(routes.edit(archive.arcid))
+                navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))
               }}
             >
-              <i className="fa fa-pen" style={{ width: 18 }}></i> {t('Edit Metadata')}
+              <i className="fa fa-pen" style={{ width: 18 }}></i>{' '}
+              {isTank ? t('Edit Tankoubon') : t('Edit Metadata')}
             </PopupMenuItem>
             <PopupMenuItem style={{ position: 'relative' }} onMouseEnter={() => openSubmenu('category')} onMouseLeave={scheduleCloseSubmenus}>
               <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t('Add to Category')}
