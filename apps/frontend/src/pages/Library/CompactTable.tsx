@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 
 import { useSettings } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
-import { Tooltip } from "@/components/Tooltip"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 import { promptDialog } from "@/dialog"
 import { routes } from "@/lib/routes"
 import { CUSTOM_COLUMN_PREFIX, DEFAULT_CUSTOM_COLUMNS } from "@/lib/storageKeys"

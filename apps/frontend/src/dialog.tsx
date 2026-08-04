@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
+import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
+import { Tooltip } from "@/components/Overlay/Tooltip"
+
 import { useStats } from "./api/hooks"
-import { PopupMenu, PopupMenuItem } from "./components/PopupMenu"
-import { Tooltip } from "./components/Tooltip"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"

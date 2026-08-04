@@ -2,8 +2,8 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { JobRecord, JobRecordState } from "@/api/types"
-import { CodeBlock } from "@/components/CodeBlock"
-import { JobProgressBar, STATE_COLOR } from "@/components/JobProgress"
+import { CodeBlock } from "@/components/Display/CodeBlock"
+import { JobProgressBar, STATE_COLOR } from "@/components/Display/JobProgress"
 import { FONT_SIZE_10PT } from "@/theme"
 
 /** State → i18n key (bare English word, added to the locale files in T024). */

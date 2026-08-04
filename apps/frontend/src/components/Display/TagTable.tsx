@@ -1,8 +1,7 @@
 import { useSettings } from "@/api/hooks"
+import { StarRatingDisplay } from "@/components/Form/StarRating"
 import { parseRating } from "@/lib/rating"
 import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from "@/lib/tagFormat"
-
-import { StarRatingDisplay } from "./StarRating"
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
  * (`~/LANraragi/public/js/mod/common.js`) renders inside a hover tooltip: one row per namespace

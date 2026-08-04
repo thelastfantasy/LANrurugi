@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { PendingFilenameConflict } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/PopupMenu"
+import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 

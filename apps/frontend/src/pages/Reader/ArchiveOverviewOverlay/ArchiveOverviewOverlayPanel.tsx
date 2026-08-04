@@ -18,8 +18,8 @@ import {
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
-import { RatingWidget } from "@/components/RatingWidget"
-import { Tooltip } from "@/components/Tooltip"
+import { RatingWidget } from "@/components/Form/RatingWidget"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"

@@ -1,9 +1,10 @@
 import { useTranslation } from "react-i18next"
 import { NavLink, Outlet } from "react-router-dom"
 
+import { Footer } from "@/components/Layout/Footer"
+import { UpdateBanner } from "@/components/Layout/UpdateBanner"
+
 import { useLoginStatus } from "./api/hooks"
-import { Footer } from "./components/Footer"
-import { UpdateBanner } from "./components/UpdateBanner"
 import { useApplyTheme } from "./theme"
 
 // Legacy's own top nav (`~/LANraragi/templates/index.html.tt2`'s `<p id="nb">`, reused across

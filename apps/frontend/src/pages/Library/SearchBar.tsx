@@ -1,7 +1,7 @@
 import type { RefObject } from "react"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from "@/components/PopupMenu"
+import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
 
 interface TagSuggestion { label: string; insertValue: string }
 import { Z_OVERLAY_CONTENT } from "@/theme"

@@ -1,5 +1,5 @@
 import { useSettings } from "@/api/hooks"
-import { StarRatingDisplay } from "@/components/StarRating"
+import { StarRatingDisplay } from "@/components/Form/StarRating"
 import { parseRating } from "@/lib/rating"
 import { displayNamespace, formatTagValue, getTagSearchURL } from "@/lib/tagFormat"
 

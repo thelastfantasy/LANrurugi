@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom"
 
 import { useClearFinishedJobs, useClearJobs, useJobs } from "@/api/hooks"
 import type { JobRecord, JobRecordState } from "@/api/types"
-import { STATE_COLOR } from "@/components/JobProgress"
+import { STATE_COLOR } from "@/components/Display/JobProgress"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_10PT, useApplyTheme } from "@/theme"

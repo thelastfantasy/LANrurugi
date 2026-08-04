@@ -3,10 +3,10 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useUpdateArchiveMetadata } from "@/api/hooks"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 import { formatRating, parseRating } from "@/lib/rating"
 
 import { StarSprite } from "./StarRating"
-import { Tooltip } from "./Tooltip"
 
 // Mirrors legacy's Raty-based rating widget (`~/LANraragi/public/js/reader.js:315-337`) — there is
 // no dedicated rating field or column anywhere in legacy's own data model; a rating is just a tag

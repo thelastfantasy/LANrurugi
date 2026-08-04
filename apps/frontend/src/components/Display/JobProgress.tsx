@@ -2,9 +2,8 @@ import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { JobRecord, JobRecordState } from "@/api/types"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 import { FONT_SIZE_10PT } from "@/theme"
-
-import { Tooltip } from "./Tooltip"
 
 /** State → color, shared between the Jobs page's own badges/borders and this component's default
  * bar color (so a state's color only needs to change in one place). */

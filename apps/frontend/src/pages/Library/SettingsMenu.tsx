@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "@/components/PopupMenu"
+import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "@/components/Overlay/PopupMenu"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 
 /** Settings gear menu (legacy's `#settings-menu` contextMenu, `index.js:117-199`) — bundles

@@ -1,6 +1,6 @@
 import { useSettings } from "@/api/hooks"
-import { TagTable } from "@/components/TagTable"
-import { Tooltip } from "@/components/Tooltip"
+import { TagTable } from "@/components/Display/TagTable"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from "@/lib/tagFormat"
 
 /** Tag line + hover tooltip — ports `colorCodeTags` (namespace-colored, date/time-excluded,

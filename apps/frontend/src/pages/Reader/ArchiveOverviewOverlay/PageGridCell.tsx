@@ -2,7 +2,7 @@ import type { MouseEvent, ReactNode } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { Tooltip } from "@/components/Tooltip"
+import { Tooltip } from "@/components/Overlay/Tooltip"
 
 import { QuickAddTocPopover } from "./shared"
 

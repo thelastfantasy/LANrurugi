@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 
-import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Overlay/CollapsibleSection"
 import { FONT_SIZE_10PT } from "@/theme"
 
 import { CheckboxRow, Row } from "./shared"

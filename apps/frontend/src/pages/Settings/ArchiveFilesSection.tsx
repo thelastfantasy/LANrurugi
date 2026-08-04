@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { useCleanTempfolder, useClearNewFlags, useDiscardSearchCache, useShinobuAction } from "@/api/hooks"
-import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Overlay/CollapsibleSection"
 import { FONT_SIZE_10PT } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
