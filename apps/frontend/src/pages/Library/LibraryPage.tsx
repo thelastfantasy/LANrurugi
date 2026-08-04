@@ -12,6 +12,7 @@ import { useLibrary } from './useLibrary'
 
 export function Library() {
   const lib = useLibrary()
+  const deleteTarget = lib.deleteTarget
 
   if (lib.search.isError) {
     return (
@@ -234,12 +235,12 @@ export function Library() {
         />
       )}
 
-      {lib.deleteTarget && (
+      {deleteTarget && (
         <DeleteConfirmDialog
-          isTank={lib.deleteTarget.isTank}
+          isTank={deleteTarget.isTank}
           onCancel={() => lib.setDeleteTarget(null)}
           onConfirm={() => {
-            void lib.deleteArchive(lib.deleteTarget.id, lib.deleteTarget.isTank)
+            void lib.deleteArchive(deleteTarget.id, deleteTarget.isTank)
             lib.setDeleteTarget(null)
           }}
         />
