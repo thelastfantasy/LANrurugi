@@ -8,6 +8,7 @@ import CollapsibleSection from '../../components/CollapsibleSection'
 import LanguageSelector from '../../components/LanguageSelector'
 import { routes } from '../../routes'
 import { DEFAULT_THEME_ID, FONT_SIZE_10PT, THEMES, useApplyTheme, useLegacyConfigCss } from '../../theme'
+import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import ArchiveFilesSection from './ArchiveFilesSection'
 import GlobalSection from './GlobalSection'
@@ -115,7 +116,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       timezone,
       newbadgemode,
     })
-    setStatus(t('Settings saved!') ?? '')
+    toast({ heading: t('Settings saved!') ?? undefined, icon: 'success' })
   }
 
   async function handleLogout() {

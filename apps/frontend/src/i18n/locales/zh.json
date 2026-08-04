@@ -963,7 +963,7 @@
   "Matched rule: {{pattern}}": "匹配规则：{{pattern}}",
   "Edit this plugin’s rate-limit settings": "编辑该插件的限速设置",
   "Download was interrupted by a server restart, please retry": "下载因服务器重启而中断，请重试",
-  "\"New\" badge duration": "\"新\"标记显示时长",
+  "\"New\" badge duration": "\"New\"标记显示时长",
   "Until the archive is opened": "直到档案被打开",
   "Until the archive is fully read": "直到档案被完整阅读",
   "3 days after it was added": "添加后 3 天",
