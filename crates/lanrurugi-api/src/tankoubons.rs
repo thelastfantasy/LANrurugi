@@ -146,11 +146,11 @@ async fn create_or_rename_tankoubon(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let (tankid, mut grouping) = match params.tankid {
+    let (tankid, mut grouping, is_new) = match params.tankid {
         Some(id) => {
             let id = TankId(id);
             match state.repos.groupings.get(&id).await {
-                Ok(Some(g)) => (id, g),
+                Ok(Some(g)) => (id, g, false),
                 Ok(None) => {
                     return not_found(
                         "create_tankoubon",
@@ -194,6 +194,7 @@ async fn create_or_rename_tankoubon(
                     thumbnail_source_archive: None,
                     thumbnail_source_page: None,
                 },
+                true,
             )
         }
     };
@@ -217,6 +218,17 @@ async fn create_or_rename_tankoubon(
                 .await
                 {
                     tracing::warn!(%tankid, error = %e, "failed to update tank title search index");
+                }
+            }
+            // Added once, unconditionally of member count, only on genuine creation (not a rename
+            // of an existing tank, which already has its own id indexed) — see
+            // `sync_tank_membership`'s own docs for why this must not depend on `archives` ever
+            // becoming non-empty.
+            if is_new {
+                if let Err(e) =
+                    lanrurugi_search::indexer::add_tank_to_index(&state.redis.search, &tankid).await
+                {
+                    tracing::warn!(%tankid, error = %e, "failed to add new tank to search index");
                 }
             }
             axum::Json(json!({
@@ -784,15 +796,9 @@ async fn update_tankoubon(
         Ok(()) => {
             let others = other_groupings(&state, &id).await;
             let (joined, left) = tank_membership_delta(&old_archives, &grouping.archives, &others);
-            if let Err(e) = lanrurugi_search::indexer::sync_tank_membership(
-                &state.redis.search,
-                &id,
-                old_archives.is_empty(),
-                grouping.archives.is_empty(),
-                &joined,
-                &left,
-            )
-            .await
+            if let Err(e) =
+                lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &joined, &left)
+                    .await
             {
                 tracing::warn!(%id, error = %e, "failed to sync tank search index");
             }
@@ -895,17 +901,18 @@ async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>)
         Ok(()) => {
             let others = other_groupings(&state, &id).await;
             let (_, left) = tank_membership_delta(&old_archives, &[], &others);
-            if let Err(e) = lanrurugi_search::indexer::sync_tank_membership(
-                &state.redis.search,
-                &id,
-                old_archives.is_empty(),
-                true,
-                &[],
-                &left,
-            )
-            .await
+            if let Err(e) =
+                lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &[], &left)
+                    .await
             {
                 tracing::warn!(%id, error = %e, "failed to sync tank search index");
+            }
+            // Outright deletion is the only thing that removes the tank's own id from the search
+            // index — see `sync_tank_membership`'s own docs for why emptying it out must not.
+            if let Err(e) =
+                lanrurugi_search::indexer::remove_tank_from_index(&state.redis.search, &id).await
+            {
+                tracing::warn!(%id, error = %e, "failed to remove tank from search index");
             }
             if !old_name.is_empty() {
                 if let Err(e) = lanrurugi_search::indexer::remove_title_index(
@@ -963,7 +970,6 @@ async fn add_to_tankoubon(
             format!("{archive} does not exist in the database."),
         );
     }
-    let was_empty = grouping.archives.is_empty();
     let old_first = grouping.archives.first().cloned();
     let newly_added = !grouping.archives.contains(&archive);
     if newly_added {
@@ -974,9 +980,6 @@ async fn add_to_tankoubon(
             if newly_added {
                 if let Err(e) = lanrurugi_search::indexer::sync_tank_membership(
                     &state.redis.search,
-                    &id,
-                    was_empty,
-                    false,
                     std::slice::from_ref(&archive.0),
                     &[],
                 )
@@ -1017,7 +1020,6 @@ async fn remove_from_tankoubon(
             )
         }
     };
-    let was_empty = grouping.archives.is_empty();
     let old_first = grouping.archives.first().cloned();
     let was_present = grouping.archives.contains(&archive);
     grouping.archives.retain(|a| a != &archive);
@@ -1031,15 +1033,9 @@ async fn remove_from_tankoubon(
                 } else {
                     vec![archive.0.clone()]
                 };
-                if let Err(e) = lanrurugi_search::indexer::sync_tank_membership(
-                    &state.redis.search,
-                    &id,
-                    was_empty,
-                    grouping.archives.is_empty(),
-                    &[],
-                    &left,
-                )
-                .await
+                if let Err(e) =
+                    lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &[], &left)
+                        .await
                 {
                     tracing::warn!(%id, %archive, error = %e, "failed to sync tank search index");
                 }

@@ -17,6 +17,9 @@ pub const NEW_KEY: &str = "LRR_NEW";
 /// (`index_new_archive`, confirmed by that function's own test naming this same check
 /// `ungrouped`); a Tankoubon's member archives are removed from this set for as long as they stay
 /// members (so only the tank's own aggregate entry shows up in a grouped search, not both it and
-/// every member individually), and the Tankoubon's own id is added once it has at least one
-/// member (`sync_tank_membership`).
+/// every member individually), via `sync_tank_membership`. The Tankoubon's own id is added once,
+/// unconditionally, at creation (`add_tank_to_index`) and removed only on outright deletion
+/// (`remove_tank_from_index`) — deliberately *not* re-derived from its current member count, so an
+/// emptied-out tank stays visible (with zero pages) instead of silently vanishing from the default
+/// view with no discoverable path back to repopulate or delete it.
 pub const TANKGROUPED_KEY: &str = "LRR_TANKGROUPED";

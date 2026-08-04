@@ -9,6 +9,7 @@ import {
   useBookmarkLink,
   useCategories,
   useClearArchiveNew,
+  useDeleteTankoubon,
   useGenerateThumbnails,
   useGenerateThumbnailsForArchives,
   useLoginStatus,
@@ -19,7 +20,7 @@ import {
 } from '../../api/hooks'
 import Footer from '../../components/Footer'
 import Tooltip from '../../components/Tooltip'
-import { promptDialog } from '../../dialog'
+import { confirmDialog, promptDialog } from '../../dialog'
 import { fetchContentLengthKb } from '../../lib/imageMeta'
 import { getTagSearchURL } from '../../lib/tagFormat'
 import { routes } from '../../routes'
@@ -113,6 +114,7 @@ export default function Reader() {
   const bookmarkLink = useBookmarkLink()
   const updateProgress = useUpdateProgress(isTank ? null : archiveId)
   const updateTankoubonProgress = useUpdateTankoubonProgress(isTank ? archiveId : null)
+  const deleteTankoubon = useDeleteTankoubon()
   const generateThumbnails = useGenerateThumbnails(isTank ? '' : (archiveId ?? ''))
   const generateThumbnailsForArchives = useGenerateThumbnailsForArchives()
   const [readerSettings, updateReaderSettings] = useReaderSettings()
@@ -491,6 +493,26 @@ export default function Reader() {
   async function goRandom() {
     const id = await fetchRandomArchiveId()
     if (id) navigate(routes.reader(id))
+  }
+
+  // Reuses the exact same confirmation copy `ArchiveOverviewOverlay`'s own tank-delete button
+  // uses (an existing key already in every locale file) — offered from the empty-Tankoubon state
+  // below since an abandoned, never-populated (or emptied-out) tank has no archives to browse
+  // into that overlay from at all; this is the only other place a user could otherwise clean one
+  // up from besides TankoubonEdit's own delete button.
+  async function handleDeleteEmptyTankoubon() {
+    if (
+      !archiveId ||
+      !(await confirmDialog(
+        t(
+          'Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.',
+        ) ?? '',
+      ))
+    ) {
+      return
+    }
+    await deleteTankoubon.mutateAsync(archiveId)
+    navigate(routes.library())
   }
 
   function cleanCache() {
@@ -881,6 +903,12 @@ export default function Reader() {
             className="stdbtn"
             value={t('Edit Tankoubon') ?? undefined}
             onClick={() => archiveId && navigate(routes.tankoubonEdit(archiveId))}
+          />
+          <input
+            type="button"
+            className="stdbtn"
+            value={t('Delete Tankoubon') ?? undefined}
+            onClick={() => void handleDeleteEmptyTankoubon()}
           />
           <input
             type="button"

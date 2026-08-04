@@ -174,8 +174,15 @@ pub async fn set_isnew_index(search_pool: &Pool, id: &str, isnew: bool) -> Resul
 }
 
 /// Keeps `LRR_TANKGROUPED` consistent with a Tankoubon's own member-archive list whenever it
-/// changes (create/rename with an initial archive list, bulk archive-list replace, single add,
-/// single remove, delete — see `TANKGROUPED_KEY`'s own doc comment for the set's real semantics).
+/// changes (bulk archive-list replace, single add, single remove — see `TANKGROUPED_KEY`'s own
+/// doc comment for the set's real semantics). Does **not** touch the tank's own id — that's
+/// [`add_tank_to_index`]/[`remove_tank_from_index`]'s job, called once at create/delete time only,
+/// deliberately independent of membership count: a Tankoubon with zero members is still a real,
+/// user-visible record (until explicitly deleted), not something that should vanish from the
+/// default grouped search the moment its last archive is removed — a tank that silently disappears
+/// the instant it empties out has no discoverable path back for the user to repopulate or delete
+/// it, becoming unreachable garbage instead of an intentionally-empty placeholder. Matches how its
+/// `LRR_TITLES` entry is also written unconditionally at creation, not conditioned on membership.
 ///
 /// Takes pre-computed deltas rather than diffing a before/after list itself: `joined` (archives
 /// pulled out of the pool because they're now folded into this tank) and `left` (archives put
@@ -185,16 +192,14 @@ pub async fn set_isnew_index(search_pool: &Pool, id: &str, isnew: bool) -> Resul
 /// isn't still a member of some *other* tank before including it in `left` — matches legacy's own
 /// `get_tankoubons_containing_archive` guard in `delete_tankoubon` — otherwise it would wrongly
 /// reappear as a standalone search result while still visually folded into its other tank(s).
-/// `tank_was_empty`/`tank_is_empty` drive the tank's own id add/remove on the empty ↔ non-empty
-/// transition, independent of the per-archive deltas above.
 pub async fn sync_tank_membership(
     search_pool: &Pool,
-    tank_id: &str,
-    tank_was_empty: bool,
-    tank_is_empty: bool,
     joined: &[String],
     left: &[String],
 ) -> Result<()> {
+    if joined.is_empty() && left.is_empty() {
+        return Ok(());
+    }
     let mut conn = search_pool.get().await?;
     let mut pipe = deadpool_redis::redis::pipe();
     pipe.atomic();
@@ -204,19 +209,24 @@ pub async fn sync_tank_membership(
     for id in left {
         pipe.sadd(TANKGROUPED_KEY, id.as_str());
     }
-    match (tank_was_empty, tank_is_empty) {
-        (true, false) => {
-            // Gained its first member: the tank now represents a real group, so its own id
-            // becomes a valid standalone candidate in a `groupby_tanks=true` search.
-            pipe.sadd(TANKGROUPED_KEY, tank_id);
-        }
-        (false, true) => {
-            // Lost its last member: nothing left to display as a group.
-            pipe.srem(TANKGROUPED_KEY, tank_id);
-        }
-        _ => {}
-    }
     let _: () = pipe.query_async(&mut conn).await?;
+    Ok(())
+}
+
+/// Adds a freshly-created Tankoubon's own id to `LRR_TANKGROUPED` — called once, at creation,
+/// unconditionally of whether it has any members yet (see [`sync_tank_membership`]'s own docs for
+/// why membership count must never gate this). The counterpart to [`remove_tank_from_index`].
+pub async fn add_tank_to_index(search_pool: &Pool, tank_id: &str) -> Result<()> {
+    let mut conn = search_pool.get().await?;
+    let _: () = conn.sadd(TANKGROUPED_KEY, tank_id).await?;
+    Ok(())
+}
+
+/// Removes a Tankoubon's own id from `LRR_TANKGROUPED` on outright deletion — the only thing that
+/// should ever make a tank disappear from the default grouped search, not merely emptying it out.
+pub async fn remove_tank_from_index(search_pool: &Pool, tank_id: &str) -> Result<()> {
+    let mut conn = search_pool.get().await?;
+    let _: () = conn.srem(TANKGROUPED_KEY, tank_id).await?;
     Ok(())
 }
 
