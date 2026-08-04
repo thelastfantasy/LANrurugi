@@ -7,7 +7,6 @@ import { useTranslation } from "react-i18next"
 import { Mousewheel, Navigation } from "swiper/modules"
 import { Swiper, SwiperSlide } from "swiper/react"
 
-import { useArchiveMetadata } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 import { SortableList } from "@/components/Display/SortableList"
 import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
@@ -15,94 +14,10 @@ import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 
-import { ArchiveCard } from "./ArchiveCard"
+import { CarouselCard } from "./CarouselCard"
+import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent"
 import { type CarouselMode } from "./types"
 
-/** Read-only card renderer for the "Recently Added"/On Deck/Random/etc. carousel — same markup as
- * `ArchiveCard` minus multi-select and context-menu source tracking differences (the carousel
- * still opens the same context menu, just tagged `source: 'carousel'` so cross-archive nav can
- * later tell the two apart, matching legacy's own `window.contextMenuSource`). */
-function CarouselCard({
-  archive,
-  cropThumbs,
-  onContextMenu,
-  onOpen,
-  onSearchTag,
-}: {
-  archive: ArchiveMetadata
-  cropThumbs: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
-  onOpen: (id: string) => void
-  /** Optional — `SelectedArchiveSlideContent`'s own multi-select-mode selection list doesn't have a
-   * meaningful "search" action for its slides (clicking there removes the archive from the
-   * selection instead, via `onOpen`), so it's fine to omit and fall back to a no-op. The
-   * On Deck/Random/Inbox/Untagged carousel *does* wire this through to the real in-app search —
-   * previously a bare no-op there too, a real, live-reported bug: clicking a tag in this
-   * carousel's tooltip visibly did nothing at all (worse than the main grid's own tags, which at
-   * least still navigate via a real `href` on middle/right-click even before `onSearchTag` was
-   * fixed — this carousel's `<a>` click handler calls `e.preventDefault()` unconditionally, so a
-   * no-op handler swallowed the click with no fallback whatsoever). */
-  onSearchTag?: (namespacedTag: string) => void
-}) {
-  return (
-    <ArchiveCard
-      archive={archive}
-      multiSelect={false}
-      selected={false}
-      cropThumbs={cropThumbs}
-      onToggleSelect={() => {}}
-      onContextMenu={onContextMenu}
-      onOpen={onOpen}
-      onSearchTag={onSearchTag ?? (() => {})}
-    />
-  )
-}
-
-/** "Recently Added" carousel (`~/LANraragi/templates/index.html.tt2`'s `.index-carousel` +
- * `index.js`'s `toggleCarousel`/`updateCarousel`) — collapsible (state persisted to
- * `localStorage.carouselOpen`), a Swiper slider (`navigation` module only — legacy's own
- * `virtual`-slides perf mode isn't reproduced, this app's libraries/result sets are far smaller
- * than legacy's largest real deployments), a mode switcher persisted to
- * `localStorage.carouselType`, and a refresh button. Endpoint/params per mode mirror
- * `updateCarousel` exactly, including which of the *other* three flags each mode always forces on
- * regardless of the index settings menu. */
-/** Resolves a single selected archive/Tankoubon ID to its card-displayable metadata (a bare
- * hook-in-a-loop isn't possible for a variable-length `selectedIds` set, hence its own
- * component) — used by the multi-select mode's selection-list body. Renders nothing while its
- * own fetch is in flight rather than a per-slide spinner (matches the small, session-scale
- * selection sizes this is meant for).
- *
- * Deliberately renders only the *content*, not the `<SwiperSlide>` itself — `swiper/react`
- * requires every `SwiperSlide` to be a direct JSX child of `<Swiper>` (it inspects `Swiper`'s own
- * `children` prop structurally to find slides to move into its internal `.swiper-wrapper`); a
- * `SwiperSlide` returned from *inside* a custom component one level down is invisible to that
- * check, so Swiper never moves it into `.swiper-wrapper` and it falls back to plain block-level
- * layout — a real, live-confirmed bug (every selected-archive "slide" rendered full-width, one
- * per row, instead of side by side). The `<SwiperSlide>` wrapper below now lives directly in the
- * `.map()` inside `<Swiper>`'s own children in `RecentlyAddedCarousel`; this component only
- * supplies what goes *inside* it, which Swiper doesn't care about. */
-function SelectedArchiveSlideContent({
-  id,
-  cropThumbs,
-  onContextMenu,
-  onRemove,
-}: {
-  id: string
-  cropThumbs: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
-  onRemove: (id: string) => void
-}) {
-  const metadata = useArchiveMetadata(id)
-  if (!metadata.data) return null
-  return (
-    <CarouselCard
-      archive={metadata.data}
-      cropThumbs={cropThumbs}
-      onContextMenu={onContextMenu}
-      onOpen={() => onRemove(id)}
-    />
-  )
-}
 
 export function RecentlyAddedCarousel({
   filter,
