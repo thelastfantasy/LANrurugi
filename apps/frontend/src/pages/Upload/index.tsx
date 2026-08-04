@@ -13,7 +13,7 @@ import { routes } from '../../routes'
 import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
-import DownloadQueuePanel from './DownloadQueuePanel'
+import { DownloadQueuePanel } from './DownloadQueuePanel'
 import { findMatchingPlugin } from './shared'
 
 // "Add from URL" stages matched URLs into a persistent, server-side queue (`useDownloadQueue`),

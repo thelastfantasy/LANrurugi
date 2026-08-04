@@ -13,7 +13,7 @@ import {
 } from '../../api/hooks'
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from '../../api/types'
 import CollapsibleSection from '../../components/CollapsibleSection'
-import { QueueItemRow, fetchMetadataForItem } from './QueueItemRow'
+import { fetchMetadataForItem,QueueItemRow } from './QueueItemRow'
 import {
   findMatchingPlugin,
   LOCAL_UPLOAD_NAMESPACE,

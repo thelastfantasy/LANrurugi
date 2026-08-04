@@ -29,14 +29,14 @@ import { FONT_SIZE_8PT, useApplyTheme } from '../../theme'
 import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import { isTankoubonId } from '../Library/shared'
-import ArchiveOverviewOverlay from './ArchiveOverviewOverlay'
+import { ArchiveOverviewOverlay } from './ArchiveOverviewOverlay'
 import {
   type ArchiveNavState,
   resolveAdjacentArchive,
   setupArchiveNavigation,
 } from './crossArchiveNav'
 import { fileInfoText } from './fileInfoText'
-import MarkerLayer from './MarkerLayer'
+import { MarkerLayer } from './MarkerLayer'
 import { SettingsOverlay } from './SettingsOverlay'
 import { clamp, computeNextPage, computeSpread } from './useReaderNavigation'
 import { useReaderSettings } from './useReaderSettings'

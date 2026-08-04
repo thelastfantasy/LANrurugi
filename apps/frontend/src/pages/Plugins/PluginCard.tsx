@@ -5,8 +5,8 @@ import { useSearchParams } from 'react-router-dom'
 import { usePluginOptions, usePluginSettings, useUpdatePluginSettings } from '../../api/hooks'
 import type { PluginInfo } from '../../api/types'
 import type { DragHandleProps } from '../../components/SortableList'
-import PluginOptionsForm from '../PluginOptionsForm'
-import PluginParametersForm from '../PluginParametersForm'
+import { PluginOptionsForm } from '../PluginOptionsForm'
+import { PluginParametersForm } from '../PluginParametersForm'
 
 /** Width of the drag-handle column — narrow (just enough for the grip glyph plus a little
  * click-target padding), not a content-sized column, which would read as an oversized empty

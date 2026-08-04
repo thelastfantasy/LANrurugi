@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 
-import type { Category } from '../../api/types'
+import type { CategoryMetadata } from '../../api/types'
 import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from './shared'
 
 export function CategoryBar({
@@ -9,7 +9,7 @@ export function CategoryBar({
   onToggleCategory,
 }: {
   selectedCategory: string
-  sortedCategories: Category[]
+  sortedCategories: CategoryMetadata[]
   onToggleCategory: (id: string) => void
 }) {
   const { t } = useTranslation()

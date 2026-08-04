@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 
-import type { TagStat } from '../../api/types'
+import type { StatTag } from '../../api/types'
 
 export function SortBySelector({
   sortby,
@@ -11,7 +11,7 @@ export function SortBySelector({
 }: {
   sortby: string
   order: 'asc' | 'desc'
-  stats: TagStat[] | undefined
+  stats: StatTag[] | undefined
   onSortBy: (key: string) => void
   onToggleOrder: () => void
 }) {

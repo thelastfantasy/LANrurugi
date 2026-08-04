@@ -1,5 +1,4 @@
 import { routes } from '../../routes'
-import { useDocumentTitle } from '../../useDocumentTitle'
 import { ArchiveCard } from './ArchiveCard'
 import { ArchiveContextMenu, DeleteConfirmDialog } from './ArchiveContextMenu'
 import { CategoryBar } from './CategoryBar'
@@ -13,7 +12,6 @@ import { useLibrary } from './useLibrary'
 
 export function Library() {
   const lib = useLibrary()
-  useDocumentTitle(lib.appliedFilter || undefined)
 
   if (lib.search.isError) {
     return (

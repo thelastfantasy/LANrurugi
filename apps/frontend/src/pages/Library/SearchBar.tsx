@@ -1,8 +1,9 @@
 import type { RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { TagSuggestion } from '../../api/types'
 import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
+
+interface TagSuggestion { label: string; insertValue: string }
 import { Z_OVERLAY_CONTENT } from '../../theme'
 
 export function SearchBar({

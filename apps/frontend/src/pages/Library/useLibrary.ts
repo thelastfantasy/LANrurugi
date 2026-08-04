@@ -31,10 +31,11 @@ import {
   MSM_SELECTION_KEY,
 } from '../../storageKeys'
 import { toast } from '../../toast'
+import { useDocumentTitle } from '../../useDocumentTitle'
 import { recordSearchNavigation } from '../Reader/crossArchiveNav'
 import { isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
 
-// Mirrors legacy's `~/LANraragi/templates/index.html.tt2` + `public/js/mod/index.js`/
+let defaultPasswordToastShownThisPageLoad = false
 
 export function useLibrary() {
 const { t } = useTranslation()
@@ -493,7 +494,7 @@ function handleOpenArchive(id: string) {
     handleContextMenu, applyTagSearch, handleOpenArchive,
     selectedTankIds, canMerge, runBatchOnSelection, mergeSelectionIntoTankoubon,
     searchInputRef,
-    newBadgeMode, timezone, setProgress,
+    setArchiveProgress,
     routes,
   }
 }
