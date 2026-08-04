@@ -2,7 +2,7 @@ import { useState } from "react"
 
 import { useReorderPlugins } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
-import { SortableList } from "@/components/Display/SortableList"
+import { SortableList } from "@/components/Display"
 
 import { PluginCard } from "./PluginCard"
 

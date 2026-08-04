@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { useLogin } from "@/api/hooks"
-import { Footer } from "@/components/Layout/Footer"
+import { Footer } from "@/components/Layout"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"

@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom"
 
 import { usePluginOptions, usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
-import type { DragHandleProps } from "@/components/Display/SortableList"
+import type { DragHandleProps } from "@/components/Display"
 import { PluginOptionsForm } from "@/pages/PluginOptionsForm"
 import { PluginParametersForm } from "@/pages/PluginParametersForm"
 

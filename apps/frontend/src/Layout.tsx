@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next"
 import { NavLink, Outlet } from "react-router-dom"
 
-import { Footer } from "@/components/Layout/Footer"
-import { UpdateBanner } from "@/components/Layout/UpdateBanner"
+import { Footer } from "@/components/Layout"
+import { UpdateBanner } from "@/components/Layout"
 
 import { useLoginStatus } from "./api/hooks"
 import { useApplyTheme } from "./theme"

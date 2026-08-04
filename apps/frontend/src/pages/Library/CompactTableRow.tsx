@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react"
 
 import type { ArchiveMetadata } from "@/api/types"
-import { Tooltip } from "@/components/Display/Tooltip"
+import { Tooltip } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 

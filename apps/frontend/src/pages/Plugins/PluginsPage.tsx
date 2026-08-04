@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom"
 
 import { usePlugins, useSettings, useUpdateSettings } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
-import { CollapsibleSection } from "@/components/Display/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Display"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { useApplyTheme, useLegacyConfigCss } from "@/theme"

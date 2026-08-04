@@ -19,8 +19,8 @@ import {
   useUpdateProgress,
   useUpdateTankoubonProgress,
 } from "@/api/hooks"
-import { Tooltip } from "@/components/Display/Tooltip"
-import { Footer } from "@/components/Layout/Footer"
+import { Tooltip } from "@/components/Display"
+import { Footer } from "@/components/Layout"
 import { confirmDialog, promptDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { clamp, computeNextPage, computeSpread } from "@/hooks/useReaderNavigation"
