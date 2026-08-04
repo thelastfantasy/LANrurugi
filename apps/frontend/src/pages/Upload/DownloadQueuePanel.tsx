@@ -83,6 +83,14 @@ export function DownloadQueuePanel({
     return map
   }, [items])
 
+  // Prune stale IDs at render time (per-row delete clears items from the queue but the
+  // `selected` Set can still hold now-removed IDs — the toolbar counts must stay in sync).
+  const itemIds = useMemo(() => new Set(items.map((i) => i.id)), [items])
+  const effectiveSelected = useMemo(
+    () => new Set([...selected].filter((id) => itemIds.has(id))),
+    [selected, itemIds],
+  )
+
   // Auto-fetch-metadata-on-completion: watches for a linked job reaching `finished` on an item
   // with `auto_fetch_metadata: true`, then fires the metadata preview call. Ref-guarded so this
   // doesn't re-fire on every poll tick once triggered.
@@ -188,9 +196,9 @@ export function DownloadQueuePanel({
           type="button"
           className="stdbtn"
           style={TOOLBAR_BUTTON_STYLE}
-          disabled={selected.size === 0 || startSelected.isPending}
+          disabled={effectiveSelected.size === 0 || startSelected.isPending}
           onClick={async () => {
-            const selectedIds = [...selected]
+            const selectedIds = [...effectiveSelected]
             await startSelected.mutateAsync(selectedIds)
             setSelected(new Set())
             // Same fire-alongside-the-download behavior as the single-row Start button's
@@ -203,7 +211,7 @@ export function DownloadQueuePanel({
             }
           }}
         >
-          {t("Start ({{n}})", { n: selected.size })}
+          {t("Start ({{n}})", { n: effectiveSelected.size })}
         </button>
         <button
           type="button"
@@ -218,13 +226,13 @@ export function DownloadQueuePanel({
           type="button"
           className="stdbtn"
           style={TOOLBAR_BUTTON_STYLE}
-          disabled={selected.size === 0 || deleteSelected.isPending}
+          disabled={effectiveSelected.size === 0 || deleteSelected.isPending}
           onClick={async () => {
-            await deleteSelected.mutateAsync([...selected])
+            await deleteSelected.mutateAsync([...effectiveSelected])
             setSelected(new Set())
           }}
         >
-          {t("Delete ({{n}})", { n: selected.size })}
+          {t("Delete ({{n}})", { n: effectiveSelected.size })}
         </button>
       </div>
 
@@ -256,7 +264,7 @@ export function DownloadQueuePanel({
                     key={item.id}
                     item={item}
                     job={item.job_id ? jobById.get(item.job_id) : undefined}
-                    selected={selected.has(item.id)}
+                    selected={effectiveSelected.has(item.id)}
                     onToggleSelect={() => {
                       if (item.state !== "queued" && item.state !== "error" && item.state !== "cancelled")
                         return
