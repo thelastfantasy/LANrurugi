@@ -2,8 +2,7 @@
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
     "types": ["vite/client", "node"],
-    "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedLocals": false
   },
   "include": ["src", "tests"]
 }
