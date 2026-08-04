@@ -746,3 +746,14 @@ div.id4 a:hover {
     text-align: center;
   background-color: #E9A53A;
 }
+
+/* Recommendation card container on the reader's boundary overlay (see Reader.tsx's
+   archiveTransition panel) — gives each thumbnail+title a visible card on top of the shade,
+   using this theme's own card background/border (same colors as div.id1). */
+.rec-card {
+    border-radius: 6px;
+    padding: 6px;
+    text-align: center;
+    background-color: #DCDDCB;
+    border: 1px solid #C6C7B4;
+}

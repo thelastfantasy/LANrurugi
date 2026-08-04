@@ -1457,16 +1457,48 @@ export default function Reader() {
       {/* Boundary overlay: recommendations only — no auto-jump (the user picks a card or
           cancels). Legacy had nothing here (it immediately called
           `readNextArchive`/`readPreviousArchive`, which toasted "last archive" without search
-          context); the panel replaces that toast with actual next-read suggestions. Clicking
-          the shade cancels, same as every other overlay on this page. */}
+          context); the panel replaces that toast with actual next-read suggestions. The
+          container is deliberately an *invisible* modal — no panel box, just the shade plus
+          the content floating above it (the boxy `base-overlay` panel felt obstructive).
+          Clicking the shade cancels, same as every other overlay on this page. */}
       {archiveTransition && (
         <>
+          {/* Lightbox-style shade: noticeably darker than the reader's own 0.6 overlays so the
+              recommendation cards pop, matching the classic lightbox look. */}
           <div
             id="overlay-shade"
-            style={{ display: 'block', opacity: 0.6 }}
+            style={{ display: 'block', opacity: 0.85 }}
             onClick={() => setArchiveTransition(null)}
           />
-          <div className="id1 base-overlay small-overlay" style={{ textAlign: 'center', padding: 24 }}>
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', zIndex: 9001, background: 'transparent' }}>
+            <button
+              type="button"
+              aria-label={t('Close') ?? undefined}
+              onClick={() => setArchiveTransition(null)}
+              style={{
+                position: 'absolute',
+                top: -24,
+                right: -24,
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 17,
+                lineHeight: '32px',
+                padding: 0,
+                // White semi-transparent circle, lightbox convention — deliberately not theme-
+                // dependent: on the dark shade a white close control is the only color that
+                // reads consistently across all 5 themes (CLAUDE.md's custom-color rule applies
+                // to theme-visible accents; this is neutral overlay chrome).
+                background: 'rgba(255,255,255,0.2)',
+                color: '#fff',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.45)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
+            >
+              ×
+            </button>
             <p>
               {archiveTransition.direction === 'next'
                 ? t('Reached the last page -- here is what to read next')
@@ -1478,38 +1510,31 @@ export default function Reader() {
                  wrap to fewer per row naturally. */
               <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap', maxWidth: 760, marginLeft: 'auto', marginRight: 'auto' }}>
                 {archiveTransition.recommendations.slice(0, 10).map((rec) => (
-                  <a
-                    key={rec.archive_id}
-                    href={`/reader/${rec.archive_id}`}
-                    title={rec.title}
-                    style={{ width: 140, display: 'block', textDecoration: 'none' }}
-                    onClick={() => setArchiveTransition(null)}
-                  >
-                    <img
-                      src={
-                        rec.archive_id.startsWith('TANK_')
-                          ? `/api/tankoubons/${rec.archive_id}/thumbnail?no_fallback=true`
-                          : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
-                      }
-                      alt={rec.title}
-                      style={{ width: 140, height: 187, objectFit: 'cover', borderRadius: 4 }}
-                      loading="lazy"
-                    />
-                    <span style={{ fontSize: 11, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {rec.title}
-                    </span>
-                  </a>
+                  <div key={rec.archive_id} className="rec-card" style={{ width: 152 }}>
+                    <a
+                      href={`/reader/${rec.archive_id}`}
+                      title={rec.title}
+                      style={{ display: 'block', textDecoration: 'none' }}
+                      onClick={() => setArchiveTransition(null)}
+                    >
+                      <img
+                        src={
+                          rec.archive_id.startsWith('TANK_')
+                            ? `/api/tankoubons/${rec.archive_id}/thumbnail?no_fallback=true`
+                            : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
+                        }
+                        alt={rec.title}
+                        style={{ width: 140, height: 187, objectFit: 'cover', borderRadius: 4 }}
+                        loading="lazy"
+                      />
+                      <span style={{ fontSize: 11, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {rec.title}
+                      </span>
+                    </a>
+                  </div>
                 ))}
               </div>
             )}
-            <div style={{ marginTop: 16 }}>
-              <input
-                type="button"
-                className="stdbtn"
-                value={t('Cancel') ?? undefined}
-                onClick={() => setArchiveTransition(null)}
-              />
-            </div>
           </div>
         </>
       )}
