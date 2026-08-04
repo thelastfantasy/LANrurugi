@@ -58,9 +58,8 @@ import { SortBySelector } from './SortBySelector'
 // server-side pagination isn't configurable per-request, so "Go to Page" paginates through these
 // fixed 100-archive chunks rather than the user's own `archives_per_page` display setting.
 
-// Module-level (not component state/`localStorage`): persists across `Library` remounting
-// mid-session (e.g. in-app nav back to `/`) but resets on an actual page reload/fresh tab,
-// matching legacy's semantics (its own toast trigger only ever runs once per real HTTP page
+let defaultPasswordToastShownThisPageLoad = false
+
 export function Library() {
   const { t } = useTranslation()
   const navigate = useNavigate()
