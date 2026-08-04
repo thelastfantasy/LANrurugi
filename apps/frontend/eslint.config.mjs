@@ -58,7 +58,6 @@ export default [
         { blankLine: 'always', prev: '*', next: 'export' },
       ],
       'simple-import-sort/imports': 'warn',
-      'simple-import-sort/exports': 'warn',
 
       'react-hooks/rules-of-hooks':  'error',
       'react-hooks/exhaustive-deps': 'warn',

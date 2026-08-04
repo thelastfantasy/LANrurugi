@@ -1,9 +1,15 @@
 export { ArchiveCard } from './ArchiveCard'
+
 export { ArchiveContextMenu, DeleteConfirmDialog } from './ArchiveContextMenu'
+
 export { CompactTable } from './CompactTable'
+
 export { Library } from './LibraryPage'
+
 export { RecentlyAddedCarousel } from './RecentlyAddedCarousel'
+
 export { SettingsMenu } from './SettingsMenu'
+
 export {
   BookmarkIcon,
   CAROUSEL_ICON,
