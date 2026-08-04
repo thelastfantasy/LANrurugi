@@ -74,8 +74,28 @@ export default function DownloadQueuePanel({
   const clearCompleted = useClearCompletedQueue()
   const updateForBatchMetadata = useUpdateQueueItem()
   const [selected, setSelected] = useState<Set<string>>(new Set())
-
   const items = useMemo(() => queue.data ?? [], [queue.data])
+  // Auto-select freshly-added queue items ("添加到队列" then straight to "开始" without having to
+  // tick every checkbox). `seenRef` starts null — the first render's items are the pre-existing
+  // queue and must NOT be selected; only ids that appear afterwards (a new "添加到队列" click) get
+  // auto-checked.
+  const seenRef = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    let seen = seenRef.current
+    if (seen === null) {
+      seen = new Set(items.map((i) => i.id))
+      seenRef.current = seen
+      return
+    }
+    const fresh = items.filter((i) => !seen.has(i.id))
+    if (fresh.length === 0) return
+    for (const i of fresh) seen.add(i.id)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const i of fresh) next.add(i.id)
+      return next
+    })
+  }, [items])
   const jobById = useMemo(() => {
     const map = new Map<string, JobRecord>()
     for (const j of jobs.data ?? []) map.set(j.id, j)
