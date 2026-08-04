@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
-import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/tocValidation"
+import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/utils/tocValidation"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 // How many `ChapterActionMenu` instances are currently mounted/open — a plain module-level

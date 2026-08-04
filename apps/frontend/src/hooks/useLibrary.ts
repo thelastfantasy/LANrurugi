@@ -31,7 +31,7 @@ import {
   MSM_SELECTION_KEY,
 } from "@/lib/storageKeys"
 import { buildSearchToken, buildTagList, splitTagsByNamespace } from "@/lib/tagFormat"
-import { isTankoubonId } from "@/pages/Library/isTankoubonId"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { type ContextMenuState } from "@/pages/Library/types"
 import { recordSearchNavigation } from "@/pages/Reader/crossArchiveNav"
 import { toast } from "@/toast"

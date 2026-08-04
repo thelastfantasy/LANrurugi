@@ -9,9 +9,9 @@ import { promptDialog } from "@/dialog"
 import { routes } from "@/lib/routes"
 import { CUSTOM_COLUMN_PREFIX, DEFAULT_CUSTOM_COLUMNS } from "@/lib/storageKeys"
 import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from "@/lib/tagFormat"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { BookmarkIcon } from "./BookmarkIcon"
-import { isTankoubonId } from "./isTankoubonId"
 import { TagLine } from "./TagLine"
 
 /** One compact-table custom column's chosen namespace, read/write straight to its own

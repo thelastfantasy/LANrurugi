@@ -23,7 +23,6 @@ export * from "./SortBySelector"
 export * from "./TagLine"
 
 
-export * from "./isTankoubonId"
 
 export * from "./types"
 

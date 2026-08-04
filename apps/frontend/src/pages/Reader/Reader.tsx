@@ -26,10 +26,11 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { clamp, computeNextPage, computeSpread } from "@/hooks/useReaderNavigation"
 import { useReaderSettings } from "@/hooks/useReaderSettings"
 import { useTankoubonReading } from "@/hooks/useTankoubonReading"
-import { fetchContentLengthKb } from "@/lib/imageMeta"
 import { routes } from "@/lib/routes"
 import { getTagSearchURL } from "@/lib/tagFormat"
-import { isTankoubonId } from "@/pages/Library/isTankoubonId"
+import { fileInfoText } from "@/lib/utils/fileInfoText"
+import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
@@ -39,7 +40,6 @@ import {
   resolveAdjacentArchive,
   setupArchiveNavigation,
 } from "./crossArchiveNav"
-import { fileInfoText } from "./fileInfoText"
 import { MarkerLayer } from "./MarkerLayer"
 import { SettingsOverlay } from "./SettingsOverlay"
 

@@ -4,9 +4,9 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { routes } from "@/lib/routes"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { BookmarkIcon } from "./BookmarkIcon"
-import { isTankoubonId } from "./isTankoubonId"
 import { TagLine } from "./TagLine"
 
 /** Read-crown/new/tankoubon status badges — ports `buildStatusDiv` exactly, including its

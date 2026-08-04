@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 
 import { useUpdateArchiveMetadata } from "@/api/hooks"
 import { Tooltip } from "@/components/Overlay/Tooltip"
-import { formatRating, parseRating } from "@/lib/rating"
+import { formatRating, parseRating } from "@/lib/utils/rating"
 
 import { StarSprite } from "./StarRating"
 

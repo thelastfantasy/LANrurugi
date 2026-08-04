@@ -1,7 +1,7 @@
 import { useSettings } from "@/api/hooks"
 import { StarRatingDisplay } from "@/components/Form/StarRating"
-import { parseRating } from "@/lib/rating"
 import { displayNamespace, formatTagValue, getTagSearchURL } from "@/lib/tagFormat"
+import { parseRating } from "@/lib/utils/rating"
 
 /** Mirrors legacy's `splitTagsByNamespace` + `buildTagsDiv` (`~/LANraragi/public/js/mod/common.js`)
  * — groups a flat comma-separated tag string by its `namespace:value` prefix (untagged values fall

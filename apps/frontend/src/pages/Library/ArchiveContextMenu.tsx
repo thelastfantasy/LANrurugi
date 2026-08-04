@@ -8,10 +8,10 @@ import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "@/components/Overl
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { routes } from "@/lib/routes"
 import { splitTagsByNamespace } from "@/lib/tagFormat"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 import { toast } from "@/toast"
 
-import { isTankoubonId } from "./isTankoubonId"
 import { type ContextMenuState } from "./types"
 
 /** Ports legacy's own right-click menu (`~/LANraragi/public/js/mod/index_contextmenu.js`) — same
