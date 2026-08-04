@@ -1,14 +1,14 @@
-import { ChildProcess, spawn } from 'node:child_process'
-import { execSync } from 'node:child_process'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { ChildProcess, spawn } from "node:child_process"
+import { execSync } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
-import { test as base } from '@playwright/test'
+import { test as base } from "@playwright/test"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const FRONTEND_ROOT = path.resolve(__dirname, '../..')
-const REPO_ROOT = path.resolve(FRONTEND_ROOT, '../..')
+const FRONTEND_ROOT = path.resolve(__dirname, "../..")
+const REPO_ROOT = path.resolve(FRONTEND_ROOT, "../..")
 
 // Per-worker isolation (spec FR-014): each worker gets its own Redis *instance* (own port), own
 // backend process, and own frontend preview server — not a single shared Redis instance
@@ -48,29 +48,29 @@ const spawnedChildren = new Set<ChildProcess>()
 
 function killAllSpawnedChildren() {
   for (const proc of spawnedChildren) {
-    if (!proc.killed) proc.kill('SIGKILL')
+    if (!proc.killed) proc.kill("SIGKILL")
   }
 }
-process.on('exit', killAllSpawnedChildren)
-process.on('SIGINT', () => {
+process.on("exit", killAllSpawnedChildren)
+process.on("SIGINT", () => {
   killAllSpawnedChildren()
   process.exit(130)
 })
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   killAllSpawnedChildren()
   process.exit(143)
 })
 
 function spawnTracked(command: string, args: string[], opts: Parameters<typeof spawn>[2]): ChildProcess {
-  const proc = spawn(command, args, { ...opts, stdio: 'ignore' })
+  const proc = spawn(command, args, { ...opts, stdio: "ignore" })
   spawnedChildren.add(proc)
-  proc.once('exit', () => spawnedChildren.delete(proc))
+  proc.once("exit", () => spawnedChildren.delete(proc))
   // `spawn` failing outright (command not found, exec permission denied, etc.) fires an 'error'
   // event asynchronously rather than throwing — with no listener, Node treats that as an uncaught
   // exception, and this was previously silently swallowed by `stdio: 'ignore'` leaving no trace at
   // all in CI logs (a real failure here surfaced only as a generic 30s Playwright fixture-setup
   // timeout with zero indication of which of the three spawned processes never actually started).
-  proc.on('error', (err) => {
+  proc.on("error", (err) => {
     console.error(`[fixtures.ts] failed to spawn "${command}": ${err.message}`)
   })
   return proc
@@ -87,27 +87,27 @@ function spawnTracked(command: string, args: string[], opts: Parameters<typeof s
 // `/proc/net/tcp{,6}` + `/proc/<pid>/fd` directly instead — no external tool dependency at all,
 // works on any Linux without needing anything beyond what's already guaranteed to exist.
 function killWhateverIsListeningOn(port: number) {
-  const hexPort = port.toString(16).toUpperCase().padStart(4, '0')
+  const hexPort = port.toString(16).toUpperCase().padStart(4, "0")
   const inodes = new Set<string>()
-  for (const procFile of ['/proc/net/tcp', '/proc/net/tcp6']) {
+  for (const procFile of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     let contents: string
     try {
-      contents = fs.readFileSync(procFile, 'utf8')
+      contents = fs.readFileSync(procFile, "utf8")
     } catch {
       continue
     }
-    for (const line of contents.split('\n').slice(1)) {
+    for (const line of contents.split("\n").slice(1)) {
       const fields = line.trim().split(/\s+/)
       const localAddress = fields[1]
       const inode = fields[9]
-      if (!localAddress || !inode || inode === '0') continue
-      const [, portHex] = localAddress.split(':')
+      if (!localAddress || !inode || inode === "0") continue
+      const [, portHex] = localAddress.split(":")
       if (portHex === hexPort) inodes.add(inode)
     }
   }
   if (inodes.size === 0) return
 
-  for (const pidDir of fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
+  for (const pidDir of fs.readdirSync("/proc").filter((name) => /^\d+$/.test(name))) {
     const fdDir = `/proc/${pidDir}/fd`
     let fds: string[]
     try {
@@ -125,7 +125,7 @@ function killWhateverIsListeningOn(port: number) {
       const match = /^socket:\[(\d+)\]$/.exec(link)
       if (match && inodes.has(match[1])) {
         try {
-          process.kill(Number(pidDir), 'SIGKILL')
+          process.kill(Number(pidDir), "SIGKILL")
         } catch {
           // already gone — fine
         }
@@ -141,7 +141,7 @@ function fsRmSyncQuiet(dir: string) {
 
 export const test = base.extend<object, { workerBaseURL: string }>({
   workerBaseURL: [
-    async ({}, use, workerInfo) => {
+    async (_ctx, use, workerInfo) => {
       const redisPort = 6390 + workerInfo.parallelIndex
       const backendPort = 3100 + workerInfo.parallelIndex
       const frontendPort = 5200 + workerInfo.parallelIndex
@@ -158,11 +158,11 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       // already had 4 archives from earlier runs). `--save ""` disables persistence outright
       // (these are throwaway test instances; durability across a restart is never needed), and
       // each worker additionally gets its own CWD as a second independent safeguard.
-      const redisDir = path.join(REPO_ROOT, `.e2e-worker-${workerInfo.parallelIndex}`, 'redis')
+      const redisDir = path.join(REPO_ROOT, `.e2e-worker-${workerInfo.parallelIndex}`, "redis")
       fs.mkdirSync(redisDir, { recursive: true })
       const redis = spawnTracked(
-        'redis-server',
-        ['--port', String(redisPort), '--daemonize', 'no', '--save', ''],
+        "redis-server",
+        ["--port", String(redisPort), "--daemonize", "no", "--save", ""],
         { cwd: redisDir },
       )
       // A fixed 300ms sleep before the first PING worked reliably in local testing but was too
@@ -174,7 +174,7 @@ export const test = base.extend<object, { workerBaseURL: string }>({
         const deadline = Date.now() + 10_000
         for (;;) {
           try {
-            execSync(`redis-cli -p ${redisPort} PING`, { stdio: 'ignore' })
+            execSync(`redis-cli -p ${redisPort} PING`, { stdio: "ignore" })
             break
           } catch {
             if (Date.now() > deadline) {
@@ -184,21 +184,21 @@ export const test = base.extend<object, { workerBaseURL: string }>({
           }
         }
       }
-      execSync(`redis-cli -p ${redisPort} FLUSHALL`, { stdio: 'ignore' })
+      execSync(`redis-cli -p ${redisPort} FLUSHALL`, { stdio: "ignore" })
 
       const backend = spawnTracked(
-        path.join(REPO_ROOT, 'target/debug/lanrurugi-server'),
+        path.join(REPO_ROOT, "target/debug/lanrurugi-server"),
         [
-          'serve',
-          '--redis-url',
+          "serve",
+          "--redis-url",
           `redis://127.0.0.1:${redisPort}`,
-          '--library-path',
-          path.join(libraryDir, 'library'),
-          '--thumb-dir',
-          path.join(libraryDir, 'thumb'),
-          '--temp-dir',
-          path.join(libraryDir, 'temp'),
-          '--bind',
+          "--library-path",
+          path.join(libraryDir, "library"),
+          "--thumb-dir",
+          path.join(libraryDir, "thumb"),
+          "--temp-dir",
+          path.join(libraryDir, "temp"),
+          "--bind",
           `127.0.0.1:${backendPort}`,
         ],
         { cwd: REPO_ROOT },
@@ -227,8 +227,8 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       // indication of why. Binding explicitly to `127.0.0.1` removes the address-scope ambiguity
       // `--strictPort` alone doesn't close.
       const frontend = spawnTracked(
-        'pnpm',
-        ['exec', 'vite', 'preview', '--port', String(frontendPort), '--strictPort', '--host', '127.0.0.1'],
+        "pnpm",
+        ["exec", "vite", "preview", "--port", String(frontendPort), "--strictPort", "--host", "127.0.0.1"],
         {
           cwd: FRONTEND_ROOT,
           env: { ...process.env, LANRURUGI_E2E_BACKEND_PORT: String(backendPort) },
@@ -239,11 +239,11 @@ export const test = base.extend<object, { workerBaseURL: string }>({
 
       await use(baseURL)
 
-      frontend.kill('SIGKILL')
-      backend.kill('SIGKILL')
-      redis.kill('SIGKILL')
+      frontend.kill("SIGKILL")
+      backend.kill("SIGKILL")
+      redis.kill("SIGKILL")
     },
-    { scope: 'worker', auto: true },
+    { scope: "worker", auto: true },
   ],
 
   baseURL: async ({ workerBaseURL }, use) => {
@@ -251,4 +251,4 @@ export const test = base.extend<object, { workerBaseURL: string }>({
   },
 })
 
-export { expect } from '@playwright/test'
+export { expect } from "@playwright/test"

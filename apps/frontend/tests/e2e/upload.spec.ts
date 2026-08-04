@@ -1,9 +1,9 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 
-import { expect, test } from './fixtures'
-import { fixturePath } from './fixturePath'
+import { fixturePath } from "./fixturePath"
+import { expect, test } from "./fixtures"
 
 // Covers the large-archive upload regression (data-model.md Regression Fixture #2): axum's
 // `Multipart` extractor enforces a 2 MB `DefaultBodyLimit` by default; without the explicit
@@ -13,25 +13,25 @@ import { fixturePath } from './fixturePath'
 // To verify this test actually catches the regression: temporarily remove the
 // `.layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))` call in upload.rs's route registration,
 // confirm this test fails, then restore it.
-test.describe('upload', { tag: '@upload' }, () => {
+test.describe("upload", { tag: "@upload" }, () => {
   test.beforeEach(async ({ page }) => {
-    await page.request.post('/api/login', { form: { password: 'kamimamita' } })
+    await page.request.post("/api/login", { form: { password: "kamimamita" } })
   })
 
-  test('an archive larger than the 2MB default body limit uploads successfully', async ({ page }) => {
+  test("an archive larger than the 2MB default body limit uploads successfully", async ({ page }) => {
     // Pad a real, valid zip fixture past axum's 2MB default so a regression in the override is
     // actually exercised (over 2MB, not merely "a normal-sized archive"). The filename carries a
     // timestamp specifically so it's unique against whatever the download queue panel's
     // worker-scoped backend already has queued from other tests sharing the same worker/backend
     // instance (queue history persists in Redis for the worker's whole lifetime, not per-test).
-    const original = fs.readFileSync(fixturePath('sample.zip'))
+    const original = fs.readFileSync(fixturePath("sample.zip"))
     const padded = Buffer.concat([original, Buffer.alloc(3 * 1024 * 1024)])
     const uniqueName = `oversized-${Date.now()}`
     const tmpPath = path.join(os.tmpdir(), `${uniqueName}.zip`)
     fs.writeFileSync(tmpPath, padded)
 
     try {
-      await page.goto('/upload')
+      await page.goto("/upload")
       const fileInput = page.locator('input[type="file"]')
       await fileInput.setInputFiles(tmpPath)
 
@@ -42,7 +42,7 @@ test.describe('upload', { tag: '@upload' }, () => {
       // this test's own uniquely-named upload — the panel accumulates rows from every prior test
       // that shared this worker's backend, so an unscoped `a[href^="/reader/"]` locator matches
       // several unrelated rows (strict-mode violation) rather than resolving unambiguously.
-      await expect(page.getByRole('link', { name: new RegExp(uniqueName) })).toBeVisible({
+      await expect(page.getByRole("link", { name: new RegExp(uniqueName) })).toBeVisible({
         timeout: 30_000,
       })
     } finally {
@@ -58,8 +58,8 @@ test.describe('upload', { tag: '@upload' }, () => {
   // own call then often saw the ID as already tracked, returning a spurious 409 for a genuinely
   // first-time upload. The race is intermittent, not deterministic, so this test uploads several
   // distinct never-before-seen archives in quick succession rather than just once.
-  test('repeated first-time uploads all succeed (no upload-vs-watcher race)', async ({ page }) => {
-    const original = fs.readFileSync(fixturePath('sample.zip'))
+  test("repeated first-time uploads all succeed (no upload-vs-watcher race)", async ({ page }) => {
+    const original = fs.readFileSync(fixturePath("sample.zip"))
     for (let i = 0; i < 5; i++) {
       // `wait_until_stable` (lanrurugi-scanner's watcher.rs, mirroring legacy Shinobu.pm's
       // add_to_filemap) treats any file under its 512000-byte hashing-sample threshold as
@@ -74,8 +74,8 @@ test.describe('upload', { tag: '@upload' }, () => {
         Buffer.from(`race-check-${Date.now()}-${i}-${Math.random()}`),
         Buffer.alloc(520_000),
       ])
-      const res = await page.request.put('/api/archives/upload', {
-        multipart: { file: { name: `race-check-${i}.zip`, mimeType: 'application/zip', buffer: unique } },
+      const res = await page.request.put("/api/archives/upload", {
+        multipart: { file: { name: `race-check-${i}.zip`, mimeType: "application/zip", buffer: unique } },
       })
       expect(res.status(), `upload #${i} should succeed, not report a spurious duplicate`).toBe(200)
       const body = (await res.json()) as { success: number }

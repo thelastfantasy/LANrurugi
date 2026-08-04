@@ -1,9 +1,9 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(__dirname, '../../../..')
+const REPO_ROOT = path.resolve(__dirname, "../../../..")
 
 // Implements spec FR-011's "clean, known state before the next run begins" by default. Skips the
 // actual cleanup (but still runs, so the process doesn't error) when `process.env.KEEP` is set —
@@ -20,7 +20,7 @@ export default async function globalTeardown() {
     return
   }
 
-  const entries = fs.readdirSync(REPO_ROOT).filter((name) => name.startsWith('.e2e-worker-'))
+  const entries = fs.readdirSync(REPO_ROOT).filter((name) => name.startsWith(".e2e-worker-"))
   for (const entry of entries) {
     fs.rmSync(path.join(REPO_ROOT, entry), { recursive: true, force: true })
   }

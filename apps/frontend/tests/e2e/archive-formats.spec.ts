@@ -1,8 +1,8 @@
-import fs from 'node:fs'
-import path from 'node:path'
+import fs from "node:fs"
+import path from "node:path"
 
-import { expect, test } from './fixtures'
-import { fixturePath } from './fixturePath'
+import { fixturePath } from "./fixturePath"
+import { expect, test } from "./fixtures"
 
 // Several sample fixtures were originally byte-identical copies under different extensions
 // (T009's `sample.zip`/`.cbz`/`.epub`; T010's `sample.7z`/`.cb7`) — the archive id is a content
@@ -16,22 +16,22 @@ import { fixturePath } from './fixturePath'
 // byte, since neither format has a fixed end-of-archive marker the way zip/7z do) — those three
 // fixtures are pre-generated with genuinely distinct embedded content instead (see T012/T011's own
 // regeneration), so they need no padding here at all.
-const NO_TRAILING_PADDING = new Set(['sample.lzh', 'sample.lha', 'sample.xz'])
+const NO_TRAILING_PADDING = new Set(["sample.lzh", "sample.lha", "sample.xz"])
 
-async function uploadArchive(page: import('@playwright/test').Page, filePath: string, filename: string) {
+async function uploadArchive(page: import("@playwright/test").Page, filePath: string, filename: string) {
   const original = fs.readFileSync(filePath)
   const buffer = NO_TRAILING_PADDING.has(path.basename(filePath))
     ? original
     : Buffer.concat([original, Buffer.from(`unique-${Date.now()}-${Math.random()}`)])
-  const res = await page.request.put('/api/archives/upload', {
-    multipart: { file: { name: filename, mimeType: 'application/octet-stream', buffer } },
+  const res = await page.request.put("/api/archives/upload", {
+    multipart: { file: { name: filename, mimeType: "application/octet-stream", buffer } },
   })
   return res
 }
 
-test.describe('archive formats', { tag: '@archive-formats' }, () => {
+test.describe("archive formats", { tag: "@archive-formats" }, () => {
   test.beforeEach(async ({ page }) => {
-    await page.request.post('/api/login', { form: { password: 'kamimamita' } })
+    await page.request.post("/api/login", { form: { password: "kamimamita" } })
   })
 
   // Covers the CJK archive-entry filename mojibake regression (data-model.md Regression Fixture
@@ -44,19 +44,19 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
   // `Utf8LocaleGuard` to use `newlocale`'s empty-string argument instead of the hardcoded
   // "C.utf8", confirm this test fails under this project's own dev container (no LANG env var
   // set), then restore it.
-  test('CJK filename without UTF-8 flag decodes correctly, not as mojibake', async ({ page }) => {
-    const res = await uploadArchive(page, fixturePath('cjk-shiftjis-noflag.zip'), 'cjk-shiftjis-noflag.zip')
+  test("CJK filename without UTF-8 flag decodes correctly, not as mojibake", async ({ page }) => {
+    const res = await uploadArchive(page, fixturePath("cjk-shiftjis-noflag.zip"), "cjk-shiftjis-noflag.zip")
     expect(res.ok()).toBe(true)
     const body = (await res.json()) as { success: number; id: string }
     expect(body.success).toBe(1)
 
     await page.goto(`/reader/${body.id}`)
-    const image = page.locator('#i3 img.reader-image').first()
-    await image.waitFor({ state: 'visible' })
-    const src = await image.getAttribute('src')
+    const image = page.locator("#i3 img.reader-image").first()
+    await image.waitFor({ state: "visible" })
+    const src = await image.getAttribute("src")
     // `getAttribute` returns the raw attribute value (browsers do not re-encode it for this API),
     // so the correctly-decoded CJK text appears literally, not percent-encoded.
-    expect(src).toContain('空白 テスト.jpg')
+    expect(src).toContain("空白 テスト.jpg")
   })
 
   // Multi-volume 7z (spec User Story 4 Acceptance Scenarios 2-3): this scenario documents and
@@ -71,8 +71,8 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
   // and stores the raw bytes), but the archive is then unreadable — `GET /files` fails with
   // `"unsupported archive extension: \"001\""`, since extension-based format detection sees `.001`
   // rather than `.7z`. This is a real gap: no multi-volume assembly happens at all today.
-  test('multi-volume 7z: current behavior is recorded (upload of first volume)', async ({ page }) => {
-    const uploadRes = await uploadArchive(page, fixturePath('multivolume.7z.001'), 'multivolume.7z.001')
+  test("multi-volume 7z: current behavior is recorded (upload of first volume)", async ({ page }) => {
+    const uploadRes = await uploadArchive(page, fixturePath("multivolume.7z.001"), "multivolume.7z.001")
     expect(uploadRes.ok()).toBe(true)
     const uploadBody = (await uploadRes.json()) as { success: number; id: string }
     expect(uploadBody.success).toBe(1)
@@ -80,7 +80,7 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
     const filesRes = await page.request.get(`/api/archives/${uploadBody.id}/files`)
     const filesBody = (await filesRes.json()) as { success: number; error?: string }
     expect(filesBody.success).toBe(0)
-    expect(filesBody.error).toContain('unsupported archive extension')
+    expect(filesBody.error).toContain("unsupported archive extension")
   })
 
   // Encrypted 7z (spec User Story 4 Acceptance Scenarios 2-3): same current-behavior-locked
@@ -90,8 +90,8 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
   // Actual current behavior (verified by hand): upload succeeds (raw bytes are accepted and
   // stored), but `GET /files` fails with a clear libarchive error — "The archive header is
   // encrypted, but currently not supported" — rather than a silent empty page list or a crash.
-  test('encrypted 7z: current behavior is recorded (upload without a password)', async ({ page }) => {
-    const uploadRes = await uploadArchive(page, fixturePath('encrypted.7z'), 'encrypted.7z')
+  test("encrypted 7z: current behavior is recorded (upload without a password)", async ({ page }) => {
+    const uploadRes = await uploadArchive(page, fixturePath("encrypted.7z"), "encrypted.7z")
     expect(uploadRes.ok()).toBe(true)
     const uploadBody = (await uploadRes.json()) as { success: number; id: string }
     expect(uploadBody.success).toBe(1)
@@ -99,7 +99,7 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
     const filesRes = await page.request.get(`/api/archives/${uploadBody.id}/files`)
     const filesBody = (await filesRes.json()) as { success: number; error?: string }
     expect(filesBody.success).toBe(0)
-    expect(filesBody.error).toContain('encrypted')
+    expect(filesBody.error).toContain("encrypted")
   })
 
   // Spec FR-009/User Story 4: every plain (non-encrypted, non-split, ASCII-filename) format
@@ -107,19 +107,19 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
   // fixture (the CJK zip test above and the two current-behavior-locked tests above already cover
   // zip-family and 7z; this covers the rest of `ARCHIVE_EXTENSIONS`).
   const plainFormats: { file: string; mime: string }[] = [
-    { file: 'sample.zip', mime: 'application/zip' },
-    { file: 'sample.cbz', mime: 'application/zip' },
-    { file: 'sample.epub', mime: 'application/epub+zip' },
-    { file: 'sample.rar', mime: 'application/x-rar-compressed' },
-    { file: 'sample.cbr', mime: 'application/x-rar-compressed' },
-    { file: 'sample.7z', mime: 'application/x-7z-compressed' },
-    { file: 'sample.cb7', mime: 'application/x-7z-compressed' },
-    { file: 'sample.lzh', mime: 'application/octet-stream' },
-    { file: 'sample.lha', mime: 'application/octet-stream' },
-    { file: 'sample.tar', mime: 'application/x-tar' },
-    { file: 'sample.gz', mime: 'application/gzip' },
-    { file: 'sample.bz2', mime: 'application/x-bzip2' },
-    { file: 'sample.xz', mime: 'application/x-xz' },
+    { file: "sample.zip", mime: "application/zip" },
+    { file: "sample.cbz", mime: "application/zip" },
+    { file: "sample.epub", mime: "application/epub+zip" },
+    { file: "sample.rar", mime: "application/x-rar-compressed" },
+    { file: "sample.cbr", mime: "application/x-rar-compressed" },
+    { file: "sample.7z", mime: "application/x-7z-compressed" },
+    { file: "sample.cb7", mime: "application/x-7z-compressed" },
+    { file: "sample.lzh", mime: "application/octet-stream" },
+    { file: "sample.lha", mime: "application/octet-stream" },
+    { file: "sample.tar", mime: "application/x-tar" },
+    { file: "sample.gz", mime: "application/gzip" },
+    { file: "sample.bz2", mime: "application/x-bzip2" },
+    { file: "sample.xz", mime: "application/x-xz" },
   ]
 
   for (const { file, mime } of plainFormats) {
@@ -134,7 +134,7 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
       expect(filesBody.pages?.length ?? 0).toBeGreaterThan(0)
 
       await page.goto(`/reader/${body.id}`)
-      const image = page.locator('#i3 img.reader-image').first()
+      const image = page.locator("#i3 img.reader-image").first()
       await expect(image).toBeVisible({ timeout: 10_000 })
       void mime // documents the real content-type a browser/client would send; not asserted on
     })
@@ -148,8 +148,8 @@ test.describe('archive formats', { tag: '@archive-formats' }, () => {
   // out of scope for this automated suite — see research.md §6 and this file's own git history for
   // that decision), so this scenario covers general non-ASCII decoding, not the CJK-mojibake
   // regression specifically.
-  test('RAR: non-ASCII filename decodes correctly', async ({ page }) => {
-    const res = await uploadArchive(page, fixturePath('rar/unicode.rar'), 'unicode-rar-test.rar')
+  test("RAR: non-ASCII filename decodes correctly", async ({ page }) => {
+    const res = await uploadArchive(page, fixturePath("rar/unicode.rar"), "unicode-rar-test.rar")
     expect(res.ok()).toBe(true)
     const body = (await res.json()) as { success: number; id: string }
     expect(body.success).toBe(1)

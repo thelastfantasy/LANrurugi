@@ -1,20 +1,20 @@
-import fs from 'node:fs'
+import fs from "node:fs"
 
-import { expect, test } from './fixtures'
-import { fixturePath } from './fixturePath'
+import { fixturePath } from "./fixturePath"
+import { expect, test } from "./fixtures"
 
-async function uploadArchive(page: import('@playwright/test').Page, fixtureName: string) {
+async function uploadArchive(page: import("@playwright/test").Page, fixtureName: string) {
   const buffer = fs.readFileSync(fixturePath(fixtureName))
-  const res = await page.request.put('/api/archives/upload', {
-    multipart: { file: { name: fixtureName, mimeType: 'application/zip', buffer } },
+  const res = await page.request.put("/api/archives/upload", {
+    multipart: { file: { name: fixtureName, mimeType: "application/zip", buffer } },
   })
   const body = (await res.json()) as { success: number; id: string }
   return body.id
 }
 
-test.describe('reader', { tag: '@reader' }, () => {
+test.describe("reader", { tag: "@reader" }, () => {
   test.beforeEach(async ({ page }) => {
-    await page.request.post('/api/login', { form: { password: 'kamimamita' } })
+    await page.request.post("/api/login", { form: { password: "kamimamita" } })
   })
 
   // Covers the reader toolbar icon-spacing regression (data-model.md Regression Fixture #4): JSX
@@ -24,11 +24,11 @@ test.describe('reader', { tag: '@reader' }, () => {
   //
   // To verify: temporarily remove the `marginRight: 3` style from Reader.tsx's toolbar `<a>`
   // elements, confirm this test fails, then restore it.
-  test('toolbar icons have a visible gap between them', async ({ page }) => {
-    const id = await uploadArchive(page, 'sample.cbz')
+  test("toolbar icons have a visible gap between them", async ({ page }) => {
+    const id = await uploadArchive(page, "sample.cbz")
     await page.goto(`/reader/${id}`)
 
-    const icons = page.locator('.absolute-options.absolute-left a')
+    const icons = page.locator(".absolute-options.absolute-left a")
     const first = await icons.nth(0).boundingBox()
     const second = await icons.nth(1).boundingBox()
     expect(first).not.toBeNull()
@@ -44,37 +44,37 @@ test.describe('reader', { tag: '@reader' }, () => {
   //
   // To verify: temporarily make `#i3`'s className unconditionally include 'loading' again,
   // confirm this test fails, then restore it.
-  test('no dead whitespace below a loaded page image', async ({ page }) => {
-    const id = await uploadArchive(page, 'sample.cbz')
+  test("no dead whitespace below a loaded page image", async ({ page }) => {
+    const id = await uploadArchive(page, "sample.cbz")
     await page.goto(`/reader/${id}`)
 
-    const image = page.locator('#i3 img.reader-image').first()
-    await image.waitFor({ state: 'visible' })
-    await expect(page.locator('#i3')).not.toHaveClass(/loading/)
+    const image = page.locator("#i3 img.reader-image").first()
+    await image.waitFor({ state: "visible" })
+    await expect(page.locator("#i3")).not.toHaveClass(/loading/)
   })
 
   // Covers fit-mode switching, required by spec FR-003 (new coverage for existing functionality,
   // not a historical regression fixture): the setting must actually change the rendered image's
   // sizing and persist across a reload.
-  test('fit-mode switching changes rendered image sizing and persists', async ({ page }) => {
-    const id = await uploadArchive(page, 'sample.cbz')
+  test("fit-mode switching changes rendered image sizing and persists", async ({ page }) => {
+    const id = await uploadArchive(page, "sample.cbz")
     await page.goto(`/reader/${id}`)
     // The reader opens with the Archive Overview overlay shown by default (readerSettings'
     // showOverlayByDefault, matching legacy) — its full-screen #overlay-shade backdrop intercepts
     // clicks on everything behind it, including the toolbar. Dismiss it (same Escape handling the
     // reader itself wires up) before interacting with the toolbar.
-    await page.keyboard.press('Escape')
+    await page.keyboard.press("Escape")
 
     await page.click('a[title="Reader Options"]')
     await page.click('input[value="Width"]')
 
-    const image = page.locator('#i3 img.reader-image').first()
-    await expect(image).toHaveCSS('width', /.+/)
+    const image = page.locator("#i3 img.reader-image").first()
+    await expect(image).toHaveCSS("width", /.+/)
     const widthValue = await image.evaluate((el) => (el as HTMLElement).style.width)
-    expect(widthValue).toBe('100%')
+    expect(widthValue).toBe("100%")
 
     await page.reload()
-    await page.keyboard.press('Escape')
+    await page.keyboard.press("Escape")
     await page.click('a[title="Reader Options"]')
     const widthButton = page.locator('input[value="Width"]')
     await expect(widthButton).toHaveClass(/toggled/)

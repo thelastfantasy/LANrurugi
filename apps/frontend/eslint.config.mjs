@@ -83,4 +83,38 @@ export default [
       '@typescript-eslint/no-unused-expressions': 'off',
     },
   },
+  {
+    // Tests — different globals (vitest for unit, node for e2e), relaxed rules
+    files: ['tests/**/*.{ts,tsx}'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        project: './tsconfig.test.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
+      globals: {
+        ...globals.browser,
+        ...globals.es2020,
+        ...globals.node,
+        ...globals.vitest,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+      'simple-import-sort': simpleImportSort,
+      '@stylistic': stylistic,
+    },
+    rules: {
+      ...tsPlugin.configs.recommended.rules,
+      'no-undef': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      'simple-import-sort/imports': 'warn',
+      '@stylistic/quotes': ['warn', 'double', { avoidEscape: true }],
+      'padding-line-between-statements': ['warn',
+        { blankLine: 'always', prev: 'import', next: '*' },
+        { blankLine: 'any',     prev: 'import', next: 'import' },
+      ],
+    },
+  },
 ]

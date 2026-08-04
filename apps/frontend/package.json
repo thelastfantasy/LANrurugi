@@ -49,6 +49,7 @@
     "cldr-annotations-derived-full": "48.2.0",
     "cldr-annotations-full": "48.2.0",
     "eslint": "^10.6.0",
+    "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "globals": "^17.7.0",

@@ -18,7 +18,7 @@ pre-commit:
       glob: "crates/**/*.rs"
       run: mise run clippy && mise run fmt-check
     frontend-lint:
-      glob: "apps/frontend/src/**/*.{ts,tsx}"
+      glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
       root: "apps/frontend"
       run: npx tsc -b --force && npx eslint --fix {staged_files}
       stage_fixed: true
