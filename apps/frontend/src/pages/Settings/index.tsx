@@ -54,6 +54,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [readerquality, setReaderquality] = useState(settings.readerquality)
   const [localprogress, setLocalprogress] = useState(settings.localprogress)
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
+  const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
 
   const [enablepass, setEnablepass] = useState(settings.enablepass)
   const [newPassword, setNewPassword] = useState('')
@@ -112,6 +113,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       usedateadded,
       usedatemodified,
       timezone,
+      newbadgemode,
     })
     setStatus(t('Settings saved!') ?? '')
   }
@@ -191,6 +193,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setLocalprogress={setLocalprogress}
             authprogress={authprogress}
             setAuthprogress={setAuthprogress}
+            newbadgemode={newbadgemode}
+            setNewbadgemode={setNewbadgemode}
             onStatus={setStatus}
           />
 

@@ -100,6 +100,22 @@ async fn get_theme(State(state): State<AppState>) -> Response {
     }
 }
 
+/// Reads `LRR_CONFIG`'s `newbadgemode` (see that field's own doc in [`STRING_FIELDS`]),
+/// defaulting to `until_opened` when unset — the one mode that matches legacy's own behavior, so
+/// a fresh/legacy-shared Redis starts with the exact badge semantics legacy has.
+pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "newbadgemode")
+            .await
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "until_opened".to_string()),
+        Err(_) => "until_opened".to_string(),
+    }
+}
+
 /// `(field, default)` pairs for every `LRR_CONFIG` value the Settings page's Global/Security/
 /// Files/Tags sections read or write, verified against `Model/Config.pm`'s `get_redis_conf`
 /// calls. Excludes `password` (see module docs) and `theme` (already had its own default before
@@ -120,6 +136,12 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // matching the same date-range a search by that string would resolve to.
     ("timezone", "UTC"),
     ("tagrules", "-already uploaded;-forbidden content;-incomplete;-ongoing;-complete;-various;-digital;-translated;-russian;-chinese;-portuguese;-french;-spanish;-italian;-vietnamese;-german;-indonesian"),
+    // When an archive's "new" badge disappears: `until_opened` (cleared the moment the reader
+    // loads — legacy's own behavior), `until_finished` (cleared only once the archive is read to
+    // its last page), or a time window `3d`/`7d`/`10d` (cleared N days after `date_added`,
+    // regardless of whether it was ever opened). Consumed by `archives::effective_isnew` (badge
+    // display) and `lanrurugi_search::engine`'s `newonly` filter so both stay consistent.
+    ("newbadgemode", "until_opened"),
 ];
 
 const NUMBER_FIELDS: &[(&str, i64)] = &[

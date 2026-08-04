@@ -694,7 +694,6 @@
   "Script failed with error: \\${error}": "脚本运行失败，错误信息：${error}",
   "Script result": "脚本运行结果",
   "Scripts": "脚本",
-  "Search Predicate": "搜索条件",
   "Search Predicate": "搜索谓词",
   "Search Title, Artist, Series, Language or Tags": "以标题、艺术家、系列、语言或标签来搜索",
   "Search by name…": "按名称搜索…",
@@ -963,5 +962,12 @@
   "Rate-limited to {{limit}}/s": "已限速：{{limit}}/s",
   "Matched rule: {{pattern}}": "匹配规则：{{pattern}}",
   "Edit this plugin’s rate-limit settings": "编辑该插件的限速设置",
-  "Download was interrupted by a server restart, please retry": "下载因服务器重启而中断，请重试"
+  "Download was interrupted by a server restart, please retry": "下载因服务器重启而中断，请重试",
+  "\"New\" badge duration": "\"新\"标记显示时长",
+  "Until the archive is opened": "直到档案被打开",
+  "Until the archive is fully read": "直到档案被完整阅读",
+  "3 days after it was added": "添加后 3 天",
+  "7 days after it was added": "添加后 7 天",
+  "10 days after it was added": "添加后 10 天",
+  "How long an archive keeps its \"new\" badge after being added to the library.": "档案添加到库后保留\"新\"标记的时长。"
 }

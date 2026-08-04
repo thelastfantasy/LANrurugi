@@ -120,16 +120,24 @@ export default function Reader() {
   const [readerSettings, updateReaderSettings] = useReaderSettings()
 
   // Legacy fires this unconditionally the moment the reader loads (`reader_common.js`'s init
-  // sequence: `DELETE /api/archives/{id}/isnew`, skipped only for a `TANK_` id since tanks have no
-  // `isnew` flag of their own) — not tied to finishing the archive or any elapsed time, just
-  // "was it opened at least once." Without this call the badge has no way to ever clear itself.
+  // sequence: `DELETE /api/archives/{id}/isnew`, skipped only for a `TANK_` id since tanks have
+  // no `isnew` flag of their own) — not tied to finishing the archive or any elapsed time, just
+  // "was it opened at least once." That's the `until_opened` badge mode (the default); under
+  // `until_finished` or a time-window mode the reader must NOT clear the flag on load, or the
+  // badge would vanish after a single open instead of after completion (or when the window
+  // lapses, which is display-side only and needs no reader involvement).
   const clearArchiveNew = useClearArchiveNew()
   const clearArchiveNewRef = useRef(clearArchiveNew.mutate)
   clearArchiveNewRef.current = clearArchiveNew.mutate
+  // `settings.data?.newbadgemode` (no `?? fallback` here — a `undefined` mode means the settings
+  // query is still in flight, and the reader must NOT clear the badge before it knows the mode:
+  // with a `?? 'until_opened'` fallback the very first render would default to the legacy mode
+  // and clear the flag even under `until_finished`, before the settings ever arrived).
+  const newBadgeMode = settings.data?.newbadgemode
   useEffect(() => {
-    if (!archiveId || isTank) return
-    clearArchiveNewRef.current(archiveId)
-  }, [archiveId, isTank])
+    if (!archiveId || isTank || !newBadgeMode) return
+    if (newBadgeMode === 'until_opened') clearArchiveNewRef.current(archiveId)
+  }, [archiveId, isTank, newBadgeMode])
 
   const totalPages = pages.data?.pages.length ?? 0
   const loggedIn = loginStatus.data?.logged_in ?? false
@@ -323,6 +331,18 @@ export default function Reader() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages])
+
+  // `until_finished` badge mode: clear the "new" flag once the reader actually reaches the last
+  // page — the same condition the display-side filter (`progress >= pagecount`,
+  // `archives::effective_isnew`) uses, so the badge disappears the moment the archive is
+  // complete rather than lingering as a stale flag. (Declared after `totalPages`/`currentPage`
+  // for that reason.)
+  useEffect(() => {
+    if (!archiveId || isTank || totalPages === 0 || !newBadgeMode) return
+    if (newBadgeMode === 'until_finished' && currentPage >= totalPages) {
+      clearArchiveNewRef.current(archiveId)
+    }
+  }, [archiveId, isTank, totalPages, currentPage, newBadgeMode])
 
   // Prefetches the next `readerSettings.preloadCount` pages beyond the currently-shown spread. A
   // bare `new Image()` with its `src` set (not appended to the DOM) is enough to make the browser

@@ -28,6 +28,8 @@ export default function GlobalSection({
   setLocalprogress,
   authprogress,
   setAuthprogress,
+  newbadgemode,
+  setNewbadgemode,
   onStatus,
 }: {
   htmltitle: string
@@ -48,6 +50,8 @@ export default function GlobalSection({
   setLocalprogress: (v: boolean) => void
   authprogress: boolean
   setAuthprogress: (v: boolean) => void
+  newbadgemode: string
+  setNewbadgemode: (v: string) => void
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
@@ -87,6 +91,17 @@ export default function GlobalSection({
             <input className="stdinput" style={{ width: '100%' }} maxLength={255} value={pagesize} onChange={(e) => setPagesize(Number(e.target.value))} type="number" />
             <br />
             {t('Number of archives shown on a page in the main list.')}
+          </Row>
+          <Row label={t('"New" badge duration')}>
+            <select className="stdinput" style={{ width: '100%' }} value={newbadgemode} onChange={(e) => setNewbadgemode(e.target.value)}>
+              <option value="until_opened">{t('Until the archive is opened')}</option>
+              <option value="until_finished">{t('Until the archive is fully read')}</option>
+              <option value="3d">{t('3 days after it was added')}</option>
+              <option value="7d">{t('7 days after it was added')}</option>
+              <option value="10d">{t('10 days after it was added')}</option>
+            </select>
+            <br />
+            {t('How long an archive keeps its "new" badge after being added to the library.')}
           </Row>
           <CheckboxRow
             id="enableresize"

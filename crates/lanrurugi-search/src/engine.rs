@@ -40,6 +40,11 @@ pub struct SearchParams {
     /// viewer's browser timezone, so two viewers always agree on which archives belong to a given
     /// searched date. API layer reads this from the `timezone` setting; defaults to UTC upstream.
     pub timezone: String,
+    /// `LRR_CONFIG`'s `newbadgemode` setting — how long an archive's "new" flag counts as new:
+    /// `until_opened` (legacy), `until_finished`, or a `Nd` time window. Applied to the `newonly`
+    /// filter so the "New Archives" button and the badges never disagree (see
+    /// `lanrurugi_api::archives::effective_isnew` for the identical display-side logic).
+    pub new_badge_mode: String,
 }
 
 impl Default for SearchParams {
@@ -54,6 +59,7 @@ impl Default for SearchParams {
             hidecompleted: false,
             groupby_tanks: true,
             timezone: "UTC".to_string(),
+            new_badge_mode: "until_opened".to_string(),
         }
     }
 }
@@ -120,7 +126,49 @@ pub async fn search(
             .await?
             .into_iter()
             .collect();
-        filtered.retain(|id| new_set.contains(id));
+        // Applies `new_badge_mode` on top of the raw `LRR_NEW` membership, mirroring
+        // `lanrurugi_api::archives::effective_isnew` — under a time window or until-finished
+        // mode, an archive whose badge has lapsed must not keep surfacing through the "New
+        // Archives" filter. `retain`'s closure can't `await`, hence the explicit loop.
+        let mut keep = HashSet::new();
+        for id in &filtered {
+            if !new_set.contains(id) {
+                continue;
+            }
+            let lapsed = match params.new_badge_mode.as_str() {
+                "until_opened" => false,
+                "until_finished" => {
+                    let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
+                    let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
+                    pagecount > 0 && progress >= pagecount
+                }
+                mode => {
+                    // Unknown mode or a missing/unparseable `date_added` tag → treat as still
+                    // new (same conservative fallback as `effective_isnew`).
+                    let Some(days) = mode.strip_suffix('d').and_then(|d| d.parse::<u64>().ok())
+                    else {
+                        continue;
+                    };
+                    let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+                    let Some(added) = tags.split(',').find_map(|t| {
+                        t.trim()
+                            .strip_prefix("date_added:")
+                            .and_then(|v| v.parse::<u64>().ok())
+                    }) else {
+                        continue;
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    now.saturating_sub(added) >= days * 24 * 60 * 60
+                }
+            };
+            if !lapsed {
+                keep.insert(id.clone());
+            }
+        }
+        filtered = keep;
     }
 
     if params.hidecompleted {

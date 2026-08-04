@@ -37,6 +37,44 @@ const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
 /// resize handling.
 const CORRUPTED_PAGE_PLACEHOLDER: &[u8] = include_bytes!("../assets/corrupted_page.svg");
 
+/// Computes whether an archive's "new" badge should be *shown*, applying `LRR_CONFIG`'s
+/// `newbadgemode` setting (see `settings::STRING_FIELDS`'s `newbadgemode` doc): `until_opened`
+/// shows it whenever the flag is set (legacy's own behavior); `until_finished` hides it once
+/// `lastreadpage` reaches `pagecount`; a `Nd` window hides it once `date_added` (parsed from the
+/// archive's own `date_added:<unix>` tag) is more than N days old — an archive without a
+/// `date_added` tag is treated as still-new (conservative: the flag was set, there's just no
+/// timestamp to age it against). Never mutates the stored flag — the mode decides *display*
+/// only; explicit clearing (`DELETE /archives/{id}/isnew`) stays orthogonal, and
+/// `lanrurugi_search::engine`'s `newonly` filter applies the same mode so the "New Archives"
+/// button and the badges never disagree.
+pub(crate) fn effective_isnew(a: &lanrurugi_core::entities::Archive, mode: &str) -> bool {
+    if !a.isnew {
+        return false;
+    }
+    match mode {
+        "until_opened" => true,
+        "until_finished" => a.lastreadpage < a.pagecount,
+        _ => {
+            let Some(days) = mode.strip_suffix('d').and_then(|d| d.parse::<u64>().ok()) else {
+                // Unknown mode — fall back to showing the badge rather than silently hiding it.
+                return true;
+            };
+            let Some(added) = a.tags.split(',').find_map(|t| {
+                t.trim()
+                    .strip_prefix("date_added:")
+                    .and_then(|v| v.parse::<u64>().ok())
+            }) else {
+                return true;
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            now.saturating_sub(added) < days * 24 * 60 * 60
+        }
+    }
+}
+
 /// A legitimate archive ID is always a 40-character lowercase-hex SHA-1 digest
 /// (`lanrurugi_storage::id::{legacy_id, size_aware_id}`) — anything else (in particular anything
 /// containing `/`, `\`, or `.`) cannot be a real ID and must never be used to build a filesystem

@@ -74,6 +74,10 @@ export interface Settings {
    * values as `yyyy-mm-dd` in this timezone (via `Intl.DateTimeFormat({ timeZone })`, which the
    * browser implements natively for any IANA id) and to build same-day search URLs. */
   timezone: string
+  /** How long an archive's "new" badge stays visible: `until_opened` (legacy — cleared when the
+   * reader loads), `until_finished` (cleared once read to the last page), or `3d`/`7d`/`10d`
+   * (a time window from `date_added`). See `lanrurugi_api::archives::effective_isnew`. */
+  newbadgemode: string
   pagesize: number
   tempmaxsize: number
   sizethreshold: number

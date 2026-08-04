@@ -43,6 +43,7 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         )
         .await;
 
+        let mode = crate::settings::read_new_badge_mode(state).await;
         let mut aggregate_names = Vec::new();
         let mut aggregate_isnew = false;
         let mut aggregate_pagecount: u64 = 0;
@@ -51,7 +52,10 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         let mut tags: Vec<String> = Vec::new();
         for a in members.into_iter().flatten().flatten() {
             aggregate_names.push(a.title.clone());
-            aggregate_isnew = aggregate_isnew || a.isnew;
+            // Per-member `effective_isnew` (not the raw flag) so a time-windowed or
+            // until-finished mode also governs a Tankoubon's aggregate badge — a tank whose every
+            // member's badge has lapsed no longer advertises itself as "new".
+            aggregate_isnew = aggregate_isnew || crate::archives::effective_isnew(&a, &mode);
             aggregate_pagecount += u64::from(a.pagecount);
             aggregate_size += a.arcsize;
             latest_readtime = latest_readtime.max(a.lastreadtime);
@@ -81,9 +85,16 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
         .await
         .ok()??;
+    let mode = crate::settings::read_new_badge_mode(state).await;
     let mut json = serde_json::to_value(ArchiveMetadataJson::from(&a)).ok()?;
-    json.as_object_mut()?
-        .insert("archive_count".into(), json!(null));
+    let obj = json.as_object_mut()?;
+    obj.insert("archive_count".into(), json!(null));
+    // `ArchiveMetadataJson` carries the raw stored flag; apply the configured mode on top so the
+    // badge rendering sees the *effective* value (see `archives::effective_isnew`'s docs).
+    obj.insert(
+        "isnew".into(),
+        json!(crate::archives::effective_isnew(&a, &mode)),
+    );
     Some(json)
 }
 
@@ -145,6 +156,7 @@ async fn build_params(
         hidecompleted: q.hidecompleted.unwrap_or(false),
         groupby_tanks: q.groupby_tanks.unwrap_or(true),
         timezone,
+        new_badge_mode: crate::settings::read_new_badge_mode(state).await,
     })
 }
 
