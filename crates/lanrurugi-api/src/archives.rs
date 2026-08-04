@@ -1169,7 +1169,7 @@ async fn fetch_page(
         .map(|v| v != "0")
         .unwrap_or(false);
     if !enable_resize {
-        return Ok(("application/octet-stream", bytes::Bytes::from(raw)));
+        return Ok((image_content_type(&raw), bytes::Bytes::from(raw)));
     }
     let threshold: i64 = fields
         .get("sizethreshold")
@@ -1195,8 +1195,30 @@ async fn fetch_page(
             let _ = tokio::fs::write(&cache_path, &resized).await;
             Ok(("image/jpeg", bytes::Bytes::from(resized)))
         }
-        Ok(None) => Ok(("application/octet-stream", bytes::Bytes::from(raw))),
+        Ok(None) => Ok((image_content_type(&raw), bytes::Bytes::from(raw))),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Detects an image's MIME type from its magic bytes so the browser displays it inline rather
+/// than triggering a download (issue #62 — `application/octet-stream` causes auto-download in
+/// every browser). Falls back to `application/octet-stream` for truly unrecognized content.
+fn image_content_type(raw: &[u8]) -> &'static str {
+    if raw.len() < 8 {
+        return "application/octet-stream";
+    }
+    if &raw[..2] == b"\xFF\xD8" {
+        "image/jpeg"
+    } else if &raw[..8] == b"\x89PNG\r\n\x1A\n" {
+        "image/png"
+    } else if &raw[..4] == b"GIF8" {
+        "image/gif"
+    } else if &raw[..4] == b"RIFF" && raw.len() >= 12 && &raw[8..12] == b"WEBP" {
+        "image/webp"
+    } else if &raw[..2] == b"BM" {
+        "image/bmp"
+    } else {
+        "application/octet-stream"
     }
 }
 
@@ -1442,5 +1464,55 @@ mod tests {
         assert!(!is_valid_archive_id(
             "da39a3ee5e6b4b0d3255bfef95601890afd8070/"
         ));
+    }
+
+    #[test]
+    fn image_content_type_detects_jpeg_from_magic_bytes() {
+        assert_eq!(
+            image_content_type(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"),
+            "image/jpeg"
+        );
+    }
+
+    #[test]
+    fn image_content_type_detects_png_from_magic_bytes() {
+        assert_eq!(
+            image_content_type(b"\x89PNG\r\n\x1A\n\x00\x00\x00\rIHDR"),
+            "image/png"
+        );
+    }
+
+    #[test]
+    fn image_content_type_detects_gif_from_magic_bytes() {
+        assert_eq!(image_content_type(b"GIF89a\x00\x00"), "image/gif");
+    }
+
+    #[test]
+    fn image_content_type_detects_webp_from_magic_bytes() {
+        let mut header = vec![0u8; 12];
+        header[..4].copy_from_slice(b"RIFF");
+        header[8..12].copy_from_slice(b"WEBP");
+        assert_eq!(image_content_type(&header), "image/webp");
+    }
+
+    #[test]
+    fn image_content_type_detects_bmp_from_magic_bytes() {
+        assert_eq!(
+            image_content_type(b"BM\x00\x00\x00\x00\x00\x00\x00\x00"),
+            "image/bmp"
+        );
+    }
+
+    #[test]
+    fn image_content_type_falls_back_to_octet_stream_for_unrecognized() {
+        assert_eq!(
+            image_content_type(b"\x00\x00\x00\x00\x00\x00\x00\x00"),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn image_content_type_falls_back_for_too_short_input() {
+        assert_eq!(image_content_type(b"\xFF"), "application/octet-stream");
     }
 }

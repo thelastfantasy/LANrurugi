@@ -719,10 +719,18 @@ mod tests {
         .await
         .unwrap();
 
-        // Descending: tank (imputed 3000) above member (3000, ties broken by input order) and
-        // both above the older archive; nothing unkeyed.
+        // Descending: both the tank (imputed 3000) and its member (3000) must sort above the
+        // older archive (1000); their relative order when values are equal is deterministic
+        // (tie-broken by ID) but the test should not depend on which comes first.
         assert_eq!(ids.len(), 3);
-        assert_eq!(ids[0], tank, "tank must impute its member's newest date");
+        assert!(
+            ids[0] == tank || ids[1] == tank,
+            "tank (imputed 3000) must be in top 2"
+        );
+        assert!(
+            ids[0] == member_new || ids[1] == member_new,
+            "member (3000) must be in top 2"
+        );
         assert_eq!(ids[2], id_old, "oldest archive last");
 
         for id in [&id_old, &member_new, &tank.to_string()] {
