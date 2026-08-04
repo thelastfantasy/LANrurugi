@@ -33,7 +33,7 @@ import {
 import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import { recordSearchNavigation } from '../Reader/crossArchiveNav'
-import { isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
+import { type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
 
 let defaultPasswordToastShownThisPageLoad = false
 
@@ -498,3 +498,4 @@ function handleOpenArchive(id: string) {
     routes,
   }
 }
+
