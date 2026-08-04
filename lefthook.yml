@@ -22,10 +22,14 @@ pre-commit:
       root: "apps/frontend"
       run: npx tsc -b --force && npx eslint --fix {staged_files}
       stage_fixed: true
-    # `cargo test`, `mise run test-frontend-unit`, and `mise run test-frontend-e2e`
-    # (specs/003-ui-test-automation) are deliberately NOT pre-commit hooks here — a deliberate
-    # choice, not a coverage gap. The constitution's own "Automated, non-bypassable local quality
-    # gates" guidance places slow checks (full test suites) at pre-push/CI rather than every
-    # commit, matching this file's existing rust-check/frontend-lint scope (fast static checks
-    # only). CI (`.github/workflows/ci.yml`'s `rust`/`frontend`/`e2e` jobs, required via branch
-    # protection on `main`) is the authoritative gate for these.
+
+pre-push:
+  parallel: true
+  commands:
+    rust-check:
+      glob: "crates/**/*.rs"
+      run: mise run clippy && mise run fmt-check
+    frontend-lint:
+      glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
+      root: "apps/frontend"
+      run: npx eslint --fix src/ tests/ --ext .tsx,.ts
