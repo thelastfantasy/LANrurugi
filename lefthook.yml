@@ -20,7 +20,7 @@ pre-commit:
     frontend-lint:
       glob: "apps/frontend/src/**/*.{ts,tsx}"
       root: "apps/frontend"
-      run: rm -f node_modules/.tmp/tsconfig.app.tsbuildinfo && npx tsc --noEmit && npx eslint {staged_files}
+      run: npx tsc -b --force && npx eslint --fix {staged_files}
       stage_fixed: true
     # `cargo test`, `mise run test-frontend-unit`, and `mise run test-frontend-e2e`
     # (specs/003-ui-test-automation) are deliberately NOT pre-commit hooks here — a deliberate
