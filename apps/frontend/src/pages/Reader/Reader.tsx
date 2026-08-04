@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -62,6 +63,26 @@ type OverlayKind = 'archive' | 'settings' | 'help' | null
 interface WakeLockSentinelLike {
   release(): Promise<void>
   addEventListener(type: 'release', listener: () => void): void
+}
+
+/** TanStack Query key for a reader's recommendation shortlist — prefetched near the last page
+ * so the boundary panel opens with data already in cache (the LLM rerank takes seconds; the
+ * prefetch hides that latency behind the reader's own page-turning). */
+const RECS_QUERY_KEY = (id: string) => ['reader-recommendations', id] as const
+
+/** Square badge chip on recommendation-card thumbnails — fixed 16×16 so the chip itself is a
+ * square regardless of the emoji glyph inside (which centers via flex). Neutral overlay chrome
+ * (semi-transparent dark), readable on any thumbnail in every theme. */
+const badgeChipStyle: React.CSSProperties = {
+  width: 16,
+  height: 16,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 11,
+  lineHeight: 1,
+  background: 'rgba(0,0,0,0.55)',
+  borderRadius: 4,
 }
 
 /** Inline key-cap styling for the help panel's keyboard shortcuts — same visual language as
@@ -184,7 +205,14 @@ export default function Reader() {
     direction: 'prev' | 'next'
     /** Fetched from `/api/reader/recommendations/{id}` while the overlay shows. `null` = still
      * loading / model not ready / fetch failed (the panel then shows nothing to pick). */
-    recommendations: { archive_id: string; title: string; score: number }[] | null
+    recommendations: {
+      archive_id: string
+      title: string
+      score: number
+      isnew: boolean
+      is_read: boolean
+      is_tank: boolean
+    }[] | null
   } | null>(null)
   const imageAreaRef = useRef<HTMLDivElement>(null)
   // The previously-rendered `#i3`'s own real height, captured right before a page turn swaps in
@@ -426,17 +454,72 @@ export default function Reader() {
 
   // Shows the boundary overlay (recommendations only — no auto-jump; the user picks a card or
   // cancels) and starts fetching the recommendations for the current archive in the background.
+  // Lock the page scroll while the boundary overlay is open (standard lightbox behavior) —
+  // otherwise wheel events over the overlay chain down to the reader page beneath it. The
+  // overlay's own container scrolls internally (max-height + overflow-y).
+  useEffect(() => {
+    if (!archiveTransition) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prevOverflow
+    }
+  }, [archiveTransition])
+
+  const queryClient = useQueryClient()
+  // Prefetch the recommendation shortlist while the reader is still a couple pages from the
+  // boundary — the LLM rerank takes seconds, and this hides that latency behind normal
+  // page-turning so the boundary panel opens with cached data (stale for a minute).
+  useEffect(() => {
+    if (!archiveId || isTank || totalPages === 0) return
+    if (currentPage < totalPages - 2) return
+    void queryClient.prefetchQuery({
+      queryKey: RECS_QUERY_KEY(archiveId),
+      staleTime: 60_000,
+      queryFn: () =>
+        fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`).then(
+          (r) => (r.ok ? r.json() : null),
+        ),
+    })
+  }, [archiveId, currentPage, totalPages, queryClient, isTank])
+
   function startArchiveTransition(direction: 'prev' | 'next') {
+    // Cached (prefetched) shortlist opens instantly; otherwise show the skeleton while the
+    // fetch runs.
+    const cached = archiveId
+      ? queryClient.getQueryData<{
+          recommendations?: {
+            archive_id: string
+            title: string
+            score: number
+            isnew: boolean
+            is_read: boolean
+            is_tank: boolean
+          }[]
+        }>(RECS_QUERY_KEY(archiveId))
+      : undefined
     setArchiveTransition({
       direction,
-      recommendations: null,
+      recommendations: cached?.recommendations ?? null,
     })
-    if (!archiveId || isTank) return
-    void fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { recommendations?: { archive_id: string; title: string; score: number }[] } | null) => {
+    if (!archiveId || isTank || cached) return
+    void queryClient
+      .fetchQuery({
+        queryKey: RECS_QUERY_KEY(archiveId),
+        staleTime: 60_000,
+        queryFn: () =>
+          fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`).then(
+            (r) => (r.ok ? r.json() : null),
+          ),
+      })
+      .then((data) => {
         setArchiveTransition((prev) =>
-          prev ? { ...prev, recommendations: data?.recommendations ?? [] } : prev,
+          prev
+            ? {
+                ...prev,
+                recommendations: data?.recommendations ?? [],
+              }
+            : prev,
         )
       })
       .catch(() => {
@@ -1467,75 +1550,154 @@ export default function Reader() {
               recommendation cards pop, matching the classic lightbox look. */}
           <div
             id="overlay-shade"
-            style={{ display: 'block', opacity: 0.85 }}
+            style={{ display: 'block', opacity: 0.85, overscrollBehavior: 'contain' }}
             onClick={() => setArchiveTransition(null)}
           />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', zIndex: 9001, background: 'transparent' }}>
-            <button
-              type="button"
-              aria-label={t('Close') ?? undefined}
-              onClick={() => setArchiveTransition(null)}
-              style={{
-                position: 'absolute',
-                top: -24,
-                right: -24,
-                width: 32,
-                height: 32,
-                borderRadius: '50%',
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: 17,
-                lineHeight: '32px',
-                padding: 0,
-                // White semi-transparent circle, lightbox convention — deliberately not theme-
-                // dependent: on the dark shade a white close control is the only color that
-                // reads consistently across all 5 themes (CLAUDE.md's custom-color rule applies
-                // to theme-visible accents; this is neutral overlay chrome).
-                background: 'rgba(255,255,255,0.2)',
-                color: '#fff',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.45)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
-            >
-              ×
-            </button>
-            <p>
-              {archiveTransition.direction === 'next'
-                ? t('Reached the last page -- here is what to read next')
-                : t('Reached the first page -- here is what to read next')}
+          /* Full-width fixed container (left:0/right:0 + translateY only) — a `left: 50% +
+             translate(-50%)` shrink-to-fit container's width is content/available-derived and
+             came out narrower than the 760px flex row, wrapping the 5-per-row cards into more
+             rows; the full-width container lets the inner flex row's own maxWidth rule
+             correctly center a 5-across two-row grid on any desktop viewport. */
+          <div
+            className="rec-overlay"
+            onClick={() => setArchiveTransition(null)}
+            style={{ position: 'fixed', top: '50%', left: 0, right: 0, transform: 'translateY(-50%)', textAlign: 'center', zIndex: 9001, background: 'transparent', maxHeight: '95vh', overflowY: 'auto', overscrollBehavior: 'contain', paddingBottom: 16 }}
+          >
+
+            {metadata.data?.title && (
+              <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', marginBottom: 4 }}>
+                {t('Currently reading')}: {metadata.data.title}
+              </p>
+            )}
+            <p style={{ fontSize: 16, fontWeight: 'bold', color: '#fff' }}>
+              {t('You might also like')}
             </p>
+            {archiveTransition.recommendations === null && (
+              /* Skeleton while the (un-prefetched) LLM rerank is in flight — grey card shapes
+                 matching the real cards' dimensions. */
+              <div className="rec-row" aria-busy="true">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div key={i} className="rec-card rec-skeleton" style={{ background: 'rgba(255,255,255,0.1)', border: 'none' }}>
+                    <div
+                      style={{
+                        width: '100%',
+                        aspectRatio: '3 / 4',
+                        borderRadius: 4,
+                        background: 'rgba(255,255,255,0.08)',
+                      }}
+                    />
+                    <div style={{ height: 11, marginTop: 6, width: '80%', background: 'rgba(255,255,255,0.08)', borderRadius: 2 }} />
+                  </div>
+                ))}
+              </div>
+            )}
             {archiveTransition.recommendations !== null && archiveTransition.recommendations.length > 0 && (
               /* 10 cards on desktop, 5 per row (two rows) — the fixed card width makes the
                  flex-wrap land at 5 across within this container's max width; narrow viewports
                  wrap to fewer per row naturally. */
-              <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap', maxWidth: 760, marginLeft: 'auto', marginRight: 'auto' }}>
+              <div className="rec-row">
                 {archiveTransition.recommendations.slice(0, 10).map((rec) => (
-                  <div key={rec.archive_id} className="rec-card" style={{ width: 152 }}>
+                  <div key={rec.archive_id} className="rec-card">
                     <a
                       href={`/reader/${rec.archive_id}`}
                       title={rec.title}
                       style={{ display: 'block', textDecoration: 'none' }}
                       onClick={() => setArchiveTransition(null)}
                     >
-                      <img
-                        src={
-                          rec.archive_id.startsWith('TANK_')
-                            ? `/api/tankoubons/${rec.archive_id}/thumbnail?no_fallback=true`
-                            : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
-                        }
-                        alt={rec.title}
-                        style={{ width: 140, height: 187, objectFit: 'cover', borderRadius: 4 }}
-                        loading="lazy"
-                      />
-                      <span style={{ fontSize: 11, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {rec.title}
-                      </span>
+                      <div style={{ position: 'relative' }}>
+                        <img
+                          src={
+                            rec.archive_id.startsWith('TANK_')
+                              ? `/api/tankoubons/${rec.archive_id}/thumbnail?no_fallback=true`
+                              : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
+                          }
+                          alt={rec.title}
+                          loading="lazy"
+                        />
+                        {/* Status badges, same emoji set as the Library grid cards (🆕 new /
+                            👑 read / 📚 tankoubon). Semi-transparent dark chips stay readable on
+                            any thumbnail; neutral overlay chrome, not theme-colored. */}
+                        {(rec.isnew || rec.is_read || rec.is_tank) && (
+                          <span
+                            style={{
+                              position: 'absolute',
+                              top: 4,
+                              left: 4,
+                              fontSize: 10,
+                              lineHeight: 1,
+                              display: 'flex',
+                              gap: 3,
+                            }}
+                          >
+                            {/* Square 16px chips (emoji vertically/horizontally centered) — a
+                                padding-based chip would be a flat rectangle, since the emoji
+                                glyph's own box is taller than its advance width. */}
+                            {rec.is_tank && (
+                              <span title={t('Tankoubon') ?? undefined} style={badgeChipStyle}>
+                                📚
+                              </span>
+                            )}
+                            {rec.isnew && (
+                              <span title={t('New!') ?? undefined} style={badgeChipStyle}>
+                                🆕
+                              </span>
+                            )}
+                            {rec.is_read && (
+                              <span title={t('Read') ?? undefined} style={badgeChipStyle}>
+                                👑
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <div className="rec-title">
+                        <span>{rec.title}</span>
+                      </div>
                     </a>
                   </div>
                 ))}
               </div>
             )}
+            <div style={{ marginTop: 18 }}>
+              <input
+                type="button"
+                className="stdbtn"
+                value={t('Return to Library') ?? undefined}
+                onClick={() => navigate(routes.library())}
+              />
+            </div>
           </div>
+          {/* Close button lives OUTSIDE the scrollable container — a fixed viewport-top-right
+              element, since the container's overflow would clip an absolutely-positioned child
+              that sits outside its box (top: -24 was getting cut off). White semi-transparent
+              circle, lightbox convention — neutral overlay chrome, not theme-colored. */}
+          <button
+            type="button"
+            aria-label={t('Close') ?? undefined}
+            onClick={() => setArchiveTransition(null)}
+            style={{
+              position: 'fixed',
+              top: 16,
+              right: 16,
+              width: 36,
+              height: 36,
+              borderRadius: '50%',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 0,
+              // Flex centering (not line-height) so the glyph sits on the button's true center
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(255,255,255,0.2)',
+              color: '#fff',
+              zIndex: 9002,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.45)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
+          >
+            <i className="fas fa-times" aria-hidden="true"></i>
+          </button>
         </>
       )}
     </div>

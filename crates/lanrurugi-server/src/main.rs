@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_api::{AppState, AuthConfig, LibraryPaths, Repositories};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
@@ -215,6 +216,30 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let redis = RedisDbs::connect(&args.redis_url)?;
     bootstrap(&redis, &args.library_path).await?;
+
+    // Auto-persist DEEPSEEK_API_KEY to Redis: if the env var is set but the config hash's
+    // `llm_api_key` is empty/absent, write it now so the Settings page always shows the
+    // (password-masked) value rather than an empty field (the user's constraint: "检查到环境
+    // 变量的key就自动写入redis"). A user can still clear it and save to overwrite the env
+    // var copy — this is a one-time seed, not an every-startup enforced sync.
+    {
+        let mut conn = redis.config.get().await?;
+        let stored: Option<String> = conn
+            .hget(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key")
+            .await
+            .ok()
+            .flatten();
+        if stored.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if let Ok(env_key) = std::env::var("DEEPSEEK_API_KEY") {
+                if !env_key.trim().is_empty() {
+                    let _: () = conn
+                        .hset(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key", &env_key)
+                        .await?;
+                    tracing::info!("llm_api_key auto-persisted from DEEPSEEK_API_KEY env var");
+                }
+            }
+        }
+    }
 
     let repos = Repositories::new(&redis);
     let scanner = ScannerHandle::new();

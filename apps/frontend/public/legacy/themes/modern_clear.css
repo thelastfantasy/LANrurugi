@@ -790,7 +790,7 @@ div.id4 a:hover {
     z-index: 1000;
     padding: 12px;
     text-align: center;
-    background-color: #ed2553;
+    background-color: rgba(237, 37, 83, 0.85);
 }
 
 /* Recommendation card container on the reader's boundary overlay (see Reader.tsx's
@@ -800,6 +800,9 @@ div.id4 a:hover {
     border-radius: 6px;
     padding: 6px;
     text-align: center;
+    /* content-box would add padding+border on top of the inline 152px width (166px actual),
+       breaking the 5-per-row math in Reader.tsx's flex row */
+    box-sizing: border-box;
     background-color: #34495E;
     border: 1px solid #2C3E50;
 }

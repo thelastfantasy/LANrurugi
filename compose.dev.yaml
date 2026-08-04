@@ -40,6 +40,8 @@ services:
       # `Dockerfile.dev` still bakes plugins in via `COPY` too (matches the production image), but
       # this bind mount takes precedence at the same path once the container is actually running.
       - ./plugins:/usr/local/share/lanrurugi/plugins
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     restart: unless-stopped
 
 volumes:

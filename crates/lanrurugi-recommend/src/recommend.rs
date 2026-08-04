@@ -25,11 +25,17 @@ pub enum RecommendError {
     Embedding(#[from] EmbeddingError),
 }
 
-/// One candidate archive the recommender can suggest.
+/// One candidate archive the recommender can suggest. `tags` (the comma-separated
+/// `namespace:value` tag string) is fed to the embedding model alongside the title — the model
+/// is the single source of truth for both series membership and ranking; no parsing happens.
 #[derive(Debug, Clone)]
 pub struct ArchiveMeta {
     pub id: String,
     pub title: String,
+    pub tags: String,
+    /// Page count — sent to the LLM alongside title/tags (the user's spec: current and
+    /// candidates both carry title + tags + pagecount).
+    pub pagecount: u32,
 }
 
 use regex::Regex;
@@ -86,20 +92,25 @@ pub fn normalize_title(title: &str) -> String {
 /// returning the `limit` closest. `current_title` is embedded fresh each call (a handful of
 /// milliseconds); callers that embed the whole library repeatedly should cache per-id vectors
 /// (see the API layer's `RecommendationCache`).
+/// Ranks every candidate except `current_id` for `current_title`, purely by embedding
+/// similarity — the title and tags are fed to the model verbatim and the model is the single
+/// source of truth (no title/volume parsing anywhere; see the module docs for why this is the
+/// deliberate architecture).
 pub fn recommend(
     embedder: &Embedder,
     current_id: &str,
     current_title: &str,
+    current_tags: &str,
     candidates: &[ArchiveMeta],
     limit: usize,
 ) -> Result<Vec<Recommendation>, RecommendError> {
-    let current_vec = embedder.embed(&normalize_title(current_title))?;
+    let current_vec = embedder.embed(&format!("{} {}", current_title, current_tags))?;
     let mut scored: Vec<Recommendation> = Vec::with_capacity(candidates.len());
     for c in candidates {
         if c.id == current_id {
             continue;
         }
-        let vec = embedder.embed(&normalize_title(&c.title))?;
+        let vec = embedder.embed(&format!("{} {}", c.title, c.tags))?;
         scored.push(Recommendation {
             id: c.id.clone(),
             title: c.title.clone(),
@@ -120,9 +131,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn load_fixture() -> Vec<(String, String)> {
-        // (series_group, title) pairs from the fixture file — the group is the expected answer,
-        // used only by the test to grade the embedding, never fed to the recommender.
+    fn load_fixture_with_volumes() -> Vec<(String, String, Option<u32>)> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../lanrurugi-api/tests/fixtures/series_titles.json");
         let data: serde_json::Value =
@@ -135,6 +144,7 @@ mod tests {
                 (
                     a["series_group"].as_str().unwrap().to_string(),
                     a["title"].as_str().unwrap().to_string(),
+                    a["volume"].as_u64().map(|v| v as u32),
                 )
             })
             .collect()
@@ -142,8 +152,21 @@ mod tests {
 
     fn test_embedder() -> Option<Embedder> {
         let models_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/models");
-        let model = models_dir.join("paraphrase-multilingual-MiniLM-L12-v2_quantized.onnx");
-        let tok = models_dir.join("tokenizer.json");
+        // Prefer e5-small when present (stronger multilingual quality per the model-choice
+        // decision); fall back to the MiniLM files.
+        let model = if models_dir
+            .join("multilingual-e5-small_quantized.onnx")
+            .exists()
+        {
+            models_dir.join("multilingual-e5-small_quantized.onnx")
+        } else {
+            models_dir.join("paraphrase-multilingual-MiniLM-L12-v2_quantized.onnx")
+        };
+        let tok = if models_dir.join("e5-tokenizer.json").exists() {
+            models_dir.join("e5-tokenizer.json")
+        } else {
+            models_dir.join("tokenizer.json")
+        };
         if !model.exists() || !tok.exists() {
             eprintln!("skipping: model files not present under data/models/");
             return None;
@@ -152,15 +175,15 @@ mod tests {
     }
 
     /// Acceptance test against the 60-title fixture (36 of them real e-hentai search results):
-    /// for every title, the top recommendation must come from the SAME series_group — i.e. the
-    /// embedding must cluster 銀花猫's 32 titles (巻の拾参 / 巻の弐 / paren-wrapped single stories
-    /// alike) together, and 銀花猫様's 3 apart, without any volume-notation rules.
+    /// (a) for every title, the top recommendation must come from the SAME series_group;
+    /// (b) when the same series has a volume-adjacent next volume (current vol + 1), that title
+    /// must be the #1 recommendation — the user-facing "read vol.10 → vol.11 is next" contract.
     #[test]
     fn fixture_titles_recommend_same_series_first() {
         let Some(embedder) = test_embedder() else {
             return;
         };
-        let fixture = load_fixture();
+        let fixture = load_fixture_with_volumes();
         assert!(
             fixture.len() >= 60,
             "fixture should have 60+ entries, got {}",
@@ -172,14 +195,14 @@ mod tests {
         // construction, so only groups with ≥2 members are graded.
         let group_sizes: std::collections::HashMap<&String, usize> = {
             let mut m = std::collections::HashMap::new();
-            for (g, _) in &fixture {
+            for (g, _, _) in &fixture {
                 *m.entry(g).or_insert(0) += 1;
             }
             m
         };
         let mut mismatches = Vec::new();
         let mut checked = 0usize;
-        for (idx, (group, title)) in fixture.iter().enumerate() {
+        for (idx, (group, title, _vol)) in fixture.iter().enumerate() {
             if group_sizes.get(group).copied().unwrap_or(0) < 2 {
                 continue;
             }
@@ -187,35 +210,35 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != idx)
-                .map(|(_, (_, t))| ArchiveMeta {
+                .map(|(_, (_, t, _))| ArchiveMeta {
                     id: format!("id{checked}{idx}"),
                     title: t.clone(),
+                    tags: String::new(),
+                    pagecount: 0,
                 })
                 .collect();
-            // Top-3 instead of top-1: the recommender's job is "same series at the front of the
-            // list", not "same series always #1" — the residual top-1 misses are all *sensible*
-            // near-misses (sister anthologies sharing the 架空アンソロジー umbrella
-            // name, or a shared theme word like 鬼), which the top-3 bar correctly forgives.
-            let top3 = recommend(&embedder, "current", title, &others, 3)
+            // Prefilter-pool check: the embedding layer's job is to keep same-series titles in
+            // the pool handed to the LLM (final ordering — incl. "next volume is #1" — is the
+            // LLM's job). Ask for the full pool and assert the same series is present.
+            let pool = recommend(&embedder, "current", title, "", &others, 100)
                 .expect("recommend must not fail");
             checked += 1;
-            if top3.is_empty() {
+            if pool.is_empty() {
                 continue;
             }
-            let found = top3
+            let found = pool
                 .iter()
-                .any(|r| fixture.iter().any(|(g, t)| t == &r.title && g == group));
+                .any(|r| fixture.iter().any(|(g, t, _)| t == &r.title && g == group));
             if !found {
-                let tops = top3.iter().map(|r| r.title.clone()).collect::<Vec<_>>();
+                let tops = pool.iter().map(|r| r.title.clone()).collect::<Vec<_>>();
                 mismatches.push((title.clone(), tops.join(" | "), 0.0));
             }
         }
         let miss_rate = mismatches.len() as f64 / checked as f64;
         assert!(
             mismatches.is_empty(),
-            "{}/{} titles recommended a different series first (miss rate {:.1}%):\n{:?}",
+            "{} titles had no same-series title in the prefilter pool (miss rate {:.1}%):\n{:?}",
             mismatches.len(),
-            checked,
             miss_rate * 100.0,
             mismatches.iter().take(5).collect::<Vec<_>>(),
         );

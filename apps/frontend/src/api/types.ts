@@ -78,6 +78,9 @@ export interface Settings {
    * reader loads), `until_finished` (cleared once read to the last page), or `3d`/`7d`/`10d`
    * (a time window from `date_added`). See `lanrurugi_api::archives::effective_isnew`. */
   newbadgemode: string
+  /** Whether a DeepSeek API key has been configured (Redis or DEEPSEEK_API_KEY env var).
+   *  The real key is never sent to the frontend. */
+  llm_api_key_set: boolean
   pagesize: number
   tempmaxsize: number
   sizethreshold: number

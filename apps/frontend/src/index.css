@@ -302,3 +302,107 @@ input[type="checkbox"]:disabled {
   padding-top: 3px;
   vertical-align: top;
 }
+
+/* Reader boundary-overlay recommendation cards — device-adaptive layout (Reader.tsx renders
+   all 10 fetched cards; the media queries hide the overflow so tablets see 6 and phones 4
+   without a JS-side slice, and shrink the cards so each device's row count works out):
+   desktop (>1024px) = 10 cards, 5 per row; tablet (≤1024px, incl. portrait tablets at
+   768-834px) = 6 cards, 3 per row; phone portrait (≤600px) = 4 cards, 2 per row — 600px (not
+   768) keeps portrait iPads on the tablet tier, and a landscape phone (~850px+) naturally
+   falls on the tablet tier too. */
+/* Card sizes are viewport-relative (vw) so they scale continuously instead of jumping at
+   breakpoints; the media queries only switch the *column count* (and the visible card count).
+   Columns: desktop 5 (10 cards), tablet landscape 3 (6), tablet portrait 2 (6),
+   phone 2 (4). The 3:4 image ratio rides along via aspect-ratio. */
+.rec-row {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 16px;
+  flex-wrap: wrap;
+  max-width: min(92vw, 820px);
+  margin-left: auto;
+  margin-right: auto;
+}
+.rec-card {
+  width: min(15.5vw, 152px);
+}
+.rec-card img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 4px;
+}
+/* Title slot: a fixed 3-line-height flex container that vertically centers the clamped text
+   (a one-line title sits on the middle line, a three-line one fills the slot). */
+.rec-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: 4px;
+}
+.rec-title span {
+  font-size: 11px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (max-width: 1024px) {
+  .rec-card:nth-child(n + 7) {
+    display: none;
+  }
+  .rec-card {
+    width: min(26vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 424px);
+  }
+}
+/* Portrait tablet: 2 columns × 3 rows instead of 3×2 — the portrait viewport is narrow, so
+   three small cards per row read cramped; two larger columns use the abundant vertical space. */
+@media (max-width: 1024px) and (orientation: portrait) {
+  .rec-card {
+    width: min(40vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 278px);
+  }
+}
+@media (max-width: 600px) {
+  .rec-card:nth-child(n + 5) {
+    display: none;
+  }
+  .rec-card {
+    width: min(42vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 278px);
+  }
+}
+
+/* Boundary-overlay scroll container: scrollable but with the scrollbar hidden (the desktop
+   panel fits without scrolling; small viewports still scroll internally, just without a bar). */
+.rec-overlay {
+  scrollbar-width: none;
+}
+.rec-overlay::-webkit-scrollbar {
+  display: none;
+}
+
+/* Boundary-overlay loading skeleton — MUI-style pulse (opacity breathing). */
+.rec-skeleton {
+  animation: rec-skeleton-pulse 1.5s ease-in-out infinite;
+}
+@keyframes rec-skeleton-pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}

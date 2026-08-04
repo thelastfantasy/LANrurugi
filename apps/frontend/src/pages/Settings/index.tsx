@@ -56,6 +56,11 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [localprogress, setLocalprogress] = useState(settings.localprogress)
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
+  // Incremented after each save to remount GlobalSection (resets editingKey).
+  const [saveTick, setSaveTick] = useState(0)
+  // The real key is never sent to the frontend — `llm_api_key_set` is a boolean only.
+  // `keyInput` holds whatever the user types when they actively choose to set/change it.
+  const [keyInput, setKeyInput] = useState('')
 
   const [enablepass, setEnablepass] = useState(settings.enablepass)
   const [newPassword, setNewPassword] = useState('')
@@ -154,7 +159,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       usedatemodified,
       timezone,
       newbadgemode,
+      ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
+    setKeyInput('')
+    setSaveTick((n) => n + 1)
     toast({ heading: t('Settings saved!') ?? undefined, icon: 'success' })
   }
 
@@ -218,6 +226,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       >
         <ul className="collapsible extensible with-right-caret">
           <GlobalSection
+            key={saveTick}
             htmltitle={htmltitle}
             setHtmltitle={setHtmltitle}
             motd={motd}
@@ -238,6 +247,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setAuthprogress={setAuthprogress}
             newbadgemode={newbadgemode}
             setNewbadgemode={setNewbadgemode}
+            llmApiKeySet={settings.llm_api_key_set}
+            keyInput={keyInput}
+            setKeyInput={setKeyInput}
             onStatus={setStatus}
           />
 

@@ -105,6 +105,8 @@ impl RecommendService {
             .map(|a| ArchiveMeta {
                 id: a.id.to_string(),
                 title: a.title.clone(),
+                tags: a.tags.clone(),
+                pagecount: a.pagecount,
             })
             .collect();
 
@@ -152,6 +154,8 @@ impl RecommendService {
                         ArchiveMeta {
                             id: id.clone(),
                             title: title.clone(),
+                            tags: String::new(),
+                            pagecount: 0,
                         },
                         vec.clone(),
                     )
@@ -160,12 +164,18 @@ impl RecommendService {
         };
 
         // Rank on the blocking thread too (pure dot products, but keeps the handler thread free).
+        // Prefilter generously (the LLM rerank needs room to pick the true next volume even if
+        // embedding ranked it a few places down); the final `limit` is applied after reranking.
+        let prefilter_limit = limit.max(crate::recommend_llm::PREFILTER_COUNT);
+        let exclude_id = archive_id.to_string();
         let embedder_for_blocking = embedder.clone();
         let current_vec = embedder_for_blocking.embed(
             &lanrurugi_recommend::recommend::normalize_title(&current_title),
         )?;
-        let exclude_id = archive_id.to_string();
-        tokio::task::spawn_blocking(move || {
+        // Two-tier: the embedding order above IS the pre-filter. If an LLM API key is
+        // configured, hand the top shortlist to the LLM for the "next volume first" rerank (the
+        // one thing embedding can't do); any LLM failure falls back to this embedding order.
+        let ranked: Vec<Recommendation> = tokio::task::spawn_blocking(move || {
             let mut scored: Vec<Recommendation> = Vec::with_capacity(vectors_snapshot.len());
             for (meta, vec) in &vectors_snapshot {
                 if meta.id == exclude_id {
@@ -182,11 +192,50 @@ impl RecommendService {
                     .partial_cmp(&a.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            scored.truncate(limit);
+            scored.truncate(prefilter_limit);
             scored
         })
         .await
-        .map_err(|e| RecommendServiceError::Embedding(embed_err_from_join(e)))
+        .map_err(|e| RecommendServiceError::Embedding(embed_err_from_join(e)))?;
+
+        // LLM rerank of the shortlist (next-volume-first — the one thing embedding can't do).
+        // Any failure (no key, network, non-JSON) falls back to the embedding order above.
+        let current_tags = current.tags.clone();
+        let current_pagecount = current.pagecount;
+        // The prefiltered shortlist only carries title from the embedding layer; re-attach the
+        // tags and pagecount from the repository for the LLM prompt.
+        let prefiltered: Vec<ArchiveMeta> = {
+            let all_meta = all;
+            ranked
+                .iter()
+                .map(|r| {
+                    let meta = all_meta
+                        .iter()
+                        .find(|a| a.id.to_string() == r.id)
+                        .map(|a| (a.tags.clone(), a.pagecount))
+                        .unwrap_or_default();
+                    ArchiveMeta {
+                        id: r.id.clone(),
+                        title: r.title.clone(),
+                        tags: meta.0,
+                        pagecount: meta.1,
+                    }
+                })
+                .collect()
+        };
+        match crate::recommend_llm::llm_rerank(
+            state,
+            &current_title,
+            &current_tags,
+            current_pagecount,
+            &prefiltered,
+            limit,
+        )
+        .await
+        {
+            Some(llm_ranked) => Ok(llm_ranked),
+            None => Ok(ranked.into_iter().take(limit).collect()),
+        }
     }
 }
 
@@ -218,15 +267,34 @@ async fn get_recommendations(
 ) -> Response {
     let limit = q.limit.unwrap_or(10).clamp(1, 20);
     match state.recommender.recommendations(&state, &id, limit).await {
-        Ok(list) => axum::Json(json!({
-            "archive_id": id,
-            "recommendations": list.iter().map(|r| json!({
-                "archive_id": r.id,
-                "title": r.title,
-                "score": r.score,
-            })).collect::<Vec<_>>(),
-        }))
-        .into_response(),
+        Ok(list) => {
+            // Enrich each recommendation with the card-status fields the frontend's badge
+            // overlays need (🆕 new / 👑 read / 📚 tankoubon) — `is_read` matches the
+            // display-side rule elsewhere (`progress >= pagecount`), `isnew` is the raw stored
+            // flag (the badge mode filter lives on the search path; here the Library-card
+            // equivalent is just informational).
+            let mut enriched = Vec::with_capacity(list.len());
+            for r in &list {
+                let meta = state
+                    .repos
+                    .archives
+                    .get(&lanrurugi_core::ids::ArchiveId(r.id.clone()))
+                    .await
+                    .ok()
+                    .flatten();
+                enriched.push(json!({
+                    "archive_id": r.id,
+                    "title": r.title,
+                    "score": r.score,
+                    "isnew": meta.as_ref().map(|a| a.isnew).unwrap_or(false),
+                    "is_read": meta.as_ref()
+                        .map(|a| a.lastreadpage > 0 && a.lastreadpage >= a.pagecount)
+                        .unwrap_or(false),
+                    "is_tank": r.id.starts_with("TANK_"),
+                }));
+            }
+            axum::Json(json!({ "archive_id": id, "recommendations": enriched })).into_response()
+        }
         Err(RecommendServiceError::ModelNotReady) => {
             (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({
                 "error": "model_not_ready",

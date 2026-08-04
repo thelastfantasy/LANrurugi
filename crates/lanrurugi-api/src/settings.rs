@@ -220,6 +220,17 @@ async fn get_settings(State(state): State<AppState>) -> Response {
         let value = fields.get(*key).map(|v| v != "0").unwrap_or(*default);
         body.insert((*key).to_string(), json!(value));
     }
+    // The real API key is NEVER sent to the frontend (security: even a password field's
+    // `$0.value` is readable by any browser extension / console). The frontend only gets
+    // a boolean so it can show "已设置" vs. the empty input.
+    let key_set = fields
+        .get("llm_api_key")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("DEEPSEEK_API_KEY")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+    body.insert("llm_api_key_set".to_string(), json!(key_set));
 
     axum::Json(Value::Object(body)).into_response()
 }

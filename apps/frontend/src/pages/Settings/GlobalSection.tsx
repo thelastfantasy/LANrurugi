@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
@@ -30,6 +31,9 @@ export default function GlobalSection({
   setAuthprogress,
   newbadgemode,
   setNewbadgemode,
+  llmApiKeySet,
+  keyInput,
+  setKeyInput,
   onStatus,
 }: {
   htmltitle: string
@@ -52,10 +56,16 @@ export default function GlobalSection({
   setAuthprogress: (v: boolean) => void
   newbadgemode: string
   setNewbadgemode: (v: string) => void
+  llmApiKeySet: boolean
+  keyInput: string
+  setKeyInput: (v: string) => void
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // Only true while the user is actively typing a new key — the real key is never
+  // rendered into the DOM as an input value (prevents $0.value from leaking it).
+  const [editingKey, setEditingKey] = useState(false)
   const cleanDatabase = useCleanDatabase()
   const dropDatabase = useDropDatabase()
 
@@ -102,6 +112,50 @@ export default function GlobalSection({
             </select>
             <br />
             {t('How long an archive keeps its "new" badge after being added to the library.')}
+          </Row>
+          <Row label={t('DeepSeek API Key')}>
+            {llmApiKeySet && !editingKey ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: 'monospace', opacity: 0.7 }}>
+                  sk-••••••••••••••••
+                </span>
+                <button
+                  type="button"
+                  className="stdbtn"
+                  onClick={() => {
+                    setKeyInput('')
+                    setEditingKey(true)
+                  }}
+                >
+                  {t('Change')}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input
+                  className="stdinput"
+                  style={{ flex: 1 }}
+                  type="password"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  placeholder="sk-..."
+                />
+                {editingKey && (
+                  <button
+                    type="button"
+                    className="stdbtn"
+                    onClick={() => {
+                      setKeyInput('')
+                      setEditingKey(false)
+                    }}
+                  >
+                    {t('Cancel')}
+                  </button>
+                )}
+              </div>
+            )}
+            <br />
+            {t("Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.")}
           </Row>
           <CheckboxRow
             id="enableresize"

@@ -907,5 +907,10 @@
   "10 days after it was added": "10 days after it was added",
   "How long an archive keeps its \"new\" badge after being added to the library.": "How long an archive keeps its \"new\" badge after being added to the library.",
   "Reached the last page -- here is what to read next": "Reached the last page -- here is what to read next",
-  "Reached the first page -- here is what to read next": "Reached the first page -- here is what to read next"
+  "Reached the first page -- here is what to read next": "Reached the first page -- here is what to read next",
+  "You might also like": "You might also like",
+  "Currently reading": "Currently reading",
+  "DeepSeek API Key": "DeepSeek API Key",
+  "Change": "Change",
+  "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.": "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported."
 }

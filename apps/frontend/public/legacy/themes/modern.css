@@ -656,7 +656,7 @@ div.id4 {
     z-index: 1000;
     padding: 12px;
     text-align: center;
-  background-color: #3b97ea;
+  background-color: rgba(59, 151, 234, 0.85);
 }
 
 /* Recommendation card container on the reader's boundary overlay (see Reader.tsx's
@@ -666,6 +666,9 @@ div.id4 {
     border-radius: 6px;
     padding: 6px;
     text-align: center;
+    /* content-box would add padding+border on top of the inline 152px width (166px actual),
+       breaking the 5-per-row math in Reader.tsx's flex row */
+    box-sizing: border-box;
     background-color: #43464E;
     border: 1px solid #34353B;
 }

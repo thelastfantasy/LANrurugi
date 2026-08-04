@@ -971,5 +971,10 @@
   "10 days after it was added": "添加后 10 天",
   "How long an archive keeps its \"new\" badge after being added to the library.": "档案添加到库后保留\"新\"标记的时长。",
   "Reached the last page -- here is what to read next": "已到最后一页 -- 这是接下来可读的内容",
-  "Reached the first page -- here is what to read next": "已到第一页 -- 这是接下来可读的内容"
+  "Reached the first page -- here is what to read next": "已到第一页 -- 这是接下来可读的内容",
+  "You might also like": "你可能还喜欢",
+  "Currently reading": "当前阅读",
+  "DeepSeek API Key": "DeepSeek API Key",
+  "Change": "更改",
+  "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.": "输入 DeepSeek 官方 API Key 可大幅强化推荐算法（基于 LLM 的重排）。目前仅支持 DeepSeek 官方 API Key。"
 }
