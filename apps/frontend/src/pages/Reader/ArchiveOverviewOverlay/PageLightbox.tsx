@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useArchivePages } from '../../../api/hooks'
 import { useMenuPalette } from '../../../components/PopupMenu'
-import Tooltip from '../../../components/Tooltip'
+import { Tooltip } from '../../../components/Tooltip'
 import { fetchContentLengthKb } from '../../../lib/imageMeta'
 import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from '../../../lib/tocValidation'
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from '../../../theme'

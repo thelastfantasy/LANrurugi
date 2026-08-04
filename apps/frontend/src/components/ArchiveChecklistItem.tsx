@@ -13,7 +13,7 @@
  * `Categories.tsx` to give a Tankoubon-member row a highlighted background via a real per-theme
  * CSS class (`.tankoubon-member-row`, defined once per theme file — see those files' own docs for
  * why a class beats a hardcoded color here), without this component needing to know that's why. */
-export default function ArchiveChecklistItem({
+export function ArchiveChecklistItem({
   title,
   checked,
   onChange,

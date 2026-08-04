@@ -19,8 +19,8 @@ import {
   useUpdateProgress,
   useUpdateTankoubonProgress,
 } from '../../api/hooks'
-import Footer from '../../components/Footer'
-import Tooltip from '../../components/Tooltip'
+import { Footer } from '../../components/Footer'
+import { Tooltip } from '../../components/Tooltip'
 import { confirmDialog, promptDialog } from '../../dialog'
 import { fetchContentLengthKb } from '../../lib/imageMeta'
 import { getTagSearchURL } from '../../lib/tagFormat'

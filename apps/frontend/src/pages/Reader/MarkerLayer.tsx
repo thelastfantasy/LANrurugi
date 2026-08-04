@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from '../../api/hooks'
 import type { StampJson } from '../../api/types'
 import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
-import Tooltip from '../../components/Tooltip'
+import { Tooltip } from '../../components/Tooltip'
 import {
   anchorPercent,
   formatStampRect,

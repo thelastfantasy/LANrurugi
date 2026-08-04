@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 import { useReorderPlugins } from '../../api/hooks'
 import type { PluginInfo } from '../../api/types'
-import SortableList from '../../components/SortableList'
+import { SortableList } from '../../components/SortableList'
 import { PluginCard } from './PluginCard'
 
 /** One `type` group's drag-to-reorder plugin list (additive — legacy has no concept of plugin

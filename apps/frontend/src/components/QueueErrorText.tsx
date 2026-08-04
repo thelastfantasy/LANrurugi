@@ -14,7 +14,7 @@ import { routes } from '../routes'
  * English phrase — see `plugin-sdk.ts`'s `PluginError` docs) rather than one of this component's
  * own fixed per-kind keys — this is the mechanism that makes a plugin's ~41 individual error
  * sites translatable without the frontend needing to enumerate every plugin's every message. */
-export default function QueueErrorText({ error }: { error: QueueError }) {
+export function QueueErrorText({ error }: { error: QueueError }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
 

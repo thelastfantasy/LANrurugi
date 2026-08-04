@@ -13,7 +13,7 @@ import { useState } from 'react'
  * open); `'right-down'` is a distinct real class in the same file, `.caret`'s pair (▶ closed, ▼
  * open) — a caller opts into it explicitly rather than this component silently picking a
  * different glyph pair per page. */
-export default function CollapsibleSection({
+export function CollapsibleSection({
   icon,
   title,
   defaultOpen = false,

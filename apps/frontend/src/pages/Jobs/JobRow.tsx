@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { JobRecord, JobRecordState } from '../../api/types'
-import CodeBlock from '../../components/CodeBlock'
+import { CodeBlock } from '../../components/CodeBlock'
 import { JobProgressBar, STATE_COLOR } from '../../components/JobProgress'
 import { FONT_SIZE_10PT } from '../../theme'
 

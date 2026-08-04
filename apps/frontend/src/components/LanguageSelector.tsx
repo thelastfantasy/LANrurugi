@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 
 import { SUPPORTED_LANGUAGES } from '../i18n'
 
-export default function LanguageSelector() {
+export function LanguageSelector() {
   const { i18n } = useTranslation()
 
   return (

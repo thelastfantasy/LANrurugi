@@ -9,7 +9,7 @@ import { FONT_SIZE_10PT } from '../theme'
  * bundled grammars, no extra setup needed. Chosen over `react-syntax-highlighter` (heavier —
  * would bloat the bundle past the existing >500 kB chunk warning) and `shiki` (async/WASM,
  * overkill for tiny job-result payloads). */
-export default function CodeBlock({
+export function CodeBlock({
   code,
   language = 'json',
 }: {

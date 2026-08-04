@@ -1,7 +1,7 @@
 import { useSettings } from '../api/hooks'
 import { parseRating } from '../lib/rating'
 import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from '../lib/tagFormat'
-import StarRatingDisplay from './StarRating'
+import { StarRatingDisplay } from './StarRating'
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
  * (`~/LANraragi/public/js/mod/common.js`) renders inside a hover tooltip: one row per namespace
@@ -17,7 +17,7 @@ import StarRatingDisplay from './StarRating'
  * chip, which legacy always renders in the same neutral `.gt` style regardless of namespace.
  * Meant to be the `label` of a `Tooltip` (the shared, portaled hover-bubble component) rather than
  * rendering its own positioning/outer-border/shadow — callers own that outer chrome. */
-export default function TagTable({
+export function TagTable({
   tags,
   onSearchTag,
 }: {

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import type { ArchiveMetadata } from '../../api/types'
 import { PopupMenu, PopupMenuItem, PopupMenuSeparator, useMenuPalette } from '../../components/PopupMenu'
-import RatingWidget from '../../components/RatingWidget'
+import { RatingWidget } from '../../components/RatingWidget'
 import { splitTagsByNamespace } from '../../lib/tagFormat'
 import { routes } from '../../routes'
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from '../../theme'

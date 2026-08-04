@@ -35,7 +35,7 @@ const CLOSE_DELAY_MS = 150
  * - `anchor` lets a caller opt into cursor-following placement instead of the default
  *   fixed-to-the-trigger-element placement.
  */
-export default function Tooltip({
+export function Tooltip({
   label,
   children,
   anchor = 'element',

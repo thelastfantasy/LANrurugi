@@ -19,7 +19,7 @@ function starFraction(rating: number, index: number): number {
  * rating is *displayed*, not set (`ArchiveOverviewOverlay.tsx`'s `TagsTable`). The interactive
  * click/hover-to-set widget is `RatingWidget.tsx`, which reuses this same per-star sprite
  * rendering but adds pointer handling on top. */
-export default function StarRatingDisplay({
+export function StarRatingDisplay({
   rating,
   size = STAR_SIZE,
 }: {

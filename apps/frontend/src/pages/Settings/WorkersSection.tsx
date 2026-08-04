@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
 import { useShinobuAction, useShinobuStatus } from '../../api/hooks'
-import CollapsibleSection from '../../components/CollapsibleSection'
+import { CollapsibleSection } from '../../components/CollapsibleSection'
 import { routes } from '../../routes'
 import { FONT_SIZE_10PT } from '../../theme'
 import { ActionRow } from './shared'

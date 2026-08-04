@@ -75,7 +75,7 @@ function SortableRow<T>({
  * `items`/`getId`/`renderItem` mirror a typical virtualized-list API: `renderItem` receives the
  * item plus `DragHandleProps` to spread onto whichever element the caller wants as the grab
  * handle, so callers keep full control over their own row layout. */
-export default function SortableList<T>({
+export function SortableList<T>({
   items,
   getId,
   onReorder,

@@ -38,7 +38,7 @@ function tagSortKey(tag: string): [number, string] {
   return [1, tag]
 }
 
-export default function TagInput({
+export function TagInput({
   value,
   onChange,
   suggestions = [],

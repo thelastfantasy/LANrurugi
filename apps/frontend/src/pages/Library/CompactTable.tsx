@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useSettings } from '../../api/hooks'
 import type { ArchiveMetadata } from '../../api/types'
-import Tooltip from '../../components/Tooltip'
+import { Tooltip } from '../../components/Tooltip'
 import { promptDialog } from '../../dialog'
 import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from '../../lib/tagFormat'
 import { routes } from '../../routes'

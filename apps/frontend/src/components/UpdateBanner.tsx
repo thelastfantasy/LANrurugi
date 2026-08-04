@@ -9,7 +9,7 @@ import { toast } from '../toast'
  * same trigger (`useUpdateCheck`), same `toast()` call shape, just via the shared `toast()` helper
  * instead of legacy's Preact-wrapped one. Renders nothing itself; requires the app-wide
  * `<ToastContainer />` mounted in `App.tsx` to actually display anything. */
-export default function UpdateBanner() {
+export function UpdateBanner() {
   const { t } = useTranslation()
   const info = useServerInfo()
   const check = useUpdateCheck(info.data?.version, info.data?.debug_mode ?? true)

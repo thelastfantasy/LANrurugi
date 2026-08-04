@@ -71,7 +71,7 @@ function overlaps(a: { left: number; top: number; width: number; height: number 
   )
 }
 
-export default function TagCloud({ tags }: { tags: StatTag[] }) {
+export function TagCloud({ tags }: { tags: StatTag[] }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const measureRefs = useRef<Map<string, HTMLSpanElement>>(new Map())
   const [placed, setPlaced] = useState<PlacedWord[] | null>(null)

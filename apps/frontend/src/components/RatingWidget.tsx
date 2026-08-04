@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useUpdateArchiveMetadata } from '../api/hooks'
 import { formatRating, parseRating } from '../lib/rating'
 import { StarSprite } from './StarRating'
-import Tooltip from './Tooltip'
+import { Tooltip } from './Tooltip'
 
 // Mirrors legacy's Raty-based rating widget (`~/LANraragi/public/js/reader.js:315-337`) — there is
 // no dedicated rating field or column anywhere in legacy's own data model; a rating is just a tag
@@ -38,7 +38,7 @@ export function currentRating(tags: string): number {
   return match ? (parseRating(match.split(':').slice(1).join(':')) ?? 0) : 0
 }
 
-export default function RatingWidget({
+export function RatingWidget({
   archiveId,
   tags,
   size = DEFAULT_STAR_SIZE,

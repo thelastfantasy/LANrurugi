@@ -2,7 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { ToastContainer } from 'react-toastify'
 
 import { DialogHost } from './dialog'
-import Layout from './Layout'
+import { Layout } from './Layout'
 import { Batch } from './pages/Batch'
 import { Categories } from './pages/Categories'
 import { Duplicates } from './pages/Duplicates'
@@ -19,7 +19,7 @@ import { Stats } from './pages/Stats'
 import { TankoubonEdit } from './pages/TankoubonEdit'
 import { Upload } from './pages/Upload'
 
-function App() {
+export function App() {
   return (
     <BrowserRouter>
       {/* Mounted once app-wide, matching legacy's own `initializeToasts()` — see `toast.tsx`. */}
@@ -48,5 +48,3 @@ function App() {
     </BrowserRouter>
   )
 }
-
-export default App

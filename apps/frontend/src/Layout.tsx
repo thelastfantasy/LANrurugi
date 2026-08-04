@@ -2,8 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet } from 'react-router-dom'
 
 import { useLoginStatus } from './api/hooks'
-import Footer from './components/Footer'
-import UpdateBanner from './components/UpdateBanner'
+import { Footer } from './components/Footer'
+import { UpdateBanner } from './components/UpdateBanner'
 import { useApplyTheme } from './theme'
 
 // Legacy's own top nav (`~/LANraragi/templates/index.html.tt2`'s `<p id="nb">`, reused across
@@ -16,7 +16,7 @@ import { useApplyTheme } from './theme'
 // (`~/LANraragi/templates/config.html.tt2`'s left column: `#plugin-config`/`#backup`/`#batch`),
 // which is also where the language switcher and logout now live (see `Settings.tsx`) — legacy's
 // nav has no room for either.
-export default function Layout() {
+export function Layout() {
   const { t } = useTranslation()
   useApplyTheme()
   const loginStatus = useLoginStatus()
