@@ -231,7 +231,6 @@ export default function Library() {
   }
 
   const selectedCategory = urlParams.get('c') ?? ''
-  const [categoryOverflowOpen, setCategoryOverflowOpen] = useState(false)
   const [autocompleteOpen, setAutocompleteOpen] = useState(false)
   const sortby = urlParams.get('sort') ?? localStorage.getItem(INDEX_SORT_KEY) ?? 'title'
   const order: 'asc' | 'desc' = (() => {
@@ -410,7 +409,6 @@ export default function Library() {
       }
       if (e.key === 'Escape') {
         setContextMenu(null)
-        setCategoryOverflowOpen(false)
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -672,33 +670,29 @@ export default function Library() {
                 {c.name}
               </button>
             ))}
+            {/* Legacy renders the overflow as a bare inline `<select id="catdropdown">` next to
+                the category buttons (`index.js`'s `loadCategories`) — this port's earlier
+                button-that-toggles-a-dropdown wrapper was an unnecessary extra layer; the select
+                is shown directly. */}
             {overflowCategories.length > 0 && (
-              <span style={{ position: 'relative' }}>
-                <button type="button" className="favtag-btn" onClick={() => setCategoryOverflowOpen((v) => !v)}>
-                  ...
-                </button>
-                {categoryOverflowOpen && (
-                  <select
-                    className="favtag-btn"
-                    style={{ position: 'absolute', top: '100%', left: 0, zIndex: Z_OVERLAY_CONTENT }}
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) toggleCategory(e.target.value)
-                      setCategoryOverflowOpen(false)
-                    }}
-                  >
-                    <option value="" disabled>
-                      {t('More categories…')}
-                    </option>
-                    {overflowCategories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.pinned ? '📌 ' : ''}
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </span>
+              <select
+                id="catdropdown"
+                className="favtag-btn"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) toggleCategory(e.target.value)
+                }}
+              >
+                <option value="" disabled>
+                  {t('More categories…')}
+                </option>
+                {overflowCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.pinned ? '📌 ' : ''}
+                    {c.name}
+                  </option>
+                ))}
+              </select>
             )}
           </div>
           {/* Legacy's own `#search-input` (`index.html.tt2`) is a *direct* child of `.idi`, with

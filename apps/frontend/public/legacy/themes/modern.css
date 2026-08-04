@@ -544,7 +544,7 @@ div.id1 {
   margin: 3px 2px 2px 3px;
   padding-top: 3px;
   vertical-align: top;
-  min-height: 335px;
+  /* min-height: 335px; */
 }
 
 div.id2 {

@@ -673,7 +673,7 @@ body.swal2-shown>[aria-hidden="true"] {
 
   div.id1 {
     width: 164px;
-    height: 256px !important;
+    /* height: 256px !important; */
   }
 
   div.id3 {

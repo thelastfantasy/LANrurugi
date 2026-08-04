@@ -398,20 +398,30 @@ export function RecentlyAddedCarousel({
           // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
           <div className="collapsible-body" style={{ width: '100%', boxSizing: 'border-box' }}>
             {selectedIds.length === 0 ? (
-              /* Real legacy `#carousel-empty` uses a fixed `height: 344px` (a flex column,
-                 centered both axes) to keep the panel's own height stable across the empty/
-                 populated states — but 344 is legacy's own card dimensions, not this port's:
-                 `SelectedArchiveSlideContent`'s real rendered row (the `padding: '8px 0'` wrapper
-                 below plus a 228px-wide `ArchiveCard`) measures 361px via
-                 `getBoundingClientRect()`, not 344 — the 17px gap was a real, live-confirmed
-                 layout-shift bug (selecting the first archive visibly grew the panel and pushed
-                 the page's own content below it down). 361 here matches that real measurement
-                 instead of legacy's own unrelated number. */
-              <div style={{ height: 361, display: 'flex', justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
-                <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
-                <span style={{ marginTop: 12 }}>
-                  {t('Click Archives to add them to the selection. Your selection carries over across searches.')}
-                </span>
+              /* The empty state reuses the grid card's own DOM skeleton (`div.id1` > `id2` +
+                 `id3` + `id4`, exactly `ArchiveCard`'s structure) instead of a hardcoded height —
+                 the card's height is pure CSS (`id2` 30px + `id3` 280px desktop / 196px under
+                 `lrr.css`'s `max-width: 560px` breakpoint + `id4` 20px + `id1`'s `padding-top`),
+                 so this panel matches the grid's cards on any device/theme with no measurement
+                 and no state. The outer `padding: '8px 0'` wrapper is the *same* wrapper the
+                 populated branch's `SortableList` row sits in — without it the empty state
+                 rendered 16px shorter than the populated one (the row padding's height), a
+                 live-confirmed panel-height jump on selecting the first archive. The hint text
+                 sits centered inside the `id3` cover slot. */
+              <div style={{ padding: '8px 0' }}>
+                <div className="id1" style={{ width: '100%', boxSizing: 'border-box' }}>
+                  <div className="id2"></div>
+                  <div
+                    className="id3"
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
+                    <span style={{ marginTop: 12 }}>
+                      {t('Click Archives to add them to the selection. Your selection carries over across searches.')}
+                    </span>
+                  </div>
+                  <div className="id4"></div>
+                </div>
               </div>
             ) : (
               // Deliberately not the `<Swiper>` the read-only carousel modes below use — `swiper/
