@@ -16,7 +16,6 @@ import {
   useTankoubons,
 } from '../../api/hooks'
 import type { ArchiveMetadata } from '../../api/types'
-import { PopupMenu, PopupMenuItem } from '../../components/PopupMenu'
 import { confirmDialog, promptDialog } from '../../dialog'
 import { buildSearchToken, buildTagList, splitTagsByNamespace } from '../../lib/tagFormat'
 import { routes } from '../../routes'
@@ -31,16 +30,19 @@ import {
   INDEX_VIEW_MODE_KEY,
   MSM_SELECTION_KEY,
 } from '../../storageKeys'
-import { Z_OVERLAY_CONTENT } from '../../theme'
 import { toast } from '../../toast'
 import { useDocumentTitle } from '../../useDocumentTitle'
 import { recordSearchNavigation } from '../Reader/crossArchiveNav'
 import { ArchiveCard } from './ArchiveCard'
 import { ArchiveContextMenu, DeleteConfirmDialog } from './ArchiveContextMenu'
+import { CategoryBar } from './CategoryBar'
 import { CompactTable } from './CompactTable'
 import { RecentlyAddedCarousel } from './RecentlyAddedCarousel'
+import { ResultInfoAndPager } from './ResultInfoAndPager'
+import { SearchBar } from './SearchBar'
 import { SettingsMenu } from './SettingsMenu'
-import { CATEGORY_BUTTON_CAP, type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
+import { type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from './shared'
+import { SortBySelector } from './SortBySelector'
 
 // Mirrors legacy's `~/LANraragi/templates/index.html.tt2` + `public/js/mod/index.js`/
 // `index_datatables.js`/`index_contextmenu.js` — the library grid page. Split out of a single
@@ -59,122 +61,6 @@ import { CATEGORY_BUTTON_CAP, type ContextMenuState, isTankoubonId, NEW_ONLY, PA
 // Module-level (not component state/`localStorage`): persists across `Library` remounting
 // mid-session (e.g. in-app nav back to `/`) but resets on an actual page reload/fresh tab,
 // matching legacy's semantics (its own toast trigger only ever runs once per real HTTP page
-// load). Without this, each SPA-internal remount re-fired the toast, stacking multiple copies on
-// screen given its long `hideAfter: 25000` with no de-dup.
-let defaultPasswordToastShownThisPageLoad = false
-
-/** DataTables' own `pagingType: "simple_numbers"` window — the default it falls back to since
- * `index_datatables.js` never sets `pagingType` explicitly. Always includes the first and last
- * page, a run of pages centered on the current one, and `null` markers (rendered as "…") for any
- * gap wider than one page — e.g. total 31, current (0-based) 0 → `[0,1,2,3,4,null,30]`, matching
- * the real "1 2 3 4 5 … 31" a live legacy instance shows on page 1 of a 31-page result set. `page`/
- * the returned numbers are 0-based (this app's own convention); only the rendered label is +1. */
-function pagingWindow(page: number, pageCount: number): (number | null)[] {
-  // Pages shown on each side of the current one — 4 matches DataTables' own real default
-  // `simple_numbers` window, live-confirmed against a real legacy instance's own "1 2 3 4 5 …
-  // 31" (31 total pages, viewing page 1: current ± 4 == pages 1-5, then a gap straight to 31).
-  const windowSize = 4
-  const result: (number | null)[] = []
-  let prev: number | null = null
-  for (let p = 0; p < pageCount; p++) {
-    const show = p === 0 || p === pageCount - 1 || Math.abs(p - page) <= windowSize
-    if (!show) continue
-    if (prev !== null && p - prev > 1) result.push(null)
-    result.push(p)
-    prev = p
-  }
-  return result
-}
-
-/** The count text (`.dataTables_info`) and the numbered pager (`.dataTables_paginate`) as ONE
- * indivisible unit — real legacy's own `dom` config (`<"top"ip>rt...`) generates them as two
- * separate sibling divs, but this port deliberately merges them into a single component so they
- * always move/wrap together as a block inside the shared `.table-options` flex row below, instead
- * of being two independent flex children that can drift apart and re-order relative to each other
- * on narrow viewports (a real, live-reported layout bug from an earlier version of this fix that
- * kept them as siblings — the count text and pager ended up on visually unrelated lines once the
- * row wrapped, instead of staying stacked as one block the way legacy's own tightly-packed look
- * actually reads). Internally still two stacked lines (count text above, pager below) — only the
- * outer boundary is unified. `flex: 1` at the call site is what makes this whole unit expand to
- * fill the toolbar row's middle slot on wide viewports and become its own full-width row when
- * the row wraps on narrow ones — the exact PC/mobile behavior asked for, achieved by `order` on
- * this one flex child rather than by juggling two.
- *
- * DataTables also appends its own `infoFiltered` template — literally `"(filtered from _MAX_
- * total entries)"`, never overridden in legacy's own i18n templates (confirmed against
- * `~/LANraragi/templates/i18n.html.tt2`, `public/js/mod/index_datatables.js`) — whenever the
- * filtered count differs from the true unfiltered total, so it renders in raw English even on a
- * fully localized instance; reproduced verbatim here rather than translated, since translating it
- * would be a real deviation from the actual legacy string every user of this feature has always
- * seen. The pager itself renders even at a single page (a lone, non-interactive "1" button) —
- * DataTables' own real pager does the same (`lrr.css`'s own `.paginate_button`/`.ellipsis` rules
- * have no `.disabled` variant to hide behind, and `index_datatables.js` sets no `pagingType`/
- * page-count guard), and is a completely separate control from the toolbar's own "Go to Page"
- * dropdown — legacy runs both at once (only the prev/next arrow buttons are CSS-hidden, per
- * `lrr.css`'s `.paginate_button.previous/next{display:none}`, not the numbered ones). */
-function ResultInfoAndPager({
-  rangeStart,
-  rangeEnd,
-  totalFiltered,
-  totalRecords,
-  page,
-  pageCount,
-  onPage,
-}: {
-  rangeStart: number
-  rangeEnd: number
-  totalFiltered: number
-  totalRecords: number
-  page: number
-  pageCount: number
-  onPage: (page: number) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div>
-      {/* A `<div>`, deliberately NOT a `<p>` — real legacy's own `.dataTables_info` is a DataTables-
-          generated `<div>`, and every vendored theme's own global `p { margin: 0; padding: 3px 1px
-          }` rule (`g.css`, confirmed for every theme) only ever targets bare `<p>` elements, never
-          `<div>`s. An earlier version of this fix used a `<p>` here, which silently picked up that
-          rule's `3px 1px` padding anyway (nothing about it is `<p>`-specific in *this* app's own
-          markup, it just happens to match the tag) — a real, live-confirmed 6px-taller-than-legacy
-          gap purely from that unintended padding, not from any deliberate spacing choice; switching
-          the tag to `<div>` removes it entirely instead of trying to cancel it back out with a
-          matching negative padding/margin hack. */}
-      <div style={{ textAlign: 'center', opacity: 0.7 }}>
-        {t('Showing {{start}} to {{end}} of {{total}} archives.', {
-          start: rangeStart,
-          end: rangeEnd,
-          total: totalFiltered,
-        })}
-        {totalRecords > totalFiltered && ` (filtered from ${totalRecords} total entries)`}
-      </div>
-      <div style={{ textAlign: 'center' }}>
-        {pagingWindow(page, pageCount).map((p, i) =>
-          p === null ? (
-            <span key={`ellipsis-${i}`} className="ellipsis">
-              …
-            </span>
-          ) : (
-            <a
-              key={p}
-              href="#"
-              className={`paginate_button${p === page ? ' current' : ''}`}
-              style={{ margin: '4px 0' }}
-              onClick={(e) => {
-                e.preventDefault()
-                onPage(p)
-              }}
-            >
-              {p + 1}
-            </a>
-          ),
-        )}
-      </div>
-    </div>
-  )
-}
-
 export function Library() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -449,8 +335,6 @@ export function Library() {
       return a.name.localeCompare(b.name)
     })
   }, [categories.data])
-  const visibleCategories = sortedCategories.slice(0, CATEGORY_BUTTON_CAP)
-  const overflowCategories = sortedCategories.slice(CATEGORY_BUTTON_CAP)
 
   // Search-bar tag autocomplete — ports `loadTagSuggestions`'s filter/sort rule: match against
   // only the fragment after the last `,`/`-`/whitespace (so autocomplete works mid-multi-tag-
@@ -642,154 +526,36 @@ export function Library() {
 
       <div id="toppane">
         <div className="idi">
-          <div id="category-container">
-            <button
-              type="button"
-              className={`favtag-btn${selectedCategory === NEW_ONLY ? ' toggled' : ''}`}
-              title={t('Archives added within the last day') ?? undefined}
-              onClick={() => toggleCategory(NEW_ONLY)}
-            >
-              🆕 {t('New Archives')}
-            </button>
-            <button
-              type="button"
-              className={`favtag-btn${selectedCategory === UNTAGGED_ONLY ? ' toggled' : ''}`}
-              title={t('Archives with no tags at all') ?? undefined}
-              onClick={() => toggleCategory(UNTAGGED_ONLY)}
-            >
-              🏷️ {t('Untagged Archives')}
-            </button>
-            {visibleCategories.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`favtag-btn${selectedCategory === c.id ? ' toggled' : ''}`}
-                onClick={() => toggleCategory(c.id)}
-              >
-                {c.pinned ? '📌 ' : ''}
-                {c.name}
-              </button>
-            ))}
-            {/* Legacy renders the overflow as a bare inline `<select id="catdropdown">` next to
-                the category buttons (`index.js`'s `loadCategories`) — this port's earlier
-                button-that-toggles-a-dropdown wrapper was an unnecessary extra layer; the select
-                is shown directly. */}
-            {overflowCategories.length > 0 && (
-              <select
-                id="catdropdown"
-                className="favtag-btn"
-                value=""
-                onChange={(e) => {
-                  if (e.target.value) toggleCategory(e.target.value)
-                }}
-              >
-                <option value="" disabled>
-                  {t('More categories…')}
-                </option>
-                {overflowCategories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.pinned ? '📌 ' : ''}
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-          {/* Legacy's own `#search-input` (`index.html.tt2`) is a *direct* child of `.idi`, with
-              no wrapper — `.stdinput`'s own `width: 80%` therefore resolves against `.idi`'s
-              content box. This port needs a wrapping element as the `position: relative` anchor
-              for the autocomplete dropdown below, but an `inline-block` wrapper with no explicit
-              width of its own becomes the input's *actual* containing block for that same `80%`
-              rule (an inline-block establishes a new block formatting context for its children) —
-              its own shrink-to-fit sizing doesn't match `.idi`'s content width, and the input ends
-              up wider than `.idi` itself, overflowing it (visible on narrow/mobile viewports where
-              `.idi`'s padding takes up a larger share of the available width). Moving the `80%`/
-              `450px` sizing onto the wrapper itself (so it resolves against `.idi`, exactly like
-              legacy's own unwrapped input did) and having the input fill `100%` of that
-              already-correctly-sized wrapper restores the same effective width legacy computes,
-              while keeping the wrapper as the dropdown's positioning anchor. */}
-          <span style={{ position: 'relative', display: 'inline-block', width: '80%', maxWidth: 450, boxSizing: 'border-box' }}>
-            <input
-              id="search-input"
-              ref={searchInputRef}
-              className="search stdinput"
-              style={{ width: '100%', maxWidth: 'none' }}
-              value={filterInput}
-              autoComplete="off"
-              onChange={(e) => {
-                setFilterInputOverride(e.target.value)
-                setAutocompleteOpen(true)
-              }}
-              onFocus={() => setAutocompleteOpen(true)}
-              onBlur={() => setTimeout(() => setAutocompleteOpen(false), 150)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setFilterInputOverride(null)
-                  navigateSearch({ appliedFilter: filterInput, page: 0 })
-                  setAutocompleteOpen(false)
-                }
-                if (e.key === 'Escape') setAutocompleteOpen(false)
-              }}
-              placeholder={t('Search Title, Artist, Series, Language or Tags') ?? undefined}
-            />
-            {autocompleteOpen && tagSuggestions.length > 0 && (
-              // Not portaled — `minWidth: '100%'` needs the search `<input>`'s own wrapping
-              // `<span style={{ position: 'relative' }}>` as its positioning ancestor to size
-              // against; a default portal to `document.body` would break both that and the
-              // `top`/`left` offsets.
-              <PopupMenu
-                portal={false}
-                style={{ position: 'absolute', top: '100%', left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: '100%', maxHeight: 220, overflowY: 'auto' }}
-              >
-                {tagSuggestions.map((s) => (
-                  <PopupMenuItem
-                    key={s.label}
-                    onMouseDown={(e) => {
-                      // `onMouseDown` (fires before the input's own `onBlur`) rather than
-                      // `onClick`, so the suggestion click actually lands instead of losing the
-                      // dropdown to the blur handler first.
-                      e.preventDefault()
-                      const upToCursor = filterInput.replace(/[^,\s-]*$/, '')
-                      const next = `${upToCursor}${s.insertValue}`
-                      setFilterInputOverride(next)
-                      setAutocompleteOpen(false)
-                      searchInputRef.current?.focus()
-                    }}
-                  >
-                    {s.label}
-                  </PopupMenuItem>
-                ))}
-              </PopupMenu>
-            )}
-          </span>
-          <input
-            id="apply-search"
-            className="searchbtn stdbtn"
-            type="button"
-            value={t('Apply Filter') ?? undefined}
-            onClick={() => {
+          <CategoryBar
+            selectedCategory={selectedCategory}
+            sortedCategories={sortedCategories}
+            onToggleCategory={toggleCategory}
+          />
+          <SearchBar
+            filterInput={filterInput}
+            autocompleteOpen={autocompleteOpen}
+            tagSuggestions={tagSuggestions}
+            multiSelect={multiSelect}
+            searchInputRef={searchInputRef}
+            onFilterInputChange={(value, open) => {
+              setFilterInputOverride(value)
+              if (open) setAutocompleteOpen(true)
+            }}
+            onAutocompleteOpenChange={setAutocompleteOpen}
+            onApplyFilter={() => {
               setFilterInputOverride(null)
               navigateSearch({ appliedFilter: filterInput, page: 0 })
             }}
-          />
-          <input
-            id="clear-search"
-            className="searchbtn stdbtn"
-            type="button"
-            value={t('Clear Filter') ?? undefined}
-            onClick={() => {
-              // Legacy's own `#clear-search` only clears the text filter — it does NOT reset the
-              // selected category (`index_datatables.js`: `currentSearch = ""; doSearch();`).
+            onClearFilter={() => {
               setFilterInputOverride(null)
-              navigateSearch({ appliedFilter: '', page: 0 })
+              navigateSearch({ appliedFilter: "", page: 0 })
             }}
-          />
-          <input
-            id="msm-toggle"
-            className={`searchbtn stdbtn${multiSelect ? ' toggled' : ''}`}
-            type="button"
-            value={t('Select Archives') ?? undefined}
-            onClick={() => void handleToggleMultiSelect()}
+            onSuggestionSelect={(insertValue) => {
+              const upToCursor = filterInput.replace(/[^,\s-]*$/, "")
+              setFilterInputOverride(`${upToCursor}${insertValue}`)
+              searchInputRef.current?.focus()
+            }}
+            onToggleMultiSelect={() => void handleToggleMultiSelect()}
           />
         </div>
 
@@ -835,53 +601,13 @@ export function Library() {
               instead (`CompactTable.tsx`'s own header click-to-sort). A real, live-confirmed bug
               this port had: "Sort by:" rendered unconditionally in both view modes. */}
           {viewMode === 'thumbnail' && (
-            <div className="thumbnail-options">
-              {t('Sort by:')}{' '}
-              <select
-                className="favtag-btn"
-                value={sortby}
-                onChange={(e) => {
-                  navigateSearch({ sortby: e.target.value, page: 0 })
-                }}
-              >
-                <option value="title">{t('Title')}</option>
-                <option value="date_added">{t('Date')}</option>
-                {/* Every real tag namespace with weight >= 2 (`useStats(2)`, matching legacy's own
-                  `loadTagSuggestions` weight floor) becomes a sortable field too — legacy's own
-                  sort-by dropdown isn't fixed to just Title/Date either.
-                  `sortby` itself is force-included even when its own weight falls under that floor
-                  (or it's not a real tag namespace at all, e.g. `artist`/`series` from clicking a
-                  compact-table column header below) — a real, live-confirmed bug otherwise: this
-                  `<select>`'s `value={sortby}` had no matching `<option>` for that case, so the
-                  browser silently fell back to displaying the *first* option ("Title") instead,
-                  showing a completely wrong sort field even though the actual sort (and every
-                  other part of the page) was correctly using it. This app's compact-table header
-                  click and this dropdown intentionally share the one `sortby` state (a deliberate
-                  simplification over legacy's own two-separate-mechanisms design — see
-                  `CompactTable.tsx`'s own docs), so this list has to cover both sources. */}
-                {[...new Set([
-                  ...(stats.data ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== 'date_added'),
-                  ...(sortby !== 'title' && sortby !== 'date_added' ? [sortby] : []),
-                ])]
-                  .sort()
-                  .map((ns) => (
-                    // legacy capitalizes only the display label, not the `value` (`index.js:341`).
-                    <option key={ns} value={ns}>
-                      {ns.charAt(0).toUpperCase() + ns.slice(1)}
-                    </option>
-                  ))}
-              </select>
-              {/* Real legacy markup: `class="fa fa-sort-alpha-down fa-2x table-option"`. */}
-              <a
-                className={`fa fa-2x fa-sort-alpha-${order === 'asc' ? 'down' : 'up'} table-option`}
-                href="#"
-                title={t('Sort Order') ?? undefined}
-                onClick={(e) => {
-                  e.preventDefault()
-                  navigateSearch({ order: order === 'asc' ? 'desc' : 'asc' })
-                }}
-              ></a>
-            </div>
+            <SortBySelector
+              sortby={sortby}
+              order={order}
+              stats={stats.data}
+              onSortBy={(key) => navigateSearch({ sortby: key, page: 0 })}
+              onToggleOrder={() => navigateSearch({ order: order === 'asc' ? 'desc' : 'asc' })}
+            />
           )}
           {viewMode === 'compact' && (
             <div className="compact-options">
