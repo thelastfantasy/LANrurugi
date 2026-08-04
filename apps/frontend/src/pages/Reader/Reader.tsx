@@ -56,9 +56,6 @@ const PAGINATOR_PAGECOUNT_FONT_SIZE = '1.25rem'
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default — specified explicitly to make clear
  * this is deliberate, not incidental inheritance. */
 const TOAST_DURATION_MS = 5000
-/** How long the infinite-scroll boundary-click overlay counts down before actually following into
- * the adjacent archive — see `archiveTransition` state's own docs. */
-const ARCHIVE_TRANSITION_COUNTDOWN_SECONDS = 3
 
 type OverlayKind = 'archive' | 'settings' | 'help' | null
 
@@ -185,10 +182,8 @@ export default function Reader() {
   // `autoNextActive`'s own countdown already works elsewhere on this page.
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: 'prev' | 'next'
-    secondsLeft: number
-    /** Fetched from `/api/reader/recommendations/{id}` while the overlay counts down — the
-     * countdown jumps to the top recommendation when it ends. `null` = still loading / model
-     * not ready / fetch failed (the overlay then just stops in place when the countdown ends). */
+    /** Fetched from `/api/reader/recommendations/{id}` while the overlay shows. `null` = still
+     * loading / model not ready / fetch failed (the panel then shows nothing to pick). */
     recommendations: { archive_id: string; title: string; score: number }[] | null
   } | null>(null)
   const imageAreaRef = useRef<HTMLDivElement>(null)
@@ -296,36 +291,6 @@ export default function Reader() {
     document.body.classList.toggle('infinite-scroll', readerSettings.infiniteScroll)
     return () => document.body.classList.remove('infinite-scroll')
   }, [readerSettings.infiniteScroll])
-
-  useEffect(() => {
-    if (!archiveTransition) return
-    // Every `setState` call lives inside this timer callback (an async boundary), not the effect
-    // body itself, on purpose — a synchronous `setState` right in the body (the more obvious way
-    // to write "if secondsLeft hit 0, fire now") trips `react-hooks/set-state-in-effect`.
-    // Firing at `secondsLeft <= 1` (not `<= 0`) means the overlay's last visible tick is "1", not
-    // a confusing "0"; the real navigation happens 1s later than that.
-    const timer = setTimeout(() => {
-      if (archiveTransition.secondsLeft <= 1) {
-        const recs = archiveTransition.recommendations
-        const direction = archiveTransition.direction
-        setArchiveTransition(null)
-        if (recs && recs.length > 0) {
-          window.location.assign(`/reader/${recs[0].archive_id}`)
-        } else {
-          toast({
-            text:
-              direction === 'next'
-                ? (t('This is the last archive') ?? undefined)
-                : (t('This is the first archive') ?? undefined),
-          })
-        }
-      } else {
-        setArchiveTransition((prev) => (prev ? { ...prev, secondsLeft: prev.secondsLeft - 1 } : prev))
-      }
-    }, 1000)
-    return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [archiveTransition])
 
   // Progress persistence decision tree (verified against legacy's `updateProgress`):
   // authprogress+logged_in -> server; localprogress -> localStorage; neither -> server anyway.
@@ -459,18 +424,15 @@ export default function Reader() {
     document.querySelector(`[data-page="${nextPage}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  // Shows the boundary overlay (countdown + recommendations) and starts fetching the
-  // recommendations for the current archive in the background. The countdown effect below jumps
-  // to the top recommendation when it hits 1; clicking a recommendation card or the Cancel
-  // button dismisses first.
+  // Shows the boundary overlay (recommendations only — no auto-jump; the user picks a card or
+  // cancels) and starts fetching the recommendations for the current archive in the background.
   function startArchiveTransition(direction: 'prev' | 'next') {
     setArchiveTransition({
       direction,
-      secondsLeft: ARCHIVE_TRANSITION_COUNTDOWN_SECONDS,
       recommendations: null,
     })
     if (!archiveId || isTank) return
-    void fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=6`)
+    void fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { recommendations?: { archive_id: string; title: string; score: number }[] } | null) => {
         setArchiveTransition((prev) =>
@@ -1492,12 +1454,11 @@ export default function Reader() {
         </>
       )}
 
-      {/* No legacy equivalent — legacy just calls `readNextArchive`/`readPreviousArchive`
-          immediately with no warning when an infinite-scroll boundary click runs out of pages
-          (see `goTo`'s own docs on `readAdjacentArchive`). That's fine there, since a discrete
-          page turn already reads as "the end"; in infinite scroll there's no such beat, so a
-          click landing straight in the next archive with zero warning felt like a mis-click.
-          Clicking the shade cancels, same as every other overlay on this page. */}
+      {/* Boundary overlay: recommendations only — no auto-jump (the user picks a card or
+          cancels). Legacy had nothing here (it immediately called
+          `readNextArchive`/`readPreviousArchive`, which toasted "last archive" without search
+          context); the panel replaces that toast with actual next-read suggestions. Clicking
+          the shade cancels, same as every other overlay on this page. */}
       {archiveTransition && (
         <>
           <div
@@ -1508,21 +1469,20 @@ export default function Reader() {
           <div className="id1 base-overlay small-overlay" style={{ textAlign: 'center', padding: 24 }}>
             <p>
               {archiveTransition.direction === 'next'
-                ? t('Reached the last page -- jumping to the next archive in {{seconds}}s', {
-                    seconds: archiveTransition.secondsLeft,
-                  })
-                : t('Reached the first page -- jumping to the previous archive in {{seconds}}s', {
-                    seconds: archiveTransition.secondsLeft,
-                  })}
+                ? t('Reached the last page -- here is what to read next')
+                : t('Reached the first page -- here is what to read next')}
             </p>
             {archiveTransition.recommendations !== null && archiveTransition.recommendations.length > 0 && (
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
-                {archiveTransition.recommendations.slice(0, 6).map((rec) => (
+              /* 10 cards on desktop, 5 per row (two rows) — the fixed card width makes the
+                 flex-wrap land at 5 across within this container's max width; narrow viewports
+                 wrap to fewer per row naturally. */
+              <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap', maxWidth: 760, marginLeft: 'auto', marginRight: 'auto' }}>
+                {archiveTransition.recommendations.slice(0, 10).map((rec) => (
                   <a
                     key={rec.archive_id}
                     href={`/reader/${rec.archive_id}`}
                     title={rec.title}
-                    style={{ width: 96, display: 'block', textDecoration: 'none' }}
+                    style={{ width: 140, display: 'block', textDecoration: 'none' }}
                     onClick={() => setArchiveTransition(null)}
                   >
                     <img
@@ -1532,10 +1492,10 @@ export default function Reader() {
                           : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
                       }
                       alt={rec.title}
-                      style={{ width: 96, height: 128, objectFit: 'cover', borderRadius: 4 }}
+                      style={{ width: 140, height: 187, objectFit: 'cover', borderRadius: 4 }}
                       loading="lazy"
                     />
-                    <span style={{ fontSize: 10, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 11, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {rec.title}
                     </span>
                   </a>

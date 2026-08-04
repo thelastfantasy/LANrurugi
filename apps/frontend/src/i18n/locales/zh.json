@@ -969,5 +969,7 @@
   "3 days after it was added": "添加后 3 天",
   "7 days after it was added": "添加后 7 天",
   "10 days after it was added": "添加后 10 天",
-  "How long an archive keeps its \"new\" badge after being added to the library.": "档案添加到库后保留\"新\"标记的时长。"
+  "How long an archive keeps its \"new\" badge after being added to the library.": "档案添加到库后保留\"新\"标记的时长。",
+  "Reached the last page -- here is what to read next": "已到最后一页 -- 这是接下来可读的内容",
+  "Reached the first page -- here is what to read next": "已到第一页 -- 这是接下来可读的内容"
 }
