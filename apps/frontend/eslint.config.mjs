@@ -89,7 +89,7 @@ export default [
     languageOptions: {
       parser: tsParser,
       parserOptions: {
-        project: './tsconfig.test.json',
+        project: './tests/tsconfig.json',
         tsconfigRootDir: import.meta.dirname,
       },
       globals: {
