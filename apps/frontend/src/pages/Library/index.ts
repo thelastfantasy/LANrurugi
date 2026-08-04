@@ -18,6 +18,8 @@ export * from "./CustomColumnCell"
 
 export * from "./CustomColumnHeader"
 
+export * from "./DeleteConfirmDialog"
+
 export * from "./LibraryPage"
 
 export * from "./RecentlyAddedCarousel"
