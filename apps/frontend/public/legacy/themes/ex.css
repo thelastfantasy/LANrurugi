@@ -661,3 +661,17 @@ div.id4 {
 .tankoubon-member-row {
     background-color: rgba(240, 165, 0, 0.2);
 }
+
+/* Fixed bottom save bar on the Settings page (see `Settings/index.tsx`) — shown only while
+   there are unsaved changes. Background uses this theme's own accent hue (the same color as
+   `#thumbs_container .id1.msm-selected`'s outline), per the project's custom-color rule. */
+.settings-save-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 12px;
+    text-align: center;
+    background-color: #3b97ea;
+}

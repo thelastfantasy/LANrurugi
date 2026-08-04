@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 
@@ -79,6 +79,45 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
   const [status, setStatus] = useState('')
 
+  // Dirty tracking for the bottom save bar: any field the Save button submits differing from
+  // the server-loaded snapshot means there's something to save. `theme` is deliberately NOT in
+  // this list — the theme switcher saves itself immediately on click (see the Theme section).
+  const isDirty = useMemo(
+    () =>
+      htmltitle !== settings.htmltitle ||
+      motd !== settings.motd ||
+      language !== settings.language ||
+      pagesize !== settings.pagesize ||
+      enableresize !== settings.enableresize ||
+      sizethreshold !== settings.sizethreshold ||
+      readerquality !== settings.readerquality ||
+      localprogress !== settings.localprogress ||
+      authprogress !== settings.authprogress ||
+      enablepass !== settings.enablepass ||
+      nofunmode !== settings.nofunmode ||
+      apikey !== settings.apikey ||
+      enablecors !== settings.enablecors ||
+      tempmaxsize !== settings.tempmaxsize ||
+      replacedupe !== settings.replacedupe ||
+      hqthumbpages !== settings.hqthumbpages ||
+      enablewebp !== settings.enablewebp ||
+      webpquality !== settings.webpquality ||
+      excludednamespaces !== settings.excludednamespaces ||
+      tagruleson !== settings.tagruleson ||
+      tagrules !== settings.tagrules ||
+      usedateadded !== settings.usedateadded ||
+      usedatemodified !== settings.usedatemodified ||
+      timezone !== settings.timezone ||
+      newbadgemode !== settings.newbadgemode,
+    [
+      htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
+      localprogress, authprogress, enablepass, nofunmode, apikey, enablecors, tempmaxsize,
+      replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
+      tagrules, usedateadded, usedatemodified, timezone, newbadgemode,
+      settings,
+    ],
+  )
+
   async function handleSave() {
     if (enablepass && newPassword) {
       if (newPassword !== newPassword2) {
@@ -142,8 +181,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <br />
         <h2>{t('Select a category to show the matching settings.')}</h2>
         <br />
-        <input id="save" className="stdbtn" type="button" value={t('Save Settings') ?? undefined} onClick={() => void handleSave()} />
-        <br />
         <input
           id="plugin-config"
           className="stdbtn"
@@ -173,7 +210,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <input id="logout" className="stdbtn" type="button" value={t('Logout') ?? undefined} onClick={() => void handleLogout()} />
       </div>
 
-      <form className="right-column" onSubmit={(e) => e.preventDefault()}>
+      <form
+        className="right-column"
+        onSubmit={(e) => e.preventDefault()}
+        // Bottom clearance so the fixed save bar never covers the last section's content.
+        style={{ paddingBottom: 72 }}
+      >
         <ul className="collapsible extensible with-right-caret">
           <GlobalSection
             htmltitle={htmltitle}
@@ -298,6 +340,17 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           <WorkersSection onStatus={setStatus} />
         </ul>
       </form>
+
+      {/* Fixed bottom save bar, shown only while there are unsaved changes — the Save button
+          used to sit at the top-left column, far from the sections being edited. The bar's own
+          background/border color is theme-specific (`.settings-save-bar` in each theme file,
+          reusing that theme's own accent hue per CLAUDE.md's custom-color rule); this container
+          is always mounted so the transition isn't a mount/unmount flash, the bar itself is
+          hidden when clean. `pointer-events: none` when hidden so an invisible bar can't block
+          clicks on content beneath it. */}
+      <div className="settings-save-bar" style={isDirty ? undefined : { display: 'none' }}>
+        <input id="save" className="stdbtn" type="button" value={t('Save Settings') ?? undefined} onClick={() => void handleSave()} />
+      </div>
     </div>
   )
 }
