@@ -20,6 +20,9 @@ services:
       - ./data/manga:/home/koyomi/lanrurugi/content
       - ./data/thumb:/home/koyomi/lanrurugi/thumb
       - ./data/database:/home/koyomi/lanrurugi/database
+      # ONNX embedding model + tokenizer for the reader recommender (lanrurugi-recommend,
+      # auto-downloaded on startup — see crates/lanrurugi-recommend/src/model_download.rs).
+      - ./data/models:/home/koyomi/lanrurugi/models
       - lrr-dev-log:/log
       - lrr-dev-temp:/temp
       # Frontend source, bind-mounted live (this is what makes hot-reload actually reflect host

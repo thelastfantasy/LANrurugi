@@ -109,6 +109,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
+
+# ONNX Runtime CPU (`libonnxruntime.so`) — `lanrurugi-recommend`'s embedding model loads it via
+# `ort`'s `load-dynamic` feature (dlopen at runtime). Pinned to the same 1.26.0 version
+# jellyfin-suite's frame-forge validates against; CPU flavor from the official GitHub release
+# tarball. Extracted as the real `.so.1.26.0` file (the tarball's `libonnxruntime.so` is a
+# symlink) with the two symlinks recreated, then `ldconfig` for the soname.
+ARG ORT_VERSION=1.27.0
+RUN curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
+    && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
+    && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/libonnxruntime.so.1 \
+    && ln -sf libonnxruntime.so.1 /usr/local/lib/libonnxruntime.so \
+    && ldconfig \
+    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
 COPY --from=frontend-builder /build/apps/frontend/dist /usr/local/share/lanrurugi/frontend
 # Bakes in whatever converted `.ts` plugins live in the repo's `./plugins/` at build time.
 # `discover_namespaces` in `lanrurugi-api::plugins` recursively scans this directory (e.g.

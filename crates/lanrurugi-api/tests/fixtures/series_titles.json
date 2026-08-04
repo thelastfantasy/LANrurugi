@@ -1,0 +1,305 @@
+{
+  "_comment": "Real archive titles used to test the reader-recommendation series/volume parser. The parser's ONLY input is `title` (plus library tags for the weak-association rank) — `series_group`/`volume` are the human-annotated expected answers used solely by the test to grade the parser, never fed to it (no cheating: the runtime code has no notion of `series_group`). Grading is by grouping equivalence, not string match: titles sharing a `series_group` must yield the SAME parser series key, titles in different groups must yield DIFFERENT keys, and `volume` must match exactly. Non-volume numbers (character names like 2B, frame-id noise -f\\d+-\\d+_n\\d+, edition markers [DL版], 後編) must never parse as volumes. Groups A-N are the live library's own titles (2026-08-04); group X are real external examples (Amazon/Wikipedia/小学館 listings) exercising volume-notational variants. Groups E-H are 36 live e-hentai search results for 架空アンソロジー (fetched 2026-08-04, logged-in session): 銀花猫 巻のN uses 大字 numerals (壱弐参拾, 拾参=13), series+volume live inside the (... ) suffix on single-story titles, one title has a mismatched full-width opening paren (いろりそう（…)), one has doubled spaces before the paren, one has no space before the paren; 銀花猫様 uses Vol.N. 1TESTA's 1 and テストヤと3つのお願い's 3 are title content, not volumes.",
+  "archives": [
+    {
+      "title": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION 第4巻-f3348-3598_n251",
+      "series_group": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION",
+      "volume": 4
+    },
+    {
+      "title": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION 第4巻-f14969-15202_n234",
+      "series_group": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION",
+      "volume": 4
+    },
+    {
+      "title": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION 第4巻-f5687-5733_n47",
+      "series_group": "jellyfin-frames-【260529】【ピンクパイナップル】レイカは華麗な僕の女王 THE ANIMATION",
+      "volume": 4
+    },
+    {
+      "title": "jellyfin-frames-【260529】【WHITE BEAR】アナルマニアオタクとアナニー大好きなお嬢様 ～奇跡のマッチング～ 後編-f385-578_n194",
+      "series_group": "jellyfin-frames-【260529】【WHITE BEAR】アナルマニアオタクとアナニー大好きなお嬢様 ～奇跡のマッチング～",
+      "volume": null
+    },
+    {
+      "title": "Yuikai Chan - Silverwolf",
+      "series_group": "Yuikai Chan",
+      "volume": null
+    },
+    {
+      "title": "Yuikai Chan - Sparxie",
+      "series_group": "Yuikai Chan",
+      "volume": null
+    },
+    {
+      "title": "tomachan_02 Ade Agent Bunny",
+      "series_group": "tomachan_02",
+      "volume": null
+    },
+    {
+      "title": "tomachan_02 Ichinose Asuna",
+      "series_group": "tomachan_02",
+      "volume": null
+    },
+    {
+      "title": "叉子宝宝 - 碧蓝航线 奥古斯特 女仆",
+      "series_group": "叉子宝宝 - 碧蓝航线",
+      "volume": null
+    },
+    {
+      "title": "二佐Nisa - 碧蓝航线 大凤 旗袍",
+      "series_group": "二佐Nisa - 碧蓝航线",
+      "volume": null
+    },
+    {
+      "title": "[King Angel] Maiden Under the Sun",
+      "series_group": "[King Angel]",
+      "volume": null
+    },
+    {
+      "title": "[Patreon] Dal (@aazsxx2)",
+      "series_group": "[Patreon] Dal",
+      "volume": null
+    },
+    {
+      "title": "[Twitter] 原子ちゃん (@yuanzichan)",
+      "series_group": "[Twitter] 原子ちゃん",
+      "volume": null
+    },
+    {
+      "title": "[ジロウ] 堕とされたい熟女達 [DL版]",
+      "series_group": "[ジロウ] 堕とされたい熟女達",
+      "volume": null
+    },
+    {
+      "title": "Petra Fyed - Kaneko Lumi",
+      "series_group": "Petra Fyed",
+      "volume": null
+    },
+    {
+      "title": "Puutin - 2B",
+      "series_group": "Puutin",
+      "volume": null
+    },
+    {
+      "title": "soso嗖嗖 - Danganronpa - Junko Enoshima",
+      "series_group": "soso嗖嗖",
+      "volume": null
+    },
+    {
+      "title": "Vinnegal Albedo",
+      "series_group": "Vinnegal",
+      "volume": null
+    },
+    {
+      "title": "2205137855554cdcb1725fa30c085a52-all",
+      "series_group": "2205137855554cdcb1725fa30c085a52-all",
+      "volume": null
+    },
+    {
+      "title": "文豪ストレイドッグス -1",
+      "series_group": "文豪ストレイドッグス",
+      "volume": 1
+    },
+    {
+      "title": "文豪ストレイドッグス (2)",
+      "series_group": "文豪ストレイドッグス",
+      "volume": 2
+    },
+    {
+      "title": "Bungo Stray Dogs - Vol.1",
+      "series_group": "Bungo Stray Dogs",
+      "volume": 1
+    },
+    {
+      "title": "Bungo Stray Dogs - Vol.2",
+      "series_group": "Bungo Stray Dogs",
+      "volume": 2
+    },
+    {
+      "title": "ドラえもん 1巻",
+      "series_group": "ドラえもん",
+      "volume": 1
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の拾参",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 13
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の拾弐",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 12
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の拾壱",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 11
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の拾",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 10
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の九",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 9
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の八",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 8
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の七",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 7
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の六",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 6
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の五",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 5
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の四",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 4
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の参",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫 巻の弐",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 2
+    },
+    {
+      "title": "[アンソロジー] 架空アンソロジー 銀花猫",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": null
+    },
+    {
+      "title": "[作家甲] 偽りの狐火 (架空アンソロジー 銀花猫 巻の九) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 9
+    },
+    {
+      "title": "[作家乙] 架空の狐お姉ちゃん (架空アンソロジー 銀花猫 巻の八) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 8
+    },
+    {
+      "title": "[作家丙] 架空の古代娘物語 (架空アンソロジー 銀花猫 巻の八) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 8
+    },
+    {
+      "title": "[作家丁] 架空の鬼と蛇の物語 (架空アンソロジー 銀花猫 巻の七) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 7
+    },
+    {
+      "title": "[作家戊] 1TESTA (架空アンソロジー 銀花猫 巻の五) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 5
+    },
+    {
+      "title": "[作家己] 架空の鬼様と俺 (架空アンソロジー 銀花猫 巻の五) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 5
+    },
+    {
+      "title": "[作家庚] 架空のコンコン憑き物語 (架空アンソロジー 銀花猫 巻の参) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家辛] 架空のメス狐物語 (架空アンソロジー 銀花猫 巻の参) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家壬] 架空の賃貸物語（テスト賃貸) (架空アンソロジー 銀花猫 巻の参) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家己] 架空のお稲荷様物語 (架空アンソロジー 銀花猫 巻の四) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 4
+    },
+    {
+      "title": "[作家癸] 架空の吸血鬼物語 (架空アンソロジー 銀花猫 巻の四) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 4
+    },
+    {
+      "title": "[作家丁] 架空の男柱と酒の物語(架空アンソロジー 銀花猫 巻の四) [無字]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 4
+    },
+    {
+      "title": "[作家丁] 架空の男柱と酒の物語 (架空アンソロジー 銀花猫 巻の四) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 4
+    },
+    {
+      "title": "[作家己] 架空の鬼娘物語  (架空アンソロジー 銀花猫 巻の参) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家丁] 架空のとつげき晩ごはん (架空アンソロジー 銀花猫 巻の弐) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 2
+    },
+    {
+      "title": "[作家丁] 架空の魔女と弟子の物語 (架空アンソロジー 銀花猫 巻の参) [無字]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家丁] 架空の魔女と弟子の物語 (架空アンソロジー 銀花猫 巻の参) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 3
+    },
+    {
+      "title": "[作家己] 架空のトイレ花子さん (架空アンソロジー 銀花猫 巻の弐) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": 2
+    },
+    {
+      "title": "[作家丁] テストヤと3つのお願い (架空アンソロジー 銀花猫) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": null
+    },
+    {
+      "title": "[作家己] 架空の狐神様物語！ (架空アンソロジー 銀花猫) [中国翻訳]",
+      "series_group": "架空アンソロジー 銀花猫",
+      "volume": null
+    },
+    {
+      "title": "[アンソロジー] 銀花猫 架空アンソロジー Vol.1",
+      "series_group": "銀花猫 架空アンソロジー",
+      "volume": 1
+    },
+    {
+      "title": "[作家子] 架空の酒の肴物語 (銀花猫 架空アンソロジー Vol.1) [中国翻訳]",
+      "series_group": "銀花猫 架空アンソロジー",
+      "volume": 1
+    },
+    {
+      "title": "[作家丑] 架空の願い叶えて物語 (銀花猫 架空アンソロジー Vol.1) [中国翻訳]",
+      "series_group": "銀花猫 架空アンソロジー",
+      "volume": 1
+    }
+  ]
+}
