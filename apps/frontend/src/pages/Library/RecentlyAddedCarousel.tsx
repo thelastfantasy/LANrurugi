@@ -11,10 +11,10 @@ import { useArchiveMetadata } from "../../api/hooks"
 import type { ArchiveMetadata } from "../../api/types"
 import { PopupMenu, PopupMenuItem } from "../../components/PopupMenu"
 import { SortableList } from "../../components/SortableList"
+import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "../../lib/constants"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "../../storageKeys"
 import { Z_OVERLAY_CONTENT } from "../../theme"
 import { ArchiveCard } from "./ArchiveCard"
-import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "./constants"
 import { type CarouselMode } from "./types"
 
 /** Read-only card renderer for the "Recently Added"/On Deck/Random/etc. carousel — same markup as

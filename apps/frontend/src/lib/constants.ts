@@ -1,4 +1,4 @@
-import type { CarouselMode } from "./types"
+type CarouselMode = "ondeck" | "random" | "inbox" | "untagged"
 
 export const PAGE_SIZE = 100
 

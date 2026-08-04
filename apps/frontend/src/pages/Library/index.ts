@@ -22,7 +22,6 @@ export * from "./SortBySelector"
 
 export * from "./TagLine"
 
-export * from "./constants"
 
 export * from "./isTankoubonId"
 
