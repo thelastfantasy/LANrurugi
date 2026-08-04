@@ -9,7 +9,9 @@ import { promptDialog } from "../../dialog"
 import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from "../../lib/tagFormat"
 import { routes } from "../../routes"
 import { CUSTOM_COLUMN_PREFIX, DEFAULT_CUSTOM_COLUMNS } from "../../storageKeys"
-import { BookmarkIcon, isTankoubonId, TagLine } from "./shared"
+import { BookmarkIcon } from "./BookmarkIcon"
+import { isTankoubonId } from "./isTankoubonId"
+import { TagLine } from "./TagLine"
 
 /** One compact-table custom column's chosen namespace, read/write straight to its own
  * `localStorage` key (`customColumn${index}`) — ports `generateTableHeaders`'s per-header default

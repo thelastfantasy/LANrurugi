@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "../../api/types"
 import { routes } from "../../routes"
-import { BookmarkIcon, isTankoubonId, TagLine } from "./shared"
+import { BookmarkIcon } from "./BookmarkIcon"
+import { isTankoubonId } from "./isTankoubonId"
+import { TagLine } from "./TagLine"
 
 /** Read-crown/new/tankoubon status badges — ports `buildStatusDiv` exactly, including its
  * mutual-exclusion rule (an archive shows 🆕 XOR 👑, never both; a Tankoubon can show both plus

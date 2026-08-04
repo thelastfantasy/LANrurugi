@@ -14,7 +14,8 @@ import { SortableList } from "../../components/SortableList"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "../../storageKeys"
 import { Z_OVERLAY_CONTENT } from "../../theme"
 import { ArchiveCard } from "./ArchiveCard"
-import { CAROUSEL_ICON, type CarouselMode, NEW_ONLY, UNTAGGED_ONLY } from "./shared"
+import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "./constants"
+import { type CarouselMode } from "./types"
 
 /** Read-only card renderer for the "Recently Added"/On Deck/Random/etc. carousel — same markup as
  * `ArchiveCard` minus multi-select and context-menu source tracking differences (the carousel

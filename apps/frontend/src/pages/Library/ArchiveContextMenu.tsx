@@ -9,7 +9,8 @@ import { splitTagsByNamespace } from "../../lib/tagFormat"
 import { routes } from "../../routes"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../theme"
 import { toast } from "../../toast"
-import { type ContextMenuState, isTankoubonId } from "./shared"
+import { isTankoubonId } from "./isTankoubonId"
+import { type ContextMenuState } from "./types"
 
 /** Ports legacy's own right-click menu (`~/LANraragi/public/js/mod/index_contextmenu.js`) — same
  * action set and same login-gating (Edit/Delete/Rating/Category only shown when `useLoginStatus`

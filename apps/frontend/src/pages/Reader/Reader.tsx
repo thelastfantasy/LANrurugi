@@ -28,7 +28,7 @@ import { routes } from "../../routes"
 import { FONT_SIZE_8PT, useApplyTheme } from "../../theme"
 import { toast } from "../../toast"
 import { useDocumentTitle } from "../../useDocumentTitle"
-import { isTankoubonId } from "../Library/shared"
+import { isTankoubonId } from "../Library/isTankoubonId"
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay"
 import {
   type ArchiveNavState,

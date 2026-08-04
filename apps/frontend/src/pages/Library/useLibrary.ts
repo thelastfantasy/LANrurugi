@@ -33,7 +33,9 @@ import {
 import { toast } from "../../toast"
 import { useDocumentTitle } from "../../useDocumentTitle"
 import { recordSearchNavigation } from "../Reader/crossArchiveNav"
-import { type ContextMenuState, isTankoubonId, NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "./shared"
+import { NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "./constants"
+import { isTankoubonId } from "./isTankoubonId"
+import { type ContextMenuState } from "./types"
 
 let defaultPasswordToastShownThisPageLoad = false
 
