@@ -175,7 +175,7 @@ function ResultInfoAndPager({
   )
 }
 
-export default function Library() {
+export function Library() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const location = useLocation()
