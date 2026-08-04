@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
 
-import { usePluginOptions, usePluginSettings, useUpdatePluginSettings } from "../../api/hooks"
-import type { PluginInfo } from "../../api/types"
-import type { DragHandleProps } from "../../components/SortableList"
-import { PluginOptionsForm } from "../PluginOptionsForm"
-import { PluginParametersForm } from "../PluginParametersForm"
+import { usePluginOptions, usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
+import type { PluginInfo } from "@/api/types"
+import type { DragHandleProps } from "@/components/SortableList"
+import { PluginOptionsForm } from "@/pages/PluginOptionsForm"
+import { PluginParametersForm } from "@/pages/PluginParametersForm"
 
 /** Width of the drag-handle column — narrow (just enough for the grip glyph plus a little
  * click-target padding), not a content-sized column, which would read as an oversized empty

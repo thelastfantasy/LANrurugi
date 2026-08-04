@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
-import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from "../theme"
+import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from "@/theme"
 
 /** `'element'` (default) anchors the bubble to the trigger's own bounding box, in a fixed spot
  * relative to it — the usual "attached to this button" tooltip. `'cursor'` instead follows the

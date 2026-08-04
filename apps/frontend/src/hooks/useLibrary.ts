@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useLocation, useNavigate } from "react-router-dom"
 
-import { sendJson } from "../../api/client"
+import { sendJson } from "@/api/client"
 import {
   useCategories,
   useCreateTankoubon,
@@ -14,12 +14,11 @@ import {
   useSettings,
   useStats,
   useTankoubons,
-} from "../../api/hooks"
-import type { ArchiveMetadata } from "../../api/types"
-import { confirmDialog, promptDialog } from "../../dialog"
-import { NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "../../lib/constants"
-import { buildSearchToken, buildTagList, splitTagsByNamespace } from "../../lib/tagFormat"
-import { routes } from "../../routes"
+} from "@/api/hooks"
+import type { ArchiveMetadata } from "@/api/types"
+import { confirmDialog, promptDialog } from "@/dialog"
+import { NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "@/lib/constants"
+import { routes } from "@/lib/routes"
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -30,12 +29,14 @@ import {
   INDEX_SORT_KEY,
   INDEX_VIEW_MODE_KEY,
   MSM_SELECTION_KEY,
-} from "../../storageKeys"
-import { toast } from "../../toast"
-import { useDocumentTitle } from "../../useDocumentTitle"
-import { recordSearchNavigation } from "../Reader/crossArchiveNav"
-import { isTankoubonId } from "./isTankoubonId"
-import { type ContextMenuState } from "./types"
+} from "@/lib/storageKeys"
+import { buildSearchToken, buildTagList, splitTagsByNamespace } from "@/lib/tagFormat"
+import { isTankoubonId } from "@/pages/Library/isTankoubonId"
+import { type ContextMenuState } from "@/pages/Library/types"
+import { recordSearchNavigation } from "@/pages/Reader/crossArchiveNav"
+import { toast } from "@/toast"
+
+import { useDocumentTitle } from "./useDocumentTitle"
 
 let defaultPasswordToastShownThisPageLoad = false
 

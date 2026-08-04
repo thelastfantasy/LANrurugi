@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 
-import type { CategoryMetadata } from "../../api/types"
-import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from "../../lib/constants"
+import type { CategoryMetadata } from "@/api/types"
+import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 
 export function CategoryBar({
   selectedCategory,

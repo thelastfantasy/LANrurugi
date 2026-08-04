@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 
-import { useSettings } from "./api/hooks"
+import { useSettings } from "@/api/hooks"
 
 /** Matches legacy's own per-page `<title>[% title %] - [% c.lh("Page Name") %]</title>` pattern
  * (`title` is the site's `htmltitle` setting) — `index.html`'s own `<title>` is just the Vite

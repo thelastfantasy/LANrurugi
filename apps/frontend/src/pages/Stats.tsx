@@ -1,13 +1,13 @@
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useArchives, useServerInfo, useStats } from "../api/hooks"
-import { CollapsibleSection } from "../components/CollapsibleSection"
-import { TagCloud } from "../components/TagCloud"
-import { getTagSearchURL } from "../lib/tagFormat"
-import { routes } from "../routes"
-import { useApplyTheme } from "../theme"
-import { useDocumentTitle } from "../useDocumentTitle"
+import { useArchives, useServerInfo, useStats } from "@/api/hooks"
+import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { TagCloud } from "@/components/TagCloud"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { getTagSearchURL } from "@/lib/tagFormat"
+import { useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/stats.html.tt2` + `public/js/stats.js` structure exactly
 // — two genuinely distinct sections that an earlier version of this page had collapsed into one:

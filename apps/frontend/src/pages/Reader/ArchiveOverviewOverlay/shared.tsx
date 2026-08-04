@@ -2,9 +2,9 @@ import type { MouseEvent } from "react"
 import { useEffect, useLayoutEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from "../../../components/PopupMenu"
-import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "../../../lib/tocValidation"
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../../theme"
+import { PopupMenu, PopupMenuItem } from "@/components/PopupMenu"
+import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/tocValidation"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 // How many `ChapterActionMenu` instances are currently mounted/open — a plain module-level
 // counter, not React state, since it exists purely to answer one synchronous yes/no question

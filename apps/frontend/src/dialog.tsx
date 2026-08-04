@@ -3,8 +3,9 @@ import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
 import { useStats } from "./api/hooks"
-import { PopupMenu, PopupMenuItem, useMenuPalette } from "./components/PopupMenu"
+import { PopupMenu, PopupMenuItem } from "./components/PopupMenu"
 import { Tooltip } from "./components/Tooltip"
+import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
 

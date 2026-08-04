@@ -18,17 +18,21 @@ import {
   useSettings,
   useUpdateProgress,
   useUpdateTankoubonProgress,
-} from "../../api/hooks"
-import { Footer } from "../../components/Footer"
-import { Tooltip } from "../../components/Tooltip"
-import { confirmDialog, promptDialog } from "../../dialog"
-import { fetchContentLengthKb } from "../../lib/imageMeta"
-import { getTagSearchURL } from "../../lib/tagFormat"
-import { routes } from "../../routes"
-import { FONT_SIZE_8PT, useApplyTheme } from "../../theme"
-import { toast } from "../../toast"
-import { useDocumentTitle } from "../../useDocumentTitle"
-import { isTankoubonId } from "../Library/isTankoubonId"
+} from "@/api/hooks"
+import { Footer } from "@/components/Footer"
+import { Tooltip } from "@/components/Tooltip"
+import { confirmDialog, promptDialog } from "@/dialog"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { clamp, computeNextPage, computeSpread } from "@/hooks/useReaderNavigation"
+import { useReaderSettings } from "@/hooks/useReaderSettings"
+import { useTankoubonReading } from "@/hooks/useTankoubonReading"
+import { fetchContentLengthKb } from "@/lib/imageMeta"
+import { routes } from "@/lib/routes"
+import { getTagSearchURL } from "@/lib/tagFormat"
+import { isTankoubonId } from "@/pages/Library/isTankoubonId"
+import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
+import { toast } from "@/toast"
+
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay"
 import {
   type ArchiveNavState,
@@ -38,9 +42,6 @@ import {
 import { fileInfoText } from "./fileInfoText"
 import { MarkerLayer } from "./MarkerLayer"
 import { SettingsOverlay } from "./SettingsOverlay"
-import { clamp, computeNextPage, computeSpread } from "./useReaderNavigation"
-import { useReaderSettings } from "./useReaderSettings"
-import { useTankoubonReading } from "./useTankoubonReading"
 
 // Faithful port of legacy's reader page (`~/LANraragi/templates/reader.html.tt2` +
 // `~/LANraragi/public/js/reader.js`) — real DOM structure (`#i1`-`#i7`) and CSS classnames from

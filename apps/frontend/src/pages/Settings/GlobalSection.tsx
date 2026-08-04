@@ -2,12 +2,13 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useCleanDatabase, useDropDatabase } from "../../api/hooks"
-import { CollapsibleSection } from "../../components/CollapsibleSection"
-import { confirmDialog } from "../../dialog"
-import { SUPPORTED_LANGUAGES } from "../../i18n"
-import { routes } from "../../routes"
-import { FONT_SIZE_10PT } from "../../theme"
+import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
+import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { confirmDialog } from "@/dialog"
+import { SUPPORTED_LANGUAGES } from "@/i18n"
+import { routes } from "@/lib/routes"
+import { FONT_SIZE_10PT } from "@/theme"
+
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
 export function GlobalSection({

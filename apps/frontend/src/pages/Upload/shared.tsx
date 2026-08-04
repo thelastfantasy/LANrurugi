@@ -1,8 +1,8 @@
-import type { PluginInfo } from "../../api/types"
-import { TagTable } from "../../components/TagTable"
-import { Tooltip } from "../../components/Tooltip"
-import { splitTagsByNamespace } from "../../lib/tagFormat"
-import { FONT_SIZE_10PT } from "../../theme"
+import type { PluginInfo } from "@/api/types"
+import { TagTable } from "@/components/TagTable"
+import { Tooltip } from "@/components/Tooltip"
+import { splitTagsByNamespace } from "@/lib/tagFormat"
+import { FONT_SIZE_10PT } from "@/theme"
 
 /** The fixed `plugin_namespace` every local-upload queue item is stored under
  * (`crates/lanrurugi-api/src/upload.rs`'s own constant of the same name) — never a real installed

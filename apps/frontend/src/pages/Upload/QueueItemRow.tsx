@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { sendJson } from "../../api/client"
+import { sendJson } from "@/api/client"
 import {
   useDeleteQueueItem,
   useOverwriteQueueItem,
@@ -10,13 +10,14 @@ import {
   useStartQueueItem,
   useStopQueueItem,
   useUpdateQueueItem,
-} from "../../api/hooks"
-import type { DownloadQueueItem, JobRecord, PluginInfo } from "../../api/types"
-import { formatBytes, JobProgressBar, STATE_COLOR } from "../../components/JobProgress"
-import { QueueErrorText } from "../../components/QueueErrorText"
-import { Tooltip } from "../../components/Tooltip"
-import { routes } from "../../routes"
-import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from "../../theme"
+} from "@/api/hooks"
+import type { DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
+import { formatBytes, JobProgressBar, STATE_COLOR } from "@/components/JobProgress"
+import { QueueErrorText } from "@/components/QueueErrorText"
+import { Tooltip } from "@/components/Tooltip"
+import { routes } from "@/lib/routes"
+import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from "@/theme"
+
 import { ConflictMenu, RenamePopover } from "./FilenameTemplateEditor"
 import { ICON_BUTTON_STYLE, LOCAL_UPLOAD_NAMESPACE, TooltipIfPresent, TruncatedFilename } from "./shared"
 

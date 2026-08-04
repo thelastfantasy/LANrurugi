@@ -2,8 +2,9 @@ import type { MouseEvent } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useUpdateArchiveMetadata } from "../api/hooks"
-import { formatRating, parseRating } from "../lib/rating"
+import { useUpdateArchiveMetadata } from "@/api/hooks"
+import { formatRating, parseRating } from "@/lib/rating"
+
 import { StarSprite } from "./StarRating"
 import { Tooltip } from "./Tooltip"
 

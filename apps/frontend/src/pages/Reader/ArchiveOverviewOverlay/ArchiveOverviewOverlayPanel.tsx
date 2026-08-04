@@ -16,16 +16,17 @@ import {
   useStampedPages,
   useStampedPagesForArchives,
   useUpdateTankoubon,
-} from "../../../api/hooks"
-import type { ArchiveMetadata, CategoryMetadata } from "../../../api/types"
-import { RatingWidget } from "../../../components/RatingWidget"
-import { Tooltip } from "../../../components/Tooltip"
-import { confirmDialog, newCategoryDialog, promptDialog } from "../../../dialog"
-import { displayTocName, isReservedTocIdentifier } from "../../../lib/tocValidation"
-import { routes } from "../../../routes"
-import { toast } from "../../../toast"
-import { isTankoubonId } from "../../Library/isTankoubonId"
-import type { TankoubonChapter } from "../useTankoubonReading"
+} from "@/api/hooks"
+import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
+import { RatingWidget } from "@/components/RatingWidget"
+import { Tooltip } from "@/components/Tooltip"
+import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
+import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
+import { routes } from "@/lib/routes"
+import { displayTocName, isReservedTocIdentifier } from "@/lib/tocValidation"
+import { isTankoubonId } from "@/pages/Library/isTankoubonId"
+import { toast } from "@/toast"
+
 import { PageGridCell } from "./PageGridCell"
 import { PageLightbox } from "./PageLightbox"
 import { ChapterActionMenu } from "./shared"

@@ -2,10 +2,10 @@ import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { waitForJob } from "../../api/client"
-import { routes } from "../../routes"
-import { FONT_SIZE_10PT, useApplyTheme } from "../../theme"
-import { useDocumentTitle } from "../../useDocumentTitle"
+import { waitForJob } from "@/api/client"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { FONT_SIZE_10PT, useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/backup.html.tt2` — one `table > tbody#files > tr` with
 // two `.stdbtn.fileinput-button` spans (backup/restore), a processing spinner, and a return

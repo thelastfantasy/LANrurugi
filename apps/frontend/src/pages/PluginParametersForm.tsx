@@ -1,8 +1,8 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { usePluginSettings, useUpdatePluginSettings } from "../api/hooks"
-import type { PluginSettings } from "../api/types"
+import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
+import type { PluginSettings } from "@/api/types"
 
 // Per-plugin custom-parameter settings (e.g. E-Hentai login's cookie fields) — one text input per
 // `PluginInfo.parameters` entry, dynamically rendered from the plugin's own declared metadata,

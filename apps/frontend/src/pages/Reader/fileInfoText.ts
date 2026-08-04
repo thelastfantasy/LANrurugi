@@ -1,4 +1,4 @@
-import type { Spread } from "./useReaderNavigation"
+import type { Spread } from "@/hooks/useReaderNavigation"
 
 interface PageDimensions {
   width: number

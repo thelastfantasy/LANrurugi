@@ -10,15 +10,15 @@ import {
   useStats,
   useTankoubon,
   useUpdateTankoubon,
-} from "../api/hooks"
-import type { TankoubonMetadata } from "../api/types"
-import { PopupMenu, PopupMenuItem } from "../components/PopupMenu"
-import { SortableList } from "../components/SortableList"
-import { TagInput } from "../components/TagInput"
-import { Tooltip } from "../components/Tooltip"
-import { routes } from "../routes"
-import { toast } from "../toast"
-import { useDocumentTitle } from "../useDocumentTitle"
+} from "@/api/hooks"
+import type { TankoubonMetadata } from "@/api/types"
+import { PopupMenu, PopupMenuItem } from "@/components/PopupMenu"
+import { SortableList } from "@/components/SortableList"
+import { TagInput } from "@/components/TagInput"
+import { Tooltip } from "@/components/Tooltip"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { toast } from "@/toast"
 
 /** Resolves an archive ID to its real title for the archive-list row below, with a
  * hover-thumbnail tooltip — matching real legacy's own `edit.html.tt2` (`is_tank` branch, line

@@ -9,14 +9,14 @@ import {
   useSettings,
   useStats,
   useUpdateArchiveMetadata,
-} from "../api/hooks"
-import type { ArchiveMetadata } from "../api/types"
-import { TagInput } from "../components/TagInput"
-import { Tooltip } from "../components/Tooltip"
-import { confirmDialog } from "../dialog"
-import { routes } from "../routes"
-import { toast } from "../toast"
-import { useDocumentTitle } from "../useDocumentTitle"
+} from "@/api/hooks"
+import type { ArchiveMetadata } from "@/api/types"
+import { TagInput } from "@/components/TagInput"
+import { Tooltip } from "@/components/Tooltip"
+import { confirmDialog } from "@/dialog"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { toast } from "@/toast"
 
 export function Edit() {
   const { t } = useTranslation()

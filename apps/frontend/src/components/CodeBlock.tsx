@@ -1,6 +1,6 @@
 import { Highlight, themes } from "prism-react-renderer"
 
-import { FONT_SIZE_10PT } from "../theme"
+import { FONT_SIZE_10PT } from "@/theme"
 
 /** Syntax-highlighted code block for the job detail view (finished jobs' JSON `result`).
  *

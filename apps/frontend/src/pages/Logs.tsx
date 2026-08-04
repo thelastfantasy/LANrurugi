@@ -2,10 +2,10 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { LOG_CATEGORIES, type LogCategory, useLogLines } from "../api/hooks"
-import { routes } from "../routes"
-import { useApplyTheme } from "../theme"
-import { useDocumentTitle } from "../useDocumentTitle"
+import { LOG_CATEGORIES, type LogCategory, useLogLines } from "@/api/hooks"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { useApplyTheme } from "@/theme"
 
 const CATEGORY_LABELS: Record<LogCategory, string> = {
   general: "General",

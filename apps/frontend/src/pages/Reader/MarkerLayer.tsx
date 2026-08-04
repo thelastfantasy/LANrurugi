@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from "../../api/hooks"
-import type { StampJson } from "../../api/types"
-import { PopupMenu, PopupMenuItem } from "../../components/PopupMenu"
-import { Tooltip } from "../../components/Tooltip"
+import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from "@/api/hooks"
+import type { StampJson } from "@/api/types"
+import { PopupMenu, PopupMenuItem } from "@/components/PopupMenu"
+import { Tooltip } from "@/components/Tooltip"
 import {
   anchorPercent,
   formatStampRect,
@@ -14,8 +14,8 @@ import {
   type StampAnchor,
   stampEditorDialog,
   type StampRect,
-} from "../../dialog"
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "../../theme"
+} from "@/dialog"
+import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
 // `renderMarkers`/`loadStamps` + `.marker` in `lrr.css`): click-to-place a pin at a %-based

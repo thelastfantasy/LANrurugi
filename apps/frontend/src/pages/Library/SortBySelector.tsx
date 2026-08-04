@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 
-import type { StatTag } from "../../api/types"
+import type { StatTag } from "@/api/types"
 
 export function SortBySelector({
   sortby,

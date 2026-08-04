@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next"
 
-import { useRegenThumbnails } from "../../api/hooks"
-import { CollapsibleSection } from "../../components/CollapsibleSection"
-import { FONT_SIZE_10PT } from "../../theme"
+import { useRegenThumbnails } from "@/api/hooks"
+import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { FONT_SIZE_10PT } from "@/theme"
+
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
 // Full IANA timezone list for the Settings-page `<select>`, grouped by continent — phpBB-style

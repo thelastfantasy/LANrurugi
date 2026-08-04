@@ -1,8 +1,8 @@
 import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useServerInfo, useUpdateCheck } from "../api/hooks"
-import { toast } from "../toast"
+import { useServerInfo, useUpdateCheck } from "@/api/hooks"
+import { toast } from "@/toast"
 
 /** Fires legacy's own update-available toast (`~/LANraragi/public/js/mod/index.js::checkVersion`'s
  * `LRR.toast({ heading: I18N.IndexUpdateNotif(...), ... })`) once a newer release is detected —

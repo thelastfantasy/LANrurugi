@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import type { QueueError } from "../api/types"
-import { routes } from "../routes"
+import type { QueueError } from "@/api/types"
+import { routes } from "@/lib/routes"
 
 /** Renders a structured `QueueError` (`lanrurugi_core::queue_error::QueueError`) as translated
  * text — maps `.kind` to an i18n key and interpolates that variant's own fields into it, rather

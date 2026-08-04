@@ -3,14 +3,14 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { sendJson, sleep } from "../api/client"
-import { useArchives, useCategories, usePlugins, useSettings } from "../api/hooks"
-import type { ArchiveMetadata } from "../api/types"
-import { ArchiveChecklistItem } from "../components/ArchiveChecklistItem"
-import { routes } from "../routes"
-import { MSM_SELECTION_KEY } from "../storageKeys"
-import { useApplyTheme } from "../theme"
-import { useDocumentTitle } from "../useDocumentTitle"
+import { sendJson, sleep } from "@/api/client"
+import { useArchives, useCategories, usePlugins, useSettings } from "@/api/hooks"
+import type { ArchiveMetadata } from "@/api/types"
+import { ArchiveChecklistItem } from "@/components/ArchiveChecklistItem"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
+import { useApplyTheme } from "@/theme"
 
 async function fetchArchive(id: string): Promise<ArchiveMetadata> {
   const response = await fetch(`/api/archives/${id}/metadata`)

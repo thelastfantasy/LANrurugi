@@ -1,6 +1,7 @@
-import { useSettings } from "../api/hooks"
-import { parseRating } from "../lib/rating"
-import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from "../lib/tagFormat"
+import { useSettings } from "@/api/hooks"
+import { parseRating } from "@/lib/rating"
+import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from "@/lib/tagFormat"
+
 import { StarRatingDisplay } from "./StarRating"
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`

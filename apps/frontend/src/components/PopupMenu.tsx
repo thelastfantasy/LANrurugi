@@ -2,21 +2,10 @@ import type { CSSProperties, ReactNode } from "react"
 import { forwardRef } from "react"
 import { createPortal } from "react-dom"
 
-import { useSettings } from "../api/hooks"
-import { DEFAULT_THEME_ID, MENU_PALETTE } from "../theme"
-
-/** Reads the current theme's popup-menu palette — the single place every `PopupMenu` consumer
- * pulls colours from, so a right-click menu, the index settings gear menu, etc. all reskin
- * together when the user switches themes. */
-export function useMenuPalette() {
-  const settings = useSettings()
-  const theme = (settings.data?.theme ?? DEFAULT_THEME_ID) as keyof typeof MENU_PALETTE
-  return MENU_PALETTE[theme] ?? MENU_PALETTE[DEFAULT_THEME_ID]
-}
+import { useMenuPalette } from "@/hooks/useMenuPalette"
 
 /** A themed popup menu box — the shared "floating list of clickable rows" every right-click menu
  * and the index settings gear menu renders. Built from scratch with Tailwind utility classes and
- * this app's own `MENU_PALETTE` colour table — no third-party menu-plugin CSS is linked in, but
  * the visual result still matches each of legacy's 5 real themes.
  *
  * `portal` (default `true`) renders via `createPortal` into `document.body` instead of as a

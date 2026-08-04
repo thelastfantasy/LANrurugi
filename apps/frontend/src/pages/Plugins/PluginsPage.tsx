@@ -3,12 +3,13 @@ import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { usePlugins, useSettings, useUpdateSettings } from "../../api/hooks"
-import type { PluginInfo } from "../../api/types"
-import { CollapsibleSection } from "../../components/CollapsibleSection"
-import { routes } from "../../routes"
-import { useApplyTheme, useLegacyConfigCss } from "../../theme"
-import { useDocumentTitle } from "../../useDocumentTitle"
+import { usePlugins, useSettings, useUpdateSettings } from "@/api/hooks"
+import type { PluginInfo } from "@/api/types"
+import { CollapsibleSection } from "@/components/CollapsibleSection"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { useApplyTheme, useLegacyConfigCss } from "@/theme"
+
 import { SortablePluginGroup } from "./SortablePluginGroup"
 
 // Legacy's own left/right split (`~/LANraragi/templates/plugins.html.tt2`): left column is

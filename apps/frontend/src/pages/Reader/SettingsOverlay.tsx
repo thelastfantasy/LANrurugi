@@ -1,8 +1,8 @@
 import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 
-import { ensureLink, FONT_SIZE_8PT, FONT_SIZE_9PT, removeLink } from "../../theme"
-import type { FitMode, ReaderSettings } from "./useReaderSettings"
+import type { FitMode, ReaderSettings } from "@/hooks/useReaderSettings"
+import { ensureLink, FONT_SIZE_8PT, FONT_SIZE_9PT, removeLink } from "@/theme"
 
 const CONFIG_CSS_ID = "reader-config-css"
 

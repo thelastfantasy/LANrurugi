@@ -2,11 +2,11 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useLogin } from "../api/hooks"
-import { Footer } from "../components/Footer"
-import { routes } from "../routes"
-import { FONT_SIZE_8PT, useApplyTheme } from "../theme"
-import { useDocumentTitle } from "../useDocumentTitle"
+import { useLogin } from "@/api/hooks"
+import { Footer } from "@/components/Footer"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/login.html.tt2` line-for-line: a plain centered `.ido`
 // form, "Admin Password:"/input on one table row (not stacked), the wrong-password row only when

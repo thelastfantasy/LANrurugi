@@ -1,8 +1,8 @@
 import { useQueries } from "@tanstack/react-query"
 
-import { fetchJson } from "../../api/client"
-import { useTankoubonFull } from "../../api/hooks"
-import type { ArchiveFilesResponse, ArchiveMetadata, TocEntry } from "../../api/types"
+import { fetchJson } from "@/api/client"
+import { useTankoubonFull } from "@/api/hooks"
+import type { ArchiveFilesResponse, ArchiveMetadata, TocEntry } from "@/api/types"
 
 /** One member archive's own contribution to the concatenated page list — a slice of the whole
  * Tankoubon's global page range this archive's own pages occupy. */

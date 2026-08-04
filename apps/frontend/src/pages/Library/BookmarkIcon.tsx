@@ -1,9 +1,9 @@
 import type { MouseEvent } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useBookmarkLink, useCategories, useLoginStatus } from "../../api/hooks"
-import { routes } from "../../routes"
-import { toast } from "../../toast"
+import { useBookmarkLink, useCategories, useLoginStatus } from "@/api/hooks"
+import { routes } from "@/lib/routes"
+import { toast } from "@/toast"
 
 export function BookmarkIcon({ archiveId }: { archiveId: string }) {
   const { t } = useTranslation()

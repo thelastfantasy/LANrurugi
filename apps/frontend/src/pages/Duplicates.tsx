@@ -2,11 +2,11 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { waitForJob } from "../api/client"
-import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from "../api/hooks"
-import { routes } from "../routes"
-import { useApplyTheme } from "../theme"
-import { useDocumentTitle } from "../useDocumentTitle"
+import { waitForJob } from "@/api/client"
+import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from "@/api/hooks"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/duplicates.html.tt2` — empty/start state with a
 // `.stdbtn.find-duplicates` button, results state as a `table#ds.ds.itg` (the same "index table

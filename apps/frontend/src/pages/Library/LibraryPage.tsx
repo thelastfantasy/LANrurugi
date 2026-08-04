@@ -1,4 +1,6 @@
-import { routes } from "../../routes"
+import { useLibrary } from "@/hooks/useLibrary"
+import { routes } from "@/lib/routes"
+
 import { ArchiveCard } from "./ArchiveCard"
 import { ArchiveContextMenu, DeleteConfirmDialog } from "./ArchiveContextMenu"
 import { CategoryBar } from "./CategoryBar"
@@ -8,7 +10,6 @@ import { ResultInfoAndPager } from "./ResultInfoAndPager"
 import { SearchBar } from "./SearchBar"
 import { SettingsMenu } from "./SettingsMenu"
 import { SortBySelector } from "./SortBySelector"
-import { useLibrary } from "./useLibrary"
 
 export function Library() {
   const lib = useLibrary()

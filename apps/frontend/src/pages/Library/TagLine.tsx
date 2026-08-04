@@ -1,7 +1,7 @@
-import { useSettings } from "../../api/hooks"
-import { TagTable } from "../../components/TagTable"
-import { Tooltip } from "../../components/Tooltip"
-import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from "../../lib/tagFormat"
+import { useSettings } from "@/api/hooks"
+import { TagTable } from "@/components/TagTable"
+import { Tooltip } from "@/components/Tooltip"
+import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from "@/lib/tagFormat"
 
 /** Tag line + hover tooltip — ports `colorCodeTags` (namespace-colored, date/time-excluded,
  * CSS-ellipsis-truncated via the `span.tags` rule already present in the copied `lrr.css`) for the

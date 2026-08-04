@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react"
 
-import type { StatTag } from "../api/types"
+import type { StatTag } from "@/api/types"
 
 /** Faithful port of jQCloud 2.0.3's real word-placement algorithm (`~/LANraragi/public/js/vendor/
  * jqcloud.min.js`, decompiled and verified line-by-line against the actual minified source — no

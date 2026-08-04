@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { fetchJson, sendJson } from "../../api/client"
+import { fetchJson, sendJson } from "@/api/client"
 import {
   useClearCompletedQueue,
   useDeleteSelectedQueue,
@@ -10,9 +10,10 @@ import {
   useSettings,
   useStartSelectedQueue,
   useUpdateQueueItem,
-} from "../../api/hooks"
-import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "../../api/types"
-import { CollapsibleSection } from "../../components/CollapsibleSection"
+} from "@/api/hooks"
+import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
+import { CollapsibleSection } from "@/components/CollapsibleSection"
+
 import { fetchMetadataForItem,QueueItemRow } from "./QueueItemRow"
 import {
   findMatchingPlugin,

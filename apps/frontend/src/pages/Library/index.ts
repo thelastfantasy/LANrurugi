@@ -27,4 +27,4 @@ export * from "./isTankoubonId"
 
 export * from "./types"
 
-export * from "./useLibrary"
+export * from "@/hooks/useLibrary"

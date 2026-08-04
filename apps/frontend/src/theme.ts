@@ -1,7 +1,8 @@
 import { useEffect } from "react"
 
+import { THEME_STORAGE_KEY } from "@/lib/storageKeys"
+
 import { usePublicTheme, useSettings } from "./api/hooks"
-import { THEME_STORAGE_KEY } from "./storageKeys"
 
 // Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
 // css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
