@@ -912,5 +912,9 @@
   "Currently reading": "Currently reading",
   "DeepSeek API Key": "DeepSeek API Key",
   "Change": "Change",
-  "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.": "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported."
+  "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.": "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.",
+  "Select All on Page": "Select All on Page",
+  "Clear Selection": "Clear Selection",
+  "Merge into Tankoubon": "Merge into Tankoubon",
+  "{{n}} selected": "{{n}} selected"
 }
