@@ -8,6 +8,7 @@ license.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
 lanrurugi-search.workspace = true
+lanrurugi-recommend.workspace = true
 lanrurugi-backup.workspace = true
 lanrurugi-scanner.workspace = true
 lanrurugi-plugin.workspace = true

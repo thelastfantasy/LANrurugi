@@ -13,6 +13,7 @@ pub mod logs;
 pub mod misc;
 pub mod opds;
 pub mod plugins;
+pub mod recommend;
 pub mod scripts;
 pub mod search;
 pub mod settings;
@@ -53,4 +54,5 @@ pub fn router() -> Router<AppState> {
         .merge(settings::router())
         .merge(scripts::router())
         .merge(logs::router())
+        .merge(recommend::router())
 }

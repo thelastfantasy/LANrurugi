@@ -98,6 +98,10 @@ pub struct AppState {
     /// a queued/in-progress download survives a page refresh or a different browser tab. Also on
     /// the `config` logical DB, same placement as `plugin_options`.
     pub download_queue: Arc<DownloadQueueRepository>,
+    /// Reader recommendation engine (ONNX embedding) — `None`-backed until the model download
+    /// plus load completes at startup; the endpoint returns 503 `model_not_ready` meanwhile
+    /// (see `recommend.rs`'s module docs).
+    pub recommender: Arc<crate::recommend::RecommendService>,
     /// Collapses concurrent on-demand cover-thumbnail regenerations for the same archive ID onto
     /// one worker, and bounds how many *distinct* archive covers regenerate at once (see
     /// `lanrurugi_core::singleflight`'s own doc comment) — used by

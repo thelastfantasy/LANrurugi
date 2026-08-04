@@ -12,6 +12,7 @@ path = "src/main.rs"
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
 lanrurugi-api.workspace = true
+lanrurugi-recommend.workspace = true
 lanrurugi-search.workspace = true
 lanrurugi-backup.workspace = true
 lanrurugi-scanner.workspace = true

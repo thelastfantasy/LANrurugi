@@ -115,6 +115,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),

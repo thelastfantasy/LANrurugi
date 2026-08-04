@@ -242,6 +242,42 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // that starts/restarts the watcher or a full scan (`shinobu.rs`, `database.rs::rebuild_index`)
     // can hand this same long-lived consumer a clone, instead of each spawning its own.
     let (new_archive_tx, mut new_archive_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Reader recommendation engine: the model downloads in the background (ETag-cached, see
+    // `lanrurugi_recommend::model_download`) and `install_embedder` flips the service ready once
+    // loaded; until then the recommendations endpoint returns 503 `model_not_ready`. The models
+    // dir sits next to the thumb dir (`<lanrurugi>/models` — both compose files mount
+    // `./data/models` there).
+    let recommender = Arc::new(lanrurugi_api::recommend::RecommendService::new());
+    {
+        let recommender = recommender.clone();
+        let models_dir = args
+            .thumb_dir
+            .parent()
+            .unwrap_or(&args.thumb_dir)
+            .join("models");
+        tokio::spawn(async move {
+            match lanrurugi_recommend::model_download::acquire_models(&models_dir).await {
+                Ok((model_path, tokenizer_path)) => {
+                    match lanrurugi_recommend::embedding::Embedder::load(
+                        &model_path,
+                        &tokenizer_path,
+                    ) {
+                        Ok(embedder) => {
+                            recommender.install_embedder(embedder);
+                            tracing::info!("recommendation model ready");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to load recommendation model — recommendations disabled")
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to acquire recommendation model — recommendations disabled")
+                }
+            }
+        });
+    }
+
     let state = AppState {
         redis: redis.clone(),
         repos: repos.clone(),
@@ -273,6 +309,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
+        recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
         filename_locks: filename_locks.clone(),

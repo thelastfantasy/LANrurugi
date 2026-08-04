@@ -186,6 +186,10 @@ export default function Reader() {
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: 'prev' | 'next'
     secondsLeft: number
+    /** Fetched from `/api/reader/recommendations/{id}` while the overlay counts down — the
+     * countdown jumps to the top recommendation when it ends. `null` = still loading / model
+     * not ready / fetch failed (the overlay then just stops in place when the countdown ends). */
+    recommendations: { archive_id: string; title: string; score: number }[] | null
   } | null>(null)
   const imageAreaRef = useRef<HTMLDivElement>(null)
   // The previously-rendered `#i3`'s own real height, captured right before a page turn swaps in
@@ -302,8 +306,19 @@ export default function Reader() {
     // a confusing "0"; the real navigation happens 1s later than that.
     const timer = setTimeout(() => {
       if (archiveTransition.secondsLeft <= 1) {
+        const recs = archiveTransition.recommendations
+        const direction = archiveTransition.direction
         setArchiveTransition(null)
-        void readAdjacentArchive(archiveTransition.direction)
+        if (recs && recs.length > 0) {
+          window.location.assign(`/reader/${recs[0].archive_id}`)
+        } else {
+          toast({
+            text:
+              direction === 'next'
+                ? (t('This is the last archive') ?? undefined)
+                : (t('This is the first archive') ?? undefined),
+          })
+        }
       } else {
         setArchiveTransition((prev) => (prev ? { ...prev, secondsLeft: prev.secondsLeft - 1 } : prev))
       }
@@ -400,7 +415,7 @@ export default function Reader() {
     if (next === currentPage) {
       const goingForward = readerSettings.mangaMode ? target === 'prev' : target === 'next'
       if ((target === 'next' || target === 'prev') && (currentPage === 1 || currentPage === totalPages)) {
-        void readAdjacentArchive(goingForward ? 'next' : 'prev')
+        startArchiveTransition(goingForward ? 'next' : 'prev')
         return
       }
     }
@@ -438,13 +453,33 @@ export default function Reader() {
     if (readerSettings.mangaMode) offset = -offset
     const nextPage = fromPage + offset
     if (nextPage < 1 || nextPage > totalPages) {
-      setArchiveTransition({
-        direction: offset > 0 ? 'next' : 'prev',
-        secondsLeft: ARCHIVE_TRANSITION_COUNTDOWN_SECONDS,
-      })
+      startArchiveTransition(offset > 0 ? 'next' : 'prev')
       return
     }
     document.querySelector(`[data-page="${nextPage}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Shows the boundary overlay (countdown + recommendations) and starts fetching the
+  // recommendations for the current archive in the background. The countdown effect below jumps
+  // to the top recommendation when it hits 1; clicking a recommendation card or the Cancel
+  // button dismisses first.
+  function startArchiveTransition(direction: 'prev' | 'next') {
+    setArchiveTransition({
+      direction,
+      secondsLeft: ARCHIVE_TRANSITION_COUNTDOWN_SECONDS,
+      recommendations: null,
+    })
+    if (!archiveId || isTank) return
+    void fetch(`/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=6`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { recommendations?: { archive_id: string; title: string; score: number }[] } | null) => {
+        setArchiveTransition((prev) =>
+          prev ? { ...prev, recommendations: data?.recommendations ?? [] } : prev,
+        )
+      })
+      .catch(() => {
+        setArchiveTransition((prev) => (prev ? { ...prev, recommendations: [] } : prev))
+      })
   }
 
   async function readAdjacentArchive(direction: 'prev' | 'next') {
@@ -1480,12 +1515,41 @@ export default function Reader() {
                     seconds: archiveTransition.secondsLeft,
                   })}
             </p>
-            <input
-              type="button"
-              className="stdbtn"
-              value={t('Cancel') ?? undefined}
-              onClick={() => setArchiveTransition(null)}
-            />
+            {archiveTransition.recommendations !== null && archiveTransition.recommendations.length > 0 && (
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+                {archiveTransition.recommendations.slice(0, 6).map((rec) => (
+                  <a
+                    key={rec.archive_id}
+                    href={`/reader/${rec.archive_id}`}
+                    title={rec.title}
+                    style={{ width: 96, display: 'block', textDecoration: 'none' }}
+                    onClick={() => setArchiveTransition(null)}
+                  >
+                    <img
+                      src={
+                        rec.archive_id.startsWith('TANK_')
+                          ? `/api/tankoubons/${rec.archive_id}/thumbnail?no_fallback=true`
+                          : `/api/archives/${rec.archive_id}/thumbnail?no_fallback=true`
+                      }
+                      alt={rec.title}
+                      style={{ width: 96, height: 128, objectFit: 'cover', borderRadius: 4 }}
+                      loading="lazy"
+                    />
+                    <span style={{ fontSize: 10, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {rec.title}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: 16 }}>
+              <input
+                type="button"
+                className="stdbtn"
+                value={t('Cancel') ?? undefined}
+                onClick={() => setArchiveTransition(null)}
+              />
+            </div>
           </div>
         </>
       )}

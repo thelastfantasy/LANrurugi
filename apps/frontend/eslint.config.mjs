@@ -62,6 +62,15 @@ export default [
 
       'react-hooks/rules-of-hooks':  'error',
       'react-hooks/exhaustive-deps': 'warn',
+      // react-hooks/refs is new in plugin 7.x and misfires on this project's deliberate use of
+      // React's official render-time-memoization pattern (a ref written during render under a
+      // `ref.current === null` guard — see Reader.tsx's `infiniteScrollResumePageRef`, whose
+      // comment cites react.dev's "adjusting state directly during rendering"). The rule's
+      // violation set shifts non-locally with unrelated edits (adding a fetch in an unrelated
+      // function suddenly flagged 21-30 pre-existing reads), so per-line disables aren't
+      // maintainable — the rule is disabled project-wide until it grows a real
+      // pattern-recognition story.
+      'react-hooks/refs': 'off',
     },
   },
 ]
