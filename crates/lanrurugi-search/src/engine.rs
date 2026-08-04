@@ -176,12 +176,14 @@ pub async fn search(
     };
 
     let sortkey = params.sortby.as_deref().unwrap_or("title");
-    let ordered = sort_ids(&mut archive_conn, &mut search_conn, sortkey, &filtered).await?;
-    let ordered = if params.order_desc {
-        ordered.into_iter().rev().collect()
-    } else {
-        ordered
-    };
+    let ordered = sort_ids(
+        &mut archive_conn,
+        &mut search_conn,
+        sortkey,
+        params.order_desc,
+        &filtered,
+    )
+    .await?;
 
     Ok(SearchResult {
         total,
@@ -389,6 +391,7 @@ async fn sort_ids(
     archive_conn: &mut deadpool_redis::Connection,
     search_conn: &mut deadpool_redis::Connection,
     sortkey: &str,
+    order_desc: bool,
     filtered: &HashSet<String>,
 ) -> Result<Vec<String>> {
     if sortkey == "title" {
@@ -403,6 +406,9 @@ async fn sort_ids(
                     result.push(id.to_string());
                 }
             }
+        }
+        if order_desc {
+            result.reverse();
         }
         return Ok(result);
     }
@@ -438,15 +444,56 @@ async fn sort_ids(
         return Ok(pairs.into_iter().map(|(id, _)| id).collect());
     }
 
-    // Sort by an arbitrary tag namespace: archives with that namespace first (alphabetically by
-    // value), archives without it at the back.
-    let mut keyed: Vec<(String, String)> = Vec::new();
+    // Sort by an arbitrary tag namespace, mirroring legacy `Model/Search.pm`'s `sort_results`:
+    // ids carrying the namespace sort first by their value (`date_added`/`timestamp` values are
+    // numeric Unix timestamps, compared numerically like legacy's own `ncmp`; other namespaces
+    // alphabetically), ids without it go to the back in an unspecified order. Descending order
+    // reverses only the keyed section — legacy applies `reverse` to `@keyed_ids` before pushing
+    // the unkeyed ones on, so ids missing the sort namespace always stay at the very back
+    // regardless of direction. (The port's original whole-list `rev()` at the call site inverted
+    // that and wrongly flipped unkeyed ids — the Tankoubons with no `date_added` — to the front
+    // under a descending `date_added` sort.)
+    //
+    // A Tankoubon is a zset, not an archive hash, so `HGET <id> tags` fails outright — its sort
+    // value is imputed from its member archives exactly like legacy's `_impute_tank_date_tags`:
+    // the tank's own `date_added`/`timestamp` tag wins if present, otherwise the MAX across its
+    // members' tags of the same namespace (`get_tank_unified_tags`'s coalescing).
+    let sortkey_prefix = format!("{sortkey}:");
+    let is_date_sort = sortkey == "date_added" || sortkey == "timestamp";
     let mut unkeyed: Vec<String> = Vec::new();
+    if is_date_sort {
+        let mut keyed: Vec<(String, u64)> = Vec::new();
+        for id in filtered {
+            let value = if id.starts_with("TANK") {
+                tank_date_sort_value(archive_conn, id, &sortkey_prefix).await
+            } else {
+                let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+                tags.split(',').find_map(|t| {
+                    t.trim()
+                        .strip_prefix(&sortkey_prefix)
+                        .and_then(|v| v.parse().ok())
+                })
+            };
+            match value {
+                Some(v) => keyed.push((id.clone(), v)),
+                None => unkeyed.push(id.clone()),
+            }
+        }
+        keyed.sort_by_key(|(_, v)| *v);
+        if order_desc {
+            keyed.reverse();
+        }
+        let mut result: Vec<String> = keyed.into_iter().map(|(id, _)| id).collect();
+        result.extend(unkeyed);
+        return Ok(result);
+    }
+
+    let mut keyed: Vec<(String, String)> = Vec::new();
     for id in filtered {
         let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
         let value = tags.split(',').find_map(|t| {
             let t = t.trim();
-            t.strip_prefix(&format!("{sortkey}:"))
+            t.strip_prefix(&sortkey_prefix)
         });
         match value {
             Some(v) => keyed.push((id.clone(), v.to_ascii_lowercase())),
@@ -454,9 +501,54 @@ async fn sort_ids(
         }
     }
     keyed.sort_by(|a, b| a.1.cmp(&b.1));
+    if order_desc {
+        keyed.reverse();
+    }
     let mut result: Vec<String> = keyed.into_iter().map(|(id, _)| id).collect();
     result.extend(unkeyed);
     Ok(result)
+}
+
+/// Imputes a Tankoubon's `date_added`/`timestamp` sort value (legacy `_impute_tank_date_tags` /
+/// `get_tank_unified_tags`): the tank's own tag of that namespace first, else the MAX numeric
+/// value across its member archives' tags. Returns the numeric timestamp (`u64`) or `None` when
+/// neither the tank nor any member carries the namespace.
+async fn tank_date_sort_value(
+    archive_conn: &mut deadpool_redis::Connection,
+    tank_id: &str,
+    sortkey_prefix: &str,
+) -> Option<u64> {
+    // Tank's own tags live at zset score -2 (`tags_<value>` — `GroupingRepository`'s
+    // `SCORE_TAGS`; the same member shape `GroupingRepository::get` decodes).
+    let own: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, -2, -2)
+        .await
+        .unwrap_or_default();
+    if let Some(tag) = own.first().and_then(|m| m.strip_prefix("tags_")) {
+        if let Some(v) = tag
+            .split(',')
+            .find_map(|t| t.trim().strip_prefix(sortkey_prefix))
+            .and_then(|v| v.parse().ok())
+        {
+            return Some(v);
+        }
+    }
+    let members: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, 1, "+inf")
+        .await
+        .unwrap_or_default();
+    let mut max = None;
+    for member in &members {
+        let tags: String = archive_conn.hget(member, "tags").await.unwrap_or_default();
+        if let Some(v) = tags
+            .split(',')
+            .find_map(|t| t.trim().strip_prefix(sortkey_prefix))
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            max = Some(max.map_or(v, |m: u64| m.max(v)));
+        }
+    }
+    max
 }
 
 #[cfg(test)]
@@ -472,6 +564,122 @@ mod tests {
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .ok()?;
         Some((archive, search))
+    }
+
+    /// Issue regression (2026-08-04): a descending `date_added` sort used to `rev()` the *whole*
+    /// list at the call site, flipping unkeyed ids — Tankoubons, which have no archive `tags`
+    /// hash — to the front, so a library sorted newest-first showed its (older) Tankoubons above
+    /// freshly-added archives. Legacy sorts only the keyed section and pushes unkeyed ids on at
+    /// the back regardless of direction.
+    #[tokio::test]
+    async fn date_added_descending_keeps_unkeyed_tankoubons_at_the_back() {
+        let Some((archive_pool, search_pool)) = test_pools() else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut aconn = archive_pool.get().await.unwrap();
+        let id_old = "a".repeat(40);
+        let id_new = "b".repeat(40);
+        let id_no_date = "c".repeat(40);
+        let tank = "TANK_1785750000";
+
+        for (id, tags) in [
+            (id_old.as_str(), "date_added:1000"),
+            (id_new.as_str(), "date_added:2000"),
+            (id_no_date.as_str(), "artist:x"),
+        ] {
+            let _: () = aconn.hset(id, "tags", tags).await.unwrap();
+        }
+        // The tank's only member has no date tag either → the tank itself stays unkeyed.
+        let _: () = aconn
+            .zadd_multiple(tank, &[(1, id_no_date.clone())])
+            .await
+            .unwrap();
+
+        let filtered: HashSet<String> = [&id_old, &id_new, &id_no_date, tank]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let ids = sort_ids(
+            &mut aconn,
+            &mut search_pool.get().await.unwrap(),
+            "date_added",
+            true,
+            &filtered,
+        )
+        .await
+        .unwrap();
+
+        // Descending: keyed (newest first) then unkeyed (both at the back, order unspecified).
+        assert_eq!(ids[0], id_new, "newest archive must come first");
+        assert_eq!(ids[1], id_old, "older archive second");
+        assert_eq!(ids.len(), 4, "nothing may be dropped from the result");
+        assert!(
+            ids[2] == id_no_date || ids[2] == tank,
+            "unkeyed ids must be at the back, got {ids:?}"
+        );
+        assert!(
+            ids[3] == id_no_date || ids[3] == tank,
+            "unkeyed ids must be at the back, got {ids:?}"
+        );
+        assert_ne!(ids[2], ids[3]);
+
+        for id in [&id_old, &id_new, &id_no_date, &tank.to_string()] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+    }
+
+    /// The other half of the same issue: a Tankoubon's own `date_added` sort value is imputed
+    /// from its member archives (legacy `_impute_tank_date_tags` — MAX across members), so the
+    /// tank participates in keyed ordering instead of always trailing as unkeyed.
+    #[tokio::test]
+    async fn date_added_sort_imputes_tank_value_from_member_archives() {
+        let Some((archive_pool, search_pool)) = test_pools() else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut aconn = archive_pool.get().await.unwrap();
+        let id_old = "d".repeat(40);
+        let member_new = "e".repeat(40);
+        let tank = "TANK_1785750001";
+
+        let _: () = aconn
+            .hset(&id_old, "tags", "date_added:1000")
+            .await
+            .unwrap();
+        let _: () = aconn
+            .hset(&member_new, "tags", "date_added:3000")
+            .await
+            .unwrap();
+        // Tank's own tags (zset score -2, `tags_` member) carry no date; its member does.
+        let _: () = aconn
+            .zadd_multiple(tank, &[(-2, "tags_artist:x"), (1, member_new.as_str())])
+            .await
+            .unwrap();
+
+        let filtered: HashSet<String> = [&id_old, &member_new, tank]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let ids = sort_ids(
+            &mut aconn,
+            &mut search_pool.get().await.unwrap(),
+            "date_added",
+            true,
+            &filtered,
+        )
+        .await
+        .unwrap();
+
+        // Descending: tank (imputed 3000) above member (3000, ties broken by input order) and
+        // both above the older archive; nothing unkeyed.
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0], tank, "tank must impute its member's newest date");
+        assert_eq!(ids[2], id_old, "oldest archive last");
+
+        for id in [&id_old, &member_new, &tank.to_string()] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
     }
 
     #[tokio::test]
