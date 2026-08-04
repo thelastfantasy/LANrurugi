@@ -52,7 +52,7 @@ function takePremadeSelection(): string[] {
   }
 }
 
-export default function Batch() {
+export function Batch() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const archives = useArchives()

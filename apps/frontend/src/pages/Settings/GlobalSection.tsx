@@ -10,7 +10,7 @@ import { routes } from '../../routes'
 import { FONT_SIZE_10PT } from '../../theme'
 import { ActionRow, CheckboxRow, Row } from './shared'
 
-export default function GlobalSection({
+export function GlobalSection({
   htmltitle,
   setHtmltitle,
   motd,

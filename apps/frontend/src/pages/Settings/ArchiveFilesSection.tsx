@@ -5,7 +5,7 @@ import CollapsibleSection from '../../components/CollapsibleSection'
 import { FONT_SIZE_10PT } from '../../theme'
 import { ActionRow, CheckboxRow, Row } from './shared'
 
-export default function ArchiveFilesSection({
+export function ArchiveFilesSection({
   tempmaxsize,
   setTempmaxsize,
   replacedupe,

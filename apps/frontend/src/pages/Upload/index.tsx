@@ -22,7 +22,7 @@ import { findMatchingPlugin } from './shared'
 // persistent queue too (`crates/lanrurugi-api/src/upload.rs` writes a `local_upload`-origin queue
 // item before/around its own synchronous ingest) — `DownloadQueuePanel` renders both kinds from
 // one `useDownloadQueue()` poll, so this page itself no longer tracks any upload state of its own.
-export default function Upload() {
+export function Upload() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()

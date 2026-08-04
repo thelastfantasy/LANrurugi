@@ -47,7 +47,7 @@ function ArchiveTitle({ archiveId }: { archiveId: string }) {
   )
 }
 
-export default function TankoubonEdit() {
+export function TankoubonEdit() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { tankId = '' } = useParams<{ tankId: string }>()

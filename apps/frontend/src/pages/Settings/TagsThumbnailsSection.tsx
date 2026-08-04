@@ -38,7 +38,7 @@ function isKnownTimezone(tz: string): boolean {
   return tz === 'UTC' || TIMEZONE_GROUPS.some((g) => g.zones.includes(tz))
 }
 
-export default function TagsThumbnailsSection({
+export function TagsThumbnailsSection({
   hqthumbpages,
   setHqthumbpages,
   enablewebp,

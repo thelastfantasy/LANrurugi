@@ -55,7 +55,7 @@ interface DragState {
   y: number
 }
 
-export default function MarkerLayer({
+export function MarkerLayer({
   archiveId,
   page,
   imageRef,

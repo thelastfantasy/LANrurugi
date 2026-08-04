@@ -36,7 +36,7 @@ import { TagsTable } from './TagsTable'
 // side by side via `.reader-thumbnail`'s `display:inline-block` (verified against
 // `~/LANraragi/public/css/lrr.css`), the full per-namespace tags table below it, then a thumbnail
 // grid scoped to the current chapter (or the whole archive if there's no TOC).
-export default function ArchiveOverviewOverlay({
+export function ArchiveOverviewOverlay({
   archive,
   categories,
   loggedIn,

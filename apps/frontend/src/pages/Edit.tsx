@@ -18,7 +18,7 @@ import { routes } from '../routes'
 import { toast } from '../toast'
 import { useDocumentTitle } from '../useDocumentTitle'
 
-export default function Edit() {
+export function Edit() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { archiveId = '' } = useParams<{ archiveId: string }>()

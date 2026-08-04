@@ -29,7 +29,7 @@ const DEFAULT_PAGE_SIZE = 50
 /** Render order for states in the stat bar + filter. */
 const STATE_ORDER: JobRecordState[] = ['active', 'queued', 'finished', 'failed']
 
-export default function Jobs() {
+export function Jobs() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const jobs = useJobs()

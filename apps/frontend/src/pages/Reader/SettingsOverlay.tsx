@@ -44,7 +44,7 @@ const CONTROL_HEIGHT = 25
 // (confirmed no other component referenced them) rather than just left unused — this page still
 // scopes that file in (same pattern as `Settings.tsx`), but only for its real, unrelated
 // `input[type=checkbox]` custom-checkbox rules (`Toggle Stamps` below).
-export default function SettingsOverlay({
+export function SettingsOverlay({
   settings,
   update,
   onClose,

@@ -31,7 +31,7 @@ const CATEGORY_BUTTON_LABELS: Record<LogCategory, string> = {
 // body itself is a one-row `table.itg` (`tr.gtr1 > td > pre.log-panel`), not a styled card.
 // Doesn't reproduce the live-tailing/auto-refresh behavior (`logs.js`'s polling) — this refetches
 // on category/line-count change and via the refresh icon only.
-export default function Logs() {
+export function Logs() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [category, setCategory] = useState<LogCategory>('general')

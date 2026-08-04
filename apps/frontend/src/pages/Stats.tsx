@@ -23,7 +23,7 @@ import { useDocumentTitle } from '../useDocumentTitle'
 
 const STAT_VALUE_FONT_SIZE = 20
 
-export default function Stats() {
+export function Stats() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const stats = useStats(2)

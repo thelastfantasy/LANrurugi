@@ -18,11 +18,6 @@ import Tooltip from '../../components/Tooltip'
 import { routes } from '../../routes'
 import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from '../../theme'
 import { ConflictMenu, RenamePopover } from './FilenameTemplateEditor'
-
-/** Fetches `metadataPlugin`'s preview for `item.url` and persists it onto the queue item (title +
- * `metadata_preview`). Module-level so both the single-row Start button and the batch "Start (N)"
- * button can share it — a batch start goes through `DownloadQueuePanel`, which has no per-row
- * `item`/`metadataPlugin` closure to reach into. */
 import { ICON_BUTTON_STYLE, LOCAL_UPLOAD_NAMESPACE, TooltipIfPresent, TruncatedFilename } from './shared'
 
 export async function fetchMetadataForItem(
@@ -74,7 +69,7 @@ function RateLimitedProgressBar({ job, pluginNamespace }: { job: JobRecord; plug
   )
 }
 
-export default function QueueItemRow({
+export function QueueItemRow({
   item,
   job,
   selected,

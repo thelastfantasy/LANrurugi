@@ -10,7 +10,7 @@ import type { PluginSettings } from '../api/types'
 // (`~/LANraragi/templates/plugins.html.tt2` lines 181-208, `.collapsible-title`/`.collapsible-body`
 // with the `fa-sliders-h` icon). Distinct from `PluginOptionsForm` (download-specific
 // concurrency/rate-limit/bundling settings).
-export default function PluginParametersForm({
+export function PluginParametersForm({
   namespace,
   parameters,
 }: {

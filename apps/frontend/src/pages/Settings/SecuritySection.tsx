@@ -4,7 +4,7 @@ import CollapsibleSection from '../../components/CollapsibleSection'
 import { FONT_SIZE_10PT } from '../../theme'
 import { CheckboxRow, Row } from './shared'
 
-export default function SecuritySection({
+export function SecuritySection({
   enablepass,
   setEnablepass,
   newPassword,

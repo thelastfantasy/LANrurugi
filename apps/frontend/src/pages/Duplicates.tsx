@@ -13,7 +13,7 @@ import { useDocumentTitle } from '../useDocumentTitle'
 // grid" class the Library page's table view would use). Doesn't reproduce DataTables
 // sorting/paging or Tippy.js tag tooltips (both separate JS features) — this is a plain static
 // table, still fully functional for scan/clear/delete.
-export default function Duplicates() {
+export function Duplicates() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const duplicates = useDuplicates()

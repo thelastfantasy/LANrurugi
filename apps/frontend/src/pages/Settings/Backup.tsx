@@ -11,7 +11,7 @@ import { useDocumentTitle } from '../../useDocumentTitle'
 // two `.stdbtn.fileinput-button` spans (backup/restore), a processing spinner, and a return
 // button. Doesn't reproduce the upload-plugin progress bar (`backup.js`) — status is a plain
 // text line instead.
-export default function Backup() {
+export function Backup() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)

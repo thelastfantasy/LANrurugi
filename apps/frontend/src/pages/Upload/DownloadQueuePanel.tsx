@@ -13,7 +13,7 @@ import {
 } from '../../api/hooks'
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from '../../api/types'
 import CollapsibleSection from '../../components/CollapsibleSection'
-import QueueItemRow, { fetchMetadataForItem } from './QueueItemRow'
+import { QueueItemRow, fetchMetadataForItem } from './QueueItemRow'
 import {
   findMatchingPlugin,
   LOCAL_UPLOAD_NAMESPACE,
@@ -25,7 +25,7 @@ import {
  * Clear Completed / Delete actions and per-item controls. A row is selectable while `queued` or
  * `error` — `error` is a startable state too, so a failed download has a way back to running again
  * once the underlying problem (e.g. missing login credentials) is fixed. */
-export default function DownloadQueuePanel({
+export function DownloadQueuePanel({
   downloadPlugins,
   metadataPlugins,
 }: {

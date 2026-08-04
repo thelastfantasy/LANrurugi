@@ -37,7 +37,7 @@ import {
 } from './crossArchiveNav'
 import { fileInfoText } from './fileInfoText'
 import MarkerLayer from './MarkerLayer'
-import SettingsOverlay from './SettingsOverlay'
+import { SettingsOverlay } from './SettingsOverlay'
 import { clamp, computeNextPage, computeSpread } from './useReaderNavigation'
 import { useReaderSettings } from './useReaderSettings'
 import { useTankoubonReading } from './useTankoubonReading'
@@ -96,7 +96,7 @@ function Key({ children }: { children: React.ReactNode }) {
   )
 }
 
-export default function Reader() {
+export function Reader() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { archiveId = null } = useParams<{ archiveId: string }>()

@@ -14,7 +14,7 @@ import { useDocumentTitle } from '../useDocumentTitle'
 // redirect text this previously (incorrectly) reused. `[% INCLUDE footer %]` sits *outside* the
 // closing `</div>` of `.ido` in the real template (a body-level sibling, not nested inside the
 // card), so `<Footer />` here is a sibling of `.ido`, not a child of it.
-export default function Login() {
+export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const login = useLogin()

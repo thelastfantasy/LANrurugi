@@ -23,7 +23,7 @@ interface DomainRuleFormRow {
 // each field's current plugin-default-vs-user-override state (T031's `source`) and inline 422
 // validation-error display. Rendered as its own visually-separated section directly under the
 // plugin card (issue #2: no extra "Download Settings" toggle/flyout layer).
-export default function PluginOptionsForm({ namespace }: { namespace: string }) {
+export function PluginOptionsForm({ namespace }: { namespace: string }) {
   const { t } = useTranslation()
   const options = usePluginOptions(namespace)
 

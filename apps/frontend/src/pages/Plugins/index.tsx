@@ -31,7 +31,7 @@ const RIGHT_GROUPS: Array<{ type: PluginInfo['type']; icon: string; label: strin
 // own "Trigger Script" button, and a download plugin is only invoked via the upload page's
 // URL-download form. Manually running one plugin against one existing archive is `Edit.tsx`'s job
 // — script-type "Library-wide maintenance scripts" below have no legacy equivalent at all.
-export default function Plugins() {
+export function Plugins() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const plugins = usePlugins('all')

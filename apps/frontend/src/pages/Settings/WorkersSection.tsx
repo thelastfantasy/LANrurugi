@@ -7,7 +7,7 @@ import { routes } from '../../routes'
 import { FONT_SIZE_10PT } from '../../theme'
 import { ActionRow } from './shared'
 
-export default function WorkersSection({ onStatus }: { onStatus: (status: string) => void }) {
+export function WorkersSection({ onStatus }: { onStatus: (status: string) => void }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const shinobuStatus = useShinobuStatus()

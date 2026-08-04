@@ -36,7 +36,7 @@ const BOOKMARK_CATEGORY_STORAGE_KEY = 'bookmarkCategoryId'
 // `state.repos.archives`) is fixed; this list reuses the exact same
 // `PUT`/`DELETE /categories/{id}/{archiveId}` toggle endpoint as the Archives checklist below,
 // just passing a tank id instead of an archive id.
-export default function Categories() {
+export function Categories() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const categories = useCategories()
