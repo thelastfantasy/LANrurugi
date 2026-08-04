@@ -144,7 +144,7 @@ export function QueueItemRow({
         >
           {item.state === "downloading" || item.state === "starting" ? (
             <>
-              <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: "break-all", display: "block" }} title={item.metadata_preview ? undefined : item.url}>
+              <span style={{ fontSize: FONT_SIZE_10PT, wordBreak: "break-all", display: "block", ...(!item.title && { userSelect: "all" }) }} title={item.metadata_preview ? undefined : item.url}>
                 {item.title ?? item.url}
               </span>
               {job ? (
@@ -190,7 +190,7 @@ export function QueueItemRow({
             </div>
           ) : (
             <span
-              style={{ fontSize: FONT_SIZE_10PT, display: "flex" }}
+              style={{ fontSize: FONT_SIZE_10PT, display: "flex", ...(!item.title && { userSelect: "all" }) }}
               title={item.metadata_preview ? undefined : item.url}
             >
               <TruncatedFilename text={item.title ?? item.url} isFilename={!item.title} />
