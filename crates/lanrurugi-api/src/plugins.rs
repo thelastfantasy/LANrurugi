@@ -509,6 +509,12 @@ async fn put_plugin_options(
             e.to_string(),
         );
     }
+    // Tell every in-flight download's live rate-limit resolver to re-read this namespace's
+    // override — see `AppState::plugin_options_generation`'s own docs for why this is a plain
+    // atomic bump rather than a pub/sub or a per-chunk Redis read.
+    state
+        .plugin_options_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
 
     let effective = merge(&query.namespace, &declared, Some(&override_));
     axum::Json(effective).into_response()
@@ -532,6 +538,9 @@ async fn delete_plugin_options(
             e.to_string(),
         );
     }
+    state
+        .plugin_options_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
     let effective = merge(&query.namespace, &declared, None);
     axum::Json(effective).into_response()
 }
@@ -1842,14 +1851,27 @@ async fn run_managed_downloads(
         .await
         .unwrap_or_default();
     let rules: Vec<DomainRule> = resolve_domain_rules(&declared, override_.as_ref());
+    // Per-download live rate-limit resolution: the plugin's *declared* options are snapshotted
+    // here (re-reading them mid-download would spawn a Deno subprocess per chunk — unacceptable),
+    // but the user's Redis-stored override is re-read on demand, invalidated by
+    // `AppState::plugin_options_generation` bumping on every options write. So clearing/changing
+    // a rate cap takes effect at the next chunk boundary of an in-flight download.
+    let rate_resolver = crate::download_manager::live_rate::LiveRateResolver::new(
+        plugin_namespace.clone(),
+        declared.clone(),
+        state.plugin_options.clone(),
+        state.plugin_options_generation.clone(),
+    );
 
     // Record this download job's effective rate limit (and the matching domain-rule pattern) onto
     // its `JobStatus` once, at start, so the frontend's progress UI can show a highlighted badge +
     // tooltip for rate-limited downloads (issue #2). Uses the first resource's hostname as this
     // job's representative — the UI model is one combined progress indicator per job (FR-003), so
     // rate-limit display is a single value too, and real multi-resource downloads (Pixiv pages,
-    // single-archive H@H) almost always share one domain/rule. Snapshotted here per FR-016: a
-    // settings change mid-download never retroactively alters this value.
+    // single-archive H@H) almost always share one domain/rule. This is a *display-only* snapshot
+    // of the start-time value — the actual throttle re-resolves live on every chunk (see
+    // `rate_resolver` above), so the badge may lag a mid-download settings change; that's fine,
+    // it's informational, and the transfer itself reacts immediately.
     //
     // Known approximation: `max_bytes_per_sec` comes from `resolve` (per-field independent
     // resolution — exact > wildcard > fallback, first rule declaring the field) while
@@ -1935,6 +1957,7 @@ async fn run_managed_downloads(
             &manager,
             &rules,
             &stream_req,
+            &rate_resolver,
             progress_tx,
             &state.library.temp_dir,
             cancel,
@@ -2373,6 +2396,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &crate::download_manager::stream::NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),

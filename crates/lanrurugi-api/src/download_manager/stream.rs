@@ -3,12 +3,33 @@
 
 use std::path::{Path, PathBuf};
 
+use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
 use reqwest::Method;
 use tokio::io::AsyncWriteExt;
 
 use super::domain_rules::DomainRule;
 use super::DownloadManager;
+
+/// Re-resolves the effective rate limit (`max_bytes_per_sec`) for `hostname` — invoked on every
+/// chunk read so a user clearing/changing a rate cap takes effect mid-transfer, not only on
+/// downloads started after the change (see `download_one`'s own docs for the concurrency/rate
+/// asymmetry this deliberately introduces). Implementations must be cheap in the steady state:
+/// the canonical [`super::live_rate::LiveRateResolver`] does one atomic generation-counter load
+/// per call and only touches Redis when the counter actually moved.
+pub trait RateResolver: Send + Sync {
+    fn resolve(&self, hostname: &str) -> BoxFuture<'static, Option<u64>>;
+}
+
+/// A resolver that never rate-limits — used by unit tests and callers with no live plugin-options
+/// source (the real-H@H integration test in `plugins.rs`), where `rules` is `&[]` anyway.
+pub struct NoopRateResolver;
+
+impl RateResolver for NoopRateResolver {
+    fn resolve(&self, _hostname: &str) -> BoxFuture<'static, Option<u64>> {
+        Box::pin(async { None })
+    }
+}
 
 /// One resource to fetch — mirrors `contracts/plugin-download-protocol.md`'s `downloads[]`
 /// element (deserialized straight from a plugin's `execDownload` JSON result upstream).
@@ -115,14 +136,17 @@ pub type ProgressUpdate = (u64, Option<u64>);
 /// byte counts (received from each resource's own channel) into one job-wide total; this function
 /// only ever reports *this one resource's* own progress.
 ///
-/// The concurrency permit and resolved rate limit are both captured once, at the top of this
-/// function, before the real request is even sent — this is the FR-016 snapshot-at-start-time
-/// guarantee: whatever `rules` resolves to at this exact moment governs this download for its
-/// entire duration, unaffected by any settings change that happens to land mid-transfer.
+/// The concurrency permit is captured once, at the top of this function, before the real request
+/// is sent — FR-016 snapshot-at-start-time: whatever `rules` resolves `max_concurrent` to at this
+/// moment governs this download for its entire duration. The *rate* limit (`max_bytes_per_sec`),
+/// by contrast, is re-resolved on every chunk read via `resolver` — a user clearing or changing a
+/// rate cap takes effect mid-transfer at the next chunk boundary, not only on downloads started
+/// after the change.
 pub async fn download_one(
     manager: &DownloadManager,
     rules: &[DomainRule],
     req: &DownloadRequest,
+    resolver: &dyn RateResolver,
     progress_tx: tokio::sync::mpsc::UnboundedSender<ProgressUpdate>,
     staging_dir: &Path,
     cancel: &tokio_util::sync::CancellationToken,
@@ -154,11 +178,11 @@ pub async fn download_one(
     let result = download_one_inner(
         manager,
         req,
+        resolver,
         progress_tx,
         staging_dir,
         cancel,
         &parsed_url,
-        &permit,
         &rate_limit_key,
     )
     .await;
@@ -170,11 +194,11 @@ pub async fn download_one(
 async fn download_one_inner(
     manager: &DownloadManager,
     req: &DownloadRequest,
+    resolver: &dyn RateResolver,
     progress_tx: tokio::sync::mpsc::UnboundedSender<ProgressUpdate>,
     staging_dir: &Path,
     cancel: &tokio_util::sync::CancellationToken,
     parsed_url: &url::Url,
-    permit: &super::DownloadPermit,
     rate_limit_key: &str,
 ) -> Result<DownloadedFile, DownloadError> {
     let method = match &req.method {
@@ -265,7 +289,11 @@ async fn download_one_inner(
         };
         manager
             .rate_limiters()
-            .throttle(rate_limit_key, permit.max_bytes_per_sec, chunk.len() as u64)
+            .throttle(
+                rate_limit_key,
+                resolver.resolve(parsed_url.host_str().unwrap_or("")).await,
+                chunk.len() as u64,
+            )
             .await;
         if let Err(e) = file.write_all(&chunk).await {
             drop(file);
@@ -438,6 +466,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
@@ -507,6 +536,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
@@ -545,6 +575,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
@@ -599,6 +630,7 @@ mod tests {
             &manager,
             &rules,
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
@@ -660,9 +692,17 @@ mod tests {
         let before = own_staging_files(&staging_dir);
 
         let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let err = download_one(&manager, &[], &req, progress_tx, &staging_dir, &cancel)
-            .await
-            .expect_err("a pre-cancelled token must short-circuit before any request is sent");
+        let err = download_one(
+            &manager,
+            &[],
+            &req,
+            &NoopRateResolver,
+            progress_tx,
+            &staging_dir,
+            &cancel,
+        )
+        .await
+        .expect_err("a pre-cancelled token must short-circuit before any request is sent");
         assert!(matches!(err, DownloadError::Cancelled));
 
         let after = own_staging_files(&staging_dir);
@@ -706,6 +746,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
@@ -772,6 +813,7 @@ mod tests {
                 &manager,
                 &[],
                 &req,
+                &NoopRateResolver,
                 progress_tx,
                 &staging_dir,
                 &tokio_util::sync::CancellationToken::new(),
@@ -842,6 +884,7 @@ mod tests {
             &manager,
             &[],
             &req,
+            &NoopRateResolver,
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),

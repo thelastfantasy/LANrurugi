@@ -88,6 +88,12 @@ pub struct AppState {
     /// (`specs/005-download-plugin-progress`), on the `config` logical DB alongside the rest of
     /// LANrurugi's own (non-legacy) settings.
     pub plugin_options: Arc<PluginOptionsRepository>,
+    /// Bumped on every successful plugin-options write (`PUT`/`DELETE
+    /// /api/plugins/{namespace}/options`, `plugins.rs`) — the per-download live rate-limit
+    /// resolver (`download_manager::live_rate::LiveRateResolver`) compares this against its own
+    /// cached generation on every chunk read, so a rate-cap change takes effect mid-transfer with
+    /// a single atomic load per chunk instead of a Redis read per chunk.
+    pub plugin_options_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Persistent, plugin-grouped download queue backing the Upload page's right-hand panel — so
     /// a queued/in-progress download survives a page refresh or a different browser tab. Also on
     /// the `config` logical DB, same placement as `plugin_options`.

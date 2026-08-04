@@ -69,6 +69,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(1)),
         page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(1)),
         plugin_options,
+        plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

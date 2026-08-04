@@ -7,6 +7,7 @@
 pub mod bundle;
 pub mod domain_rules;
 pub mod ingest;
+pub mod live_rate;
 pub mod rate_limit;
 pub mod settings;
 pub mod stream;
@@ -44,10 +45,9 @@ pub struct DownloadManager {
     rate_limiters: RateLimiterMap,
 }
 
-/// A concurrency permit plus (optionally) a rate limiter reference, resolved once at the moment a
-/// download starts and held for that download's entire lifetime — spec FR-016: a mid-download
-/// settings change must not retroactively alter an already-in-progress download. Dropping this
-/// releases the concurrency permit.
+/// A concurrency permit plus the initial resolved rate limit (kept for caller convenience — the
+/// actual per-chunk rate limit is re-resolved on every chunk via [`stream::RateResolver`] rather
+/// than using this snapshot). Dropping this releases the concurrency permit.
 pub struct DownloadPermit {
     _permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pub max_bytes_per_sec: Option<u64>,
@@ -67,8 +67,10 @@ impl DownloadManager {
     /// Resolves `hostname` against `rules`, acquires a concurrency permit for however many
     /// simultaneous downloads that resolved domain currently allows (waiting if the limit is
     /// already reached — spec US2 Acceptance Scenario 1: "the rest wait their turn rather than
-    /// failing outright"), and returns a [`DownloadPermit`] snapshotting both the permit and the
-    /// resolved rate limit for this one download's use.
+    /// failing outright"), and returns a [`DownloadPermit`] holding the permit. The rate limit
+    /// (`max_bytes_per_sec`) is captured at this moment only as a convenience snapshot — the real
+    /// per-chunk throttle re-resolves it live via [`stream::RateResolver`], so clearing or
+    /// changing a rate cap takes effect mid-transfer, not only for future downloads.
     ///
     /// **FR-006 correctness**: `Semaphore`'s capacity is fixed at construction. If `rules`'
     /// resolved `max_concurrent` for this domain differs from the *originally declared* capacity

@@ -113,6 +113,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
                 .unwrap_or(4),
         )),
         plugin_options,
+        plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
         new_archive_tx,
         download_cancellations: Default::default(),
