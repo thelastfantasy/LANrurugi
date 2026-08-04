@@ -76,13 +76,16 @@ export default function DownloadQueuePanel({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const items = useMemo(() => queue.data ?? [], [queue.data])
   // Auto-select freshly-added queue items ("添加到队列" then straight to "开始" without having to
-  // tick every checkbox). `seenRef` starts null — the first render's items are the pre-existing
-  // queue and must NOT be selected; only ids that appear afterwards (a new "添加到队列" click) get
-  // auto-checked.
+  // tick every checkbox). `seenRef` starts null — the first *non-empty* `items` snapshot is the
+  // pre-existing queue and must NOT be selected (the empty first frame from the still-loading
+  // query is deliberately skipped, or every item would look "fresh" the moment data arrives and
+  // the whole queue would get auto-checked, inflating 开始/删除's counts); only ids appearing
+  // after that snapshot (a new "添加到队列" click) get auto-checked.
   const seenRef = useRef<Set<string> | null>(null)
   useEffect(() => {
     let seen = seenRef.current
     if (seen === null) {
+      if (items.length === 0) return
       seen = new Set(items.map((i) => i.id))
       seenRef.current = seen
       return
