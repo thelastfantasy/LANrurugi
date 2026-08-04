@@ -141,7 +141,8 @@ function fsRmSyncQuiet(dir: string) {
 
 export const test = base.extend<object, { workerBaseURL: string }>({
   workerBaseURL: [
-    async (_ctx, use, workerInfo) => {
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use, workerInfo) => {
       const redisPort = 6390 + workerInfo.parallelIndex
       const backendPort = 3100 + workerInfo.parallelIndex
       const frontendPort = 5200 + workerInfo.parallelIndex
