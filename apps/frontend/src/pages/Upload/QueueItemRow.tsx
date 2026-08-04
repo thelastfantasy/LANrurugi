@@ -13,8 +13,8 @@ import {
 } from "@/api/hooks"
 import type { DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
 import { formatBytes, JobProgressBar, STATE_COLOR } from "@/components/Display/JobProgress"
+import { Tooltip } from "@/components/Display/Tooltip"
 import { QueueErrorText } from "@/components/Layout/QueueErrorText"
-import { Tooltip } from "@/components/Overlay/Tooltip"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP } from "@/theme"
 

@@ -6,23 +6,23 @@ export * from "./Form/StarRating"
 
 export * from "./Form/TagInput"
 
-export * from "./Overlay/CollapsibleSection"
-
-export * from "./Overlay/PopupMenu"
-
-export * from "./Overlay/Tooltip"
-
 export * from "./Display/ArchiveChecklistItem"
 
 export * from "./Display/CodeBlock"
 
+export * from "./Display/CollapsibleSection"
+
 export * from "./Display/JobProgress"
+
+export * from "./Display/PopupMenu"
 
 export * from "./Display/SortableList"
 
 export * from "./Display/TagCloud"
 
 export * from "./Display/TagTable"
+
+export * from "./Display/Tooltip"
 
 export * from "./Layout/Footer"
 

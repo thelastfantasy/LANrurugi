@@ -11,8 +11,8 @@ import {
   useUpdateArchiveMetadata,
 } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
+import { Tooltip } from "@/components/Display/Tooltip"
 import { TagInput } from "@/components/Form/TagInput"
-import { Tooltip } from "@/components/Overlay/Tooltip"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"

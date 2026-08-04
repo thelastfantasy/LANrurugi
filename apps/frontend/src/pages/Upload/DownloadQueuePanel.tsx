@@ -12,7 +12,7 @@ import {
   useUpdateQueueItem,
 } from "@/api/hooks"
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
-import { CollapsibleSection } from "@/components/Overlay/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Display/CollapsibleSection"
 
 import { fetchMetadataForItem,QueueItemRow } from "./QueueItemRow"
 import {

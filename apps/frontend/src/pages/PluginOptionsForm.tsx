@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { ValidationError } from "@/api/client"
 import { usePluginOptions, useResetPluginOptions, useUpdatePluginOptions } from "@/api/hooks"
 import type { PluginOptions, PluginOptionsUpdate } from "@/api/types"
-import { Tooltip } from "@/components/Overlay/Tooltip"
+import { Tooltip } from "@/components/Display/Tooltip"
 
 import { ICON_BUTTON_STYLE } from "./Upload/shared"
 

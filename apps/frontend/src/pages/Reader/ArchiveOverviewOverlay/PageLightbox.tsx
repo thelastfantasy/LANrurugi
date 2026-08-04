@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useArchivePages } from "@/api/hooks"
-import { Tooltip } from "@/components/Overlay/Tooltip"
+import { Tooltip } from "@/components/Display/Tooltip"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
 import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/utils/tocValidation"

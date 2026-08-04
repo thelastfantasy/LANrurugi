@@ -12,10 +12,10 @@ import {
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
+import { PopupMenu, PopupMenuItem } from "@/components/Display/PopupMenu"
 import { SortableList } from "@/components/Display/SortableList"
+import { Tooltip } from "@/components/Display/Tooltip"
 import { TagInput } from "@/components/Form/TagInput"
-import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
-import { Tooltip } from "@/components/Overlay/Tooltip"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { toast } from "@/toast"

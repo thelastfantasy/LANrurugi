@@ -1,6 +1,6 @@
 import type { PluginInfo } from "@/api/types"
 import { TagTable } from "@/components/Display/TagTable"
-import { Tooltip } from "@/components/Overlay/Tooltip"
+import { Tooltip } from "@/components/Display/Tooltip"
 import { splitTagsByNamespace } from "@/lib/tagFormat"
 import { FONT_SIZE_10PT } from "@/theme"
 

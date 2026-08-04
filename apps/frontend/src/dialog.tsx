@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from "@/components/Overlay/PopupMenu"
-import { Tooltip } from "@/components/Overlay/Tooltip"
+import { PopupMenu, PopupMenuItem } from "@/components/Display/PopupMenu"
+import { Tooltip } from "@/components/Display/Tooltip"
 
 import { useStats } from "./api/hooks"
 import { useMenuPalette } from "./hooks/useMenuPalette"

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
-import { CollapsibleSection } from "@/components/Overlay/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Display/CollapsibleSection"
 import { confirmDialog } from "@/dialog"
 import { SUPPORTED_LANGUAGES } from "@/i18n"
 import { routes } from "@/lib/routes"

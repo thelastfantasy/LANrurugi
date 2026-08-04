@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { useRegenThumbnails } from "@/api/hooks"
-import { CollapsibleSection } from "@/components/Overlay/CollapsibleSection"
+import { CollapsibleSection } from "@/components/Display/CollapsibleSection"
 import { FONT_SIZE_10PT } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
