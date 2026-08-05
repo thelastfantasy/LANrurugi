@@ -5,6 +5,7 @@ import { useNavigate, useParams } from "react-router-dom"
 import {
   type TankoubonAiRenameResponse,
   useAddToTankoubon,
+  useAiRenameChapter,
   useAiRenameTankoubon,
   useArchiveMetadata,
   useDeleteTankoubon,
@@ -317,6 +318,8 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   const [newArchiveId, setNewArchiveId] = useState("")
   const [archiveSearchOpen, setArchiveSearchOpen] = useState(false)
   const aiRename = useAiRenameTankoubon()
+  const aiRenameChapter = useAiRenameChapter()
+  const [chapterAiLoading, setChapterAiLoading] = useState<number | null>(null)
   const llmStatus = useLlmKeyStatus()
   const hasLlmKey = llmStatus.data?.configured ?? false
   const [aiOverlayOpen, setAiOverlayOpen] = useState(false)
@@ -471,6 +474,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                 onReorder={handleReorder}
                 renderItem={(archiveId, dragHandleProps) => {
                   const twoRow = hasLlmKey
+                  const memberIndex = tankoubon.archives.indexOf(archiveId) + 1
                   return (
                   <div
                     style={{
@@ -545,22 +549,67 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                     {/* Chapter input + AI Rename — row 2, column 2 */}
                     {twoRow && (
                       <div style={{ gridColumn: "2", display: "flex", gap: 4, alignItems: "center" }}>
-                        <input
-                          className="stdinput"
-                          type="text"
-                          placeholder={t("Chapter name") ?? undefined}
-                          value={chapterNames[archiveId] ?? ""}
-                          onChange={(e) => setChapterNames((prev) => ({ ...prev, [archiveId]: e.target.value }))}
-                          style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
-                        />
-                        <button
-                          type="button"
-                          className="stdbtn"
-                          style={{ width: 24, height: 18, minWidth: 24, padding: 0, fontSize: "7pt" }}
-                          title="AI Rename"
+                        {chapterAiLoading === memberIndex ? (
+                          <div
+                            style={{
+                              flex: 1,
+                              height: 18,
+                              borderRadius: 4,
+                              background: "repeating-linear-gradient(-45deg, rgba(128,128,128,0.15), rgba(128,128,128,0.15) 4px, rgba(128,128,128,0.06) 4px, rgba(128,128,128,0.06) 8px)",
+                              animation: "ai-shimmer 1s linear infinite",
+                              backgroundSize: "200% 100%",
+                            }}
+                          />
+                        ) : (
+                          <input
+                            className="stdinput"
+                            type="text"
+                            placeholder={t("Chapter name") ?? undefined}
+                            value={chapterNames[archiveId] ?? ""}
+                            onChange={(e) => setChapterNames((prev) => ({ ...prev, [archiveId]: e.target.value }))}
+                            style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
+                          />
+                        )}
+                        <Tooltip
+                          label={
+                            <div>
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("AI Chapter Name")}</div>
+                              <div style={{ opacity: 0.8 }}>{t("Suggest a chapter title based on series context and volume numbers")}</div>
+                            </div>
+                          }
+                          anchor="cursor"
                         >
-                          <i className="fa fa-robot" aria-hidden="true"></i>
-                        </button>
+                          <button
+                            type="button"
+                            className="stdbtn"
+                            style={{ width: 24, height: 18, minWidth: 24, padding: 0, fontSize: "7pt" }}
+                            disabled={chapterAiLoading !== null}
+                            onClick={() => {
+                              setChapterAiLoading(memberIndex)
+                              aiRenameChapter.mutate(
+                                { tankId, archiveIndex: memberIndex },
+                                {
+                                  onSuccess: (data) => {
+                                    setChapterNames((prev) => ({ ...prev, [archiveId]: data.name }))
+                                    setChapterAiLoading(null)
+                                    const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.[archiveId]
+                                    if (data.name === prevName) {
+                                      toast({ heading: t("Chapter name unchanged"), text: data.name, icon: "info" })
+                                    } else {
+                                      toast({ heading: t("Chapter name suggested"), text: data.name, icon: "success" })
+                                    }
+                                  },
+                                  onError: (err) => {
+                                    setChapterAiLoading(null)
+                                    toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                                  },
+                                },
+                              )
+                            }}
+                          >
+                            <i className="fa fa-robot" aria-hidden="true"></i>
+                          </button>
+                        </Tooltip>
                       </div>
                     )}
                   </div>

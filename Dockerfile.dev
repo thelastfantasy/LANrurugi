@@ -45,10 +45,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# `--mount=type=cache,target=/build/target` persists incremental compilation
-# artifacts across rebuilds — unchanged crates skip recompilation entirely.
-RUN --mount=type=cache,target=/build/target \
-    cargo build --release -p lanrurugi-server
+# Cache mounts persist cargo registry + incremental build artifacts across
+# rebuilds, but their contents are NOT part of the image layer — the binary
+# must be copied out explicitly for the `COPY --from` in the runtime stage
+# to find it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release -p lanrurugi-server && \
+    cp /build/target/release/lanrurugi-server /build/lanrurugi-server
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
@@ -90,7 +94,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=deno-bin /deno /usr/local/bin/deno
-COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
+COPY --from=rust-builder /build/lanrurugi-server /usr/local/bin/lanrurugi-server
 
 # ONNX Runtime CPU (`libonnxruntime.so`) — `lanrurugi-recommend`'s embedding model loads it via
 # `ort`'s `load-dynamic` feature (dlopen at runtime). Pinned to the same 1.26.0 version

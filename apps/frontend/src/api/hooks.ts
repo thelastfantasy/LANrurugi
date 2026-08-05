@@ -488,6 +488,13 @@ export function useAiRenameTankoubon() {
   })
 }
 
+export function useAiRenameChapter() {
+  return useMutation({
+    mutationFn: ({ tankId, archiveIndex }: { tankId: string; archiveIndex: number }) =>
+      sendJson<{ name: string }>("POST", `/tankoubons/${tankId}/ai/rename-chapter`, { archive_index: archiveIndex }),
+  })
+}
+
 /** Same shape as `useUpdateProgress`, but for a Tankoubon read as one concatenated book — `page`
  * is the *global* page number across every member archive, matching the backend's own
  * `PUT /tankoubons/{id}/progress/{page}` (`update_tankoubon_progress`), which stores it directly

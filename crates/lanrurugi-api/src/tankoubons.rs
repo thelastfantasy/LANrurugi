@@ -100,6 +100,10 @@ pub fn router() -> Router<AppState> {
             "/tankoubons/{id}/ai/rename-suggestions",
             axum::routing::post(ai_rename_suggestions),
         )
+        .route(
+            "/tankoubons/{id}/ai/rename-chapter",
+            axum::routing::post(ai_rename_chapter),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1196,5 +1200,113 @@ async fn ai_rename_suggestions(
             "ai_rename",
             msg,
         ),
+    }
+}
+
+/// POST /api/tankoubons/{id}/ai/rename-chapter
+///
+/// Renames a single member archive's chapter name via AI, given the full series
+/// context (other members' titles and any already-set chapter names). Returns a
+/// single `{name}` suggestion.
+#[derive(Debug, Deserialize)]
+struct RenameChapterBody {
+    archive_index: usize,
+}
+
+async fn ai_rename_chapter(
+    State(state): State<AppState>,
+    Path(id): Path<TankId>,
+    axum::Json(body): axum::Json<RenameChapterBody>,
+) -> Response {
+    let tank = match state.repos.groupings.get(&id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return not_found("ai_rename_chapter", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ai_rename_chapter",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Index is 1-based from the frontend (matches `original_member_names[].index`)
+    let idx = body.archive_index;
+    if idx < 1 || idx > tank.archives.len() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "ai_rename_chapter",
+            format!(
+                "archive_index {idx} out of range (1–{})",
+                tank.archives.len()
+            ),
+        );
+    }
+    let target_id = &tank.archives[idx - 1];
+
+    let target_archive = match state.repos.archives.get(target_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return not_found(
+                "ai_rename_chapter",
+                format!("member archive {target_id} does not exist."),
+            )
+        }
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ai_rename_chapter",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Build context: all members with their current chapter names (if any)
+    let mut context = String::new();
+    for (i, member_id) in tank.archives.iter().enumerate() {
+        let title = if member_id == target_id {
+            target_archive.title.clone()
+        } else if let Ok(Some(a)) = state.repos.archives.get(member_id).await {
+            a.title.clone()
+        } else {
+            continue;
+        };
+        let cn = tank
+            .chapter_names
+            .get(member_id.as_str())
+            .map(|s| format!(" → {s}"))
+            .unwrap_or_default();
+        context.push_str(&format!("{}. {}{}\n", i + 1, title, cn));
+    }
+
+    let system = "你是一个漫画/同人志系列的章节命名助手。你会收到系列名称、一个目标档案的标题、以及所有成员档案的上下文（编号从 1 开始，已命名的章节会以 → 显示）。请为目标档案建议一个合适的章节标题，保留卷号/话数信息。只输出 json：\n\n```typescript\ntype RenameChapter = { name: string }\n```\n\n示例输出（json）：\n{\"name\":\"第壱巻\"}".to_string();
+    let user = format!(
+        "单行本：{}
+
+成员列表（第 {idx} 项是目标）：
+{context}
+
+请为第 {idx} 项建议章节标题。偏好原始作品语言。",
+        tank.name,
+    );
+
+    #[derive(serde::Deserialize)]
+    struct ChapterSuggestion {
+        name: String,
+    }
+
+    match lanrurugi_llm::json_chat::<ChapterSuggestion>(
+        &state.redis.config,
+        &system,
+        &user,
+        0.5,
+        200,
+    )
+    .await
+    {
+        Ok(suggestion) => {
+            axum::Json(serde_json::json!({ "name": suggestion.name })).into_response()
+        }
+        Err(msg) => error(StatusCode::SERVICE_UNAVAILABLE, "ai_rename_chapter", msg),
     }
 }
