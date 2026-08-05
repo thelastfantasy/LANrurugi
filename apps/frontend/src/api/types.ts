@@ -5,6 +5,10 @@
 export interface TocEntry {
   name: string
   page: number
+  /** `true` for auto-generated "archive boundary" entries in Tankoubon mode — these
+   *  are NOT real ToC data from the member archive, just visual markers showing where
+   *  each member starts. They should not be editable or deletable. */
+  synthetic?: boolean
 }
 
 export interface ArchiveMetadata {

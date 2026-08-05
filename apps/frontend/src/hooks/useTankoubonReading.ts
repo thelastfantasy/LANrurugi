@@ -66,7 +66,7 @@ export function useTankoubonReading(tankId: string | null) {
       // its own real ToC entries (if any) nest under that, offset-adjusted into the Tankoubon's
       // global page numbering — same two-level shape `ArchiveOverviewOverlay`'s chapter dropdown
       // already renders for a plain archive's own `toc`, just sourced from multiple archives.
-      toc.push({ name: member.title, page: startPage })
+      toc.push({ name: member.title, page: startPage, synthetic: true })
       for (const entry of member.toc) {
         toc.push({ name: entry.name, page: startPage + entry.page - 1 })
       }

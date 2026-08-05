@@ -17,7 +17,7 @@ import {
   useStampedPagesForArchives,
   useUpdateTankoubon,
 } from "@/api/hooks"
-import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
+import type { ArchiveMetadata, CategoryMetadata, TocEntry } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { RatingWidget } from "@/components/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
@@ -524,11 +524,12 @@ export function ArchiveOverviewOverlay({
                 {chapters.map((c) => (
                   <option key={c.page} value={c.page}>
                     {displayTocName(c.name, t)}
+                    {(c as TocEntry).synthetic ? ` (${t("archive boundary")})` : ""}
                   </option>
                 ))}
               </select>
             )}
-            {loggedIn && chapters && currentChapter && (
+            {loggedIn && chapters && currentChapter && !currentChapter.synthetic && (
               <>
                 {/* Left-click opens the same "pick any chapter" menu the delete icon already
                     has, rather than legacy's own left-click-edits-`currentChapter`-directly

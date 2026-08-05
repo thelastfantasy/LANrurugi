@@ -414,6 +414,13 @@ async fn add_toc_entry(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<TocParams>,
 ) -> Response {
+    if id.0.starts_with("TANK_") {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "update_toc",
+            "Tankoubon entries do not have their own ToC — use the member archive's ID instead.",
+        );
+    }
     let Some(title) = params.title else {
         return error(StatusCode::BAD_REQUEST, "update_toc", "title is required.");
     };
@@ -469,6 +476,13 @@ async fn remove_toc_entry(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<TocDeleteParams>,
 ) -> Response {
+    if id.0.starts_with("TANK_") {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "remove_toc",
+            "Tankoubon entries do not have their own ToC — use the member archive's ID instead.",
+        );
+    }
     let mut archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("remove_toc", format!("{id} does not exist.")),
