@@ -67,6 +67,7 @@ fn tankoubon_summary_json(g: &Grouping) -> serde_json::Value {
         "tags": g.tags,
         "archives": g.archives,
         "progress": g.progress,
+        "chapter_names": g.chapter_names,
     })
 }
 
@@ -197,6 +198,7 @@ async fn create_or_rename_tankoubon(
                     thumbnail_manual: false,
                     thumbnail_source_archive: None,
                     thumbnail_source_page: None,
+                    chapter_names: Default::default(),
                 },
                 true,
             )
@@ -318,6 +320,7 @@ async fn get_tankoubon_full(
             "tags": grouping.tags,
             "progress": grouping.progress,
             "archives": page_ids,
+            "chapter_names": grouping.chapter_names,
             "full_data": full_data,
         },
         "total": total,
@@ -778,6 +781,9 @@ async fn update_tankoubon(
                 tags
             };
         }
+        if let Some(chapter_names) = metadata.chapter_names {
+            grouping.chapter_names = chapter_names;
+        }
     }
     let old_archives = grouping.archives.clone();
     let old_first = old_archives.first().cloned();
@@ -892,6 +898,7 @@ pub struct UpdateTankoubonMetadata {
     summary: Option<String>,
     tags: Option<String>,
     append: Option<bool>,
+    chapter_names: Option<std::collections::HashMap<String, String>>,
 }
 
 async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
@@ -1104,14 +1111,33 @@ async fn ai_rename_suggestions(
         .map(|(i, (_id, title))| format!("{}. {}", i + 1, title))
         .collect();
 
-    let system = "你是一个漫画/同人志系列的命名助手。请根据给定的档案列表（按阅读顺序排列），为这个系列（单行本）建议一个合适的名称，并为每个档案建议一个章节标题。如果档案名称中包含卷号/话数信息，请保留。只输出 JSON：{\"tank_name\": \"...\", \"chapter_names\": [\"...\", ...]}，不要输出任何其它文字。";
+    let system = "你是一个漫画/同人志系列的命名助手。给定一个编号的档案列表，你需要：\n\
+         1. 根据标题中的卷号/话数信息（日文「巻の壱」「巻の弐」、中文「第一卷」、英文 Vol.1 等）分析正确的阅读顺序\n\
+         2. 为这个系列提供至少 2 个候选名称\n\
+         3. 为每个档案建议一个章节标题\n\n\
+         只输出符合以下 TypeScript 类型的 JSON 对象，不要输出任何其它文字：\n\n\
+         ```typescript\n\
+         interface AiResponse {\n\
+           suggestions: {\n\
+             tank_name: string\n\
+             // chapter entries — one per input archive, reordered by correct reading order\n\
+             chapters: {\n\
+               original_index: number  // matches the input list number (1-based)\n\
+               sorted_index: number    // position in correct reading order (1-based)\n\
+               name: string            // suggested chapter title, preserve volume/chapter numbers\n\
+             }[]\n\
+           }[]\n\
+         }\n\
+         ```\n\n\
+         示例输出（json）：\n\
+         {\"suggestions\":[{\"tank_name\":\"系列名\",\"chapters\":[{\"original_index\":3,\"sorted_index\":1,\"name\":\"卷一\"},{\"original_index\":1,\"sorted_index\":2,\"name\":\"卷二\"}]},{\"tank_name\":\"系列名 完全版\",\"chapters\":[{\"original_index\":1,\"sorted_index\":1,\"name\":\"第一章\"},{\"original_index\":3,\"sorted_index\":2,\"name\":\"第二章\"}]}]}".to_string();
     let user = format!(
         "当前单行本名称：{}
 
-成员档案（按阅读顺序）：
+成员档案（编号在前）：
 {}
 
-请为单行本和每个章节建议名称。偏好原始作品语言。",
+偏好原始作品语言。",
         tank.name,
         member_list.join(
             "
@@ -1120,32 +1146,43 @@ async fn ai_rename_suggestions(
     );
 
     #[derive(serde::Deserialize)]
-    struct RenameSuggestion {
-        tank_name: String,
-        chapter_names: Vec<String>,
+    struct AiResponse {
+        suggestions: Vec<RenameSuggestion>,
     }
 
-    match lanrurugi_llm::json_chat::<RenameSuggestion>(
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct RenameSuggestion {
+        tank_name: String,
+        chapters: Vec<ChapterEntry>,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct ChapterEntry {
+        original_index: u32,
+        sorted_index: u32,
+        name: String,
+    }
+
+    match lanrurugi_llm::json_chat::<AiResponse>(
         &state.redis.config,
-        system,
+        &system,
         &user,
         0.7,
         2000,
     )
     .await
     {
-        Some(suggestion) => axum::Json(serde_json::json!({
-            "tank_name": suggestion.tank_name,
-            "chapter_names": suggestion.chapter_names,
+        Ok(response) => axum::Json(serde_json::json!({
+            "suggestions": response.suggestions,
             "original_member_names": members.iter().map(|(id, title)|
-                serde_json::json!({"id": id, "title": title})
+                serde_json::json!({"id": id, "title": title, "index": members.iter().position(|(mid, _)| mid == id).map(|i| i + 1).unwrap_or(0)})
             ).collect::<Vec<_>>(),
         }))
         .into_response(),
-        None => error(
+        Err(msg) => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "ai_rename",
-            "LLM API key not configured, or API call failed.",
+            msg,
         ),
     }
 }

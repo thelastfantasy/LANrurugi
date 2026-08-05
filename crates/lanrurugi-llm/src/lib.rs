@@ -2,8 +2,8 @@
 //! other providers (Qwen, OpenAI, etc.) through the [`ChatBackend`] trait.
 //!
 //! Callers get an API key via [`resolve_api_key`] and call [`chat`] / [`json_chat`].
-//! Failures (missing key, network, bad response) return `None` so every caller gets
-//! graceful fallback for free.
+//! Failures return `Err` with a human-readable message suitable for surfacing to the
+//! frontend as a toast.
 
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
@@ -28,15 +28,17 @@ pub async fn resolve_api_key(redis_config: &Pool) -> Option<String> {
 }
 
 /// Calls the DeepSeek chat API and returns the raw text content of the first choice.
-/// Returns `None` on any failure.
 pub async fn chat(
     redis_config: &Pool,
     system: &str,
     user: &str,
     temperature: f32,
     max_tokens: u32,
-) -> Option<String> {
-    let key = resolve_api_key(redis_config).await?;
+) -> Result<String, String> {
+    let key = resolve_api_key(redis_config)
+        .await
+        .ok_or_else(|| "DeepSeek API key not configured".to_string())?;
+
     let body = json!({
         "model": "deepseek-chat",
         "messages": [
@@ -45,39 +47,71 @@ pub async fn chat(
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "response_format": { "type": "json_object" },
     });
 
     let client = reqwest::Client::new();
-    let resp = match client
+    let resp = client
         .post("https://api.deepseek.com/chat/completions")
         .header("Authorization", format!("Bearer {key}"))
         .json(&body)
         .send()
         .await
-    {
-        Ok(r) => r,
-        Err(e) => {
+        .map_err(|e| {
             warn!(error = %e, "LLM API request failed");
-            return None;
-        }
-    };
-    let text = match resp.text().await {
-        Ok(t) => t,
-        Err(e) => {
-            warn!(error = %e, "LLM API response body read failed");
-            return None;
-        }
-    };
-    let parsed: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, body = %text, "LLM API response not valid JSON");
-            return None;
-        }
-    };
-    parsed["choices"][0]["message"]["content"]
+            format!("AI API 请求失败: {e}")
+        })?;
+
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| {
+        warn!(error = %e, "LLM API response body read failed");
+        format!("AI API 响应读取失败: {e}")
+    })?;
+
+    // Non-2xx: parse the error body from DeepSeek if possible
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| text.clone());
+        warn!(status = %status, body = %text, "LLM API returned error");
+        let detail = match status.as_u16() {
+            401 => format!("LLM: API Key 无效 (401) — {msg}"),
+            402 => format!("LLM: 账户余额不足 (402) — {msg}"),
+            429 => format!("LLM: 请求频率超限 (429) — {msg}"),
+            500 | 503 => format!("LLM: 服务暂时不可用 ({}) — {msg}", status.as_u16()),
+            _ => format!("LLM: API 错误 ({}) — {msg}", status.as_u16()),
+        };
+        return Err(detail);
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        warn!(error = %e, body = %text, "LLM API response not valid JSON");
+        format!("AI 返回了非 JSON 数据: {e}")
+    })?;
+
+    let mut content = parsed["choices"][0]["message"]["content"]
         .as_str()
         .map(|s| s.to_string())
+        .ok_or_else(|| {
+            warn!(body = %text, "LLM API response missing choices[0].message.content");
+            "AI 返回格式异常，缺少 content 字段".to_string()
+        })?;
+
+    // Strip markdown code fences (```json / ```) if the model wrapped the output
+    if let Some(inner) = content
+        .strip_prefix("```json")
+        .and_then(|s| s.strip_suffix("```"))
+        .or_else(|| {
+            content
+                .strip_prefix("```")
+                .and_then(|s| s.strip_suffix("```"))
+        })
+    {
+        content = inner.trim().to_string();
+    }
+
+    Ok(content)
 }
 
 /// Calls DeepSeek chat API and deserialises the response as JSON.
@@ -88,13 +122,13 @@ pub async fn json_chat<T: serde::de::DeserializeOwned>(
     user: &str,
     temperature: f32,
     max_tokens: u32,
-) -> Option<T> {
+) -> Result<T, String> {
     let text = chat(redis_config, system, user, temperature, max_tokens).await?;
-    match serde_json::from_str::<T>(&text) {
-        Ok(v) => Some(v),
-        Err(_) => serde_json::from_str::<serde_json::Value>(&text)
+    serde_json::from_str::<T>(&text).or_else(|_| {
+        serde_json::from_str::<serde_json::Value>(&text)
             .ok()
             .and_then(|v| v.as_object().and_then(|o| o.values().next()).cloned())
-            .and_then(|arr| serde_json::from_value::<T>(arr).ok()),
-    }
+            .and_then(|arr| serde_json::from_value::<T>(arr).ok())
+            .ok_or_else(|| format!("AI 返回了无法解析的格式: {text}"))
+    })
 }

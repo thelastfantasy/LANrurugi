@@ -207,10 +207,12 @@ export function PageGridCell({
   onAddToc,
   onQuickAddToc,
   onOpenLightbox,
+  isTank,
 }: {
   page: number
   isStamped: boolean
   loggedIn: boolean
+  isTank?: boolean
   /** Briefly true right after the overlay opens, for whichever page it opened on — see
    * `ArchiveOverviewOverlay`'s own `highlightedPage` docs. Rendered as a pulsing accent outline
    * (a plain animated `boxShadow`, not a static one, so it actually draws the eye across a grid
@@ -262,6 +264,10 @@ export function PageGridCell({
         {/* Not gated behind `loggedIn` (unlike the two icons below) — this is a read-only preview
             tool, useful regardless of edit permissions; only the quick-add-chapter section
             *inside* the lightbox itself needs a login check (see `PageLightbox`'s own render). */}
+        {/* No lightbox in tankoubon mode — global page numbering has no direct single-archive
+            page URL to point a standalone "view full page" at (the lightbox's filmstrip/zoom
+            need per-archive page paths, not virtual concatenated ones). */}
+        {!isTank && (
         <PageGridActionIcon
           icon="fa-magnifying-glass"
           corner="bottom-left"
@@ -273,6 +279,7 @@ export function PageGridCell({
             onOpenLightbox(page)
           }}
         />
+        )}
         {loggedIn && (
           <>
             <PageGridActionIcon

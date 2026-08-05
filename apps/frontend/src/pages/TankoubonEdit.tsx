@@ -8,8 +8,8 @@ import {
   useAiRenameTankoubon,
   useArchiveMetadata,
   useDeleteTankoubon,
+  useLlmKeyStatus,
   useSearch,
-  useSettings,
   useStats,
   useTankoubon,
   useUpdateTankoubon,
@@ -22,6 +22,215 @@ import { TagInput } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { toast } from "@/toast"
+
+type Suggestion = TankoubonAiRenameResponse["suggestions"][number]
+type OriginalMember = TankoubonAiRenameResponse["original_member_names"][number]
+
+function BookPages({
+  suggestions,
+  originalMembers,
+  onApply,
+  t,
+}: {
+  suggestions: Suggestion[]
+  originalMembers: OriginalMember[]
+  onApply: (sug: Suggestion) => void
+  t: ReturnType<typeof useTranslation>["t"]
+}) {
+  const [page, setPage] = useState(0)
+  const total = suggestions.length
+  const sug = suggestions[page]
+  if (!sug) return null
+
+  // Display chapters sorted by AI's suggested order
+  const sortedChapters = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* Book header with navigation */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <button
+          type="button"
+          className="stdbtn"
+          disabled={page === 0}
+          onClick={() => setPage((p) => p - 1)}
+          style={{ minWidth: 28, visibility: page === 0 ? "hidden" : undefined }}
+        >
+          ←
+        </button>
+        <span style={{ fontSize: 12, opacity: 0.6 }}>
+          {page + 1} / {total}
+        </span>
+        <button
+          type="button"
+          className="stdbtn"
+          disabled={page === total - 1}
+          onClick={() => setPage((p) => p + 1)}
+          style={{ minWidth: 28, visibility: page === total - 1 ? "hidden" : undefined }}
+        >
+          →
+        </button>
+      </div>
+
+      {/* Book page card */}
+      <div
+        style={{
+          border: "1px solid rgba(128,128,128,0.3)",
+          borderRadius: 8,
+          overflow: "hidden",
+        }}
+      >
+        {/* Page top bar */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 16px",
+            background: "rgba(128,128,128,0.08)",
+            borderBottom: "1px solid rgba(128,128,128,0.15)",
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 700 }}>
+            {t("AI Suggestions")} · {t("Suggestion")} {page + 1}
+          </span>
+          <span style={{ fontSize: 10, opacity: 0.4 }}>
+            <i className="fa fa-robot" aria-hidden="true" />
+          </span>
+        </div>
+
+        {/* Tank name */}
+        <div style={{ padding: "14px 16px 8px" }}>
+          <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+            {t("Title")}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.3 }}>
+            {sug.tank_name}
+          </div>
+        </div>
+
+        {/* Chapter mappings — sorted by AI, left=original right=suggested */}
+        <div style={{ padding: "6px 16px 12px" }}>
+          <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+            {t("Chapters")} · {t("sorted order")}
+          </div>
+          {sortedChapters.map((ch, i) => {
+            const mem = originalMembers[ch.original_index - 1]
+            return (
+            <div
+              key={ch.original_index}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 0",
+                fontSize: 12,
+                borderBottom: i < sortedChapters.length - 1 ? "1px solid rgba(128,128,128,0.1)" : undefined,
+              }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.35, minWidth: 16, flexShrink: 0 }}>
+                {ch.sorted_index}
+              </span>
+              {/* Original (left) — struck through, multiline */}
+              <span
+                style={{
+                  flex: 1,
+                  opacity: 0.35,
+                  textDecoration: "line-through",
+                  wordBreak: "break-word",
+                  lineHeight: 1.4,
+                }}
+              >
+                {mem?.title ?? "—"}
+              </span>
+              <i className="fa fa-arrow-right" aria-hidden="true" style={{ opacity: 0.25, flexShrink: 0, fontSize: 10, alignSelf: "flex-start", marginTop: 3 }}></i>
+              {/* Suggested (right) — multiline */}
+              <span
+                style={{
+                  flex: 1,
+                  fontWeight: 500,
+                  wordBreak: "break-word",
+                  lineHeight: 1.4,
+                }}
+              >
+                {ch.name}
+              </span>
+            </div>
+            )
+          })}
+        </div>
+
+        {/* Page footer with Apply */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 16px",
+            borderTop: "1px solid rgba(128,128,128,0.15)",
+            background: "rgba(128,128,128,0.05)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 4 }}>
+            {suggestions.map((_, i) => (
+              <span
+                key={i}
+                onClick={() => setPage(i)}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: i === page ? "rgba(128,128,128,0.7)" : "rgba(128,128,128,0.2)",
+                  cursor: "pointer",
+                  transition: "background 0.2s",
+                }}
+              />
+            ))}
+          </div>
+          <input
+            type="button"
+            className="stdbtn"
+            value={t("Apply") ?? undefined}
+            onClick={() => onApply(sug)}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Modern AI-thinking skeleton — pulsing robot icon + shimmer bars + animated dots. */
+function AiSkeleton() {
+  const [dots, setDots] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setDots((d) => (d + 1) % 4), 400)
+    return () => clearInterval(t)
+  }, [])
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "20px 0" }}>
+      {/* Pulsing robot icon */}
+      <div style={{ animation: "ai-pulse 1.5s ease-in-out infinite" }}>
+        <i className="fa fa-robot" aria-hidden="true" style={{ fontSize: 40, opacity: 0.7 }} />
+      </div>
+      <div style={{ fontSize: 14, opacity: 0.6, fontFamily: "monospace" }}>
+        {"AI 正在思考" + ".".repeat(dots)}
+      </div>
+      {/* Shimmer bars — hint at content without fake cards */}
+      <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10, padding: "0 8px" }}>
+        <div className="ai-skel-bar" style={{ width: "70%" }} />
+        <div className="ai-skel-bar" style={{ width: "50%" }} />
+        <div className="ai-skel-bar" style={{ width: "60%" }} />
+        <div className="ai-skel-bar" style={{ width: "40%" }} />
+      </div>
+    </div>
+  )
+}
 
 /** Resolves an archive ID to its real title for the archive-list row below, with a
  * hover-thumbnail tooltip — matching real legacy's own `edit.html.tt2` (`is_tank` branch, line
@@ -108,10 +317,11 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   const [newArchiveId, setNewArchiveId] = useState("")
   const [archiveSearchOpen, setArchiveSearchOpen] = useState(false)
   const aiRename = useAiRenameTankoubon()
-  const settings = useSettings()
-  const hasDsKey = settings.data?.llm_api_key_set ?? false
+  const llmStatus = useLlmKeyStatus()
+  const hasLlmKey = llmStatus.data?.configured ?? false
   const [aiOverlayOpen, setAiOverlayOpen] = useState(false)
   const [aiSuggestions, setAiSuggestions] = useState<TankoubonAiRenameResponse | null>(null)
+  const [chapterNames, setChapterNames] = useState<Record<string, string>>(tankoubon.chapter_names ?? {})
 
   // Debounced so the title-search dropdown below doesn't fire one request per keystroke —
   // additive on top of the raw-ID input, which still works unchanged (see `addArchiveId`).
@@ -135,7 +345,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   // successful save via `Server.callAPIBody`'s built-in success-message handling — this port's
   // `updateTankoubon` doesn't have that generic per-call toasting, so it's shown explicitly here.
   async function handleSave() {
-    await updateTankoubon.mutateAsync({ metadata: { name, summary, tags } })
+    await updateTankoubon.mutateAsync({ metadata: { name, summary, tags, chapter_names: chapterNames } })
     toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
   }
 
@@ -218,19 +428,36 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>{t("Archives:")}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
-            {hasDsKey && (
-              <button
-                type="button"
-                className="stdbtn"
-                style={{ alignSelf: "flex-start" }}
-                disabled={aiRename.isPending}
-                onClick={() => aiRename.mutate(tankId, {
-                  onSuccess: (data) => { setAiSuggestions(data); setAiOverlayOpen(true) },
-                })}
+            {hasLlmKey && (
+              <Tooltip
+                label={
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("AI Smart Rename")}</div>
+                    <div style={{ opacity: 0.8 }}>{t("Analyze the archive list and suggest a tankoubon title and chapter names for each volume")}</div>
+                  </div>
+                }
+                anchor="cursor"
               >
-                <i className="fa fa-robot" aria-hidden="true"></i>{" "}
-                AI
-              </button>
+                <button
+                  type="button"
+                  className="stdbtn"
+                  style={{ width: 32, height: 21, minWidth: 32, padding: 0, alignSelf: "flex-start" }}
+                  disabled={aiRename.isPending}
+                  onClick={() => {
+                    setAiOverlayOpen(true)
+                    setAiSuggestions(null)
+                    aiRename.mutate(tankId, {
+                      onSuccess: (data) => { setAiSuggestions(data) },
+                      onError: (err) => {
+                        setAiOverlayOpen(false)
+                        toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                      },
+                    })
+                  }}
+                >
+                  <i className="fa fa-robot" aria-hidden="true"></i>
+                </button>
+              </Tooltip>
             )}
             {/* `SortableList`'s own `DndContext`/`SortableContext` render transparently (no DOM
                 wrapper of their own), so without this wrapping div each row's bare element would
@@ -242,36 +469,60 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                 items={archives}
                 getId={(archiveId) => archiveId}
                 onReorder={handleReorder}
-                renderItem={(archiveId, dragHandleProps) => (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "2px 0" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, overflow: "hidden" }}>
-                      <span
-                        {...dragHandleProps.attributes}
-                        {...dragHandleProps.listeners}
-                        style={{
-                          flexShrink: 0,
-                          display: "flex",
-                          cursor: dragHandleProps.isDragging ? "grabbing" : "grab",
-                          touchAction: "none",
-                          opacity: 0.6,
-                        }}
-                      >
-                        <i className="fa fa-grip-vertical" aria-hidden="true"></i>
-                      </span>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        <ArchiveTitle archiveId={archiveId} />
-                      </span>
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                      {/* `.stdbtn`'s own legacy CSS sets `min-width: 150px` (sized for the
-                          standalone, spread-out action rows below, e.g. "Save Metadata") —
-                          packed into one compact per-archive row instead would demand way more
-                          room than available and get unevenly flex-shrunk, a real observed bug
-                          (each row's button widths came out different and inconsistent).
-                          Overriding to a small fixed width here keeps `.stdbtn`'s color/border/
-                          font but not that assumption; legacy's own equivalent row isn't
-                          `.stdbtn` at all, just bare icon links with no width constraint of
-                          their own. */}
+                renderItem={(archiveId, dragHandleProps) => {
+                  const twoRow = hasLlmKey
+                  return (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr auto",
+                      gridTemplateRows: twoRow ? "auto auto" : "auto",
+                      gap: "2px 8px",
+                      alignItems: "center",
+                      padding: "2px 0 4px 0",
+                      borderBottom: "1px solid rgba(128,128,128,0.12)",
+                    }}
+                  >
+                    {/* Drag handle — column 1, spans both rows when two-row */}
+                    <span
+                      {...dragHandleProps.attributes}
+                      {...dragHandleProps.listeners}
+                      style={{
+                        gridColumn: "1",
+                        gridRow: twoRow ? "1 / 3" : undefined,
+                        flexShrink: 0,
+                        display: "flex",
+                        cursor: dragHandleProps.isDragging ? "grabbing" : "grab",
+                        touchAction: "none",
+                        opacity: 0.6,
+                      }}
+                    >
+                      <i className="fa fa-grip-vertical" aria-hidden="true"></i>
+                    </span>
+
+                    {/* Archive title — row 1, column 2 */}
+                    <span
+                      style={{
+                        gridColumn: "2",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <ArchiveTitle archiveId={archiveId} />
+                    </span>
+
+                    {/* Edit + ✕ — column 3, spans both rows */}
+                    <div
+                      style={{
+                        gridColumn: "3",
+                        gridRow: twoRow ? "1 / 3" : undefined,
+                        display: "flex",
+                        gap: 6,
+                        flexShrink: 0,
+                        alignItems: "center",
+                      }}
+                    >
                       <button
                         type="button"
                         className="stdbtn"
@@ -290,14 +541,38 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                         ✕
                       </button>
                     </div>
+
+                    {/* Chapter input + AI Rename — row 2, column 2 */}
+                    {twoRow && (
+                      <div style={{ gridColumn: "2", display: "flex", gap: 4, alignItems: "center" }}>
+                        <input
+                          className="stdinput"
+                          type="text"
+                          placeholder={t("Chapter name") ?? undefined}
+                          value={chapterNames[archiveId] ?? ""}
+                          onChange={(e) => setChapterNames((prev) => ({ ...prev, [archiveId]: e.target.value }))}
+                          style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
+                        />
+                        <button
+                          type="button"
+                          className="stdbtn"
+                          style={{ width: 24, height: 18, minWidth: 24, padding: 0, fontSize: "7pt" }}
+                          title="AI Rename"
+                        >
+                          <i className="fa fa-robot" aria-hidden="true"></i>
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
+                  )
+                }}
               />
             </div>
             </div>
           </div>
 
-          {aiOverlayOpen && aiSuggestions && (
+          {/* AI Suggestions overlay — skeleton while loading, book-page cards on success */}
+          {aiOverlayOpen && (
             <>
               <div
                 style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9000 }}
@@ -305,25 +580,67 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
               />
               <div
                 className="id1"
-                style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 9001, width: 480, maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto", padding: 20, textAlign: "left" }}
+                style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 9001, width: 560, maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto", padding: 24, textAlign: "left" }}
               >
-                <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>
-                  AI: {aiSuggestions.tank_name}
-                </h3>
-                <div style={{ marginBottom: 12 }}>
-                  {aiSuggestions.original_member_names.map((m, i) => (
-                    <div key={m.id} style={{ marginBottom: 4 }}>
-                      <div style={{ fontSize: 12, opacity: 0.7 }}>{m.title}</div>
-                      <div style={{ fontSize: 12 }}>→ {aiSuggestions.chapter_names[i] || m.title}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                {aiRename.isPending ? (
+                  <AiSkeleton />
+                ) : aiSuggestions ? (
+                  <BookPages
+                    suggestions={aiSuggestions.suggestions}
+                    originalMembers={aiSuggestions.original_member_names}
+                    onApply={(sug) => {
+                      setName(sug.tank_name)
+                      const next: Record<string, string> = {}
+                      const sorted = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
+                      const reordered: string[] = []
+                      for (const ch of sorted) {
+                        // original_index matches the `index` field on original_member_names (1-based)
+                        const mem = aiSuggestions.original_member_names.find((m) => m.index === ch.original_index)
+                        if (mem) {
+                          if (ch.name) next[mem.id] = ch.name
+                          reordered.push(mem.id)
+                        }
+                      }
+                      setChapterNames((prev) => ({ ...prev, ...next }))
+                      // Only update order if all members are accounted for
+                      if (reordered.length === archives.length) {
+                        setArchives(reordered)
+                        updateTankoubon.mutate({ archives: reordered })
+                      }
+                      setAiOverlayOpen(false)
+                    }}
+                    t={t}
+                  />
+                ) : null}
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
                   <input type="button" className="stdbtn" value={t("Close") ?? undefined} onClick={() => setAiOverlayOpen(false)} />
                 </div>
               </div>
             </>
           )}
+
+          {/* Inline keyframes for the skeleton shimmer — one-off <style>, scoped by class name */}
+          <style>{`
+            @keyframes ai-shimmer {
+              0%   { background-position: -200% 0; }
+              100% { background-position: 200% 0; }
+            }
+            @keyframes ai-pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.4; }
+            }
+            @keyframes ai-dot {
+              0%, 20%  { opacity: 0; }
+              50%, 100% { opacity: 1; }
+            }
+            .ai-skel-bar {
+              height: 12px;
+              border-radius: 4px;
+              background: linear-gradient(90deg, rgba(128,128,128,0.08) 25%, rgba(128,128,128,0.2) 50%, rgba(128,128,128,0.08) 75%);
+              background-size: 200% 100%;
+              animation: ai-shimmer 1.8s ease-in-out infinite;
+            }
+          `}</style>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
             <span>{t("Add Archive to Tankoubon:")}</span>

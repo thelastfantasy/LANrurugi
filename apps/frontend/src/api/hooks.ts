@@ -428,7 +428,7 @@ export function useUpdateTankoubon(id: string) {
   return useMutation({
     mutationFn: (body: {
       archives?: string[]
-      metadata?: { name?: string; summary?: string; tags?: string }
+      metadata?: { name?: string; summary?: string; tags?: string; chapter_names?: Record<string, string> }
     }) => sendJson("PUT", `/tankoubons/${id}`, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
@@ -466,9 +466,19 @@ export function useTankoubonFull(id: string | null) {
 }
 
 export interface TankoubonAiRenameResponse {
-  tank_name: string
-  chapter_names: string[]
-  original_member_names: { id: string; title: string }[]
+  suggestions: {
+    tank_name: string
+    chapters: { original_index: number; sorted_index: number; name: string }[]
+  }[]
+  original_member_names: { id: string; title: string; index: number }[]
+}
+
+export function useLlmKeyStatus() {
+  return useQuery({
+    queryKey: ["llm-key-status"],
+    queryFn: () => fetchJson<{ configured: boolean }>("/llm/key-status"),
+    staleTime: 60_000,
+  })
 }
 
 export function useAiRenameTankoubon() {

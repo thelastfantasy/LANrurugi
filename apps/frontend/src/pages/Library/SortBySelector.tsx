@@ -25,7 +25,7 @@ export function SortBySelector({
   ].sort()
 
   return (
-    <div className="thumbnail-options">
+    <div className="thumbnail-options" style={{ display: "flex", alignItems: "center" }}>
       {t("Sort by:")}{" "}
       <select
         className="favtag-btn"
@@ -42,6 +42,7 @@ export function SortBySelector({
       </select>
       <a
         className={`fa fa-2x fa-sort-alpha-${order === "asc" ? "down" : "up"} table-option`}
+        style={{ position: "relative", top: 6 }}
         href="#"
         title={t("Sort Order") ?? undefined}
         onClick={(e) => {

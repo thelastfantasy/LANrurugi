@@ -143,6 +143,13 @@ half of the server-side anti-flash-of-default-theme mechanism — see that file'
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
 any other Vite-served frontend file; no build step of its own to go stale.
 
+## Rust edits — check before rebuild
+
+After editing any Rust code under `crates/`, run `cargo check` (from the workspace root) BEFORE
+`mise run dev-rebuild`. A rebuild that fails inside the container wastes time; `cargo check`
+catches compilation errors in seconds instead of minutes. Only proceed to rebuild after check
+passes clean.
+
 ## UI-only changes require human verification before commit
 
 When a change is purely UI (visual layout, spacing, styling, tooltip/overlay behavior — no
@@ -184,6 +191,12 @@ themes, not just whichever one happens to be active during development. Concrete
   that's also a Tankoubon member) — added to all 5 theme files this way, reusing each theme's own
   `.msm-selected` accent color, after an initial attempt hardcoded a single `rgba(...)` value that
   only looked right on the one theme it was eyeballed against.
+
+## `--no-verify` is forbidden
+
+Never use `git commit --no-verify` or `git push --no-verify`. If the pre-push/pre-commit hook
+fails, debug the actual error — do not bypass the hook. There is no situation where skipping
+hooks is acceptable.
 
 ## Before pushing — check whether README.md needs updating
 

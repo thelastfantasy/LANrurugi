@@ -156,6 +156,9 @@ pub struct Grouping {
     /// the tank is now empty.
     pub thumbnail_source_archive: Option<ArchiveId>,
     pub thumbnail_source_page: Option<u32>,
+    /// Per-member chapter names (archive ID → chapter title), set via AI rename Apply.
+    #[serde(default)]
+    pub chapter_names: std::collections::HashMap<String, String>,
 }
 
 /// A user-placed annotation ("stamp") on a specific page of an archive. Redis hash keyed by

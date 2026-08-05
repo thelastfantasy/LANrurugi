@@ -29,12 +29,19 @@ function handleUnauthorized(path: string) {
   }
 }
 
+/** Tries to read a JSON error body (`{error: "..."}`) from the response;
+ * falls back to a status-only message if the body isn't valid JSON or lacks `error`. */
+async function readErrorBody(response: Response, path: string): Promise<string> {
+  const body = await response.json().catch(() => null) as { error?: string } | null
+  return body?.error ?? `Request to ${path} failed with ${response.status}`
+}
+
 export async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`/api${path}`)
 
   if (!response.ok) {
     if (response.status === 401) handleUnauthorized(path)
-    throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
+    throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
   return (await response.json()) as T
@@ -45,7 +52,7 @@ export async function fetchText(path: string): Promise<string> {
 
   if (!response.ok) {
     if (response.status === 401) handleUnauthorized(path)
-    throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
+    throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
   return response.text()
@@ -69,7 +76,7 @@ export async function sendJson<T>(
       const body = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
       if (body?.error && body.field) throw new ValidationError(body.error, body.field)
     }
-    throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
+    throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
   const text = await response.text()

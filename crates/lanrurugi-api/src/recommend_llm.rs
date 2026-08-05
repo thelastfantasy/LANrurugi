@@ -49,14 +49,22 @@ pub async fn llm_rerank(
             )
         })
         .collect();
-    let system =
-        "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题和标签、以及候选漫画清单（id: 标题）。\
-         请从候选中挑选并排序推荐。排序规则（按优先级）：\
-         1) 同一系列的下一卷必须排第一（例如当前是第10卷，那么第11卷就是第一推荐，没有第二种可能）；\
-         2) 同一系列的其它卷紧随其后，按卷号顺序；\
-         3) 其余候选按与当前漫画的相关度降序。\
-         必须选满要求的数量——即使后面部分候选与当前漫画关联度较低，也要补足数量，绝不能少于要求的数量。\
-         只输出一个 JSON 数组，每项 {\"id\": \"...\", \"title\": \"...\"}，不要输出任何其它文字。";
+    let system = "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题和标签、以及候选漫画清单（id: 标题）。\n\
+         请从候选中挑选并排序推荐。排序规则（按优先级）：\n\
+         1) 同一系列的下一卷必须排第一（例如当前是第10卷，那么第11卷就是第一推荐，没有第二种可能）；\n\
+         2) 同一系列的其它卷紧随其后，按卷号顺序；\n\
+         3) 其余候选按与当前漫画的相关度降序。\n\
+         必须选满要求的数量——即使后面部分候选与当前漫画关联度较低，也要补足数量，绝不能少于要求的数量。\n\n\
+         只输出符合以下类型的 json 数组，不要输出任何其它文字：\n\n\
+         ```typescript\n\
+         type LlmPick = {\n\
+           id: string    // the candidate's id field exactly as given\n\
+           title: string // the candidate's title field exactly as given\n\
+         }\n\
+         // response is LlmPick[]\n\
+         ```\n\n\
+         示例输出（json）：\n\
+         [{\"id\":\"abc123\",\"title\":\"第11巻\"},{\"id\":\"def456\",\"title\":\"関連作品\"}]".to_string();
     let user = format!(
         "当前漫画标题：{}\n当前漫画标签：{}\n当前漫画页数：{}页\n\n候选漫画：\n{}\n\n请推荐 {} 本。",
         current_title,
@@ -67,7 +75,9 @@ pub async fn llm_rerank(
     );
 
     let picks: Vec<LlmPick> =
-        lanrurugi_llm::json_chat(&state.redis.config, system, &user, 0.2, 2000).await?;
+        lanrurugi_llm::json_chat(&state.redis.config, &system, &user, 0.2, 2000)
+            .await
+            .ok()?;
     if picks.is_empty() {
         warn!("LLM rerank returned no picks — falling back to embedding order");
         return None;

@@ -54,19 +54,21 @@ export function useTankoubonReading(tankId: string | null) {
   let toc: TocEntry[] = []
 
   if (!isLoading && !isError) {
+    const chapterNames = full.data?.result.chapter_names ?? {}
     let offset = 0
     members.forEach((member, i) => {
       const memberPages = pageQueries[i]?.data?.pages ?? []
       if (memberPages.length === 0) return
       const startPage = offset + 1
       const endPage = offset + memberPages.length
-      chapters.push({ arcId: member.arcid, title: member.title, startPage, endPage })
+      const displayTitle = chapterNames[member.arcid] || member.title
+      chapters.push({ arcId: member.arcid, title: displayTitle, startPage, endPage })
       pages.push(...memberPages)
-      // The member's own title stands in for legacy's own `buildTankChapters` top-level entry;
-      // its own real ToC entries (if any) nest under that, offset-adjusted into the Tankoubon's
+      // Show custom chapter name (from AI rename) if set; fall back to archive title.
+      // Its own real ToC entries (if any) nest under that, offset-adjusted into the Tankoubon's
       // global page numbering — same two-level shape `ArchiveOverviewOverlay`'s chapter dropdown
       // already renders for a plain archive's own `toc`, just sourced from multiple archives.
-      toc.push({ name: member.title, page: startPage, synthetic: true })
+      toc.push({ name: displayTitle, page: startPage, synthetic: true })
       for (const entry of member.toc) {
         toc.push({ name: entry.name, page: startPage + entry.page - 1 })
       }

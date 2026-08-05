@@ -364,6 +364,7 @@ const SCORE_THUMBNAIL_MANUAL: isize = -4;
 /// omitting the zset member entirely — simpler `get`/`save` symmetry than an optional member.
 const SCORE_THUMBNAIL_SOURCE_ARCHIVE: isize = -5;
 const SCORE_THUMBNAIL_SOURCE_PAGE: isize = -6;
+const SCORE_CHAPTER_NAMES: isize = -7;
 
 impl GroupingRepository {
     pub fn new(pool: Pool) -> Self {
@@ -378,7 +379,7 @@ impl GroupingRepository {
         }
 
         let metadata_members: Vec<String> = conn
-            .zrangebyscore(tankid.as_str(), SCORE_THUMBNAIL_SOURCE_PAGE, SCORE_NAME)
+            .zrangebyscore(tankid.as_str(), SCORE_CHAPTER_NAMES, SCORE_NAME)
             .await?;
         let mut name = String::new();
         let mut summary = String::new();
@@ -387,6 +388,7 @@ impl GroupingRepository {
         let mut thumbnail_manual = false;
         let mut thumbnail_source_archive = None;
         let mut thumbnail_source_page = None;
+        let mut chapter_names = String::new();
         for member in metadata_members {
             if let Some(v) = member.strip_prefix("name_") {
                 name = v.to_string();
@@ -402,11 +404,16 @@ impl GroupingRepository {
                 thumbnail_source_archive = (!v.is_empty()).then(|| ArchiveId(v.to_string()));
             } else if let Some(v) = member.strip_prefix("thumbnail_source_page_") {
                 thumbnail_source_page = v.parse().ok();
+            } else if let Some(v) = member.strip_prefix("chapter_names_") {
+                chapter_names = v.to_string();
             }
         }
 
         let archive_strs: Vec<String> = conn.zrangebyscore(tankid.as_str(), 1, "+inf").await?;
         let archives: Vec<ArchiveId> = archive_strs.into_iter().map(ArchiveId).collect();
+
+        let chapter_names: std::collections::HashMap<String, String> =
+            serde_json::from_str(&chapter_names).unwrap_or_default();
 
         Ok(Some(Grouping {
             tankid: tankid.clone(),
@@ -418,6 +425,7 @@ impl GroupingRepository {
             thumbnail_manual,
             thumbnail_source_archive,
             thumbnail_source_page,
+            chapter_names,
         }))
     }
 
@@ -466,6 +474,13 @@ impl GroupingRepository {
                         .thumbnail_source_page
                         .map(|p| p.to_string())
                         .unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_CHAPTER_NAMES,
+                format!(
+                    "chapter_names_{}",
+                    serde_json::to_string(&grouping.chapter_names).unwrap_or_default()
                 ),
             ),
         ];
@@ -691,6 +706,7 @@ mod tests {
             thumbnail_manual: true,
             thumbnail_source_archive: Some(ArchiveId("c".repeat(40))),
             thumbnail_source_page: Some(7),
+            chapter_names: Default::default(),
         };
 
         repo.save(&grouping).await.unwrap();

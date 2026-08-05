@@ -17,7 +17,9 @@ use crate::AppState;
 use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/info", get(server_info))
+    Router::new()
+        .route("/info", get(server_info))
+        .route("/llm/key-status", get(llm_key_status))
 }
 
 async fn server_info(State(state): State<AppState>) -> Response {
@@ -75,4 +77,27 @@ async fn server_info(State(state): State<AppState>) -> Response {
         "excluded_namespaces": excluded_namespaces,
     }))
     .into_response()
+}
+
+/// `GET /api/llm/key-status` — returns `{ configured: true/false }`.
+async fn llm_key_status(State(state): State<AppState>) -> Response {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return crate::common::error(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "llm_key_status",
+                e.to_string(),
+            )
+        }
+    };
+    let fields: std::collections::HashMap<String, String> = conn
+        .hgetall(lanrurugi_storage::keys::CONFIG_KEY)
+        .await
+        .unwrap_or_default();
+    let configured = fields
+        .get("llm_api_key")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    axum::Json(serde_json::json!({ "configured": configured })).into_response()
 }

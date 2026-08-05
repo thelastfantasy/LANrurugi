@@ -17,7 +17,7 @@ import {
   useStampedPagesForArchives,
   useUpdateTankoubon,
 } from "@/api/hooks"
-import type { ArchiveMetadata, CategoryMetadata, TocEntry } from "@/api/types"
+import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { RatingWidget } from "@/components/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
@@ -524,7 +524,6 @@ export function ArchiveOverviewOverlay({
                 {chapters.map((c) => (
                   <option key={c.page} value={c.page}>
                     {displayTocName(c.name, t)}
-                    {(c as TocEntry).synthetic ? ` (${t("archive boundary")})` : ""}
                   </option>
                 ))}
               </select>
@@ -599,6 +598,7 @@ export function ArchiveOverviewOverlay({
                 onAddToc={handleAddToc}
                 onQuickAddToc={handleQuickAddToc}
                 onOpenLightbox={setLightboxPage}
+                isTank={isTank}
               />
             )
           })}

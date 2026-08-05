@@ -573,8 +573,18 @@ async fn tank_date_sort_value(
     tank_id: &str,
     sortkey_prefix: &str,
 ) -> Option<u64> {
-    // Tank's own tags live at zset score -2 (`tags_<value>` — `GroupingRepository`'s
-    // `SCORE_TAGS`; the same member shape `GroupingRepository::get` decodes).
+    // Primary: extract creation timestamp from the Tankoubon's own ID
+    // (`TANK_{unix_timestamp}` — `GroupingRepository`'s `create_or_rename_tankoubon`).
+    // Avoids polluting the user-visible tag list with a `date_added:` tag.
+    if let Some(ts) = tank_id
+        .strip_prefix("TANK_")
+        .and_then(|rest| rest.parse::<u64>().ok())
+    {
+        return Some(ts);
+    }
+
+    // Fallback: tank's own tags (zset score -2, `tags_<value>` — `GroupingRepository`'s
+    // `SCORE_TAGS`).
     let own: Vec<String> = archive_conn
         .zrangebyscore(tank_id, -2, -2)
         .await
