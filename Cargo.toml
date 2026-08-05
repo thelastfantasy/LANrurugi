@@ -12,6 +12,7 @@ members = [
     "crates/lanrurugi-bench",
     "crates/lanrurugi-plugin-converter",
     "crates/lanrurugi-recommend",
+    "crates/lanrurugi-llm",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ lanrurugi-plugin = { path = "crates/lanrurugi-plugin" }
 lanrurugi-api = { path = "crates/lanrurugi-api" }
 lanrurugi-search = { path = "crates/lanrurugi-search" }
 lanrurugi-recommend = { path = "crates/lanrurugi-recommend" }
+lanrurugi-llm = { path = "crates/lanrurugi-llm" }
 lanrurugi-backup = { path = "crates/lanrurugi-backup" }
 lanrurugi-bench = { path = "crates/lanrurugi-bench" }
 

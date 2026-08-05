@@ -1875,6 +1875,7 @@ dependencies = [
  "lanrurugi-backup",
  "lanrurugi-bench",
  "lanrurugi-core",
+ "lanrurugi-llm",
  "lanrurugi-plugin",
  "lanrurugi-recommend",
  "lanrurugi-scanner",
@@ -1948,6 +1949,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "lanrurugi-llm"
+version = "0.1.0"
+dependencies = [
+ "deadpool-redis",
+ "lanrurugi-storage",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
