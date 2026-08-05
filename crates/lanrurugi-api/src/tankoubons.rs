@@ -95,6 +95,10 @@ pub fn router() -> Router<AppState> {
             "/tankoubons/{id}/{archive}",
             put(add_to_tankoubon).delete(remove_from_tankoubon),
         )
+        .route(
+            "/tankoubons/{id}/ai/rename-suggestions",
+            axum::routing::post(ai_rename_suggestions),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1049,6 +1053,99 @@ async fn remove_from_tankoubon(
             StatusCode::INTERNAL_SERVER_ERROR,
             "remove_from_tankoubon",
             e.to_string(),
+        ),
+    }
+}
+
+/// POST /api/tankoubons/{id}/ai/rename-suggestions
+///
+/// Sends the tankoubon title, member archive names, and order to DeepSeek and returns
+/// AI-generated rename suggestions (tankoubon name + per-archive chapter names).
+/// The LLM key must be configured; returns 400 if not.
+async fn ai_rename_suggestions(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::TankId>,
+) -> Response {
+    let tank = match state.repos.groupings.get(&id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return not_found("ai_rename", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ai_rename",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Collect member archive titles in order
+    let mut members: Vec<(String, String)> = Vec::new();
+    for member_id in &tank.archives {
+        if let Ok(Some(archive)) = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(member_id.to_string()))
+            .await
+        {
+            members.push((member_id.to_string(), archive.title.clone()));
+        }
+    }
+    if members.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "ai_rename",
+            "Tankoubon has no member archives.",
+        );
+    }
+
+    let member_list: Vec<String> = members
+        .iter()
+        .enumerate()
+        .map(|(i, (_id, title))| format!("{}. {}", i + 1, title))
+        .collect();
+
+    let system = "你是一个漫画/同人志系列的命名助手。请根据给定的档案列表（按阅读顺序排列），为这个系列（单行本）建议一个合适的名称，并为每个档案建议一个章节标题。如果档案名称中包含卷号/话数信息，请保留。只输出 JSON：{\"tank_name\": \"...\", \"chapter_names\": [\"...\", ...]}，不要输出任何其它文字。";
+    let user = format!(
+        "当前单行本名称：{}
+
+成员档案（按阅读顺序）：
+{}
+
+请为单行本和每个章节建议名称。偏好原始作品语言。",
+        tank.name,
+        member_list.join(
+            "
+"
+        ),
+    );
+
+    #[derive(serde::Deserialize)]
+    struct RenameSuggestion {
+        tank_name: String,
+        chapter_names: Vec<String>,
+    }
+
+    match lanrurugi_llm::json_chat::<RenameSuggestion>(
+        &state.redis.config,
+        system,
+        &user,
+        0.7,
+        2000,
+    )
+    .await
+    {
+        Some(suggestion) => axum::Json(serde_json::json!({
+            "tank_name": suggestion.tank_name,
+            "chapter_names": suggestion.chapter_names,
+            "original_member_names": members.iter().map(|(id, title)|
+                serde_json::json!({"id": id, "title": title})
+            ).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        None => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ai_rename",
+            "LLM API key not configured, or API call failed.",
         ),
     }
 }

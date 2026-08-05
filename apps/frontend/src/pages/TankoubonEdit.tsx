@@ -3,10 +3,13 @@ import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
 import {
+  type TankoubonAiRenameResponse,
   useAddToTankoubon,
+  useAiRenameTankoubon,
   useArchiveMetadata,
   useDeleteTankoubon,
   useSearch,
+  useSettings,
   useStats,
   useTankoubon,
   useUpdateTankoubon,
@@ -104,6 +107,11 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   const [archives, setArchives] = useState(tankoubon.archives)
   const [newArchiveId, setNewArchiveId] = useState("")
   const [archiveSearchOpen, setArchiveSearchOpen] = useState(false)
+  const aiRename = useAiRenameTankoubon()
+  const settings = useSettings()
+  const hasDsKey = settings.data?.llm_api_key_set ?? false
+  const [aiOverlayOpen, setAiOverlayOpen] = useState(false)
+  const [aiSuggestions, setAiSuggestions] = useState<TankoubonAiRenameResponse | null>(null)
 
   // Debounced so the title-search dropdown below doesn't fire one request per keystroke —
   // additive on top of the raw-ID input, which still works unchanged (see `addArchiveId`).
@@ -209,6 +217,21 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>{t("Archives:")}</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+            {hasDsKey && (
+              <button
+                type="button"
+                className="stdbtn"
+                style={{ alignSelf: "flex-start" }}
+                disabled={aiRename.isPending}
+                onClick={() => aiRename.mutate(tankId, {
+                  onSuccess: (data) => { setAiSuggestions(data); setAiOverlayOpen(true) },
+                })}
+              >
+                <i className="fa fa-robot" aria-hidden="true"></i>{" "}
+                AI
+              </button>
+            )}
             {/* `SortableList`'s own `DndContext`/`SortableContext` render transparently (no DOM
                 wrapper of their own), so without this wrapping div each row's bare element would
                 land as a direct child of this `grid` container and get independently
@@ -271,7 +294,36 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                 )}
               />
             </div>
+            </div>
           </div>
+
+          {aiOverlayOpen && aiSuggestions && (
+            <>
+              <div
+                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9000 }}
+                onClick={() => setAiOverlayOpen(false)}
+              />
+              <div
+                className="id1"
+                style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 9001, width: 480, maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto", padding: 20, textAlign: "left" }}
+              >
+                <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>
+                  AI: {aiSuggestions.tank_name}
+                </h3>
+                <div style={{ marginBottom: 12 }}>
+                  {aiSuggestions.original_member_names.map((m, i) => (
+                    <div key={m.id} style={{ marginBottom: 4 }}>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>{m.title}</div>
+                      <div style={{ fontSize: 12 }}>→ {aiSuggestions.chapter_names[i] || m.title}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <input type="button" className="stdbtn" value={t("Close") ?? undefined} onClick={() => setAiOverlayOpen(false)} />
+                </div>
+              </div>
+            </>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
             <span>{t("Add Archive to Tankoubon:")}</span>
