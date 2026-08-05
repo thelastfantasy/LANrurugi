@@ -979,5 +979,6 @@
   "Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.": "输入 DeepSeek 官方 API Key 可大幅强化推荐算法（基于 LLM 的重排）。目前仅支持 DeepSeek 官方 API Key。",
   "Select All on Page": "全选本页",
   "Clear Selection": "清除选择",
-  "Merge into Tankoubon": "合并为单行本"
+  "Merge into Tankoubon": "合并为单行本",
+  "Tankoubon volumes": "单行本分卷"
 }

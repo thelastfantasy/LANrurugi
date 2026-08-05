@@ -1,15 +1,17 @@
 import { useTranslation } from "react-i18next"
 
 import type { CategoryMetadata } from "@/api/types"
-import { CATEGORY_BUTTON_CAP, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
+import { CATEGORY_BUTTON_CAP, NEW_ONLY, TANKOUBON_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 
 export function CategoryBar({
   selectedCategory,
   sortedCategories,
+  hasTankoubons,
   onToggleCategory,
 }: {
   selectedCategory: string
   sortedCategories: CategoryMetadata[]
+  hasTankoubons: boolean
   onToggleCategory: (id: string) => void
 }) {
   const { t } = useTranslation()
@@ -18,6 +20,16 @@ export function CategoryBar({
 
   return (
     <div id="category-container">
+      {hasTankoubons && (
+        <button
+          type="button"
+          className={`favtag-btn${selectedCategory === TANKOUBON_ONLY ? " toggled" : ""}`}
+          title={t("Tankoubon volumes") ?? undefined}
+          onClick={() => onToggleCategory(TANKOUBON_ONLY)}
+        >
+          📚 {t("Tankoubons")}
+        </button>
+      )}
       <button
         type="button"
         className={`favtag-btn${selectedCategory === NEW_ONLY ? " toggled" : ""}`}

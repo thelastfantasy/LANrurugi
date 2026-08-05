@@ -97,7 +97,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         loading="lazy"
         alt={alt}
         src={src}
-        style={loaded ? undefined : { visibility: "hidden" }}
+        style={{ display: "block", width: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
         onLoad={() => setLoaded(true)}
       />
     </div>
@@ -115,7 +115,7 @@ function PageNumberLabel({ children }: { children: ReactNode }) {
   return (
     <span
       className="page-number"
-      style={{ left: "50%", transform: "translateX(-50%)" }}
+      style={{ left: "50%", transform: "translateX(-50%)", backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 4 }}
     >
       {children}
     </span>
@@ -175,8 +175,8 @@ function PageGridActionIcon({
         // depends on the cell's own height. `bottom: 2%` instead expresses the actually-intended
         // "pinned near this corner" relationship directly, independent of cell height — the same
         // reasoning that motivated `right`/`left` over a percentage for the horizontal axis.
-        [vertical]: "2%",
-        [horizontal]: "2%",
+        [vertical]: "0",
+        [horizontal]: "0",
         padding: 12,
         fontSize: 20,
         color: "lightskyblue",
@@ -185,7 +185,8 @@ function PageGridActionIcon({
         // a black backdrop once actually hovered, driven here by this component's own React
         // state rather than that shared CSS selector (see this component's own docs for why).
         zIndex: hovered ? 300 : -1,
-        backgroundColor: hovered ? "#000000" : undefined,
+        backgroundColor: hovered ? "rgba(0,0,0,0.5)" : undefined,
+        borderRadius: 4,
       }}
     />
   )

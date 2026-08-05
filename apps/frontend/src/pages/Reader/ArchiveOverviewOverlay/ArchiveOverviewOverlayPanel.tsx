@@ -377,12 +377,12 @@ export function ArchiveOverviewOverlay({
       {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
           opaque black, so content behind the shade stays faintly visible. */}
       <div id="overlay-shade" style={{ display: "block", opacity: 0.6 }} onClick={onClose} />
-      <div id="archivePagesOverlay" className="id1 base-overlay page-overlay">
+      <div id="archivePagesOverlay" className="id1 base-overlay page-overlay" style={{ padding: "0 16px", boxSizing: "border-box" }}>
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("Archive Overview")}
         </h2>
 
-        <div id="tagContainer" className="caption caption-tags caption-reader">
+        <div id="tagContainer" className="caption caption-tags caption-reader" style={{ maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
           <br />
           <div style={{ marginBottom: 16 }}>
             {/* Legacy's own `.id3 img { max-height: 275px }` alone doesn't keep this narrow — a
@@ -494,7 +494,7 @@ export function ArchiveOverviewOverlay({
         <br />
 
         <div className="overlay-bar">
-          <div className="overlay-bar-left">
+          <div className="overlay-bar-left" style={{ paddingLeft: 0 }}>
             {stampedPageSet.size > 0 && (
               <a
                 className={`fas fa-stamp${filterStamped ? " toggled" : ""}`}
@@ -510,7 +510,7 @@ export function ArchiveOverviewOverlay({
             )}
           </div>
           <h2 className="ih">{chapters ? t("Chapters") : t("Pages")}</h2>
-          <div className="chapter-selector">
+          <div className="chapter-selector" style={{ paddingRight: 0 }}>
             {chapters && (
               <select
                 id="chapter-select"
@@ -580,7 +580,7 @@ export function ArchiveOverviewOverlay({
           </div>
         </div>
 
-        <div id="pages-section" style={{ textAlign: "center" }}>
+        <div id="pages-section" style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
           {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => {
             const isStamped = stampedPageSet.has(String(page))
             if (filterStamped && !isStamped) return null

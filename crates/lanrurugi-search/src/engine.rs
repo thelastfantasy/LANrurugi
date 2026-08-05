@@ -35,6 +35,8 @@ pub struct SearchParams {
     pub untaggedonly: bool,
     pub hidecompleted: bool,
     pub groupby_tanks: bool,
+    /// When true, only keep Tankoubon (TANK_-prefixed) entries in the filtered set.
+    pub tankonly: bool,
     /// IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"`) used only by `date_added:YYYY-MM-DD`
     /// date-range tokens — the day an archive was added is computed in this timezone, not the
     /// viewer's browser timezone, so two viewers always agree on which archives belong to a given
@@ -56,6 +58,7 @@ impl Default for SearchParams {
             order_desc: false,
             newonly: false,
             untaggedonly: false,
+            tankonly: false,
             hidecompleted: false,
             groupby_tanks: true,
             timezone: "UTC".to_string(),
@@ -118,6 +121,10 @@ pub async fn search(
             .into_iter()
             .collect();
         filtered.retain(|id| untagged.contains(id));
+    }
+
+    if params.tankonly {
+        filtered.retain(|id| id.starts_with("TANK_"));
     }
 
     if params.newonly {

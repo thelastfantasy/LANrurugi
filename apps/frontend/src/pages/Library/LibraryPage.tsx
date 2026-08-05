@@ -40,6 +40,7 @@ export function Library() {
           <CategoryBar
             selectedCategory={lib.selectedCategory}
             sortedCategories={lib.sortedCategories}
+            hasTankoubons={(lib.tankoubons.data?.total ?? 0) > 0}
             onToggleCategory={lib.toggleCategory}
           />
           <SearchBar

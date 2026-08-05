@@ -283,6 +283,7 @@ export interface SearchOptions {
    * two flags instead — matches `LANraragi::Controller::Api::Search::handle_databases`. */
   newonly?: boolean
   untaggedonly?: boolean
+  tankonly?: boolean
   /** Index-settings-menu toggles (`localStorage.hidecompleted`/`grouptanks` in legacy), sent on
    * every search so both the main grid and (if built) the carousel stay in sync with them. */
   hidecompleted?: boolean
@@ -302,6 +303,7 @@ export function useSearch(options: SearchOptions) {
   if (options.start !== undefined) params.set("start", String(options.start))
   if (options.newonly) params.set("newonly", "true")
   if (options.untaggedonly) params.set("untaggedonly", "true")
+  if (options.tankonly) params.set("tankonly", "true")
   if (options.hidecompleted) params.set("hidecompleted", "true")
   if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
   return useQuery({
@@ -430,6 +432,7 @@ export function useUpdateTankoubon(id: string) {
     }) => sendJson("PUT", `/tankoubons/${id}`, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full", id] })
       queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
     },
   })

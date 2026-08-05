@@ -17,7 +17,7 @@ import {
 } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 import { confirmDialog, promptDialog } from "@/dialog"
-import { NEW_ONLY, PAGE_SIZE, UNTAGGED_ONLY } from "@/lib/constants"
+import { NEW_ONLY, PAGE_SIZE, TANKOUBON_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 import { routes } from "@/lib/routes"
 import {
   COLUMN_COUNT_KEY,
@@ -284,7 +284,7 @@ useEffect(() => {
 // archives are there" once a category/sort/page is active — `/search` (empty filter included)
 // is the single source of truth here, matching legacy's own `index.js`, which always goes
 // through the same search endpoint regardless of whether a text filter is set.
-const isBuiltinSelector = selectedCategory === NEW_ONLY || selectedCategory === UNTAGGED_ONLY
+const isBuiltinSelector = selectedCategory === NEW_ONLY || selectedCategory === UNTAGGED_ONLY || selectedCategory === TANKOUBON_ONLY
 const search = useSearch({
   filter: appliedFilter,
   category: !isBuiltinSelector && selectedCategory ? selectedCategory : undefined,
@@ -293,6 +293,7 @@ const search = useSearch({
   start: page * PAGE_SIZE,
   newonly: selectedCategory === NEW_ONLY,
   untaggedonly: selectedCategory === UNTAGGED_ONLY,
+  tankonly: selectedCategory === TANKOUBON_ONLY,
   hidecompleted: hideCompleted,
   groupbyTanks,
 })

@@ -117,6 +117,7 @@ pub struct SearchQuery {
     untaggedonly: Option<bool>,
     hidecompleted: Option<bool>,
     groupby_tanks: Option<bool>,
+    tankonly: Option<bool>,
 }
 
 async fn build_params(
@@ -155,6 +156,7 @@ async fn build_params(
         untaggedonly: q.untaggedonly.unwrap_or(false),
         hidecompleted: q.hidecompleted.unwrap_or(false),
         groupby_tanks: q.groupby_tanks.unwrap_or(true),
+        tankonly: q.tankonly.unwrap_or(false),
         timezone,
         new_badge_mode: crate::settings::read_new_badge_mode(state).await,
     })
@@ -250,6 +252,7 @@ pub struct RandomQuery {
     untaggedonly: Option<bool>,
     hidecompleted: Option<bool>,
     groupby_tanks: Option<bool>,
+    tankonly: Option<bool>,
 }
 
 async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuery>) -> Response {
@@ -263,6 +266,7 @@ async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuer
         untaggedonly: q.untaggedonly,
         hidecompleted: q.hidecompleted,
         groupby_tanks: q.groupby_tanks,
+        tankonly: q.tankonly,
     };
     let params = match build_params(&state, &search_q).await {
         Ok(p) => p,
