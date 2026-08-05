@@ -199,6 +199,8 @@ async fn create_or_rename_tankoubon(
                     thumbnail_source_archive: None,
                     thumbnail_source_page: None,
                     chapter_names: Default::default(),
+                    created_at: Some(now),
+                    updated_at: Some(now),
                 },
                 true,
             )
@@ -762,6 +764,16 @@ async fn update_tankoubon(
             )
         }
     };
+
+    // Every successful PUT bumps `updated_at` so the Tankoubon surfaces to the
+    // top under date-based sort — matches the user's expectation that "just edited"
+    // means "most recent."
+    grouping.updated_at = Some(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    );
 
     // Captured before `body.metadata` is moved out of below.
     let tags_set_explicitly = body.metadata.as_ref().is_some_and(|m| m.tags.is_some());

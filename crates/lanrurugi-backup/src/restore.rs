@@ -85,6 +85,8 @@ pub async fn restore(
                 thumbnail_source_archive: None,
                 thumbnail_source_page: None,
                 chapter_names: Default::default(),
+                created_at: None,
+                updated_at: None,
             })
             .await?;
         summary.tankoubons_restored += 1;

@@ -573,9 +573,30 @@ async fn tank_date_sort_value(
     tank_id: &str,
     sortkey_prefix: &str,
 ) -> Option<u64> {
-    // Primary: extract creation timestamp from the Tankoubon's own ID
-    // (`TANK_{unix_timestamp}` — `GroupingRepository`'s `create_or_rename_tankoubon`).
-    // Avoids polluting the user-visible tag list with a `date_added:` tag.
+    // Priority: updated_at > created_at > Tank ID timestamp > member MAX (fallback).
+    // The `updated_at`/`created_at` zset members (scores -9/-8, `GroupingRepository`'s
+    // `SCORE_UPDATED_AT`/`SCORE_CREATED_AT`) are stored as `updated_at_<u64>` /
+    // `created_at_<u64>` — same prefix pattern as the other metadata members.
+    use deadpool_redis::redis::AsyncCommands;
+    let own_members: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, -9, -8)
+        .await
+        .unwrap_or_default();
+    let mut found_updated: Option<u64> = None;
+    let mut found_created: Option<u64> = None;
+    for m in &own_members {
+        if let Some(v) = m.strip_prefix("updated_at_").and_then(|s| s.parse().ok()) {
+            found_updated = Some(v);
+        } else if let Some(v) = m.strip_prefix("created_at_").and_then(|s| s.parse().ok()) {
+            found_created = Some(v);
+        }
+    }
+
+    if let Some(ts) = found_updated.or(found_created) {
+        return Some(ts);
+    }
+
+    // Fallback 1: extract from Tank ID (`TANK_{unix_timestamp}`).
     if let Some(ts) = tank_id
         .strip_prefix("TANK_")
         .and_then(|rest| rest.parse::<u64>().ok())
@@ -583,13 +604,12 @@ async fn tank_date_sort_value(
         return Some(ts);
     }
 
-    // Fallback: tank's own tags (zset score -2, `tags_<value>` — `GroupingRepository`'s
-    // `SCORE_TAGS`).
-    let own: Vec<String> = archive_conn
+    // Fallback 2: tank's own tags (zset score -2, `tags_<value>` — `SCORE_TAGS`).
+    let own_tags: Vec<String> = archive_conn
         .zrangebyscore(tank_id, -2, -2)
         .await
         .unwrap_or_default();
-    if let Some(tag) = own.first().and_then(|m| m.strip_prefix("tags_")) {
+    if let Some(tag) = own_tags.first().and_then(|m| m.strip_prefix("tags_")) {
         if let Some(v) = tag
             .split(',')
             .find_map(|t| t.trim().strip_prefix(sortkey_prefix))

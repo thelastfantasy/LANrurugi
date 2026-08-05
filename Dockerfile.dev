@@ -45,7 +45,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p lanrurugi-server
+# `--mount=type=cache,target=/build/target` persists incremental compilation
+# artifacts across rebuilds — unchanged crates skip recompilation entirely.
+RUN --mount=type=cache,target=/build/target \
+    cargo build --release -p lanrurugi-server
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;

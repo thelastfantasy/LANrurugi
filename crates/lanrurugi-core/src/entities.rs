@@ -159,6 +159,14 @@ pub struct Grouping {
     /// Per-member chapter names (archive ID → chapter title), set via AI rename Apply.
     #[serde(default)]
     pub chapter_names: std::collections::HashMap<String, String>,
+    /// Unix timestamp of creation (from `TANK_` ID prefix or explicit set).
+    #[serde(default)]
+    pub created_at: Option<u64>,
+    /// Unix timestamp of last modification — refreshed on every PUT. Drives
+    /// `date_added`/`timestamp` sort for Tankoubons so a recently-edited one
+    /// surfaces to the top.
+    #[serde(default)]
+    pub updated_at: Option<u64>,
 }
 
 /// A user-placed annotation ("stamp") on a specific page of an archive. Redis hash keyed by

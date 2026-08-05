@@ -365,6 +365,8 @@ const SCORE_THUMBNAIL_MANUAL: isize = -4;
 const SCORE_THUMBNAIL_SOURCE_ARCHIVE: isize = -5;
 const SCORE_THUMBNAIL_SOURCE_PAGE: isize = -6;
 const SCORE_CHAPTER_NAMES: isize = -7;
+const SCORE_CREATED_AT: isize = -8;
+const SCORE_UPDATED_AT: isize = -9;
 
 impl GroupingRepository {
     pub fn new(pool: Pool) -> Self {
@@ -379,7 +381,7 @@ impl GroupingRepository {
         }
 
         let metadata_members: Vec<String> = conn
-            .zrangebyscore(tankid.as_str(), SCORE_CHAPTER_NAMES, SCORE_NAME)
+            .zrangebyscore(tankid.as_str(), SCORE_UPDATED_AT, SCORE_NAME)
             .await?;
         let mut name = String::new();
         let mut summary = String::new();
@@ -389,6 +391,8 @@ impl GroupingRepository {
         let mut thumbnail_source_archive = None;
         let mut thumbnail_source_page = None;
         let mut chapter_names = String::new();
+        let mut created_at = None;
+        let mut updated_at = None;
         for member in metadata_members {
             if let Some(v) = member.strip_prefix("name_") {
                 name = v.to_string();
@@ -406,6 +410,10 @@ impl GroupingRepository {
                 thumbnail_source_page = v.parse().ok();
             } else if let Some(v) = member.strip_prefix("chapter_names_") {
                 chapter_names = v.to_string();
+            } else if let Some(v) = member.strip_prefix("created_at_") {
+                created_at = v.parse().ok();
+            } else if let Some(v) = member.strip_prefix("updated_at_") {
+                updated_at = v.parse().ok();
             }
         }
 
@@ -426,6 +434,8 @@ impl GroupingRepository {
             thumbnail_source_archive,
             thumbnail_source_page,
             chapter_names,
+            created_at,
+            updated_at,
         }))
     }
 
@@ -481,6 +491,26 @@ impl GroupingRepository {
                 format!(
                     "chapter_names_{}",
                     serde_json::to_string(&grouping.chapter_names).unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_CREATED_AT,
+                format!(
+                    "created_at_{}",
+                    grouping
+                        .created_at
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_UPDATED_AT,
+                format!(
+                    "updated_at_{}",
+                    grouping
+                        .updated_at
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
                 ),
             ),
         ];
@@ -707,6 +737,8 @@ mod tests {
             thumbnail_source_archive: Some(ArchiveId("c".repeat(40))),
             thumbnail_source_page: Some(7),
             chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
         };
 
         repo.save(&grouping).await.unwrap();
