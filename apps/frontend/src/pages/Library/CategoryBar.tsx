@@ -20,16 +20,6 @@ export function CategoryBar({
 
   return (
     <div id="category-container">
-      {hasTankoubons && (
-        <button
-          type="button"
-          className={`favtag-btn${selectedCategory === TANKOUBON_ONLY ? " toggled" : ""}`}
-          title={t("Tankoubon volumes") ?? undefined}
-          onClick={() => onToggleCategory(TANKOUBON_ONLY)}
-        >
-          📚 {t("Tankoubons")}
-        </button>
-      )}
       <button
         type="button"
         className={`favtag-btn${selectedCategory === NEW_ONLY ? " toggled" : ""}`}
@@ -46,6 +36,16 @@ export function CategoryBar({
       >
         🏷️ {t("Untagged Archives")}
       </button>
+      {hasTankoubons && (
+        <button
+          type="button"
+          className={`favtag-btn${selectedCategory === TANKOUBON_ONLY ? " toggled" : ""}`}
+          title={t("Tankoubon volumes") ?? undefined}
+          onClick={() => onToggleCategory(TANKOUBON_ONLY)}
+        >
+          📚 {t("Tankoubons")}
+        </button>
+      )}
       {visible.map((c) => (
         <button
           key={c.id}
