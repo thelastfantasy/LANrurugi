@@ -1,12 +1,23 @@
-//! Text embedding via ONNX Runtime for `sentence-transformers/paraphrase-multilingual-MiniLM-
-//! L12-v2` (Xenova ONNX export) — the model the reader recommender uses for series recognition.
+//! Text embedding via ONNX Runtime — the model the reader recommender uses for series
+//! recognition. Model-agnostic within the sentence-transformers BERT-family convention: see
+//! `model_download.rs`'s own docs for how the actual model file is selected (default
+//! `intfloat/multilingual-e5-small`, env-var overridable to point at a different model file
+//! entirely — see that module for the accuracy comparison that picked the default and
+//! `crates/lanrurugi-recommend/examples/eval_fixture.rs` for the tool to re-run that comparison
+//! against a new candidate before switching).
 //!
-//! Standard sentence-transformers pipeline for this model: BERT WordPiece tokenize (the Rust
-//! `tokenizers` crate, loading `tokenizer.json`), ONNX inference (inputs `input_ids` /
-//! `attention_mask` / `token_type_ids`, output `last_hidden_state`), **mean pooling** over the
-//! token dimension masked by `attention_mask`, then **L2 normalization** — so cosine similarity
-//! between two embedded titles is a plain dot product. The pooling config is the model's own
-//! documented `1_Pooling` setting, hardcoded here (a config.json read would only re-confirm it).
+//! Standard sentence-transformers pipeline: BERT WordPiece tokenize (the Rust `tokenizers` crate,
+//! loading `tokenizer.json`), ONNX inference (inputs `input_ids` / `attention_mask` /
+//! `token_type_ids`, output `last_hidden_state`), **mean pooling** over the token dimension masked
+//! by `attention_mask`, then **L2 normalization** — so cosine similarity between two embedded
+//! titles is a plain dot product. The pooling config (mean pooling + L2 normalize) is the
+//! standard sentence-transformers `1_Pooling` setting shared by every model this module has been
+//! run against so far, hardcoded here (a config.json read would only re-confirm it) — a future
+//! swapped-in model using a genuinely different pooling strategy (e.g. CLS-token pooling) would
+//! need this module's own pooling logic updated, not just a config change. The embedding
+//! dimensionality itself is NOT hardcoded — it's read from the model's own `last_hidden_state`
+//! output shape on every call (see `embed()`), so a differently-sized model swapped in via env
+//! var doesn't silently corrupt the pooling math the way a hardcoded dimension constant would.
 //!
 //! Session construction mirrors `frame-forge`'s `make_cpu_session` (`~/jellyfin-suite/crates/
 //! frame-forge/src/dl_match.rs`): the execution provider is registered explicitly, because a
@@ -24,10 +35,11 @@ use ort::value::Tensor;
 use thiserror::Error;
 use tokenizers::Tokenizer;
 
-/// MiniLM-L12's context window (the Xenova export's own `max_position_embeddings`).
+/// Context window shared by every BERT-family model this has been run against so far (MiniLM-L12
+/// and multilingual-e5-small both report 512 as their `max_position_embeddings`). A library title
+/// is a handful of tokens; this cap only guards pathological input, and a future swapped-in model
+/// with a smaller window would just get truncated more aggressively, not broken.
 const MAX_SEQ_LEN: usize = 512;
-/// Embedding dimensionality (MiniLM-L12 hidden size).
-pub const EMBEDDING_DIM: usize = 384;
 
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
@@ -105,8 +117,10 @@ impl Embedder {
         })
     }
 
-    /// Embeds `text` into a normalized `EMBEDDING_DIM`-vector. Truncates to `MAX_SEQ_LEN` (a
-    /// library title is a handful of tokens; the cap only guards pathological input).
+    /// Embeds `text` into a normalized vector — length is whatever the loaded model's own
+    /// `last_hidden_state` output reports (see this module's own docs). Truncates to
+    /// `MAX_SEQ_LEN` (a library title is a handful of tokens; the cap only guards pathological
+    /// input).
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let encoding = self.tokenizer.encode(text, true)?;
         let ids: Vec<i64> = encoding
@@ -143,12 +157,14 @@ impl Embedder {
             .try_extract_tensor::<f32>()
             .map_err(|e| EmbeddingError::BadOutput(e.to_string()))?;
         let (shape, flat) = hidden;
-        // `flat` is the [1, seq, 384] output flattened; rebuild with the shape the model
-        // reported so the indexing below is obviously correct.
+        // `flat` is the [1, seq, hidden_dim] output flattened; rebuild with the shape the model
+        // itself reported so both the indexing below AND the output vector length are correct
+        // for whatever model is actually loaded — no hardcoded dimension constant to fall out of
+        // sync with a swapped-in model (see this module's own docs).
         let dims = shape.to_ixdyn();
         if dims.ndim() != 3 || dims[0] != 1 {
             return Err(EmbeddingError::BadOutput(format!(
-                "last_hidden_state has shape {dims:?}, expected [1, seq, 384]"
+                "last_hidden_state has shape {dims:?}, expected [1, seq, hidden_dim]"
             )));
         }
         let seq = dims[1];
@@ -157,13 +173,14 @@ impl Embedder {
                 "tokenizer produced {len} tokens but the model saw {seq}"
             )));
         }
+        let hidden_dim = dims[2];
         let arr = ndarray::ArrayD::from_shape_vec(dims, flat.to_vec())
             .map_err(|e| EmbeddingError::BadOutput(e.to_string()))?;
 
         // Mean pooling over the sequence dimension, masked by attention_mask. (For a single
         // non-padded sequence every mask entry is 1 — the mask only matters if padding is ever
         // introduced, and keeping the math obviously-correct costs nothing.)
-        let mut pooled = vec![0f32; EMBEDDING_DIM];
+        let mut pooled = vec![0f32; hidden_dim];
         let mut denom = 0f32;
         for i in 0..len {
             if mask[i] == 1 {
@@ -201,34 +218,49 @@ mod tests {
     use super::*;
 
     /// Real-model smoke test: requires the downloaded model under `data/models/` (see
-    /// `model_download.rs` — the dev container's `./data/models` bind mount). Skips when absent
-    /// so the crate's unit tests stay runnable on a fresh checkout without the 118MB download.
+    /// `model_download.rs` — the dev container's `./data/models` bind mount) AND three real
+    /// archive titles supplied via env var (`LANRURUGI_TEST_TITLE_SAME_SERIES_A`/`_B`/
+    /// `LANRURUGI_TEST_TITLE_CROSS_SERIES` — copy `.env.example` to `.env.local` and fill them
+    /// in; see that file's own comment). Real, copyrighted work titles don't belong hardcoded in
+    /// source (same reasoning as `TEST_REAL_DOWNLOAD_URL` elsewhere in this repo). Skips (not
+    /// fails) when either the model files or the env vars are absent, so the crate's unit tests
+    /// stay runnable on a fresh checkout without the 118MB download or any external secrets.
     #[test]
     fn real_model_embeds_and_normalizes() {
         let models_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/models");
-        let model = models_dir.join("paraphrase-multilingual-MiniLM-L12-v2_quantized.onnx");
-        let tok = models_dir.join("tokenizer.json");
+        let model = models_dir.join("multilingual-e5-small_quantized.onnx");
+        let tok = models_dir.join("e5-tokenizer.json");
         if !model.exists() || !tok.exists() {
             eprintln!("skipping: model files not present under data/models/ — run the model download first");
             return;
         }
+        let (Ok(title_a), Ok(title_b), Ok(title_c)) = (
+            std::env::var("LANRURUGI_TEST_TITLE_SAME_SERIES_A"),
+            std::env::var("LANRURUGI_TEST_TITLE_SAME_SERIES_B"),
+            std::env::var("LANRURUGI_TEST_TITLE_CROSS_SERIES"),
+        ) else {
+            eprintln!(
+                "skipping: LANRURUGI_TEST_TITLE_SAME_SERIES_A/_B/LANRURUGI_TEST_TITLE_CROSS_SERIES not set — see .env.example"
+            );
+            return;
+        };
         let embedder = Embedder::load(&model, &tok, 1).expect("model must load");
-        let a = embedder
-            .embed("架空アンソロジー 銀花猫 巻の拾参")
-            .unwrap();
-        let b = embedder
-            .embed("[アンソロジー] 架空アンソロジー 銀花猫 巻の弐")
-            .unwrap();
-        let c = embedder
-            .embed("銀花猫 架空アンソロジー Vol.1")
-            .unwrap();
-        assert_eq!(a.len(), EMBEDDING_DIM);
+        let a = embedder.embed(&title_a).unwrap();
+        let b = embedder.embed(&title_b).unwrap();
+        let c = embedder.embed(&title_c).unwrap();
+        assert!(!a.is_empty(), "embedding must have a non-zero dimension");
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "the same model must produce a consistent dimension across calls"
+        );
         let norm_a: f32 = a.iter().map(|v| v * v).sum();
         assert!(
             (norm_a - 1.0).abs() < 1e-3,
             "embedding must be L2-normalized, got {norm_a}"
         );
-        // Same-series titles (銀花猫) must be far closer to each other than to the other series.
+        // The two same-series titles (env vars A/B) must be far closer to each other than to the
+        // cross-series title (env var C).
         let same = cosine_similarity(&a, &b);
         let cross = cosine_similarity(&a, &c);
         assert!(

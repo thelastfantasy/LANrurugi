@@ -7,40 +7,59 @@
 //! - Downloads go to a `.tmp` file and are atomically renamed into place, so a crashed download
 //!   never leaves a half-written model the ORT session would silently load.
 //! - A user-placed file at the final path skips all download logic (offline/air-gapped installs).
-//! - The source URL can be overridden via env var (mirror/proxy deployments).
+//! - The source URL AND final file name are each independently overridable via env var (mirror/
+//!   proxy deployments, or swapping the model entirely — see below).
 //!
-//! Model: `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (the transformers.js ONNX export of
-//! `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` — includes `tokenizer.json`,
-//! which the Rust `tokenizers` crate consumes directly). Only the int8-quantized ONNX and the
-//! tokenizer are needed; the pooling config (mean pooling + L2 normalize) is the standard
-//! sentence-transformers setting for this model and is hardcoded in `embedding.rs`.
+//! Default model: `intfloat/multilingual-e5-small` (ONNX export via `Xenova/multilingual-e5-
+//! small`). Picked over the previously-shipped `paraphrase-multilingual-MiniLM-L12-v2` after a
+//! head-to-head run of `crates/lanrurugi-recommend/examples/eval_fixture.rs` against the 60-title
+//! fixture: same 0% miss rate, but e5-small's Top-1 same-series accuracy was 97.9% vs. MiniLM-
+//! L12's 93.6%, with identical file size (~118MB quantized) — a strictly better choice at the
+//! same cost. (Both models are BERT-family sentence-transformers exports; only the ONNX/
+//! tokenizer file names differ, not the inference pipeline in `embedding.rs`.)
+//!
+//! **Swapping to a different model entirely** (a smaller one for lower memory footprint, or a
+//! future stronger one) needs no code change — set `LANRURUGI_EMBEDDING_MODEL_URL` +
+//! `LANRURUGI_EMBEDDING_MODEL_FILE` (and the matching `..._TOKENIZER_...` pair if the new model
+//! ships its own tokenizer, which it almost always does) to point at the new files. `embedding.rs`
+//! reads the embedding dimension from the model's own ONNX output shape at inference time (not a
+//! hardcoded constant), so a differently-sized model works without a recompile — but *does* still
+//! need to be the same sentence-transformers BERT-family shape (`input_ids`/`attention_mask`/
+//! `token_type_ids` in, `last_hidden_state` out, mean pooling + L2 normalize) that `embedding.rs`
+//! implements; a model using a different pooling strategy would need that module's own logic
+//! updated too. Re-run `eval_fixture.rs` (`mise run eval-recommend-model`) against the candidate
+//! before switching production to it — don't swap on a size/parameter-count guess alone (see that
+//! example's own docs for why: the multilingual-vs-model-size tradeoff isn't obvious from specs).
 
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
-/// One downloadable artifact: remote URL, final file name, and the env var that can override the
-/// URL (mirror deployments).
+/// One downloadable artifact: remote URL, final file name, and the env vars that can override
+/// each independently (mirror deployments, or pointing at an entirely different model file).
 struct Artifact {
     name: &'static str,
     url: &'static str,
     file_name: &'static str,
     url_env_var: &'static str,
+    file_name_env_var: &'static str,
 }
 
 const MODEL_ARTIFACTS: &[Artifact] = &[
     Artifact {
         name: "embedding model",
-        url: "https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model_quantized.onnx",
-        file_name: "paraphrase-multilingual-MiniLM-L12-v2_quantized.onnx",
+        url: "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx",
+        file_name: "multilingual-e5-small_quantized.onnx",
         url_env_var: "LANRURUGI_EMBEDDING_MODEL_URL",
+        file_name_env_var: "LANRURUGI_EMBEDDING_MODEL_FILE",
     },
     Artifact {
         name: "tokenizer",
-        url: "https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json",
-        file_name: "tokenizer.json",
+        url: "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/tokenizer.json",
+        file_name: "e5-tokenizer.json",
         url_env_var: "LANRURUGI_EMBEDDING_TOKENIZER_URL",
+        file_name_env_var: "LANRURUGI_EMBEDDING_TOKENIZER_FILE",
     },
 ];
 
@@ -73,6 +92,17 @@ fn resolved_url(artifact: &Artifact) -> String {
         .unwrap_or_else(|| artifact.url.to_string())
 }
 
+/// Resolves `artifact`'s on-disk file name the same way — a swapped-in model almost always ships
+/// under a different file name than the default, and reusing the default's name would either
+/// collide with (or be silently shadowed by) an already-cached default-model file sitting in the
+/// same `models_dir` from before the override was set.
+fn resolved_file_name(artifact: &Artifact) -> String {
+    std::env::var(artifact.file_name_env_var)
+        .ok()
+        .filter(|f| !f.trim().is_empty())
+        .unwrap_or_else(|| artifact.file_name.to_string())
+}
+
 /// Ensures every artifact exists and is current in `models_dir`, downloading as needed. Returns
 /// `(model_path, tokenizer_path)`. Callers should run this in a background task (see
 /// `spawn_acquire_models`) — downloads are large and must not block server startup.
@@ -88,8 +118,9 @@ pub async fn acquire_models(models_dir: &Path) -> Result<(PathBuf, PathBuf), Mod
     let mut model_path = None;
     let mut tokenizer_path = None;
     for artifact in MODEL_ARTIFACTS {
-        let path = acquire_one(models_dir, artifact).await?;
-        if artifact.file_name.ends_with(".onnx") {
+        let file_name = resolved_file_name(artifact);
+        let path = acquire_one(models_dir, artifact, &file_name).await?;
+        if file_name.ends_with(".onnx") {
             model_path = Some(path);
         } else {
             tokenizer_path = Some(path);
@@ -104,8 +135,9 @@ pub async fn acquire_models(models_dir: &Path) -> Result<(PathBuf, PathBuf), Mod
 async fn acquire_one(
     models_dir: &Path,
     artifact: &Artifact,
+    file_name: &str,
 ) -> Result<PathBuf, ModelDownloadError> {
-    let final_path = models_dir.join(artifact.file_name);
+    let final_path = models_dir.join(file_name);
 
     // 1. A user-placed file at the final path skips all download logic (offline installs).
     if final_path.exists() {

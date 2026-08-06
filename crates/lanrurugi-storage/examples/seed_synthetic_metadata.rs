@@ -26,17 +26,23 @@ use lanrurugi_core::ids::{ArchiveId, TankId};
 use lanrurugi_storage::redis::RedisDbs;
 use lanrurugi_storage::repository::{ArchiveRepository, GroupingRepository};
 
+/// Placeholder series names — synthetic, not real work titles (this fallback pool only kicks in
+/// when the target Redis has no real archives to borrow real title/tag templates from; see the
+/// module docs above). Mixed CJK/Latin on purpose, to still exercise the same multilingual
+/// tokenization path a real library would.
 const FALLBACK_SERIES_NAMES: &[&str] = &[
-    "架空アンソロジー 銀花猫",
-    "異世界転生した件について",
-    "冒険者ギルドの受付嬢",
-    "魔法少女育成計画",
-    "剣と魔法の学園生活",
-    "vampire knight chronicles",
-    "the last summoner",
-    "cosplay photo collection",
+    "架空の異世界転生シリーズ",
+    "架空の冒険者ギルド物語",
+    "架空の魔法少女育成記",
+    "架空の学園剣術譚",
+    "fictional vampire chronicles",
+    "fictional last summoner saga",
+    "fictional cosplay photo collection",
+    "fictional anthology volume",
 ];
 
+/// Placeholder artist handles — synthetic, not real circle/artist names (see
+/// `FALLBACK_SERIES_NAMES`'s own doc for why this pool exists at all).
 const FALLBACK_ARTISTS: &[&str] = &[
     "artist-alpha",
     "artist-beta",

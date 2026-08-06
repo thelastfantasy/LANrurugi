@@ -270,7 +270,11 @@ mod tests {
 
     #[test]
     fn vector_codec_round_trips_bit_exact_with_multibyte_title() {
-        let title = "架空アンソロジー 銀花猫 café";
+        // Placeholder multi-byte UTF-8 (CJK + accented Latin) — this test only exercises the byte
+        // codec, so the content is arbitrary as long as it's genuinely multi-byte; no need for a
+        // real archive title here (unlike embedding.rs's real-model smoke test, which needs an
+        // actual title's real semantic content and reads one from an env var instead).
+        let title = "架空のシリーズ名 テスト巻 café";
         let vector: Vec<f32> = (0..384).map(|i| (i as f32) * 0.01234 - 1.5).collect();
         let encoded = encode_vector(title, &vector);
         let (decoded_title, decoded_vector) = decode_vector("test-key", &encoded).unwrap();

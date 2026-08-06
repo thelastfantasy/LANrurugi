@@ -1,13 +1,14 @@
 //! Series recognition + recommendation ranking on top of the embedding model.
 //!
-//! The design bet, validated against real data (see `tests/fixtures/series_titles.json` — 60
-//! real titles incl. 36 live e-hentai search results with 大字 numerals like 巻の拾参, paren-
-//! wrapped series names, mismatched full/half-width parens): **series membership is a semantic
-//! problem, not a string problem**. Volume-number *notation* is a long tail (arabic, roman,
-//! kanji, 大字, 音读 kana, 訓读 kana, arbitrary author inventions) that no rule table can
-//! exhaust — but embedding similarity captures "these titles are about the same 銀花猫
-//! anthology" regardless of how the volume suffix is written, because the shared core text
-//! dominates the embedding.
+//! The design bet, validated against real data (a 60-real-title fixture incl. 36 live e-hentai
+//! search results with 大字 numerals like 巻の拾参, paren-wrapped series names, mismatched full/
+//! half-width parens — see this module's own `tests::load_fixture_with_volumes` for how that
+//! fixture is loaded from an env-var-supplied path, kept out of source since it's real,
+//! copyrighted work titles, not synthetic test data): **series membership is a semantic problem,
+//! not a string problem**. Volume-number *notation* is a long tail (arabic, roman, kanji, 大字,
+//! 音读 kana, 訓读 kana, arbitrary author inventions) that no rule table can exhaust — but
+//! embedding similarity captures "these titles are about the same anthology" regardless of how
+//! the volume suffix is written, because the shared core text dominates the embedding.
 //!
 //! So this module does NOT parse volume numbers at all. It embeds titles and ranks candidates
 //! by cosine similarity; same-series titles naturally cluster at the top. Volume ordering
@@ -131,42 +132,37 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn load_fixture_with_volumes() -> Vec<(String, String, Option<u32>)> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../lanrurugi-api/tests/fixtures/series_titles.json");
+    /// Loads the 60-real-title series/volume fixture from a path supplied via
+    /// `LANRURUGI_TEST_FIXTURE_SERIES_TITLES_PATH` (copy `.env.example` to `.env.local` and set
+    /// it — see that file's own comment). Real, copyrighted work titles/author handles don't
+    /// belong in source (same reasoning as `embedding.rs`'s `LANRURUGI_TEST_TITLE_*` vars) —
+    /// unlike those three standalone titles, this fixture also carries the full series/volume
+    /// annotation structure the acceptance test grades against, which is impractical to pass as
+    /// individual env vars, hence a file path instead. `None` when the env var is unset, so the
+    /// caller can skip (not fail) the test on a fresh checkout with no local fixture file.
+    fn load_fixture_with_volumes() -> Option<Vec<(String, String, Option<u32>)>> {
+        let path = std::env::var("LANRURUGI_TEST_FIXTURE_SERIES_TITLES_PATH").ok()?;
         let data: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        data["archives"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|a| {
-                (
-                    a["series_group"].as_str().unwrap().to_string(),
-                    a["title"].as_str().unwrap().to_string(),
-                    a["volume"].as_u64().map(|v| v as u32),
-                )
-            })
-            .collect()
+            serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+        Some(
+            data["archives"]
+                .as_array()?
+                .iter()
+                .map(|a| {
+                    (
+                        a["series_group"].as_str().unwrap().to_string(),
+                        a["title"].as_str().unwrap().to_string(),
+                        a["volume"].as_u64().map(|v| v as u32),
+                    )
+                })
+                .collect(),
+        )
     }
 
     fn test_embedder() -> Option<Embedder> {
         let models_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/models");
-        // Prefer e5-small when present (stronger multilingual quality per the model-choice
-        // decision); fall back to the MiniLM files.
-        let model = if models_dir
-            .join("multilingual-e5-small_quantized.onnx")
-            .exists()
-        {
-            models_dir.join("multilingual-e5-small_quantized.onnx")
-        } else {
-            models_dir.join("paraphrase-multilingual-MiniLM-L12-v2_quantized.onnx")
-        };
-        let tok = if models_dir.join("e5-tokenizer.json").exists() {
-            models_dir.join("e5-tokenizer.json")
-        } else {
-            models_dir.join("tokenizer.json")
-        };
+        let model = models_dir.join("multilingual-e5-small_quantized.onnx");
+        let tok = models_dir.join("e5-tokenizer.json");
         if !model.exists() || !tok.exists() {
             eprintln!("skipping: model files not present under data/models/");
             return None;
@@ -183,7 +179,12 @@ mod tests {
         let Some(embedder) = test_embedder() else {
             return;
         };
-        let fixture = load_fixture_with_volumes();
+        let Some(fixture) = load_fixture_with_volumes() else {
+            eprintln!(
+                "skipping: LANRURUGI_TEST_FIXTURE_SERIES_TITLES_PATH not set — see .env.example"
+            );
+            return;
+        };
         assert!(
             fixture.len() >= 60,
             "fixture should have 60+ entries, got {}",

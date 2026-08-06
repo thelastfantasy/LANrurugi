@@ -76,6 +76,10 @@ run = "scripts/cargo-container-run.sh cargo build --workspace"
 description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
 run = "scripts/convert-plugins.sh \"$@\""
 
+[tasks.eval-recommend-model]
+description = "Quantified series-recognition accuracy of an embedding model against the 60-title fixture — usage: mise run eval-recommend-model -- <model.onnx> <tokenizer.json> [prefix]. Point at files under data/models/ to compare candidates before switching lanrurugi-recommend's production model (see crates/lanrurugi-recommend/examples/eval_fixture.rs's own docs)."
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release --example eval_fixture -- \"$@\""
+
 [tasks.plugin-sdk-docs]
 description = "Generate the plugin-authoring SDK reference (deno doc --html) into target/plugin-sdk-docs/"
 run = """
