@@ -666,7 +666,13 @@ mod tests {
         let id_old = "a".repeat(40);
         let id_new = "b".repeat(40);
         let id_no_date = "c".repeat(40);
-        let tank = "TANK_1785750000";
+        // Deliberately NOT the real `TANK_<unix-timestamp>` shape (`tankoubons.rs`'s own
+        // `TankId(format!("TANK_{now}"))`) — `tank_date_sort_value`'s Fallback 1 legitimately
+        // extracts a sort timestamp straight from an ID in that shape (a real Tankoubon's ID
+        // literally IS its creation time), so a real-shaped id here would always resolve to
+        // "keyed" regardless of tags/zset content, defeating the "completely unkeyed" scenario
+        // this test means to set up. A non-numeric suffix guarantees Fallback 1 can't match.
+        let tank = "TANK_test_no_date";
 
         for (id, tags) in [
             (id_old.as_str(), "date_added:1000"),
