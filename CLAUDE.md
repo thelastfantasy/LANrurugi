@@ -216,3 +216,25 @@ internal refactors, test-only changes, or mid-flight work-in-progress commits us
 skipping this check silently lets the README drift out of date the same way the "002/003/005 are
 planned but not yet implemented" line above did until it was caught and corrected during a real
 README-writing pass.
+
+## Real adult-work titles/URLs must never be hardcoded — use env vars instead
+
+Any test, fixture, comment, or example that needs a *real* archive title, author/circle handle, or
+gallery URL (as opposed to synthetic/placeholder data) for an adult work must not have that string
+committed to source at all — read it from an environment variable (or an env-var-supplied external
+file path for larger structured fixtures) instead, following this repo's existing
+`TEST_REAL_DOWNLOAD_URL`/`TEST_REAL_EHENTAI_GALLERY_URL` convention in `.env.example`/`.env.local`:
+document the variable (name, purpose, what skips if it's unset) in `.env.example` with the value
+left blank, put the real value only in the gitignored `.env.local`, and have the consuming code
+treat an unset/missing var as "skip this test, don't fail" rather than requiring it. This applies
+retroactively too — if you discover a real title/handle/URL already hardcoded anywhere (source,
+tests, fixture JSON files, doc comments), scrub it out to an env var the same way, including from
+git history if it's already been committed (`git filter-repo --replace-text`, verified against a
+disposable clone before ever touching the real repo or force-pushing). Precedent: issue #70's
+model-switch work found a 60-title real e-hentai search-result fixture (`tests/fixtures/
+series_titles.json`) and three individual real titles in `embedding.rs`'s smoke test hardcoded in
+source and already pushed to two prior commits; both were moved to
+`LANRURUGI_TEST_FIXTURE_SERIES_TITLES_PATH` (external file, since the fixture also carries
+structured series/volume annotations no set of individual env vars could practically hold) and
+`LANRURUGI_TEST_TITLE_SAME_SERIES_A`/`_B`/`LANRURUGI_TEST_TITLE_CROSS_SERIES` respectively, and the
+already-pushed history was rewritten to scrub the real strings out of every prior commit too.
