@@ -431,10 +431,16 @@ async function updateRating(archiveId: string, isTank: boolean, rating: string |
   else tagsByNamespace.rating = [rating]
   const newTags = buildTagList(tagsByNamespace).join(", ")
   if (isTank) {
+    // `PUT /api/tankoubons/{id}` expects `tags` nested under `metadata` (`UpdateTankoubonBody`/
+    // `UpdateTankoubonMetadata` in tankoubons.rs) — a bare top-level `{ tags }` deserializes as a
+    // *valid* request with `metadata: None`, so the backend silently no-ops instead of erroring,
+    // which is why this looked like "rating on a Tankoubon does nothing" rather than a visible
+    // failure (confirmed live: both setting AND right-click-clearing a Tankoubon's rating were
+    // broken the same way, since both go through this one branch).
     await fetch(endpoint, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: newTags }),
+      body: JSON.stringify({ metadata: { tags: newTags } }),
     })
   } else {
     await sendJson("PUT", `/archives/${archiveId}/metadata?tags=${encodeURIComponent(newTags)}`)

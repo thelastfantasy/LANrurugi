@@ -769,25 +769,21 @@ async fn update_tankoubon(
         }
     };
 
-    // Every successful PUT bumps `updated_at` so the Tankoubon surfaces to the
-    // top under date-based sort — matches the user's expectation that "just edited"
-    // means "most recent."
-    grouping.updated_at = Some(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    );
-
     // Captured before `body.metadata` is moved out of below.
     let tags_set_explicitly = body.metadata.as_ref().is_some_and(|m| m.tags.is_some());
     let old_name = grouping.name.clone();
+    // `updated_at` is bumped below, but only if something other than a bare rating change
+    // actually happened — see that check's own comment for why a rating alone is excluded.
+    let old_tags = grouping.tags.clone();
+    let mut non_rating_change = false;
 
     if let Some(metadata) = body.metadata {
         if let Some(name) = metadata.name {
+            non_rating_change = true;
             grouping.name = name;
         }
         if let Some(summary) = metadata.summary {
+            non_rating_change = true;
             grouping.summary = summary;
         }
         if let Some(tags) = metadata.tags {
@@ -798,12 +794,14 @@ async fn update_tankoubon(
             };
         }
         if let Some(chapter_names) = metadata.chapter_names {
+            non_rating_change = true;
             grouping.chapter_names = chapter_names;
         }
     }
     let old_archives = grouping.archives.clone();
     let old_first = old_archives.first().cloned();
     if let Some(archives) = body.archives {
+        non_rating_change = true;
         let archive_ids: Vec<ArchiveId> = archives.into_iter().map(ArchiveId).collect();
         // Auto-fills the Tankoubon's own tags with whatever's common across all the member
         // archives being set here (e.g. the same `artist:` tag on every volume) — but only when
@@ -816,6 +814,25 @@ async fn update_tankoubon(
             grouping.tags = common_member_tags(&state, &archive_ids).await;
         }
         grouping.archives = archive_ids;
+    }
+
+    // A rating-only change (the reader's star widget, right-click-to-clear included) must not
+    // bump `updated_at` — rating a Tankoubon you've already read/sorted shouldn't kick it back to
+    // the top of a date-sorted library view the way an actual content edit should. Every OTHER
+    // tags change (category/artist/anything but `rating:`) still counts as a real edit. Compares
+    // the tags with their `rating:` entries stripped rather than special-casing "only a rating
+    // field was in the request body" — a request that changes both rating AND another tag in the
+    // same call must still count as an edit.
+    if !non_rating_change && strip_rating_tag(&old_tags) != strip_rating_tag(&grouping.tags) {
+        non_rating_change = true;
+    }
+    if non_rating_change {
+        grouping.updated_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        );
     }
 
     match state.repos.groupings.save(&grouping).await {
@@ -900,6 +917,24 @@ async fn common_member_tags(state: &AppState, archive_ids: &[ArchiveId]) -> Stri
 fn is_bookkeeping_tag(tag: &str) -> bool {
     let namespace = tag.split(':').next().unwrap_or(tag);
     namespace == "date_added" || namespace == "timestamp"
+}
+
+/// Sorted, comma-joined tag list with every `rating:`-namespaced entry removed — used by
+/// `update_tankoubon`'s `updated_at` guard to tell "only the rating changed" apart from "some
+/// other tag changed too", by comparing this against both the pre- and post-update tag strings.
+/// Sorted (order-independent) and re-joined without whitespace variance so two tag strings that
+/// are semantically identical but differ only in comma-spacing or tag order don't spuriously
+/// register as a change.
+fn strip_rating_tag(tags: &str) -> String {
+    let mut kept: Vec<String> = tags
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .filter(|t| t.split(':').next().unwrap_or(t) != "rating")
+        .map(str::to_string)
+        .collect();
+    kept.sort();
+    kept.join(",")
 }
 
 #[derive(Debug, Deserialize)]
@@ -1309,5 +1344,43 @@ async fn ai_rename_chapter(
             axum::Json(serde_json::json!({ "name": suggestion.name })).into_response()
         }
         Err(msg) => error(StatusCode::SERVICE_UNAVAILABLE, "ai_rename_chapter", msg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_rating_tag_removes_rating_regardless_of_position() {
+        assert_eq!(
+            strip_rating_tag("category:cosplay,rating:4.5"),
+            "category:cosplay"
+        );
+        assert_eq!(
+            strip_rating_tag("rating:4.5,category:cosplay"),
+            "category:cosplay"
+        );
+        assert_eq!(strip_rating_tag("rating:4.5"), "");
+        assert_eq!(strip_rating_tag(""), "");
+    }
+
+    #[test]
+    fn strip_rating_tag_ignores_comma_spacing_and_order() {
+        // Order-independent (sorted) and whitespace-independent (trimmed) — a rating-only change
+        // submitted with different tag ordering/spacing than what's already stored must still
+        // compare as "unchanged" once the rating is stripped from both sides.
+        assert_eq!(
+            strip_rating_tag("artist:foo, category:cosplay"),
+            strip_rating_tag("category:cosplay,artist:foo")
+        );
+    }
+
+    #[test]
+    fn strip_rating_tag_does_not_touch_non_rating_namespaces_with_similar_names() {
+        // A namespace like `top_rating:` or a bare tag containing the substring "rating" must
+        // NOT be stripped — only an exact `rating` namespace match.
+        assert_eq!(strip_rating_tag("top_rating:5"), "top_rating:5");
+        assert_eq!(strip_rating_tag("myrating"), "myrating");
     }
 }
