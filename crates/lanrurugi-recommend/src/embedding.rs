@@ -60,15 +60,32 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    pub fn load(model_path: &Path, tokenizer_path: &Path) -> Result<Self, EmbeddingError> {
+    /// `intra_threads` caps how many threads ONNX Runtime uses *inside* a single `run()` call to
+    /// parallelize one inference's own graph ops — the knob that actually matters for the
+    /// precompute backfill job (issue #70): `session` above is `Mutex`-wrapped, so spawning more
+    /// concurrent callers of `embed()` never buys real parallelism, they just queue on that lock.
+    /// Real throughput on a multi-core box comes only from this session-internal thread count.
+    /// The live request path (`recommend.rs`) passes a small fixed value (contending with normal
+    /// request handling); the batch precompute job (`recommend_precompute.rs`) passes its own
+    /// CPU-budget calculation instead.
+    pub fn load(
+        model_path: &Path,
+        tokenizer_path: &Path,
+        intra_threads: usize,
+    ) -> Result<Self, EmbeddingError> {
         let builder = Session::builder().map_err(|e| EmbeddingError::Session {
             path: model_path.display().to_string(),
             source: e,
         })?;
-        let mut builder = builder
+        let builder = builder
             .with_execution_providers([ep::CPU::default().build()])
             .map_err(|e| {
                 EmbeddingError::BadOutput(format!("failed to register execution provider: {e}"))
+            })?;
+        let mut builder = builder
+            .with_intra_threads(intra_threads.max(1))
+            .map_err(|e| {
+                EmbeddingError::BadOutput(format!("failed to set intra-op thread count: {e}"))
             })?;
         let session =
             builder
@@ -195,7 +212,7 @@ mod tests {
             eprintln!("skipping: model files not present under data/models/ — run the model download first");
             return;
         }
-        let embedder = Embedder::load(&model, &tok).expect("model must load");
+        let embedder = Embedder::load(&model, &tok, 1).expect("model must load");
         let a = embedder
             .embed("架空アンソロジー 銀花猫 巻の拾参")
             .unwrap();

@@ -86,6 +86,10 @@ export interface Settings {
   /** Whether a DeepSeek API key has been configured (Redis or DEEPSEEK_API_KEY env var).
    *  The real key is never sent to the frontend. */
   llm_api_key_set: boolean
+  /** Reader recommendation-cache precision (`"low"` / `"medium"` / `"high"`) — how many
+   *  candidates the background precompute job keeps per archive's cached similar-archive list.
+   *  Changing this triggers a full background rebuild (see `lanrurugi_api::settings::put_settings`). */
+  recommendprecision: string
   pagesize: number
   tempmaxsize: number
   sizethreshold: number

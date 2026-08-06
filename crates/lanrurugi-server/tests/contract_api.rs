@@ -31,6 +31,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = std::sync::Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -66,6 +69,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        recommend_cache: recommend_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -270,6 +274,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = std::sync::Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -305,6 +312,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        recommend_cache: recommend_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -388,6 +396,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = std::sync::Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -423,6 +434,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        recommend_cache: recommend_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -564,6 +576,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = std::sync::Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
 
     let library_dir = tempfile::tempdir().unwrap();
     let subfolder = library_dir.path().join("My Series");
@@ -630,6 +645,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        recommend_cache: recommend_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

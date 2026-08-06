@@ -4,5 +4,6 @@ pub mod id;
 pub mod keys;
 pub mod plugin_options;
 pub mod rebuild;
+pub mod recommend_cache;
 pub mod redis;
 pub mod repository;

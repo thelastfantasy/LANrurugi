@@ -294,6 +294,9 @@ async fn delete_archive(
             {
                 tracing::warn!(%id, error = %e, "failed to remove deleted archive from search index");
             }
+            if let Err(e) = state.recommend_cache.delete_for(id.as_str()).await {
+                tracing::warn!(%id, error = %e, "failed to remove deleted archive from recommendation cache");
+            }
             // Real legacy's own `delete_archive` (`~/LANraragi/lib/LANraragi/Model/Archive.pm`)
             // unconditionally deletes the archive file, its cover thumbnail, and its per-page
             // thumbnail cache directory too — not an opt-in checkbox. This was missing entirely
@@ -1048,6 +1051,14 @@ async fn update_archive_metadata(
                 {
                     tracing::warn!(%id, error = %e, "failed to update tag search index");
                 }
+            }
+            if archive.title != old_title {
+                let state = state.clone();
+                let id = id.to_string();
+                let title = archive.title.clone();
+                tokio::spawn(async move {
+                    crate::recommend_precompute::precompute_one(&state, &id, &title).await;
+                });
             }
             ok("update_metadata", [])
         }

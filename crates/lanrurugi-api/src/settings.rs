@@ -142,6 +142,13 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // regardless of whether it was ever opened). Consumed by `archives::effective_isnew` (badge
     // display) and `lanrurugi_search::engine`'s `newonly` filter so both stay consistent.
     ("newbadgemode", "until_opened"),
+    // Reader recommendation-cache precision (`low`/`medium`/`high` — see
+    // `recommend_precompute::RecommendPrecision`) — how many candidates
+    // `recommend_precompute.rs`'s background rebuild keeps per archive's cached Top-N similar-
+    // archive list. Changing this bumps `LANRURUGI_RECOMMEND_META`'s `rebuild_generation` and
+    // queues a full rebuild job (see the side-effect branch in `put_settings` below) since a
+    // tier change can't be applied retroactively by the incremental one-way backfill alone.
+    ("recommendprecision", "medium"),
 ];
 
 const NUMBER_FIELDS: &[(&str, i64)] = &[
@@ -272,6 +279,21 @@ async fn put_settings(
         .map(|v| v != "0")
         .unwrap_or(true);
 
+    // Same "captured before the write loop" pattern as `enablewebp` above — a tier change can't
+    // be applied retroactively by `precompute_one`'s incremental one-way backfill (it only ever
+    // widens/narrows the *one* archive it's called for), so it needs its own full rebuild,
+    // exactly like flipping `enablewebp` needs a full thumbnail regen rather than only affecting
+    // thumbnails generated from here on.
+    let new_recommend_precision = fields
+        .get("recommendprecision")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+    let previous_recommend_precision: Option<String> = conn
+        .hget(CONFIG_KEY, "recommendprecision")
+        .await
+        .ok()
+        .flatten();
+
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
@@ -300,6 +322,33 @@ async fn put_settings(
         if let Ok(archives) = state.repos.archives.list_all().await {
             crate::archives::spawn_regen_thumbnails_job(&state, archives, thumb_settings, true)
                 .await;
+        }
+    }
+
+    if new_recommend_precision.is_some_and(|v| Some(&v) != previous_recommend_precision.as_ref()) {
+        // Avoid double-queueing if a rebuild (from this same tier change, or a still-running
+        // first-time backfill) is already in flight — matches the "check `by_name` before
+        // spawning" guard `duplicates.rs`'s own job-creation callers use elsewhere.
+        let already_running = state
+            .jobs
+            .by_name("recommend_precompute")
+            .await
+            .iter()
+            .any(|j| {
+                matches!(
+                    j.state,
+                    lanrurugi_core::jobs::JobState::Queued | lanrurugi_core::jobs::JobState::Active
+                )
+            });
+        if !already_running {
+            if let Err(e) = state.recommend_cache.bump_rebuild_generation().await {
+                tracing::warn!(error = %e, "failed to bump recommend-cache rebuild generation");
+            }
+            crate::recommend_precompute::spawn_full_precompute_job(
+                &state,
+                "precision tier changed",
+            )
+            .await;
         }
     }
 

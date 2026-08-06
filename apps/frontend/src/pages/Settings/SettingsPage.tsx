@@ -57,6 +57,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [localprogress, setLocalprogress] = useState(settings.localprogress)
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
+  const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
   // Incremented after each save to remount GlobalSection (resets editingKey).
   const [saveTick, setSaveTick] = useState(0)
   // The real key is never sent to the frontend — `llm_api_key_set` is a boolean only.
@@ -114,12 +115,13 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       usedateadded !== settings.usedateadded ||
       usedatemodified !== settings.usedatemodified ||
       timezone !== settings.timezone ||
-      newbadgemode !== settings.newbadgemode,
+      newbadgemode !== settings.newbadgemode ||
+      recommendprecision !== settings.recommendprecision,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, enablepass, nofunmode, apikey, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
-      tagrules, usedateadded, usedatemodified, timezone, newbadgemode,
+      tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings,
     ],
   )
@@ -160,6 +162,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       usedatemodified,
       timezone,
       newbadgemode,
+      recommendprecision,
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
     setKeyInput("")
@@ -251,6 +254,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             llmApiKeySet={settings.llm_api_key_set}
             keyInput={keyInput}
             setKeyInput={setKeyInput}
+            recommendprecision={recommendprecision}
+            setRecommendprecision={setRecommendprecision}
             onStatus={setStatus}
           />
 

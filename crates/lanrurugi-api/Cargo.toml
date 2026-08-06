@@ -34,3 +34,5 @@ zip.workspace = true
 governor.workspace = true
 futures-util.workspace = true
 url.workspace = true
+sysinfo.workspace = true
+rayon.workspace = true

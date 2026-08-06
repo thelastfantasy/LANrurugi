@@ -171,7 +171,7 @@ mod tests {
             eprintln!("skipping: model files not present under data/models/");
             return None;
         }
-        Some(Embedder::load(&model, &tok).expect("model must load"))
+        Some(Embedder::load(&model, &tok, 1).expect("model must load"))
     }
 
     /// Acceptance test against the 60-title fixture (36 of them real e-hentai search results):

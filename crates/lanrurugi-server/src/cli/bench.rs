@@ -75,6 +75,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let download_queue = Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
 
     // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
     // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
@@ -115,6 +118,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
+        recommend_cache,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx,
         download_cancellations: Default::default(),

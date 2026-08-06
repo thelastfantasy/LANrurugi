@@ -8,6 +8,7 @@ use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
 use lanrurugi_storage::download_queue::DownloadQueueRepository;
 use lanrurugi_storage::plugin_options::PluginOptionsRepository;
+use lanrurugi_storage::recommend_cache::RecommendCacheRepository;
 use lanrurugi_storage::redis::RedisDbs;
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, StampRepository,
@@ -98,6 +99,11 @@ pub struct AppState {
     /// a queued/in-progress download survives a page refresh or a different browser tab. Also on
     /// the `config` logical DB, same placement as `plugin_options`.
     pub download_queue: Arc<DownloadQueueRepository>,
+    /// Precomputed reader-recommendation embedding vectors and per-archive Top-N similar-archive
+    /// lists (issue #70) — also on the `config` logical DB, same placement as `plugin_options`
+    /// and `download_queue`. See `lanrurugi_storage::recommend_cache` module docs and
+    /// `recommend_precompute.rs` for how these are written.
+    pub recommend_cache: Arc<RecommendCacheRepository>,
     /// Reader recommendation engine (ONNX embedding) — `None`-backed until the model download
     /// plus load completes at startup; the endpoint returns 503 `model_not_ready` meanwhile
     /// (see `recommend.rs`'s module docs).

@@ -303,6 +303,7 @@ async fn clean_database(State(state): State<AppState>) -> Response {
     for mut archive in archives {
         if archive.file.is_empty() {
             let _ = state.repos.archives.delete(&archive.id).await;
+            let _ = state.recommend_cache.delete_for(archive.id.as_str()).await;
             deleted += 1;
             continue;
         }

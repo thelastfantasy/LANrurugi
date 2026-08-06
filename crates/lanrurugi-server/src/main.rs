@@ -15,6 +15,14 @@ use lanrurugi_storage::redis::RedisDbs;
 /// port, matching legacy's own out-of-the-box deployment assumption.
 const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1:6379";
 
+/// Bumped whenever the one-time reader-recommendation-cache backfill (issue #70) needs to run
+/// again for every existing instance — e.g. a future change to what gets embedded/cached that
+/// isn't itself a precision-tier change (which already has its own trigger in
+/// `settings::put_settings`). A pre-existing library's archives never re-trigger
+/// `recommend_precompute::precompute_one` on their own (nothing about them changes after this
+/// feature ships), so without this backfill they'd simply never get a cached recommendation entry.
+const CURRENT_RECOMMEND_BACKFILL_VERSION: u32 = 1;
+
 /// LANrurugi: a Rust + React rewrite of LANraragi. One binary, three modes (constitution
 /// Principle III) — no separate watcher/worker processes.
 #[derive(Parser)]
@@ -256,6 +264,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let download_queue = Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let recommend_cache = Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -286,6 +297,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     match lanrurugi_recommend::embedding::Embedder::load(
                         &model_path,
                         &tokenizer_path,
+                        lanrurugi_api::recommend_precompute::precompute_worker_budget(),
                     ) {
                         Ok(embedder) => {
                             recommender.install_embedder(embedder);
@@ -334,6 +346,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
+        recommend_cache,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
@@ -374,10 +387,90 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
+    // One-time reader-recommendation-cache backfill (issue #70) — a pre-existing library's
+    // archives never trigger `precompute_one` on their own (nothing about them changes after
+    // this feature ships), so without this they'd never get a cached recommendation entry at
+    // all. Polls `recommender.ready()` rather than awaiting the model-load task directly (that
+    // task is fire-and-forget above, with no handle to join) — cheap (a bool read behind a
+    // `Mutex`), and the model load itself only happens once at startup, so a short poll interval
+    // costs nothing. Guarded the same way a precision-tier change is (`settings::put_settings`):
+    // skip if a rebuild is already queued/active, so a slow model load racing a user's own tier
+    // change during the same startup window doesn't double-queue a rebuild. Only advances
+    // `backfill_version` once the job actually finishes successfully — an interrupted rebuild
+    // (process restarted mid-backfill) is retried on the next startup rather than silently
+    // skipped, since `spawn_full_precompute_job`'s own generation-tagged resumability means a
+    // retry is cheap (already-current entries are skipped).
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                if state.recommender.ready() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            let current_version = state
+                .recommend_cache
+                .get_backfill_version()
+                .await
+                .unwrap_or(0);
+            if current_version >= CURRENT_RECOMMEND_BACKFILL_VERSION {
+                return;
+            }
+            let already_running =
+                state
+                    .jobs
+                    .by_name("recommend_precompute")
+                    .await
+                    .iter()
+                    .any(|j| {
+                        matches!(
+                            j.state,
+                            lanrurugi_core::jobs::JobState::Queued
+                                | lanrurugi_core::jobs::JobState::Active
+                        )
+                    });
+            if already_running {
+                return;
+            }
+            let job_id = lanrurugi_api::recommend_precompute::spawn_full_precompute_job(
+                &state,
+                "first-time recommendation cache backfill",
+            )
+            .await;
+            // Poll the job's own status (no completion channel exists on `JobRegistry`) so the
+            // version marker is only written once the rebuild actually finished — see this
+            // block's own doc comment above for why a partial/interrupted run must not advance it.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let Some(job) = state.jobs.get(&job_id).await else {
+                    break;
+                };
+                match job.state {
+                    lanrurugi_core::jobs::JobState::Finished => {
+                        if let Err(e) = state
+                            .recommend_cache
+                            .put_backfill_version(CURRENT_RECOMMEND_BACKFILL_VERSION)
+                            .await
+                        {
+                            tracing::warn!(error = %e, "failed to persist recommend-cache backfill version");
+                        }
+                        break;
+                    }
+                    lanrurugi_core::jobs::JobState::Failed => break,
+                    _ => continue,
+                }
+            }
+        });
+    }
+
     {
         let state = state.clone();
         tokio::spawn(async move {
             while let Some(id) = new_archive_rx.recv().await {
+                // Recommendation-cache precompute for the final, plugin-enriched title happens
+                // inside this call itself (once, after every enabled plugin has run) — see its
+                // own doc comment.
                 lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
             }
         });

@@ -35,6 +35,8 @@ export function GlobalSection({
   llmApiKeySet,
   keyInput,
   setKeyInput,
+  recommendprecision,
+  setRecommendprecision,
   onStatus,
 }: {
   htmltitle: string
@@ -60,6 +62,8 @@ export function GlobalSection({
   llmApiKeySet: boolean
   keyInput: string
   setKeyInput: (v: string) => void
+  recommendprecision: string
+  setRecommendprecision: (v: string) => void
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
@@ -157,6 +161,22 @@ export function GlobalSection({
             )}
             <br />
             {t("Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.")}
+          </Row>
+          <Row label={t("Recommendation Precision")}>
+            <select
+              className="stdinput"
+              style={{ width: "100%" }}
+              value={recommendprecision}
+              onChange={(e) => setRecommendprecision(e.target.value)}
+            >
+              <option value="low">{t("Low (fastest, least CPU/storage)")}</option>
+              <option value="medium">{t("Medium (recommended)")}</option>
+              <option value="high">{t("High (most accurate, more CPU/storage)")}</option>
+            </select>
+            <br />
+            {t("Controls how many similar archives are precomputed and cached for the reader's recommendation panel. Higher precision uses more CPU and Redis storage, scaled automatically to your server's hardware and library size.")}
+            <br />
+            {t("Changing this triggers a background rebuild of the recommendation cache.")}
           </Row>
           <CheckboxRow
             id="enableresize"

@@ -1139,6 +1139,26 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         }
     }
 
+    // Precompute the recommendation-cache entry once, after every enabled plugin has had its
+    // turn (not per-iteration — an earlier plugin's title write would otherwise get embedded and
+    // immediately superseded by a later plugin's own title write in the same run). Covers every
+    // caller of this function (ingest watcher, download-manager ingest, upload, bench) in one
+    // place rather than needing a hook at each of the 4 call sites. Fetches the archive fresh
+    // rather than trusting `summary.new_title` — a plugin can also be the *first* time this
+    // archive is ever precomputed even when no plugin actually changed its title.
+    if let Ok(Some(archive)) = state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+        .await
+    {
+        let state = state.clone();
+        let archive_id = archive_id.to_string();
+        tokio::spawn(async move {
+            crate::recommend_precompute::precompute_one(&state, &archive_id, &archive.title).await;
+        });
+    }
+
     summary
 }
 

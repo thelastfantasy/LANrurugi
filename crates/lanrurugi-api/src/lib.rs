@@ -15,6 +15,7 @@ pub mod opds;
 pub mod plugins;
 pub mod recommend;
 pub mod recommend_llm;
+pub mod recommend_precompute;
 pub mod scripts;
 pub mod search;
 pub mod settings;
