@@ -72,7 +72,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
     // looking shifted. `width` only needs to be set before load (see `PLACEHOLDER_WIDTH_PX`'s own
     // docs) — once loaded, `width: 95%` off the now-properly-tall wrapper is what actually
     // determines the image's rendered width, exactly matching a real loaded cell in this same grid.
-    <div style={{ height: "100%", ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
+    <div style={{ height: "100%", display: "flex", justifyContent: "center", ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
       {!loaded && (
         // The centering transform lives on this plain, non-animated wrapper, not on the `<i>`
         // itself — `fa-spin`'s own CSS animation drives the icon's `transform` (a rotation) every
@@ -97,7 +97,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         loading="lazy"
         alt={alt}
         src={src}
-        style={{ display: "block", width: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
+        style={{ display: "block", width: "auto", maxWidth: "100%", height: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
         onLoad={() => setLoaded(true)}
       />
     </div>
@@ -111,11 +111,23 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
  * `lrr.css`) — that value was never actually a deliberate "off-center" design choice to preserve,
  * just an artifact of the label's own text width never being accounted for in a fixed percentage;
  * a real centering rule is what "第 N 页" visibly reads as trying to be. */
-function PageNumberLabel({ children }: { children: ReactNode }) {
+function PageNumberLabel({ children, hovered }: { children: ReactNode; hovered: boolean }) {
   return (
     <span
       className="page-number"
-      style={{ left: "50%", transform: "translateX(-50%)", backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 4 }}
+      style={{
+        left: "50%",
+        transform: "translateX(-50%)",
+        backgroundColor: "rgba(0,0,0,0.5)",
+        borderRadius: 4,
+        whiteSpace: "nowrap",
+        // Same fix as `PageGridActionIcon` — legacy's own `z-index: -1` at rest only hides this
+        // label where the thumbnail `<img>` actually covers it, which a `contain`-fit image
+        // narrower/shorter than its cell doesn't guarantee (real transparent gutter around it).
+        opacity: hovered ? 1 : 0,
+        zIndex: hovered ? 300 : 0,
+        transition: "opacity 0.1s",
+      }}
     >
       {children}
     </span>
@@ -180,13 +192,20 @@ function PageGridActionIcon({
         padding: 12,
         fontSize: 20,
         color: "lightskyblue",
-        // Mirrors legacy's own real `.quick-thumbnail:hover>.page-number` rule (`lrr.css`) —
-        // `z-index: -1` at rest (behind the thumbnail `<img>`, effectively invisible), `300` +
-        // a black backdrop once actually hovered, driven here by this component's own React
-        // state rather than that shared CSS selector (see this component's own docs for why).
-        zIndex: hovered ? 300 : -1,
+        // Was `z-index: -1` at rest (mirroring legacy's `.quick-thumbnail:hover>.page-number`
+        // CSS rule) — relies on the thumbnail `<img>` fully covering the cell to actually hide
+        // the icon there, which a `contain`-fit image narrower/shorter than its cell doesn't do
+        // (real transparent gutter around it), leaving the icon visibly floating over empty
+        // background at rest. `opacity: 0` hides it unconditionally regardless of what's
+        // underneath; `pointerEvents: 'none'` keeps it from swallowing clicks meant for the
+        // cell/image below while invisible (a plain `display: none` would work too but breaks
+        // the opacity transition on hover-in).
+        opacity: hovered ? 1 : 0,
+        pointerEvents: hovered ? "auto" : "none",
+        zIndex: hovered ? 300 : 0,
         backgroundColor: hovered ? "rgba(0,0,0,0.5)" : undefined,
         borderRadius: 4,
+        transition: "opacity 0.1s",
       }}
     />
   )
@@ -259,7 +278,7 @@ export function PageGridCell({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <PageNumberLabel>{t("Page {{n}}", { n: page })}</PageNumberLabel>
+        <PageNumberLabel hovered={hovered}>{t("Page {{n}}", { n: page })}</PageNumberLabel>
         <OverviewThumbnail src={thumbnailSrc} alt={t("Page {{n}}", { n: page }) ?? undefined} />
         {/* Not gated behind `loggedIn` (unlike the two icons below) — this is a read-only preview
             tool, useful regardless of edit permissions; only the quick-add-chapter section

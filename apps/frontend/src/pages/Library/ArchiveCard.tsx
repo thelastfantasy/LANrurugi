@@ -21,10 +21,10 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
 
   if (!showNew && !showCrown && !isTank) return null
   return (
-    <div className="isnew status-icons">
-      {showNew && <span title={t("New!") ?? undefined}>🆕</span>}
-      {showCrown && <span title={t("Read") ?? undefined}>👑</span>}
-      {isTank && <span title={t("Tankoubon") ?? undefined}>📚</span>}
+    <div className="status-icons" style={{ display: "flex", gap: 1, flexShrink: 0, paddingTop: 2 }}>
+      {showNew && <span title={t("New!") ?? undefined} style={{ fontSize: "0.8em" }}>🆕</span>}
+      {showCrown && <span title={t("Read") ?? undefined} style={{ fontSize: "0.8em" }}>👑</span>}
+      {isTank && <span title={t("Tankoubon") ?? undefined} style={{ fontSize: "0.8em" }}>📚</span>}
     </div>
   )
 }
@@ -96,11 +96,16 @@ export function ArchiveCard({
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
     >
-      <div className="id2">
-        <StatusIcons archive={archive} />
-        <a href={routes.reader(id)} title={archive.title} onClick={handleOpen}>
+      <div className="id2" style={{ display: "flex", alignItems: "flex-start", justifyContent: "center", gap: 2 }}>
+        <a
+          href={routes.reader(id)}
+          title={archive.title}
+          onClick={handleOpen}
+          style={{ flex: "0 1 auto", minWidth: 0 }}
+        >
           {archive.title}
         </a>
+        <StatusIcons archive={archive} />
       </div>
       <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
         {multiSelect && (

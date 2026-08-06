@@ -914,7 +914,7 @@ pub struct UpdateTankoubonMetadata {
     summary: Option<String>,
     tags: Option<String>,
     append: Option<bool>,
-    chapter_names: Option<std::collections::HashMap<String, String>>,
+    chapter_names: Option<Vec<lanrurugi_core::entities::ChapterNameEntry>>,
 }
 
 async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
@@ -1273,8 +1273,9 @@ async fn ai_rename_chapter(
         };
         let cn = tank
             .chapter_names
-            .get(member_id.as_str())
-            .map(|s| format!(" → {s}"))
+            .iter()
+            .find(|c| c.id == member_id.as_str())
+            .map(|c| format!(" → {}", c.name))
             .unwrap_or_default();
         context.push_str(&format!("{}. {}{}\n", i + 1, title, cn));
     }

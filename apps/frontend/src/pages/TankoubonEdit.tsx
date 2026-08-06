@@ -1,18 +1,16 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
 import {
   type TankoubonAiRenameResponse,
-  useAddToTankoubon,
   useAiRenameChapter,
   useAiRenameTankoubon,
-  useArchiveMetadata,
   useDeleteTankoubon,
   useLlmKeyStatus,
   useSearch,
   useStats,
-  useTankoubon,
+  useTankoubonFull,
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
@@ -233,29 +231,24 @@ function AiSkeleton() {
   )
 }
 
-/** Resolves an archive ID to its real title for the archive-list row below, with a
- * hover-thumbnail tooltip — matching real legacy's own `edit.html.tt2` (`is_tank` branch, line
- * 147: `archive.title` with `onmouseover="IndexTable.buildImageTooltip(this)"`), not a bare ID.
- * A standalone component (not a hook called in a loop) since the archive list is
- * variable-length, same reasoning as `RecentlyAddedCarousel.tsx`'s own
- * `SelectedArchiveSlideContent`. Falls back to the raw ID while its own fetch is in flight or if
- * it fails, so a row is never blank. */
-function ArchiveTitle({ archiveId }: { archiveId: string }) {
-  const metadata = useArchiveMetadata(archiveId)
-  if (!metadata.data) return <span>{archiveId}</span>
+/** Archive title with hover-thumbnail tooltip — title comes from the tankoubon's own
+ * `full_data` (no per-archive fetch needed), matching real legacy's own `edit.html.tt2`
+ * (`is_tank` branch, line 147: `archive.title` with `onmouseover="IndexTable.buildImageTooltip(this)"`). */
+function ArchiveTitle({ archiveId, title }: { archiveId: string; title: string }) {
   return (
     <Tooltip
       anchor="cursor"
       wrapperStyle={{ display: "inline" }}
+      maxWidth={480}
       label={
         <img
           src={`/api/archives/${archiveId}/thumbnail?no_fallback=true`}
           alt=""
-          style={{ height: 300, display: "block" }}
+          style={{ maxHeight: 420, maxWidth: "100%", display: "block" }}
         />
       }
     >
-      <span>{metadata.data.title}</span>
+      <span>{title}</span>
     </Tooltip>
   )
 }
@@ -264,9 +257,21 @@ export function TankoubonEdit() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { tankId = "" } = useParams<{ tankId: string }>()
-  const tankoubon = useTankoubon(tankId)
+  const tankoubonFull = useTankoubonFull(tankId)
+  const tankoubon = tankoubonFull.data?.result
+  // Title lookup built from full_data + manually-added archives. Ref so additions
+  // persist across re-renders (new Map on every render would lose them).
+  const titleById = useRef(new Map<string, string>())
+  // Populate on first data load — useRef only uses the initial value once.
+  useEffect(() => {
+    if (tankoubon) {
+      for (const a of tankoubon.full_data ?? []) {
+        titleById.current.set(a.arcid, a.title)
+      }
+    }
+  }, [tankoubon])
 
-  if (tankoubon.isLoading) {
+  if (tankoubonFull.isLoading) {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", color: "var(--theme-muted)" }}>
         {t("Loading library…")}
@@ -274,11 +279,11 @@ export function TankoubonEdit() {
     )
   }
 
-  if (tankoubon.isError || !tankoubon.data) {
+  if (tankoubonFull.isError || !tankoubon) {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">
-          {t("Failed to load archives: {{error}}", { error: String(tankoubon.error) })}
+          {t("Failed to load archives: {{error}}", { error: String(tankoubonFull.error) })}
         </p>
         <input
           className="stdbtn"
@@ -292,10 +297,10 @@ export function TankoubonEdit() {
 
   // Keyed by tankId so navigating between two different tankoubons' edit pages remounts this
   // form with fresh initial state, rather than needing an effect to re-sync it.
-  return <TankoubonForm key={tankId} tankId={tankId} tankoubon={tankoubon.data} />
+  return <TankoubonForm key={tankId} tankId={tankId} tankoubon={tankoubon} titleById={titleById.current} />
 }
 
-function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: TankoubonMetadata }) {
+function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tankoubon: TankoubonMetadata; titleById: Map<string, string> }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   // Matches this page's own real heading text below ("Editing %1 (Tankoubon)") — no legacy
@@ -304,7 +309,6 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   useDocumentTitle(t("Editing %1 (Tankoubon)").replace("%1", tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
-  const addToTankoubon = useAddToTankoubon(tankId)
   const stats = useStats(2)
   // Same source/shape as `Edit.tsx`'s own `tagSuggestions` (every tag used at least twice across
   // the library) — this page's Tags field now uses the same `TagInput` chip editor as the
@@ -324,7 +328,11 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   const hasLlmKey = llmStatus.data?.configured ?? false
   const [aiOverlayOpen, setAiOverlayOpen] = useState(false)
   const [aiSuggestions, setAiSuggestions] = useState<TankoubonAiRenameResponse | null>(null)
-  const [chapterNames, setChapterNames] = useState<Record<string, string>>(tankoubon.chapter_names ?? {})
+  const initChapters: Record<string, string> = {}
+  for (const c of tankoubon.chapter_names ?? []) {
+    initChapters[c.id] = c.name
+  }
+  const [chapterNames, setChapterNames] = useState<Record<string, string>>(initChapters)
 
   // Debounced so the title-search dropdown below doesn't fire one request per keystroke —
   // additive on top of the raw-ID input, which still works unchanged (see `addArchiveId`).
@@ -348,7 +356,10 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   // successful save via `Server.callAPIBody`'s built-in success-message handling — this port's
   // `updateTankoubon` doesn't have that generic per-call toasting, so it's shown explicitly here.
   async function handleSave() {
-    await updateTankoubon.mutateAsync({ metadata: { name, summary, tags, chapter_names: chapterNames } })
+    await updateTankoubon.mutateAsync({
+      archives,
+      metadata: { name, summary, tags, chapter_names: Object.entries(chapterNames).map(([id, name]) => ({ id, name })) },
+    })
     toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
   }
 
@@ -359,13 +370,10 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   // significant), persisted the same way `moveArchive` used to.
   function handleReorder(next: string[]) {
     setArchives(next)
-    updateTankoubon.mutate({ archives: next })
   }
 
   function removeArchive(id: string) {
-    const next = archives.filter((a) => a !== id)
-    setArchives(next)
-    updateTankoubon.mutate({ archives: next })
+    setArchives((prev) => prev.filter((a) => a !== id))
   }
 
   async function handleDelete() {
@@ -374,18 +382,21 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
   }
 
   // Shared by the raw-ID "Add" button and picking a row from the title-search dropdown below —
-  // same mutation either way, just a different source for the ID.
-  async function addArchiveId(archiveId: string) {
-    await addToTankoubon.mutateAsync(archiveId)
+  // same mutation either way, just a different source for the ID. `title` is used for newly-added
+  // archives that aren't in the initial `full_data` (otherwise the row shows the raw hash).
+  function addArchiveId(archiveId: string, title?: string) {
     setArchives((prev) => [...prev, archiveId])
-    setNewArchiveId("")
-    setArchiveSearchOpen(false)
+    if (title) titleById.set(archiveId, title)
+    // Auto-scroll so the newly-added row stays visible at the bottom
+    setTimeout(() => {
+      window.scrollBy({ top: 52, behavior: "smooth" })
+    }, 50)
   }
 
-  async function handleAddArchive() {
+  function handleAddArchive() {
     const id = newArchiveId.trim()
     if (!id) return
-    await addArchiveId(id)
+    addArchiveId(id)
   }
 
   return (
@@ -513,7 +524,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                         whiteSpace: "nowrap",
                       }}
                     >
-                      <ArchiveTitle archiveId={archiveId} />
+                      <ArchiveTitle archiveId={archiveId} title={titleById.get(archiveId) ?? archiveId} />
                     </span>
 
                     {/* Edit + ✕ — column 3, spans both rows */}
@@ -592,7 +603,7 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                                   onSuccess: (data) => {
                                     setChapterNames((prev) => ({ ...prev, [archiveId]: data.name }))
                                     setChapterAiLoading(null)
-                                    const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.[archiveId]
+                                    const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.find((c) => c.id === archiveId)?.name
                                     if (data.name === prevName) {
                                       toast({ heading: t("Chapter name unchanged"), text: data.name, icon: "info" })
                                     } else {
@@ -654,7 +665,6 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                       // Only update order if all members are accounted for
                       if (reordered.length === archives.length) {
                         setArchives(reordered)
-                        updateTankoubon.mutate({ archives: reordered })
                       }
                       setAiOverlayOpen(false)
                     }}
@@ -763,29 +773,29 @@ function TankoubonForm({ tankId, tankoubon }: { tankId: string; tankoubon: Tanko
                     }}
                   >
                     {archiveSearchResults.map((a) => (
-                      <PopupMenuItem
-                        key={a.arcid}
-                        onMouseDown={(e) => {
-                          // Beats the input's own `onBlur` (fires first on mousedown), same
-                          // reasoning as the Library search bar's own tag-autocomplete dropdown.
-                          e.preventDefault()
-                          void addArchiveId(a.arcid)
-                        }}
+                      <Tooltip
+                        anchor="cursor"
+                        wrapperStyle={{ display: "contents" }}
+                        maxWidth={480}
+                        label={
+                          <img
+                            src={`/api/archives/${a.arcid}/thumbnail?no_fallback=true`}
+                            alt=""
+                            style={{ maxHeight: 420, maxWidth: "100%", display: "block" }}
+                          />
+                        }
                       >
-                        <Tooltip
-                          anchor="cursor"
-                          wrapperStyle={{ display: "inline" }}
-                          label={
-                            <img
-                              src={`/api/archives/${a.arcid}/thumbnail?no_fallback=true`}
-                              alt=""
-                              style={{ height: 300, display: "block" }}
-                            />
-                          }
+                        <PopupMenuItem
+                          key={a.arcid}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            void addArchiveId(a.arcid, a.title)
+                          }}
                         >
-                          <span>{a.title}</span>
-                        </Tooltip>
-                      </PopupMenuItem>
+                          <span>{a.title}</span>{" "}
+                          <span style={{ opacity: 0.45, fontSize: "0.9em" }}>({a.pagecount}p)</span>
+                        </PopupMenuItem>
+                      </Tooltip>
                     ))}
                   </PopupMenu>
                 )}

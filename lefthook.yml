@@ -32,4 +32,4 @@ pre-push:
     frontend-lint:
       glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
       root: "apps/frontend"
-      run: npx eslint --fix src/ tests/ --ext .tsx,.ts
+      run: npx tsc -b --force && npx eslint --fix src/ tests/ --ext .tsx,.ts

@@ -45,7 +45,7 @@ export interface TankoubonMetadata {
   tags: string
   archives: string[]
   progress: number
-  chapter_names: Record<string, string>
+  chapter_names: { id: string; name: string }[]
 }
 
 export interface TankoubonListResponse {

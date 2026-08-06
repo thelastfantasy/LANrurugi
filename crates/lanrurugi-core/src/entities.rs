@@ -115,6 +115,14 @@ impl Category {
     }
 }
 
+/// One entry in a Tankoubon's ordered chapter-name list. Separated from Grouping
+/// so the JSON serialisation is always `[{id, name}]`, never a key-ordered `{id: name}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChapterNameEntry {
+    pub id: String,
+    pub name: String,
+}
+
 /// A Tankoubon (volume grouping). Redis **ZSET** keyed by `TANK_<10-digit-timestamp>` (15 chars) —
 /// see module docs for the packed-metadata layout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,9 +164,10 @@ pub struct Grouping {
     /// the tank is now empty.
     pub thumbnail_source_archive: Option<ArchiveId>,
     pub thumbnail_source_page: Option<u32>,
-    /// Per-member chapter names (archive ID → chapter title), set via AI rename Apply.
+    /// Per-member chapter names in archive order — an ordered list, not a map,
+    /// so the JSON serialisation preserves the same order as the archives array.
     #[serde(default)]
-    pub chapter_names: std::collections::HashMap<String, String>,
+    pub chapter_names: Vec<ChapterNameEntry>,
     /// Unix timestamp of creation (from `TANK_` ID prefix or explicit set).
     #[serde(default)]
     pub created_at: Option<u64>,

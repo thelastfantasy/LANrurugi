@@ -472,7 +472,7 @@ export function Reader() {
   // boundary — the LLM rerank takes seconds, and this hides that latency behind normal
   // page-turning so the boundary panel opens with cached data (stale for a minute).
   useEffect(() => {
-    if (!archiveId || isTank || totalPages === 0) return
+    if (!archiveId || totalPages === 0) return
     if (currentPage < totalPages - 2) return
     void queryClient.prefetchQuery({
       queryKey: RECS_QUERY_KEY(archiveId),
@@ -503,7 +503,7 @@ export function Reader() {
       direction,
       recommendations: cached?.recommendations ?? null,
     })
-    if (!archiveId || isTank || cached) return
+    if (!archiveId || cached) return
     void queryClient
       .fetchQuery({
         queryKey: RECS_QUERY_KEY(archiveId),

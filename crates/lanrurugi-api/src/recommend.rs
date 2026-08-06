@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -27,7 +28,7 @@ use thiserror::Error;
 use lanrurugi_recommend::embedding::Embedder;
 use lanrurugi_recommend::recommend::{ArchiveMeta, Recommendation};
 
-use crate::common::error;
+use crate::common::{error, not_found};
 use crate::AppState;
 
 #[derive(Debug, Error)]
@@ -78,6 +79,7 @@ impl RecommendService {
         state: &AppState,
         archive_id: &str,
         limit: usize,
+        exclude_ids: &[String],
     ) -> Result<Vec<Recommendation>, RecommendServiceError> {
         let embedder = self
             .embedder
@@ -167,7 +169,15 @@ impl RecommendService {
         // Prefilter generously (the LLM rerank needs room to pick the true next volume even if
         // embedding ranked it a few places down); the final `limit` is applied after reranking.
         let prefilter_limit = limit.max(crate::recommend_llm::PREFILTER_COUNT);
-        let exclude_id = archive_id.to_string();
+        // Beyond the anchor itself, exclude every other member of the same Tankoubon (if the
+        // caller resolved a Tankoubon down to its last volume as the anchor) — the reader has
+        // already read all of them, so recommending a sibling volume back would just point at
+        // something already finished instead of something new.
+        let exclude_set: std::collections::HashSet<String> = exclude_ids
+            .iter()
+            .cloned()
+            .chain([archive_id.to_string()])
+            .collect();
         let embedder_for_blocking = embedder.clone();
         let current_vec = embedder_for_blocking.embed(
             &lanrurugi_recommend::recommend::normalize_title(&current_title),
@@ -178,7 +188,7 @@ impl RecommendService {
         let ranked: Vec<Recommendation> = tokio::task::spawn_blocking(move || {
             let mut scored: Vec<Recommendation> = Vec::with_capacity(vectors_snapshot.len());
             for (meta, vec) in &vectors_snapshot {
-                if meta.id == exclude_id {
+                if exclude_set.contains(&meta.id) {
                     continue;
                 }
                 scored.push(Recommendation {
@@ -266,7 +276,54 @@ async fn get_recommendations(
     Query(q): Query<RecommendationQuery>,
 ) -> Response {
     let limit = q.limit.unwrap_or(10).clamp(1, 20);
-    match state.recommender.recommendations(&state, &id, limit).await {
+
+    // A Tankoubon has no title/tags of its own to embed — recommendations are computed against
+    // its *last* member archive instead (the boundary overlay only ever opens after finishing
+    // that last volume's last page, so "what's similar to the volume just finished" is exactly
+    // the anchor a reader closing out a Tankoubon actually wants). The response still reports
+    // back the original Tankoubon `id` (not the resolved archive id) so the frontend's cache key
+    // and displayed "recommendations for X" stay keyed on what the reader was actually viewing.
+    // Also exclude every other member of the same Tankoubon from the candidate pool — the
+    // reader has already read all of them, so recommending a sibling volume back would just
+    // point at something already finished instead of something new.
+    let (anchor_id, exclude_ids) = if id.starts_with("TANK_") {
+        match state
+            .repos
+            .groupings
+            .get(&lanrurugi_core::ids::TankId(id.clone()))
+            .await
+        {
+            Ok(Some(tank)) => match tank.archives.last() {
+                Some(last) => (
+                    last.to_string(),
+                    tank.archives.iter().map(|a| a.to_string()).collect(),
+                ),
+                None => {
+                    return error(
+                        StatusCode::BAD_REQUEST,
+                        "get_recommendations",
+                        "Tankoubon has no member archives.",
+                    )
+                }
+            },
+            Ok(None) => return not_found("get_recommendations", format!("{id} does not exist.")),
+            Err(e) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "get_recommendations",
+                    e.to_string(),
+                )
+            }
+        }
+    } else {
+        (id.clone(), Vec::new())
+    };
+
+    match state
+        .recommender
+        .recommendations(&state, &anchor_id, limit, &exclude_ids)
+        .await
+    {
         Ok(list) => {
             // Enrich each recommendation with the card-status fields the frontend's badge
             // overlays need (🆕 new / 👑 read / 📚 tankoubon) — `is_read` matches the

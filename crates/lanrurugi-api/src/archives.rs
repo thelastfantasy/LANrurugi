@@ -18,6 +18,7 @@ use axum::routing::{get, put};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::entities::{Archive, TocEntry};
+use lanrurugi_core::ids::{ArchiveId, TankId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -149,6 +150,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/archives/{id}/files/thumbnails",
             axum::routing::post(generate_page_thumbnails),
+        )
+        .route(
+            "/archives/{id}/thumbnails",
+            axum::routing::get(get_page_thumbnails),
         )
         .route(
             "/archives/{id}/thumbnail",
@@ -1453,6 +1458,117 @@ async fn generate_page_thumbnails(
         "message": "Thumbnails generated.",
     }))
     .into_response()
+}
+
+/// `GET /api/archives/{id}/thumbnails?from=N&count=M`
+///
+/// Returns paginated page-metadata so the overview grid can load incrementally
+/// instead of rendering every cell at once (issue #71). Each entry carries the
+/// resolved `arcId` + `localPage` so the frontend can build the correct thumbnail
+/// URL even for a Tankoubon whose pages span multiple member archives.
+#[derive(Debug, Deserialize)]
+struct PageThumbnailsQuery {
+    from: Option<u32>,
+    count: Option<u32>,
+}
+
+async fn get_page_thumbnails(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PageThumbnailsQuery>,
+) -> Response {
+    let from = q.from.unwrap_or(1).max(1);
+    let count = q.count.unwrap_or(60).min(100);
+
+    // Tankoubon: resolve global pages across member archives
+    if id.starts_with("TANK_") {
+        let tank_id = TankId(id.clone());
+        let tank = match state.repos.groupings.get(&tank_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) => return not_found("get_page_thumbnails", format!("{id} does not exist.")),
+            Err(e) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "get_page_thumbnails",
+                    e.to_string(),
+                )
+            }
+        };
+
+        let mut total = 0u32;
+        let mut member_page_counts: Vec<(ArchiveId, u32)> = Vec::new();
+        for member_id in &tank.archives {
+            if let Ok(Some(archive)) = state.repos.archives.get(member_id).await {
+                let pc = archive.pagecount;
+                member_page_counts.push((member_id.clone(), pc));
+                total += pc;
+            }
+        }
+
+        let mut pages: Vec<serde_json::Value> = Vec::with_capacity(count as usize);
+        let end = (from + count - 1).min(total);
+        let mut global = 1u32;
+        for (arc_id, pc) in &member_page_counts {
+            let member_start = global;
+            let member_end = global + pc - 1;
+            global += pc;
+
+            let overlap_start = member_start.max(from);
+            let overlap_end = member_end.min(end);
+            if overlap_start > overlap_end {
+                continue;
+            }
+            for gp in overlap_start..=overlap_end {
+                let local_page = gp - member_start + 1;
+                pages.push(serde_json::json!({
+                    "page": gp,
+                    "arcId": arc_id,
+                    "localPage": local_page,
+                }));
+                if pages.len() >= count as usize {
+                    break;
+                }
+            }
+            if pages.len() >= count as usize {
+                break;
+            }
+        }
+
+        return axum::Json(serde_json::json!({ "pages": pages, "total": total })).into_response();
+    }
+
+    // Regular archive
+    let archive_id = ArchiveId(id);
+    let archive = match state.repos.archives.get(&archive_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return not_found(
+                "get_page_thumbnails",
+                format!("{archive_id} does not exist."),
+            )
+        }
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "get_page_thumbnails",
+                e.to_string(),
+            )
+        }
+    };
+
+    let total = archive.pagecount;
+    let end = (from + count - 1).min(total);
+    let pages: Vec<serde_json::Value> = (from..=end)
+        .map(|p| {
+            serde_json::json!({
+                "page": p,
+                "arcId": archive_id.0,
+                "localPage": p,
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({ "pages": pages, "total": total })).into_response()
 }
 
 #[cfg(test)]

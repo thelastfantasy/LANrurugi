@@ -54,14 +54,15 @@ export function useTankoubonReading(tankId: string | null) {
   let toc: TocEntry[] = []
 
   if (!isLoading && !isError) {
-    const chapterNames = full.data?.result.chapter_names ?? {}
+    const chapterNames = full.data?.result.chapter_names ?? []
+    const nameById = new Map(chapterNames.map((c) => [c.id, c.name]))
     let offset = 0
     members.forEach((member, i) => {
       const memberPages = pageQueries[i]?.data?.pages ?? []
       if (memberPages.length === 0) return
       const startPage = offset + 1
       const endPage = offset + memberPages.length
-      const displayTitle = chapterNames[member.arcid] || member.title
+      const displayTitle = nameById.get(member.arcid) || member.title
       chapters.push({ arcId: member.arcid, title: displayTitle, startPage, endPage })
       pages.push(...memberPages)
       // Show custom chapter name (from AI rename) if set; fall back to archive title.

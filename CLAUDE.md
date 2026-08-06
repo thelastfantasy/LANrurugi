@@ -192,6 +192,12 @@ themes, not just whichever one happens to be active during development. Concrete
   `.msm-selected` accent color, after an initial attempt hardcoded a single `rgba(...)` value that
   only looked right on the one theme it was eyeballed against.
 
+## Pre-push checks required
+
+After completing each batch of edits, run `mise run check` and confirm all checks
+pass (rust-check ✔️ + frontend-lint ✔️). Fix any failures before proceeding. Never
+offer `--no-verify` as a workaround.
+
 ## `--no-verify` is forbidden
 
 Never use `git commit --no-verify` or `git push --no-verify`. If the pre-push/pre-commit hook

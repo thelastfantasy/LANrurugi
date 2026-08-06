@@ -42,6 +42,9 @@ export default [
       'simple-import-sort': simpleImportSort,
       '@stylistic': stylistic,
     },
+    settings: {
+      react: { version: 'detect' },
+    },
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,

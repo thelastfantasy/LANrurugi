@@ -49,8 +49,8 @@ COPY crates ./crates
 # rebuilds, but their contents are NOT part of the image layer — the binary
 # must be copied out explicitly for the `COPY --from` in the runtime stage
 # to find it.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
+RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=lrr-cargo-target,target=/build/target \
     cargo build --release -p lanrurugi-server && \
     cp /build/target/release/lanrurugi-server /build/lanrurugi-server
 

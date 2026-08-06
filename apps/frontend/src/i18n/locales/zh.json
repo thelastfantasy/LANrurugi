@@ -702,6 +702,7 @@
   "Scan your Content Folder and automatically create Static Categories for each subfolder.": "扫描您的内容文件夹，并为每个子文件夹自动创建静态分类。",
   "Script failed with error: \\${error}": "脚本运行失败，错误信息：${error}",
   "Script result": "脚本运行结果",
+  "Scroll to top": "回到顶部",
   "Scripts": "脚本",
   "Search Predicate": "搜索谓词",
   "Search Title, Artist, Series, Language or Tags": "以标题、艺术家、系列、语言或标签来搜索",

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query"
 import type { MouseEvent } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
@@ -21,6 +21,7 @@ import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { RatingWidget } from "@/components/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
+import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
@@ -31,6 +32,85 @@ import { PageGridCell } from "./PageGridCell"
 import { PageLightbox } from "./PageLightbox"
 import { ChapterActionMenu } from "./shared"
 import { TagsTable } from "./TagsTable"
+
+/**
+ * Scroll-boundary sentinel — triggers `onVisible` when the user scrolls within
+ * `threshold` px of this element. Uses the overlay's own scroll container
+ * (`#i1`) rather than IntersectionObserver so the initial scroll-to-current-page
+ * doesn't falsely trigger a cascade of preloads.
+ */
+/** Scroll-to-top floating button — absolute within the modal (`.id1` is the positioning
+ * parent since it has `position: fixed`), visible only after scrolling down 300px. */
+function ScrollToTopFab({ onJump }: { onJump: () => void }) {
+  const { t } = useTranslation()
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const div = ref.current
+    if (!div) return
+    const overlay = div.closest("#archivePagesOverlay") as HTMLElement | null
+    if (!overlay) return
+    const scrollEl = overlay
+    const el = div
+    function check() { el.hidden = scrollEl.scrollTop < 300 }
+    scrollEl.addEventListener("scroll", check, { passive: true })
+    check()
+    return () => scrollEl.removeEventListener("scroll", check)
+  }, [])
+  return (
+    <div
+      ref={ref}
+      style={{ position: "sticky", bottom: 0, width: "100%", textAlign: "right", padding: "0 20px 12px 0", boxSizing: "border-box" }}
+    >
+      <button
+        type="button"
+        className="stdbtn"
+        title={t("Scroll to top") ?? undefined}
+        onClick={() => {
+          onJump()
+          ;(ref.current?.closest("#archivePagesOverlay") as HTMLElement | undefined)?.scrollTo({ top: 0, behavior: "smooth" })
+        }}
+        style={{
+          width: 32,
+          height: 32,
+          minWidth: 32,
+          padding: 0,
+          borderRadius: "50%",
+          opacity: 0.85,
+          background: "rgba(0,0,0,0.55)",
+          color: "#fff",
+          border: "none",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+        }}
+      >
+        <i className="fa fa-arrow-up" aria-hidden="true" />
+      </button>
+    </div>
+  )
+}
+
+/** Placeholder for an unloaded page in the overview grid — same dimensions as a
+ * real `PageGridCell` so the scrollbar always reflects the true total. Triggers
+ * `onVisible` via IntersectionObserver when scrolled near. */
+function PagePlaceholder({ page: _page, onVisible }: { page: number; onVisible: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) onVisible() },
+      { rootMargin: "240px" },
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [onVisible])
+  return (
+    <div
+      ref={ref}
+      className="id3 quick-thumbnail"
+      style={{ width: 205, aspectRatio: "1 / 1.414", background: "rgba(128,128,128,0.06)", borderRadius: 4 }}
+    />
+  )
+}
 
 // Mirrors legacy's `#archivePagesOverlay` (`updateArchiveOverlay`/`generateThumbnails` in
 // `~/LANraragi/public/js/reader.js`) — thumbnail (left) + Admin Options/Categories/Rating (right)
@@ -336,6 +416,22 @@ export function ArchiveOverviewOverlay({
     navigate(routes.library())
   }
 
+  // Overridden by the scroll-to-top FAB (`ScrollToTopFab`'s own `onJump`) — re-anchors the
+  // paginated fetch to page 1 instead of just scrolling, so the pages skipped over by the jump
+  // stay unloaded (placeholders) rather than every one of them firing `onVisible` at once when
+  // they all land in the viewport simultaneously (a real observed bug: a jump from page ~450 to
+  // the top fired dozens of concurrent `loadUp`/`loadDown` calls in the same render, one per
+  // placeholder that happened to be in view right after the jump).
+  const [scrollAnchor, setScrollAnchor] = useState<number | null>(null)
+  const {
+    pages: paginatedPages,
+    pageMeta,
+    total: loadedTotal,
+    loadedStart,
+    loadedEnd,
+    loadUp,
+    loadDown,
+  } = usePaginatedOverview(archive.arcid, scrollAnchor ?? (autoFocus ? (currentPage || 1) : 1))
   const pageCount = archive.pagecount
 
   // Scrolls to and briefly outlines the current page's own thumbnail once, right after the
@@ -347,27 +443,40 @@ export function ArchiveOverviewOverlay({
   // overlay instead (`autoFocus` false) — auto-scrolling on every single page load in addition to
   // auto-opening was a real, reported annoyance, even though auto-opening itself is intentional.
   const [highlightedPage, setHighlightedPage] = useState<number | null>(null)
+  const scrolledRef = useRef(false)
   useEffect(() => {
     if (!autoFocus) return
-    // Deferred a tick rather than calling `setHighlightedPage` synchronously in the effect body
-    // (the project's own lint rules flag that as cascading-render-prone) — also conveniently lets
-    // the just-mounted grid finish its first paint before `scrollIntoView` runs against it.
-    const startTimer = setTimeout(() => {
+    if (scrolledRef.current) return
+    const section = document.getElementById("pages-section")
+    if (!section) return
+    // With paginated loading the target cell may not exist yet — watch for it.
+    const obs = new MutationObserver(() => {
       const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
       if (!cell) return
       cell.scrollIntoView({ block: "center" })
       setHighlightedPage(currentPage)
+      scrolledRef.current = true
+      obs.disconnect()
+    })
+    obs.observe(section, { childList: true, subtree: true })
+    // Also try immediately in case the cell is already there (deferred so eslint
+    // set-state-in-effect doesn't flag the synchronous setHighlightedPage call).
+    const tryImmediate = setTimeout(() => {
+      const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
+      if (cell) {
+        cell.scrollIntoView({ block: "center" })
+        setHighlightedPage(currentPage)
+        scrolledRef.current = true
+        obs.disconnect()
+      }
     }, 0)
     const clearTimer = setTimeout(() => setHighlightedPage(null), 3000)
     return () => {
-      clearTimeout(startTimer)
+      obs.disconnect()
+      clearTimeout(tryImmediate)
       clearTimeout(clearTimer)
     }
-    // Intentionally empty deps — this is a one-time "where am I" cue for whichever page the
-    // overlay opened on, not something that should re-trigger on every `currentPage` change while
-    // it stays open (e.g. from clicking around the grid itself).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [autoFocus, currentPage, paginatedPages])
 
   return (
     <>
@@ -377,7 +486,7 @@ export function ArchiveOverviewOverlay({
       {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
           opaque black, so content behind the shade stays faintly visible. */}
       <div id="overlay-shade" style={{ display: "block", opacity: 0.6 }} onClick={onClose} />
-      <div id="archivePagesOverlay" className="id1 base-overlay page-overlay" style={{ padding: "0 16px", boxSizing: "border-box" }}>
+      <div id="archivePagesOverlay" className="id1 base-overlay page-overlay" style={{ padding: "0 16px", boxSizing: "border-box", overscrollBehavior: "contain" }}>
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("Archive Overview")}
         </h2>
@@ -423,13 +532,79 @@ export function ArchiveOverviewOverlay({
                 <br />
 
                 <h2>{t("Categories")}</h2>
+                {/* Scoped hover style for the remove-category `×` — inline styles can't
+                    express `:hover`, and this is a small enough one-off to not warrant a
+                    dedicated CSS module/class in the shared theme files. */}
+                <style>{`
+                  .category-chip {
+                    border-radius: 5px;
+                    overflow: hidden;
+                    position: relative;
+                  }
+                  /* Diagonal sheen — thin light stripes at a 45° angle, the classic flat
+                     "brushed metal" Windows-button texture. Static at rest; on hover the
+                     stripes slide across the chip (a plain background-position animation,
+                     no glow/blur) for the same "hovered = alive" cue a real button gives. */
+                  @keyframes category-chip-sheen-flow {
+                    from { background-position: 0 0; }
+                    to { background-position: -48px 0; }
+                  }
+                  /* Soft, wide, blurred-edge bands (unlike the earlier hard-edged stripes) so
+                     the hover animation reads as liquid flowing sideways rather than a texture
+                     ticking past — each band fades in/out via multiple gradient stops instead
+                     of a sharp on/off repeating-linear-gradient. */
+                  .category-chip::before {
+                    content: "";
+                    position: absolute;
+                    inset: 0;
+                    background: repeating-linear-gradient(
+                      100deg,
+                      rgba(255,255,255,0) 0px,
+                      rgba(255,255,255,0.95) 8px,
+                      rgba(255,255,255,0) 16px,
+                      rgba(255,255,255,0) 48px
+                    );
+                    mix-blend-mode: overlay;
+                    pointer-events: none;
+                    z-index: 0;
+                  }
+                  .category-chip:hover::before {
+                    animation: category-chip-sheen-flow 2.2s linear infinite;
+                  }
+                  .category-chip > * {
+                    position: relative;
+                    z-index: 1;
+                  }
+                  .category-chip-remove {
+                    transition: background-color 0.1s;
+                  }
+                  .category-chip-remove:hover {
+                    background-color: rgba(0,0,0,0.12);
+                  }
+                `}</style>
                 <div style={{ display: "inline-block" }}>
                   {archiveCategories.map((c) => (
-                    <div key={c.id} className="gt" style={{ fontSize: 14, padding: 4 }}>
-                      <span className="label">{c.name}</span>
+                    <div
+                      key={c.id}
+                      className="gt category-chip"
+                      style={{ fontSize: 14, height: 26, padding: 0, display: "inline-flex", alignItems: "stretch", gap: 0, lineHeight: 1 }}
+                    >
+                      <span className="label" style={{ padding: "0 6px 0 8px", display: "flex", alignItems: "center" }}>
+                        {c.name}
+                      </span>
                       <a
                         href="#"
-                        style={{ marginLeft: 4, marginRight: 2 }}
+                        className="category-chip-remove"
+                        style={{
+                          textDecoration: "none",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: "0 8px",
+                          fontSize: "1.3em",
+                          borderLeft: "1px solid currentColor",
+                          opacity: 0.9,
+                        }}
                         onClick={(e) => {
                           e.preventDefault()
                           void removeFromCategory(c.id)
@@ -580,30 +755,63 @@ export function ArchiveOverviewOverlay({
         </div>
 
         <div id="pages-section" style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
-          {Array.from({ length: pageCount }, (_, i) => i + 1).map((page) => {
-            const isStamped = stampedPageSet.has(String(page))
-            if (filterStamped && !isStamped) return null
-            const target = resolve(page)
-            if (!target) return null
+          {/* Progress bar */}
+          {loadedTotal > 0 && loadedStart > 0 && (
+            <div style={{ width: "100%", height: 3, background: "rgba(128,128,128,0.15)", marginBottom: 4 }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.min(100, ((loadedEnd - loadedStart + 1) / loadedTotal) * 100)}%`,
+                  marginLeft: `${((loadedStart - 1) / loadedTotal) * 100}%`,
+                  background: "rgba(128,128,128,0.4)",
+                  borderRadius: 2,
+                  transition: "width 0.2s, margin-left 0.2s",
+                }}
+              />
+            </div>
+          )}
+          {/* Render ALL pages — loaded = real cell, unloaded = placeholder.
+              Placeholder cells give the scrollbar its true height immediately,
+              so sentinels only fire when the user genuinely scrolls there. */}
+          {Array.from({ length: loadedTotal || pageCount || 0 }, (_, i) => i + 1).map((page) => {
+            const meta = pageMeta.get(page)
+            if (meta) {
+              const isStamped = stampedPageSet.has(String(page))
+              if (filterStamped && !isStamped) return null
+              return (
+                <PageGridCell
+                  key={page}
+                  page={page}
+                  isStamped={isStamped}
+                  loggedIn={loggedIn}
+                  highlighted={page === highlightedPage}
+                  thumbnailSrc={`/api/archives/${meta.arcId}/thumbnail?page=${meta.localPage}`}
+                  onSelectPage={onSelectPage}
+                  onSetThumbnail={handleSetThumbnail}
+                  onAddToc={handleAddToc}
+                  onQuickAddToc={handleQuickAddToc}
+                  onOpenLightbox={setLightboxPage}
+                  isTank={isTank}
+                />
+              )
+            }
+            // Placeholder for unloaded page — same size as a real cell
             return (
-              <PageGridCell
+              <PagePlaceholder
                 key={page}
                 page={page}
-                isStamped={isStamped}
-                loggedIn={loggedIn}
-                highlighted={page === highlightedPage}
-                thumbnailSrc={`/api/archives/${target.arcId}/thumbnail?page=${target.localPage}`}
-                onSelectPage={onSelectPage}
-                onSetThumbnail={handleSetThumbnail}
-                onAddToc={handleAddToc}
-                onQuickAddToc={handleQuickAddToc}
-                onOpenLightbox={setLightboxPage}
-                isTank={isTank}
+                onVisible={() => {
+                  if (page < loadedStart) loadUp()
+                  else loadDown()
+                }}
               />
             )
           })}
         </div>
+        {/* Scroll-to-top FAB — sticky within the scrollable overlay, shown only when scrolled */}
+        <ScrollToTopFab onJump={() => setScrollAnchor(1)} />
       </div>
+
       {lightboxPage !== null && (
         <PageLightbox
           archiveId={archive.arcid}

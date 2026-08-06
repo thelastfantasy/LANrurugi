@@ -124,11 +124,5 @@ pub async fn json_chat<T: serde::de::DeserializeOwned>(
     max_tokens: u32,
 ) -> Result<T, String> {
     let text = chat(redis_config, system, user, temperature, max_tokens).await?;
-    serde_json::from_str::<T>(&text).or_else(|_| {
-        serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.as_object().and_then(|o| o.values().next()).cloned())
-            .and_then(|arr| serde_json::from_value::<T>(arr).ok())
-            .ok_or_else(|| format!("AI 返回了无法解析的格式: {text}"))
-    })
+    serde_json::from_str::<T>(&text).map_err(|_| format!("AI 返回了无法解析的格式: {text}"))
 }

@@ -64,6 +64,10 @@ run = "scripts/cargo-container-run.sh cargo clippy --workspace --all-targets -- 
 description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook; see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo fmt --all --check"
 
+[tasks.check]
+description = "tsc + eslint + clippy + fmt — must pass before committing"
+run = "npx lefthook run pre-push"
+
 [tasks.build]
 description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo build --workspace"

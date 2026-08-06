@@ -66,7 +66,7 @@ done
 ENV_FILE_ARGS=()
 [ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS=(--env-file "$REPO_ROOT/.env.local")
 
-"$CMD" run --rm --memory=8g --memory-swap=8g --cpus="$cpus" --cpu-shares="$cpu_shares" \
+"$CMD" run --rm --network host --memory=8g --memory-swap=8g --cpus="$cpus" --cpu-shares="$cpu_shares" \
   -v "$REPO_ROOT":/workspace \
   -v "$REPO_ROOT/.cargo-target":/workspace/target \
   -v "$REPO_ROOT/.cargo-registry":/usr/local/cargo/registry \

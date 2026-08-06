@@ -10,7 +10,7 @@
 
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
-use lanrurugi_core::entities::{Archive, Category, Grouping, Stamp, TocEntry};
+use lanrurugi_core::entities::{Archive, Category, ChapterNameEntry, Grouping, Stamp, TocEntry};
 use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
 use thiserror::Error;
 
@@ -420,7 +420,7 @@ impl GroupingRepository {
         let archive_strs: Vec<String> = conn.zrangebyscore(tankid.as_str(), 1, "+inf").await?;
         let archives: Vec<ArchiveId> = archive_strs.into_iter().map(ArchiveId).collect();
 
-        let chapter_names: std::collections::HashMap<String, String> =
+        let chapter_names: Vec<ChapterNameEntry> =
             serde_json::from_str(&chapter_names).unwrap_or_default();
 
         Ok(Some(Grouping {

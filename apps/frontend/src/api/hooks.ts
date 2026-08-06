@@ -428,7 +428,7 @@ export function useUpdateTankoubon(id: string) {
   return useMutation({
     mutationFn: (body: {
       archives?: string[]
-      metadata?: { name?: string; summary?: string; tags?: string; chapter_names?: Record<string, string> }
+      metadata?: { name?: string; summary?: string; tags?: string; chapter_names?: { id: string; name: string }[] }
     }) => sendJson("PUT", `/tankoubons/${id}`, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
