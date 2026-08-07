@@ -495,6 +495,22 @@ export function useAiRenameChapter() {
   })
 }
 
+export interface AiGroupSuggestion {
+  archive_ids: string[]
+}
+
+/** `POST /tankoubons/ai-group-suggestions` — no id param (unlike `useAiRenameTankoubon`), since
+ * this scans the whole library's ungrouped archives rather than operating on one already-existing
+ * Tankoubon. Local-model-only (see that endpoint's own module docs) — no `useLlmKeyStatus` gate
+ * needed, just the same `model_not_ready` 503 the reader recommendations endpoint can return,
+ * surfaced to the caller as a thrown `ApiError` like any other failed mutation. */
+export function useAiGroupSuggestions() {
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ suggestions: AiGroupSuggestion[] }>("POST", "/tankoubons/ai-group-suggestions"),
+  })
+}
+
 /** Same shape as `useUpdateProgress`, but for a Tankoubon read as one concatenated book — `page`
  * is the *global* page number across every member archive, matching the backend's own
  * `PUT /tankoubons/{id}/progress/{page}` (`update_tankoubon_progress`), which stores it directly

@@ -14,7 +14,7 @@ import {
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
+import { AiSkeleton, IconButton, IconButtonWithTooltip, Modal, PopupMenu, PopupMenuItem } from "@/components/Display"
 import { SortableList } from "@/components/Display"
 import { Tooltip } from "@/components/Display"
 import { TagInput } from "@/components/Form"
@@ -61,7 +61,7 @@ function BookPages({
           onClick={() => setPage((p) => p - 1)}
           style={{ minWidth: 28, visibility: page === 0 ? "hidden" : undefined }}
         >
-          ←
+          <i className="fa fa-chevron-left" aria-hidden="true"></i>
         </button>
         <span style={{ fontSize: 12, opacity: 0.6 }}>
           {page + 1} / {total}
@@ -73,7 +73,7 @@ function BookPages({
           onClick={() => setPage((p) => p + 1)}
           style={{ minWidth: 28, visibility: page === total - 1 ? "hidden" : undefined }}
         >
-          →
+          <i className="fa fa-chevron-right" aria-hidden="true"></i>
         </button>
       </div>
 
@@ -199,33 +199,6 @@ function BookPages({
             onClick={() => onApply(sug)}
           />
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** Modern AI-thinking skeleton — pulsing robot icon + shimmer bars + animated dots. */
-function AiSkeleton() {
-  const [dots, setDots] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => setDots((d) => (d + 1) % 4), 400)
-    return () => clearInterval(t)
-  }, [])
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "20px 0" }}>
-      {/* Pulsing robot icon */}
-      <div style={{ animation: "ai-pulse 1.5s ease-in-out infinite" }}>
-        <i className="fa fa-robot" aria-hidden="true" style={{ fontSize: 40, opacity: 0.7 }} />
-      </div>
-      <div style={{ fontSize: 14, opacity: 0.6, fontFamily: "monospace" }}>
-        {"AI 正在思考" + ".".repeat(dots)}
-      </div>
-      {/* Shimmer bars — hint at content without fake cards */}
-      <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10, padding: "0 8px" }}>
-        <div className="ai-skel-bar" style={{ width: "70%" }} />
-        <div className="ai-skel-bar" style={{ width: "50%" }} />
-        <div className="ai-skel-bar" style={{ width: "60%" }} />
-        <div className="ai-skel-bar" style={{ width: "40%" }} />
       </div>
     </div>
   )
@@ -443,35 +416,24 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             <span>{t("Archives:")}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
             {hasLlmKey && (
-              <Tooltip
-                label={
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("AI Smart Rename")}</div>
-                    <div style={{ opacity: 0.8 }}>{t("Analyze the archive list and suggest a tankoubon title and chapter names for each volume")}</div>
-                  </div>
-                }
-                anchor="cursor"
-              >
-                <button
-                  type="button"
-                  className="stdbtn"
-                  style={{ width: 32, height: 21, minWidth: 32, padding: 0, alignSelf: "flex-start" }}
-                  disabled={aiRename.isPending}
-                  onClick={() => {
-                    setAiOverlayOpen(true)
-                    setAiSuggestions(null)
-                    aiRename.mutate(tankId, {
-                      onSuccess: (data) => { setAiSuggestions(data) },
-                      onError: (err) => {
-                        setAiOverlayOpen(false)
-                        toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
-                      },
-                    })
-                  }}
-                >
-                  <i className="fa fa-robot" aria-hidden="true"></i>
-                </button>
-              </Tooltip>
+              <IconButtonWithTooltip
+                icon="fa fa-robot"
+                title={t("AI Smart Rename")}
+                description={t("Analyze the archive list and suggest a tankoubon title and chapter names for each volume")}
+                style={{ alignSelf: "flex-start" }}
+                disabled={aiRename.isPending}
+                onClick={() => {
+                  setAiOverlayOpen(true)
+                  setAiSuggestions(null)
+                  aiRename.mutate(tankId, {
+                    onSuccess: (data) => { setAiSuggestions(data) },
+                    onError: (err) => {
+                      setAiOverlayOpen(false)
+                      toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                    },
+                  })
+                }}
+              />
             )}
             {/* `SortableList`'s own `DndContext`/`SortableContext` render transparently (no DOM
                 wrapper of their own), so without this wrapping div each row's bare element would
@@ -546,15 +508,11 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                       >
                         {t("Edit")}
                       </button>
-                      <button
-                        type="button"
-                        className="stdbtn"
+                      <IconButton
+                        icon="fa fa-times"
                         onClick={() => removeArchive(archiveId)}
                         title={t("Remove from Tankoubon") ?? undefined}
-                        style={{ minWidth: 32 }}
-                      >
-                        ✕
-                      </button>
+                      />
                     </div>
 
                     {/* Chapter input + AI Rename — row 2, column 2 */}
@@ -581,46 +539,36 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                             style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
                           />
                         )}
-                        <Tooltip
-                          label={
-                            <div>
-                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("AI Chapter Name")}</div>
-                              <div style={{ opacity: 0.8 }}>{t("Suggest a chapter title based on series context and volume numbers")}</div>
-                            </div>
-                          }
-                          anchor="cursor"
-                        >
-                          <button
-                            type="button"
-                            className="stdbtn"
-                            style={{ width: 24, height: 18, minWidth: 24, padding: 0, fontSize: "7pt" }}
-                            disabled={chapterAiLoading !== null}
-                            onClick={() => {
-                              setChapterAiLoading(memberIndex)
-                              aiRenameChapter.mutate(
-                                { tankId, archiveIndex: memberIndex },
-                                {
-                                  onSuccess: (data) => {
-                                    setChapterNames((prev) => ({ ...prev, [archiveId]: data.name }))
-                                    setChapterAiLoading(null)
-                                    const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.find((c) => c.id === archiveId)?.name
-                                    if (data.name === prevName) {
-                                      toast({ heading: t("Chapter name unchanged"), text: data.name, icon: "info" })
-                                    } else {
-                                      toast({ heading: t("Chapter name suggested"), text: data.name, icon: "success" })
-                                    }
-                                  },
-                                  onError: (err) => {
-                                    setChapterAiLoading(null)
-                                    toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
-                                  },
+                        <IconButtonWithTooltip
+                          icon="fa fa-robot"
+                          title={t("AI Chapter Name")}
+                          description={t("Suggest a chapter title based on series context and volume numbers")}
+                          size="small"
+                          style={{ fontSize: "7pt" }}
+                          disabled={chapterAiLoading !== null}
+                          onClick={() => {
+                            setChapterAiLoading(memberIndex)
+                            aiRenameChapter.mutate(
+                              { tankId, archiveIndex: memberIndex },
+                              {
+                                onSuccess: (data) => {
+                                  setChapterNames((prev) => ({ ...prev, [archiveId]: data.name }))
+                                  setChapterAiLoading(null)
+                                  const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.find((c) => c.id === archiveId)?.name
+                                  if (data.name === prevName) {
+                                    toast({ heading: t("Chapter name unchanged"), text: data.name, icon: "info" })
+                                  } else {
+                                    toast({ heading: t("Chapter name suggested"), text: data.name, icon: "success" })
+                                  }
                                 },
-                              )
-                            }}
-                          >
-                            <i className="fa fa-robot" aria-hidden="true"></i>
-                          </button>
-                        </Tooltip>
+                                onError: (err) => {
+                                  setChapterAiLoading(null)
+                                  toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                                },
+                              },
+                            )
+                          }}
+                        />
                       </div>
                     )}
                   </div>
@@ -633,71 +581,46 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
 
           {/* AI Suggestions overlay — skeleton while loading, book-page cards on success */}
           {aiOverlayOpen && (
-            <>
-              <div
-                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9000 }}
-                onClick={() => setAiOverlayOpen(false)}
-              />
-              <div
-                className="id1"
-                style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 9001, width: 560, maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto", padding: 24, textAlign: "left" }}
-              >
-                {aiRename.isPending ? (
-                  <AiSkeleton />
-                ) : aiSuggestions ? (
-                  <BookPages
-                    suggestions={aiSuggestions.suggestions}
-                    originalMembers={aiSuggestions.original_member_names}
-                    onApply={(sug) => {
-                      setName(sug.tank_name)
-                      const next: Record<string, string> = {}
-                      const sorted = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
-                      const reordered: string[] = []
-                      for (const ch of sorted) {
-                        // original_index matches the `index` field on original_member_names (1-based)
-                        const mem = aiSuggestions.original_member_names.find((m) => m.index === ch.original_index)
-                        if (mem) {
-                          if (ch.name) next[mem.id] = ch.name
-                          reordered.push(mem.id)
-                        }
+            <Modal onClose={() => setAiOverlayOpen(false)} textAlign="left">
+              {aiRename.isPending ? (
+                <AiSkeleton />
+              ) : aiSuggestions ? (
+                <BookPages
+                  suggestions={aiSuggestions.suggestions}
+                  originalMembers={aiSuggestions.original_member_names}
+                  onApply={(sug) => {
+                    setName(sug.tank_name)
+                    const next: Record<string, string> = {}
+                    const sorted = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
+                    const reordered: string[] = []
+                    for (const ch of sorted) {
+                      // original_index matches the `index` field on original_member_names (1-based)
+                      const mem = aiSuggestions.original_member_names.find((m) => m.index === ch.original_index)
+                      if (mem) {
+                        if (ch.name) next[mem.id] = ch.name
+                        reordered.push(mem.id)
                       }
-                      setChapterNames((prev) => ({ ...prev, ...next }))
-                      // Only update order if all members are accounted for
-                      if (reordered.length === archives.length) {
-                        setArchives(reordered)
-                      }
-                      setAiOverlayOpen(false)
-                    }}
-                    t={t}
-                  />
-                ) : null}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-                  <input type="button" className="stdbtn" value={t("Close") ?? undefined} onClick={() => setAiOverlayOpen(false)} />
-                </div>
-              </div>
-            </>
+                    }
+                    setChapterNames((prev) => ({ ...prev, ...next }))
+                    // Only update order if all members are accounted for
+                    if (reordered.length === archives.length) {
+                      setArchives(reordered)
+                    }
+                    setAiOverlayOpen(false)
+                  }}
+                  t={t}
+                />
+              ) : null}
+            </Modal>
           )}
 
-          {/* Inline keyframes for the skeleton shimmer — one-off <style>, scoped by class name */}
+          {/* Inline keyframe for the per-chapter shimmer placeholder above (line ~543) — the
+              overlay's own "AI is thinking" shimmer/pulse styles now live inside the shared
+              `AiSkeleton` component instead of being duplicated here. */}
           <style>{`
             @keyframes ai-shimmer {
               0%   { background-position: -200% 0; }
               100% { background-position: 200% 0; }
-            }
-            @keyframes ai-pulse {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0.4; }
-            }
-            @keyframes ai-dot {
-              0%, 20%  { opacity: 0; }
-              50%, 100% { opacity: 1; }
-            }
-            .ai-skel-bar {
-              height: 12px;
-              border-radius: 4px;
-              background: linear-gradient(90deg, rgba(128,128,128,0.08) 25%, rgba(128,128,128,0.2) 50%, rgba(128,128,128,0.08) 75%);
-              background-size: 200% 100%;
-              animation: ai-shimmer 1.8s ease-in-out infinite;
             }
           `}</style>
 

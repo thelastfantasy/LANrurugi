@@ -1,7 +1,7 @@
 import type { RefObject } from "react"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
+import { IconButtonWithTooltip, PopupMenu, PopupMenuItem } from "@/components/Display"
 
 interface TagSuggestion { label: string; insertValue: string }
 import { Z_OVERLAY_CONTENT } from "@/theme"
@@ -18,6 +18,7 @@ export function SearchBar({
   onClearFilter,
   onSuggestionSelect,
   onToggleMultiSelect,
+  onAiSmartTankoubon,
 }: {
   filterInput: string
   autocompleteOpen: boolean
@@ -30,6 +31,7 @@ export function SearchBar({
   onClearFilter: () => void
   onSuggestionSelect: (insertValue: string) => void
   onToggleMultiSelect: () => void
+  onAiSmartTankoubon: () => void
 }) {
   const { t } = useTranslation()
 
@@ -96,6 +98,18 @@ export function SearchBar({
         type="button"
         value={t("Select Archives") ?? undefined}
         onClick={() => void onToggleMultiSelect()}
+      />
+      <IconButtonWithTooltip
+        icon="fa fa-robot"
+        title={t("AI Smart Create Tankoubon")}
+        description={t("Analyze archives not yet in any Tankoubon and suggest groups that likely belong to the same series")}
+        // Not `searchbtn` — that class carries a legacy `min-width: 100px !important` (sized for
+        // this row's own text buttons like "Apply Filter"), which beats `IconButton`'s inline
+        // `minWidth` and silently stretches it back into a wide button. `marginTop: 4` reproduces
+        // the one part of `.searchbtn` this row's vertical alignment actually needs.
+        className="stdbtn"
+        style={{ marginTop: 4 }}
+        onClick={onAiSmartTankoubon}
       />
     </>
   )

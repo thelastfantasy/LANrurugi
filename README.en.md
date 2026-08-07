@@ -199,6 +199,10 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
 - **A "Mark as Read"/"Mark as Unread" context-menu item on Library grid cards**, setting reading
   progress directly to the last page or 0 — legacy has no way to manually toggle read status
   outside of actually paging through the archive.
+- **AI-assisted Tankoubon editing**, suggesting a title, chapter names, and reading order from
+  member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
+  Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
+  likely belong to the same series (local embedding model only, no LLM key required).
 
 ### Testing infrastructure
 

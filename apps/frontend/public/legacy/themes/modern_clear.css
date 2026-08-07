@@ -806,3 +806,25 @@ div.id4 a:hover {
     background-color: #34495E;
     border: 1px solid #2C3E50;
 }
+
+/* Round modal close button (`components/Display/Modal.tsx`) — reuses this theme's own accent hue
+   (same value as `#thumbs_container .id1.msm-selected`'s outline), per the project's custom-color
+   rule, as a solid background with a white icon and a 1px border in this theme's own `div.id1`
+   background color (the modal box's own background, so the button reads as separated from the
+   box rather than blending straight into it at the corner where they overlap) — distinct from the
+   bordered/tinted `.stdbtn` look every other button on this theme uses, since this one floats
+   outside the modal box itself and needs to read as a separate "close" affordance, not just
+   another button. */
+.modal-close-btn {
+    background-color: #ed2553;
+    color: #FFFFFF;
+    border: none;
+    box-shadow: 0 0 0 1.5px #34495E, 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.modal-close-btn:hover {
+    background-color: #F14D74;
+    color: #FFFFFF;
+    border: none;
+    box-shadow: 0 0 0 1.5px #34495E, 0 1px 3px rgba(0, 0, 0, 0.4);
+}

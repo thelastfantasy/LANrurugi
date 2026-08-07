@@ -1,6 +1,9 @@
+import { useState } from "react"
+
 import { useLibrary } from "@/hooks/useLibrary"
 import { routes } from "@/lib/routes"
 
+import { AiSmartTankoubonModal } from "./AiSmartTankoubonModal"
 import { ArchiveCard } from "./ArchiveCard"
 import { ArchiveContextMenu } from "./ArchiveContextMenu"
 import { CategoryBar } from "./CategoryBar"
@@ -15,6 +18,7 @@ import { SortBySelector } from "./SortBySelector"
 export function Library() {
   const lib = useLibrary()
   const deleteTarget = lib.deleteTarget
+  const [aiTankoubonModalOpen, setAiTankoubonModalOpen] = useState(false)
 
   if (lib.search.isError) {
     return (
@@ -68,6 +72,7 @@ export function Library() {
               lib.searchInputRef.current?.focus()
             }}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
+            onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
           />
         </div>
 
@@ -248,6 +253,8 @@ export function Library() {
           }}
         />
       )}
+
+      {aiTankoubonModalOpen && <AiSmartTankoubonModal onClose={() => setAiTankoubonModalOpen(false)} />}
     </div>
   )
 }

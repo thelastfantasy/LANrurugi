@@ -22,6 +22,7 @@ pub mod settings;
 pub mod shinobu;
 pub mod stamps;
 pub mod state;
+pub mod tankoubon_grouping;
 pub mod tankoubons;
 pub mod upload;
 
@@ -42,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .merge(bench::router())
         .merge(categories::router())
         .merge(tankoubons::router())
+        .merge(tankoubon_grouping::router())
         .merge(stamps::router())
         .merge(misc::router())
         .merge(shinobu::router())
