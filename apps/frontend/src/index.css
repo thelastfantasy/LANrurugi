@@ -142,6 +142,26 @@ input[type="checkbox"]:disabled {
   100% { background-position: 0 50%; }
 }
 
+/* Shared scale-up entrance animation for every popup/modal-style dialog in this app
+ * (components/Display/Confirm.tsx, components/Display/Modal.tsx, and dialog.tsx's own
+ * confirmDialog()/promptDialog() render) — matches real SweetAlert2's own default `swal2-show`
+ * animation, which LANraragi itself uses for every one of its popups but which this port's own
+ * `.swal2-popup`/`.id1` CSS never carried over (only ever copied for static colors/spacing).
+ * Named `confirm-pop-in`/`modal-pop-in` rather than one shared name since the two call sites
+ * animate different properties (Modal.tsx's box is already offset via a flex-centered wrapper, so
+ * it only needs `scale`/`opacity`; dialog.tsx's and Confirm.tsx's own boxes are still positioned
+ * via `translate(-50%, -50%)` directly on the animated element, so their keyframes must preserve
+ * that translate at every step or the box would jump to the top-left corner mid-animation). */
+@keyframes confirm-pop-in {
+  0% { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+@keyframes modal-pop-in {
+  0% { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 /* Additive: `Library/index.tsx`'s `.table-options` toolbar row (Sort by/Columns, the count-text-
  * plus-numbered-pager unit, Go to Page+gear) — the whole flex layout, not just the breakpoint
  * override, lives here as real CSS classes rather than inline `style` objects, since a genuinely
@@ -405,4 +425,153 @@ input[type="checkbox"]:disabled {
   100% {
     opacity: 1;
   }
+}
+
+/* AiSmartTankoubonModal.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
+ * component itself carries no row spacing (Categories.tsx/Batch.tsx both rely on plain browser
+ * default <li> layout, which is correct for their own denser lists), but this modal's own rows
+ * routinely show long, near-identical titles (same-series archives differing only in a volume
+ * number/subtitle near the end) at the page's small base font size, and the default zero-padding
+ * <li> packed them tight enough that adjacent rows were hard to visually separate at a glance —
+ * confirmed live via getComputedStyle: default row height was 15.7px with 0 padding and
+ * line-height: normal. Real per-row padding (not just line-height) gives each row a visible gap
+ * from its neighbors regardless of how many lines the title itself wraps to. */
+.ai-group-checklist-item {
+  padding: 6px 0;
+  line-height: 1.5;
+}
+.ai-group-checklist-item + .ai-group-checklist-item {
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+}
+/* ArchiveChecklistItem's own markup separates the checkbox from the title with a single literal
+ * space character (`{" "}`) — visually tight at this page's small base font size, especially next
+ * to titles long enough to need the row-height fix above. A real margin on the checkbox itself
+ * (scoped to this modal's own class, not ArchiveChecklistItem — Categories.tsx/Batch.tsx's denser
+ * lists don't have this problem at their own font sizes) gives it real breathing room instead. */
+.ai-group-checklist-item input[type="checkbox"] {
+  margin-right: 10px !important;
+  transform: scale(1.15);
+  /* Without this, the checkbox's own inline layout box still reserves space at its PRE-scale
+     size, so the enlarged checkbox visually overlaps/crowds the text that follows it. */
+  flex-shrink: 0;
+}
+/* Plain inline flow (ArchiveChecklistItem's own default) wraps a long title's second line all
+ * the way back to the row's left edge, under the checkbox, rather than staying indented under
+ * the first line's own text start — confirmed live via a real long title splitting across two
+ * lines. A flex row with two real boxes (the checkbox as a fixed-width first item, the title's
+ * own <span> — see ArchiveChecklistItem.tsx's own docs on why that wrapper exists — as the
+ * second, taking the remaining width) keeps every wrapped line's left edge aligned with the
+ * first line's text, not the checkbox. */
+.ai-group-checklist-item label {
+  display: flex;
+  align-items: flex-start;
+}
+.ai-group-checklist-item label > span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button — a pill button with the label
+ * on the left and a small checkbox toggle on the right, separated by a `currentColor` divider,
+ * same left-label/right-action shape as ArchiveOverviewOverlayPanel's own real category chip
+ * (`.gt.category-chip`'s label span + `borderLeft: "1px solid currentColor"` + right-side action
+ * region) rather than a custom invention — `currentColor` means the divider automatically matches
+ * this button's own text/border color per-theme with no extra per-theme CSS file rules needed
+ * (unlike an earlier version of this control, which drew its own circular icon and needed a
+ * bespoke accent-color rule in every theme file just for that). Replaces the original plain-
+ * `<button>`-with-a-bare-checkbox layout a stray browser checkbox rendered ugly and gave no
+ * visual weight to at all.
+ *
+ * `.stdbtn`'s own `height: 28px` / `padding: 0 4px 1px` (legacy's fixed-height text-button sizing)
+ * both need overriding — without `height: auto` the extra vertical padding below has no room to
+ * actually expand the button, confirmed live (padding alone did nothing visually until height was
+ * freed). */
+/* `line-height: normal` is set explicitly (not left to inherit) because `<button>` (the
+ * checkable-button branch) and `<input type="button">` (the plain-pill branch) compute their
+ * default line box height differently for the same font — confirmed live, a real 3px height
+ * mismatch (29px vs 32px) between the two otherwise-identical-padding buttons traced to exactly
+ * this, not the padding/gap rules above (which are already shared and identical). */
+.ai-checkable-btn,
+.ai-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 5px 12px;
+  height: auto;
+  line-height: normal;
+}
+.ai-checkable-btn-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  padding-left: 10px;
+  border-left: 1px solid currentColor;
+  opacity: 0.9;
+}
+.ai-checkable-btn-toggle input[type="checkbox"] {
+  position: absolute;
+  inset: 0 0 0 10px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+/* The circle itself — drawn once, its fill/border swap with `:checked` (see each theme file's own
+ * rule) rather than being two different circles. */
+.ai-checkable-btn-toggle-circle {
+  position: absolute;
+  inset: 0 0 0 10px;
+  border-radius: 50%;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+/* The AI robot icon, shown while unchecked — absolutely centered over the (currently unfilled)
+ * circle, same positioning approach as `.fa-check` below so the two glyphs occupy the exact same
+ * spot and cross-fade in place. Faded out once `:checked` so the check mark reads as replacing
+ * it, not stacking on top of it. */
+.ai-checkable-btn-toggle .fa-robot {
+  position: absolute;
+  inset: 0 0 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  transition: opacity 0.15s;
+}
+.ai-checkable-btn-toggle-circle .fa-check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .fa-robot {
+  opacity: 0;
+}
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle .fa-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* AiSmartTankoubonModal.tsx's suggestion cards — border + header background color varies by
+ * suggestion kind (see each theme file's own `.ai-suggestion-card-add`/`-new` rule pair for the
+ * actual blue/green values); this shared rule only carries the border WIDTH itself, since that's
+ * identical either way and shouldn't need repeating per-theme. */
+.ai-suggestion-card-add,
+.ai-suggestion-card-new {
+  border-width: 1px;
+  border-style: solid;
+}
+.ai-suggestion-card-header {
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
 }

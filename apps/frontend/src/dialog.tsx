@@ -1383,13 +1383,24 @@ export function DialogHost() {
           textAlign: "center",
           borderRadius: ".2em",
           boxShadow: "0 2px 10px rgba(0,0,0,.4)",
+          animation: "confirm-pop-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2)",
         }}
         onKeyDown={(e) => {
           if (e.key === "Escape") onCancel()
           if (e.key === "Enter" && request.kind === "confirm") onConfirm()
         }}
       >
-        <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{request.message}</p>
+        {/* Warning-triangle icon only for `confirm` (a yes/no decision about a — often
+            destructive — action), not `prompt` (a plain text-input dialog with nothing to warn
+            about) — same icon+bold-message shape `components/Display/Confirm.tsx` established,
+            kept in sync visually even though this promise-based helper predates that component
+            and isn't itself built on top of it (different call shape: this one is driven by a
+            `DialogRequest` union covering four dialog kinds in one render function, not a simple
+            two-button component). */}
+        {request.kind === "confirm" && (
+          <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
+        )}
+        <p style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</p>
         {request.kind === "prompt" && (
           <input
             ref={inputRef}

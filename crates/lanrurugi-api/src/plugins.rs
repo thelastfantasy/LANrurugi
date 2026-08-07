@@ -1146,17 +1146,34 @@ pub async fn run_enabled_metadata_plugins_on_archive(
     // place rather than needing a hook at each of the 4 call sites. Fetches the archive fresh
     // rather than trusting `summary.new_title` — a plugin can also be the *first* time this
     // archive is ever precomputed even when no plugin actually changed its title.
+    //
+    // The LLM artist/cosplayer tag backfill (`artist_backfill::backfill_artist_tag`) runs from
+    // this same fetch, same reasoning — needs the final, plugin-enriched title/tags, not
+    // whichever plugin's intermediate write happened to run first.
     if let Ok(Some(archive)) = state
         .repos
         .archives
         .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
         .await
     {
-        let state = state.clone();
-        let archive_id = archive_id.to_string();
-        tokio::spawn(async move {
-            crate::recommend_precompute::precompute_one(&state, &archive_id, &archive.title).await;
-        });
+        {
+            let state = state.clone();
+            let archive_id = archive_id.to_string();
+            let title = archive.title.clone();
+            tokio::spawn(async move {
+                crate::recommend_precompute::precompute_one(&state, &archive_id, &title).await;
+            });
+        }
+        {
+            let state = state.clone();
+            let archive_id = archive_id.to_string();
+            let title = archive.title.clone();
+            let tags = archive.tags.clone();
+            tokio::spawn(async move {
+                crate::artist_backfill::backfill_artist_tag(&state, &archive_id, &title, &tags)
+                    .await;
+            });
+        }
     }
 
     summary

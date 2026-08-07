@@ -63,8 +63,19 @@ done
 # TEST_REAL_DOWNLOAD_EXPECTED_FILENAME for stream.rs's opt-in real-server test) into the
 # container's environment, since the container otherwise starts with none of the host shell's
 # env vars. `--env-file` accepts the same KEY=VALUE format .env.local already uses.
+#
+# .env.test.local (also gitignored, `.env.*` in .gitignore) is a second, optional file for the
+# same purpose, kept SEPARATE from .env.local specifically for values containing spaces (real
+# archive titles, mostly) — `mise` (which also reads .env.local, for `mise run` tasks) requires
+# such values to be quoted, but podman/docker's own `--env-file` parser does NOT strip quotes the
+# way a shell or mise's dotenv parser does (confirmed live: a quoted value came through with the
+# literal `"` characters still embedded in it), so no single file/quoting-style satisfies both
+# readers at once. Real, copyrighted titles used only by opt-in real-data tests
+# (tankoubon_grouping.rs's LANRURUGI_TEST_TITLE_BRACKETED_HANDLE/_PLAIN_HANDLE etc.) belong here,
+# unquoted; anything mise itself also needs to read stays in .env.local.
 ENV_FILE_ARGS=()
-[ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS=(--env-file "$REPO_ROOT/.env.local")
+[ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.local")
+[ -f "$REPO_ROOT/.env.test.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.test.local")
 
 "$CMD" run --rm --network host --memory=8g --memory-swap=8g --cpus="$cpus" --cpu-shares="$cpu_shares" \
   -v "$REPO_ROOT":/workspace \

@@ -6,6 +6,8 @@ export * from "./CodeBlock"
 
 export * from "./CollapsibleSection"
 
+export * from "./Confirm"
+
 export * from "./IconButton"
 
 export * from "./JobProgress"

@@ -150,17 +150,22 @@ After editing any Rust code under `crates/`, run `cargo check` (from the workspa
 catches compilation errors in seconds instead of minutes. Only proceed to rebuild after check
 passes clean.
 
-## UI-only changes require human verification before commit
+## UI-only changes require human verification before commit — and the user does that verification, not the agent
 
 When a change is purely UI (visual layout, spacing, styling, tooltip/overlay behavior — no
-backend/logic change riding along), do not `git commit` it yourself after your own browser
-verification. Implement it, verify it works with the browser tools as usual, then stop and hand it
-to the user to look at and confirm before committing. This is stricter than the general "only
-commit when explicitly asked" rule elsewhere — even an explicit earlier "go ahead and commit your
-fixes" for a session does not cover a purely-visual change encountered later in that same session;
-ask again. A change that's mostly logic but happens to touch a `.tsx` file's styling too is not
-"purely UI" — this rule is about changes where the entire diff is visual polish with no functional
-risk to independently verify against.
+backend/logic change riding along), do not `git commit` it yourself, and do not spend a round of
+browser-tool screenshots/hovers/snapshots trying to self-verify the visual result either — the
+user explicitly does not want that loop (confirmed live: after a z-index fix, told directly "我说过ui确认你不用做的" when the agent kept reopening the modal to hover-test it). Implement the
+change, run the relevant type-check/lint, then stop and hand it directly to the user to look at
+and confirm — do not interpose a self-verification pass in between. This is stricter than the
+general "only commit when explicitly asked" rule elsewhere — even an explicit earlier "go ahead
+and commit your fixes" for a session does not cover a purely-visual change encountered later in
+that same session; ask again. A change that's mostly logic but happens to touch a `.tsx` file's
+styling too is not "purely UI" — this rule is about changes where the entire diff is visual polish
+with no functional risk to independently verify against. (Non-UI changes — new backend logic, data
+flow, a new API contract — still warrant the agent's own functional verification, e.g. curling an
+endpoint or checking Redis state; this rule is specifically about *visual* polish, where "does this
+look right" is a judgment only the user watching their own screen can actually make.)
 
 ## Custom colors must be theme-aware, never a hardcoded value
 

@@ -376,7 +376,6 @@ div#toppane {
     width: 99%;
 }
 
-
 /* page selector */
 .paginate_button {
     display: inline-block;
@@ -712,4 +711,74 @@ div.id4 {
     color: #FFFFFF;
     border: none;
     box-shadow: 0 0 0 1.5px #F2EFDF, 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Destructive-action button (`components/Display/Confirm.tsx`'s `danger` prop, e.g. the "Yes,
+   delete it" button) — a real class, not the inline hardcoded `#d33` an earlier version of this
+   dialog used, which silently defeated `.stdbtn:hover` entirely (inline styles always win over a
+   CSS `:hover` rule, so the button never visibly changed on hover — a real, live-reported bug).
+   This theme's own base color is already a deep red-brown (#5C0D11, `.stdbtn`'s own border/text
+   color), so "danger" here uses a brighter, more saturated red that still reads as belonging to
+   the same palette rather than a color invented from scratch. */
+.stdbtn-danger {
+    background: none repeat scroll 0 0 #C0392B;
+    border: 2px outset #7A1117;
+    color: #FFFFFF;
+}
+
+.stdbtn-danger:hover {
+    background: none repeat scroll 0 0 #E74C3C;
+    border: 2px outset #7A1117;
+    color: #FFFFFF;
+}
+
+/* Warning-triangle icon on Confirm.tsx's `danger` dialogs — same red as .stdbtn-danger's own
+   resting background, for visual consistency between the icon and the confirm button below it. */
+.confirm-danger-icon {
+    color: #C0392B;
+}
+
+/* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button's circular icon-toggle — reuses
+   this theme's own accent color (same value as .modal-close-btn's own background, per the
+   project's custom-color rule) for both the unchecked ring outline and the checked fill, so the
+   toggle reads as belonging to this theme rather than a generic gray control. */
+.ai-checkable-btn-toggle-circle {
+    border: 1.5px solid #5C0D11;
+    background-color: transparent;
+}
+
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle {
+    background-color: #5C0D11;
+    border-color: #5C0D11;
+}
+
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle .fa-check {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* AiSmartTankoubonModal.tsx's suggestion-card kind coloring — blue for "add to an existing
+   Tankoubon", green for "create a new one" (see index.css's own shared border-width rule for why
+   only the colors live here). Tuned per-theme for contrast against this theme's own background,
+   not a literal reused value from elsewhere in this file (no existing blue/green accent to borrow
+   from the way .modal-close-btn borrows the theme's own single accent hue). */
+.ai-suggestion-card-add {
+    border-color: #2E5C8A;
+}
+.ai-suggestion-card-add .ai-suggestion-card-header {
+    background: rgba(46, 92, 138, 0.08);
+    border-bottom-color: rgba(46, 92, 138, 0.2);
+}
+.ai-suggestion-card-new {
+    border-color: #2E7D4F;
+}
+.ai-suggestion-card-new .ai-suggestion-card-header {
+    background: rgba(46, 125, 79, 0.08);
+    border-bottom-color: rgba(46, 125, 79, 0.2);
+}
+
+/* Unchecked-state AI robot icon on the same toggle — colored with this theme's own accent too,
+   so the icon reads as "this theme's AI control" even before it's filled in. */
+.ai-checkable-btn-toggle .fa-robot {
+    color: #5C0D11;
 }

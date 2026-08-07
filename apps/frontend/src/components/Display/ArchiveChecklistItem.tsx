@@ -27,7 +27,23 @@ export function ArchiveChecklistItem({
   return (
     <li className={className}>
       <label>
-        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> {title}
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          // Browser UA default checkbox margin/vertical-align (`margin: 3px 3px 3px 4px`,
+          // `vertical-align: baseline` — confirmed live via `getComputedStyle`) leaves the
+          // checkbox visibly offset from the adjacent title text's own baseline; no theme CSS
+          // resets this for a bare `input[type=checkbox]`. `verticalAlign: "middle"` aligns it to
+          // the text's vertical center instead, and zeroing the margin removes the asymmetric gap
+          // that stacked on top of the baseline mismatch.
+          style={{ margin: 0, verticalAlign: "middle" }}
+        />{" "}
+        {/* Real wrapper, not a bare text node — lets a caller turn this row into a two-column
+         * flex layout (checkbox column + title column) via CSS alone, keeping a long title's own
+         * wrapped lines aligned under its own first line instead of back at the checkbox's left
+         * edge (AiSmartTankoubonModal.tsx's `.ai-group-checklist-item` does this). */}
+        <span>{title}</span>
       </label>
     </li>
   )

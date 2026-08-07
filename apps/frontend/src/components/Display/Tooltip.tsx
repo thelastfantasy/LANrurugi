@@ -41,6 +41,7 @@ export function Tooltip({
   anchor = "element",
   wrapperStyle,
   maxWidth = 320,
+  zIndex = Z_OVERLAY_TOOLTIP,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -54,6 +55,14 @@ export function Tooltip({
   /** Overrides the bubble's default 320px cap — for content that reads worse wrapped that narrow
    * (e.g. a multi-column list of keyboard shortcuts). */
   maxWidth?: number
+  /** Overrides the default `Z_OVERLAY_TOOLTIP` (1100) — needed when the trigger itself lives
+   * inside something that already clears 1100 on its own, e.g. `Modal.tsx`'s hardcoded
+   * `zIndex: 9001` (that component's own docs on why it needs to sit above legacy's `.base-overlay`
+   * — see `Z_OVERLAY_ABOVE_LEGACY_MODAL`'s own docs in `theme.ts` for the same "clear legacy's
+   * 9000 tier" reasoning). Without this, a `Tooltip` triggered from inside such a modal renders its
+   * portaled bubble at the DOM's very end but still loses the stacking fight to the modal's own
+   * much higher z-index, appearing to render *behind* it instead of on top. */
+  zIndex?: number
 }) {
   const [visible, setVisible] = useState(false)
   // `position: 'fixed'` (not just `visibility: 'hidden'`) from the very first render — a bubble
@@ -160,7 +169,7 @@ export function Tooltip({
             role="tooltip"
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
-            style={{ ...style, zIndex: Z_OVERLAY_TOOLTIP }}
+            style={{ ...style, zIndex }}
           >
             {/* `swal2-popup` (not an actual SweetAlert2 dialog — just its class name) — every
                 legacy theme already styles it for this "informational popup" role, so the tooltip

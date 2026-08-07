@@ -294,6 +294,25 @@ async fn put_settings(
         .ok()
         .flatten();
 
+    // Same "captured before the write loop" pattern again — `artist_backfill.rs`'s per-archive
+    // ingest hook only ever reaches archives ingested *after* an LLM key exists; a key added days
+    // into using the app leaves every already-ingested archive permanently unbackfilled unless
+    // this transition itself triggers a retroactive full-library sweep (see
+    // `artist_backfill::spawn_full_backfill_job`'s own docs for why this can't just piggyback on
+    // the recommend-cache's own startup-only backfill). Only the unset→set transition matters —
+    // a set→different-set key change (rotating keys) or set→unset (removing the key) has no
+    // reason to re-sweep the whole library.
+    let new_llm_api_key = fields
+        .get("llm_api_key")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+    let had_llm_api_key_before = conn
+        .hget::<_, _, Option<String>>(CONFIG_KEY, "llm_api_key")
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|s| !s.trim().is_empty());
+
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
@@ -349,6 +368,20 @@ async fn put_settings(
                 "precision tier changed",
             )
             .await;
+        }
+    }
+
+    if !had_llm_api_key_before && new_llm_api_key.is_some_and(|k| !k.trim().is_empty()) {
+        // Same "check `by_name` before spawning" double-queue guard as the recommend-precision
+        // branch above.
+        let already_running = state.jobs.by_name("artist_backfill").await.iter().any(|j| {
+            matches!(
+                j.state,
+                lanrurugi_core::jobs::JobState::Queued | lanrurugi_core::jobs::JobState::Active
+            )
+        });
+        if !already_running {
+            crate::artist_backfill::spawn_full_backfill_job(&state, "LLM key configured").await;
         }
     }
 

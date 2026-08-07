@@ -32,6 +32,10 @@ import { IconButton } from "./IconButton"
  * `position: relative` wrapper that actually holds the button + box re-enables `pointerEvents:
  * "auto"` since that's the part that should stay clickable.
  *
+ * Plays a scale-up entrance animation on mount (`modal-pop-in`, defined once in `index.css` and
+ * shared in shape with `Confirm.tsx`'s own `confirm-pop-in` — see that keyframe's own comment for
+ * why the two aren't just one shared name).
+ *
  * `onClose` is not called automatically on `Escape` — callers that want that can add their own
  * `keydown` listener; most of this app's modals so far haven't needed it.
  *
@@ -63,7 +67,7 @@ export function Modal({
           pointerEvents: "none",
         }}
       >
-        <div style={{ position: "relative", pointerEvents: "auto" }}>
+        <div style={{ position: "relative", pointerEvents: "auto", animation: "modal-pop-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2)" }}>
           <div style={{ position: "absolute", top: -16, right: -16 }}>
             <IconButton
               icon="fa fa-times"

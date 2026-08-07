@@ -1,4 +1,5 @@
 pub mod archives;
+pub mod artist_backfill;
 pub mod auth;
 pub mod bench;
 pub mod categories;

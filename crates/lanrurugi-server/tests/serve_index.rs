@@ -47,6 +47,11 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
     let recommend_cache = Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
+    let ignored_group_suggestions = Arc::new(
+        lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
+            redis.config.clone(),
+        ),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -75,6 +80,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
         recommend_cache,
+        ignored_group_suggestions,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

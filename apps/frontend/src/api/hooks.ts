@@ -496,18 +496,74 @@ export function useAiRenameChapter() {
 }
 
 export interface AiGroupSuggestion {
+  /** New members to add — for an `existing_tankoubon_id` suggestion, these are the *additional*
+   * archives only; the Tankoubon's own existing members are never repeated here. */
   archive_ids: string[]
+  /** Present when this suggestion is "add these archives to an existing Tankoubon" rather than
+   * "group these loose archives into a new one" — see the backend's own `tankoubon_grouping.rs`
+   * module docs for how an existing Tankoubon participates in the same clique algorithm as a
+   * synthetic node. */
+  existing_tankoubon_id?: string
 }
 
 /** `POST /tankoubons/ai-group-suggestions` — no id param (unlike `useAiRenameTankoubon`), since
  * this scans the whole library's ungrouped archives rather than operating on one already-existing
  * Tankoubon. Local-model-only (see that endpoint's own module docs) — no `useLlmKeyStatus` gate
  * needed, just the same `model_not_ready` 503 the reader recommendations endpoint can return,
- * surfaced to the caller as a thrown `ApiError` like any other failed mutation. */
+ * surfaced to the caller as a thrown `ApiError` like any other failed mutation.
+ *
+ * `includeIgnored` mirrors the backend's own `?include_ignored=true` query param (default
+ * `false`) — the "Show ignored combinations" checkbox re-requests with this set to `true` rather
+ * than filtering a locally-cached result, since the ignored set can change between requests (a
+ * user un-ignoring something in a previous session) and the backend is the source of truth for
+ * which fingerprints are currently ignored. */
 export function useAiGroupSuggestions() {
   return useMutation({
-    mutationFn: () =>
-      sendJson<{ suggestions: AiGroupSuggestion[] }>("POST", "/tankoubons/ai-group-suggestions"),
+    mutationFn: (includeIgnored?: boolean) =>
+      sendJson<{ suggestions: AiGroupSuggestion[] }>(
+        "POST",
+        `/tankoubons/ai-group-suggestions${includeIgnored ? "?include_ignored=true" : ""}`,
+      ),
+  })
+}
+
+export interface IgnoredGroupSuggestion {
+  archive_ids: string[]
+  existing_tankoubon_id?: string
+  ignored_at: number
+}
+
+/** Backs the "Show ignored combinations" checklist in `AiSmartTankoubonModal.tsx` — the raw
+ * dismissed-suggestion entries; titles are resolved client-side against the already-loaded
+ * archive list (same `titleById` map the main suggestion cards use), not hydrated server-side. */
+export function useIgnoredGroupSuggestions(enabled: boolean) {
+  return useQuery({
+    queryKey: ["tankoubons", "ai-group-suggestions", "ignored"],
+    queryFn: () => fetchJson<{ ignored: IgnoredGroupSuggestion[] }>("/tankoubons/ai-group-suggestions/ignored"),
+    enabled,
+  })
+}
+
+/** "Don't suggest this again" — dismisses one specific suggestion (exact archive-id-set +
+ * `existing_tankoubon_id` match, see the backend's own `fingerprint` docs) so future
+ * `useAiGroupSuggestions()` calls skip it by default. */
+export function useIgnoreGroupSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { archive_ids: string[]; existing_tankoubon_id?: string }) =>
+      sendJson("POST", "/tankoubons/ai-group-suggestions/ignore", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons", "ai-group-suggestions", "ignored"] }),
+  })
+}
+
+/** Re-enables a previously-ignored suggestion (the "Un-ignore" button on the ignored-combinations
+ * checklist). */
+export function useUnignoreGroupSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { archive_ids: string[]; existing_tankoubon_id?: string }) =>
+      sendJson("DELETE", "/tankoubons/ai-group-suggestions/ignore", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons", "ai-group-suggestions", "ignored"] }),
   })
 }
 

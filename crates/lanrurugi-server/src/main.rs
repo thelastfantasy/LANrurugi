@@ -267,6 +267,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let recommend_cache = Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
+    let ignored_group_suggestions = Arc::new(
+        lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
+            redis.config.clone(),
+        ),
+    );
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -347,6 +352,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
         recommend_cache,
+        ignored_group_suggestions,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
