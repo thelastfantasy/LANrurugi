@@ -83,6 +83,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
             redis.config.clone(),
         ),
     );
+    let compare_cache = Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
 
     // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
     // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
@@ -125,6 +128,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         download_queue,
         recommend_cache,
         ignored_group_suggestions,
+        compare_cache,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx,
         download_cancellations: Default::default(),

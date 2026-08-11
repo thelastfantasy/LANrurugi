@@ -349,7 +349,7 @@ export function ArchiveOverviewOverlay({
   // delete button now opens `ChapterActionMenu` listing every chapter in the archive, so deleting one
   // that isn't the currently-viewed one doesn't require first scrolling/navigating to it.
   async function handleRemoveToc(entry: { page: number; name: string }) {
-    if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? ""))) return
+    if (!(await confirmDialog(t('Are you sure you want to delete "{{name}}"?', { name: entry.name }) ?? "", true))) return
     const target = resolve(entry.page)
     if (!target) return
     const onError = () => toast({ text: t("Error adding/removing chapter:") ?? undefined, icon: "error" })
@@ -408,6 +408,7 @@ export function ArchiveOverviewOverlay({
     if (
       !(await confirmDialog(
         t("This will delete both metadata and matching files from your system! Please use with caution.") ?? "",
+        true,
       ))
     ) {
       return

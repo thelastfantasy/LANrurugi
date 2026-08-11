@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { useArchivePages } from "@/api/hooks"
 import { Tooltip } from "@/components/Display"
+import { useHorizontalScroll } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
 import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/utils/tocValidation"
@@ -103,6 +104,9 @@ function LightboxFilmstripEdge({ direction, onScroll }: { direction: "left" | "r
     <div
       onMouseEnter={start}
       onMouseLeave={stop}
+      onTouchStart={(e) => { e.preventDefault(); start() }}
+      onTouchEnd={stop}
+      onTouchCancel={stop}
       style={{
         position: "absolute",
         top: 0,
@@ -187,6 +191,7 @@ export function PageLightbox({
   // needed just to null out state on every page change.
   const [measured, setMeasured] = useState<{ page: number; width: number; height: number; sizeKb: number | null } | null>(null)
   const filmstripRef = useRef<HTMLDivElement>(null)
+  const lenisRef = useHorizontalScroll(filmstripRef)
   // Set right before an arrow-key-driven `setPreviewPage` call, read (and cleared) by the
   // scroll-into-view effect below — hover-driven page changes deliberately do NOT scroll the
   // filmstrip (the user's own scroll position while scrubbing shouldn't be fought), but keyboard
@@ -219,47 +224,39 @@ export function PageLightbox({
     if (!scrollFilmstripOnNextPage.current) return
     scrollFilmstripOnNextPage.current = false
     suppressHoverRef.current = true
-    filmstripRef.current
-      ?.querySelector(`[data-filmstrip-page="${previewPage}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" })
-    // `scrollIntoView` with `behavior: 'auto'` (the default, and what this container's own
-    // `scrollBehavior: 'auto'` style also specifies) completes synchronously before the next
-    // paint, but the resulting `mouseenter` is dispatched by the browser on its own event loop
-    // turn slightly after — a short timeout (rather than 0) reliably outlasts that, confirmed
-    // live: a 0ms timeout still occasionally let the stray `mouseenter` through.
+    const lenis = lenisRef.current
+    const strip = filmstripRef.current
+    const frame = strip?.querySelector<HTMLElement>(`[data-filmstrip-page="${previewPage}"]`)
+    if (lenis && strip && frame) {
+      lenis.scrollTo(frame.offsetLeft - strip.clientWidth / 2 + frame.clientWidth / 2)
+    } else if (strip && frame) {
+      // Fallback before Lenis is ready
+      frame.scrollIntoView({ block: "nearest", inline: "nearest" })
+    }
     const timer = setTimeout(() => {
       suppressHoverRef.current = false
     }, 100)
     return () => clearTimeout(timer)
+  // lenisRef is a ref (stable), read only at call time — not an effect dependency.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewPage])
 
-  // Scrolls the filmstrip to the page the lightbox was opened on — without this, a magnifying-
-  // glass click far down the page grid (or on any page other than whichever one the filmstrip
-  // happens to already be scrolled to, which starts at its natural left edge) opened the lightbox
-  // with the *active* frame off-screen in the strip below, with no indication of where it was
-  // (a real, live-reported gap: clicking the icon on page 71 opened the large preview correctly,
-  // but the filmstrip stayed scrolled to its start instead of showing page 71's own frame).
-  // Waits on `pages.data` since the frames themselves don't exist in the DOM to scroll to until
-  // that query resolves.
-  //
-  // Computed manually via `offsetLeft`/`clientWidth` rather than `scrollIntoView({ inline:
-  // 'center' })` — the native call was confirmed live to *not* reliably center (or sometimes not
-  // move the strip at all) inside this nested `position: fixed` modal's own `overflow-x: auto`
-  // container, unlike the keyboard-driven effect above which only needs `'nearest'` (a much
-  // simpler case the browser handles fine) rather than true centering.
-  useLayoutEffect(() => {
-    if (!pages.data) return
+  // Scrolls the filmstrip to the page the lightbox was opened on. Waits on both `pages.data` and
+  // the Lenis instance being ready (the hook's own useEffect fires after mount). Centered manually
+  // via `offsetLeft`/`clientWidth` — `scrollIntoView({inline:'center'})` was confirmed live to not
+  // reliably work inside this nested `position:fixed` modal's `overflow-x:auto` container.
+  const centeredRef = useRef(false)
+  useEffect(() => {
+    if (centeredRef.current) return
+    const lenis = lenisRef.current
+    if (!lenis || !pages.data) return
     const strip = filmstripRef.current
     const frame = strip?.querySelector<HTMLElement>(`[data-filmstrip-page="${initialPage}"]`)
     if (!strip || !frame) return
-    strip.scrollLeft = frame.offsetLeft - strip.clientWidth / 2 + frame.clientWidth / 2
-    // `initialPage` deliberately excluded — this should only run once, when `pages.data` first
-    // resolves after mount, not re-fire if `initialPage` ever changed identity for unrelated
-    // reasons (it doesn't currently, but `PageLightbox` never remounts on prop change since
-    // there's exactly one instance keyed by nothing — the effect body itself already reads
-    // whatever `initialPage` was at mount time via closure, which is exactly the desired page).
+    lenis.scrollTo(frame.offsetLeft - strip.clientWidth / 2 + frame.clientWidth / 2, { immediate: true })
+    centeredRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pages.data])
+  }, [pages.data, lenisRef.current])
 
   // Latest-value refs for the keydown listener below — kept in a ref rather than read directly
   // from the closure so the listener itself can be registered exactly once (see that effect's own
@@ -346,7 +343,8 @@ export function PageLightbox({
   const onDarkBg = isDarkColor(palette.bg)
 
   function scrollFilmstrip(delta: number) {
-    filmstripRef.current?.scrollBy({ left: delta })
+    const lenis = lenisRef.current
+    if (lenis) lenis.scrollTo(lenis.targetScroll + delta)
   }
 
   return (
@@ -508,14 +506,6 @@ export function PageLightbox({
           <div
             ref={filmstripRef}
             style={{ display: "flex", gap: 4, height: "100%", overflowX: "auto", padding: "8px 48px", scrollBehavior: "auto" }}
-            // Mouse wheel scrolls the filmstrip horizontally (a plain vertical wheel gesture,
-            // which browsers don't natively redirect into horizontal scroll on this element) —
-            // `stopPropagation` so the wheel event doesn't also reach the Archive Overview modal's
-            // own scroll underneath, which would otherwise scroll the page grid at the same time.
-            onWheel={(e) => {
-              e.stopPropagation()
-              filmstripRef.current?.scrollBy({ left: e.deltaY })
-            }}
           >
             {(pages.data?.pages ?? []).map((_, i) => {
               const page = i + 1

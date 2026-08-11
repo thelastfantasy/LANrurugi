@@ -157,6 +157,7 @@ mod tests {
             stamp_ids: vec![],
             heal_failed_at: None,
             corrupted_pages: vec![],
+            has_patch: false,
         };
         let id_a = ArchiveId("a".repeat(40));
         let id_b = ArchiveId("b".repeat(40));

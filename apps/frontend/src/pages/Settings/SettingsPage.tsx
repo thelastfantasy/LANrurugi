@@ -8,7 +8,7 @@ import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { DEFAULT_THEME_ID, FONT_SIZE_10PT, THEMES, useApplyTheme, useLegacyConfigCss } from "@/theme"
+import { DEFAULT_THEME_ID, FONT_SIZE_SM, THEMES, useApplyTheme, useLegacyConfigCss } from "@/theme"
 import { toast } from "@/toast"
 
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
@@ -212,7 +212,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <br />
         <input id="return" className="stdbtn" type="button" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
 
-        {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
+        {status && <p style={{ fontSize: FONT_SIZE_SM }}>{status}</p>}
 
         {/* Not part of legacy's own left-column (legacy has no visible logout affordance — its
             session just expires — and only one site-wide language, set below in Global
@@ -260,7 +260,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           />
 
           <CollapsibleSection icon="fa-paint-brush" title={t("Theme")}>
-              <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+              <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
                 <tbody>
                   <tr>
                     <td></td>

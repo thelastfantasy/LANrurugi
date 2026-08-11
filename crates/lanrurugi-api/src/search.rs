@@ -95,6 +95,11 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         "isnew".into(),
         json!(crate::archives::effective_isnew(&a, &mode)),
     );
+    // Additive, not part of `ArchiveMetadataJson` itself — that struct's own shape is pinned to
+    // the legacy-recorded contract (constitution Principle II), so a new field (issue #77's own
+    // follow-on design — the library-grid patch badge) goes here instead, same pattern
+    // `archive_count` above already established for a LANrurugi-only addition.
+    obj.insert("has_patch".into(), json!(a.has_patch));
     Some(json)
 }
 

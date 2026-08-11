@@ -1,12 +1,45 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+import { flip, offset, type Placement, shift, size, useFloating } from "@floating-ui/react"
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { PendingFilenameConflict } from "@/api/types"
 import { PopupMenu, PopupMenuItem } from "@/components/Display"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
-import { FONT_SIZE_8PT, FONT_SIZE_10PT, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
+import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 import { splitFilenameStemAndExt } from "./shared"
+
+/** Positions a floating panel against a fixed virtual point — `RenamePopover`'s own anchor is a
+ * click position, not a persistent element, so (unlike `ConflictMenu`, which hands Floating UI a
+ * real element ref) a one-time virtual reference is correct here, not just simpler. */
+function useAnchoredFloating(rect: DOMRect, placement: Placement) {
+  const { refs, floatingStyles, isPositioned } = useFloating({
+    strategy: "absolute",
+    placement,
+    middleware: [
+      offset(4),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+      size({
+        padding: 8,
+        apply({ availableHeight, elements }) {
+          elements.floating.style.maxHeight = `${availableHeight}px`
+          elements.floating.style.overflowY = "auto"
+        },
+      }),
+    ],
+  })
+  useLayoutEffect(() => {
+    refs.setReference({ getBoundingClientRect: () => rect })
+    // `rect`'s own fields (not the `DOMRect` object identity, which is fresh every render even for
+    // an anchor that hasn't actually moved) are the real dependency — comparing by value here is
+    // what keeps this from redundantly re-registering the reference every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rect.top, rect.left, rect.right, rect.bottom, rect.width, rect.height])
+  // See `ConflictMenu`'s own docs — `floatingStyles` carries stale/0x0-measured coordinates until
+  // Floating UI's first real position pass completes; `isPositioned` gates that.
+  return { refs, floatingStyles, isPositioned }
+}
 
 const TEMPLATE_VARS = [
   "filename",
@@ -50,20 +83,75 @@ function shiftClickInsertion(key: string): string {
 /** The dropdown offering both resolutions for a `PendingFilenameConflict` — "Overwrite" runs
  * immediately, "Rename and Catalog" signals the caller to open {@link RenamePopover}, anchored off
  * the trigger button's own rect rather than the clicked menu item (which disappears the instant
- * this menu closes). */
+ * this menu closes).
+ *
+ * Renders NON-portaled (`portal={false}`) — the caller wraps its trigger button in a
+ * `position: relative` container and renders this menu as a sibling inside it, so `position:
+ * absolute` resolves against that wrapper directly. No Floating UI viewport/document coordinate
+ * math involved, so the menu scrolls with the page as part of its trigger row's own content.
+ * `@floating-ui/react`'s `strategy: "absolute"` was tried first and measured to have a real
+ * coordinate bug in this exact DOM shape (portaled to `document.body`): `size()`'s own `apply`
+ * callback showed `rects.reference.y` off from the trigger's real `getBoundingClientRect().y` by
+ * exactly `window.scrollY`, never correctly subtracted back out. Sidestepping Floating UI's
+ * coordinate system entirely avoids that bug rather than working around it.
+ *
+ * Flips to open ABOVE the trigger when there isn't enough room below, and to RIGHT-align (instead
+ * of the default left-align) when there isn't enough room to the right — own `useLayoutEffect`
+ * measuring real `getBoundingClientRect()`s, not Floating UI's `flip()`/`shift()` (those require
+ * the same buggy coordinate pipeline this component exists to avoid). Reported live: dropping the
+ * vertical check entirely left the menu clipped off the bottom of the viewport near the end of a
+ * long list; a left-only horizontal anchor (no corresponding flip) left it clipped off the RIGHT
+ * edge whenever the trigger button itself sat near the right edge of a narrow viewport (a wide
+ * three-item menu overflowing a trigger with little room to its right). */
 export function ConflictMenu({
-  anchor,
   onOverwrite,
   onRename,
+  onCompare,
 }: {
-  anchor: DOMRect
   onOverwrite: () => void
   onRename: () => void
+  /** Optional (issue #77's AI quality-comparison judgment, read-only) — the caller decides
+   * whether this option is even worth offering (e.g. hidden if the existing archive's own file
+   * has since gone missing), so this menu doesn't hard-require it. */
+  onCompare?: () => void
 }) {
   const { t } = useTranslation()
-  const pos = anchoredPosition(anchor, 160)
+  const menuRef = useRef<HTMLUListElement | null>(null)
+  const [openAbove, setOpenAbove] = useState<boolean | null>(null)
+  const [alignRight, setAlignRight] = useState(false)
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    const wrapper = el?.parentElement
+    if (!el || !wrapper) return
+    const wrapperRect = wrapper.getBoundingClientRect()
+    const menuRect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - wrapperRect.bottom
+    setOpenAbove(spaceBelow < menuRect.height + 8 && wrapperRect.top >= menuRect.height + 8)
+    // Left-aligned (`left: 0`, the default) overflows the viewport's right edge whenever the
+    // trigger doesn't have `menuRect.width` of room to its right — right-align instead
+    // (`right: 0`, i.e. the menu's own right edge lines up with the trigger's right edge) so the
+    // menu grows leftward into the room that actually exists, same idea as the vertical flip.
+    const spaceRight = window.innerWidth - wrapperRect.left
+    setAlignRight(spaceRight < menuRect.width + 8 && wrapperRect.right >= menuRect.width + 8)
+  }, [])
   return (
-    <PopupMenu style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}>
+    <PopupMenu
+      ref={menuRef}
+      portal={false}
+      style={{
+        position: "absolute",
+        ...(openAbove ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }),
+        ...(alignRight ? { right: 0 } : { left: 0 }),
+        visibility: openAbove === null ? "hidden" : "visible",
+        zIndex: Z_OVERLAY_CONTENT,
+      }}
+    >
+      {onCompare && (
+        <PopupMenuItem onClick={onCompare}>
+          <i className="fa fa-robot" aria-hidden="true" style={{ marginRight: 6 }}></i>
+          {t("AI Suggestion")}
+        </PopupMenuItem>
+      )}
       <PopupMenuItem onClick={onOverwrite}>
         <i className="fa fa-clone" aria-hidden="true" style={{ marginRight: 6 }}></i>
         {t("Overwrite")}
@@ -76,39 +164,20 @@ export function ConflictMenu({
   )
 }
 
-/** Picks a `{top, left}` for a `width`-wide floating panel anchored below `rect` (its trigger's
- * `getBoundingClientRect()`).
- *
- * `preferCenter: false` (default, used by `ConflictMenu`): always left-aligns with the trigger,
- * flipping to right-aligned only when left-aligned doesn't fit — a small menu should visually hug
- * its trigger.
- *
- * `preferCenter: true` (used by `RenamePopover`, a wide standalone form panel): picks whichever
- * side pulls the panel closer to the viewport center when both directions have room, since these
- * triggers live inside a right-aligned-icon row and a right-aligned trigger opening rightward
- * would still hug the window edge even when it technically fits.
- *
- * Both modes flip above the trigger when there isn't enough room below. */
-function anchoredPosition(
-  rect: DOMRect,
-  width: number,
-  preferCenter = false,
-): { top: number; left: number } {
-  const margin = 8
-  const estimatedHeight = 220
-  const fitsLeftAligned = rect.left + width + margin <= window.innerWidth
-  const fitsRightAligned = rect.right - width >= margin
+/** Resolves a `DOMRect` anchor (or `preferCenter`'s viewport-center-relative rule) to a Floating
+ * UI `Placement` — `useAnchoredFloating` (below) hands this straight to `useFloating`'s own
+ * `placement` option as the PREFERRED side/alignment before `flip`/`shift` correct it against real
+ * measured content, so this only needs to express the same left/right PREFERENCE the old
+ * hand-rolled `anchoredPosition` did, not the actual final on-screen position — that part is
+ * `@floating-ui/react`'s job now (see `useAnchoredFloating`'s own docs for why: two real, reported
+ * live bugs in a previous hand-rolled implementation — a wrong "which side has more room" flip
+ * check, and no post-flip clamp to catch an overflowing result — are exactly the class of bug
+ * `flip()` + `shift()` exist to rule out structurally, not just patch case-by-case). */
+function preferredPlacement(rect: DOMRect, preferCenter: boolean): "bottom-start" | "bottom-end" {
   const preferLeftAligned = preferCenter
     ? (rect.left + rect.right) / 2 <= window.innerWidth / 2
     : true
-  const useLeftAligned = preferLeftAligned ? fitsLeftAligned || !fitsRightAligned : fitsLeftAligned && !fitsRightAligned
-  const left = useLeftAligned ? rect.left : Math.max(rect.right - width, margin)
-  const spaceBelow = window.innerHeight - rect.bottom
-  const top =
-    spaceBelow >= estimatedHeight || spaceBelow >= rect.top
-      ? rect.bottom + 4
-      : Math.max(rect.top - estimatedHeight - 4, margin)
-  return { top, left }
+  return preferLeftAligned ? "bottom-start" : "bottom-end"
 }
 
 /** One piece of a parsed template string — either literal, freely-editable text, or a `{var}`/
@@ -515,7 +584,7 @@ function TemplateVarButton({
     <button
       type="button"
       style={{
-        fontSize: FONT_SIZE_8PT,
+        fontSize: FONT_SIZE_XS,
         padding: "1px 5px",
         minWidth: 0,
         width: "auto",
@@ -568,10 +637,13 @@ export function RenamePopover({
   // 280px keeps the default `{filename}_{crc}.{ext}` template on one line once each token
   // renders as its own bordered/padded chip.
   const width = 280
-  const { top, left } = anchoredPosition(
-    new DOMRect(anchor.x, anchor.y, 0, 0),
-    width,
-    true,
+  // `anchor` is a plain point (this popover opens off a click position, not a trigger element's
+  // own box) — wrapped in a zero-size `DOMRect` so `useAnchoredFloating` has a consistent
+  // `DOMRect`-shaped anchor to work with regardless of which caller it's serving.
+  const anchorRect = useMemo(() => new DOMRect(anchor.x, anchor.y, 0, 0), [anchor.x, anchor.y])
+  const { refs, floatingStyles, isPositioned } = useAnchoredFloating(
+    anchorRect,
+    preferredPlacement(anchorRect, true),
   )
 
   const vars: Record<string, string> = {
@@ -594,9 +666,16 @@ export function RenamePopover({
   return (
     <>
       <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }} onClick={onCancel} />
-      <PopupMenu style={{ position: "fixed", top, left, zIndex: Z_OVERLAY_CONTENT }}>
+      <PopupMenu
+        ref={refs.setFloating}
+        style={{
+          ...floatingStyles,
+          visibility: isPositioned ? "visible" : "hidden",
+          zIndex: Z_OVERLAY_CONTENT,
+        }}
+      >
         <li style={{ listStyle: "none", padding: "6px 10px", width }}>
-          <div style={{ fontSize: FONT_SIZE_10PT, marginBottom: 4 }}>{t("New filename")}</div>
+          <div style={{ fontSize: FONT_SIZE_SM, marginBottom: 4 }}>{t("New filename")}</div>
           <TemplateInput
             template={template}
             onChange={setTemplate}
@@ -616,14 +695,14 @@ export function RenamePopover({
           </div>
           {/* `{ext}` is an exception to the general "wrapped in parentheses" rule (see
               `shiftClickInsertion`), so it needs its own explanatory line. */}
-          <div style={{ fontSize: FONT_SIZE_8PT, opacity: 0.6, marginTop: 4 }}>
+          <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.6, marginTop: 4 }}>
             <div>{t("Shift-click to insert wrapped in parentheses")}</div>
             <div>{t("Shift-click {{ext}} to insert with a leading dot instead", { ext: "{ext}" })}</div>
           </div>
           <code
             style={{
               display: "block",
-              fontSize: FONT_SIZE_8PT,
+              fontSize: FONT_SIZE_XS,
               marginTop: 6,
               padding: "3px 5px",
               background: "rgba(0,0,0,0.06)",

@@ -39,6 +39,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
             redis.config.clone(),
         ),
     );
+    let compare_cache = std::sync::Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -76,6 +79,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_queue: download_queue.clone(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
+        compare_cache: compare_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -145,6 +149,7 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
         stamp_ids: vec![],
         heal_failed_at: None,
         corrupted_pages: vec![],
+        has_patch: false,
     })
     .await
     .unwrap();
@@ -234,6 +239,7 @@ async fn delete_archive_matches_recorded_response_shape() {
         stamp_ids: vec![],
         heal_failed_at: None,
         corrupted_pages: vec![],
+        has_patch: false,
     })
     .await
     .unwrap();
@@ -288,6 +294,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
             redis.config.clone(),
         ),
     );
+    let compare_cache = std::sync::Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -325,6 +334,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         download_queue: download_queue.clone(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
+        compare_cache: compare_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -416,6 +426,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
             redis.config.clone(),
         ),
     );
+    let compare_cache = std::sync::Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -453,6 +466,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         download_queue: download_queue.clone(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
+        compare_cache: compare_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -602,6 +616,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             redis.config.clone(),
         ),
     );
+    let compare_cache = std::sync::Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
 
     let library_dir = tempfile::tempdir().unwrap();
     let subfolder = library_dir.path().join("My Series");
@@ -629,6 +646,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             stamp_ids: vec![],
             heal_failed_at: None,
             corrupted_pages: vec![],
+            has_patch: false,
         })
         .await
         .unwrap();
@@ -670,6 +688,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         download_queue: download_queue.clone(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
+        compare_cache: compare_cache.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

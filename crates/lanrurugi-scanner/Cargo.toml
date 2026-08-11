@@ -10,6 +10,7 @@ lanrurugi-storage.workspace = true
 lanrurugi-search.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+crc32fast.workspace = true
 tokio.workspace = true
 rayon.workspace = true
 notify.workspace = true

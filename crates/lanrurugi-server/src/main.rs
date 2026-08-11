@@ -272,6 +272,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             redis.config.clone(),
         ),
     );
+    let compare_cache = Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -353,6 +356,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         download_queue,
         recommend_cache,
         ignored_group_suggestions,
+        compare_cache,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
@@ -364,8 +368,19 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // pointed at) is purely in-memory and was just recreated empty above, so that job is gone for
     // good, but the persisted queue item's own `state` survived unchanged in Redis. Without this,
     // such an item is stuck showing "Starting…" forever (`useJobs()` never finds its `job_id`
-    // again) with no retry affordance. Run synchronously here, before `build_app`/accepting
-    // connections, rather than as a spawned background job — it's a handful of Redis round trips
+    // again) with no retry affordance.
+    //
+    // Same treatment for a `pending_filename_conflict` whose staged `temp_path` no longer exists —
+    // `temp_dir` isn't a persistent volume, so a full container recreate (not just a process
+    // restart) wipes it, but the queue item's `pending_filename_conflict` field survived unchanged
+    // in Redis just like `state` does above. Left uncorrected, the frontend keeps offering
+    // Overwrite/Rename/AI-Compare for bytes that are already gone, and every one of those actions
+    // fails with a confusing "file not found" instead of a clear "please retry the download".
+    // Distinct from `sweep_stale_pending_renames` (spawned further below on an hourly timer): that
+    // sweep is age-based (`PENDING_RENAME_MAX_AGE`, 24h) and only reclaims files that are still
+    // *present but old*, so it never notices a file that's simply *missing outright* — exactly
+    // this restart/recreate case. Run synchronously here, before `build_app`/accepting connections,
+    // rather than as a spawned background job — it's a handful of Redis round trips and stat calls
     // at most, and every item should already be in its corrected state by the time the frontend's
     // first poll lands.
     match state.download_queue.list_all().await {
@@ -384,6 +399,41 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                             error = %e,
                             "failed to mark a restart-orphaned download queue item as errored"
                         );
+                    }
+                    continue;
+                }
+                if let Some(conflict) = &item.pending_filename_conflict {
+                    let temp_path_exists = tokio::fs::try_exists(&conflict.temp_path)
+                        .await
+                        .unwrap_or(false);
+                    if !temp_path_exists {
+                        tracing::info!(
+                            item_id = %item.id,
+                            temp_path = %conflict.temp_path,
+                            "clearing pending filename conflict whose staged file vanished across a restart"
+                        );
+                        item.pending_filename_conflict = None;
+                        item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                        item.error =
+                            Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                        if let Err(e) = state.download_queue.update(&item).await {
+                            tracing::warn!(
+                                item_id = %item.id,
+                                error = %e,
+                                "failed to clear a restart-orphaned pending filename conflict"
+                            );
+                        }
+                        // Redis (unlike `temp_dir`) survives a container recreate, so a cached AI
+                        // comparison result for this same item — its sample-page images read live
+                        // from the very `temp_path` that just vanished — would otherwise keep
+                        // being served as a "successful" cached comparison whose images 404.
+                        if let Err(e) = state.compare_cache.delete(&item.id).await {
+                            tracing::warn!(
+                                item_id = %item.id,
+                                error = %e,
+                                "failed to clear compare_cache for a restart-orphaned pending filename conflict"
+                            );
+                        }
                     }
                 }
             }

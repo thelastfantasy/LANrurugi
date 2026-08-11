@@ -2,7 +2,7 @@ import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { FitMode, ReaderSettings } from "@/hooks/useReaderSettings"
-import { ensureLink, FONT_SIZE_8PT, FONT_SIZE_9PT, removeLink } from "@/theme"
+import { ensureLink, FONT_SIZE_MD, FONT_SIZE_XS, removeLink } from "@/theme"
 
 const CONFIG_CSS_ID = "reader-config-css"
 
@@ -24,8 +24,8 @@ function SettingSection({
 }) {
   return (
     <div style={{ textAlign: "left", marginBottom: 20 }}>
-      <h2 style={{ margin: "0 0 4px", fontSize: FONT_SIZE_9PT, fontWeight: "bold" }}>{title}</h2>
-      {description && <div style={{ fontSize: FONT_SIZE_8PT, opacity: 0.6, marginBottom: 6 }}>{description}</div>}
+      <h2 style={{ margin: "0 0 4px", fontSize: FONT_SIZE_MD, fontWeight: "bold" }}>{title}</h2>
+      {description && <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.6, marginBottom: 6 }}>{description}</div>}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>{children}</div>
     </div>
   )
@@ -110,7 +110,7 @@ export function SettingsOverlay({
             outer one) rendered nowhere near the actual rounded corner it needs to stay clear of. */}
         <div style={{ width: "100%", boxSizing: "border-box", overflowY: "auto", padding: "0 16px" }}>
           <h2 style={{ textAlign: "center" }}>{t("Reader Options")}</h2>
-          <h1 style={{ textAlign: "center", fontSize: FONT_SIZE_9PT, marginBottom: 16 }}>
+          <h1 style={{ textAlign: "center", fontSize: FONT_SIZE_MD, marginBottom: 16 }}>
             {t("Those options save automatically -- Click around and find out!")}
           </h1>
 

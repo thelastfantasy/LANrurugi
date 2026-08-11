@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 
 import { useCleanTempfolder, useClearNewFlags, useDiscardSearchCache, useShinobuAction } from "@/api/hooks"
 import { CollapsibleSection } from "@/components/Display"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
@@ -27,7 +27,7 @@ export function ArchiveFilesSection({
 
   return (
     <CollapsibleSection icon="fa-file-archive" title={t("Archive Files")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <ActionRow
             id="rescan-button"

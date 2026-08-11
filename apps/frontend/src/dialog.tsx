@@ -175,6 +175,7 @@ type DialogRequest =
   | {
       kind: "confirm"
       message: string
+      danger: boolean
       resolve: (value: boolean) => void
     }
   | {
@@ -206,10 +207,14 @@ export function promptDialog(message: string, defaultValue = ""): Promise<string
   })
 }
 
-/** Drop-in replacement for `window.confirm(message)`. */
-export function confirmDialog(message: string): Promise<boolean> {
+/** Drop-in replacement for `window.confirm(message)`. `danger` (default `false`) styles the
+ * confirm button with `.stdbtn-danger` (real red class, themed per theme file) instead of the
+ * plain `.stdbtn` — same distinction `components/Display/Confirm.tsx`'s own `danger` prop makes,
+ * so a call site whose confirm actually deletes files/data (not just a reversible grouping) reads
+ * as visibly destructive rather than identical to a routine confirm. */
+export function confirmDialog(message: string, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
-    setRequest({ kind: "confirm", message, resolve })
+    setRequest({ kind: "confirm", message, danger, resolve })
   })
 }
 
@@ -1420,7 +1425,12 @@ export function DialogHost() {
         )}
         <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
           <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
-          <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={onConfirm} />
+          <input
+            type="button"
+            className={request.kind === "confirm" && request.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
+            value={t("OK") ?? "OK"}
+            onClick={onConfirm}
+          />
         </div>
       </div>
     </>,

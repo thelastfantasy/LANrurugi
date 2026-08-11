@@ -83,6 +83,32 @@ export async function sendJson<T>(
   return (text ? JSON.parse(text) : undefined) as T
 }
 
+/** JSON-body mutation whose response is a binary file (e.g. `POST
+ * /download_queue/{id}/compare/export-patch`'s `.patch.zip` bytes), not JSON — same error-handling
+ * shape as {@link sendJson}, but reads the response as a `Blob` and also returns the server-supplied
+ * filename (parsed from `Content-Disposition`), so the caller can drive a real "Save As" download
+ * with the name the server actually intended rather than a generic placeholder. */
+export async function sendJsonForBlob(
+  method: "PUT" | "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(`/api${path}`, {
+    method,
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) handleUnauthorized(path)
+    throw new ApiError(response.status, await readErrorBody(response, path))
+  }
+
+  const disposition = response.headers.get("Content-Disposition")
+  const match = disposition?.match(/filename="([^"]+)"/)
+  return { blob: await response.blob(), filename: match?.[1] ?? null }
+}
+
 /** Form-encoded mutation — most legacy-derived endpoints (categories, metadata, plugins) take
  * `application/x-www-form-urlencoded` bodies, matching their original Mojolicious `req->param`
  * handling, not JSON. */

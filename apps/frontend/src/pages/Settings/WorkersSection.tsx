@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom"
 import { useShinobuAction, useShinobuStatus } from "@/api/hooks"
 import { CollapsibleSection } from "@/components/Display"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow } from "./shared"
 
@@ -16,7 +16,7 @@ export function WorkersSection({ onStatus }: { onStatus: (status: string) => voi
 
   return (
     <CollapsibleSection icon="fa-satellite" title={t("Background Workers")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <tr>
             <td className="option-td">

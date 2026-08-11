@@ -148,6 +148,10 @@ impl ArchiveRepository {
             ("toc", toc_json),
             ("stamps", stamps_json),
             ("corrupted_pages", corrupted_pages_json),
+            (
+                "has_patch",
+                if archive.has_patch { "true" } else { "false" }.to_string(),
+            ),
         ];
         let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
         if let Some(thumbhash) = &archive.thumbhash {
@@ -247,6 +251,7 @@ fn archive_from_fields(
     let progress = fields.remove("progress").unwrap_or_default();
     let lastreadtime = fields.remove("lastreadtime").unwrap_or_default();
     let heal_failed_at = fields.remove("heal_failed_at").and_then(|s| s.parse().ok());
+    let has_patch = fields.remove("has_patch").unwrap_or_default() == "true";
 
     Ok(Archive {
         id: id.clone(),
@@ -268,6 +273,7 @@ fn archive_from_fields(
         stamp_ids,
         heal_failed_at,
         corrupted_pages,
+        has_patch,
     })
 }
 
@@ -704,6 +710,7 @@ mod tests {
             stamp_ids: vec![],
             heal_failed_at: Some(1_700_000_500),
             corrupted_pages: vec!["page03.jpg".to_string(), "page07.jpg".to_string()],
+            has_patch: true,
         };
 
         repo.save(&archive).await.unwrap();
@@ -811,6 +818,7 @@ mod tests {
             stamp_ids: vec![],
             heal_failed_at: None,
             corrupted_pages: vec![],
+            has_patch: false,
         };
         archive_repo.save(&archive).await.unwrap();
 

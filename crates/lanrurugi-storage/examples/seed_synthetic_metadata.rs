@@ -162,6 +162,7 @@ fn synthetic_archive(index: usize, templates: &[SeriesTemplate]) -> Archive {
         stamp_ids: Vec::new(),
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
+        has_patch: false,
     }
 }
 

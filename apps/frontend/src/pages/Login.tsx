@@ -6,7 +6,7 @@ import { useLogin } from "@/api/hooks"
 import { Footer } from "@/components/Layout"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/login.html.tt2` line-for-line: a plain centered `.ido`
 // form, "Admin Password:"/input on one table row (not stacked), the wrong-password row only when
@@ -38,7 +38,7 @@ export function Login() {
         <p>{t("This page requires you to log on.")}</p>
 
         <form onSubmit={handleSubmit} name="loginForm" method="post">
-          <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_8PT }}>
+          <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_XS }}>
             <tbody>
               <tr>
                 <td>{t("Admin Password:")}</td>

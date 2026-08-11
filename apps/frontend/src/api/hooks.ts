@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { ApiError, fetchJson, fetchText, sendForm, sendJson } from "./client"
+import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
 import type {
   AddToQueueItem,
   AddToQueueResponse,
@@ -8,9 +8,11 @@ import type {
   ArchiveMetadata,
   BookmarkLinkResponse,
   CategoryMetadata,
+  ComparisonResult,
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateGroup,
+  ExportPatchInsertion,
   JobRecord,
   JobsResponse,
   LoginStatus,
@@ -930,18 +932,21 @@ export function useLogLines(category: LogCategory, lines = 100) {
 // Native `/api/jobs` endpoints, additive over the legacy-mimicking `/api/minion/*` contract
 // (research.md §1).
 
+function jobsRefetchInterval(query: { state: { data?: JobsResponse } }) {
+  const jobs = query.state.data?.jobs ?? []
+  const active = jobs.some((job) => job.state === "active")
+  return active ? DOWNLOAD_QUEUE_POLL_INTERVAL_MS : POLL_INTERVAL_MS
+}
+
 export function useJobs() {
   return useQuery({
     queryKey: ["jobs"],
     queryFn: () => fetchJson<JobsResponse>("/jobs"),
     // `select` unwraps the `{ jobs: [...] }` envelope so consumers get the array directly.
     select: (data) => data.jobs as JobRecord[],
-    // Shares `DOWNLOAD_QUEUE_POLL_INTERVAL_MS`'s own faster cadence (not the shared
-    // `POLL_INTERVAL_MS` this used to match with Shinobu/log-tail polling) — this is the query
-    // that actually carries a download's live `downloaded_bytes`/`total_bytes`, so it needs to be
-    // at least as fresh as the download-queue list itself for the Upload page's progress bar/speed
-    // readout to feel responsive rather than laggy.
-    refetchInterval: DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
+    // Fast cadence only while a job is actually active — see `downloadQueueRefetchInterval`'s own
+    // reasoning above.
+    refetchInterval: jobsRefetchInterval,
   })
 }
 
@@ -988,12 +993,21 @@ export function useClearFinishedJobs() {
 // consumer while open, and the queue itself (not just the underlying job) is what needs to feel
 // live (item state transitions, not just byte progress).
 
+/** Fast cadence only while something is actually moving (`starting`/`downloading`) — otherwise
+ * falls back to the shared background cadence. Without this, a page with only finished/errored
+ * items still polled every second forever with nothing to show for it. */
+function downloadQueueRefetchInterval(query: { state: { data?: DownloadQueueListResponse } }) {
+  const items = query.state.data?.items ?? []
+  const active = items.some((item) => item.state === "starting" || item.state === "downloading")
+  return active ? DOWNLOAD_QUEUE_POLL_INTERVAL_MS : POLL_INTERVAL_MS
+}
+
 export function useDownloadQueue() {
   return useQuery({
     queryKey: ["download-queue"],
     queryFn: () => fetchJson<DownloadQueueListResponse>("/download_queue"),
     select: (data) => data.items,
-    refetchInterval: DOWNLOAD_QUEUE_POLL_INTERVAL_MS,
+    refetchInterval: downloadQueueRefetchInterval,
   })
 }
 
@@ -1069,11 +1083,17 @@ export function useStopQueueItem() {
   })
 }
 
+/** `insertions`, when given, packages B's own unique pages (`ComparisonResult.b_unmatched_pages`,
+ * issue #77's own follow-on design) into a `.patch.zip` for the new A that's replacing B —
+ * omitted for every ordinary overwrite that never went through the AI comparison flow, which
+ * remains a plain `{ id }` call exactly as before this parameter existed. */
 export function useOverwriteQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/overwrite`),
+    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
+      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/overwrite`, {
+        insertions: insertions ?? [],
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
@@ -1087,6 +1107,63 @@ export function useRenameQueueItem() {
     mutationFn: ({ id, filename }: { id: string; filename: string }) =>
       sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/rename`, {
         filename,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+    },
+  })
+}
+
+/** Read-only — doesn't invalidate any query (unlike overwrite/rename above), since a comparison
+ * resolves nothing about the conflict itself, just informs the user's own choice of which
+ * resolution to pick next. */
+export function useCompareQueueItem() {
+  return useMutation({
+    mutationFn: (id: string) => sendJson<{ result: ComparisonResult }>("POST", `/download_queue/${encodeURIComponent(id)}/compare`),
+  })
+}
+
+/** B's own real entry-name list, natural-sorted (issue #77's own follow-on design) — the "insert
+ * after/before this page" anchor picker needs real filenames to send to `useExportComparePatch`,
+ * not just the numeric indices every other part of the comparison UI deals in (see
+ * `ExportPatchInsertion`'s own docs for why `patch.rs`'s JSON schema uses filenames, not indices,
+ * as its anchor). Only ever fetched once the user actually opens the picker (`enabled`), not
+ * eagerly alongside the comparison result itself. */
+export function useComparePages(id: string | null, side: "a" | "b") {
+  return useQuery({
+    queryKey: ["compare-pages", id, side],
+    queryFn: () => fetchJson<{ pages: string[] }>(`/download_queue/${encodeURIComponent(id ?? "")}/compare/pages?side=${side}`),
+    enabled: id !== null,
+  })
+}
+
+/** Builds a `.patch.zip` from a user-picked selection of A's own unique pages
+ * (`ComparisonResult.a_unmatched_pages`, issue #77's own follow-on design) and returns it as a
+ * `Blob` ready for the caller to trigger a real browser download with — this mutation doesn't
+ * install the patch anywhere itself (confirmed design: the user places it next to the target
+ * archive on disk manually), so there's nothing here to invalidate either, same as
+ * `useCompareQueueItem` above. */
+export function useExportComparePatch() {
+  return useMutation({
+    mutationFn: ({ id, insertions }: { id: string; insertions: ExportPatchInsertion[] }) =>
+      sendJsonForBlob("POST", `/download_queue/${encodeURIComponent(id)}/compare/export-patch`, { insertions }),
+  })
+}
+
+/** "Keep the existing library archive (B), discard this download (A)" — issue #77's own follow-on
+ * design. `insertions`, when given, packages A's own unique pages straight onto B's own sidecar
+ * `.patch.zip` server-side (unlike `useExportComparePatch` above, this doesn't hand back a file
+ * for the user to place themselves — this flow's own frontend already walked them through picking
+ * insertion points as part of *choosing* to keep B). Always deletes the queue item on success
+ * (nothing is left for it to track — see the endpoint's own docs), so this invalidates the queue
+ * list same as delete/overwrite/rename. */
+export function useKeepSideB() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
+      sendJson<{ success: number }>("POST", `/download_queue/${encodeURIComponent(id)}/compare/keep-b`, {
+        insertions: insertions ?? [],
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })

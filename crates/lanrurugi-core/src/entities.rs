@@ -69,6 +69,16 @@ pub struct Archive {
     /// majority of archives that have no corrupt pages at all.
     #[serde(default)]
     pub corrupted_pages: Vec<String>,
+    /// Whether a sidecar `.patch.zip` (`lanrurugi_scanner::patch`, issue #77's own follow-on
+    /// design) currently exists next to this archive's own file — persisted here (rather than a
+    /// live `Path::exists` check on every read) so the library grid can show a per-card badge
+    /// without paying a filesystem stat for every archive on every page load. Kept in sync by
+    /// every code path that writes or removes a patch file (`download_queue.rs`'s
+    /// `keep_side_b`/`overwrite_queue_item`), not derived automatically — there is no filesystem
+    /// watch on patch files themselves, only on watched archive extensions
+    /// (`watcher::is_watched_archive_path` explicitly excludes them).
+    #[serde(default)]
+    pub has_patch: bool,
 }
 
 impl Archive {

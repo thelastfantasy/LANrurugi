@@ -35,6 +35,14 @@ const AUTO_CLOSE_TIME: Record<ToastIcon, number | false> = {
  * placement for transient notifications (matching most modern web apps' own convention) and keeps
  * toasts clear of every other interactive chrome on this app's pages (issue #58).
  */
+/** Dismisses a specific toast by the id `toast()` returned (or, called with no id, every toast
+ * currently showing) — `react-toastify`'s own `toast.dismiss`, re-exported so call sites needing
+ * a "processing…" toast that later gets replaced by a real result don't import that library
+ * directly just for this one function. */
+export function dismissToast(id?: ReturnType<typeof emitToast>) {
+  emitToast.dismiss(id)
+}
+
 export function toast(c: ToastConfig) {
   const type = c.icon ?? "info"
   const isWarningOrError = type === "warning" || type === "error"

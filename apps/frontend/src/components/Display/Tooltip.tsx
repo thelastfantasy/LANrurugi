@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
-import { FONT_SIZE_9PT, Z_OVERLAY_TOOLTIP } from "@/theme"
+import { FONT_SIZE_MD, Z_OVERLAY_TOOLTIP } from "@/theme"
 
 /** `'element'` (default) anchors the bubble to the trigger's own bounding box, in a fixed spot
  * relative to it — the usual "attached to this button" tooltip. `'cursor'` instead follows the
@@ -183,7 +183,7 @@ export function Tooltip({
               style={{
                 display: "block",
                 padding: "6px 10px",
-                fontSize: FONT_SIZE_9PT,
+                fontSize: FONT_SIZE_MD,
                 lineHeight: 1.5,
                 whiteSpace: "normal",
                 maxWidth,

@@ -247,10 +247,10 @@ input[type="checkbox"]:disabled {
  * trackpad/drag) fully working — `scrollbar-width`/`-ms-overflow-style` can't be done inline
  * (unsupported property names in React's style object) and `::-webkit-scrollbar` is a pseudo-
  * element, which inline styles can never target at all. Used by `SortableList.tsx`'s horizontal
- * mode (the selection-mode carousel in `RecentlyAddedCarousel.tsx`): the rest of the app's
- * carousels are Swiper-based, which hides overflow internally and never shows a native scrollbar
- * track, so a bare `overflow-x: auto` div showing the browser's own scrollbar once enough cards
- * are selected to overflow the row reads as visually inconsistent with every other carousel here. */
+ * mode (the selection-mode carousel in `RecentlyAddedCarousel.tsx`): the same carousel's
+ * read-only modes now use a plain `overflow-x: auto` flex row with Lenis wheel handling, which
+ * also has no visible scrollbar — a bare `overflow-x: auto` div showing the browser's own
+ * scrollbar track once enough cards are selected reads inconsistent with the rest of the row. */
 .hide-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -270,30 +270,17 @@ input[type="checkbox"]:disabled {
   vertical-align: middle;
 }
 
-/* `RecentlyAddedCarousel.tsx`'s two carousel modes — the read-only Swiper one (Recently Added/On
- * Deck/etc.) and the drag-to-reorder `SortableList` one ("选择档案" multi-select mode) — both wrap
- * each card in a fixed-size box that used to be a plain inline `width: 228`. An inline style can't
- * carry a media query, so both used to stay 228px wide even once `div.id1` inside them (`lrr.css`)
- * shrank to 164px under its own `max-width: 560px` breakpoint, leaving a large empty gap around
- * each (now-smaller) card on narrow viewports. This class gives both the same responsive width
- * `div.id1` itself gets — 228px unconditional, 164px to match that breakpoint (mirrored verbatim,
- * not reinvented) — so the wrapper is always exactly the size of the card it holds.
- *
- * The extra `.swiper-slide.carousel-slide` selector (used by the Swiper-based mode only) exists
- * for specificity, not semantics: `swiper/css` injects its own `.swiper-slide { width: 100% }`
- * rule as a separate stylesheet, and Vite's dev-server module-injection order can land it *after*
- * this file's own `<style>` tag — at equal specificity (both single-class selectors), source order
- * decides, and swiper's rule was winning. The swiper slide element already carries both classes,
- * so the compound selector matches the same element while outranking swiper's rule regardless of
- * injection order; the drag-mode wrapper has no such competing rule, so the plain `.carousel-slide`
- * selector is enough for it. */
-.carousel-slide,
-.swiper-slide.carousel-slide {
+/* `RecentlyAddedCarousel.tsx`'s two carousel modes (read-only flex row and drag-to-reorder
+ * `SortableList`) both wrap each card in a fixed-size `.carousel-slide` box. An inline style
+ * can't carry a media query, so both used to stay 228px wide even once `div.id1` inside
+ * them (`lrr.css`) shrank to 164px under its own `max-width: 560px` breakpoint. This class
+ * gives both the same responsive width `div.id1` itself gets — 228px unconditional, 164px
+ * to match that breakpoint. */
+.carousel-slide {
   width: 228px;
 }
 @media all and (max-width: 560px) {
-  .carousel-slide,
-  .swiper-slide.carousel-slide {
+  .carousel-slide {
     width: 164px;
   }
 }

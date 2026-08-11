@@ -11,7 +11,7 @@ import { Tooltip } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_9PT, FONT_SIZE_10PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_MD, FONT_SIZE_SM, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 const BOOKMARK_CATEGORY_STORAGE_KEY = "bookmarkCategoryId"
@@ -132,7 +132,7 @@ export function Categories() {
 
   async function handleDelete() {
     if (!selectedId) return
-    if (!(await confirmDialog(t("The category will be deleted permanently.") ?? ""))) return
+    if (!(await confirmDialog(t("The category will be deleted permanently.") ?? "", true))) return
     try {
       await sendJson("DELETE", `/categories/${selectedId}`)
       toast({ text: t("Category deleted!") ?? undefined, icon: "success" })
@@ -196,7 +196,7 @@ export function Categories() {
       <br />
       <br />
       <div style={{ marginLeft: "auto", marginRight: "auto" }}>
-        <div className="left-column" style={{ textAlign: "left", fontSize: FONT_SIZE_10PT, width: 400 }}>
+        <div className="left-column" style={{ textAlign: "left", fontSize: FONT_SIZE_SM, width: 400 }}>
           {t("Categories appear at the top of your window when browsing the Library.")}
           <br />
           {t("There are two distinct kinds:")}
@@ -314,7 +314,7 @@ export function Categories() {
                   </tr>
                   <tr className="tag-options">
                     <td></td>
-                    <td id="status" style={{ fontSize: FONT_SIZE_9PT }}>
+                    <td id="status" style={{ fontSize: FONT_SIZE_MD }}>
                       {status === "saving" && (
                         <>
                           <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t("Saving your modifications...")}

@@ -1,3 +1,5 @@
+export * from "./useHorizontalScroll"
+
 export * from "./useCustomColumnNamespace"
 
 export * from "./useDocumentTitle"

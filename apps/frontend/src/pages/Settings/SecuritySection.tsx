@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { CollapsibleSection } from "@/components/Display"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 import { CheckboxRow, Row } from "./shared"
 
@@ -36,7 +36,7 @@ export function SecuritySection({
 
   return (
     <CollapsibleSection icon="fa-shield-alt" title={t("Security")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <CheckboxRow id="enablepass" checked={enablepass} onChange={setEnablepass} label={t("Enable Password")}>
             {t("If enabled, everything that isn't reading will require a password.")}

@@ -115,6 +115,8 @@ where
 pub enum ThumbnailError {
     #[error("archive read error: {0}")]
     Archive(#[from] ArchiveFormatError),
+    #[error("patch read error: {0}")]
+    Patch(#[from] crate::patch::PatchError),
     #[error("archive has no pages to thumbnail")]
     NoPages,
     #[error("failed to decode image: {0}")]
@@ -166,11 +168,17 @@ fn generate_sync(
     format: ThumbFormat,
     quality: u8,
 ) -> Result<Option<String>, ThumbnailError> {
-    let pages = archive_format::list_pages(archive_path)?;
-    let entry_name = pages
+    // Merges in a sidecar `.patch.zip`'s own pages, if one exists (`crate::patch`, issue #77's own
+    // follow-on design) — this is the shared thumbnail-generation path (cover, per-page, and
+    // batch regen all go through here), so a patched page gets the exact same thumbnail treatment
+    // as an original one rather than the overview grid (the one caller that actually surfaces
+    // per-page thumbnails to a user) silently having no thumbnail for it.
+    let original_pages = archive_format::list_pages(archive_path)?;
+    let effective = crate::patch::effective_pages(archive_path, &original_pages);
+    let entry = effective
         .get(page.saturating_sub(1))
         .ok_or(ThumbnailError::NoPages)?;
-    let bytes = archive_format::read_entry(archive_path, entry_name)?;
+    let bytes = crate::patch::read_page(archive_path, entry)?;
 
     let cover_hash = (page == 1).then(|| {
         let mut hasher = Sha1::new();

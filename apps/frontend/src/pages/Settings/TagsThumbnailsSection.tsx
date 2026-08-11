@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 
 import { useRegenThumbnails } from "@/api/hooks"
 import { CollapsibleSection } from "@/components/Display"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
@@ -85,7 +85,7 @@ export function TagsThumbnailsSection({
 
   return (
     <CollapsibleSection icon="fa-tags" title={t("Tags and Thumbnails")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("Use high-quality thumbnails for pages")}>
             {t("LANraragi generates lower-quality thumbnails for archive pages for performance reasons.")}

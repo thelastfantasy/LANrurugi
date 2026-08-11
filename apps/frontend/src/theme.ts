@@ -77,13 +77,19 @@ export const MENU_PALETTE: Record<
 
 // `lrr.css`/`allcollapsible.css` hardcode several rules in `pt` (some `!important`) — these are
 // the `rem` equivalents used throughout the app instead (16px root font size assumed), so a
-// pt-sized legacy rule and our own inline styles agree on the same rendered size. Naming reflects
-// the legacy pt value they replace, not the rem number, since that's the meaningful constant.
-export const FONT_SIZE_8PT = "0.667rem"
+// pt-sized legacy rule and our own inline styles agree on the same rendered size. Named by
+// relative size (XS/SM/MD), not the legacy pt value each one replaces — an earlier version of
+// this file named them FONT_SIZE_8PT/9PT/10PT after that legacy value, but that made the constant
+// names actively misleading at every call site: FONT_SIZE_9PT (0.833rem) is *larger* than
+// FONT_SIZE_10PT (0.75rem), since pt-to-rem isn't a monotonic renaming, and nothing about a call
+// site reading `FONT_SIZE_9PT` communicates that it's the *biggest* of the three. Real CSS length
+// units (rem), not `pt` in either the name or the value, per the project's own confirmed
+// direction.
+export const FONT_SIZE_XS = "0.667rem"
 
-export const FONT_SIZE_9PT = "0.833rem"
+export const FONT_SIZE_MD = "0.833rem"
 
-export const FONT_SIZE_10PT = "0.75rem"
+export const FONT_SIZE_SM = "0.75rem"
 
 // Shared full-screen-overlay layering: a fixed, click-to-dismiss backdrop behind a floating menu/
 // popup — used by Library's/the Reader's own context menus. `CONTENT` is exactly one level above

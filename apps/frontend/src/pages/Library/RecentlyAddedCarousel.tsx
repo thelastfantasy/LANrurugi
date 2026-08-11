@@ -1,15 +1,10 @@
-import "swiper/css"
-import "swiper/css/navigation"
-
+import Lenis from "lenis"
 import type { MouseEvent } from "react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Mousewheel, Navigation } from "swiper/modules"
-import { Swiper, SwiperSlide } from "swiper/react"
 
 import type { ArchiveMetadata } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
-import { SortableList } from "@/components/Display"
+import { PopupMenu, PopupMenuItem, SortableList } from "@/components/Display"
 import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys"
 import { Z_OVERLAY_CONTENT } from "@/theme"
@@ -76,6 +71,27 @@ export function RecentlyAddedCarousel({
   const [items, setItems] = useState<ArchiveMetadata[]>([])
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0)
+  const carouselRef = useRef<HTMLDivElement>(null)
+  const lenisRef = useRef<Lenis | null>(null)
+  // Lenis init with `items` guard — the carousel div only mounts when data arrives, so the
+  // shared `useHorizontalScroll` hook (which fires once on mount with `[]` deps) would never
+  // see the ref. This effect re-checks once items populate the DOM.
+  useEffect(() => {
+    const el = carouselRef.current
+    if (!el || lenisRef.current) return
+    const lenis = new Lenis({
+      wrapper: el, content: el,
+      orientation: "horizontal", gestureOrientation: "both",
+      wheelMultiplier: 4.5, lerp: 0.1, autoRaf: true,
+    })
+    lenisRef.current = lenis
+    return () => { lenis.destroy(); lenisRef.current = null }
+     
+  }, [items])
+  const stepSlide = useCallback(() => {
+    const firstChild = carouselRef.current?.firstElementChild as HTMLElement | null
+    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236 // 228 + 8 gap
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0")
@@ -394,37 +410,45 @@ export function RecentlyAddedCarousel({
                 <span style={{ marginTop: 12 }}>{t("No results here.")}</span>
               </div>
             ) : (
-              <Swiper
-                modules={[Navigation, Mousewheel]}
-                navigation={{ nextEl: ".carousel-next", prevEl: ".carousel-prev" }}
-                mousewheel
-                spaceBetween={8}
-                slidesPerView="auto"
-                style={{ padding: "8px 0" }}
-              >
-                {items.map((a) => (
-                  // `.carousel-slide` (`index.css`) tracks `div.id1`'s own responsive width exactly
-                  // (228px desktop / 164px under `lrr.css`'s `max-width: 560px` breakpoint) — a
-                  // plain inline `style={{ width: 228 }}` used to sit here instead, which matched
-                  // the desktop case but, being an inline style, always won over the CSS cascade
-                  // (including that same media query) on narrower viewports too, wrapping a
-                  // genuinely 164px-wide mobile card in a stale 228px slide and leaving a large
-                  // empty gap around the thumbnail. Swiper's `slidesPerView="auto"` mode needs each
-                  // slide to carry its own explicit width to size correctly — it doesn't measure a
-                  // child's rendered content width on its own.
-                  <SwiperSlide key={a.arcid} className="carousel-slide">
-                    <CarouselCard
-                      archive={a}
-                      cropThumbs={cropThumbs}
-                      onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
-                      onOpen={onOpen}
-                      onSearchTag={onSearchTag}
-                    />
-                  </SwiperSlide>
-                ))}
-                <a href="#" className="fa fa-3x fa-chevron-left carousel-prev" style={{ position: "absolute", left: 0, top: 136, cursor: "pointer", zIndex: 20 }}></a>
-                <a href="#" className="fa fa-3x fa-chevron-right carousel-next" style={{ position: "absolute", right: 0, top: 136, cursor: "pointer", zIndex: 20 }}></a>
-              </Swiper>
+              <div style={{ position: "relative" }}>
+                <div
+                  ref={carouselRef}
+                  className="hide-scrollbar"
+                  style={{ display: "flex", gap: 8, overflowX: "auto", overflowY: "hidden", padding: "8px 0" }}
+                >
+                  {items.map((a) => (
+                    <div key={a.arcid} className="carousel-slide">
+                      <CarouselCard
+                        archive={a}
+                        cropThumbs={cropThumbs}
+                        onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                        onOpen={onOpen}
+                        onSearchTag={onSearchTag}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <a
+                  href="#"
+                  className="fa fa-3x fa-chevron-left carousel-prev"
+                  style={{ position: "absolute", left: 0, top: 136, cursor: "pointer", zIndex: 20 }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    const lenis = lenisRef.current
+                    if (lenis) lenis.scrollTo(lenis.targetScroll - stepSlide())
+                  }}
+                ></a>
+                <a
+                  href="#"
+                  className="fa fa-3x fa-chevron-right carousel-next"
+                  style={{ position: "absolute", right: 0, top: 136, cursor: "pointer", zIndex: 20 }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    const lenis = lenisRef.current
+                    if (lenis) lenis.scrollTo(lenis.targetScroll + stepSlide())
+                  }}
+                ></a>
+              </div>
             )}
           </div>
         )}

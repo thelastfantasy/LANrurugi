@@ -47,6 +47,14 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, 'src'),
     },
+    // Forces a single React/React DOM module instance across the whole dep graph — without this,
+    // `@floating-ui/react` (added for `FilenameTemplateEditor.tsx`'s popover positioning) resolved
+    // its own `react` copy separately from the app's own, and its internal `useId()` call threw
+    // "Cannot read properties of null" (React's hook dispatcher was null — the classic symptom of
+    // two React module instances coexisting, not two INSTALLED versions: `pnpm ls react` here only
+    // ever shows the one 19.2.7 copy). Root-caused directly (not guessed) after clearing Vite's
+    // `optimizeDeps` cache didn't fix it, ruling out a stale-prebundle explanation.
+    dedupe: ['react', 'react-dom'],
   },
   plugins: [react(), tailwindcss(), injectServerTheme()],
   server: {

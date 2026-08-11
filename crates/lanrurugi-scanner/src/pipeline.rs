@@ -289,7 +289,8 @@ pub async fn ingest_file_with_policy(
                         });
                     }
                     DuplicatePolicy::Overwrite => {
-                        delete_existing_archive(archives, config_pool, &existing).await?;
+                        delete_existing_archive(archives, config_pool, search_pool, &existing)
+                            .await?;
                     }
                 }
             }
@@ -364,12 +365,38 @@ fn now_unix() -> u64 {
 async fn delete_existing_archive(
     archives: &ArchiveRepository,
     config_pool: &Pool,
+    search_pool: &Pool,
     existing: &Archive,
 ) -> Result<(), PipelineError> {
     let _ = tokio::fs::remove_file(&existing.file).await;
+    // A sidecar `.patch.zip` (issue #77's own follow-on design) is associated purely by filename
+    // convention — left behind here, it would either sit as a dangling orphan (this archive's
+    // record is gone) or, worse, get silently picked up by whatever new archive next lands on
+    // this same filename (the `Overwrite`-policy caller's own new archive, about to be catalogued
+    // right after this). Same cleanup `archives.rs::delete_archive`'s own docs already established
+    // for the single-delete API path — best-effort, matching that path's reasoning.
+    let _ = tokio::fs::remove_file(crate::patch::patch_path_for(Path::new(&existing.file))).await;
     archives.delete(&existing.id).await?;
     let mut config_conn = config_pool.get().await?;
     let _: () = config_conn.hdel(FILEMAP_KEY, &existing.file).await?;
+    // Confirmed missing live (issue found during unrelated manual QA): without this, the deleted
+    // archive's title/tags stayed in the search index (`LRR_TITLES`/tag sets), and since the new
+    // archive being catalogued right after this reuses the exact same filename, a subsequent
+    // library-list hover/search could still surface the OLD title/source/uploader tags — the new
+    // archive's own real ones were correct once opened directly, only the index-backed summary
+    // view was stale. Mirrors `archives.rs::delete_archive`'s own best-effort index cleanup
+    // (a failure here shouldn't undo the deletion already committed above, just leave a ghost
+    // index entry for a future rescan to reconcile, logged for visibility).
+    if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
+        search_pool,
+        existing.id.as_str(),
+        &existing.title,
+        &existing.tags,
+    )
+    .await
+    {
+        tracing::warn!(id = %existing.id, error = %e, "failed to remove overwritten archive from search index");
+    }
     Ok(())
 }
 
@@ -434,6 +461,13 @@ async fn catalogue_new_archive(
         String::new()
     };
 
+    // A sidecar `.patch.zip` (issue #77's own follow-on design) may already sit next to this file
+    // at first-scan time — e.g. a user drops both a manually-authored patch and its target archive
+    // into the library directory together, rather than only ever via the compare-flow endpoints
+    // that write one server-side. Checked here so a fresh catalogue doesn't start with a stale
+    // `has_patch: false` that would only get corrected the next time some other code path happens
+    // to touch this archive's record.
+    let has_patch = crate::patch::patch_path_for(path).exists();
     let mut archive = Archive {
         id: id.clone(),
         name: name.clone(),
@@ -451,6 +485,7 @@ async fn catalogue_new_archive(
         stamp_ids: Vec::new(),
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
+        has_patch,
     };
     archives.save(&archive).await?;
     if let Err(e) =
@@ -818,6 +853,22 @@ mod tests {
         assert!(
             !dir.path().join("shared-name.zip").exists(),
             "old archive's on-disk file should be gone (new file is still at its staged path)"
+        );
+
+        // Confirmed missing live: the deleted archive's search-index title entry must go with it,
+        // or a library-list hover could keep surfacing the overwritten archive's stale
+        // title/tags/source even after the new archive replaced it on disk under the same name.
+        let mut search_conn = search_pool.get().await.unwrap();
+        let stale_score: Option<f64> = search_conn
+            .zscore(
+                lanrurugi_search::keys::TITLES_KEY,
+                format!("{}\0{}", existing_archive.title.to_lowercase(), existing_id),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stale_score, None,
+            "overwritten archive's title should no longer be in the search index"
         );
 
         archives.delete(&new_id).await.unwrap();

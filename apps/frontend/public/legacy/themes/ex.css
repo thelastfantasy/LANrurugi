@@ -777,3 +777,36 @@ div.id4 {
 .ai-checkable-btn-toggle .fa-robot {
     color: #3b97ea;
 }
+
+/* Background for the filename/sharpness caption under each sample thumbnail in the AI quality-
+   comparison modal (`ComparisonResultModal.tsx`'s own `OverlayPage`) — that caption text has no
+   `color` of its own (deliberately: per this project's own rule, custom colors must be theme-
+   aware, but the caption *text* color here is a plain inherited value from the page's own default
+   text color, not something this feature set explicitly). A light neutral background, not a dark
+   one, is what actually works against an unknown/inherited text color — a dark tint (an earlier
+   version of this rule) assumed the text would be white, but it isn't guaranteed to be depending
+   on the active theme's own global text color, and a dark-on-dark pairing was confirmed live to be
+   unreadable. Same light value across all 5 themes rather than a per-theme accent tint, since the
+   goal here is guaranteed contrast against unknown text, not matching each theme's own palette. */
+.ai-compare-caption-bg {
+    background: #e8e8e8;
+}
+
+/* Color source for the AI quality-comparison modal's synthetic-border stripe pattern
+   (`AlignmentBandOverlay.tsx` draws onto a `<canvas>`, which can't be colored by CSS directly —
+   this class exists purely so that component's draw effect can read `background-color`/
+   `border-color` off it via `getComputedStyle` and reuse them as fill colors), per this project's
+   own custom-color rule. `background-color` (the stripe itself) is a LIGHTENED variant of
+   `#thumbs_container .id1.msm-selected`'s own outline hue (`#3b97ea` raised to ~62% lightness),
+   not that raw accent value — confirmed live that the raw accent (this theme's own, and
+   especially `g.css`'s very dark `#5C0D11`, which this theme family's own body text/link color
+   convention assumes sits against a LIGHT page background, not black) read as muddy/low-contrast
+   against a near-black backdrop. `border-color` (the backdrop between stripes) is this theme's own
+   real `body` background (`#34353b`) — confirmed live: the user explicitly prioritized matching
+   each theme's own palette over matching the comparison modal's own dark overlay background, so a
+   light-themed backdrop (e.g. `g.css`'s) is deliberately allowed to look different from the
+   surrounding modal chrome here. */
+.ai-compare-stripe-source {
+    background-color: rgba(68, 162, 247, 0.7);
+    border-color: #34353b;
+}

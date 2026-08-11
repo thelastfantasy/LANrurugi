@@ -115,7 +115,18 @@ run = "podman compose -f compose.dev.yaml stop"
 
 [tasks.dev-rebuild]
 description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
-run = "podman compose -f compose.dev.yaml build"
+# Deliberately `podman build` directly, NOT `podman compose -f compose.dev.yaml build` — this
+# host has no `podman-compose` installed, so `podman compose` falls back to a standalone
+# `docker-compose` binary, which (confirmed live, 2026-08-09) prints "Docker Compose requires
+# buildx plugin to be installed" and silently drops to its own legacy builder instead of calling
+# through to `podman build` — losing `Dockerfile.dev`'s `--mount=type=cache,id=lrr-cargo-registry`/
+# `id=lrr-cargo-target` Rust-build caches entirely (buildah itself DOES support these natively;
+# confirmed via a direct `podman build` on the same Dockerfile completing a warm rebuild in 0.54s
+# vs. several minutes through the compose path). Calling `podman build` directly here bypasses
+# that broken indirection; must stay in sync with `compose.dev.yaml`'s own `build:` section
+# (context `.`, `dockerfile: Dockerfile.dev`, image tag `localhost/lanrurugi-dev-full:latest`) if
+# that ever changes.
+run = "podman build -f Dockerfile.dev -t localhost/lanrurugi-dev-full:latest ."
 
 [tasks.dev-logs]
 description = "Follow the local dev container's logs"

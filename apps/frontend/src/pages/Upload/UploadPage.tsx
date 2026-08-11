@@ -11,7 +11,7 @@ import { Tooltip } from "@/components/Display"
 import { newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
@@ -143,7 +143,7 @@ export function Upload() {
   }
 
   return (
-    <div className="ido" style={{ textAlign: "center", fontSize: FONT_SIZE_8PT }}>
+    <div className="ido" style={{ textAlign: "center", fontSize: FONT_SIZE_XS }}>
       <h1 className="ih" style={{ textAlign: "center" }}>
         {t("Adding Archives to the Library")}
       </h1>

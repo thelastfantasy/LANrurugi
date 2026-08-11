@@ -297,6 +297,36 @@ async fn delete_archive(
             if let Err(e) = state.recommend_cache.delete_for(id.as_str()).await {
                 tracing::warn!(%id, error = %e, "failed to remove deleted archive from recommendation cache");
             }
+            // A completed download-queue entry references the archive(s) it produced via
+            // `archive_ids` — deleting the archive without also deleting this entry left a
+            // "successful download" row in the Upload page's queue pointing at an id that no
+            // longer resolves to anything (confirmed live: reported as confusing, expected the
+            // queue entry to go too). No reverse index from archive id to queue item exists (a
+            // queue entry's `archive_ids` can hold more than one id for a multi-resource
+            // download), so this scans the full queue — acceptable here since the queue is orders
+            // of magnitude smaller than the archive library and this only runs once per delete,
+            // not on any hot read path. Best-effort, same reasoning as the cleanups above.
+            match state.download_queue.list_all().await {
+                Ok(items) => {
+                    let stale: Vec<String> = items
+                        .into_iter()
+                        .filter(|item| {
+                            item.archive_ids
+                                .as_ref()
+                                .is_some_and(|ids| ids.iter().any(|a| a == id.as_str()))
+                        })
+                        .map(|item| item.id)
+                        .collect();
+                    if !stale.is_empty() {
+                        if let Err(e) = state.download_queue.delete_many(&stale).await {
+                            tracing::warn!(%id, error = %e, "failed to remove deleted archive's download-queue entries");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "failed to scan download queue for deleted archive's entries");
+                }
+            }
             // Real legacy's own `delete_archive` (`~/LANraragi/lib/LANraragi/Model/Archive.pm`)
             // unconditionally deletes the archive file, its cover thumbnail, and its per-page
             // thumbnail cache directory too — not an opt-in checkbox. This was missing entirely
@@ -307,6 +337,19 @@ async fn delete_archive(
             if let Err(e) = tokio::fs::remove_file(&archive.file).await {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
+                }
+            }
+            // A sidecar `.patch.zip` (issue #77's own follow-on design) is associated purely by
+            // filename convention (same directory, same stem) — leaving it behind after its
+            // target archive is gone would either sit as a dangling orphan forever, or (worse)
+            // get silently picked up by some future, differently-content archive that happens to
+            // land on the same filename, splicing in pages that were never meant to apply to it.
+            // Best-effort, same reasoning as every other cleanup here.
+            let patch_path =
+                lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
+            if let Err(e) = tokio::fs::remove_file(&patch_path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(%id, patch_path = %patch_path.display(), error = %e, "failed to remove deleted archive's patch file from disk");
                 }
             }
             let shard = &id[0..2.min(id.len())];
@@ -534,6 +577,19 @@ async fn download_archive(
             )
         }
     };
+    // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
+    // that don't exist in the archive file itself — downloading the raw file as-is would silently
+    // drop them. `build_merged_zip` returns `None` (repackage cost skipped entirely) whenever
+    // there's no patch, or a patch exists but failed to load/apply, in which case this falls
+    // through to the same plain-file-read behavior as before patches existed.
+    let archive_file = archive.file.clone();
+    let merged = lanrurugi_core::concurrency::run_blocking(move || {
+        lanrurugi_scanner::patch::build_merged_zip(std::path::Path::new(&archive_file))
+    })
+    .await;
+    if let Ok(Ok(Some(bytes))) = merged {
+        return ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response();
+    }
     match tokio::fs::read(&archive.file).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
         Err(e) => error(
@@ -1073,6 +1129,13 @@ async fn update_archive_metadata(
 #[derive(Debug, Deserialize)]
 pub struct PageParams {
     path: String,
+    /// `"patch"` when this page comes from the archive's own sidecar `.patch.zip`
+    /// (`lanrurugi_scanner::patch`) rather than the archive file itself — set on the URL
+    /// `/files` itself already generated for a patched page (see [`get_files`]'s own doc comment),
+    /// so this endpoint doesn't need to re-derive it. Absent/anything else means "read `path` from
+    /// the archive file, as before patches existed."
+    #[serde(default)]
+    source: Option<String>,
 }
 
 /// `<temp_dir>/resize_page/<id>/<sha1(path)>_<threshold>_<quality>.jpg` — matches legacy's own
@@ -1134,16 +1197,33 @@ async fn get_page(
         }
     };
 
+    let is_patch = params.source.as_deref() == Some("patch");
+    // Singleflight key includes a `patch:`/`orig:` prefix on the path component — a patch page and
+    // an original page can legitimately share the same entry *name* (they live in two separate
+    // zips), so the plain path alone isn't a unique key across the two sources.
+    let cache_key_path = if is_patch {
+        format!("patch:{}", params.path)
+    } else {
+        format!("orig:{}", params.path)
+    };
     let result = state
         .page_singleflight
-        .run((id.to_string(), params.path.clone()), {
+        .run((id.to_string(), cache_key_path), {
             let state = state.clone();
             let id = id.clone();
             let path = params.path.clone();
             let archive_file = archive.file.clone();
             let corrupted_pages = archive.corrupted_pages.clone();
             move || async move {
-                fetch_page(&state, id.as_str(), &path, &archive_file, &corrupted_pages).await
+                fetch_page(
+                    &state,
+                    id.as_str(),
+                    &path,
+                    &archive_file,
+                    &corrupted_pages,
+                    is_patch,
+                )
+                .await
             }
         })
         .await;
@@ -1158,13 +1238,35 @@ async fn get_page(
 
 /// The actual per-`(archive, entry path)` work [`AppState::page_singleflight`] collapses
 /// concurrent duplicate calls onto — see [`get_page`]'s own doc comment.
+///
+/// `is_patch` (set from the `source=patch` query param [`get_files`]'s own patch-aware URLs
+/// carry) skips the corrupted-pages check and resize cache entirely — both are keyed by/scoped to
+/// entries inside the archive file itself, and a patch page is a different file's content
+/// (`lanrurugi_scanner::patch::read_page` reads it from the sidecar `.patch.zip`, not
+/// `archive_file`) that neither of those apply to.
 async fn fetch_page(
     state: &AppState,
     id: &str,
     path: &str,
     archive_file: &str,
     corrupted_pages: &[String],
+    is_patch: bool,
 ) -> Result<(&'static str, bytes::Bytes), String> {
+    if is_patch {
+        let archive_file_owned = archive_file.to_string();
+        let entry_name = path.to_string();
+        let raw = lanrurugi_core::concurrency::run_blocking(move || {
+            lanrurugi_scanner::patch::read_page(
+                std::path::Path::new(&archive_file_owned),
+                &lanrurugi_scanner::patch::EffectivePage::Patched(entry_name),
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        return Ok((image_content_type(&raw), bytes::Bytes::from(raw)));
+    }
+
     // Short-circuits before any archive I/O — a page already known to be corrupt (flagged by
     // `generate_page_thumbnails`'s own decode attempt) is served straight from this static asset
     // every time, never re-attempting the decode that already failed once. `corrupted_pages` comes
@@ -1233,7 +1335,11 @@ async fn fetch_page(
 /// Detects an image's MIME type from its magic bytes so the browser displays it inline rather
 /// than triggering a download (issue #62 — `application/octet-stream` causes auto-download in
 /// every browser). Falls back to `application/octet-stream` for truly unrecognized content.
-fn image_content_type(raw: &[u8]) -> &'static str {
+///
+/// `pub(crate)` — also used by `download_queue.rs`'s own comparison-sample page-image endpoint
+/// (issue #77), which needs the exact same "show inline, don't download" behavior for a page
+/// pulled from a not-yet-cataloged staged download, not just an already-cataloged archive.
+pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
     if raw.len() < 8 {
         return "application/octet-stream";
     }
@@ -1256,6 +1362,13 @@ fn image_content_type(raw: &[u8]) -> &'static str {
 /// LANrurugi extracts pages on demand rather than pre-extracting to a cache directory, there's no
 /// separate background "extract" job to report here (`job` is always `0`) — pages are simply
 /// available immediately via `/archives/{id}/page`.
+///
+/// Merges in a sidecar `.patch.zip`'s own pages, if one exists (`lanrurugi_scanner::patch`,
+/// issue #77's own follow-on design) — a URL for a patch-sourced page carries `&source=patch` so
+/// [`get_page`] knows to read it from the patch zip instead of the archive file itself; every
+/// other consumer of page URLs (OPDS, `pagecount`, the scan health-check) still calls
+/// `archive_format::list_pages` directly and never sees patched pages at all (confirmed design —
+/// patches are a reader-facing-only concept, not part of the archive's own catalogued state).
 async fn get_files(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
@@ -1271,11 +1384,20 @@ async fn get_files(
             )
         }
     };
-    match lanrurugi_scanner::archive_format::list_pages(std::path::Path::new(&archive.file)) {
+    let archive_path = std::path::Path::new(&archive.file);
+    match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
-            let urls: Vec<String> = pages
+            let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &pages);
+            let urls: Vec<String> = effective
                 .iter()
-                .map(|p| format!("/api/archives/{id}/page?path={p}"))
+                .map(|p| match p {
+                    lanrurugi_scanner::patch::EffectivePage::Original(name) => {
+                        format!("/api/archives/{id}/page?path={name}")
+                    }
+                    lanrurugi_scanner::patch::EffectivePage::Patched(name) => {
+                        format!("/api/archives/{id}/page?path={name}&source=patch")
+                    }
+                })
                 .collect();
             axum::Json(json!({ "job": 0, "pages": urls })).into_response()
         }
@@ -1567,7 +1689,25 @@ async fn get_page_thumbnails(
         }
     };
 
-    let total = archive.pagecount;
+    // The effective (patch-merged) page count, not the raw `pagecount` field — that field is
+    // never patch-aware (confirmed design: patches don't touch the archive's own catalogued
+    // state), so using it here would under-report the total whenever a sidecar `.patch.zip`
+    // exists, leaving the overview grid unable to scroll to the patched-in pages at all. Real
+    // disk I/O (`list_pages` + the patch-existence check), so run off the async reactor like every
+    // other archive-format read in this file.
+    let archive_file = archive.file.clone();
+    let total = match lanrurugi_core::concurrency::run_blocking(move || {
+        let path = std::path::Path::new(&archive_file);
+        let original = lanrurugi_scanner::archive_format::list_pages(path)?;
+        Ok::<usize, lanrurugi_scanner::archive_format::ArchiveFormatError>(
+            lanrurugi_scanner::patch::effective_pages(path, &original).len(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(n)) => n as u32,
+        _ => archive.pagecount,
+    };
     let end = (from + count - 1).min(total);
     let pages: Vec<serde_json::Value> = (from..=end)
         .map(|p| {

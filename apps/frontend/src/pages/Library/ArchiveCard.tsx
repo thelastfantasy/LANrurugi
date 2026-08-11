@@ -18,13 +18,19 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   const isRead = archive.pagecount > 0 && archive.progress / archive.pagecount > 0.85
   const showNew = archive.isnew
   const showCrown = isRead && (isTank || !showNew)
+  // Additive, LANrurugi-only badge (issue #77's own follow-on design) — a sidecar `.patch.zip`
+  // exists next to this archive, so what the reader shows for it differs from the raw file on
+  // disk. No legacy equivalent, so no mutual-exclusion rule with the other three (unlike 🆕/👑,
+  // which are deliberately XOR) — a patched archive can be new/read/a Tankoubon at the same time.
+  const showPatch = archive.has_patch === true
 
-  if (!showNew && !showCrown && !isTank) return null
+  if (!showNew && !showCrown && !isTank && !showPatch) return null
   return (
     <div className="status-icons" style={{ display: "flex", gap: 1, flexShrink: 0, paddingTop: 2 }}>
       {showNew && <span title={t("New!") ?? undefined} style={{ fontSize: "0.8em" }}>🆕</span>}
       {showCrown && <span title={t("Read") ?? undefined} style={{ fontSize: "0.8em" }}>👑</span>}
       {isTank && <span title={t("Tankoubon") ?? undefined} style={{ fontSize: "0.8em" }}>📚</span>}
+      {showPatch && <span title={t("Has a page patch") ?? undefined} style={{ fontSize: "0.8em" }}>🩹</span>}
     </div>
   )
 }

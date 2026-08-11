@@ -86,7 +86,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   }
 
   async function handleDelete() {
-    if (!(await confirmDialog(t("Are you sure you want to delete this archive?") ?? ""))) return
+    if (!(await confirmDialog(t("Are you sure you want to delete this archive?") ?? "", true))) return
     await deleteArchive.mutateAsync(archiveId)
     navigate("/")
   }

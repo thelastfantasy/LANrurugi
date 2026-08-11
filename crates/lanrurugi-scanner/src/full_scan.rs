@@ -440,6 +440,7 @@ mod tests {
                 stamp_ids: vec![],
                 heal_failed_at: None,
                 corrupted_pages: vec![],
+                has_patch: false,
             })
             .await
             .unwrap();
@@ -674,6 +675,7 @@ mod tests {
             stamp_ids: vec![],
             heal_failed_at: None,
             corrupted_pages: vec![],
+            has_patch: false,
         }
     }
 

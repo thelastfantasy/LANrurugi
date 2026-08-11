@@ -16,12 +16,23 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
+use crate::patch;
+
 const WATCHED_EXTENSIONS: &[&str] = &[
     "zip", "rar", "7z", "tar", "gz", "lzma", "xz", "cbz", "cbr", "cb7", "cbt", "pdf", "epub", "zst",
 ];
 
 pub fn is_watched_archive_path(path: &Path) -> bool {
     if path.components().any(|c| c.as_os_str() == "thumb") {
+        return false;
+    }
+    // A page patch (`crates/lanrurugi-scanner/src/patch.rs`) is itself a `.zip` file, sharing its
+    // "real" archive's extension — without this check it would get catalogued as its own,
+    // separate (and un-openable-as-manga) archive. Checked here rather than only in `full_scan`'s
+    // own filter, since this same function also gates the live filesystem watcher (`watch`
+    // below) — a patch dropped in later, not just one present at first scan, must be excluded
+    // too.
+    if patch::is_patch_path(path) {
         return false;
     }
     path.extension()

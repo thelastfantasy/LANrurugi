@@ -7,7 +7,7 @@ import type { JobRecord, JobRecordState } from "@/api/types"
 import { STATE_COLOR } from "@/components/Display"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_10PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 
 import { FilterChip } from "./FilterChip"
 import { isTerminal, JobRow, STATE_LABEL_KEYS } from "./JobRow"
@@ -143,7 +143,7 @@ export function Jobs() {
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12 }}>
       <h1 className="ih">{t("Background Jobs")}</h1>
-      <p style={{ fontSize: FONT_SIZE_10PT }}>
+      <p style={{ fontSize: FONT_SIZE_SM }}>
         {t("The background job console shows currently running and recently concluded tasks.")}
       </p>
 
@@ -217,7 +217,7 @@ export function Jobs() {
         />
       </div>
 
-      {status && <p style={{ fontSize: FONT_SIZE_10PT }}>{status}</p>}
+      {status && <p style={{ fontSize: FONT_SIZE_SM }}>{status}</p>}
 
       {jobs.isLoading && (
         <div id="processing">
@@ -230,7 +230,7 @@ export function Jobs() {
         <div id="nojobs" style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-inbox"></i>
           <p>{t("No background jobs yet.")}</p>
-          <p style={{ fontSize: FONT_SIZE_10PT }}>
+          <p style={{ fontSize: FONT_SIZE_SM }}>
             {t(
               "Jobs will appear here as you trigger thumbnail regeneration, backups, restores, duplicate scans, and other background work.",
             )}
@@ -297,7 +297,7 @@ export function Jobs() {
             >
               {t("Previous")}
             </button>
-            <span style={{ fontSize: FONT_SIZE_10PT }}>
+            <span style={{ fontSize: FONT_SIZE_SM }}>
               {t("Page {{n}} of {{total}}", { n: safePage + 1, total: pageCount })}
             </span>
             <button
@@ -308,7 +308,7 @@ export function Jobs() {
             >
               {t("Next")}
             </button>
-            <label style={{ fontSize: FONT_SIZE_10PT }}>
+            <label style={{ fontSize: FONT_SIZE_SM }}>
               {t("per page")}
               <select
                 className="stdinput"

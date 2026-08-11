@@ -13,6 +13,7 @@ members = [
     "crates/lanrurugi-plugin-converter",
     "crates/lanrurugi-recommend",
     "crates/lanrurugi-llm",
+    "crates/lanrurugi-imgcompare",
 ]
 
 [workspace.package]
@@ -32,9 +33,11 @@ lanrurugi-recommend = { path = "crates/lanrurugi-recommend" }
 lanrurugi-llm = { path = "crates/lanrurugi-llm" }
 lanrurugi-backup = { path = "crates/lanrurugi-backup" }
 lanrurugi-bench = { path = "crates/lanrurugi-bench" }
+lanrurugi-imgcompare = { path = "crates/lanrurugi-imgcompare" }
 
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
+tokio-stream = "0.1"
 rayon = "1.12"
 axum = { version = "0.8", features = ["multipart"] }
 bytes = "1.12"

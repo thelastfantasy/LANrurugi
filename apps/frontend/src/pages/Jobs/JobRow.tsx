@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import type { JobRecord, JobRecordState } from "@/api/types"
 import { CodeBlock } from "@/components/Display"
 import { JobProgressBar, STATE_COLOR } from "@/components/Display"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 /** State → i18n key (bare English word, added to the locale files in T024). */
 export const STATE_LABEL_KEYS: Record<JobRecordState, string> = {
@@ -84,7 +84,7 @@ function JobDetail({ job }: { job: JobRecord }) {
   const { t } = useTranslation()
   if (job.state === "failed") {
     return (
-      <div style={{ fontSize: FONT_SIZE_10PT }}>
+      <div style={{ fontSize: FONT_SIZE_SM }}>
         <strong style={{ color: STATE_COLOR.failed }}>{t("Error")}: </strong>
         <pre
           style={{
@@ -111,7 +111,7 @@ function JobDetail({ job }: { job: JobRecord }) {
           ? job.result
           : JSON.stringify(job.result, null, 2)
     return (
-      <div style={{ fontSize: FONT_SIZE_10PT }}>
+      <div style={{ fontSize: FONT_SIZE_SM }}>
         <strong>{t("Result")}: </strong>
         <div style={{ marginTop: 4 }}>
           <CodeBlock code={code} language="json" />
@@ -120,7 +120,7 @@ function JobDetail({ job }: { job: JobRecord }) {
     )
   }
   return (
-    <div style={{ fontSize: FONT_SIZE_10PT, color: STATE_COLOR.finished }}>
+    <div style={{ fontSize: FONT_SIZE_SM, color: STATE_COLOR.finished }}>
       {t("This job is still running — no result yet.")}
     </div>
   )

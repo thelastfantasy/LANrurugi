@@ -7,7 +7,7 @@ import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { SUPPORTED_LANGUAGES } from "@/i18n"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
@@ -76,7 +76,7 @@ export function GlobalSection({
 
   return (
     <CollapsibleSection icon="fa-cubes" title={t("Global Settings")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <Row label={t("Site Title")}>
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={htmltitle} onChange={(e) => setHtmltitle(e.target.value)} type="text" />
@@ -260,7 +260,7 @@ export function GlobalSection({
             id="drop-db"
             label={t("Reset Database")}
             onClick={async () => {
-              if (!(await confirmDialog(t("Clicking this button will reset the entire database and delete all settings and metadata.") ?? ""))) return
+              if (!(await confirmDialog(t("Clicking this button will reset the entire database and delete all settings and metadata.") ?? "", true))) return
               await dropDatabase.mutateAsync()
               setTimeout(() => navigate(routes.library()), 1500)
             }}

@@ -28,6 +28,10 @@ export interface ArchiveMetadata {
    * `TANK_`, `extension: ".tank"`) — `null` for a real archive. Mirrors legacy's own
    * `build_tank_json` aggregate shape (`~/LANraragi/lib/LANraragi/Utils/Database.pm`). */
   archive_count: number | null
+  /** Whether a sidecar `.patch.zip` currently exists next to this archive (issue #77's own
+   * follow-on design) — additive, LANrurugi-only field alongside the legacy-pinned ones above,
+   * not present on a synthetic Tankoubon entry (`archive_count !== null`). */
+  has_patch?: boolean
 }
 
 export interface CategoryMetadata {
@@ -320,6 +324,148 @@ export interface PendingFilenameConflict {
   original_filename: string
   existing_id: string
   crc32: string
+}
+
+/** Mirrors `lanrurugi_imgcompare::PageComparison` — one aligned page pair's own sharpness scores
+ * (issue #77's AI quality-comparison judgment). `a`/`b` are deliberately not "new"/"old" here
+ * either — `POST /download_queue/{id}/compare` (the only caller today) assigns `a` = the staged
+ * download, `b` = the existing library archive, but this type itself stays symmetric. */
+export interface PageComparison {
+  a_page_index: number
+  b_page_index: number
+  /** This page's own real filename inside the archive (e.g. `"012.jpg"`) — distinct from
+   * `ComparisonResult.a_filename`/`b_filename`, which are the whole *archive's* filename. */
+  a_filename: string
+  b_filename: string
+  /** This page's own compressed byte size inside the archive (not the decoded pixel buffer's
+   * size). Distinct from `ComparisonResult.a_file_size`/`b_file_size`, which are the whole
+   * *archive's* size. */
+  a_file_size: number
+  b_file_size: number
+  a_sharpness: number
+  b_sharpness: number
+  a_width: number
+  a_height: number
+  b_width: number
+  b_height: number
+  /** Maps a point in A's pixel space to the corresponding point in B's — accounts for the two
+   * scans having a different crop margin and/or resolution (a common real scenario). Identity
+   * (`scale: 1, offset_x: 0, offset_y: 0`) when no reliable alignment was found. */
+  crop_alignment: CropAlignment
+}
+
+/** Mirrors `lanrurugi_imgcompare::crop_align::CropAlignment` — maps a point in A to the
+ * corresponding point in B, in normalized per-own-dimension (UV-texture-style) coordinates: given
+ * `a_u = a_px_x / a_width`, `a_v = a_px_y / a_height`, the corresponding B point is
+ * `b_u = a_u * scale + offset_x`, `b_v = a_v * scale + offset_y`, then `b_px_x = b_u * b_width`,
+ * `b_px_y = b_v * b_height`. */
+export interface CropAlignment {
+  scale: number
+  offset_x: number
+  offset_y: number
+}
+
+export type ComparisonSide = "a" | "b"
+
+/** Mirrors `lanrurugi_scanner::archive_format::ArchiveEntryInfo` — one raw archive entry (file
+ * *or* directory, including empty directories) from a cheap header-only walk. A strict superset
+ * of the page list whenever the archive bundles non-image files (readme/torrent/etc) alongside
+ * its actual pages, and of the page count whenever it contains empty directories the page list
+ * silently skips. Powers the tree-structure popover next to each side's filename in the
+ * comparison modal. */
+export interface ArchiveEntryInfo {
+  name: string
+  is_regular_file: boolean
+  is_page: boolean
+}
+
+/** Mirrors `lanrurugi_imgcompare::UnmatchedPage` — one page with no counterpart on the other side,
+ * plus a ready-made default for where a patch inserting it should anchor (the *other* side's own
+ * page index — ready to pass straight through as `ExportPatchInsertion.after_filename`'s
+ * equivalent once resolved to a real filename via `useComparePages`). `default_insert_after: null`
+ * means "insert at the very start." No AI/LLM involved in computing this — see that Rust type's
+ * own docs for why the alignment DP's output already encodes it. */
+export interface UnmatchedPage {
+  page_index: number
+  default_insert_after: number | null
+}
+
+/** Mirrors `lanrurugi_imgcompare::ComparisonResult`. `likely_different_language` is a separate
+ * signal from `recommendation` being absent — see that Rust type's own docs for why "probably two
+ * legitimate language editions" and "genuine quality conflict, too close to call" need different
+ * UI treatment rather than collapsing into one "no recommendation" case. */
+export interface ComparisonResult {
+  aligned_pairs: number
+  a_total_pages: number
+  b_total_pages: number
+  likely_different_language: boolean
+  recommendation: ComparisonSide | null
+  samples: PageComparison[]
+  a_filename: string
+  b_filename: string
+  a_file_size: number
+  b_file_size: number
+  /** Every entry (files and directories, including empty ones) inside each archive — see
+   * `ArchiveEntryInfo`'s own docs. */
+  a_entries: ArchiveEntryInfo[]
+  b_entries: ArchiveEntryInfo[]
+  /** A's own pages with no counterpart found in B (issue #77's own follow-on design) — the
+   * material for the "keep some of A's extra pages as a patch" flow, read via the existing
+   * `.../compare/page?side=a&index=N` endpoint (same indices `samples`' own `a_page_index` uses). */
+  a_unmatched_pages: UnmatchedPage[]
+  /** The `b`-side mirror of `a_unmatched_pages` — for the symmetric "keep some of B's extra pages
+   * even when picking A overall" flow. */
+  b_unmatched_pages: UnmatchedPage[]
+}
+
+/** Mirrors `lanrurugi_imgcompare::ComparePhase` — which pass produced a `CompareEvent::Sample`.
+ * `"coarse"` is the fast pipeline every sample gets first (opens the result view immediately);
+ * `"precise"` is a pixel-accurate replacement `crop_alignment` streamed in afterward for whichever
+ * samples the coarse pass already flagged as needing a synthetic border — see
+ * `useCompareQueueItemStream`'s own docs for how the two get merged into one live sample list. */
+export type ComparePhase = "coarse" | "precise"
+
+/** Mirrors `lanrurugi_imgcompare::CompareEvent` — one `GET /download_queue/{id}/compare/stream`
+ * SSE message, tagged by `type` so the frontend never has to infer phase from message order (issue
+ * #77's own confirmed design: "注意sse的数据里面要进行区分，用flag标明是粗结果还是精结果"). `sample`
+ * carries `sample_index` (this sample's stable position in the eventual result's own `samples`
+ * array — NOT `a_page_index`/`b_page_index`) so a `"precise"` event can be applied as an in-place
+ * replacement of the matching `"coarse"` one. `done` is emitted exactly once, after every `sample`
+ * event across both phases, carrying every `ComparisonResult` field except `samples` itself (the
+ * frontend has already assembled that incrementally by the time `done` arrives) — see that
+ * variant's own docs for why this doubles as the explicit stream-end marker
+ * ("并且sse要有结束标记") instead of relying on the connection closing. */
+export type CompareEvent =
+  | { type: "sample"; sample_index: number; phase: ComparePhase; sample: PageComparison }
+  | {
+      type: "done"
+      aligned_pairs: number
+      a_total_pages: number
+      b_total_pages: number
+      a_entries: ArchiveEntryInfo[]
+      b_entries: ArchiveEntryInfo[]
+      likely_different_language: boolean
+      recommendation: ComparisonSide | null
+      a_filename: string
+      b_filename: string
+      a_file_size: number
+      b_file_size: number
+      a_unmatched_pages: UnmatchedPage[]
+      b_unmatched_pages: UnmatchedPage[]
+    }
+
+/** One insertion group for `POST /download_queue/{id}/compare/export-patch`,
+ * `/overwrite`, or `/compare/keep-b` — mirrors `lanrurugi-api`'s own `ExportPatchInsertion`.
+ * `after_filename`/`before_filename` are real entry names from the *target*'s own page list (the
+ * user picks the anchor visually, resolved via `useComparePages`), `page_indices` are the
+ * *source* side's own unmatched page indices (from `ComparisonResult.a_unmatched_pages`/
+ * `b_unmatched_pages`) to insert there, in order. Which side is source vs. target depends on the
+ * endpoint: exporting/keeping B reads from A onto B; the overwrite flow (keeping A) reads from B
+ * onto the new A. */
+export interface ExportPatchInsertion {
+  after_filename?: string | null
+  before_filename?: string | null
+  page_indices: number[]
 }
 
 // `#[serde(default)]` on the Rust side — absent on any record written before this field existed,

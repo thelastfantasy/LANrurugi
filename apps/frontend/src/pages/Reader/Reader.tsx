@@ -31,7 +31,7 @@ import { getTagSearchURL } from "@/lib/tagFormat"
 import { fileInfoText } from "@/lib/utils/fileInfoText"
 import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
-import { FONT_SIZE_8PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay"
@@ -1081,7 +1081,7 @@ export function Reader() {
   // panel (`overlay === 'help'` below) — one piece of content, two presentations, rather than
   // duplicating (and inevitably drifting) the same shortcut list twice.
   const helpContent = (
-    <div style={{ fontSize: FONT_SIZE_8PT }}>
+    <div style={{ fontSize: FONT_SIZE_XS }}>
       <p style={{ margin: "0 0 4px" }}>{t("You can navigate between pages using:")}</p>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
         <li>{t("The arrow icons")}</li>

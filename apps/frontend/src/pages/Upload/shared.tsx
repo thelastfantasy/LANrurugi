@@ -1,8 +1,47 @@
+import type Lenis from "lenis"
+import { useCallback, useEffect, useRef } from "react"
+
 import type { PluginInfo } from "@/api/types"
-import { TagTable } from "@/components/Display"
-import { Tooltip } from "@/components/Display"
+import { TagTable, Tooltip } from "@/components/Display"
+import { useHorizontalScroll } from "@/hooks"
 import { splitTagsByNamespace } from "@/lib/tagFormat"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_XS } from "@/theme"
+
+/* ─── PatchAssignmentView 共享常量 + ScrollRow ─── */
+
+export const ROW_GAP_PX = 6
+
+export const THUMB_ASPECT_RATIO = "150 / 206"
+const WHEEL_MULTIPLIER = 4.5
+const SCROLL_REPEAT_MS = 60
+
+export function ScrollRow({ count, renderPage, rowRef, lenisApiRef }: {
+  count: number; renderPage: (i: number) => React.ReactNode
+  rowRef: React.RefObject<HTMLDivElement | null>
+  lenisApiRef?: React.MutableRefObject<{ lenis: Lenis; stepPx(): number } | null>
+}) {
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const heldKeyRef = useRef<string | null>(null)
+  const lenisRef = useHorizontalScroll(rowRef, { wheelMultiplier: WHEEL_MULTIPLIER })
+  const stepPx = useCallback(() => { const c = rowRef.current?.firstElementChild as HTMLElement | null; return c ? c.getBoundingClientRect().width + ROW_GAP_PX : 160 }, [rowRef])
+  useEffect(() => { const l = lenisRef.current; if (l && lenisApiRef) lenisApiRef.current = { lenis: l, stepPx }; return () => { if (lenisApiRef) lenisApiRef.current = null } }, [])
+  function start(d: 1 | -1) { stop(); const l = lenisRef.current; if (!l) return; l.scrollTo(l.targetScroll + d * stepPx()); intervalRef.current = setInterval(() => { const ln = lenisRef.current; ln?.scrollTo(ln.targetScroll + d * stepPx()) }, SCROLL_REPEAT_MS) }
+  function stop() { if (intervalRef.current !== null) { clearInterval(intervalRef.current); intervalRef.current = null } }
+  useEffect(() => stop, [])
+  function kd(e: React.KeyboardEvent) { if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return; e.preventDefault(); if (heldKeyRef.current === e.key) return; heldKeyRef.current = e.key; start(e.key === "ArrowLeft" ? -1 : 1) }
+  function ku(e: React.KeyboardEvent) { if (e.key !== heldKeyRef.current) return; heldKeyRef.current = null; stop() }
+  const ap = (d: 1 | -1): React.HTMLAttributes<HTMLDivElement> => ({ onMouseDown: () => start(d), onMouseUp: stop, onMouseLeave: stop, onTouchStart: (e: React.TouchEvent) => { e.preventDefault(); start(d) }, onTouchEnd: stop, onTouchCancel: stop })
+  const as = (dir: "left" | "right"): React.CSSProperties => ({ flexShrink: 0, width: 48, height: "100%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", touchAction: "none", background: `linear-gradient(to ${dir}, transparent, rgba(0,0,0,0.6))` })
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 4 }}>
+      <div style={as("left")} {...ap(-1)}><i className="fa fa-2x fa-chevron-left" style={{ color: "white" }} aria-hidden="true" /></div>
+      <div ref={rowRef} className="hide-scrollbar" tabIndex={0} onKeyDown={kd} onKeyUp={ku} style={{ display: "flex", gap: ROW_GAP_PX, overflowX: "auto", flex: 1, minHeight: 0, padding: "4px 0" }}>{Array.from({ length: count }, (_, i) => renderPage(i))}</div>
+      <div style={as("right")} {...ap(1)}><i className="fa fa-2x fa-chevron-right" style={{ color: "white" }} aria-hidden="true" /></div>
+    </div>
+  )
+}
+
+/* ─── 原有 Upload 工具函数 ─── */
 
 /** The fixed `plugin_namespace` every local-upload queue item is stored under
  * (`crates/lanrurugi-api/src/upload.rs`'s own constant of the same name) — never a real installed
@@ -97,7 +136,7 @@ export const ICON_BUTTON_STYLE: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  fontSize: FONT_SIZE_10PT,
+  fontSize: FONT_SIZE_XS,
 }
 
 /** Overrides `.stdbtn`'s theme `min-width: 150px` (5 buttons at that width, plus gaps, don't fit
@@ -108,7 +147,7 @@ export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
   width: "auto",
   flex: "0 1 auto",
   whiteSpace: "nowrap",
-  fontSize: FONT_SIZE_10PT,
+  fontSize: FONT_SIZE_XS,
   padding: "0 6px",
 }
 
@@ -126,7 +165,7 @@ export function MetadataPreviewTooltip({ preview, url }: { preview: Record<strin
       <div style={{ fontWeight: "bold", wordBreak: "break-word" }}>
         {typeof preview.title === "string" ? preview.title : url}
       </div>
-      {!hasSourceTag && <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_10PT }}>{url}</div>}
+      {!hasSourceTag && <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_XS }}>{url}</div>}
       <TagTable tags={tags} />
       {summary && <div style={{ opacity: 0.8 }}>{summary}</div>}
     </div>
@@ -160,5 +199,6 @@ export function TooltipIfPresent({
     <Tooltip label={<MetadataPreviewTooltip preview={preview} url={url} />} wrapperStyle={wrapperStyle}>
       {children}
     </Tooltip>
+
   )
 }

@@ -50,6 +50,7 @@ use std::path::Path;
 use std::ptr;
 
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -346,6 +347,52 @@ pub fn list_pages(path: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// One entry's own identity within an archive's real internal structure — every entry
+/// (files *and* directories, including empty ones), not just the image-extension subset
+/// [`list_pages`] returns. Backs the comparison UI's own "what's actually inside this archive"
+/// tree view (issue #77's own follow-on design: "有时候里面也可能有txt或torrent文件啥的" — a real
+/// download can bundle a readme/torrent alongside the actual manga pages, and the UI wants to show
+/// that real structure, not just a page count).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveEntryInfo {
+    /// Full path within the archive (may contain `/` for a nested entry) — the raw, already
+    /// [`decode_archive_name`]-recovered name, same as every other entry-name-returning function
+    /// in this module.
+    pub name: String,
+    /// `false` for a directory entry (including an empty one, which has no other way to appear in
+    /// this list at all — it contributes no file entries of its own). A directory's own `name`
+    /// still ends up here so the frontend's tree view has something to anchor an empty folder to.
+    pub is_regular_file: bool,
+    /// `true` only for a regular file whose extension [`is_image_name`] recognizes — the same
+    /// "is this actually a page" test [`list_pages`] applies, surfaced per-entry here instead of
+    /// as a separate filtered list, so the frontend can render "this one's a page" (vs. a stray
+    /// non-image file) inline in one combined tree rather than cross-referencing two lists.
+    pub is_page: bool,
+}
+
+/// Lists every entry in the archive — files and directories, in whatever order libarchive itself
+/// enumerates them (not natural-sorted, unlike [`list_pages`]; the frontend's own tree view
+/// imposes its own path-based ordering when rendering). A cheap header-only walk (`skip_data` on
+/// every entry) — no file bytes are ever read into memory.
+pub fn list_all_entries(path: &Path) -> Result<Vec<ArchiveEntryInfo>> {
+    if !is_supported_archive(path) {
+        return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
+    }
+    let mut archive = RawArchiveReader::open(path)?;
+    let mut entries = Vec::new();
+    while let Some(entry) = archive.next_entry()? {
+        let name = decode_archive_name(&entry.name_bytes);
+        let is_page = entry.is_regular_file && is_image_name(&name);
+        entries.push(ArchiveEntryInfo {
+            name,
+            is_regular_file: entry.is_regular_file,
+            is_page,
+        });
+        archive.skip_data()?;
+    }
+    Ok(entries)
+}
+
 /// Reads the raw bytes of a single named entry (used for thumbnail extraction). Iterates the
 /// archive until the entry is found, then reads its data into memory.
 pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
@@ -361,6 +408,69 @@ pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
         archive.skip_data()?;
     }
     Err(ArchiveFormatError::EntryNotFound(entry_name.to_string()))
+}
+
+/// Reads every entry in `entry_names` in one forward pass over the archive, rather than one
+/// `read_entry` call per name — libarchive is a forward-only stream with no cheap random access
+/// (see `read_page_dimensions`'s own docs on this same constraint), so calling `read_entry` in a
+/// loop for N entries re-opens and re-scans the archive from byte zero N times, an O(n²) cost for
+/// "read every page" that only gets worse the more pages an archive has. This instead opens the
+/// archive once and walks it exactly once, collecting every wanted entry's bytes as it passes
+/// them (`skip_data`-ing everything else), stopping early once every wanted name has been found.
+/// Returns bytes in the same order as `entry_names`, `None` for any name never found (matching
+/// `read_page_dimensions`'s own per-entry tolerance rather than failing the whole batch over one
+/// missing/renamed page).
+pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Vec<u8>>>> {
+    if !is_supported_archive(path) {
+        return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
+    }
+    if entry_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let wanted: std::collections::HashSet<&str> = entry_names.iter().map(String::as_str).collect();
+    let mut found: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    let mut archive = RawArchiveReader::open(path)?;
+    // Instrumentation for verifying the early-break actually fires in practice, not just in
+    // theory (reported live: "你把比较耗时的操作都用日志记录下来...是否在应该break的时候准确
+    // break") — `entries_walked` counts every `next_entry()` call (found or skipped), so
+    // comparing it against `entry_names.len()` at the end shows whether this stopped as soon as
+    // every wanted entry was found (walked ≈ highest wanted entry's own position in the archive)
+    // or had to scan to the very end (walked == total entry count in the archive) because some
+    // wanted name was never matched.
+    let mut entries_walked: usize = 0;
+    let start = std::time::Instant::now();
+    while let Some(entry) = archive.next_entry()? {
+        entries_walked += 1;
+        let name = decode_archive_name(&entry.name_bytes);
+        if wanted.contains(name.as_str()) {
+            found.insert(name, archive.read_data_to_vec()?);
+            if found.len() == wanted.len() {
+                tracing::info!(
+                    path = %path.display(),
+                    wanted = wanted.len(),
+                    entries_walked,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "read_entries: early break — every wanted entry found before archive end"
+                );
+                break;
+            }
+            continue;
+        }
+        archive.skip_data()?;
+    }
+    if found.len() < wanted.len() {
+        tracing::info!(
+            path = %path.display(),
+            wanted = wanted.len(),
+            found = found.len(),
+            entries_walked,
+            elapsed_ms = start.elapsed().as_millis(),
+            "read_entries: reached archive end without finding every wanted entry (no early break)"
+        );
+    }
+
+    Ok(entry_names.iter().map(|name| found.remove(name)).collect())
 }
 
 /// Reads natural pixel dimensions for just the first `count` pages (natural-sort order, same as
@@ -644,6 +754,27 @@ mod tests {
     }
 
     #[test]
+    fn list_all_entries_marks_pages_and_counts_every_real_file() {
+        let f = make_test_zip_with_ext(
+            "zip",
+            &["page10.jpg", "page2.jpg", "readme.txt", "page1.jpg"],
+        );
+        let entries = list_all_entries(f.path()).unwrap();
+        // 4 real files total (3 images + 1 readme.txt) — list_pages's own count for the same
+        // fixture is 3, confirming this genuinely surfaces a different, larger set.
+        assert_eq!(entries.len(), 4);
+        assert_eq!(list_pages(f.path()).unwrap().len(), 3);
+
+        let readme = entries.iter().find(|e| e.name == "readme.txt").unwrap();
+        assert!(readme.is_regular_file);
+        assert!(!readme.is_page);
+
+        let page = entries.iter().find(|e| e.name == "page1.jpg").unwrap();
+        assert!(page.is_regular_file);
+        assert!(page.is_page);
+    }
+
+    #[test]
     fn read_entry_returns_file_bytes() {
         let f = make_test_zip_with_ext("zip", &["page1.jpg", "page2.jpg"]);
         assert_eq!(
@@ -669,6 +800,36 @@ mod tests {
         let f = make_test_zip_with_ext("zip", &["page1.jpg"]);
         let err = read_entry(f.path(), "does-not-exist.jpg").unwrap_err();
         assert!(matches!(err, ArchiveFormatError::EntryNotFound(_)));
+    }
+
+    #[test]
+    fn read_entries_returns_every_wanted_entry_in_the_requested_order() {
+        let f = make_test_zip_with_ext("zip", &["page1.jpg", "page2.jpg", "page3.jpg"]);
+        // Deliberately out of on-disk order and skipping page2 — confirms this isn't just
+        // returning entries in archive order, and that an entry not asked for isn't included.
+        let wanted = vec!["page3.jpg".to_string(), "page1.jpg".to_string()];
+        let result = read_entries(f.path(), &wanted).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                Some(b"content of page3.jpg".to_vec()),
+                Some(b"content of page1.jpg".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_entries_returns_none_for_a_name_not_found_without_failing_the_whole_batch() {
+        let f = make_test_zip_with_ext("zip", &["page1.jpg"]);
+        let wanted = vec!["page1.jpg".to_string(), "missing.jpg".to_string()];
+        let result = read_entries(f.path(), &wanted).unwrap();
+        assert_eq!(result, vec![Some(b"content of page1.jpg".to_vec()), None]);
+    }
+
+    #[test]
+    fn read_entries_returns_empty_for_an_empty_request() {
+        let f = make_test_zip_with_ext("zip", &["page1.jpg"]);
+        assert_eq!(read_entries(f.path(), &[]).unwrap(), Vec::new());
     }
 
     #[test]

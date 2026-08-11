@@ -150,6 +150,18 @@ After editing any Rust code under `crates/`, run `cargo check` (from the workspa
 catches compilation errors in seconds instead of minutes. Only proceed to rebuild after check
 passes clean.
 
+## CPU-bound parallel work must cap its own resource usage
+
+New `rayon` parallel work must not default to the uncapped global pool — cap at ~30% of cores
+(`lanrurugi-api::recommend_precompute::precompute_worker_budget`, or a local duplicate of that
+formula for crates that can't depend on `lanrurugi-api`). Background jobs additionally get
+`LoadThrottle`-style live backoff; a short interactive operation just needs the fixed cap.
+
+## Comments: keep it short
+
+Doc comments explain the non-obvious "why" in one to a few sentences, not a full narrative of
+alternatives considered, prior bugs, or verbatim user quotes. If it needs a paragraph, it's too long.
+
 ## UI-only changes require human verification before commit — and the user does that verification, not the agent
 
 When a change is purely UI (visual layout, spacing, styling, tooltip/overlay behavior — no

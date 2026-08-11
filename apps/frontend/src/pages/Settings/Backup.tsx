@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { waitForJob } from "@/api/client"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_10PT, useApplyTheme } from "@/theme"
+import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 
 // Mirrors legacy's `~/LANraragi/templates/backup.html.tt2` — one `table > tbody#files > tr` with
 // two `.stdbtn.fileinput-button` spans (backup/restore), a processing spinner, and a return
@@ -101,7 +101,7 @@ export function Backup() {
       <br />
       {t("(Categories will always be restored)")}
 
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_10PT, marginTop: 25, textAlign: "center" }}>
+      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM, marginTop: 25, textAlign: "center" }}>
         <tbody id="files">
           <tr>
             <td>
@@ -140,7 +140,7 @@ export function Backup() {
       <br />
       <br />
 
-      <span style={{ margin: "auto", fontSize: FONT_SIZE_10PT, width: "80%", textAlign: "center" }}>
+      <span style={{ margin: "auto", fontSize: FONT_SIZE_SM, width: "80%", textAlign: "center" }}>
         {busy && (
           <div id="processing">
             <i className="fa fa-3x fa-compact-disc fa-spin" style={{ marginTop: 20 }}></i>

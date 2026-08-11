@@ -18,7 +18,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { useState } from "react"
+import Lenis from "lenis"
+import { useEffect, useRef, useState } from "react"
 
 /** Props a caller's `renderItem` must spread onto whatever element should act as the grab handle
  * (`{...dragHandleProps.attributes} {...dragHandleProps.listeners}`) — kept distinct from the
@@ -99,6 +100,25 @@ export function SortableList<T>({
   const [activeId, setActiveId] = useState<string | null>(null)
   const byId = new Map(items.map((item) => [getId(item), item]))
   const ids = items.map(getId)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const lenisRef = useRef<Lenis | null>(null)
+
+  // Horizontal mode: Lenis handles wheel→horizontal with damp, just like ScrollRow and PageLightbox.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || direction !== "horizontal") return
+    const lenis = new Lenis({
+      wrapper: el,
+      content: el,
+      orientation: "horizontal",
+      gestureOrientation: "both",
+      wheelMultiplier: 4.5,
+      lerp: 0.1,
+      autoRaf: true,
+    })
+    lenisRef.current = lenis
+    return () => { lenis.destroy(); lenisRef.current = null }
+  }, [direction])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -107,10 +127,12 @@ export function SortableList<T>({
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id))
+    lenisRef.current?.stop()
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setActiveId(null)
+    lenisRef.current?.start()
     const { active, over } = event
     if (!over || active.id === over.id) return
     const oldIndex = ids.indexOf(String(active.id))
@@ -134,14 +156,14 @@ export function SortableList<T>({
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
+      onDragCancel={() => { setActiveId(null); lenisRef.current?.start() }}
     >
       <SortableContext
         items={ids}
         strategy={direction === "horizontal" ? horizontalListSortingStrategy : verticalListSortingStrategy}
       >
         {direction === "horizontal" ? (
-          <div className="hide-scrollbar" style={{ display: "flex", flexDirection: "row", overflowX: "auto" }}>
+          <div ref={containerRef} className="hide-scrollbar" style={{ display: "flex", flexDirection: "row", overflowX: "auto" }}>
             {items_}
           </div>
         ) : (

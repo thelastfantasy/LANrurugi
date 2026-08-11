@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import type { JobRecord, JobRecordState } from "@/api/types"
 import { Tooltip } from "@/components/Display"
-import { FONT_SIZE_10PT } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 /** State → color, shared between the Jobs page's own badges/borders and this component's default
  * bar color (so a state's color only needs to change in one place). */
@@ -145,7 +145,7 @@ export function JobProgressBar({
         >
           <div style={{ width: `${ratio * 100}%`, height: "100%", background: barColor }} />
         </div>
-        <span style={{ fontSize: FONT_SIZE_10PT, minWidth: 120, textAlign: "right", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: FONT_SIZE_SM, minWidth: 120, textAlign: "right", whiteSpace: "nowrap" }}>
           {formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} ({pctLabel}%)
           {speedLabel && (
             <>
@@ -168,7 +168,7 @@ export function JobProgressBar({
     return (
       <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP, justifyContent: "center" }}>
         <i className="fa fa-circle-notch fa-spin" aria-hidden="true"></i>
-        <span style={{ fontSize: FONT_SIZE_10PT, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: FONT_SIZE_SM, whiteSpace: "nowrap" }}>
           {t("{{size}} downloaded", { size: formatBytes(job.downloaded_bytes) })}
           {speedLabel && (
             <>
@@ -202,7 +202,7 @@ export function JobProgressBar({
       >
         <div style={{ width: `${pct}%`, height: "100%", background: barColor }} />
       </div>
-      <span style={{ fontSize: FONT_SIZE_10PT, minWidth: 34, textAlign: "right" }}>{pct}%</span>
+      <span style={{ fontSize: FONT_SIZE_SM, minWidth: 34, textAlign: "right" }}>{pct}%</span>
     </div>
   )
 }

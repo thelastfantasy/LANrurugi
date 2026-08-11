@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod compare_cache;
 pub mod download_queue;
 pub mod id;
 pub mod ignored_group_suggestions;
