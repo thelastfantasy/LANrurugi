@@ -169,6 +169,12 @@ pub struct AppState {
     /// the watcher path is left unguarded again. See `lanrurugi_core::filename_lock` for the
     /// implementation and the full incident this fixes.
     pub filename_locks: FilenameLocks,
+    /// SSE broadcast — every `update_queue_item_state` call sends a clone here after the Redis
+    /// write succeeds, so `GET /download_queue/stream` subscribers see the change without polling.
+    /// SSE broadcast — every `update_queue_item_state` call sends a clone here after the Redis
+    /// write succeeds. `None` in test/bench contexts (no SSE subscribers); real `serve` always
+    /// sets this.
+    pub download_queue_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
 }
 
 impl AppState {

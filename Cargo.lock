@@ -1897,6 +1897,7 @@ dependencies = [
  "lanrurugi-storage",
  "rand 0.10.2",
  "rayon",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -4056,6 +4057,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

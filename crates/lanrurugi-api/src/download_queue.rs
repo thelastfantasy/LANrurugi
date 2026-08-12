@@ -7,12 +7,15 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::Router;
+use futures_util::StreamExt;
 use lanrurugi_storage::download_queue::{DownloadQueueState, QueueItemOrigin};
 use serde::Deserialize;
 use serde_json::json;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::common::{error, not_found, ok};
 use crate::AppState;
@@ -20,6 +23,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/download_queue", get(list_queue).post(add_to_queue))
+        .route("/download_queue/stream", get(queue_stream))
         .route(
             "/download_queue/{id}",
             patch(update_queue_item).delete(delete_queue_item),
@@ -50,6 +54,46 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/start_selected", post(start_selected))
         .route("/download_queue/delete_selected", post(delete_selected))
         .route("/download_queue/clear_completed", post(clear_completed))
+}
+
+/// `GET /download_queue/stream` — SSE endpoint that pushes incremental queue-item state changes
+/// broadcast by `update_queue_item_state` after each successful Redis write. The first event is
+/// `full` with the current complete list so the client can bootstrap without a separate HTTP GET.
+async fn queue_stream(State(state): State<AppState>) -> Response {
+    // First message: full current state.
+    let initial = match state.download_queue.list_all().await {
+        Ok(items) => serde_json::json!({ "type": "full", "items": items }),
+        Err(_) => serde_json::json!({ "type": "full", "items": [] }),
+    };
+    let initial_event = Event::default()
+        .event("full")
+        .data(serde_json::to_string(&initial).unwrap_or_default());
+
+    let Some(tx) = &state.download_queue_tx else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "queue_stream",
+            "SSE not available",
+        );
+    };
+    let rx = tx.subscribe();
+    let delta_stream = BroadcastStream::new(rx).filter_map(|result| async move {
+        match result {
+            Ok(event) => {
+                let sse_event: Event = Event::default().event("delta").data(
+                    serde_json::to_string(&serde_json::json!({ "type": "delta", "item": event }))
+                        .unwrap_or_default(),
+                );
+                Some(Ok::<_, std::convert::Infallible>(sse_event))
+            }
+            Err(_) => None,
+        }
+    });
+
+    let stream = futures_util::stream::once(async move { Ok(initial_event) }).chain(delta_stream);
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 async fn list_queue(State(state): State<AppState>) -> Response {
@@ -1832,19 +1876,30 @@ async fn resolve_conflict(
                         .await;
             }
             if let Ok(Some(mut fresh)) = state.download_queue.get(id).await {
+                // Cache metadata and apply tags before Done — this is the same path
+                // `plugins.rs`'s regular download uses (see `ensure_metadata_cached`),
+                // just reached through a different entry point (rename/overwrite vs.
+                // start-pipeline). The archive already exists at this point (catalogue
+                // succeeded above) so `archive_ids` is set first so the tag-applier
+                // can find it.
+                fresh.archive_ids = Some(vec![ingested.archive_id.clone()]);
+                if fresh.auto_fetch_metadata || fresh.title.is_none() {
+                    crate::plugins::ensure_metadata_cached(state, &mut fresh).await;
+                }
                 fresh.state = DownloadQueueState::Done;
                 fresh.error = None;
                 fresh.pending_filename_conflict = None;
-                // Same field the managed-download success path (`plugins.rs::start_download`)
-                // persists onto `Done` — without it, a resolved item's completed-item reader
-                // link had nothing of its own to read (no linked `job_id` on this path at all,
-                // since resolving a conflict re-catalogs already-staged bytes rather than
-                // starting a new job) and rendered as unclickable plain text after the very next
-                // page refresh, even though the archive it became was real and already in the
-                // library.
-                fresh.archive_ids = Some(vec![ingested.archive_id.clone()]);
                 if let Err(e) = state.download_queue.update(&fresh).await {
                     tracing::warn!(%id, error = %e, "failed to update download-queue item after resolving filename conflict");
+                } else if let Some(tx) = &state.download_queue_tx {
+                    let _ = tx.send(serde_json::json!({
+                        "id": id,
+                        "state": "done",
+                        "archive_ids": &fresh.archive_ids,
+                        "title": &fresh.title,
+                        "metadata_preview": &fresh.metadata_preview,
+                        "error": null,
+                    }));
                 }
             }
             // The conflict this cached comparison was for no longer exists (resolved either way —
@@ -1962,6 +2017,7 @@ mod tests {
             archive_ids: None,
             title: None,
             metadata_preview: None,
+            metadata_preview_at: None,
             error: None,
             pending_filename_conflict: None,
             created_at: 0,

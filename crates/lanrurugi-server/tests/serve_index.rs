@@ -89,6 +89,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
+        download_queue_tx: None,
     };
 
     let dir = tempfile::tempdir().ok()?;

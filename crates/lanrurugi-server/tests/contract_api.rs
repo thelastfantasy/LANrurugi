@@ -84,6 +84,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
+        download_queue_tx: None,
     };
     Some((lanrurugi_server::app::build_app(state, None, None), redis))
 }
@@ -339,6 +340,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
+        download_queue_tx: None,
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -471,6 +473,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
+        download_queue_tx: None,
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -693,6 +696,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
+        download_queue_tx: None,
     };
     let app = lanrurugi_server::app::build_app(state, None, None);
 

@@ -1651,8 +1651,15 @@ pub(crate) async fn start_download(
                 {
                     Ok(ids) => {
                         if let Some((repo, item_id)) = &queue_link {
-                            update_queue_item_state(
+                            // Fetch/cache metadata before Done so the frontend sees it.
+                            if let Ok(Some(mut item)) = repo.get(item_id).await {
+                                if item.auto_fetch_metadata || item.title.is_none() {
+                                    ensure_metadata_cached(&state_for_task, &mut item).await;
+                                }
+                            }
+                            update_queue_item_state_with_tx(
                                 repo,
+                                state_for_task.download_queue_tx.as_ref(),
                                 item_id,
                                 lanrurugi_storage::download_queue::DownloadQueueState::Done,
                                 None,
@@ -1816,6 +1823,27 @@ pub(crate) async fn update_queue_item_state(
     error: Option<lanrurugi_core::queue_error::QueueError>,
     archive_ids: Option<Vec<String>>,
 ) {
+    update_queue_item_state_with_tx(
+        repo,
+        None::<&tokio::sync::broadcast::Sender<_>>,
+        item_id,
+        new_state,
+        job_id,
+        error,
+        archive_ids,
+    )
+    .await
+}
+
+pub(crate) async fn update_queue_item_state_with_tx(
+    repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
+    tx: Option<&tokio::sync::broadcast::Sender<serde_json::Value>>,
+    item_id: &str,
+    new_state: lanrurugi_storage::download_queue::DownloadQueueState,
+    job_id: Option<String>,
+    error: Option<lanrurugi_core::queue_error::QueueError>,
+    archive_ids: Option<Vec<String>>,
+) {
     // Retry transient Redis failures with exponential backoff (200ms → 500ms → 1s, capped)
     // so a brief connection-pool or timeout spike during heavy ingest work doesn't leave a
     // queue item stuck in `Downloading` forever.
@@ -1847,7 +1875,20 @@ pub(crate) async fn update_queue_item_state(
                     item.error = error.clone();
                 }
                 match repo.update(&item).await {
-                    Ok(()) => return,
+                    Ok(()) => {
+                        if let Some(tx) = tx {
+                            let _ = tx.send(serde_json::json!({
+                                "id": item_id,
+                                "state": new_state,
+                                "job_id": &item.job_id,
+                                "archive_ids": &item.archive_ids,
+                                "title": &item.title,
+                                "metadata_preview": &item.metadata_preview,
+                                "error": &item.error,
+                            }));
+                        }
+                        return;
+                    }
                     Err(e) if attempt < RETRIES => {
                         tracing::warn!(%item_id, attempt, delay_ms = delay, error = %e, "failed to update download-queue item state, retrying");
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -1889,6 +1930,155 @@ pub(crate) async fn update_queue_item_state(
 /// lands while this download is already in flight only ever governs a *later* `download_url` call,
 /// never this one (verified: `download_manager::acquire`'s own capacity-change handling replaces
 /// the stale semaphore for future acquires without disturbing a permit already held by this call).
+/// Plugins listed in `namespaces` in the order the caller wants to try them; the first whose
+/// `url_pattern` regex matches `url` wins. `None` if no installed plugin of this kind matches.
+async fn find_matching_plugin(
+    state: &AppState,
+    namespaces: &[String],
+    url: &str,
+) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
+    for ns in namespaces {
+        if let Ok(info) = state.plugins.plugin_info(ns).await {
+            if let Some(ref pattern) = info.url_pattern {
+                if let Ok(re) = regex::Regex::new(pattern) {
+                    if re.is_match(url) {
+                        return Some((ns.clone(), info));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+const METADATA_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// Ensures a queue item has fresh `metadata_preview` data cached — checks the 10-min TTL on
+/// `metadata_preview_at`, and if stale or absent, finds a matching metadata plugin for the URL
+/// and calls `execMetadata`. Writes the result back to both the queue item and the archive(s)
+/// when `auto_fetch_metadata` is enabled. Returns the cached/fresh `{ title, tags }` data.
+pub(crate) async fn ensure_metadata_cached(
+    state: &AppState,
+    item: &mut lanrurugi_storage::download_queue::DownloadQueueItem,
+) -> Option<serde_json::Value> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    // Cache hit — still within the 10-min window.
+    if let Some(at) = item.metadata_preview_at {
+        if now - at < METADATA_CACHE_TTL_MS {
+            return item.metadata_preview.clone();
+        }
+    }
+
+    // No cache or expired — find a metadata plugin and call it.
+    let namespaces = discover_namespaces(&state.plugins_dir).await;
+    let mut metadata_ns = Vec::new();
+    for ns in &namespaces {
+        if let Ok(info) = state.plugins.plugin_info(ns).await {
+            if info.kind == "metadata" {
+                metadata_ns.push(ns.clone());
+            }
+        }
+    }
+
+    let (plugin_ns, _info) = find_matching_plugin(state, &metadata_ns, &item.url).await?;
+    let args = serde_json::json!({ "url": item.url });
+    let result = state
+        .plugins
+        .execute(&plugin_ns, "execMetadata", args)
+        .await
+        .ok()?;
+
+    let title = result
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let tags = result
+        .get("tags")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    item.metadata_preview = Some(result.clone());
+    item.metadata_preview_at = Some(now);
+    if let Some(ref t) = title {
+        item.title = Some(t.clone());
+    }
+    if let Err(e) = state.download_queue.update(item).await {
+        tracing::warn!(item_id = %item.id, error = %e, "failed to persist metadata cache");
+    }
+
+    // Apply tags to already-catalogued archive(s) when auto_fetch_metadata is on.
+    if item.auto_fetch_metadata {
+        if let Some(ref tags) = tags {
+            if let Some(ref archive_ids) = item.archive_ids {
+                for aid in archive_ids {
+                    apply_metadata_tags(state, aid, tags).await;
+                }
+            }
+        }
+    }
+
+    Some(result)
+}
+
+/// Merges `metadata_tags` into an archive's existing tag string — appends tags that aren't
+/// already present, leaves existing ones untouched. Updates the archive record + search index.
+async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: &str) {
+    let mut archive = match state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+        .await
+    {
+        Ok(Some(a)) => a,
+        _ => return,
+    };
+
+    let existing: std::collections::HashSet<&str> = archive
+        .tags
+        .split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let new_tags: Vec<&str> = metadata_tags
+        .split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty() && !existing.contains(t))
+        .collect();
+
+    if new_tags.is_empty() {
+        return;
+    }
+
+    let old_tags = archive.tags.clone();
+    let merged = if archive.tags.is_empty() {
+        new_tags.join(", ")
+    } else {
+        format!("{}, {}", archive.tags, new_tags.join(", "))
+    };
+    archive.tags = merged;
+
+    if let Err(e) = state.repos.archives.save(&archive).await {
+        tracing::warn!(%archive_id, error = %e, "failed to save metadata tags to archive");
+        return;
+    }
+
+    // Re-index so the new tags are searchable immediately.
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+        &state.redis.search,
+        archive_id,
+        &old_tags,
+        &archive.tags,
+    )
+    .await
+    {
+        tracing::warn!(%archive_id, error = %e, "failed to update search index after metadata tag merge");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_managed_downloads(
     state: AppState,

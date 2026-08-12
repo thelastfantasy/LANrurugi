@@ -146,6 +146,10 @@ pub struct DownloadQueueItem {
     /// whatever keys/tags actually came back rather than the host assuming a shared schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_preview: Option<serde_json::Value>,
+    /// Millisecond timestamp of the last `metadata_preview` write — checked at catalog time to
+    /// decide whether the cached result is still fresh (10-min TTL) or needs a fresh plugin call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_preview_at: Option<i64>,
     /// Structured, translatable failure detail (`lanrurugi_core::queue_error::QueueError`) — no
     /// free-text message; the frontend maps `.kind` to an i18n key and renders its own fields
     /// into it. See that type's own docs for why no raw Rust `Display` string is stored here.
@@ -221,6 +225,7 @@ impl DownloadQueueRepository {
             archive_ids: None,
             title: None,
             metadata_preview: None,
+            metadata_preview_at: None,
             error: None,
             pending_filename_conflict: None,
             created_at: std::time::SystemTime::now()

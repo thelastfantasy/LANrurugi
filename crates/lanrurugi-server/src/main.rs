@@ -369,6 +369,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
         filename_locks: filename_locks.clone(),
+        download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
     };
 
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of

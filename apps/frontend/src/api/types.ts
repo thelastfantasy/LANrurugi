@@ -501,6 +501,7 @@ export interface DownloadQueueItem {
   // untyped since every plugin's `tags` string uses its own namespace vocabulary (E-Hentai's
   // `artist:`/`uploader:`/`category:`/`timestamp:` mean nothing to a different site's plugin).
   metadata_preview: Record<string, unknown> | null
+  metadata_preview_at: number | null
   error: QueueError | null
   pending_filename_conflict?: PendingFilenameConflict | null
   created_at: number
