@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_scanner::pipeline::{
     ingest_file_with_policy, DuplicatePolicy, DuplicateReason, IngestOptions, IngestOutcome,
 };
@@ -36,6 +37,13 @@ pub enum IngestDownloadError {
     /// user can pick).
     #[error("filename collides with an existing archive, staged for user resolution: {0:?}")]
     PendingRename(PendingFilenameConflict),
+    /// A `Filename` collision whose source archive's pages were already extracted and patched into
+    /// the colliding target — no conflict menu to offer; the staged file can be discarded.
+    #[error("source archive already patched into {existing_id}")]
+    AlreadyPatched {
+        existing_id: String,
+        filename: String,
+    },
 }
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
@@ -65,6 +73,13 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
             IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
                 existing_id: conflict.existing_id.clone(),
                 filename: conflict.original_filename.clone(),
+            },
+            IngestDownloadError::AlreadyPatched {
+                existing_id,
+                filename,
+            } => QueueError::AlreadyPatched {
+                existing_id: existing_id.clone(),
+                filename: filename.clone(),
             },
         }
     }
@@ -126,6 +141,17 @@ pub async fn ingest_downloaded_file(
             existing_id,
             reason: DuplicateReason::Filename,
         }) if !overwrite => {
+            // Before staging a full rename conflict, check whether this exact source was already
+            // patched into the colliding target in a prior session — if so, the work is already
+            // done, and we can discard the staged file immediately rather than re-offering the same
+            // compare-and-resolve menu.
+            if let Some(already) =
+                check_already_patched(state, &downloaded.path, &downloaded.filename, &existing_id)
+                    .await
+            {
+                let _ = tokio::fs::remove_file(&downloaded.path).await;
+                return Err(already);
+            }
             stage_pending_rename(
                 state,
                 &downloaded.path,
@@ -309,6 +335,40 @@ async fn stage_pending_rename(
     }
 
     Err(IngestDownloadError::PendingRename(conflict))
+}
+
+/// Checks whether `staging_path`'s content was already patched into the archive identified by
+/// `existing_id` — reads the colliding archive's `.patch.zip` (if one exists) and compares its
+/// `source_crc32` against the staged file's own CRC32. Returns `Some(AlreadyPatched)` on a match
+/// (the caller should discard the staged file and record the info), or `None` if no patch exists
+/// / the source doesn't match / the archive can't be looked up (all degrade to the normal
+/// filename-conflict flow — the patch check is a pure optimization, never a correctness gate).
+async fn check_already_patched(
+    state: &AppState,
+    staging_path: &std::path::Path,
+    filename: &str,
+    existing_id: &str,
+) -> Option<IngestDownloadError> {
+    let existing_archive = state
+        .repos
+        .archives
+        .get(&ArchiveId(existing_id.to_string()))
+        .await
+        .ok()??;
+    let archive_path = std::path::PathBuf::from(&existing_archive.file);
+    let patch_path = lanrurugi_scanner::patch::patch_path_for(&archive_path);
+    if !patch_path.exists() {
+        return None;
+    }
+    let staged_crc32 = hex_crc32_of_file(staging_path).await.ok()?;
+    let metadata = lanrurugi_scanner::patch::load(&patch_path, &archive_path).ok()?;
+    if metadata.source_crc32.as_deref() == Some(&staged_crc32) {
+        return Some(IngestDownloadError::AlreadyPatched {
+            existing_id: existing_id.to_string(),
+            filename: filename.to_string(),
+        });
+    }
+    None
 }
 
 /// How long an unresolved `PendingFilenameConflict`'s staged bytes are kept around before the

@@ -61,6 +61,11 @@ pub struct PatchInsertion {
 #[serde(rename_all = "camelCase")]
 pub struct PatchMetadata {
     pub target_crc32: String,
+    /// CRC32 of the source archive whose pages were extracted for this patch — stored so a future
+    /// re-download of the same source can be recognized as "already patched" and skip the filename-
+    /// conflict menu entirely rather than re-offering the same compare-and-resolve flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_crc32: Option<String>,
     pub insertions: Vec<PatchInsertion>,
 }
 
@@ -274,10 +279,12 @@ pub fn build_merged_zip(archive_path: &Path) -> Result<Option<Vec<u8>>> {
 /// not something this crate installs on the user's behalf).
 pub fn build_patch_zip(
     target_crc32: &str,
+    source_crc32: Option<&str>,
     pages: &[(String, Vec<u8>)],
     insertions: Vec<PatchInsertion>,
 ) -> Result<Vec<u8>> {
     let metadata = PatchMetadata {
+        source_crc32: source_crc32.map(|s| s.to_string()),
         target_crc32: target_crc32.to_string(),
         insertions,
     };
@@ -390,6 +397,7 @@ mod tests {
             "c.jpg".to_string(),
         ];
         let metadata = PatchMetadata {
+            source_crc32: None,
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
@@ -410,6 +418,7 @@ mod tests {
     fn apply_inserts_before_the_given_anchor_when_after_is_absent() {
         let original = vec!["a.jpg".to_string(), "b.jpg".to_string()];
         let metadata = PatchMetadata {
+            source_crc32: None,
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
@@ -430,6 +439,7 @@ mod tests {
             "c.jpg".to_string(),
         ];
         let metadata = PatchMetadata {
+            source_crc32: None,
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
@@ -448,6 +458,7 @@ mod tests {
     fn apply_inserts_at_the_start_when_both_anchors_are_absent() {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
+            source_crc32: None,
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
@@ -464,6 +475,7 @@ mod tests {
     fn apply_skips_an_insertion_whose_anchor_does_not_exist() {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
+            source_crc32: None,
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("does-not-exist.jpg".to_string()),
@@ -545,6 +557,7 @@ mod tests {
 
         let bytes = build_patch_zip(
             &real_crc32,
+            None,
             &[("extra1.jpg".to_string(), b"extra bytes".to_vec())],
             vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),

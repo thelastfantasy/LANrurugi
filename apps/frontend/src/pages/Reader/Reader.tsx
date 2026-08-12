@@ -364,7 +364,7 @@ export function Reader() {
     for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
       const page = currentPage + offset
       if (page > totalPages) break
-      const url = pages.data.pages[page - 1]
+      const url = pages.data.pages[page - 1]?.url
       if (url) urls.push(url)
     }
     // Keeping references prevents the browser from cancelling an in-flight prefetch request when
@@ -1022,8 +1022,8 @@ export function Reader() {
     )
   }
 
-  const leftUrl = pages.data.pages[spread.left - 1]
-  const rightUrl = spread.right !== null ? pages.data.pages[spread.right - 1] : null
+  const leftUrl = pages.data.pages[spread.left - 1]?.url
+  const rightUrl = spread.right !== null ? pages.data.pages[spread.right - 1]?.url : null
 
   // `MarkerLayer` (stamps) is a per-real-archive resource — in tank mode, the current global page
   // has to be resolved back to which member archive (and that archive's own local page number)
@@ -1398,10 +1398,10 @@ export function Reader() {
                   : imageStyle
               return (
                 <img
-                  key={url}
+                  key={url.url}
                   data-page={i + 1}
                   className={hasRealHeight ? "reader-image" : "reader-image loading-placeholder"}
-                  src={url}
+                  src={url.url}
                   alt={`${t("Page")} ${i + 1}`}
                   loading="lazy"
                   draggable={false}

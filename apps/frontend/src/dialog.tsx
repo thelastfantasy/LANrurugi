@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
@@ -174,7 +175,7 @@ type DialogRequest =
     }
   | {
       kind: "confirm"
-      message: string
+      message: ReactNode
       danger: boolean
       resolve: (value: boolean) => void
     }
@@ -212,7 +213,7 @@ export function promptDialog(message: string, defaultValue = ""): Promise<string
  * plain `.stdbtn` — same distinction `components/Display/Confirm.tsx`'s own `danger` prop makes,
  * so a call site whose confirm actually deletes files/data (not just a reversible grouping) reads
  * as visibly destructive rather than identical to a routine confirm. */
-export function confirmDialog(message: string, danger = false): Promise<boolean> {
+export function confirmDialog(message: ReactNode, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
     setRequest({ kind: "confirm", message, danger, resolve })
   })
@@ -1405,7 +1406,7 @@ export function DialogHost() {
         {request.kind === "confirm" && (
           <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
         )}
-        <p style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</p>
+        <div style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</div>
         {request.kind === "prompt" && (
           <input
             ref={inputRef}

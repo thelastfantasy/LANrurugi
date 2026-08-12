@@ -1,3 +1,4 @@
+import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom"
 import { move } from "@dnd-kit/helpers"
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react"
 import type Lenis from "lenis"
@@ -6,7 +7,7 @@ import { useTranslation } from "react-i18next"
 
 import { useComparePages } from "@/api/hooks"
 import type { ExportPatchInsertion, UnmatchedPage } from "@/api/types"
-import { IconButton } from "@/components/Display"
+import { IconButton, Tooltip } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { ScrollRow, THUMB_ASPECT_RATIO } from "./shared"
@@ -31,17 +32,19 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
   const targetPagesQuery = useComparePages(queueItemId, targetSide)
   const targetPages = targetPagesQuery.data?.pages ?? []
   const unmatchedIndices = useMemo(() => new Set(unmatchedPages.map((p) => p.page_index)), [unmatchedPages])
-  const unmatchedByIndex = useMemo(() => new Map(unmatchedPages.map((p) => [p.page_index, p])), [unmatchedPages])
 
   function buildDefaultGroups(): Record<string, string[]> {
     const sourceItems: string[] = []
     const targetItems = targetPages.map((_, i) => targetId(i))
-    for (const p of unmatchedPages) {
+    const sorted = [...unmatchedPages].sort((a, b) => a.page_index - b.page_index)
+    let lastAfter = -1, offset = 0
+    for (const p of sorted) {
       const pid = pageId(p.page_index)
       if (p.default_insert_after == null) { sourceItems.push(pid); continue }
-      // default_insert_after = target page index. Insert source page right after that target.
+      if (p.default_insert_after !== lastAfter) { lastAfter = p.default_insert_after; offset = 0 }
       const idx = targetItems.indexOf(targetId(p.default_insert_after))
-      targetItems.splice(idx >= 0 ? idx + 1 : 0, 0, pid)
+      targetItems.splice(idx >= 0 ? idx + 1 + offset : 0, 0, pid)
+      offset++
     }
     return { source: sourceItems, target: targetItems }
   }
@@ -96,18 +99,24 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
         pages.push(Number(id.replace("source-", "")))
       } else {
         if (pages.length > 0) {
-          result.push({ after_filename: currentAfter === null ? null : targetPages[currentAfter] ?? null, before_filename: null, page_indices: pages.sort((a, b) => a - b) })
+          result.push(currentAfter === null
+            ? { after_filename: null, before_filename: targetPages[0] ?? null, page_indices: pages.sort((a, b) => a - b) }
+            : { after_filename: targetPages[currentAfter] ?? null, before_filename: null, page_indices: pages.sort((a, b) => a - b) }
+          )
           pages = []
         }
         currentAfter = Number(id.replace("target-", ""))
       }
     }
-    if (pages.length > 0) result.push({ after_filename: currentAfter === null ? null : targetPages[currentAfter] ?? null, before_filename: null, page_indices: pages.sort((a, b) => a - b) })
+    if (pages.length > 0) result.push(currentAfter === null
+      ? { after_filename: null, before_filename: targetPages[0] ?? null, page_indices: pages.sort((a, b) => a - b) }
+      : { after_filename: targetPages[currentAfter] ?? null, before_filename: null, page_indices: pages.sort((a, b) => a - b) }
+    )
     return result
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, overflow: "hidden", boxSizing: "border-box", zIndex: 9600, background: "rgba(0,0,0,0.96)", display: "flex", flexDirection: "column", padding: 16, color: "#fff" }}>
+    <div style={{ position: "fixed", inset: 0, overflow: "hidden", overscrollBehavior: "none", boxSizing: "border-box", zIndex: 9600, background: "rgba(0,0,0,0.96)", display: "flex", flexDirection: "column", padding: 16, color: "#fff" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0 }}>{t("Arrange Extra Pages")}</h3>
         <IconButton icon="fa fa-times" onClick={onCancel} size={32} className="modal-close-btn" style={{ borderRadius: "50%" }} />
@@ -129,9 +138,8 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
       )}
 
       <DragDropProvider
-        onDragStart={() => { sourceLenisRef.current?.lenis.stop(); targetLenisRef.current?.lenis.stop() }}
+        sensors={[PointerSensor.configure({ activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })] })]}
         onDragOver={(event) => { if (event.operation.source?.type !== "column") setGroups((g) => move(g, event)) }}
-        onDragEnd={() => { sourceLenisRef.current?.lenis.start(); targetLenisRef.current?.lenis.start() }}
       >
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 16, overflowY: "auto", marginTop: 16 }}>
           {/* 源行 */}
@@ -159,6 +167,7 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ height: 28, display: "flex", alignItems: "center", fontSize: FONT_SIZE_SM, opacity: 0.7, marginBottom: 4 }}>
               {t("Target pages (drop zone between each page)")}
+              <span style={{ marginLeft: 8, opacity: 0.6 }}>{t("(patched pages not shown)")}</span>
             </div>
             <Slot id="target">
             <ScrollRow count={1} rowRef={targetRowRef} lenisApiRef={targetLenisRef}
@@ -200,9 +209,31 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
         <div style={{ marginTop: 12, padding: 12, background: "rgba(255,255,255,0.06)", borderRadius: 6, maxHeight: "30vh", overflowY: "auto" }}>
           <div style={{ fontSize: FONT_SIZE_SM, fontWeight: 700, marginBottom: 6 }}>{t("Preview")}</div>
           {placedCount === 0 ? <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.7 }}>{t("No extra pages placed — nothing will be added.")}</div>
-            : [...unmatchedByIndex.keys()].filter((i) => !(groups.source ?? []).includes(pageId(i))).map((i) => {
-              const pl = (groups.target ?? []).indexOf(targetId(i))
-              return <div key={i} style={{ fontSize: FONT_SIZE_SM, opacity: 0.85 }}>{t("Source page {{n}} → {{where}}", { n: i + 1, where: pl >= 0 ? t("after page {{n}}", { n: pl + 1 }) : t("start") })}</div>
+            : diffGroups.map((group) => {
+              const first = group[0]
+              const pid = pageId(first.page_index)
+              const inSource = (groups.source ?? []).includes(pid)
+              const pages = group.map((p) => p.page_index + 1).join(", ")
+              const thumb = (idx: number, side: "a" | "b", highlight: boolean) => (
+                <div key={`${side}-${idx}`} style={{ flexShrink: 0, width: "10vw", maxWidth: 120, aspectRatio: THUMB_ASPECT_RATIO, borderRadius: 4, overflow: "hidden", background: highlight ? "#2e7d32" : "transparent", padding: highlight ? 2 : 0 }}>
+                  <img src={`/api/download_queue/${encodeURIComponent(queueItemId)}/compare/page?side=${side}&index=${idx}`} alt=""
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                </div>
+              )
+              const imgCount = inSource ? group.length : ((() => { const arr = groups.target ?? []; const idx = arr.indexOf(pid); if (idx >= 0) for (let j = idx - 1; j >= 0; j--) if (arr[j].startsWith("target-")) return group.length + 1; return group.length })())
+              const tooltipContent = (() => {
+                if (inSource) return <div style={{ display: "flex", gap: 4 }}>{group.map((p) => thumb(p.page_index, sourceSide, true))}</div>
+                const arr = groups.target ?? []; const idx = arr.indexOf(pid)
+                const targetPage = idx >= 0 ? (() => { for (let j = idx - 1; j >= 0; j--) if (arr[j].startsWith("target-")) return Number(arr[j].replace("target-", "")); return null })() : null
+                return <div style={{ display: "flex", gap: 4 }}>
+                  {targetPage != null && thumb(targetPage, targetSide, false)}
+                  {group.map((p) => thumb(p.page_index, sourceSide, true))}
+                </div>
+              })()
+              const text = inSource
+                ? t("Source archive page {{n}}: {{where}}", { n: pages, where: t("unplaced") })
+                : (() => { const arr = groups.target ?? []; const idx = arr.indexOf(pid); let label = t("target archive, before first page"); if (idx >= 0) for (let j = idx - 1; j >= 0; j--) if (arr[j].startsWith("target-")) { label = t("target archive, after page {{n}}", { n: Number(arr[j].replace("target-", "")) + 1 }); break }; return t("Source archive page {{n}}: {{where}}", { n: pages, where: label }) })()
+              return <div key={first.page_index} style={{ display: "block" }}><Tooltip label={tooltipContent} zIndex={9700} maxWidth={Math.min(imgCount * 12 * (window.innerWidth / 100) + 32, window.innerWidth * 0.95)}><span style={{ fontSize: FONT_SIZE_SM, opacity: 0.85 }}>{text}</span></Tooltip></div>
             })}
         </div>
       )}

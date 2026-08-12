@@ -312,6 +312,7 @@ export type QueueError =
   | { kind: "duplicate_filename_cleaned"; existing_id: string; filename: string }
   | { kind: "internal" }
   | { kind: "stale_after_restart" }
+  | { kind: "already_patched"; existing_id: string; filename: string }
 
 /** Mirrors `lanrurugi_storage::download_queue::PendingFilenameConflict` — set on a queue item
  * whose download was blocked by a `Filename` collision (content is genuinely new, only the
@@ -505,6 +506,7 @@ export interface DownloadQueueItem {
   created_at: number
 }
 
+/** `created_at` added by backend's `list_all` sort — pure display-only ordering field. */
 export interface DownloadQueueListResponse {
   items: DownloadQueueItem[]
 }
@@ -529,9 +531,14 @@ export interface UpdateQueueItemBody {
   overwrite_on_duplicate?: boolean
 }
 
+export interface ArchivePage {
+  url: string
+  is_patch: boolean
+}
+
 export interface ArchiveFilesResponse {
   job: number
-  pages: string[]
+  pages: ArchivePage[]
 }
 
 export interface PageDimensionsResponse {

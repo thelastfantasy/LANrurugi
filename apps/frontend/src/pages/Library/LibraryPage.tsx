@@ -94,7 +94,6 @@ export function Library() {
           onMerge={() => void lib.mergeSelectionIntoTankoubon()}
           canMerge={lib.canMerge}
           onSearchTag={lib.applyTagSearch}
-          refreshKey={lib.carouselRefreshKey}
         />
       </div>
 

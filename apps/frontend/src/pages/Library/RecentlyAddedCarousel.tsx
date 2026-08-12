@@ -1,9 +1,11 @@
+import { useQuery } from "@tanstack/react-query"
 import Lenis from "lenis"
 import type { MouseEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import type { ArchiveMetadata } from "@/api/types"
+import { fetchJson } from "@/api/client"
+import type { ArchiveMetadata, SearchResponse } from "@/api/types"
 import { PopupMenu, PopupMenuItem, SortableList } from "@/components/Display"
 import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys"
@@ -32,7 +34,6 @@ export function RecentlyAddedCarousel({
   onMerge,
   canMerge,
   onSearchTag,
-  refreshKey,
 }: {
   filter: string
   category: string
@@ -55,12 +56,6 @@ export function RecentlyAddedCarousel({
   onMerge: () => void
   canMerge: boolean
   onSearchTag: (namespacedTag: string) => void
-  /** Bumped by the parent whenever something outside this component's own control (the
-   * "Mark as Read"/"Mark as Unread" context-menu action, currently the only such case) changes
-   * archive progress data this carousel's own fetch effect has no other way to learn about — this
-   * carousel doesn't use TanStack Query (a plain `useEffect`+`fetch`, unlike the main grid's own
-   * `useSearch`), so a parent-side `invalidateQueries` call has no effect on it at all. */
-  refreshKey: number
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(() => localStorage.getItem(CAROUSEL_OPEN_KEY) === "1")
@@ -68,26 +63,8 @@ export function RecentlyAddedCarousel({
     () => (localStorage.getItem(CAROUSEL_TYPE_KEY) as CarouselMode | null) ?? "ondeck",
   )
   const [menuOpen, setMenuOpen] = useState(false)
-  const [items, setItems] = useState<ArchiveMetadata[]>([])
-  const [loading, setLoading] = useState(false)
-  const [nonce, setNonce] = useState(0)
   const carouselRef = useRef<HTMLDivElement>(null)
   const lenisRef = useRef<Lenis | null>(null)
-  // Lenis init with `items` guard — the carousel div only mounts when data arrives, so the
-  // shared `useHorizontalScroll` hook (which fires once on mount with `[]` deps) would never
-  // see the ref. This effect re-checks once items populate the DOM.
-  useEffect(() => {
-    const el = carouselRef.current
-    if (!el || lenisRef.current) return
-    const lenis = new Lenis({
-      wrapper: el, content: el,
-      orientation: "horizontal", gestureOrientation: "both",
-      wheelMultiplier: 4.5, lerp: 0.1, autoRaf: true,
-    })
-    lenisRef.current = lenis
-    return () => { lenis.destroy(); lenisRef.current = null }
-     
-  }, [items])
   const stepSlide = useCallback(() => {
     const firstChild = carouselRef.current?.firstElementChild as HTMLElement | null
     return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236 // 228 + 8 gap
@@ -120,68 +97,64 @@ export function RecentlyAddedCarousel({
   // by MSM's temporary forced-expand.
   const isOpen = open || multiSelect
 
+  const params = new URLSearchParams()
+  if (filter) params.set("filter", filter)
+  const isBuiltinSelector = category === NEW_ONLY || category === UNTAGGED_ONLY
+  if (category && !isBuiltinSelector) params.set("category", category)
+  if (!groupbyTanks) params.set("groupby_tanks", "false")
+  if (hideCompleted) params.set("hidecompleted", "true")
+  if (category === NEW_ONLY) params.set("newonly", "true")
+  if (category === UNTAGGED_ONLY) params.set("untaggedonly", "true")
+
+  const isRandom = mode === "random"
+  const modeParams = new URLSearchParams(params)
+  let path: string
+  switch (mode) {
+    case "random":
+      modeParams.set("count", "15")
+      path = `/search/random?${modeParams.toString()}`
+      break
+    case "inbox":
+      modeParams.set("newonly", "true")
+      modeParams.set("sortby", "date_added")
+      modeParams.set("order", "desc")
+      modeParams.set("start", "-1")
+      path = `/search?${modeParams.toString()}`
+      break
+    case "untagged":
+      modeParams.set("untaggedonly", "true")
+      modeParams.set("sortby", "date_added")
+      modeParams.set("order", "desc")
+      modeParams.set("start", "-1")
+      path = `/search?${modeParams.toString()}`
+      break
+    default:
+      modeParams.set("sortby", "lastread")
+      modeParams.set("hidecompleted", "true")
+      path = `/search?${modeParams.toString()}`
+      break
+  }
+
+  const carouselQuery = useQuery({
+    queryKey: isRandom ? ["search", "random", modeParams.toString()] : ["search", { filter, category, mode, hideCompleted, groupbyTanks }],
+    queryFn: () => fetchJson<SearchResponse>(path),
+    enabled: isOpen && !multiSelect,
+  })
+  const items = carouselQuery.data?.data ?? []
+  const loading = carouselQuery.isLoading
+
+  // Lenis init with `items` guard — the carousel div only mounts when data arrives.
   useEffect(() => {
-    // No mode-based fetch while in selection mode — legacy doesn't refresh carousel data during
-    // MSM either, the carousel is repurposed to display the selection itself instead.
-    if (!isOpen || multiSelect) return
-    const params = new URLSearchParams()
-    if (filter) params.set("filter", filter)
-    const isBuiltinSelector = category === NEW_ONLY || category === UNTAGGED_ONLY
-    if (category && !isBuiltinSelector) params.set("category", category)
-    if (!groupbyTanks) params.set("groupby_tanks", "false")
-    if (hideCompleted) params.set("hidecompleted", "true")
-    if (category === NEW_ONLY) params.set("newonly", "true")
-    if (category === UNTAGGED_ONLY) params.set("untaggedonly", "true")
-
-    let endpoint: string
-    switch (mode) {
-      case "random":
-        params.set("count", "15")
-        endpoint = `/api/search/random?${params.toString()}`
-        break
-      case "inbox":
-        params.set("newonly", "true")
-        params.set("sortby", "date_added")
-        params.set("order", "desc")
-        params.set("start", "-1")
-        endpoint = `/api/search?${params.toString()}`
-        break
-      case "untagged":
-        params.set("untaggedonly", "true")
-        params.set("sortby", "date_added")
-        params.set("order", "desc")
-        params.set("start", "-1")
-        endpoint = `/api/search?${params.toString()}`
-        break
-      default:
-        params.set("sortby", "lastread")
-        params.set("hidecompleted", "true")
-        endpoint = `/api/search?${params.toString()}`
-        break
-    }
-
-    let cancelled = false
-    // `setLoading(true)` is deferred a tick rather than called synchronously in the effect body —
-    // this is a real network request kicking off (an external-system interaction, not a plain
-    // state sync), and react-hooks' `set-state-in-effect` rule flags direct synchronous setState
-    // calls in an effect body as a cascading-render risk regardless.
-    queueMicrotask(() => {
-      if (!cancelled) setLoading(true)
+    const el = carouselRef.current
+    if (!el || lenisRef.current) return
+    const lenis = new Lenis({
+      wrapper: el, content: el,
+      orientation: "horizontal", gestureOrientation: "both",
+      wheelMultiplier: 4.5, lerp: 0.1, autoRaf: true,
     })
-    fetch(endpoint)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return
-        setItems(data.data ?? [])
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-
-  }, [isOpen, mode, filter, category, hideCompleted, groupbyTanks, nonce, multiSelect, refreshKey])
+    lenisRef.current = lenis
+    return () => { lenis.destroy(); lenisRef.current = null }
+  }, [items])
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t("On Deck"),
@@ -283,7 +256,7 @@ export function RecentlyAddedCarousel({
               title={t("Refresh") ?? undefined}
               onClick={(e) => {
                 e.preventDefault()
-                setNonce((n) => n + 1)
+                void carouselQuery.refetch()
               }}
             ></a>
             <span style={{ position: "relative" }}>

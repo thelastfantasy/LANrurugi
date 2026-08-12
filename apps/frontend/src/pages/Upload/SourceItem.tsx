@@ -29,7 +29,7 @@ export function SourceGhost({ index, queueItemId, side }: {
   index: number; queueItemId: string; side: "a" | "b"
 }) {
   return (
-    <div style={{ flexShrink: 0, height: "100%", aspectRatio: THUMB_ASPECT_RATIO, borderRadius: 4, overflow: "hidden", opacity: 0.4 }}>
+    <div data-source-page={index} style={{ flexShrink: 0, height: "100%", aspectRatio: THUMB_ASPECT_RATIO, borderRadius: 4, overflow: "hidden", opacity: 0.4 }}>
       <img src={`/api/download_queue/${encodeURIComponent(queueItemId)}/compare/page?side=${side}&index=${index}`}
         alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
     </div>

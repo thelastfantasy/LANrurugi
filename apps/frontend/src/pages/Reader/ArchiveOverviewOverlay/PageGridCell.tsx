@@ -227,6 +227,7 @@ export function PageGridCell({
   onQuickAddToc,
   onOpenLightbox,
   isTank,
+  isPatch = false,
 }: {
   page: number
   isStamped: boolean
@@ -244,6 +245,10 @@ export function PageGridCell({
   onAddToc: (e: MouseEvent, page: number) => void
   onQuickAddToc: (page: number, title: string) => void
   onOpenLightbox: (page: number) => void
+  /** True when this page came from a `.patch.zip` rather than the original archive — the cell
+   * gets a distinct green-tinted background so patched pages are visually separable at a glance
+   * in the overview grid. */
+  isPatch?: boolean
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
@@ -265,7 +270,7 @@ export function PageGridCell({
       onClick={() => onSelectPage(page)}
     >
       <div
-        className="id3 quick-thumbnail"
+        className={`id3 quick-thumbnail${isPatch ? " patch" : ""}`}
         data-stamped={isStamped || undefined}
         style={{
           position: "relative",
@@ -280,6 +285,31 @@ export function PageGridCell({
       >
         <PageNumberLabel hovered={hovered}>{t("Page {{n}}", { n: page })}</PageNumberLabel>
         <OverviewThumbnail src={thumbnailSrc} alt={t("Page {{n}}", { n: page }) ?? undefined} />
+        {isPatch && (
+          <Tooltip label={t("Patch page")} wrapperStyle={{ position: "static" }}>
+            <span
+              style={{
+                position: "absolute",
+                bottom: 8,
+                left: "50%",
+                transform: "translateX(-50%)",
+                fontSize: 14,
+                backgroundColor: "rgba(0,0,0,0.5)",
+                color: "lightskyblue",
+                padding: "0.5rem",
+                borderRadius: 4,
+                pointerEvents: "auto",
+                cursor: "default",
+                zIndex: 2,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <i className="fa fa-circle-plus" aria-hidden="true" />
+            </span>
+          </Tooltip>
+        )}
         {/* Not gated behind `loggedIn` (unlike the two icons below) — this is a read-only preview
             tool, useful regardless of edit permissions; only the quick-add-chapter section
             *inside* the lightbox itself needs a login check (see `PageLightbox`'s own render). */}

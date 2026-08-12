@@ -176,6 +176,16 @@ export function QueueItemRow({
     void handleFetchMetadata();
   }
 
+  // "Start All" bypasses per-row start → metadata is never triggered. Auto-fetch
+  // whenever the item transitions to an active download/downloaded state.
+  const metadataAutoFetchedRef = useRef(false)
+  useEffect(() => {
+    if (item.auto_fetch_metadata && !metadataAutoFetchedRef.current && (item.state === "downloading" || item.state === "done")) {
+      metadataAutoFetchedRef.current = true
+      fetchMetadataOnStart()
+    }
+  }, [item.state, item.auto_fetch_metadata]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleCompare() {
     setConflictMenuOpen(false);
     // The comparison itself (perceptual-hash every sampled page, banded-DP align, decode a
@@ -196,20 +206,21 @@ export function QueueItemRow({
   }
 
   const hasFirstSample = compareStream.state.samples.some((s) => s !== undefined);
+  const streamDone = compareStream.finished || compareStream.state.summary !== null;
+  const noMatch = streamDone && !hasFirstSample;
   const showModal = started && hasFirstSample && !compareStream.error;
 
-  // Dismisses the "Analyzing…" toast the moment there's actually something to show — either the
-  // first sample (modal opens, driven by `showModal` above) or a stream-level failure, whichever
-  // comes first. Runs only while `startedRef.current` (guards against a stale/already-dismissed
-  // toast from a prior run reacting to this effect after the queue item itself re-renders for an
-  // unrelated reason). Doesn't need to reset `started`/`startedRef` on error — `showModal`'s own
-  // `!compareStream.error` term already keeps the modal hidden, and `handleCompare()` sets both
-  // back to `true` unconditionally on the next attempt anyway.
   useEffect(() => {
     if (!startedRef.current) return;
-    if (hasFirstSample && pendingCompareToastRef.current !== null) {
+    if ((hasFirstSample || streamDone || compareStream.error) && pendingCompareToastRef.current !== null) {
       dismissToast(pendingCompareToastRef.current);
       pendingCompareToastRef.current = null;
+    }
+    if (noMatch) {
+      toast({ heading: t("No reliable comparison result — the two archives appear to have completely different content."), icon: "info", hideAfter: false });
+      startedRef.current = false;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStarted(false);
     }
     if (compareStream.error) {
       if (pendingCompareToastRef.current !== null) {
@@ -223,7 +234,8 @@ export function QueueItemRow({
       // which one it actually was.
       toast({ heading: compareStream.error, icon: "error" });
     }
-  }, [hasFirstSample, compareStream.error]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasFirstSample, streamDone, noMatch, compareStream.error]);
 
   return (
     <>
@@ -351,7 +363,7 @@ export function QueueItemRow({
             )}
             {item.state === "error" && item.error && (
               <div
-                style={{ fontSize: FONT_SIZE_XS, color: STATE_COLOR.failed }}
+                style={{ fontSize: FONT_SIZE_XS, color: item.error.kind === "already_patched" ? "#c79121" : STATE_COLOR.failed }}
               >
                 <QueueErrorText error={item.error} />
               </div>

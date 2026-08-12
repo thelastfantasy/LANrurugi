@@ -7,7 +7,9 @@ import { useNavigate } from "react-router-dom"
 import {
   useAddTocEntry,
   useAddTocEntryForId,
+  useArchivePages,
   useCreateCategory,
+  useDeletePatch,
   useDeleteTankoubon,
   useRemoveTocEntry,
   useRemoveTocEntryForId,
@@ -17,7 +19,7 @@ import {
   useStampedPagesForArchives,
   useUpdateTankoubon,
 } from "@/api/hooks"
-import type { ArchiveMetadata, CategoryMetadata } from "@/api/types"
+import type { ArchiveMetadata, ArchivePage, CategoryMetadata } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { RatingWidget } from "@/components/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
@@ -112,6 +114,50 @@ function PagePlaceholder({ page: _page, onVisible }: { page: number; onVisible: 
   )
 }
 
+function DeletePatchButton({ archiveId, patchPageSet }: { archiveId: string; patchPageSet: Set<number> | null }) {
+  const { t } = useTranslation()
+  const delPatch = useDeletePatch(archiveId)
+
+  function handleDelete() {
+    const pages = patchPageSet ? [...patchPageSet].sort((a, b) => a - b) : []
+    // Group consecutive pages into ranges
+    const groups: string[] = []
+    let start = 0
+    for (let i = 0; i < pages.length; i++) {
+      if (i === 0 || pages[i] !== pages[i - 1] + 1) start = pages[i]
+      const next = pages[i + 1]
+      if (next === undefined || next !== pages[i] + 1) {
+        groups.push(start === pages[i] ? `${start}` : `${start}–${pages[i]}`)
+      }
+    }
+    if (!confirmDialog(
+      <div>
+        <div>{t("Delete the patch? The archive itself will not be deleted.")}</div>
+        <div style={{ marginTop: 8 }}>{t("{{count}} patched pages", { count: pages.length })}</div>
+        {groups.length > 0 && (
+          <ul style={{ margin: "4px auto 0", padding: 0, listStyle: "none", display: "inline-block", textAlign: "left" }}>
+            {groups.map((g) => (
+              <li key={g} style={{ padding: "2px 0" }}>• {t("Page {{n}}", { n: g })}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    )) return
+    void delPatch.mutateAsync()
+  }
+
+  return (
+    <input
+      className="stdbtn"
+      type="button"
+      style={{ width: "auto", minWidth: 110 }}
+      value={(delPatch.isPending ? t("Deleting...") : t("Delete Patch")) ?? undefined}
+      disabled={delPatch.isPending}
+      onClick={handleDelete}
+    />
+  )
+}
+
 // Mirrors legacy's `#archivePagesOverlay` (`updateArchiveOverlay`/`generateThumbnails` in
 // `~/LANraragi/public/js/reader.js`) — thumbnail (left) + Admin Options/Categories/Rating (right)
 // side by side via `.reader-thumbnail`'s `display:inline-block` (verified against
@@ -160,7 +206,7 @@ export function ArchiveOverviewOverlay({
    * (`useTankoubonReading`'s own `pages.data.pages`) — passed straight through to `PageLightbox`'s
    * own `pagesOverride` so its large preview doesn't re-fetch `archive.arcid`'s own pages (wrong;
    * that id is the Tankoubon's, not a real archive's). */
-  tankPages?: string[]
+  tankPages?: ArchivePage[]
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -435,6 +481,18 @@ export function ArchiveOverviewOverlay({
   } = usePaginatedOverview(archive.arcid, scrollAnchor ?? (autoFocus ? (currentPage || 1) : 1))
   const pageCount = archive.pagecount
 
+  // Patch page detection — `is_patch` from `/archives/{id}/files` (now per-page) drives a
+  // distinct background color on the overview grid's thumbnail cells so the user can tell at a
+  // glance which pages are original and which came from a `.patch.zip`.
+  const singlePagesForPatch = useArchivePages(isTank ? null : archive.arcid)
+  const patchPageSet = (() => {
+    const list = isTank ? tankPages : singlePagesForPatch.data?.pages
+    if (!list) return null as Set<number> | null
+    const s = new Set<number>()
+    list.forEach((p, i) => { if (p.is_patch) s.add(i + 1) })
+    return s
+  })()
+
   // Scrolls to and briefly outlines the current page's own thumbnail once, right after the
   // overlay opens from a real click (`autoFocus`, see this component's own prop docs) — otherwise
   // the reader has to hunt for it by eye across a grid that can run into the hundreds of cells for
@@ -521,15 +579,18 @@ export function ArchiveOverviewOverlay({
                 <input
                   className="stdbtn"
                   type="button"
+                  style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
                   value={(isTank ? t("Edit Tankoubon") : t("Edit Archive Metadata")) ?? undefined}
                   onClick={() => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))}
                 />
                 <input
                   className="stdbtn"
                   type="button"
+                  style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
                   value={(isTank ? t("Delete Tankoubon") : t("Delete Archive")) ?? undefined}
                   onClick={() => void deleteArchive()}
                 />
+                {!isTank && archive.has_patch && <DeletePatchButton archiveId={archive.arcid} patchPageSet={patchPageSet} />}
                 <br />
 
                 <h2>{t("Categories")}</h2>
@@ -793,6 +854,7 @@ export function ArchiveOverviewOverlay({
                   onQuickAddToc={handleQuickAddToc}
                   onOpenLightbox={setLightboxPage}
                   isTank={isTank}
+                  isPatch={patchPageSet?.has(page) ?? false}
                 />
               )
             }

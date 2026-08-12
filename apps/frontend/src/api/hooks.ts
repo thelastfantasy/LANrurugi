@@ -345,6 +345,20 @@ export function useSetArchiveThumbnail(id: string) {
   })
 }
 
+/** Deletes the sidecar `.patch.zip` for an archive and clears its `has_patch` flag —
+ * `DELETE /archives/{id}/patch`. */
+export function useDeletePatch(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson("DELETE", `/archives/${id}/patch`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archive-pages", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+  })
+}
+
 /** Reader overview overlay's "add chapter" hover icon (legacy `.add-toc`, `addTocSection`). */
 export function useAddTocEntry(id: string) {
   const queryClient = useQueryClient()
@@ -947,6 +961,7 @@ export function useJobs() {
     // Fast cadence only while a job is actually active — see `downloadQueueRefetchInterval`'s own
     // reasoning above.
     refetchInterval: jobsRefetchInterval,
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -1008,6 +1023,7 @@ export function useDownloadQueue() {
     queryFn: () => fetchJson<DownloadQueueListResponse>("/download_queue"),
     select: (data) => data.items,
     refetchInterval: downloadQueueRefetchInterval,
+    refetchIntervalInBackground: true,
   })
 }
 

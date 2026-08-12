@@ -82,9 +82,12 @@ export function ComparisonResultModal({
   // this component's own box). Same pattern as `Reader.tsx`'s boundary-overlay lock.
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
+    const prevOverscroll = document.body.style.overscrollBehavior;
     document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
     return () => {
       document.body.style.overflow = prevOverflow;
+      document.body.style.overscrollBehavior = prevOverscroll;
     };
   }, []);
 
@@ -189,6 +192,8 @@ export function ComparisonResultModal({
         // grid shrinking to fit, producing a page-level scrollbar and pushing the bottom Keep A/B
         // row off-screen (reported live, screenshotted: outer page scrollbar + cut-off buttons).
         overflow: "hidden",
+        // Mobile Firefox elastic overscroll leaks white edges around the viewport — suppress.
+        overscrollBehavior: "none",
         // The default `content-box` sizing adds `padding` on top of the declared height instead of
         // inside it — measured live via `getBoundingClientRect`: a 905px box rendered 937px tall
         // (exactly `905 + 16*2` padding), 32px past the viewport, with the excess silently clipped

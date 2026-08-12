@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query"
 import type { MouseEvent } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -51,6 +52,7 @@ const createTankoubon = useCreateTankoubon()
 const loginStatus = useLoginStatus()
 const settings = useSettings()
 const stats = useStats(2)
+const queryClient = useQueryClient()
 const loggedIn = loginStatus.data?.logged_in ?? true
 
 // `appliedFilter`/`selectedCategory`/`sortby`/`order`/`page` all derive directly from
@@ -165,18 +167,10 @@ const [multiSelect, setMultiSelect] = useState(false)
 const [selectedIds, setSelectedIds] = useState<string[]>([])
 const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
 const [deleteTarget, setDeleteTarget] = useState<{ id: string; isTank: boolean } | null>(null)
-// See `RecentlyAddedCarousel`'s own `refreshKey` prop docs — bumped after "Mark as Read"/"Mark
-// as Unread" so the carousel's own non-TanStack-Query fetch effect re-runs and picks up the new
-// progress value, since `invalidateQueries` alone (which the main grid's `useSearch` already
-// responds to) has no effect on this carousel at all.
-const [carouselRefreshKey, setCarouselRefreshKey] = useState(0)
 const searchInputRef = useRef<HTMLInputElement>(null)
 const setArchiveProgress = useSetArchiveProgress()
 function handleSetProgress(archiveId: string, page: number) {
-  setArchiveProgress.mutate(
-    { id: archiveId, page },
-    { onSuccess: () => setCarouselRefreshKey((k) => k + 1) },
-  )
+  setArchiveProgress.mutate({ id: archiveId, page })
 }
 
 // First-visit context-menu tutorial toast + default-password warning — fired once per browser
@@ -445,7 +439,9 @@ async function updateRating(archiveId: string, isTank: boolean, rating: string |
   } else {
     await sendJson("PUT", `/archives/${archiveId}/metadata?tags=${encodeURIComponent(newTags)}`)
   }
-  await search.refetch()
+  queryClient.invalidateQueries({ queryKey: ["archive", archiveId] })
+  queryClient.invalidateQueries({ queryKey: ["archives"] })
+  queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
 }
 
 async function deleteArchive(archiveId: string, isTank: boolean) {
@@ -455,7 +451,9 @@ async function deleteArchive(archiveId: string, isTank: boolean) {
   } else {
     await fetch(`/api/archives/${archiveId}`, { method: "DELETE" })
   }
-  await search.refetch()
+  queryClient.invalidateQueries({ queryKey: ["archive", archiveId] })
+  queryClient.invalidateQueries({ queryKey: ["archives"] })
+  await queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
 }
 
 function handleContextMenu(e: MouseEvent, archive: ArchiveMetadata, source: "grid" | "carousel" = "grid") {
@@ -499,7 +497,7 @@ function handleOpenArchive(id: string) {
     multiSelect, search, shown, totalFiltered, totalRecords, pageCount, rangeStart, rangeEnd,
     selectedIds, setSelectedIds, toggleSelected, selectAllOnPage, clearSelection, handleToggleMultiSelect,
     sortedCategories, tagSuggestions,
-    contextMenu, setContextMenu, deleteTarget, setDeleteTarget, carouselRefreshKey, handleSetProgress,
+    contextMenu, setContextMenu, deleteTarget, setDeleteTarget, handleSetProgress,
     toggleCategory, toggleArchiveCategory, updateRating, deleteArchive,
     handleContextMenu, applyTagSearch, handleOpenArchive,
     selectedTankIds, canMerge, runBatchOnSelection, mergeSelectionIntoTankoubon,

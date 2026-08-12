@@ -264,6 +264,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let download_queue = Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    match download_queue.backfill_created_at().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            count = n,
+            "download queue: backfilled created_at for stale items"
+        ),
+        Err(e) => tracing::warn!(error = %e, "download queue: created_at backfill skipped"),
+    }
     let recommend_cache = Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -532,6 +540,22 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Every 10 minutes — detect queue items still `Downloading`/`Starting` whose job is gone
+    // (e.g. Redis timed out during the state-update right after ingest failed — see
+    // `update_queue_item_state`'s own retry logic). The startup-time check above catches items
+    // orphaned by a restart; this sweep catches items orphaned by a transient Redis blip during
+    // the current uptime.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+            loop {
+                interval.tick().await;
+                sweep_stale_queue_items(&state).await;
+            }
+        });
+    }
+
     // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
     // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
     // sweep's own schedule happens to line up against when it was staged.
@@ -539,9 +563,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
-            // The first tick fires immediately (`tokio::time::interval`'s own documented
-            // behavior) — deliberate, not skipped: a conflict staged just before a restart
-            // shouldn't have to wait a full hour for the first sweep to even notice it's stale.
             loop {
                 interval.tick().await;
                 lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
@@ -640,6 +661,52 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
 /// `lanrurugi rebuild-index` (User Story 6, T077): runs the same two-step repair
 /// (`lanrurugi_storage::rebuild::rekey_all` + `lanrurugi_scanner::full_scan::full_scan`) as
+/// Marks queue items still in `Starting`/`Downloading` whose `job_id` points to nothing alive
+/// as `Error(StaleAfterRestart)` — catches items orphaned by a transient Redis failure during
+/// the state-update right after ingest (where `update_queue_item_state`'s own retry already
+/// covers the common sub-second case; this sweep is the backstop for the rare multi-second blip).
+async fn sweep_stale_queue_items(state: &AppState) {
+    let items = match state.download_queue.list_all().await {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!(error = %e, "sweep_stale_queue_items: failed to list queue");
+            return;
+        }
+    };
+    for mut item in items {
+        if !matches!(
+            item.state,
+            lanrurugi_storage::download_queue::DownloadQueueState::Starting
+                | lanrurugi_storage::download_queue::DownloadQueueState::Downloading
+        ) {
+            continue;
+        }
+        // If the job still exists and is active, the download is genuinely in progress — leave
+        // it alone. Only mark as stale when the job is already gone (failed/finished/lost).
+        let still_active = match &item.job_id {
+            Some(jid) => state
+                .jobs
+                .get(jid)
+                .await
+                .map(|j| j.state == lanrurugi_core::jobs::JobState::Active)
+                .unwrap_or(false),
+            None => false,
+        };
+        if still_active {
+            continue;
+        }
+        tracing::info!(
+            item_id = %item.id,
+            "sweep: marking orphaned queue item as stale (job no longer active)"
+        );
+        item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
+        item.error = Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+        if let Err(e) = state.download_queue.update(&item).await {
+            tracing::warn!(item_id = %item.id, error = %e, "sweep: failed to update stale item");
+        }
+    }
+}
+
 /// `POST /database/rebuild-index`, synchronously to completion rather than as a background job —
 /// appropriate for a one-shot CLI invocation (e.g. run once after upgrading from legacy, or from
 /// a maintenance cron, without needing an HTTP client to poll a job ID).

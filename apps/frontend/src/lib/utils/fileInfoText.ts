@@ -9,7 +9,7 @@ interface PageDimensions {
  * "fileA - fileB :: (WA+WB)xH :: (sizeA+sizeB)KB" for a double-page spread. Extracted as a pure
  * function (out of Reader.tsx's closure) so it's unit-testable without a full component render. */
 export function fileInfoText(
-  pageUrls: string[],
+  pageUrls: { url: string }[],
   spread: Spread,
   pageDimensions: Record<number, PageDimensions>,
   pageSizesKb: Record<number, number>,
@@ -18,7 +18,7 @@ export function fileInfoText(
   const nameFromUrl = (url: string | undefined) =>
     url ? (new URL(url, origin).searchParams.get("path") ?? "") : ""
 
-  const leftUrl = pageUrls[spread.left - 1]
+  const leftUrl = pageUrls[spread.left - 1]?.url
   const leftName = nameFromUrl(leftUrl)
   const leftDim = pageDimensions[spread.left]
   const leftSize = pageSizesKb[spread.left]
@@ -28,7 +28,7 @@ export function fileInfoText(
     return `${leftName} :: ${leftDim.width} x ${leftDim.height} :: ${leftSize} KB`
   }
 
-  const rightUrl = pageUrls[spread.right - 1]
+  const rightUrl = pageUrls[spread.right - 1]?.url
   const rightName = nameFromUrl(rightUrl)
   const rightDim = pageDimensions[spread.right]
   const rightSize = pageSizesKb[spread.right]

@@ -169,6 +169,7 @@ export function Tooltip({
             role="tooltip"
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
+            onContextMenu={(e) => { e.stopPropagation() }}
             style={{ ...style, zIndex }}
           >
             {/* `swal2-popup` (not an actual SweetAlert2 dialog — just its class name) — every

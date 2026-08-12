@@ -1816,36 +1816,59 @@ pub(crate) async fn update_queue_item_state(
     error: Option<lanrurugi_core::queue_error::QueueError>,
     archive_ids: Option<Vec<String>>,
 ) {
-    match repo.get(item_id).await {
-        Ok(Some(mut item)) => {
-            item.state = new_state;
-            if job_id.is_some() {
-                item.job_id = job_id;
+    // Retry transient Redis failures with exponential backoff (200ms → 500ms → 1s, capped)
+    // so a brief connection-pool or timeout spike during heavy ingest work doesn't leave a
+    // queue item stuck in `Downloading` forever.
+    const RETRIES: u32 = 3;
+    const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
+    // Option-typed function args we can't consume inside a retry loop (the first success
+    // that still gets retried would move them, leaving nothing for the next). First attempt
+    // clones once; last attempt moves (free). Intermediate attempts skip optional fields
+    // entirely — if `update` fails, the next `get()` reloads a fresh item from Redis.
+    let mut job_id = job_id;
+    let mut archive_ids = archive_ids;
+    let mut error = error;
+    for (i, &delay) in BACKOFF_MS.iter().enumerate() {
+        let attempt = i as u32 + 1;
+        match repo.get(item_id).await {
+            Ok(Some(mut item)) => {
+                item.state = new_state;
+                if attempt == RETRIES {
+                    item.job_id = job_id.take();
+                    item.archive_ids = archive_ids.take();
+                    item.error = error.take();
+                } else {
+                    // Clone cost is trivial for `Option<String>` + `Option<QueueError>`;
+                    // `Vec<String>` is at most a handful of short IDs per download. The
+                    // common path (attempt 1 succeeds, no retry) pays exactly what the
+                    // original code did pre-retry — one clone of an empty or tiny Vec.
+                    item.job_id = job_id.clone();
+                    item.archive_ids = archive_ids.clone();
+                    item.error = error.clone();
+                }
+                match repo.update(&item).await {
+                    Ok(()) => return,
+                    Err(e) if attempt < RETRIES => {
+                        tracing::warn!(%item_id, attempt, delay_ms = delay, error = %e, "failed to update download-queue item state, retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%item_id, attempt, error = %e, "failed to update download-queue item state after {RETRIES} attempts");
+                    }
+                }
             }
-            // Set-if-some, same as `job_id` above — persisted here (not just in the linked job's
-            // ephemeral `JobRegistry` result) so the completed-item reader link survives a server
-            // restart; see the field's own docs (`download_queue.rs`).
-            if archive_ids.is_some() {
-                item.archive_ids = archive_ids;
+            Ok(None) => {
+                tracing::debug!(%item_id, "download-queue item no longer exists, skipping state update");
+                return;
             }
-            // Unconditional (not `if error.is_some()`): every real call site passes `None` to
-            // mean "this transition has no error" — which should clear any stale error left over
-            // from an earlier failed attempt on this same queue item (e.g. a retry that then
-            // succeeds), not silently preserve it. The old conditional left a `Done` transition's
-            // item permanently carrying its previous `Error` transition's message forever, a real,
-            // confirmed bug (found via a live queue item that had `state: "done"` with real
-            // successful `archive_ids` in its job result, yet still showed an "Invalid E*Hentai
-            // login credentials" error from an earlier failed attempt).
-            item.error = error;
-            if let Err(e) = repo.update(&item).await {
-                tracing::warn!(%item_id, error = %e, "failed to update download-queue item state");
+            Err(e) if attempt < RETRIES => {
+                tracing::warn!(%item_id, attempt, delay_ms = delay, error = %e, "failed to load download-queue item for state update, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
-        }
-        Ok(None) => {
-            tracing::debug!(%item_id, "download-queue item no longer exists, skipping state update");
-        }
-        Err(e) => {
-            tracing::warn!(%item_id, error = %e, "failed to load download-queue item for state update");
+            Err(e) => {
+                tracing::warn!(%item_id, attempt, error = %e, "failed to load download-queue item for state update after {RETRIES} attempts");
+                return;
+            }
         }
     }
 }

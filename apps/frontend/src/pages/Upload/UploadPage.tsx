@@ -223,9 +223,30 @@ export function Upload() {
             id="urlForm"
             value={urls}
             onChange={(e) => setUrls(e.target.value)}
+            onPaste={(e) => {
+              const raw = e.clipboardData.getData("text")
+              if (!raw.trim()) return
+              // 无换行 → 识别分隔符转成换行；有换行 → 原样保留
+              let insert: string
+              if (raw.includes("\n")) {
+                insert = raw
+              } else {
+                const sep = raw.includes(",") ? /,\s*/ : /\s+/
+                const lines = raw.trim().split(sep).filter(Boolean)
+                if (lines.length <= 1) return
+                insert = lines.join("\n")
+              }
+              // 末尾无空行时追加一个
+              if (!insert.endsWith("\n\n")) insert = insert.replace(/\n?$/, "\n")
+              e.preventDefault()
+              const ta = e.target as HTMLTextAreaElement
+              setUrls(urls.slice(0, ta.selectionStart) + insert + urls.slice(ta.selectionEnd))
+            }}
             style={{ width: 400, height: 100, whiteSpace: "pre" }}
           />
-          <br />
+          <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.5, textAlign: "left" }}>
+            {t("Valid URL lines: {{count}}", { count: urls.split("\n").map((u) => u.trim()).filter(Boolean).length })}
+          </div>
           <br />
 
           <span

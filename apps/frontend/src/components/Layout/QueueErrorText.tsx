@@ -81,5 +81,23 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t("An internal error occurred")}</span>
     case "stale_after_restart":
       return <span>{t("Download was interrupted by a server restart, please retry")}</span>
+    case "already_patched":
+      return (
+        <span style={{ color: "#c79121" }}>
+          {t("Already patched — the unique pages from {{filename}} were previously patched into", {
+            filename: error.filename,
+          })}{" "}
+          <a
+            href={routes.reader(error.existing_id)}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(routes.reader(error.existing_id))
+            }}
+            style={{ color: "inherit" }}
+          >
+            {error.existing_id}
+          </a>
+        </span>
+      )
   }
 }

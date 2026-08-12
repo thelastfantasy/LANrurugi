@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useArchivePages } from "@/api/hooks"
+import type { ArchivePage } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { useHorizontalScroll } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
@@ -166,7 +167,7 @@ export function PageLightbox({
   /** Tankoubon-mode only: the already-concatenated multi-archive page list
    * (`useTankoubonReading`'s own `pages.data.pages`) — used instead of fetching `archiveId`'s own
    * pages internally, since `archiveId` is then the Tankoubon's own id, not a real archive's. */
-  pagesOverride?: string[]
+  pagesOverride?: ArchivePage[]
   /** Tankoubon-mode only companion to `pagesOverride` — resolves one of its own *global* page
    * numbers back to the real member archive (and that archive's own local page number) whose
    * thumbnail the filmstrip should actually show for it. `undefined` in the plain single-archive
@@ -210,7 +211,7 @@ export function PageLightbox({
   // be resting over — cleared 1s after mount by the effect right below this ref.
   const suppressHoverRef = useRef(true)
 
-  const pageUrl = pages.data?.pages[previewPage - 1]
+  const pageUrl = pages.data?.pages[previewPage - 1]?.url
   const dimensions = measured?.page === previewPage ? measured : null
 
   useEffect(() => {

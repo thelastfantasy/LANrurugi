@@ -814,3 +814,9 @@ div.id4 {
     background-color: rgba(241, 74, 82, 0.7);
     border-color: #e3e0d1;
 }
+
+/* Patched-page thumbnail — green-tinted background (same tint across themes: patched = added content). */
+.quick-thumbnail.patch {
+  background: rgba(46, 125, 50, 0.35);
+  border-radius: 4px;
+}

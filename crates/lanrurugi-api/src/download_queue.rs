@@ -1495,6 +1495,7 @@ fn build_patch_zip_bytes(
 ) -> std::result::Result<Vec<u8>, lanrurugi_scanner::archive_format::ArchiveFormatError> {
     let target_crc32 = lanrurugi_scanner::patch::crc32_of_file(target_path)
         .map_err(lanrurugi_scanner::archive_format::ArchiveFormatError::from)?;
+    let source_crc32 = lanrurugi_scanner::patch::crc32_of_file(source_path).ok();
     let source_pages = lanrurugi_scanner::archive_format::list_pages(source_path)?;
 
     let mut bundled_pages: Vec<(String, Vec<u8>)> = Vec::new();
@@ -1525,10 +1526,13 @@ fn build_patch_zip_bytes(
         });
     }
 
-    lanrurugi_scanner::patch::build_patch_zip(&target_crc32, &bundled_pages, patch_insertions)
-        .map_err(|e| {
-            lanrurugi_scanner::archive_format::ArchiveFormatError::Libarchive(e.to_string())
-        })
+    lanrurugi_scanner::patch::build_patch_zip(
+        &target_crc32,
+        source_crc32.as_deref(),
+        &bundled_pages,
+        patch_insertions,
+    )
+    .map_err(|e| lanrurugi_scanner::archive_format::ArchiveFormatError::Libarchive(e.to_string()))
 }
 
 /// `POST /download_queue/{id}/compare/export-patch` — builds a `.patch.zip` from a user-picked

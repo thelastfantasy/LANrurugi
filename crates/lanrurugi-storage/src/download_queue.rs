@@ -223,7 +223,10 @@ impl DownloadQueueRepository {
             metadata_preview: None,
             error: None,
             pending_filename_conflict: None,
-            created_at: now_unix(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
         };
         self.save(&item).await?;
         Ok(item)
@@ -262,7 +265,36 @@ impl DownloadQueueRepository {
                 items.push(item);
             }
         }
+        items.sort_by_key(|i| i.created_at);
         Ok(items)
+    }
+
+    /// One-shot backfill: existing items with a missing / stale `created_at` (from before the
+    /// millisecond-timestamp migration) get the current time written back to Redis.
+    pub async fn backfill_created_at(&self) -> Result<usize> {
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.smembers(IDS_KEY).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let mut count = 0;
+        for id in &ids {
+            let key = item_key(id);
+            let raw: Option<String> = conn.get(&key).await?;
+            if let Some(raw) = raw {
+                if let Ok(mut item) = serde_json::from_str::<DownloadQueueItem>(&raw) {
+                    if item.created_at == 0 || item.created_at < 1_000_000_000_000 {
+                        item.created_at = now;
+                        let raw = serde_json::to_string(&item)
+                            .map_err(|e| DownloadQueueStorageError::Json(key.clone(), e))?;
+                        let _: () = conn.set(&key, raw).await?;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        Ok(count)
     }
 
     /// Full-replace update — the caller is expected to have already merged any partial change
@@ -286,13 +318,6 @@ impl DownloadQueueRepository {
         }
         Ok(())
     }
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

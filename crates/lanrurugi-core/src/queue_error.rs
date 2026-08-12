@@ -115,6 +115,15 @@ pub enum QueueError {
         existing_id: String,
         filename: String,
     },
+    /// A `DuplicateFilename` conflict whose source archive's pages were already extracted and
+    /// patched into the colliding target in a prior session — no conflict menu to offer (the work
+    /// is already done), just a yellow "already patched" info row the user can dismiss or ignore.
+    AlreadyPatched {
+        /// The archive this source's pages were patched into (the `existing_id` from the prior
+        /// conflict resolution).
+        existing_id: String,
+        filename: String,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -148,6 +157,7 @@ impl QueueError {
             QueueError::DuplicateArchive { .. } => 409,
             QueueError::DuplicateFilename { .. } => 1003,
             QueueError::DuplicateFilenameCleaned { .. } => 1004,
+            QueueError::AlreadyPatched { .. } => 1006,
             QueueError::StaleAfterRestart => 1005,
         }
     }
@@ -223,6 +233,14 @@ mod tests {
             }
             .code(),
             1004
+        );
+        assert_eq!(
+            QueueError::AlreadyPatched {
+                existing_id: "x".into(),
+                filename: "y.zip".into(),
+            }
+            .code(),
+            1006
         );
         assert_eq!(QueueError::StaleAfterRestart.code(), 1005);
     }

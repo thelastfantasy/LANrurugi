@@ -2,7 +2,7 @@ import { useQueries } from "@tanstack/react-query"
 
 import { fetchJson } from "@/api/client"
 import { useTankoubonFull } from "@/api/hooks"
-import type { ArchiveFilesResponse, ArchiveMetadata, TocEntry } from "@/api/types"
+import type { ArchiveFilesResponse, ArchiveMetadata, ArchivePage, TocEntry } from "@/api/types"
 
 /** One member archive's own contribution to the concatenated page list — a slice of the whole
  * Tankoubon's global page range this archive's own pages occupy. */
@@ -50,7 +50,7 @@ export function useTankoubonReading(tankId: string | null) {
   const error = full.error ?? pageQueries.find((q) => q.error)?.error
 
   const chapters: TankoubonChapter[] = []
-  const pages: string[] = []
+  const pages: ArchivePage[] = []
   let toc: TocEntry[] = []
 
   if (!isLoading && !isError) {

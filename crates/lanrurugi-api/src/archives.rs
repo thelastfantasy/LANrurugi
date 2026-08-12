@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, put};
+use axum::routing::{delete, get, put};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::entities::{Archive, TocEntry};
@@ -166,6 +166,7 @@ pub fn router() -> Router<AppState> {
             put(add_toc_entry).delete(remove_toc_entry),
         )
         .route("/archives/{id}/download", get(download_archive))
+        .route("/archives/{id}/patch", delete(delete_patch))
         .route(
             "/archives/{id}/isnew",
             put(set_new_flag).delete(clear_new_flag),
@@ -598,6 +599,49 @@ async fn download_archive(
             e.to_string(),
         ),
     }
+}
+
+/// `DELETE /archives/{id}/patch` — deletes the sidecar `.patch.zip` (if any) and clears the
+/// archive's `has_patch` flag. Lets the user undo a patch — e.g. to replace it with pages from a
+/// different source after re-running the comparison flow — without touching the archive itself.
+async fn delete_patch(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
+    let mut archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return not_found("delete_patch", format!("{id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_patch",
+                e.to_string(),
+            )
+        }
+    };
+    let patch_path = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
+    if patch_path.exists() {
+        if let Err(e) = tokio::fs::remove_file(&patch_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "delete_patch",
+                    e.to_string(),
+                );
+            }
+        }
+    }
+    if archive.has_patch {
+        archive.has_patch = false;
+        if let Err(e) = state.repos.archives.save(&archive).await {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_patch",
+                e.to_string(),
+            );
+        }
+    }
+    axum::Json(json!({ "operation": "delete_patch", "success": 1 })).into_response()
 }
 
 /// Cover thumbnail path, matching legacy `extract_thumbnail`'s sharding: `<thumb_dir>/<id[0:2]>/<id>.<ext>`.
@@ -1388,18 +1432,18 @@ async fn get_files(
     match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
             let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &pages);
-            let urls: Vec<String> = effective
+            let pages: Vec<serde_json::Value> = effective
                 .iter()
                 .map(|p| match p {
                     lanrurugi_scanner::patch::EffectivePage::Original(name) => {
-                        format!("/api/archives/{id}/page?path={name}")
+                        json!({ "url": format!("/api/archives/{id}/page?path={name}"), "is_patch": false })
                     }
                     lanrurugi_scanner::patch::EffectivePage::Patched(name) => {
-                        format!("/api/archives/{id}/page?path={name}&source=patch")
+                        json!({ "url": format!("/api/archives/{id}/page?path={name}&source=patch"), "is_patch": true })
                     }
                 })
                 .collect();
-            axum::Json(json!({ "job": 0, "pages": urls })).into_response()
+            axum::Json(json!({ "job": 0, "pages": pages })).into_response()
         }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
