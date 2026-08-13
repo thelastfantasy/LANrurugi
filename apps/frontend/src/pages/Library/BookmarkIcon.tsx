@@ -23,6 +23,7 @@ export function BookmarkIcon({ archiveId }: { archiveId: string }) {
     if (!loggedIn) {
       toast({
         text: `<a href="${routes.login()}">${t("Login")}</a> ${t("to toggle bookmark feature.")}`,
+        html: true,
         icon: "warning",
       })
       return

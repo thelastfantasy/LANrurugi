@@ -4,10 +4,21 @@ export type ToastIcon = "info" | "success" | "warning" | "error"
 
 export interface ToastConfig {
   heading?: string
-  /** Raw HTML, same as legacy's own `text` field — e.g. an inline `<a href=...>` link. Only ever
-   * fed developer-authored strings (never user input) at any call site, matching legacy's own
-   * security posture for this specific helper. */
+  /** Rendered as plain text (React's default escaping) unless `html: true` is also set — see that
+   * field's own docs. */
   text?: string
+  /** Opt-in to rendering `text` as raw HTML, matching legacy's own `LRR.toast()` `text` field
+   * (e.g. an inline `<a href=...>` link) — only set this for developer-authored strings with no
+   * user- or plugin-controlled content anywhere in them (interpolating a value the user/a plugin
+   * controls into an `html: true` toast is exactly the injection this default-off flag exists to
+   * prevent — see issue #64). Ignored when `text` is unset.
+   *
+   * If a future call site needs to render *partially* trusted content (e.g. a plugin/user string
+   * where only a safe subset of formatting like `<b>`/line breaks should survive), don't just flip
+   * this flag on that string — sanitize it first (e.g. via DOMPurify, not currently a dependency)
+   * and pass the sanitized result. `html: true` itself still means "trust this verbatim," never
+   * "lightly filtered." */
+  html?: boolean
   icon?: ToastIcon
   hideAfter?: number | false
   closeOnClick?: boolean
@@ -69,7 +80,8 @@ export function toast(c: ToastConfig) {
     // down into the portal, and `lrr.css`'s `.Toastify__toast-body` rule doesn't itself override it.
     <div className="Toastify__toast-body" style={{ textAlign: "left" }}>
       {c.heading && <h2>{c.heading}</h2>}
-      {c.text && <div dangerouslySetInnerHTML={{ __html: c.text }} />}
+      {c.text && c.html && <div dangerouslySetInnerHTML={{ __html: c.text }} />}
+      {c.text && !c.html && <div>{c.text}</div>}
     </div>,
     options,
   )

@@ -155,10 +155,6 @@ function SuggestionCard({
         void queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
         void queryClient.invalidateQueries({ queryKey: ["archives"] })
         void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
-        // `heading`, not `text` — `text` is raw `dangerouslySetInnerHTML` (fine for the
-        // developer-authored strings every other call site feeds it), but `name` here comes from a
-        // real archive title, which a user controls via upload/rename and could contain HTML.
-        // `heading` renders through plain JSX instead, so React escapes it automatically.
         toast({ heading: `${t("Tankoubon created!")}: ${finalName}`, icon: "success" })
       }
       onDismissed()

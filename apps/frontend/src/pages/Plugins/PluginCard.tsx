@@ -174,9 +174,10 @@ export function PluginCard({
         </div>
 
         <br />
-        {/* Plugin-declared static HTML (`<br/>`, `<i class="fa ...">`, etc., not user input) —
-            legacy's own template renders this the same way, unescaped. */}
-        <span dangerouslySetInnerHTML={{ __html: plugin.description }} />
+        {/* `plugin.description` is a third-party string the plugin itself declares (issue #64) —
+            rendered as plain text, not HTML, so a malicious/compromised plugin can't inject a
+            script via its own metadata. */}
+        <span>{plugin.description}</span>
         <br />
 
         {plugin.type === "script" && (
@@ -185,7 +186,8 @@ export function PluginCard({
               {plugin.oneshot_arg && (
                 <tr>
                   <td style={{ verticalAlign: "middle" }}>
-                    <b dangerouslySetInnerHTML={{ __html: `${t(plugin.oneshot_arg)} :` }} />
+                    {/* `plugin.oneshot_arg` is also plugin-declared (issue #64) — plain text. */}
+                    <b>{t(plugin.oneshot_arg)} :</b>
                   </td>
                   <td>
                     <input style={{ maxWidth: 200 }} size={20} value={scriptArg} onChange={(e) => setScriptArg(e.target.value)} />

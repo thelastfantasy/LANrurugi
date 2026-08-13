@@ -747,6 +747,7 @@ export function Reader() {
       const template = t("<a href='\\${url}'>Login</a> to toggle bookmark feature.") ?? ""
       toast({
         text: template.replace("${url}", "/login"),
+        html: true,
         icon: "warning",
         hideAfter: TOAST_DURATION_MS,
       })
