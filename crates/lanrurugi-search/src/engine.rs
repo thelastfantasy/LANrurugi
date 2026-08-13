@@ -852,9 +852,16 @@ mod tests {
         let mut sconn = search_pool.get().await.unwrap();
         let _: () = sconn.del("INDEX_artist:jane").await.unwrap();
         let _: () = sconn.del("INDEX_artist:bob").await.unwrap();
-        let _: () = sconn.del(UNTAGGED_KEY).await.unwrap();
-        let _: () = sconn.del(NEW_KEY).await.unwrap();
-        let _: () = sconn.del(TANKGROUPED_KEY).await.unwrap();
+        // `srem` this test's own ids, not `del` the whole set — `UNTAGGED_KEY`/`NEW_KEY`/
+        // `TANKGROUPED_KEY` are shared across every test in this file (and `indexer.rs`'s own
+        // tests, same DB3), and `cargo test` runs `#[tokio::test]`s concurrently by default. A
+        // wholesale `del` here could wipe another concurrently-running test's just-written
+        // membership out from under it — a real, observed flake (issue #86), not hypothetical.
+        for id in [&id_a, &id_b] {
+            let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
+            let _: () = sconn.srem(NEW_KEY, id).await.unwrap();
+            let _: () = sconn.srem(TANKGROUPED_KEY, id).await.unwrap();
+        }
         let _: () = sconn
             .zrem(
                 TITLES_KEY,
@@ -948,9 +955,12 @@ mod tests {
         let mut sconn = search_pool.get().await.unwrap();
         let _: () = sconn.del("INDEX_female:huge breasts").await.unwrap();
         let _: () = sconn.del("INDEX_female:milf").await.unwrap();
-        let _: () = sconn.del(UNTAGGED_KEY).await.unwrap();
-        let _: () = sconn.del(NEW_KEY).await.unwrap();
-        let _: () = sconn.del(TANKGROUPED_KEY).await.unwrap();
+        // `srem` this test's own id, not `del` the whole set — see the sibling test above (issue
+        // #86) for why a wholesale `del` on a set shared across concurrently-running tests is a
+        // real flake, not just a theoretical one.
+        let _: () = sconn.srem(UNTAGGED_KEY, &id).await.unwrap();
+        let _: () = sconn.srem(NEW_KEY, &id).await.unwrap();
+        let _: () = sconn.srem(TANKGROUPED_KEY, &id).await.unwrap();
         let _: () = sconn
             .zrem(TITLES_KEY, "book c\0".to_string() + &id)
             .await
