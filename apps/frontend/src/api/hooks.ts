@@ -1,4 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect } from "react"
 
 import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
 import type {
@@ -1004,27 +1005,80 @@ export function useClearFinishedJobs() {
 
 // --- Upload page's persistent download queue ----------------------------------------------------
 // Additive `/download_queue*` endpoints (no legacy equivalent) — see `DownloadQueueItem`'s own
-// docs. Polled at a shorter interval than `useJobs()` since the Upload page is this data's primary
-// consumer while open, and the queue itself (not just the underlying job) is what needs to feel
-// live (item state transitions, not just byte progress).
+// docs. Live updates arrive over SSE (`GET /download_queue/stream`), not polling — see
+// `useDownloadQueue`'s own EventSource wiring below.
 
-/** Fast cadence only while something is actually moving (`starting`/`downloading`) — otherwise
- * falls back to the shared background cadence. Without this, a page with only finished/errored
- * items still polled every second forever with nothing to show for it. */
-function downloadQueueRefetchInterval(query: { state: { data?: DownloadQueueListResponse } }) {
-  const items = query.state.data?.items ?? []
-  const active = items.some((item) => item.state === "starting" || item.state === "downloading")
-  return active ? DOWNLOAD_QUEUE_POLL_INTERVAL_MS : POLL_INTERVAL_MS
+/** Partial fields an `update` delta carries — set-if-present merged over the existing item. */
+interface DownloadQueueItemPatch {
+  id: string
+  state?: DownloadQueueItem["state"]
+  job_id?: string | null
+  archive_ids?: string[] | null
+  title?: string | null
+  metadata_preview?: Record<string, unknown> | null
+  error?: DownloadQueueItem["error"]
 }
 
+/** The `delta` event payload — `kind` decides how the client folds it into the cached list. */
+type DownloadQueueDelta =
+  | { kind: "update"; item: DownloadQueueItemPatch }
+  | { kind: "add"; item: DownloadQueueItem }
+  | { kind: "remove"; id: string }
+
 export function useDownloadQueue() {
-  return useQuery({
+  const queryClient = useQueryClient()
+
+  // Initial snapshot via a plain one-shot fetch — no polling. Live updates arrive over the
+  // SSE stream below (`full` replaces the whole list, `delta` patches one item in place).
+  const query = useQuery({
     queryKey: ["download-queue"],
     queryFn: () => fetchJson<DownloadQueueListResponse>("/download_queue"),
     select: (data) => data.items,
-    refetchInterval: downloadQueueRefetchInterval,
-    refetchIntervalInBackground: true,
   })
+
+  useEffect(() => {
+    const source = new EventSource("/api/download_queue/stream")
+    source.addEventListener("full", (e) => {
+      const data = JSON.parse((e as MessageEvent<string>).data) as {
+        type: "full"
+        items: DownloadQueueItem[]
+      }
+      if (data.type !== "full") return
+      queryClient.setQueryData(["download-queue"], (old: DownloadQueueListResponse | undefined) => ({
+        ...(old ?? { recordsTotal: 0, recordsFiltered: 0 }),
+        items: data.items,
+      }))
+    })
+    source.addEventListener("delta", (e) => {
+      const data = JSON.parse((e as MessageEvent<string>).data) as {
+        type: "delta"
+      } & DownloadQueueDelta
+      if (data.type !== "delta") return
+      queryClient.setQueryData(["download-queue"], (old: DownloadQueueListResponse | undefined) => {
+        if (!old) return old
+        let items = old.items
+        switch (data.kind) {
+          case "update":
+            items = items.map((it) => (it.id === data.item.id ? { ...it, ...data.item } : it))
+            break
+          case "add":
+            // Append unless the id is somehow already present (e.g. the `full` bootstrap
+            // raced ahead of this delta) — a replace then, never a duplicate row.
+            items = items.some((it) => it.id === data.item.id)
+              ? items.map((it) => (it.id === data.item.id ? data.item : it))
+              : [...items, data.item]
+            break
+          case "remove":
+            items = items.filter((it) => it.id !== data.id)
+            break
+        }
+        return { ...old, items }
+      })
+    })
+    return () => source.close()
+  }, [queryClient])
+
+  return query
 }
 
 export function useAddToQueue() {
@@ -1042,6 +1096,20 @@ export function useUpdateQueueItem() {
     mutationFn: ({ id, ...update }: UpdateQueueItemBody & { id: string }) =>
       sendJson<{ item: DownloadQueueItem }>("PATCH", `/download_queue/${encodeURIComponent(id)}`, update),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
+  })
+}
+
+/** "Fetch Metadata" button — runs the backend's plugin-`execMetadata` + 10-min-cache path
+ * (`POST /download_queue/{id}/fetch-metadata`), not a direct `/plugins/use` call, so a manual
+ * preview shares the same cache the post-download auto-fetch uses. No `onSuccess` invalidation —
+ * the updated item arrives via the `/download_queue/stream` SSE delta the backend broadcasts. */
+export function useFetchQueueItemMetadata() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ success: number; metadata_preview?: Record<string, unknown> }>(
+        "POST",
+        `/download_queue/${encodeURIComponent(id)}/fetch-metadata`,
+      ),
   })
 }
 

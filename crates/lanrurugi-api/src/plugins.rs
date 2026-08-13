@@ -41,6 +41,11 @@ const PLUGIN_CATEGORIES: &[&str] = &["metadata", "login", "download", "script"];
 /// contain subdirectories (unlike legacy's flat `Sideloaded/`).
 const CUSTOM_PLUGIN_DIR: &str = "custom";
 
+/// How long a cached `metadata_preview` stays fresh before `ensure_metadata_cached` re-runs the
+/// plugin — long enough to cover a batch of downloads landing within minutes of each other, short
+/// enough that a plugin's bad/transient result doesn't linger.
+const METADATA_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
+
 fn plugin_method(kind: &str) -> &'static str {
     match kind {
         "metadata" => "exec_metadata",
@@ -1534,6 +1539,7 @@ pub(crate) async fn start_download(
             if let Some((repo, item_id)) = &queue_link {
                 update_queue_item_state(
                     repo,
+                    state_for_task.download_queue_tx.as_ref(),
                     item_id,
                     lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
                     Some(job_id_for_task.clone()),
@@ -1578,6 +1584,7 @@ pub(crate) async fn start_download(
                     if let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
                             repo,
+                            state_for_task.download_queue_tx.as_ref(),
                             item_id,
                             lanrurugi_storage::download_queue::DownloadQueueState::Error,
                             None,
@@ -1601,6 +1608,7 @@ pub(crate) async fn start_download(
                     if let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
                             repo,
+                            state_for_task.download_queue_tx.as_ref(),
                             item_id,
                             lanrurugi_storage::download_queue::DownloadQueueState::Error,
                             None,
@@ -1623,6 +1631,7 @@ pub(crate) async fn start_download(
                 if let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,
+                        state_for_task.download_queue_tx.as_ref(),
                         item_id,
                         lanrurugi_storage::download_queue::DownloadQueueState::Error,
                         None,
@@ -1657,7 +1666,7 @@ pub(crate) async fn start_download(
                                     ensure_metadata_cached(&state_for_task, &mut item).await;
                                 }
                             }
-                            update_queue_item_state_with_tx(
+                            update_queue_item_state(
                                 repo,
                                 state_for_task.download_queue_tx.as_ref(),
                                 item_id,
@@ -1686,6 +1695,7 @@ pub(crate) async fn start_download(
                         if let Some((repo, item_id)) = &queue_link {
                             update_queue_item_state(
                                 repo,
+                                state_for_task.download_queue_tx.as_ref(),
                                 item_id,
                                 lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
                                 None,
@@ -1700,6 +1710,7 @@ pub(crate) async fn start_download(
                         if let Some((repo, item_id)) = &queue_link {
                             update_queue_item_state(
                                 repo,
+                                state_for_task.download_queue_tx.as_ref(),
                                 item_id,
                                 lanrurugi_storage::download_queue::DownloadQueueState::Error,
                                 None,
@@ -1722,6 +1733,7 @@ pub(crate) async fn start_download(
                 if let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,
+                        state_for_task.download_queue_tx.as_ref(),
                         item_id,
                         lanrurugi_storage::download_queue::DownloadQueueState::Done,
                         None,
@@ -1741,6 +1753,7 @@ pub(crate) async fn start_download(
             if let Some((repo, item_id)) = &queue_link {
                 update_queue_item_state(
                     repo,
+                    state_for_task.download_queue_tx.as_ref(),
                     item_id,
                     lanrurugi_storage::download_queue::DownloadQueueState::Error,
                     None,
@@ -1817,26 +1830,6 @@ fn queue_error_from_plugin_error(
 /// semantics a download uses, rather than a second, parallel implementation of the same rules.
 pub(crate) async fn update_queue_item_state(
     repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
-    item_id: &str,
-    new_state: lanrurugi_storage::download_queue::DownloadQueueState,
-    job_id: Option<String>,
-    error: Option<lanrurugi_core::queue_error::QueueError>,
-    archive_ids: Option<Vec<String>>,
-) {
-    update_queue_item_state_with_tx(
-        repo,
-        None::<&tokio::sync::broadcast::Sender<_>>,
-        item_id,
-        new_state,
-        job_id,
-        error,
-        archive_ids,
-    )
-    .await
-}
-
-pub(crate) async fn update_queue_item_state_with_tx(
-    repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
     tx: Option<&tokio::sync::broadcast::Sender<serde_json::Value>>,
     item_id: &str,
     new_state: lanrurugi_storage::download_queue::DownloadQueueState,
@@ -1878,6 +1871,7 @@ pub(crate) async fn update_queue_item_state_with_tx(
                     Ok(()) => {
                         if let Some(tx) = tx {
                             let _ = tx.send(serde_json::json!({
+                                "kind": "update",
                                 "id": item_id,
                                 "state": new_state,
                                 "job_id": &item.job_id,
@@ -1951,8 +1945,6 @@ async fn find_matching_plugin(
     None
 }
 
-const METADATA_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
-
 /// Ensures a queue item has fresh `metadata_preview` data cached — checks the 10-min TTL on
 /// `metadata_preview_at`, and if stale or absent, finds a matching metadata plugin for the URL
 /// and calls `execMetadata`. Writes the result back to both the queue item and the archive(s)
@@ -2008,6 +2000,19 @@ pub(crate) async fn ensure_metadata_cached(
     }
     if let Err(e) = state.download_queue.update(item).await {
         tracing::warn!(item_id = %item.id, error = %e, "failed to persist metadata cache");
+    } else if let Some(tx) = &state.download_queue_tx {
+        // Push the fresh preview/title out to SSE subscribers (the Upload page's tooltip
+        // reads `metadata_preview` from the queue list, which only updates via these deltas).
+        let _ = tx.send(serde_json::json!({
+            "kind": "update",
+            "id": &item.id,
+            "state": &item.state,
+            "job_id": &item.job_id,
+            "archive_ids": &item.archive_ids,
+            "title": &item.title,
+            "metadata_preview": &item.metadata_preview,
+            "error": &item.error,
+        }));
     }
 
     // Apply tags to already-catalogued archive(s) when auto_fetch_metadata is on.

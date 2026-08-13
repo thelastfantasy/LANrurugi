@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { sendJson } from "@/api/client";
 import {
   useDeleteQueueItem,
+  useFetchQueueItemMetadata,
   useOverwriteQueueItem,
   useRenameQueueItem,
   useStartQueueItem,
@@ -32,25 +32,6 @@ import {
   TruncatedFilename,
 } from "./shared";
 import { useCompareStream } from "./useCompareStream";
-
-export async function fetchMetadataForItem(
-  item: DownloadQueueItem,
-  metadataPlugin: PluginInfo | null,
-  update: ReturnType<typeof useUpdateQueueItem>,
-) {
-  if (!metadataPlugin || item.metadata_preview) return;
-  const result = await sendJson<{
-    success: number;
-    data?: Record<string, unknown>;
-  }>(
-    "POST",
-    `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&arg=${encodeURIComponent(item.url)}`,
-  ).catch(() => null);
-  const data = result?.data;
-  const title = typeof data?.title === "string" ? data.title : undefined;
-  if (data)
-    await update.mutateAsync({ id: item.id, title, metadata_preview: data });
-}
 
 /** A `JobProgressBar` for a rate-limited download, with a hover tooltip anchored to *just the
  * speed figure itself* (via `JobProgressBar`'s own `speedTooltip` prop) showing the limit +
@@ -121,6 +102,7 @@ export function QueueItemRow({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const update = useUpdateQueueItem();
+  const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
   const stop = useStopQueueItem();
   const del = useDeleteQueueItem();
@@ -153,7 +135,6 @@ export function QueueItemRow({
   // call a same-effect self-trigger, flagged by the `react-hooks` linter as a cascading-render risk).
   const startedRef = useRef(false);
   const pendingCompareToastRef = useRef<ReturnType<typeof toast> | null>(null);
-  const [fetchingMetadata, setFetchingMetadata] = useState(false);
   const archiveId =
     item.archive_ids?.[0] ??
     (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0];
@@ -161,30 +142,13 @@ export function QueueItemRow({
   const isLocalUpload = item.plugin_namespace === LOCAL_UPLOAD_NAMESPACE;
   const fileSize = item.file_size ?? job?.total_bytes;
 
-  async function handleFetchMetadata() {
+  // Backend-owned now (`POST /download_queue/{id}/fetch-metadata` → the same 10-min-cache
+  // path the post-download auto-fetch uses); the updated `metadata_preview` comes back over
+  // the queue SSE delta, so nothing to write locally.
+  function handleFetchMetadata() {
     if (!metadataPlugin) return;
-    setFetchingMetadata(true);
-    try {
-      await fetchMetadataForItem(item, metadataPlugin, update);
-    } finally {
-      setFetchingMetadata(false);
-    }
+    fetchMetadata.mutate(item.id);
   }
-
-  function fetchMetadataOnStart() {
-    if (!metadataPlugin || item.metadata_preview || fetchingMetadata) return;
-    void handleFetchMetadata();
-  }
-
-  // "Start All" bypasses per-row start → metadata is never triggered. Auto-fetch
-  // whenever the item transitions to an active download/downloaded state.
-  const metadataAutoFetchedRef = useRef(false)
-  useEffect(() => {
-    if (item.auto_fetch_metadata && !metadataAutoFetchedRef.current && (item.state === "downloading" || item.state === "done")) {
-      metadataAutoFetchedRef.current = true
-      fetchMetadataOnStart()
-    }
-  }, [item.state, item.auto_fetch_metadata]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleCompare() {
     setConflictMenuOpen(false);
@@ -502,8 +466,9 @@ export function QueueItemRow({
                 start.isPending
               }
               onClick={() => {
+                // Metadata auto-fetch now lives backend-side (post-download, via
+                // `ensure_metadata_cached`) — no frontend trigger needed on Start.
                 void start.mutateAsync(item.id);
-                fetchMetadataOnStart();
               }}
             >
               <i
@@ -527,12 +492,12 @@ export function QueueItemRow({
               className="stdbtn"
               style={ICON_BUTTON_STYLE}
               disabled={
-                !metadataPlugin || item.state === "done" || fetchingMetadata
+                !metadataPlugin || item.state === "done" || fetchMetadata.isPending
               }
               onClick={() => void handleFetchMetadata()}
             >
               <i
-                className={`fa ${fetchingMetadata ? "fa-spinner fa-spin" : "fa-tags"}`}
+                className={`fa ${fetchMetadata.isPending ? "fa-spinner fa-spin" : "fa-tags"}`}
                 aria-hidden="true"
               ></i>
             </button>

@@ -226,15 +226,14 @@ export function Upload() {
             onPaste={(e) => {
               const raw = e.clipboardData.getData("text")
               if (!raw.trim()) return
-              // 无换行 → 识别分隔符转成换行；有换行 → 原样保留
+              // 无换行 → 识别分隔符转成换行；有换行 → 原样保留；单条 URL 原样保留
               let insert: string
               if (raw.includes("\n")) {
                 insert = raw
               } else {
                 const sep = raw.includes(",") ? /,\s*/ : /\s+/
                 const lines = raw.trim().split(sep).filter(Boolean)
-                if (lines.length <= 1) return
-                insert = lines.join("\n")
+                insert = lines.length <= 1 ? raw.trim() : lines.join("\n")
               }
               // 末尾无空行时追加一个
               if (!insert.endsWith("\n\n")) insert = insert.replace(/\n?$/, "\n")

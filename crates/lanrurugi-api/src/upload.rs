@@ -144,7 +144,12 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
         })
         .await
     {
-        Ok(item) => item,
+        Ok(item) => {
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({ "kind": "add", "item": item }));
+            }
+            item
+        }
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e.to_string()),
     };
 
@@ -179,6 +184,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
     if let Err(e) = tokio::fs::write(&staging_path, &bytes).await {
         update_queue_item_state(
             &state.download_queue,
+            state.download_queue_tx.as_ref(),
             &queue_item.id,
             DownloadQueueState::Error,
             None,
@@ -242,6 +248,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
 
             update_queue_item_state(
                 &state.download_queue,
+                state.download_queue_tx.as_ref(),
                 &queue_item.id,
                 DownloadQueueState::Done,
                 None,
@@ -271,6 +278,7 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
             let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
             update_queue_item_state(
                 &state.download_queue,
+                state.download_queue_tx.as_ref(),
                 &queue_item.id,
                 DownloadQueueState::Error,
                 None,
@@ -320,33 +328,34 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// Scoped to `temp_dir/resize_page/` only (the reader's WebP resize cache — see
+/// `archives.rs::resize_cache_path`) — a plain "delete everything under `temp_dir`" (legacy's own
+/// behavior, which has no equivalent of this app's persisted download-queue staging) would also
+/// wipe `temp_dir/temp_*` files backing an unresolved `PendingFilenameConflict`: bytes a user
+/// hasn't yet chosen "overwrite" or "rename and catalog" for on the Upload page. Those have their
+/// own age-based sweep (`ingest::sweep_stale_pending_renames`) and must survive an admin clicking
+/// "Clear Cache" for unrelated reasons.
 async fn clean_tempfolder(State(state): State<AppState>) -> Response {
     let mut newsize: u64 = 0;
     let mut error_msg: Option<String> = None;
 
-    let mut entries = match tokio::fs::read_dir(&state.library.temp_dir).await {
-        Ok(e) => e,
-        Err(e) => {
-            return axum::Json(json!({
-                "operation": "cleantemp",
-                "success": 1,
-                "error": e.to_string(),
-                "newsize": 0,
-            }))
-            .into_response()
+    let resize_cache_dir = state.library.temp_dir.join("resize_page");
+    match tokio::fs::read_dir(&resize_cache_dir).await {
+        Ok(mut entries) => {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                let result = if path.is_dir() {
+                    tokio::fs::remove_dir_all(&path).await
+                } else {
+                    tokio::fs::remove_file(&path).await
+                };
+                if let Err(e) = result {
+                    error_msg = Some(e.to_string());
+                }
+            }
         }
-    };
-
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let result = if path.is_dir() {
-            tokio::fs::remove_dir_all(&path).await
-        } else {
-            tokio::fs::remove_file(&path).await
-        };
-        if let Err(e) = result {
-            error_msg = Some(e.to_string());
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => error_msg = Some(e.to_string()),
     }
 
     if let Ok(mut remaining) = tokio::fs::read_dir(&state.library.temp_dir).await {

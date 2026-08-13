@@ -816,3 +816,12 @@ div.id4 {
   background: rgba(46, 125, 50, 0.35);
   border-radius: 4px;
 }
+
+/* Reader file-info bar: served-optimized segment (this theme's "good" green) */
+.file-info-opt {
+  color: #66bb6a;
+}
+/* ... and the original-entry segment (warning red) */
+.file-info-orig {
+  color: #ef5350;
+}

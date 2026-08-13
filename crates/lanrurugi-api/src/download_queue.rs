@@ -28,6 +28,10 @@ pub fn router() -> Router<AppState> {
             "/download_queue/{id}",
             patch(update_queue_item).delete(delete_queue_item),
         )
+        .route(
+            "/download_queue/{id}/fetch-metadata",
+            post(fetch_queue_item_metadata),
+        )
         .route("/download_queue/{id}/start", post(start_queue_item))
         .route("/download_queue/{id}/stop", post(stop_queue_item))
         .route("/download_queue/{id}/overwrite", post(overwrite_queue_item))
@@ -60,7 +64,18 @@ pub fn router() -> Router<AppState> {
 /// broadcast by `update_queue_item_state` after each successful Redis write. The first event is
 /// `full` with the current complete list so the client can bootstrap without a separate HTTP GET.
 async fn queue_stream(State(state): State<AppState>) -> Response {
-    // First message: full current state.
+    let Some(tx) = &state.download_queue_tx else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "queue_stream",
+            "SSE not available",
+        );
+    };
+    // Subscribe BEFORE reading the initial list — a delta broadcast in the gap between
+    // `list_all` and `subscribe` would otherwise be missed by this client forever (until
+    // the next delta/lag). With subscribe-first, that delta just sits buffered in `rx`
+    // and is delivered right after the `full` event, on top of an already-consistent list.
+    let rx = tx.subscribe();
     let initial = match state.download_queue.list_all().await {
         Ok(items) => serde_json::json!({ "type": "full", "items": items }),
         Err(_) => serde_json::json!({ "type": "full", "items": [] }),
@@ -69,24 +84,34 @@ async fn queue_stream(State(state): State<AppState>) -> Response {
         .event("full")
         .data(serde_json::to_string(&initial).unwrap_or_default());
 
-    let Some(tx) = &state.download_queue_tx else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "queue_stream",
-            "SSE not available",
-        );
-    };
-    let rx = tx.subscribe();
-    let delta_stream = BroadcastStream::new(rx).filter_map(|result| async move {
-        match result {
-            Ok(event) => {
-                let sse_event: Event = Event::default().event("delta").data(
-                    serde_json::to_string(&serde_json::json!({ "type": "delta", "item": event }))
+    let queue_repo = state.download_queue.clone();
+    let delta_stream = BroadcastStream::new(rx).filter_map(move |result| {
+        let queue_repo = queue_repo.clone();
+        async move {
+            match result {
+                Ok(event) => {
+                    let sse_event: Event = Event::default().event("delta").data(
+                        serde_json::to_string(
+                            &serde_json::json!({ "type": "delta", "item": event }),
+                        )
                         .unwrap_or_default(),
-                );
-                Some(Ok::<_, std::convert::Infallible>(sse_event))
+                    );
+                    Some(Ok::<_, std::convert::Infallible>(sse_event))
+                }
+                // Client fell behind the broadcast buffer — resend the full list instead of
+                // silently skipping, so the client can't end up with stale items forever.
+                // (`Closed` isn't a variant — the stream just ends once the sender drops.)
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                    let full = match queue_repo.list_all().await {
+                        Ok(items) => serde_json::json!({ "type": "full", "items": items }),
+                        Err(_) => serde_json::json!({ "type": "full", "items": [] }),
+                    };
+                    let sse_event: Event = Event::default()
+                        .event("full")
+                        .data(serde_json::to_string(&full).unwrap_or_default());
+                    Some(Ok::<_, std::convert::Infallible>(sse_event))
+                }
             }
-            Err(_) => None,
         }
     });
 
@@ -94,6 +119,34 @@ async fn queue_stream(State(state): State<AppState>) -> Response {
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+/// `POST /download_queue/{id}/fetch-metadata` — the "Fetch Metadata" button's backend path. Runs
+/// the same plugin-`execMetadata` + `metadata_preview`-cache logic the post-download auto-fetch
+/// uses (`plugins::ensure_metadata_cached`), so a manual preview and the automatic one share one
+/// code path (and one 10-min TTL) instead of the frontend calling `POST /plugins/use` itself.
+async fn fetch_queue_item_metadata(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("fetch_queue_item_metadata", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "fetch_queue_item_metadata",
+                e.to_string(),
+            )
+        }
+    };
+    match crate::plugins::ensure_metadata_cached(&state, &mut item).await {
+        Some(preview) => {
+            axum::Json(json!({ "success": 1, "metadata_preview": preview })).into_response()
+        }
+        None => axum::Json(json!({ "success": 0, "error": "no matching metadata plugin found" }))
+            .into_response(),
+    }
 }
 
 async fn list_queue(State(state): State<AppState>) -> Response {
@@ -146,7 +199,12 @@ async fn add_to_queue(State(state): State<AppState>, body: axum::Json<AddQueueBo
                 })
                 .await
             {
-                Ok(saved) => added.push(saved),
+                Ok(saved) => {
+                    if let Some(tx) = &state.download_queue_tx {
+                        let _ = tx.send(serde_json::json!({ "kind": "add", "item": saved }));
+                    }
+                    added.push(saved);
+                }
                 Err(e) => rejected.push(json!({ "url": item.url, "reason": e.to_string() })),
             },
             Err(_) => rejected.push(json!({
@@ -207,7 +265,21 @@ async fn update_queue_item(
     }
 
     match state.download_queue.update(&item).await {
-        Ok(()) => axum::Json(json!({ "item": item })).into_response(),
+        Ok(()) => {
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({
+                    "kind": "update",
+                    "id": &item.id,
+                    "state": &item.state,
+                    "job_id": &item.job_id,
+                    "archive_ids": &item.archive_ids,
+                    "title": &item.title,
+                    "metadata_preview": &item.metadata_preview,
+                    "error": &item.error,
+                }));
+            }
+            axum::Json(json!({ "item": item })).into_response()
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "update_download_queue_item",
@@ -259,7 +331,12 @@ async fn delete_queue_item(State(state): State<AppState>, Path(id): Path<String>
     }
 
     match state.download_queue.delete(&id).await {
-        Ok(()) => ok("delete_download_queue_item", []),
+        Ok(()) => {
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({ "kind": "remove", "id": &id }));
+            }
+            ok("delete_download_queue_item", [])
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "delete_download_queue_item",
@@ -389,6 +466,9 @@ async fn delete_selected(
             }
         }
         if state.download_queue.delete(id).await.is_ok() {
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
+            }
             deleted.push(id.clone());
         }
     }
@@ -1893,8 +1973,10 @@ async fn resolve_conflict(
                     tracing::warn!(%id, error = %e, "failed to update download-queue item after resolving filename conflict");
                 } else if let Some(tx) = &state.download_queue_tx {
                     let _ = tx.send(serde_json::json!({
+                        "kind": "update",
                         "id": id,
                         "state": "done",
+                        "job_id": &fresh.job_id,
                         "archive_ids": &fresh.archive_ids,
                         "title": &fresh.title,
                         "metadata_preview": &fresh.metadata_preview,
@@ -1989,6 +2071,11 @@ async fn clear_completed(State(state): State<AppState>) -> Response {
             "clear_completed_download_queue",
             e.to_string(),
         );
+    }
+    if let Some(tx) = &state.download_queue_tx {
+        for id in &ids {
+            let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
+        }
     }
     ok(
         "clear_completed_download_queue",

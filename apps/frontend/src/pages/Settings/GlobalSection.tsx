@@ -184,10 +184,7 @@ export function GlobalSection({
             onChange={setEnableresize}
             label={t("Resize Images in Reader")}
           >
-            {t("If enabled, pages exceeding a certain size will be resized when viewed to save bandwidth.")}
-            <br />
-            <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
-            {t("This option can potentially consume a lot of RAM if enabled and used on large images! Use with caution.")}
+            {t("Pages over the size threshold below are re-encoded to WebP when viewed. A page whose short edge exceeds 1064px is also downscaled to 1064px.")}
           </CheckboxRow>
           {enableresize && (
             <>
@@ -201,7 +198,7 @@ export function GlobalSection({
                   onChange={(e) => setSizethreshold(Number(e.target.value))}
                 />
                 <br />
-                {t("(in KBs.) Maximum size an image can reach before being resized.")}
+                {t("(in KBs.) Maximum raw size an image can reach before being re-encoded. Default: 1536 KB (1.5 MB).")}
               </Row>
               <Row label={t("Resize Quality")}>
                 <input
@@ -215,7 +212,7 @@ export function GlobalSection({
                   onChange={(e) => setReaderquality(Number(e.target.value))}
                 />
                 <br />
-                {t("Quality of the resized images. Less quality = Smaller image. (0-100)")}
+                {t("WebP quality of the re-encoded images. Less quality = smaller image. (0-100) Default: 85.")}
               </Row>
             </>
           )}

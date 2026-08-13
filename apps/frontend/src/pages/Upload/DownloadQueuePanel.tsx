@@ -9,12 +9,11 @@ import {
   useJobs,
   useSettings,
   useStartSelectedQueue,
-  useUpdateQueueItem,
 } from "@/api/hooks"
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
 import { CollapsibleSection } from "@/components/Display"
 
-import { fetchMetadataForItem,QueueItemRow } from "./QueueItemRow"
+import { QueueItemRow } from "./QueueItemRow"
 import {
   findMatchingPlugin,
   LOCAL_UPLOAD_NAMESPACE,
@@ -40,7 +39,6 @@ export function DownloadQueuePanel({
   const startSelected = useStartSelectedQueue()
   const deleteSelected = useDeleteSelectedQueue()
   const clearCompleted = useClearCompletedQueue()
-  const updateForBatchMetadata = useUpdateQueueItem()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const items = useMemo(() => queue.data ?? [], [queue.data])
   // Auto-select freshly-added queue items ("添加到队列" then straight to "开始" without having to
@@ -201,14 +199,8 @@ export function DownloadQueuePanel({
             const selectedIds = [...effectiveSelected]
             await startSelected.mutateAsync(selectedIds)
             setSelected(new Set())
-            // Same fire-alongside-the-download behavior as the single-row Start button's
-            // `fetchMetadataOnStart` — fire-and-forget per item so one slow/failed fetch never
-            // delays the others.
-            for (const id of selectedIds) {
-              const item = items.find((i) => i.id === id)
-              if (!item) continue
-              void fetchMetadataForItem(item, findMatchingPlugin(metadataPlugins, item.url), updateForBatchMetadata)
-            }
+            // Metadata auto-fetch now lives backend-side (post-download, via
+            // `ensure_metadata_cached`) — no frontend fire-and-forget loop needed.
           }}
         >
           {t("Start ({{n}})", { n: effectiveSelected.size })}

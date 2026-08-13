@@ -190,8 +190,19 @@ impl AppState {
 pub type ThumbnailSingleflight =
     lanrurugi_core::singleflight::Singleflight<String, Option<(&'static str, bytes::Bytes)>>;
 
+/// `fetch_page`'s result — `resized` marks the optimized-WebP variant, and `orig_*` carry the
+/// original entry's own size/dimensions (surfaced as response headers so the reader's file-info
+/// bar can show "current WebP vs original" without a second request or decode).
+#[derive(Clone)]
+pub struct FetchedPage {
+    pub content_type: &'static str,
+    pub bytes: bytes::Bytes,
+    pub resized: bool,
+    pub orig_size: u64,
+    pub orig_width: u32,
+    pub orig_height: u32,
+}
+
 /// See [`AppState::page_singleflight`].
-pub type PageSingleflight = lanrurugi_core::singleflight::Singleflight<
-    (String, String),
-    Result<(&'static str, bytes::Bytes), String>,
->;
+pub type PageSingleflight =
+    lanrurugi_core::singleflight::Singleflight<(String, String), Result<FetchedPage, String>>;

@@ -25,6 +25,7 @@ use sha1::{Digest, Sha1};
 
 use crate::common::{error, not_found, ok};
 use crate::settings::{DEFAULT_READER_QUALITY, DEFAULT_SIZE_THRESHOLD};
+use crate::state::FetchedPage;
 use crate::AppState;
 use lanrurugi_storage::id::ARCHIVE_ID_LEN;
 use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
@@ -1180,12 +1181,20 @@ pub struct PageParams {
     /// the archive file, as before patches existed."
     #[serde(default)]
     source: Option<String>,
+    /// `"1"`/`"true"` explicitly asks for the resize-optimized WebP version (`/files` sets this on
+    /// every URL it generates when `enableresize` is on) — the URL is the contract here, so the
+    /// browser caches the original and optimized variants as distinct resources. Absent means
+    /// "serve the original bytes" (reader "view original" affordances and non-reader callers).
+    #[serde(default)]
+    optimize: Option<String>,
 }
 
-/// `<temp_dir>/resize_page/<id>/<sha1(path)>_<threshold>_<quality>.jpg` — matches legacy's own
+/// `<temp_dir>/resize_page/<id>/<sha1(path)>_<threshold>_<quality>.webp` — matches legacy's own
 /// `resize_page/$id/$path/$threshold/$quality` cache key (`Model/Archive.pm::serve_page`), with
 /// the in-archive `path` component sha1-hashed rather than embedded verbatim so a path containing
-/// `/`, `..`, or other filesystem-unsafe characters can't affect the cache file's location.
+/// `/`, `..`, or other filesystem-unsafe characters can't affect the cache file's location. A
+/// `<same name>.dims` sidecar ("WxH") records the original dimensions at encode time so a cache
+/// hit can still report them without re-decoding the original.
 fn resize_cache_path(
     temp_dir: &std::path::Path,
     id: &str,
@@ -1199,7 +1208,7 @@ fn resize_cache_path(
     temp_dir
         .join("resize_page")
         .join(id)
-        .join(format!("{path_hash}_{threshold}_{quality}.jpg"))
+        .join(format!("{path_hash}_{threshold}_{quality}.webp"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -1212,9 +1221,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Reader resize (legacy `enable_resize`/`Model/Archive.pm::serve_page`): pages over
-/// `sizethreshold` KB get downscaled/recompressed to JPEG at `readerquality` and cached under
-/// `temp_dir`, rather than served as their original bytes every time. Disabled by default
-/// (`enableresize = false`), matching legacy's own default.
+/// `sizethreshold` KB get downscaled/recompressed to WebP at `readerquality` and cached under
+/// `temp_dir`, rather than served as their original bytes every time. Enabled by default
+/// (`enableresize = true` — WebP re-encode is cheap enough that the old JPEG-era caution no
+/// longer applies).
 ///
 /// The actual archive read (and optional resize) is collapsed through
 /// [`AppState::page_singleflight`], keyed by `(id, entry path)` — the reader requests several
@@ -1242,14 +1252,16 @@ async fn get_page(
     };
 
     let is_patch = params.source.as_deref() == Some("patch");
-    // Singleflight key includes a `patch:`/`orig:` prefix on the path component — a patch page and
-    // an original page can legitimately share the same entry *name* (they live in two separate
-    // zips), so the plain path alone isn't a unique key across the two sources.
-    let cache_key_path = if is_patch {
-        format!("patch:{}", params.path)
-    } else {
-        format!("orig:{}", params.path)
-    };
+    let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
+    // Singleflight key includes the `patch:`/`orig:` prefix and the optimize flag — a patch page
+    // and an original page can legitimately share the same entry *name* (they live in two separate
+    // zips), and the optimized variant is a distinct resource from the original bytes.
+    let cache_key_path = format!(
+        "{}:{}{}",
+        if is_patch { "patch" } else { "orig" },
+        params.path,
+        if optimize { ":opt" } else { "" },
+    );
     let result = state
         .page_singleflight
         .run((id.to_string(), cache_key_path), {
@@ -1266,6 +1278,7 @@ async fn get_page(
                     &archive_file,
                     &corrupted_pages,
                     is_patch,
+                    optimize,
                 )
                 .await
             }
@@ -1273,8 +1286,35 @@ async fn get_page(
         .await;
 
     match result {
-        Ok((content_type, bytes)) => {
-            ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
+        Ok(page) => {
+            let mut header_map = header::HeaderMap::new();
+            header_map.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static(page.content_type),
+            );
+            if page.resized {
+                // Lets the reader's file-info bar show "converted WebP" vs the original entry
+                // (the URL's own `path` still carries the original name — e.g. `foo.png` — which
+                // is the page's identity in the archive, not a claim about the served format).
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-resized"),
+                    header::HeaderValue::from_static("webp"),
+                );
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-original-size"),
+                    header::HeaderValue::from_str(&page.orig_size.to_string())
+                        .unwrap_or(header::HeaderValue::from_static("0")),
+                );
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-original-dimensions"),
+                    header::HeaderValue::from_str(&format!(
+                        "{}x{}",
+                        page.orig_width, page.orig_height
+                    ))
+                    .unwrap_or(header::HeaderValue::from_static("0x0")),
+                );
+            }
+            (header_map, page.bytes).into_response()
         }
         Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, "serve_page", msg),
     }
@@ -1295,7 +1335,8 @@ async fn fetch_page(
     archive_file: &str,
     corrupted_pages: &[String],
     is_patch: bool,
-) -> Result<(&'static str, bytes::Bytes), String> {
+    optimize: bool,
+) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
         let entry_name = path.to_string();
@@ -1308,7 +1349,14 @@ async fn fetch_page(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-        return Ok((image_content_type(&raw), bytes::Bytes::from(raw)));
+        return Ok(FetchedPage {
+            content_type: image_content_type(&raw),
+            bytes: bytes::Bytes::from(raw.clone()),
+            resized: false,
+            orig_size: raw.len() as u64,
+            orig_width: 0,
+            orig_height: 0,
+        });
     }
 
     // Short-circuits before any archive I/O — a page already known to be corrupt (flagged by
@@ -1317,10 +1365,14 @@ async fn fetch_page(
     // from the same `Archive` fetch `get_page` already did (not a second Redis round trip here).
     // See `Archive::corrupted_pages`'s own docs for why this is keyed by entry name, not index.
     if corrupted_pages.iter().any(|p| p == path) {
-        return Ok((
-            "image/svg+xml",
-            bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
-        ));
+        return Ok(FetchedPage {
+            content_type: "image/svg+xml",
+            bytes: bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+            resized: false,
+            orig_size: 0,
+            orig_width: 0,
+            orig_height: 0,
+        });
     }
 
     // `read_entry` does blocking libarchive FFI + file IO (constitution Principle III: never run
@@ -1344,9 +1396,6 @@ async fn fetch_page(
         .get("enableresize")
         .map(|v| v != "0")
         .unwrap_or(false);
-    if !enable_resize {
-        return Ok((image_content_type(&raw), bytes::Bytes::from(raw)));
-    }
     let threshold: i64 = fields
         .get("sizethreshold")
         .and_then(|v| v.parse().ok())
@@ -1356,22 +1405,109 @@ async fn fetch_page(
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
 
-    let cache_path = resize_cache_path(&state.library.temp_dir, id, path, threshold, quality);
-    if let Ok(cached) = tokio::fs::read(&cache_path).await {
-        return Ok(("image/jpeg", bytes::Bytes::from(cached)));
+    let content_type = image_content_type(&raw);
+    // Formats browsers render natively — BMP included (Chrome/Firefox/Edge all decode it; it just
+    // wastes bandwidth, so it still goes through the *threshold-based* resize path like any other
+    // renderable format). Everything else (TIFF/unknown — Safari-only TIFF aside, no mainstream
+    // browser) gets a *forced* WebP conversion under `optimize=1`, regardless of the resize
+    // setting, since serving those bytes as-is would just show a broken image. A client-side
+    // `img.onError` retry in the reader covers any format this list misses per-browser.
+    let renderable = matches!(
+        content_type,
+        "image/jpeg"
+            | "image/png"
+            | "image/gif"
+            | "image/webp"
+            | "image/avif"
+            | "image/svg+xml"
+            | "image/bmp"
+    );
+    let force_convert = !renderable;
+
+    // `optimize` is the per-request contract (set by `/files`'s own generated URLs); without it,
+    // serve the original bytes. A renderable page with resize disabled also passes through.
+    if !optimize || (!enable_resize && renderable) {
+        return Ok(FetchedPage {
+            content_type,
+            bytes: bytes::Bytes::from(raw.clone()),
+            resized: false,
+            orig_size: raw.len() as u64,
+            orig_width: 0,
+            orig_height: 0,
+        });
     }
 
-    match lanrurugi_scanner::resize::resize_if_over_threshold(raw.clone(), quality as u8, threshold)
-        .await
-    {
-        Ok(Some(resized)) => {
+    // Byte-size check first (no decode needed) — under-threshold *renderable* pages pass through
+    // untouched; a forced conversion skips this gate entirely.
+    if !force_convert && (raw.len() / 1024) as i64 <= threshold {
+        return Ok(FetchedPage {
+            content_type,
+            bytes: bytes::Bytes::from(raw.clone()),
+            resized: false,
+            orig_size: raw.len() as u64,
+            orig_width: 0,
+            orig_height: 0,
+        });
+    }
+
+    let cache_path = resize_cache_path(&state.library.temp_dir, id, path, threshold, quality);
+    // Cache hit: the webp bytes plus the `.dims` sidecar (original "WxH") written at encode
+    // time — no re-decode of the original needed. A missing sidecar (older cache entry) just
+    // degrades to zero dims in the headers.
+    if let Ok(cached) = tokio::fs::read(&cache_path).await {
+        let dims = tokio::fs::read_to_string(cache_path.with_extension("webp.dims"))
+            .await
+            .ok()
+            .and_then(|s| {
+                let (w, h) = s.trim().split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            });
+        return Ok(FetchedPage {
+            content_type: "image/webp",
+            bytes: bytes::Bytes::from(cached),
+            resized: true,
+            orig_size: raw.len() as u64,
+            orig_width: dims.map(|d| d.0).unwrap_or(0),
+            orig_height: dims.map(|d| d.1).unwrap_or(0),
+        });
+    }
+
+    let converted = if force_convert {
+        lanrurugi_scanner::resize::convert_to_webp(raw.clone(), quality as u8)
+            .await
+            .map(Some)
+    } else {
+        lanrurugi_scanner::resize::resize_if_over_threshold(raw.clone(), quality as u8, threshold)
+            .await
+    };
+    match converted {
+        Ok(Some((resized, orig_width, orig_height))) => {
             if let Some(parent) = cache_path.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
             let _ = tokio::fs::write(&cache_path, &resized).await;
-            Ok(("image/jpeg", bytes::Bytes::from(resized)))
+            let _ = tokio::fs::write(
+                cache_path.with_extension("webp.dims"),
+                format!("{orig_width}x{orig_height}"),
+            )
+            .await;
+            Ok(FetchedPage {
+                content_type: "image/webp",
+                bytes: bytes::Bytes::from(resized),
+                resized: true,
+                orig_size: raw.len() as u64,
+                orig_width,
+                orig_height,
+            })
         }
-        Ok(None) => Ok((image_content_type(&raw), bytes::Bytes::from(raw))),
+        Ok(None) => Ok(FetchedPage {
+            content_type: image_content_type(&raw),
+            bytes: bytes::Bytes::from(raw.clone()),
+            resized: false,
+            orig_size: raw.len() as u64,
+            orig_width: 0,
+            orig_height: 0,
+        }),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1397,6 +1533,15 @@ pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
         "image/webp"
     } else if &raw[..2] == b"BM" {
         "image/bmp"
+    } else if raw.len() >= 12
+        && &raw[4..8] == b"ftyp"
+        && (&raw[8..12] == b"avif" || &raw[8..12] == b"avis")
+    {
+        "image/avif"
+    } else if (&raw[..4] == b"II*\0") || (&raw[..4] == b"MM\0*") {
+        "image/tiff"
+    } else if raw.starts_with(b"<svg") || raw.starts_with(b"<?xml") {
+        "image/svg+xml"
     } else {
         "application/octet-stream"
     }
@@ -1429,6 +1574,11 @@ async fn get_files(
         }
     };
     let archive_path = std::path::Path::new(&archive.file);
+    // `optimize=1` is stamped on every generated URL — the reader then gets the WebP variant
+    // where `fetch_page` decides it's warranted (setting-enabled + over-threshold, or a format
+    // browsers can't render at all), while a caller hitting the same URL without the param gets
+    // the original bytes.
+    let opt_suffix = "&optimize=1";
     match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
             let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &pages);
@@ -1436,10 +1586,10 @@ async fn get_files(
                 .iter()
                 .map(|p| match p {
                     lanrurugi_scanner::patch::EffectivePage::Original(name) => {
-                        json!({ "url": format!("/api/archives/{id}/page?path={name}"), "is_patch": false })
+                        json!({ "url": format!("/api/archives/{id}/page?path={name}{opt_suffix}"), "is_patch": false })
                     }
                     lanrurugi_scanner::patch::EffectivePage::Patched(name) => {
-                        json!({ "url": format!("/api/archives/{id}/page?path={name}&source=patch"), "is_patch": true })
+                        json!({ "url": format!("/api/archives/{id}/page?path={name}&source=patch{opt_suffix}"), "is_patch": true })
                     }
                 })
                 .collect();

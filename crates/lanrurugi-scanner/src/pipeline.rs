@@ -200,6 +200,14 @@ pub struct IngestOptions<'a> {
     /// content download is expected there and should auto-rename around rather than reject), so it
     /// sets `intended_filename: None` but still needs a real name for `title_filename`.
     pub title_filename: Option<&'a str>,
+    /// When `true`, a newly catalogued archive's `file` field is written EMPTY instead of
+    /// `path` — for callers that ingest a *staged* file which will only be moved to its final
+    /// `archive_dir` location afterward (download/upload ingest). The caller must fill `file`
+    /// in after the move; if it never does (crash mid-way), the record shows an empty path
+    /// rather than a dangling temp path whose bytes get swept — see `download_manager::ingest`'s
+    /// fixup + the startup zombie-repair sweep in `main.rs`. The watcher path leaves this
+    /// `false` (`path` IS already final there).
+    pub defer_file_path: bool,
 }
 
 impl<'a> IngestOptions<'a> {
@@ -209,6 +217,7 @@ impl<'a> IngestOptions<'a> {
             duplicate_policy,
             intended_filename: Some(name),
             title_filename: Some(name),
+            defer_file_path: false,
         }
     }
 }
@@ -228,6 +237,7 @@ pub async fn ingest_file_with_policy(
         duplicate_policy,
         intended_filename,
         title_filename,
+        defer_file_path,
     } = options;
 
     let id = ArchiveId(size_aware_id(path)?);
@@ -304,6 +314,7 @@ pub async fn ingest_file_with_policy(
     let catalogue_settings = CatalogueSettings {
         thumb: crate::thumbnail::read_settings(&mut config_conn).await,
         date_added: read_date_added_settings(&mut config_conn).await,
+        defer_file_path,
     };
     catalogue_new_archive(
         archives,
@@ -331,6 +342,9 @@ struct DateAddedSettings {
 struct CatalogueSettings {
     thumb: crate::thumbnail::ThumbSettings,
     date_added: DateAddedSettings,
+    /// See [`IngestOptions::defer_file_path`]'s own docs — record gets an empty `file`,
+    /// filled in later by the caller once the staged file reaches its final path.
+    defer_file_path: bool,
 }
 
 /// Reads the live `usedateadded`/`usedatemodified` values from the same `LRR_CONFIG` hash
@@ -412,6 +426,7 @@ async fn catalogue_new_archive(
     let CatalogueSettings {
         thumb: thumb_settings,
         date_added: date_added_settings,
+        defer_file_path,
     } = settings;
     // `title_filename` (when given) is the archive's real, destination-facing basename — used
     // in preference to `path`'s own basename since a caller staging a file under a disposable temp
@@ -472,7 +487,15 @@ async fn catalogue_new_archive(
         id: id.clone(),
         name: name.clone(),
         title: name,
-        file: path.to_string_lossy().to_string(),
+        // `defer_file_path` callers (download/upload ingest of a *staged* file) get an empty
+        // `file` here and fill it in after the move to `archive_dir` — never the staging path
+        // itself, whose bytes get swept and would leave a dangling record (see
+        // `IngestOptions::defer_file_path`'s own docs).
+        file: if defer_file_path {
+            String::new()
+        } else {
+            path.to_string_lossy().to_string()
+        },
         tags,
         summary: String::new(),
         arcsize,

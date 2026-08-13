@@ -29,7 +29,7 @@ import { useTankoubonReading } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
 import { getTagSearchURL } from "@/lib/tagFormat"
 import { fileInfoText } from "@/lib/utils/fileInfoText"
-import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
+import { fetchContentLengthKb, fetchResizedPageInfo, type ResizedPageInfo } from "@/lib/utils/imageMeta"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
@@ -179,6 +179,8 @@ export function Reader() {
   const [widespreads, setWidespreads] = useState<Record<number, boolean>>({})
   const [pageDimensions, setPageDimensions] = useState<Record<number, { width: number; height: number }>>({})
   const [pageSizesKb, setPageSizesKb] = useState<Record<number, number>>({})
+  // `null` = checked, not converted; `undefined` = not checked yet (see `onImageLoad`).
+  const [resizedPageInfo, setResizedPageInfo] = useState<Record<number, ResizedPageInfo | null>>({})
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false)
   const [navState, setNavState] = useState<ArchiveNavState>({ ids: [], index: -1 })
   // Resuming a slideshow across an archive boundary (legacy stashes this in `sessionStorage`
@@ -419,17 +421,16 @@ export function Reader() {
       lastSpreadHeightRef.current = imageAreaRef.current.getBoundingClientRect().height
     }
     setPageOverride(next)
-    // Legacy's own `goToPage` (reader.js) ends every non-infinite-scroll page change with a
-    // plain, instant `window.scrollTo(0, 0)` — verified against the real source, not a smooth
-    // scroll. A page tall enough to have been scrolled (a long strip page, a zoomed-in fit mode,
-    // a short viewport) would otherwise leave a turn landing wherever the previous page's scroll
-    // position happened to be, instead of the new page's own title/nav bar at `#i2` starting
-    // visible from the top. Infinite-scroll mode is excluded, matching legacy's own `if
-    // (infiniteScroll) { ... } else { ...; window.scrollTo(0, 0); }` branch — there every page
-    // shares one continuously-scrolling document, and `selectPage`'s own `scrollIntoView` (not
-    // this) is what "jump to page N" means there.
+    // A page tall enough to have been scrolled (a long strip page, a zoomed-in fit mode, a short
+    // viewport) would otherwise leave a turn landing wherever the previous page's scroll position
+    // happened to be, instead of the new page's own title/nav bar at `#i2` starting visible from
+    // the top. Legacy scrolls here instantly; smooth is a deliberate deviation (user-requested —
+    // an instant jump reads as jarring next to the reader's other smoothed motion). Infinite-scroll
+    // mode is excluded, matching legacy's own `if (infiniteScroll) { ... }` branch — there every
+    // page shares one continuously-scrolling document, and `selectPage`'s own `scrollIntoView`
+    // (not this) is what "jump to page N" means there.
     if (!readerSettings.infiniteScroll) {
-      window.scrollTo(0, 0)
+      window.scrollTo({ top: 0, behavior: "smooth" })
     }
   }
 
@@ -553,11 +554,24 @@ export function Reader() {
     if (readerSettings.infiniteScroll) {
       document.querySelector(`[data-page="${page}"]`)?.scrollIntoView({ block: "start" })
     } else {
-      // Same as `goTo`'s own scroll-to-top — legacy's `goToPage` is the single shared landing
-      // point every page-jump path (Next/Prev, the overview thumbnail grid, the page-number
-      // input) funnels through, verified against the real source.
-      window.scrollTo(0, 0)
+      // Same smooth scroll-to-top as `goTo` — every page-jump path (Next/Prev, the overview
+      // thumbnail grid, the page-number input) funnels through legacy's `goToPage` semantics,
+      // just smoothed (deliberate deviation, see `goTo`'s own docs).
+      window.scrollTo({ top: 0, behavior: "smooth" })
     }
+  }
+
+  // The browser's own decode failure is the ground truth for "this format isn't renderable" —
+  // more precise than the server's magic-byte list (per-browser AVIF/TIFF support varies). On a
+  // failed load, retry the same URL with `&optimize=1` once; a URL already carrying the param
+  // (or with no `path` to key the server-side conversion on) is left alone to fail naturally.
+  function onImageError(e: React.SyntheticEvent<HTMLImageElement>) {
+    const img = e.currentTarget
+    if (img.src.includes("optimize=1")) return
+    const parsed = new URL(img.src)
+    if (!parsed.searchParams.has("path")) return
+    parsed.searchParams.set("optimize", "1")
+    img.src = parsed.toString()
   }
 
   function onImageLoad(page: number, e: React.SyntheticEvent<HTMLImageElement>) {
@@ -571,6 +585,11 @@ export function Reader() {
     if (pageSizesKb[page] === undefined) {
       void fetchContentLengthKb(img.src).then((kb) => {
         if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }))
+      })
+    }
+    if (resizedPageInfo[page] === undefined) {
+      void fetchResizedPageInfo(img.src).then((info) => {
+        setResizedPageInfo((prev) => ({ ...prev, [page]: info }))
       })
     }
   }
@@ -1326,9 +1345,37 @@ export function Reader() {
       pageSizesKb[spread.right] !== undefined
   if (isFileInfoReady) lastFileInfoRef.current = currentFileInfo
   const displayedFileInfo = isFileInfoReady ? currentFileInfo : (lastFileInfoRef.current ?? currentFileInfo)
+  // Single-page + converted-to-WebP: render the info bar as two colored segments — the served
+  // variant (theme "good" green) first, then the original entry's own format/dimensions/size
+  // (theme "warning" red) plus how much the optimization shaved off. Spreads and unconverted
+  // pages keep the legacy plain-text line above.
+  const leftResizeInfo = spread.right === null ? resizedPageInfo[spread.left] : undefined
+  const pageEntryName = pages.data
+    ? (new URL(pages.data.pages[spread.left - 1].url, window.location.origin).searchParams.get("path") ?? "")
+    : ""
+  const servedKb = spread.right === null ? pageSizesKb[spread.left] : undefined
+  const leftDims = spread.right === null ? pageDimensions[spread.left] : undefined
+  let resizedFileInfo: React.ReactNode | null = null
+  if (leftResizeInfo && servedKb !== undefined && leftDims) {
+    const origKb = leftResizeInfo.origSizeBytes / 1024
+    const origSizeText = origKb >= 1024 ? `${(origKb / 1024).toFixed(1)} MB` : `${Math.round(origKb)} KB`
+    const savedPct = Math.max(0, Math.round((1 - (servedKb * 1024) / leftResizeInfo.origSizeBytes) * 100))
+    resizedFileInfo = (
+      <>
+        <span className="file-info-opt">
+          {pageEntryName} → WebP :: {leftDims.width} x {leftDims.height} :: {servedKb} KB
+        </span>
+        {" · "}
+        <span className="file-info-orig">
+          {t("Original")}: {pageEntryName.split(".").pop()} {leftResizeInfo.origWidth} x {leftResizeInfo.origHeight} :: {origSizeText}
+          {" · "}{t("saved {{pct}}%", { pct: savedPct })}
+        </span>
+      </>
+    )
+  }
   const fileinfo = (
     <div className="file-info" title={displayedFileInfo}>
-      {displayedFileInfo}
+      {resizedFileInfo ?? displayedFileInfo}
     </div>
   )
 
@@ -1407,6 +1454,7 @@ export function Reader() {
                   draggable={false}
                   style={style}
                   onLoad={(e) => onImageLoad(i + 1, e)}
+                  onError={onImageError}
                   onClick={(e) => {
                     const isLeftHalf = e.clientX < window.innerWidth / 2
                     goToInfiniteScrollPage(i + 1, isLeftHalf ? "prev" : "next")
@@ -1436,6 +1484,7 @@ export function Reader() {
                 alt={`${t("Page")} ${spread.left}`}
                 fetchPriority="high"
                 onLoad={(e) => onImageLoad(spread.left, e)}
+                onError={onImageError}
                 draggable={false}
                 style={placementImageStyle}
               />
@@ -1447,6 +1496,7 @@ export function Reader() {
                   alt={`${t("Page")} ${spread.right}`}
                   fetchPriority="high"
                   onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
+                  onError={onImageError}
                   draggable={false}
                   style={imageStyle}
                 />

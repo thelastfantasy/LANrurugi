@@ -5,7 +5,7 @@ import { fileInfoText } from "@/lib/utils/fileInfoText"
 const ORIGIN = "http://localhost:3000"
 
 function pageUrl(name: string) {
-  return `${ORIGIN}/api/archives/abc/files/thumbnail?path=${encodeURIComponent(name)}`
+  return { url: `${ORIGIN}/api/archives/abc/files/thumbnail?path=${encodeURIComponent(name)}` }
 }
 
 describe("fileInfoText", () => {

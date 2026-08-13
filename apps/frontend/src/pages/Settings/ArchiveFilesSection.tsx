@@ -40,7 +40,7 @@ export function ArchiveFilesSection({
           >
             {t("Click this button to trigger a rescan of the Archive Directory in case you're missing files, or some data such as total page counts.")}
           </ActionRow>
-          <Row label={t("Maximum Cache Size")}>
+          <Row label={t("Maximum Reader Cache Size")}>
             <input
               className="stdinput"
               style={{ width: "100%" }}
@@ -50,20 +50,20 @@ export function ArchiveFilesSection({
               type="text"
             />
             <br />
-            {t("In MBs. The cache contains recently viewed pages, for faster subsequent reading.")}
+            {t("In MBs. This limits the reader's resized-page cache (recently viewed pages re-encoded to WebP for faster loading) — it does not affect files still waiting in the Upload page's conflict queue.")}
             <br />
-            {t("It is automatically emptied when it grows past this specified size.")} {t("The maximum value allowed is 4GB.")}
+            {t("Checked every 15 minutes; the oldest cached pages are removed first once this size is exceeded.")}
           </Row>
           <ActionRow
             id="clean-temp"
-            label={t("Clear Cache")}
+            label={t("Clear Reader Cache")}
             onClick={async () => {
               await cleanTempfolder.mutateAsync()
               onStatus(t("Cache cleared.") ?? "")
             }}
           >
             <br />
-            {t("Clear the cache manually by clicking this button.")}
+            {t("Immediately empties the reader's resized-page cache described above. Files still waiting in the Upload page's conflict queue are not affected.")}
           </ActionRow>
           <ActionRow
             id="reset-search-cache"

@@ -6,11 +6,13 @@
 
 use std::path::{Path, PathBuf};
 
+use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_scanner::pipeline::{
     ingest_file_with_policy, DuplicatePolicy, DuplicateReason, IngestOptions, IngestOutcome,
 };
 use lanrurugi_storage::download_queue::PendingFilenameConflict;
+use lanrurugi_storage::keys::CONFIG_KEY;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 
@@ -198,6 +200,7 @@ async fn catalogue_staged_file(
         duplicate_policy,
         intended_filename: Some(filename),
         title_filename: Some(filename),
+        defer_file_path: true,
     };
     let outcome = ingest_file_with_policy(
         &state.repos.archives,
@@ -242,30 +245,61 @@ async fn catalogue_staged_file(
         let _ = tokio::fs::remove_file(staging_path).await;
     }
 
-    if let Ok(Some(mut archive)) = state.repos.archives.get(&archive_id).await {
-        archive.file = dest.to_string_lossy().to_string();
-        // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
-        // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
-        // real external source for a file the user picked off their own disk, so stamping one
-        // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
-        // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
-        // originally gave* (the gallery page, never whatever internal download link a plugin
-        // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
-        // cataloguing — this is host-side download-task code, not something a metadata plugin adds
-        // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
-        // since a plugin's own `execDownload` could in principle have already supplied tags via
-        // some other path; deduped the same way `set_tags(..., append=1)` does.
-        if let Some(source_url) = source_url {
-            let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-            if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
-                archive.tags = if archive.tags.is_empty() {
-                    source_tag
-                } else {
-                    format!("{},{source_tag}", archive.tags)
-                };
+    // Fix up the record's `file` (born empty under `defer_file_path`) to the real final path.
+    // Retried — a Redis blip here would otherwise leave the record pointing at nothing forever
+    // (the old "file = temp path" variant of this bug created a live zombie archive: dedup kept
+    // matching a record whose file had been swept away). If every retry fails, the startup
+    // zombie-repair sweep (`main.rs`) still converges it later; this just shrinks the window.
+    const RETRIES: u32 = 3;
+    const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
+    for (i, &delay) in BACKOFF_MS.iter().enumerate() {
+        match state.repos.archives.get(&archive_id).await {
+            Ok(Some(mut archive)) => {
+                archive.file = dest.to_string_lossy().to_string();
+                // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
+                // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
+                // real external source for a file the user picked off their own disk, so stamping one
+                // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
+                // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
+                // originally gave* (the gallery page, never whatever internal download link a plugin
+                // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
+                // cataloguing — this is host-side download-task code, not something a metadata plugin adds
+                // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
+                // since a plugin's own `execDownload` could in principle have already supplied tags via
+                // some other path; deduped the same way `set_tags(..., append=1)` does.
+                if let Some(source_url) = source_url {
+                    let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
+                    if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                        archive.tags = if archive.tags.is_empty() {
+                            source_tag
+                        } else {
+                            format!("{},{source_tag}", archive.tags)
+                        };
+                    }
+                }
+                match state.repos.archives.save(&archive).await {
+                    Ok(()) => break,
+                    Err(e) if i + 1 < RETRIES as usize => {
+                        tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    Err(e) => {
+                        tracing::error!(%archive_id, error = %e, "failed to fix up archive file path after {RETRIES} attempts — startup zombie sweep will repair");
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::error!(%archive_id, "archive record vanished during file-path fixup");
+                break;
+            }
+            Err(e) if i + 1 < RETRIES as usize => {
+                tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to load archive for file-path fixup, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+            Err(e) => {
+                tracing::error!(%archive_id, error = %e, "failed to load archive for file-path fixup after {RETRIES} attempts — startup zombie sweep will repair");
             }
         }
-        let _ = state.repos.archives.save(&archive).await;
     }
     if let Ok(mut conn) = state.redis.config.get().await {
         use deadpool_redis::redis::AsyncCommands;
@@ -474,6 +508,144 @@ async fn find_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> Vec<
         }
     }
     stale_paths
+}
+
+/// Default `tempmaxsize` (MB) — matches `NUMBER_FIELDS`' default in `settings.rs`, used when the
+/// field is missing from Redis entirely.
+const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
+
+/// Enforces the `tempmaxsize` setting (MB, Redis `LRR_CONFIG` hash field) against
+/// `temp_dir/resize_page/` — the reader's WebP resize cache (`archives.rs::resize_cache_path`),
+/// the only unbounded, self-regenerating content under `temp_dir` (a cache miss just re-resizes
+/// from the archive; nothing is lost). Deliberately does not touch anything else in `temp_dir`:
+/// `temp_*`-prefixed pending-rename staging files are unresolved user decisions, not a cache, and
+/// already have their own age-based sweep (`sweep_stale_pending_renames`) with different
+/// eligibility rules. Called on a periodic timer (see `main.rs`), not in response to any request.
+pub async fn sweep_resize_cache_size(state: &AppState) {
+    let max_bytes = match state.redis.config.get().await {
+        Ok(mut conn) => {
+            let fields: std::collections::HashMap<String, String> =
+                conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+            fields
+                .get("tempmaxsize")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(DEFAULT_TEMP_MAX_SIZE_MB)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to read tempmaxsize from redis, using default");
+            DEFAULT_TEMP_MAX_SIZE_MB
+        }
+    }
+    .max(0) as u64
+        * 1024
+        * 1024;
+
+    let resize_cache_dir = state.library.temp_dir.join("resize_page");
+    let mut entries = match list_resize_cache_entries(&resize_cache_dir).await {
+        Some(entries) => entries,
+        None => return,
+    };
+
+    let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
+    if total_bytes <= max_bytes {
+        return;
+    }
+
+    // Oldest first, so the least-recently-generated pages (least likely to still be in a reader's
+    // prefetch window) are evicted before anything newer.
+    entries.sort_by_key(|e| e.modified);
+
+    let mut freed = 0u64;
+    let mut remaining = total_bytes;
+    for entry in entries {
+        if remaining <= max_bytes {
+            break;
+        }
+        // The `.dims` sidecar (see `resize_cache_path`'s doc comment) has no independent size
+        // tracked above; delete it alongside its `.webp` so a future cache hit doesn't try to
+        // read stale dimensions for a file that no longer exists.
+        let sidecar = entry.path.with_extension("webp.dims");
+        let _ = tokio::fs::remove_file(&sidecar).await;
+        match tokio::fs::remove_file(&entry.path).await {
+            Ok(()) => {
+                freed += entry.size;
+                remaining = remaining.saturating_sub(entry.size);
+            }
+            Err(e) => {
+                tracing::warn!(path = ?entry.path, error = %e, "failed to remove resize cache entry")
+            }
+        }
+    }
+    tracing::info!(
+        freed_bytes = freed,
+        max_bytes,
+        "trimmed resize cache to stay under tempmaxsize"
+    );
+}
+
+struct ResizeCacheEntry {
+    path: PathBuf,
+    size: u64,
+    modified: std::time::SystemTime,
+}
+
+/// Recursively lists every `.webp` file under `resize_page/<id>/…` with its size and mtime.
+/// Returns `None` (rather than an empty vec) when the directory doesn't exist yet — a fresh
+/// install with no resize activity yet, not a cache to trim.
+async fn list_resize_cache_entries(resize_cache_dir: &Path) -> Option<Vec<ResizeCacheEntry>> {
+    let mut per_archive_dirs = match tokio::fs::read_dir(resize_cache_dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to read resize cache dir");
+            return None;
+        }
+    };
+
+    let mut out = Vec::new();
+    loop {
+        let archive_dir = match per_archive_dirs.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(error = %e, "error scanning resize cache dir");
+                break;
+            }
+        };
+        if !archive_dir.file_type().await.is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let mut files = match tokio::fs::read_dir(archive_dir.path()).await {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        loop {
+            let file = match files.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => break,
+            };
+            let is_webp = file
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".webp"));
+            if !is_webp {
+                continue;
+            }
+            let Ok(metadata) = file.metadata().await else {
+                continue;
+            };
+            let modified = metadata
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            out.push(ResizeCacheEntry {
+                path: file.path(),
+                size: metadata.len(),
+                modified,
+            });
+        }
+    }
+    Some(out)
 }
 
 /// Streams `path` in fixed-size chunks (never loading the whole file into memory — a real archive

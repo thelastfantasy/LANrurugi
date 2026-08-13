@@ -1,9 +1,11 @@
 //! Reader page resizing — verified against legacy `Model/Archive.pm::serve_page` +
 //! `Model/Reader.pm::resize_image` + `Utils/ImageMagickResizer.pm::resize_page`: when a page's
 //! *raw byte size* (not its pixel dimensions) exceeds `sizethreshold` KB, it's downscaled and
-//! re-encoded as JPEG at `readerquality`. A page already under the threshold is served unmodified
-//! — this module returns `None` for that case rather than a no-op re-encode, so the caller can
-//! skip writing a cache entry identical to the source file.
+//! re-encoded as **WebP** at `readerquality` (deviation from legacy's JPEG — WebP at the same
+//! quality is smaller, and the `webp` crate is already a dependency for thumbnails). A page
+//! already under the threshold is served unmodified — this module returns `None` for that case
+//! rather than a no-op re-encode, so the caller can skip writing a cache entry identical to the
+//! source file.
 //!
 //! **Deliberate deviation from legacy**: legacy's `resize_page` compares raw *width* against the
 //! 1064px cap (`if ($origw > 1064) { $img->Resize(geometry => '1064x') }`), unconditionally. That
@@ -17,8 +19,6 @@
 //! width-only check didn't consider at all. Either way, resizing (when triggered) still scales
 //! both dimensions by the same ratio — never distorts, just changes which dimension decides
 //! *whether* to scale at all.
-use image::codecs::jpeg::JpegEncoder;
-use image::ImageEncoder;
 use lanrurugi_core::concurrency::run_blocking;
 use thiserror::Error;
 
@@ -31,31 +31,51 @@ const MAX_SHORT_EDGE: u32 = 1064;
 pub enum ResizeError {
     #[error("failed to decode image: {0}")]
     Decode(#[from] image::ImageError),
+    #[error("webp encode error: {0:?}")]
+    Webp(webp::WebPEncodingError),
     #[error("blocking task failed: {0}")]
     Join(#[from] lanrurugi_core::concurrency::BlockingTaskError),
 }
 
 /// Returns `Ok(None)` when `content`'s byte size doesn't exceed `threshold_kb` — the caller
-/// should serve `content` itself unmodified in that case.
+/// should serve `content` itself unmodified in that case. On success, the tuple also carries the
+/// *original* pixel dimensions (from the decode that just ran) so the caller can surface them —
+/// e.g. in a response header — without decoding a second time.
 pub async fn resize_if_over_threshold(
     content: Vec<u8>,
     quality: u8,
     threshold_kb: i64,
-) -> Result<Option<Vec<u8>>, ResizeError> {
-    run_blocking(move || resize_sync(&content, quality, threshold_kb)).await?
+) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
+    run_blocking(move || {
+        let size_kb = (content.len() / 1024) as i64;
+        if size_kb <= threshold_kb {
+            return Ok(None);
+        }
+        let img = image::load_from_memory(&content)?;
+        let (orig_width, orig_height) = (img.width(), img.height());
+        let out = resize_sync(&img, quality)?;
+        Ok(Some((out, orig_width, orig_height)))
+    })
+    .await?
 }
 
-fn resize_sync(
-    content: &[u8],
+/// Unconditional WebP conversion (no byte-size threshold) — for formats browsers can't render
+/// at all (BMP/TIFF/unknown), where "serve the original" isn't an option. Returns the converted
+/// bytes plus the original dimensions, same shape as `resize_if_over_threshold`'s success case.
+pub async fn convert_to_webp(
+    content: Vec<u8>,
     quality: u8,
-    threshold_kb: i64,
-) -> Result<Option<Vec<u8>>, ResizeError> {
-    let size_kb = (content.len() / 1024) as i64;
-    if size_kb <= threshold_kb {
-        return Ok(None);
-    }
+) -> Result<(Vec<u8>, u32, u32), ResizeError> {
+    run_blocking(move || {
+        let img = image::load_from_memory(&content)?;
+        let (orig_width, orig_height) = (img.width(), img.height());
+        let out = resize_sync(&img, quality)?;
+        Ok((out, orig_width, orig_height))
+    })
+    .await?
+}
 
-    let img = image::load_from_memory(content)?;
+fn resize_sync(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, ResizeError> {
     let short_edge = img.width().min(img.height());
     let resized = if short_edge > MAX_SHORT_EDGE {
         let ratio = MAX_SHORT_EDGE as f64 / short_edge as f64;
@@ -70,19 +90,15 @@ fn resize_sync(
         // Still over the byte-size threshold but the short edge isn't over-sized: legacy still
         // re-encodes through ImageMagick at `quality` here (a recompression pass, e.g. for an
         // oversized lossless PNG), it just doesn't also downscale.
-        img
+        img.clone()
     };
 
     let rgb = resized.to_rgb8();
-    let mut out = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut out, quality);
-    encoder.write_image(
-        rgb.as_raw(),
-        rgb.width(),
-        rgb.height(),
-        image::ExtendedColorType::Rgb8,
-    )?;
-    Ok(Some(out))
+    let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
+    let encoded = encoder
+        .encode_simple(false, quality as f32)
+        .map_err(ResizeError::Webp)?;
+    Ok(encoded.to_vec())
 }
 
 #[cfg(test)]
@@ -115,7 +131,7 @@ mod tests {
         // scales down proportionally rather than being clamped directly.
         let content = make_test_jpeg(2000, 3000);
         let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
-        let resized = result.expect("over threshold must resize");
+        let (resized, ..) = result.expect("over threshold must resize");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), MAX_SHORT_EDGE);
         assert_eq!(decoded.height(), 1596); // round(3000 * 1064 / 2000)
@@ -133,7 +149,7 @@ mod tests {
         // bounds" case so a regression can't sneak in via the short-edge computation itself.
         let content = make_test_jpeg(800, 8000);
         let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
-        let resized = result.expect("over byte threshold must still re-encode");
+        let (resized, ..) = result.expect("over byte threshold must still re-encode");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(
             decoded.width(),
@@ -151,7 +167,7 @@ mod tests {
         // width to exactly 1064 regardless of which edge that constrains.
         let content = make_test_jpeg(1200, 12000);
         let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
-        let resized = result.expect("over threshold must resize");
+        let (resized, ..) = result.expect("over threshold must resize");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), MAX_SHORT_EDGE);
         assert_eq!(decoded.height(), MAX_SHORT_EDGE * 12000 / 1200);
@@ -161,7 +177,7 @@ mod tests {
     async fn over_threshold_but_under_short_edge_still_reencodes() {
         let content = make_test_jpeg(500, 500);
         let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
-        let resized = result.expect("over threshold must re-encode even without downscaling");
+        let (resized, ..) = result.expect("over threshold must re-encode even without downscaling");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), 500);
     }

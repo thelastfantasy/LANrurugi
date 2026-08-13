@@ -31,8 +31,11 @@ use lanrurugi_storage::keys::CONFIG_KEY;
 /// from `LRR_CONFIG` entirely, e.g. a fresh install before the Settings page's own defaulting
 /// logic below has ever run) can't drift out of sync with the one true default declared here.
 pub(crate) const DEFAULT_PAGE_SIZE: i64 = 100;
-pub(crate) const DEFAULT_SIZE_THRESHOLD: i64 = 1000;
-pub(crate) const DEFAULT_READER_QUALITY: i64 = 50;
+/// Reader resize trigger: pages over this many KB get downscaled/re-encoded to WebP (1.5 MB —
+/// large enough that normal manga pages pass through untouched, small enough that a
+/// multi-megabyte PNG/webtoon strip still gets compressed for the reader).
+pub(crate) const DEFAULT_SIZE_THRESHOLD: i64 = 1536;
+pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 
 pub fn router() -> Router<AppState> {
@@ -165,7 +168,7 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("enablecors", false),
     ("localprogress", false),
     ("authprogress", false),
-    ("enableresize", false),
+    ("enableresize", true),
     ("hqthumbpages", false),
     ("enablewebp", true),
     ("replacedupe", false),

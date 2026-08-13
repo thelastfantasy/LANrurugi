@@ -452,6 +452,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
+    // Same "converge any crash-intermediate state before accepting connections" reasoning as the
+    // queue-orphan cleanup above — archive records whose `file` is empty/points at temp/vanished
+    // get repaired or dropped so hash-based dedup stops matching ghost bytes.
+    repair_zombie_archives(&state).await;
+
     // One-time reader-recommendation-cache backfill (issue #70) — a pre-existing library's
     // archives never trigger `precompute_one` on their own (nothing about them changes after
     // this feature ships), so without this they'd never get a cached recommendation entry at
@@ -567,6 +572,21 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
+            }
+        });
+    }
+
+    // Every 15 minutes — enforce the `tempmaxsize` setting against the reader's WebP resize cache
+    // (`temp_dir/resize_page/`), the only unbounded self-regenerating content under `temp_dir`. A
+    // finer interval than the pending-rename sweep since this cache can grow continuously under
+    // heavy reading traffic, not just accumulate from occasional abandoned conflicts.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+            loop {
+                interval.tick().await;
+                lanrurugi_api::download_manager::ingest::sweep_resize_cache_size(&state).await;
             }
         });
     }
@@ -704,6 +724,95 @@ async fn sweep_stale_queue_items(state: &AppState) {
         item.error = Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
         if let Err(e) = state.download_queue.update(&item).await {
             tracing::warn!(item_id = %item.id, error = %e, "sweep: failed to update stale item");
+        }
+    }
+}
+
+/// Startup zombie-archive repair: converges every record whose `file` is empty (born under
+/// `defer_file_path` and the fixup never ran — crash window), points into `temp_dir` (old-style
+/// zombie), or simply doesn't exist on disk anymore. Repair first (an archive-dir file matching
+/// the record's `name` exists → point `file` at it); otherwise delete the record + its search
+/// index so a hash-based dedup stops matching a record whose bytes are gone. A real on-disk file
+/// left behind either way gets re-catalogued by the watcher/startup scan — data isn't lost, the
+/// record just gets a fresh, correct one.
+async fn repair_zombie_archives(state: &AppState) {
+    let archives = match state.repos.archives.list_all().await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "repair_zombie_archives: failed to list archives");
+            return;
+        }
+    };
+    let temp_dir = state.library.temp_dir.to_string_lossy().to_string();
+    for mut archive in archives {
+        let file_exists = !archive.file.is_empty()
+            && tokio::fs::try_exists(std::path::Path::new(&archive.file))
+                .await
+                .unwrap_or(false);
+        let stale = archive.file.is_empty()
+            || archive.file.starts_with(&temp_dir)
+            || archive.file.starts_with("./temp")
+            || !file_exists;
+        if !stale {
+            continue;
+        }
+
+        // Repair attempt: the record's `name` is the real destination-facing filename — if a
+        // file of exactly that name sits in `archive_dir`, that's almost certainly this
+        // archive's own bytes (the crash-after-rename case).
+        let candidate = state.library.archive_dir.join(&archive.name);
+        if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+            tracing::info!(
+                id = %archive.id,
+                file = %candidate.to_string_lossy(),
+                "repairing zombie archive: file path now points at archive_dir match"
+            );
+            let old_file = std::mem::take(&mut archive.file);
+            archive.file = candidate.to_string_lossy().to_string();
+            if let Err(e) = state.repos.archives.save(&archive).await {
+                tracing::warn!(id = %archive.id, error = %e, "failed to save repaired archive file path");
+                continue;
+            }
+            if !old_file.is_empty() {
+                if let Ok(mut conn) = state.redis.config.get().await {
+                    use deadpool_redis::redis::AsyncCommands;
+                    use lanrurugi_storage::keys::FILEMAP_KEY;
+                    let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &old_file).await;
+                    let _: Result<(), _> = conn
+                        .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
+                        .await;
+                }
+            }
+            continue;
+        }
+
+        // Not repairable — drop the record and its search index. The bytes (if any survive
+        // under a name we can't derive) will be re-catalogued by the watcher/startup scan.
+        tracing::info!(
+            id = %archive.id,
+            name = %archive.name,
+            file = %archive.file,
+            "deleting zombie archive record whose file is gone"
+        );
+        if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
+            &state.redis.search,
+            archive.id.as_str(),
+            &archive.title,
+            &archive.tags,
+        )
+        .await
+        {
+            tracing::warn!(id = %archive.id, error = %e, "failed to remove zombie archive from search index");
+        }
+        if let Err(e) = state.repos.archives.delete(&archive.id).await {
+            tracing::warn!(id = %archive.id, error = %e, "failed to delete zombie archive record");
+        }
+        if !archive.file.is_empty() {
+            if let Ok(mut conn) = state.redis.config.get().await {
+                use deadpool_redis::redis::AsyncCommands;
+                use lanrurugi_storage::keys::FILEMAP_KEY;
+                let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
+            }
         }
     }
 }
