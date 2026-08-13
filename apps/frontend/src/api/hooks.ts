@@ -333,6 +333,23 @@ export function useUpdateArchiveMetadata(id: string) {
   })
 }
 
+/** Edit page's filename-rename affordance (additive, no legacy equivalent — see
+ * `archives.rs::rename_archive`'s own docs). `stem` is the desired basename *without* its
+ * extension — the backend always keeps the archive's existing extension and also renames the
+ * sidecar `.patch.zip`, if any, alongside it. */
+export function useRenameArchive(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (stem: string) =>
+      sendJson<{ filename: string }>("PUT", `/archives/${id}/rename`, { stem }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["search"] })
+    },
+  })
+}
+
 /** Reader overview overlay's "set as thumbnail" hover icon (legacy `.set-thumbnail`) — regenerates
  * the archive's cover thumbnail from the given page (`PUT /archives/{id}/thumbnail?page=N`). */
 export function useSetArchiveThumbnail(id: string) {

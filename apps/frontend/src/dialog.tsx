@@ -184,6 +184,12 @@ type DialogRequest =
       resolve: (value: NewCategoryResult | null) => void
     }
   | {
+      kind: "renameArchive"
+      currentStem: string
+      extension: string
+      resolve: (value: string | null) => void
+    }
+  | {
       kind: "stampEditor"
       defaultContent: string
       defaultIcon: string
@@ -227,6 +233,18 @@ export function confirmDialog(message: ReactNode, danger = false): Promise<boole
 export function newCategoryDialog(): Promise<NewCategoryResult | null> {
   return new Promise((resolve) => {
     setRequest({ kind: "newCategory", resolve })
+  })
+}
+
+/** Edit page's filename-rename button (`archives.rs::rename_archive`). The extension is rendered
+ * as a fixed, non-editable suffix rather than left in the same field as the editable stem — typing
+ * over/dropping it by accident would silently change the archive's file type as far as the OS is
+ * concerned (the actual bytes are untouched; only what they're named), a much easier mistake to
+ * make in a single free-text field than a deliberate choice a user would ever actually want here.
+ * Resolves the new *stem* only (no extension) if confirmed, `null` if cancelled. */
+export function renameArchiveDialog(currentStem: string, extension: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "renameArchive", currentStem, extension, resolve })
   })
 }
 
@@ -1225,6 +1243,75 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   )
 }
 
+function RenameArchiveForm({
+  currentStem,
+  extension,
+  onSubmit,
+  onCancel,
+}: {
+  currentStem: string
+  extension: string
+  onSubmit: (stem: string) => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  const [stem, setStem] = useState(currentStem)
+  const stemRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    stemRef.current?.select()
+  }, [])
+
+  function submit() {
+    if (!stem.trim()) return
+    onSubmit(stem.trim())
+  }
+
+  return (
+    <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("Enter the new file name:")}</p>
+      {/* The extension is a fixed suffix, not part of the editable field — see
+          `renameArchiveDialog`'s own docs for why. Both halves are real `.stdinput`s (not a plain
+          `<span>` for the extension) so the fixed suffix picks up the same real per-theme border/
+          background this modal's other inputs already use, rather than a hand-picked color that'd
+          need its own entry in all 5 theme files (or a hardcoded value that wouldn't adapt at
+          all) for what's really just this same input styled read-only. `flex` row: the stem input
+          grows, the extension shrinks to fit its own text (`flex: '0 0 auto'` + a `size` matching
+          its actual character count, since a bare `width: auto` on an `<input>` doesn't shrink to
+          content the way it would on most other elements). */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+        <input
+          ref={stemRef}
+          type="text"
+          className="stdinput"
+          style={{ flex: 1, height: 25, boxSizing: "border-box" }}
+          value={stem}
+          onChange={(e) => setStem(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit()
+          }}
+        />
+        {extension && (
+          <input
+            type="text"
+            className="stdinput"
+            readOnly
+            tabIndex={-1}
+            aria-label={t("File extension (not editable)") ?? undefined}
+            size={extension.length + 1}
+            style={{ flex: "0 0 auto", width: "auto", height: 25, boxSizing: "border-box", marginLeft: 4, textAlign: "center" }}
+            value={`.${extension}`}
+          />
+        )}
+      </div>
+      <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
+      </div>
+    </div>
+  )
+}
+
 /** Mounted once, app-wide (see `App.tsx`) — matches `toast.tsx`'s own `<ToastContainer>`
  * convention exactly: a single always-present host that any file's plain `promptDialog`/
  * `confirmDialog`/`newCategoryDialog` call can push a request into, regardless of which component
@@ -1291,6 +1378,18 @@ export function DialogHost() {
     close()
   }
 
+  function cancelRenameArchive() {
+    if (request?.kind !== "renameArchive") return
+    request.resolve(null)
+    close()
+  }
+
+  function submitRenameArchive(stem: string) {
+    if (request?.kind !== "renameArchive") return
+    request.resolve(stem)
+    close()
+  }
+
   function cancelStampEditor() {
     if (request?.kind !== "stampEditor") return
     request.resolve(null)
@@ -1326,6 +1425,40 @@ export function DialogHost() {
           }}
         >
           <NewCategoryForm onSubmit={submitNewCategory} onCancel={cancelNewCategory} />
+        </div>
+      </>,
+      document.body,
+    )
+  }
+
+  if (request.kind === "renameArchive") {
+    return createPortal(
+      <>
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelRenameArchive} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="swal2-popup"
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: Z_OVERLAY_CONTENT,
+            display: "block",
+            width: 400,
+            padding: 20,
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
+          }}
+        >
+          <RenameArchiveForm
+            currentStem={request.currentStem}
+            extension={request.extension}
+            onSubmit={submitRenameArchive}
+            onCancel={cancelRenameArchive}
+          />
         </div>
       </>,
       document.body,

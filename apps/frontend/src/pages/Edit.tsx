@@ -2,10 +2,12 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
+import { ApiError } from "@/api/client"
 import {
   useArchiveMetadata,
   useDeleteArchive,
   usePlugins,
+  useRenameArchive,
   useSettings,
   useStats,
   useUpdateArchiveMetadata,
@@ -13,10 +15,10 @@ import {
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { TagInput } from "@/components/Form"
-import { confirmDialog } from "@/dialog"
+import { confirmDialog, renameArchiveDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { toast } from "@/toast"
+import { dismissToast, toast } from "@/toast"
 
 export function Edit() {
   const { t } = useTranslation()
@@ -66,6 +68,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const stats = useStats(2)
   const updateMetadata = useUpdateArchiveMetadata(archiveId)
   const deleteArchive = useDeleteArchive()
+  const renameArchive = useRenameArchive(archiveId)
 
   const [title, setTitle] = useState(archive.title)
   const [summary, setSummary] = useState(archive.summary ?? "")
@@ -89,6 +92,50 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     if (!(await confirmDialog(t("Are you sure you want to delete this archive?") ?? "", true))) return
     await deleteArchive.mutateAsync(archiveId)
     navigate("/")
+  }
+
+  // Additive, no legacy equivalent (see `archives.rs::rename_archive`'s own docs). Renames the
+  // on-disk file — distinct from `title`, which is just a display label archive.metadata already
+  // covers — so it goes through its own confirmation step and its own mutation rather than being
+  // folded into `handleSave`. The extension is split off and rendered as a fixed, non-editable
+  // suffix in the dialog (see `renameArchiveDialog`'s own docs), so only the stem ever round-trips
+  // to the backend — matches `RenameArchiveParams::stem`'s own contract exactly. Uses `archive.
+  // extension` (a separate, already-dotless field — legacy's own `name`/`filename` field is itself
+  // stored *without* an extension, verified live: `archive.filename` for a real "foo.zip" archive
+  // is just "foo") rather than trying to split one back out of `archive.filename` — that field
+  // simply doesn't have one to split.
+  async function handleRename() {
+    const nextStem = await renameArchiveDialog(archive.filename, archive.extension)
+    if (nextStem === null || nextStem.trim() === "" || nextStem.trim() === archive.filename) return
+    // The backend queues behind any in-progress ingest/rescan that happens to hold the same
+    // filename (`archives.rs::rename_archive`'s own docs) rather than rejecting outright, so this
+    // request can occasionally take a while — with no feedback at all in that window, a slow
+    // rename reads as the button having done nothing. `hideAfter: false` + `closeOnClick: false`
+    // (dismissed explicitly once the mutation settles, below) so it stays up for however long the
+    // wait actually takes, not a fixed guess.
+    const pendingToastId = toast({
+      heading: t("Renaming…") ?? undefined,
+      text: t("This may take a moment if another operation is using the same filename — it will finish in the background even if you navigate away.") ?? undefined,
+      icon: "info",
+      hideAfter: false,
+      closeOnClick: false,
+    })
+    try {
+      const result = await renameArchive.mutateAsync(nextStem.trim())
+      dismissToast(pendingToastId)
+      toast({
+        heading: t("Archive renamed to") ?? undefined,
+        text: result.filename,
+        icon: "success",
+      })
+    } catch (err) {
+      dismissToast(pendingToastId)
+      toast({
+        heading: t("Rename failed") ?? undefined,
+        text: err instanceof ApiError ? err.message : String(err),
+        icon: "error",
+      })
+    }
   }
 
   // Real legacy's `Edit.runPlugin` always saves current form state FIRST, then fetches+merges
@@ -127,8 +174,38 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           toast({ heading: t("Archive summary updated!") ?? undefined, icon: "info" })
         }
         if (result.tags) {
-          setTags((prev) => [prev, result.tags].filter(Boolean).join(", "))
-          toast({ heading: t("Added the following tags") ?? undefined, text: result.tags, icon: "info", hideAfter: 7000 })
+          // Matches legacy's own `Edit.addTag` (`edit.js:293-337`'s per-tag `Edit.addTag` calls
+          // into the real `tagger` widget's `allow_duplicates: false` init option) — a plugin can
+          // return a tag the archive already has (re-running the same plugin, or a tag two
+          // different plugins both add), and appending the whole comma-joined string unconditionally
+          // would duplicate it instead of silently no-opping like legacy/`TagInput.commit` do.
+          const existing = tags
+            .split(/,\s?/)
+            .map((t) => t.trim())
+            .filter(Boolean)
+          const actuallyNew: string[] = []
+          const merged = [...existing]
+          for (const tag of result.tags.split(/,\s?/)) {
+            const trimmed = tag.trim()
+            if (trimmed && !merged.includes(trimmed)) {
+              merged.push(trimmed)
+              actuallyNew.push(trimmed)
+            }
+          }
+          setTags(merged.join(", "))
+          // Reflects what was actually merged in, not the plugin's raw (possibly-already-present)
+          // return value — a re-run that comes back with tags the archive already has should say
+          // so via the "No new tags added!" branch below, not claim tags were added that weren't.
+          if (actuallyNew.length > 0) {
+            toast({
+              heading: t("Added the following tags") ?? undefined,
+              text: actuallyNew.join(", "),
+              icon: "info",
+              hideAfter: 7000,
+            })
+          } else {
+            toast({ heading: t("No new tags added!") ?? undefined, icon: "info" })
+          }
         } else {
           toast({ heading: t("No new tags added!") ?? undefined, icon: "info" })
         }
@@ -164,9 +241,21 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
               wider card once the form itself was widened (this and `.ido`'s own `maxWidth` above,
               issue #45) — the input just stops growing at 450px while the grid column it sits in
               keeps stretching. Overriding it lets every field genuinely fill the column instead. */}
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", alignItems: "center", gap: 6 }}>
             <span>{t("Current File Name:")}</span>
             <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} value={archive.filename} />
+            {/* height: 18px matches the filename `.stdinput` next to it exactly (verified via
+                `getBoundingClientRect()` — that input renders at 18px tall under this theme's own
+                `.stdinput` padding/font-size, not the 25px this app's other `.stdbtn`s elsewhere
+                on this page use, which sit in taller/differently-padded rows). */}
+            <input
+              className="stdbtn"
+              type="button"
+              value={t("Rename") ?? undefined}
+              onClick={() => void handleRename()}
+              disabled={renameArchive.isPending}
+              style={{ minWidth: 70, height: 18, boxSizing: "border-box" }}
+            />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>

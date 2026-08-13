@@ -168,6 +168,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/archives/{id}/download", get(download_archive))
         .route("/archives/{id}/patch", delete(delete_patch))
+        .route("/archives/{id}/rename", put(rename_archive))
         .route(
             "/archives/{id}/isnew",
             put(set_new_flag).delete(clear_new_flag),
@@ -643,6 +644,246 @@ async fn delete_patch(
         }
     }
     axum::Json(json!({ "operation": "delete_patch", "success": 1 })).into_response()
+}
+
+/// Most filesystems this app is realistically deployed on (ext4, ZFS, APFS, NTFS) cap a single
+/// path *component* (not the full path) at 255 bytes — not 255 characters: a CJK filename, common
+/// in this library's own real usage, is 3 bytes/char in UTF-8, so this limit bites at 85 characters
+/// long before any character-count check would warn. Checked against the *patch* filename (see
+/// below), the tighter of the two constraints, not the archive filename directly.
+const MAX_FILENAME_BYTES: usize = 255;
+
+#[derive(Debug, Deserialize)]
+struct RenameArchiveParams {
+    /// The new filename *stem* only, no extension — the Edit page's rename modal renders the
+    /// extension as a fixed, non-editable suffix precisely so the backend never has to guess
+    /// whether a caller's string already includes one (see `renameArchiveDialog`'s own docs on
+    /// why that's a real footgun otherwise: silently doubling `.zip.zip`, or worse, actually
+    /// changing the file's apparent type). The real extension is always taken from the archive's
+    /// existing `file` path, never from this field.
+    stem: String,
+}
+
+/// `PUT /archives/{id}/rename` — additive, no legacy equivalent (legacy has no archive-rename
+/// feature at all; verified via `~/LANraragi/lib/LANraragi/Controller/*.pm` and `public/js/edit.js`
+/// having no `rename` reference anywhere). Renames the archive's on-disk file (not just its stored
+/// `title`/`name`), keeping `Archive::file` and `LRR_FILEMAP` in sync — modeled on
+/// `download_manager::ingest`'s own staging-file-to-`archive_dir` rename fixup, the closest
+/// existing precedent for "the archive's file path changed, update the two places that track it".
+///
+/// A sidecar `.patch.zip` (see `delete_patch`'s own docs on how it's associated — same directory,
+/// same stem, purely by filename convention) is renamed alongside the archive itself: leaving it
+/// under the old stem would silently break `patch::patch_path_for`'s lookup for every future
+/// request, making an existing patch invisible without deleting anything or erroring — the kind of
+/// silent data-loss-adjacent bug that's much worse than a rename this function could instead just
+/// reject outright.
+async fn rename_archive(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    axum::Json(params): axum::Json<RenameArchiveParams>,
+) -> Response {
+    let mut archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return not_found("rename_archive", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "rename_archive",
+                e.to_string(),
+            )
+        }
+    };
+
+    let old_path = std::path::PathBuf::from(&archive.file);
+    let extension = old_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    // `sanitize_filename` (built for a whole filename, e.g. `foo.zip`) still does the right thing
+    // for a bare stem with no extension — it just strips any directory-traversal component off
+    // whatever's in the last path segment, which a dot-less string still has exactly one of.
+    let requested_stem = crate::upload::sanitize_filename(params.stem.trim());
+    if requested_stem.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "rename_archive",
+            "filename cannot be empty".to_string(),
+        );
+    }
+
+    let new_filename = if extension.is_empty() {
+        requested_stem.clone()
+    } else {
+        format!("{requested_stem}.{extension}")
+    };
+    let patch_filename = format!("{requested_stem}.patch.zip");
+    // Checked against the patch filename, not `new_filename` — `.patch.zip` (10 bytes) is longer
+    // than every real archive extension this app's own scanner accepts (`.zip`/`.cbz`/`.rar`/
+    // `.7z`/`.pdf`/... — 4-5 bytes), so a stem that just barely fits under 255 bytes with its real
+    // extension could still overflow once `.patch.zip` is appended — better to reject the rename
+    // outright here than let it silently produce a patch file the OS can't create at all (the
+    // archive itself would still succeed, since it's checked separately below, leaving a renamed
+    // archive with an now-permanently-unreachable-by-name existing patch).
+    if patch_filename.len() > MAX_FILENAME_BYTES {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "rename_archive",
+            format!(
+                "filename too long ({} bytes once combined with the patch sidecar's own \
+                 .patch.zip suffix; {MAX_FILENAME_BYTES} bytes max)",
+                patch_filename.len()
+            ),
+        );
+    }
+    if new_filename.len() > MAX_FILENAME_BYTES {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "rename_archive",
+            format!(
+                "filename too long ({} bytes; {MAX_FILENAME_BYTES} bytes max)",
+                new_filename.len()
+            ),
+        );
+    }
+
+    if new_filename
+        == old_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+    {
+        // No-op rename (e.g. only whitespace trimmed away) — nothing to do, not an error.
+        return axum::Json(
+            json!({ "operation": "rename_archive", "success": 1, "filename": new_filename }),
+        )
+        .into_response();
+    }
+
+    // Held across the conflict check, the actual `rename`, and the DB/`LRR_FILEMAP` writes below
+    // — the same `FilenameLocks` a concurrent download/upload/watcher-driven ingest would take out
+    // on either name (`lanrurugi_scanner::pipeline::run`'s own per-event lock, `download_manager::
+    // ingest`'s staging-to-`archive_dir` fixup). Without this, a download that happens to resolve
+    // to the exact same target filename this rename is moving *to* (or a watcher event for the
+    // *old* name racing this handler before the `fs::rename` below completes) could interleave
+    // with this handler's own check-then-write sequence — the same kind of real, observed
+    // corruption `FilenameLocks`'s own module docs describe for the two ingest paths it already
+    // guards against each other. Two locks, not one, since both names are live for part of this
+    // handler's duration; always old-then-new (a fixed order, even though no other caller
+    // currently locks two names at once) to rule out a lock-order deadlock if that ever changes.
+    let old_filename_str = old_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let _old_guard = state.lock_filename(&old_filename_str).await;
+    let _new_guard = state.lock_filename(&new_filename).await;
+
+    match state.repos.archives.find_by_filename(&new_filename).await {
+        Ok(Some(existing)) if existing.id != id => {
+            return error(
+                StatusCode::CONFLICT,
+                "rename_archive",
+                format!(
+                    "an archive with filename {new_filename:?} already exists ({}).",
+                    existing.id
+                ),
+            )
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "rename_archive",
+                e.to_string(),
+            )
+        }
+    }
+
+    let new_path = old_path.with_file_name(&new_filename);
+    // Journaled *before* the disk rename, cleared only after the archive record below is durably
+    // saved — a crash in between (disk already renamed, DB record still pointing at the old path)
+    // otherwise leaves `repair_zombie_archives`' own repair guessing purely from `archive.name`,
+    // which may not have been saved yet either. This entry gives the startup repair the exact
+    // old/new paths this rename was mid-flight on, no guessing required. Best-effort: if Redis is
+    // briefly unreachable here, the rename still proceeds — a real Redis outage already blocks the
+    // rest of this handler's own writes (the `archives.save()` below) as effectively as it would
+    // block writing this journal entry.
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn
+            .hset(
+                lanrurugi_storage::keys::PENDING_RENAME_KEY,
+                id.as_str(),
+                format!("{}\n{}", old_path.display(), new_path.display()),
+            )
+            .await;
+    }
+
+    if let Err(e) = tokio::fs::rename(&old_path, &new_path).await {
+        if let Ok(mut conn) = state.redis.config.get().await {
+            let _: Result<(), _> = conn
+                .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
+                .await;
+        }
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rename_archive",
+            format!("failed to rename file on disk: {e}"),
+        );
+    }
+
+    if archive.has_patch {
+        let old_patch_path = lanrurugi_scanner::patch::patch_path_for(&old_path);
+        let new_patch_path = old_path.with_file_name(&patch_filename);
+        if old_patch_path.exists() {
+            if let Err(e) = tokio::fs::rename(&old_patch_path, &new_patch_path).await {
+                // The archive file itself already moved — rolling that back here would trade one
+                // inconsistent state (renamed archive, stale-named patch) for another (original
+                // name restored, but the caller was already told the whole operation failed,
+                // leaving no clean signal either way) without actually fixing anything, since the
+                // real problem is whatever made this specific rename fail (permissions, a second
+                // conflicting file already at `new_patch_path`, ...) and would just as likely
+                // reject the rollback `rename` too. Surface the failure; the archive's own rename
+                // already succeeded and is reported as such below — this is logged, not fatal.
+                tracing::error!(%id, old_patch_path = %old_patch_path.display(), new_patch_path = %new_patch_path.display(), error = %e, "renamed archive file but failed to rename its sidecar patch file");
+            }
+        }
+    }
+
+    archive.file = new_path.to_string_lossy().to_string();
+    // `name` (legacy field, exposed to the frontend as `filename`) is the *stem* on its own —
+    // stored independently of `file`, not derived from it (unlike `extension()`, which always
+    // re-reads `file` itself) — so it goes stale unless updated here too. Left alone, the Edit
+    // page's "Current File Name" field would keep showing the pre-rename name even though the
+    // file on disk (and every other place `file` is read from) had already moved.
+    archive.name = requested_stem.clone();
+    if let Err(e) = state.repos.archives.save(&archive).await {
+        // The journal entry deliberately stays — it's still true that the disk file is at
+        // `new_path` while the DB record isn't caught up yet, exactly the state the journal
+        // exists to record. `repair_zombie_archives` will finish the job on next startup; a
+        // manual retry of this same rename request would also just re-do this save.
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rename_archive",
+            format!("renamed file on disk but failed to save the archive record: {e}"),
+        );
+    }
+
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let old_str = old_path.to_string_lossy().to_string();
+        let new_str = new_path.to_string_lossy().to_string();
+        let _: Result<(), _> = conn
+            .hdel(lanrurugi_storage::keys::FILEMAP_KEY, &old_str)
+            .await;
+        let _: Result<(), _> = conn
+            .hset(lanrurugi_storage::keys::FILEMAP_KEY, &new_str, id.as_str())
+            .await;
+        let _: Result<(), _> = conn
+            .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
+            .await;
+    }
+
+    axum::Json(json!({ "operation": "rename_archive", "success": 1, "filename": new_filename }))
+        .into_response()
 }
 
 /// Cover thumbnail path, matching legacy `extract_thumbnail`'s sharding: `<thumb_dir>/<id[0:2]>/<id>.<ext>`.

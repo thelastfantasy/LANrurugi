@@ -48,7 +48,7 @@ pub fn router() -> Router<AppState> {
 
 /// Filenames are taken from the multipart field only for their extension/base name — never used
 /// as a path, so a client can't traverse outside `archive_dir` via `../../etc/passwd`-style names.
-fn sanitize_filename(name: &str) -> String {
+pub(crate) fn sanitize_filename(name: &str) -> String {
     Path::new(name)
         .file_name()
         .and_then(|n| n.to_str())

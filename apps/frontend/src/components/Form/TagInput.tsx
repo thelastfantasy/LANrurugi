@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 /** A purpose-built replacement for real legacy's third-party `tagger` jQuery plugin
  * (`vendor/tagger.js`/`tagger.css`, MIT-licensed, https://github.com/jcubic/tagger — pulled in at
@@ -50,6 +50,46 @@ export function TagInput({
   disabled?: boolean
 }) {
   const [draft, setDraft] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Undo/redo for tag add/remove — legacy's own `tagger` widget (and no plain `<textarea>`'s
+  // native undo stack applies here, since each tag is its own chip, not editable text) has no
+  // such feature, but it's a real gap users hit: an accidental "×" click on the wrong tag had no
+  // way to recover short of retyping it. Tracks only `value` snapshots (the flat tag string), not
+  // `draft` (in-progress typing) — undoing mid-type would be surprising, and the draft input's own
+  // text already has the browser's native undo for free. `skipHistory` suppresses the effect
+  // below from re-recording a history navigation as if it were a fresh edit.
+  const historyRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] })
+  const skipHistoryRef = useRef(false)
+  const lastValueRef = useRef(value)
+
+  useEffect(() => {
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false
+    } else if (value !== lastValueRef.current) {
+      historyRef.current.past.push(lastValueRef.current)
+      historyRef.current.future = []
+    }
+    lastValueRef.current = value
+  }, [value])
+
+  function undo() {
+    const { past } = historyRef.current
+    if (past.length === 0) return
+    const previous = past.pop() as string
+    historyRef.current.future.push(value)
+    skipHistoryRef.current = true
+    onChange(previous)
+  }
+
+  function redo() {
+    const { future } = historyRef.current
+    if (future.length === 0) return
+    const next = future.pop() as string
+    historyRef.current.past.push(value)
+    skipHistoryRef.current = true
+    onChange(next)
+  }
 
   const tags = useMemo(
     () =>
@@ -82,9 +122,39 @@ export function TagInput({
 
   function removeTag(tag: string) {
     onChange(tags.filter((t) => t !== tag).join(", "))
+    // A remove-button click can land while the component has no focus at all (the button itself
+    // isn't the draft input) — move focus to the draft input afterward so the user can
+    // immediately keep typing/undo without an extra click, same as if they'd clicked the input
+    // directly.
+    inputRef.current?.focus()
+  }
+
+  // `Ctrl+Z`/`Cmd+Z` (undo) and `Ctrl+Y`/`Cmd+Shift+Z` (redo, both spellings — Windows/Linux apps
+  // conventionally use `Ctrl+Y`, macOS `Cmd+Shift+Z`). Only handled while the draft input is
+  // empty: with text mid-type, `Ctrl+Z` should undo *that typing* first via the browser's own
+  // native text-input undo, not jump straight to reverting the last committed/removed tag.
+  function handleUndoRedoKeyDown(e: React.KeyboardEvent): boolean {
+    if (draft !== "" || !(e.ctrlKey || e.metaKey)) return false
+    // `e.key` reports the shifted character ("Z", not "z") when Shift is held, so a plain `=== "z"`
+    // check would never match `Shift+Z` — compare case-insensitively instead.
+    const key = e.key.toLowerCase()
+    if (key === "z" && !e.shiftKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      undo()
+      return true
+    }
+    if (key === "y" || (key === "z" && e.shiftKey)) {
+      e.preventDefault()
+      e.stopPropagation()
+      redo()
+      return true
+    }
+    return false
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (handleUndoRedoKeyDown(e)) return
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault()
       commit(draft)
@@ -129,7 +199,27 @@ export function TagInput({
           rule). Clearing `width` (the theme rule's own `width: 60%`) too, for the same reason as
           `maxWidth` — otherwise 60% of the 574px column is 344px, still short of the other
           fields' full width. */}
-      <div className="tagger" style={{ minHeight: 125, width: "auto", maxWidth: "none", display: "block", boxSizing: "border-box" }}>
+      <div
+        className="tagger"
+        style={{ minHeight: 125, width: "auto", maxWidth: "none", display: "block", boxSizing: "border-box", cursor: disabled ? undefined : "text" }}
+        onClick={(e) => {
+          // The input's own `<li>` only fills the rest of *its* flex line (the row the last tag
+          // wrapped onto), not the whole remaining height of a multi-row `.tagger` — clicking the
+          // empty space below that line hit this container, not the input, and did nothing. Any
+          // click that isn't on a tag chip or its remove button should still focus the input, same
+          // as clicking directly on it would.
+          if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "UL") {
+            inputRef.current?.focus()
+          }
+        }}
+        // Catches Ctrl+Z/Ctrl+Y right after a remove-button click, which moves focus off the
+        // draft input (usually onto the button itself, sometimes the document body) — without
+        // this, undo only worked while the draft input itself still had focus.
+        // `handleUndoRedoKeyDown` itself calls `stopPropagation()` on a handled keypress, so a
+        // keydown that started on the draft input (already handled by its own `onKeyDown` above)
+        // never reaches here a second time.
+        onKeyDown={handleUndoRedoKeyDown}
+      >
         <ul
           style={{
             display: "flex",
@@ -187,6 +277,7 @@ export function TagInput({
             // (issue #45).
             <li className="tagger-new" style={{ flexGrow: 1, position: "relative", margin: "0.4rem 0", paddingLeft: 10, minWidth: 80 }}>
               <input
+                ref={inputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={handleKeyDown}

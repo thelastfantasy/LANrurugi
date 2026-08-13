@@ -452,6 +452,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
+    // Resolves any `archives.rs::rename_archive` left mid-flight by a crash — before the generic
+    // zombie repair below, since this one knows exactly which old/new path pair was in progress
+    // (no guessing from `archive.name`, which may itself not have been saved yet).
+    resolve_pending_renames(&state).await;
+
     // Same "converge any crash-intermediate state before accepting connections" reasoning as the
     // queue-orphan cleanup above — archive records whose `file` is empty/points at temp/vanished
     // get repaired or dropped so hash-based dedup stops matching ghost bytes.
@@ -725,6 +730,81 @@ async fn sweep_stale_queue_items(state: &AppState) {
         if let Err(e) = state.download_queue.update(&item).await {
             tracing::warn!(item_id = %item.id, error = %e, "sweep: failed to update stale item");
         }
+    }
+}
+
+/// Startup counterpart to `archives.rs::rename_archive`'s `PENDING_RENAME_KEY` journal (see that
+/// key's own docs) — finishes or discards whatever rename was mid-flight when the process last
+/// stopped, using the exact old/new path pair the journal recorded rather than guessing. Three
+/// possible disk states for a given entry, each with an unambiguous resolution:
+/// - `new_path` exists, `old_path` doesn't: the disk rename completed but the DB save didn't —
+///   apply it now (same field updates `rename_archive` itself would have made).
+/// - `old_path` exists, `new_path` doesn't: the crash happened *before* the disk rename ran —
+///   nothing to finish; just clear the journal entry.
+/// - Neither exists (or the archive record itself is already gone): unrecoverable from this
+///   entry alone — clear it and let `repair_zombie_archives` (which runs right after this) apply
+///   its own broader "does an `archive_dir` file match this record's `name`" fallback.
+async fn resolve_pending_renames(state: &AppState) {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "resolve_pending_renames: failed to reach redis");
+            return;
+        }
+    };
+    let entries: std::collections::HashMap<String, String> = conn
+        .hgetall(lanrurugi_storage::keys::PENDING_RENAME_KEY)
+        .await
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return;
+    }
+
+    for (archive_id, paths) in entries {
+        let Some((old_path, new_path)) = paths.split_once('\n') else {
+            tracing::warn!(%archive_id, "resolve_pending_renames: malformed journal entry, discarding");
+            let _: Result<(), _> = conn
+                .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, &archive_id)
+                .await;
+            continue;
+        };
+        let id = lanrurugi_core::ids::ArchiveId(archive_id.clone());
+        let new_exists = tokio::fs::try_exists(new_path).await.unwrap_or(false);
+        let old_exists = tokio::fs::try_exists(old_path).await.unwrap_or(false);
+
+        if new_exists {
+            if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {
+                archive.file = new_path.to_string();
+                if let Some(new_name) = std::path::Path::new(new_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                {
+                    archive.name = new_name.to_string();
+                }
+                if let Err(e) = state.repos.archives.save(&archive).await {
+                    tracing::warn!(%archive_id, error = %e, "resolve_pending_renames: failed to save recovered rename, will retry next startup");
+                    continue;
+                }
+                let _: Result<(), _> = conn
+                    .hdel(lanrurugi_storage::keys::FILEMAP_KEY, old_path)
+                    .await;
+                let _: Result<(), _> = conn
+                    .hset(
+                        lanrurugi_storage::keys::FILEMAP_KEY,
+                        new_path,
+                        archive_id.as_str(),
+                    )
+                    .await;
+                tracing::info!(%archive_id, old_path, new_path, "resolve_pending_renames: completed a rename interrupted by restart");
+            }
+        } else if old_exists {
+            tracing::info!(%archive_id, old_path, new_path, "resolve_pending_renames: disk rename never ran, discarding stale journal entry");
+        } else {
+            tracing::warn!(%archive_id, old_path, new_path, "resolve_pending_renames: neither old nor new path exists, deferring to repair_zombie_archives");
+        }
+        let _: Result<(), _> = conn
+            .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, &archive_id)
+            .await;
     }
 }
 
