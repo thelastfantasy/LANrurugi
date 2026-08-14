@@ -157,10 +157,10 @@ export function RecentlyAddedCarousel({
   }, [items])
 
   const modeLabel: Record<CarouselMode, string> = {
-    ondeck: t("On Deck"),
-    random: t("Random"),
-    inbox: t("New Archives"),
-    untagged: t("Untagged Archives"),
+    ondeck: t("library.onDeck"),
+    random: t("library.random"),
+    inbox: t("library.newArchives"),
+    untagged: t("library.untaggedArchives"),
   }
 
   return (
@@ -187,7 +187,7 @@ export function RecentlyAddedCarousel({
               this same header's icon/text in place rather than showing a second header — MSM is a
               *mode the carousel itself enters*, not a separate panel underneath it. */}
           <i className={multiSelect ? "fas fa-check-square" : `fa ${CAROUSEL_ICON[mode]}`} aria-hidden="true"></i>
-          <div style={{ marginLeft: 8 }}>{multiSelect ? t("Selection") : modeLabel[mode]}</div>
+          <div style={{ marginLeft: 8 }}>{multiSelect ? t("app.selection") : modeLabel[mode]}</div>
         </div>
         {isOpen && multiSelect && (
           <div className="collapsible-right" onClick={(e) => e.stopPropagation()}>
@@ -195,7 +195,7 @@ export function RecentlyAddedCarousel({
                 slot, replacing the refresh/more-options icons. `updateSelectionCount` hides
                 batch-ops/merge/clear at zero selected — only select-page stays visible. */}
             {selectedIds.length > 0 && (
-              <span>{t("{{n}} selected", { n: selectedIds.length })}</span>
+              <span>{t("library.selected", { n: selectedIds.length })}</span>
             )}
             {/* No `marginBottom` offset on these four, unlike the refresh/more-options icons
                 below (`margin-bottom: 0px` vs. `-4px` in legacy's real computed style). */}
@@ -204,7 +204,7 @@ export function RecentlyAddedCarousel({
                 href="#"
                 className="fa fa-2x fa-hammer"
                 style={{ marginLeft: 12 }}
-                title={t("Run Batch Operations on selection") ?? undefined}
+                title={t("library.runBatchOperationsOnSelection") ?? undefined}
                 onClick={(e) => {
                   e.preventDefault()
                   onRunBatch()
@@ -216,7 +216,7 @@ export function RecentlyAddedCarousel({
                 href="#"
                 className="fa fa-2x fa-compress-alt"
                 style={{ marginLeft: 12 }}
-                title={t("Merge Archives into Tankoubon") ?? undefined}
+                title={t("library.mergeArchivesIntoTankoubon") ?? undefined}
                 onClick={(e) => {
                   e.preventDefault()
                   onMerge()
@@ -228,7 +228,7 @@ export function RecentlyAddedCarousel({
                 href="#"
                 className="fa fa-2x fa-eject"
                 style={{ marginLeft: 12 }}
-                title={t("Clear selection") ?? undefined}
+                title={t("library.clearSelection") ?? undefined}
                 onClick={(e) => {
                   e.preventDefault()
                   onClearSelection()
@@ -239,7 +239,7 @@ export function RecentlyAddedCarousel({
               href="#"
               className="fa fa-2x fa-check-double"
               style={{ marginLeft: 12 }}
-              title={t("Select All in Page") ?? undefined}
+              title={t("library.selectAllInPage") ?? undefined}
               onClick={(e) => {
                 e.preventDefault()
                 onSelectPage()
@@ -253,7 +253,7 @@ export function RecentlyAddedCarousel({
               href="#"
               className={`fa fa-2x fa-sync${loading ? " fa-spin" : ""}`}
               style={{ marginBottom: -4 }}
-              title={t("Refresh") ?? undefined}
+              title={t("library.refresh") ?? undefined}
               onClick={(e) => {
                 e.preventDefault()
                 void carouselQuery.refetch()
@@ -264,7 +264,7 @@ export function RecentlyAddedCarousel({
                 href="#"
                 className="fa fa-2x fa-ellipsis-h"
                 style={{ marginBottom: -4, marginLeft: 12 }}
-                title={t("Carousel Mode") ?? undefined}
+                title={t("library.carouselMode") ?? undefined}
                 onClick={(e) => {
                   e.preventDefault()
                   setMenuOpen((m) => !m)
@@ -323,7 +323,7 @@ export function RecentlyAddedCarousel({
                   >
                     <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
                     <span style={{ marginTop: 12 }}>
-                      {t("Click Archives to add them to the selection. Your selection carries over across searches.")}
+                      {t("library.clickArchivesToAddThem")}
                     </span>
                   </div>
                   <div className="id4"></div>
@@ -380,7 +380,7 @@ export function RecentlyAddedCarousel({
             ) : items.length === 0 ? (
               <div style={{ height: 344, display: "flex", justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
                 <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
-                <span style={{ marginTop: 12 }}>{t("No results here.")}</span>
+                <span style={{ marginTop: 12 }}>{t("library.noResultsHere")}</span>
               </div>
             ) : (
               <div style={{ position: "relative" }}>

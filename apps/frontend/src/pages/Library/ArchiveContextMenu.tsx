@@ -92,8 +92,8 @@ export function ArchiveContextMenu({
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`
     navigator.clipboard
       .writeText(url)
-      .then(() => toast({ heading: t("Link copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 }))
-      .catch(() => toast({ heading: t("Failed to copy link.") ?? undefined, icon: "error" }))
+      .then(() => toast({ heading: t("library.linkCopiedToClipboard") ?? undefined, icon: "info", hideAfter: 3000 }))
+      .catch(() => toast({ heading: t("library.failedToCopyLink") ?? undefined, icon: "error" }))
   }
 
   return (
@@ -140,7 +140,7 @@ export function ArchiveContextMenu({
             onOpen(archive.arcid)
           }}
         >
-          <i className="fa fa-book-open" style={{ width: 18 }}></i> {t("Read")}
+          <i className="fa fa-book-open" style={{ width: 18 }}></i> {t("common.read")}
         </PopupMenuItem>
         {/* Not offered on a Tankoubon — it's an aggregate container with no single `progress`/
             `pagecount` of its own (each member archive tracks its own separately), so "mark this
@@ -157,7 +157,7 @@ export function ArchiveContextMenu({
             }}
           >
             <i className={`fa ${archive.progress > 0 ? "fa-eye-slash" : "fa-eye"}`} style={{ width: 18 }}></i>{" "}
-            {archive.progress > 0 ? t("Mark as Unread") : t("Mark as Read")}
+            {archive.progress > 0 ? t("library.markAsUnread") : t("library.markAsRead")}
           </PopupMenuItem>
         )}
         {!isTank && (
@@ -167,7 +167,7 @@ export function ArchiveContextMenu({
               window.location.assign(`/api/archives/${archive.arcid}/download`)
             }}
           >
-            <i className="fa fa-download" style={{ width: 18 }}></i> {t("Download")}
+            <i className="fa fa-download" style={{ width: 18 }}></i> {t("library.download")}
           </PopupMenuItem>
         )}
         <PopupMenuItem
@@ -176,7 +176,7 @@ export function ArchiveContextMenu({
             copyLink()
           }}
         >
-          <i className="fa fa-link" style={{ width: 18 }}></i> {t("Copy Link")}
+          <i className="fa fa-link" style={{ width: 18 }}></i> {t("library.copyLink")}
         </PopupMenuItem>
         <PopupMenuItem
           onClick={() => {
@@ -185,7 +185,7 @@ export function ArchiveContextMenu({
           }}
         >
           <i className="fa fa-check-square" style={{ width: 18 }}></i>{" "}
-          {isSelected ? t("Remove from Selection") : t("Add to Selection")}
+          {isSelected ? t("library.removeFromSelection") : t("library.addToSelection")}
         </PopupMenuItem>
         {loggedIn && (
           <>
@@ -197,10 +197,10 @@ export function ArchiveContextMenu({
               }}
             >
               <i className="fa fa-pen" style={{ width: 18 }}></i>{" "}
-              {isTank ? t("Edit Tankoubon") : t("Edit Metadata")}
+              {isTank ? t("common.editTankoubon") : t("library.editMetadata")}
             </PopupMenuItem>
             <PopupMenuItem style={{ position: "relative" }} onMouseEnter={() => openSubmenu("category")} onMouseLeave={scheduleCloseSubmenus}>
-              <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t("Add to Category")}
+              <i className="fa fa-search-plus" style={{ width: 18 }}></i> {t("library.addToCategory")}
               {categoryMenuOpen && (
                 <PopupMenu
                   portal={false}
@@ -209,7 +209,7 @@ export function ArchiveContextMenu({
                   onMouseLeave={scheduleCloseSubmenus}
                 >
                   {staticCategories.length === 0 && (
-                    <PopupMenuItem disabled>{t("No categories found.")}</PopupMenuItem>
+                    <PopupMenuItem disabled>{t("library.noCategoriesFound")}</PopupMenuItem>
                   )}
                   {staticCategories.map((c) => {
                     const currentlyIn = c.archives.includes(archive.arcid)
@@ -229,7 +229,7 @@ export function ArchiveContextMenu({
                 onDelete(archive.arcid, isTank)
               }}
             >
-              <i className="fa fa-trash" style={{ width: 18 }}></i> {t("Delete")}
+              <i className="fa fa-trash" style={{ width: 18 }}></i> {t("common.delete")}
             </PopupMenuItem>
           </>
         )}

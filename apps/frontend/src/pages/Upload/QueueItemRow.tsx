@@ -63,11 +63,11 @@ function RateLimitedProgressBar({
           }}
         >
           <span>
-            {t("Rate-limited to {{limit}}/s", { limit: formatBytes(cap) })}
+            {t("upload.ratelimitedToLimitS", { limit: formatBytes(cap) })}
           </span>
           {pattern && (
             <span style={{ opacity: 0.85 }}>
-              {t("Matched rule: {{pattern}}", { pattern })}
+              {t("upload.matchedRulePattern", { pattern })}
             </span>
           )}
           <a
@@ -78,7 +78,7 @@ function RateLimitedProgressBar({
             href={routes.pluginSettings(pluginNamespace)}
             style={{ textDecoration: "underline" }}
           >
-            {t("Edit this plugin's rate-limit settings")}
+            {t("upload.editThisPluginSRatelimit")}
           </a>
         </div>
       }
@@ -158,7 +158,7 @@ export function QueueItemRow({
     // (reported live: "点击ai选项时没有skeleton或正在处理的toast"). Dismissed the moment the modal
     // actually opens (first sample) or a stream-level error arrives, below.
     const pendingToastId = toast({
-      heading: t("Analyzing…") ?? "Analyzing…",
+      heading: t("upload.analyzing") ?? "Analyzing…",
       icon: "info",
       hideAfter: false,
       closeOnClick: false,
@@ -181,7 +181,7 @@ export function QueueItemRow({
       pendingCompareToastRef.current = null;
     }
     if (noMatch) {
-      toast({ heading: t("No reliable comparison result — the two archives appear to have completely different content."), icon: "info", hideAfter: false });
+      toast({ heading: t("upload.noReliableComparisonResult"), icon: "info", hideAfter: false });
       startedRef.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStarted(false);
@@ -263,7 +263,7 @@ export function QueueItemRow({
                   )
                 ) : (
                   <span style={{ fontSize: FONT_SIZE_SM }}>
-                    {t("Starting…")}
+                    {t("upload.starting")}
                   </span>
                 )}
               </>
@@ -336,7 +336,7 @@ export function QueueItemRow({
               <div
                 style={{ fontSize: FONT_SIZE_XS, color: STATE_COLOR.failed }}
               >
-                {t("Cancelled")}
+                {t("upload.cancelled")}
               </div>
             )}
           </div>
@@ -344,7 +344,7 @@ export function QueueItemRow({
 
         {!isLocalUpload && (
           <>
-            <Tooltip label={t("Auto Fetch Metadata") ?? ""}>
+            <Tooltip label={t("upload.autoFetchMetadata") ?? ""}>
               <input
                 type="checkbox"
                 checked={item.auto_fetch_metadata}
@@ -358,7 +358,7 @@ export function QueueItemRow({
               />
             </Tooltip>
 
-            <Tooltip label={t("Overwrite Duplicate") ?? ""}>
+            <Tooltip label={t("upload.overwriteDuplicate") ?? ""}>
               <input
                 type="checkbox"
                 checked={item.overwrite_on_duplicate}
@@ -380,7 +380,7 @@ export function QueueItemRow({
                 (`portal={false}`) so its own `position: absolute` resolves against THIS box, not
                 the viewport/document, and scrolls with the row as ordinary page content. */}
             <div style={{ position: "relative" }}>
-              <Tooltip label={t("Resolve Conflict") ?? ""}>
+              <Tooltip label={t("upload.resolveConflict") ?? ""}>
                 <button
                   ref={conflictButtonRef}
                   type="button"
@@ -436,7 +436,7 @@ export function QueueItemRow({
           </>
         ) : isLocalUpload ? null : item.state === "starting" ||
           item.state === "downloading" ? (
-          <Tooltip label={t("Stop") ?? ""}>
+          <Tooltip label={t("upload.stop") ?? ""}>
             <button
               type="button"
               className="stdbtn"
@@ -451,8 +451,8 @@ export function QueueItemRow({
           <Tooltip
             label={
               (item.state === "error" || wasCancelled
-                ? t("Retry")
-                : t("Download")) ?? ""
+                ? t("upload.retry")
+                : t("library.download")) ?? ""
             }
           >
             <button
@@ -483,8 +483,8 @@ export function QueueItemRow({
           <Tooltip
             label={
               metadataPlugin
-                ? `${t("Fetch Metadata")} (${metadataPlugin.name})`
-                : (t("Fetch Metadata") ?? "")
+                ? `${t("upload.fetchMetadata")} (${metadataPlugin.name})`
+                : (t("upload.fetchMetadata") ?? "")
             }
           >
             <button
@@ -505,7 +505,7 @@ export function QueueItemRow({
         )}
 
         <Tooltip
-          label={(item.state === "done" ? t("Remove") : t("Delete")) ?? ""}
+          label={(item.state === "done" ? t("pluginOptions.remove") : t("common.delete")) ?? ""}
         >
           <button
             type="button"

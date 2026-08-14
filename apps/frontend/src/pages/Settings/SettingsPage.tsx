@@ -25,12 +25,12 @@ export function Settings() {
   useLegacyConfigCss()
 
   if (settings.isLoading) {
-    return <div className="ido">{t("Loading library…")}</div>
+    return <div className="ido">{t("common.loadingLibrary")}</div>
   }
 
   if (settings.isError || !settings.data) {
     return (
-      <div className="ido">{t("Failed to load archives: {{error}}", { error: String(settings.error) })}</div>
+      <div className="ido">{t("common.failedToLoadArchivesError", { error: String(settings.error) })}</div>
     )
   }
 
@@ -40,7 +40,7 @@ export function Settings() {
 function SettingsForm({ settings }: { settings: SettingsType }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  useDocumentTitle(t("Admin Settings") ?? undefined)
+  useDocumentTitle(t("settings.adminSettings") ?? undefined)
   const logout = useLogout()
   const info = useServerInfo()
   const updateSettings = useUpdateSettings()
@@ -57,6 +57,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [readerquality, setReaderquality] = useState(settings.readerquality)
   const [localprogress, setLocalprogress] = useState(settings.localprogress)
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
+  const [devmode, setDevmode] = useState(settings.devmode)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
   // Incremented after each save to remount GlobalSection (resets editingKey).
@@ -102,6 +103,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       readerquality !== settings.readerquality ||
       localprogress !== settings.localprogress ||
       authprogress !== settings.authprogress ||
+      devmode !== settings.devmode ||
       enablepass !== settings.enablepass ||
       nofunmode !== settings.nofunmode ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
@@ -122,7 +124,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recommendprecision !== settings.recommendprecision,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
-      localprogress, authprogress, enablepass, nofunmode, accessTokenLifetimeSecs,
+      localprogress, authprogress, devmode, enablepass, nofunmode, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
@@ -133,7 +135,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   async function handleSave() {
     if (enablepass && newPassword) {
       if (newPassword !== newPassword2) {
-        setStatus(t("Passwords don't match!") ?? "")
+        setStatus(t("settings.passwordsDonTMatch") ?? "")
         return
       }
       await changePassword.mutateAsync(newPassword)
@@ -150,6 +152,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       readerquality,
       localprogress,
       authprogress,
+      devmode,
       enablepass,
       nofunmode,
       access_token_lifetime_secs: accessTokenLifetimeSecs,
@@ -172,7 +175,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
     })
     setKeyInput("")
     setSaveTick((n) => n + 1)
-    toast({ heading: t("Settings saved!") ?? undefined, icon: "success" })
+    toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
   }
 
   async function handleLogout() {
@@ -183,7 +186,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   return (
     <div className="ido">
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Admin Settings")}
+        {t("settings.adminSettings")}
       </h2>
       <br />
 
@@ -191,31 +194,31 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <img className="logo-container" src="/legacy/img/logo.png" alt="LANrurugi" />
         <br />
         <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
-        {t("Version {{version}} {{vername}}", {
+        {t("settings.versionVersionVername", {
           version: info.data?.version ?? "",
           vername: info.data?.version_name ?? "",
         })}
         <br />
-        <h2>{t("Select a category to show the matching settings.")}</h2>
+        <h2>{t("settings.selectACategoryToShow")}</h2>
         <br />
         <input
           id="plugin-config"
           className="stdbtn"
           type="button"
-          value={t("Plugin Configuration") ?? undefined}
+          value={t("common.pluginConfiguration") ?? undefined}
           onClick={() => navigate(routes.pluginSettings())}
         />{" "}
         <input
           id="backup"
           className="stdbtn"
           type="button"
-          value={t("Database Backup/Restore") ?? undefined}
+          value={t("settings.databaseBackupRestore") ?? undefined}
           onClick={() => navigate(routes.backup())}
         />{" "}
-        <input id="batch" className="stdbtn" type="button" value={t("Batch Operations") ?? undefined} onClick={() => navigate(routes.batch())} />
+        <input id="batch" className="stdbtn" type="button" value={t("batch.batchOperations") ?? undefined} onClick={() => navigate(routes.batch())} />
         <br />
         <br />
-        <input id="return" className="stdbtn" type="button" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+        <input id="return" className="stdbtn" type="button" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
 
         {status && <p style={{ fontSize: FONT_SIZE_SM }}>{status}</p>}
 
@@ -224,7 +227,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             Settings). Kept minimal and visually separate since this SPA needs both. */}
         <hr style={{ margin: "12px 0" }} />
         <LanguageSelector />{" "}
-        <input id="logout" className="stdbtn" type="button" value={t("Logout") ?? undefined} onClick={() => void handleLogout()} />
+        <input id="logout" className="stdbtn" type="button" value={t("settings.logout") ?? undefined} onClick={() => void handleLogout()} />
       </div>
 
       <form
@@ -254,6 +257,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setLocalprogress={setLocalprogress}
             authprogress={authprogress}
             setAuthprogress={setAuthprogress}
+            devmode={devmode}
+            setDevmode={setDevmode}
             newbadgemode={newbadgemode}
             setNewbadgemode={setNewbadgemode}
             llmApiKeySet={settings.llm_api_key_set}
@@ -264,19 +269,19 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             onStatus={setStatus}
           />
 
-          <CollapsibleSection icon="fa-paint-brush" title={t("Theme")}>
+          <CollapsibleSection icon="fa-paint-brush" title={t("settings.theme")}>
               <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
                 <tbody>
                   <tr>
                     <td></td>
                     <td className="config-td">
                       <br />
-                      {t("The selected theme will apply to the entire application and be shown to all users.")}
+                      {t("settings.theSelectedThemeWillApply")}
                       <br />
-                      {t('If you\'re using a browser that supports "theme-color", the theme\'s primary color will also be applied there.')}
+                      {t("settings.themeColorMetaHint")}
                       <br />
                       <br />
-                      {t("Click on a theme to preview it before saving!")}
+                      {t("settings.clickOnAThemeTo")}
                     </td>
                   </tr>
                   <tr>
@@ -376,7 +381,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           hidden when clean. `pointer-events: none` when hidden so an invisible bar can't block
           clicks on content beneath it. */}
       <div className="settings-save-bar" style={isDirty ? undefined : { display: "none" }}>
-        <input id="save" className="stdbtn" type="button" value={t("Save Settings") ?? undefined} onClick={() => void handleSave()} />
+        <input id="save" className="stdbtn" type="button" value={t("pluginOptions.saveSettings") ?? undefined} onClick={() => void handleSave()} />
       </div>
     </div>
   )

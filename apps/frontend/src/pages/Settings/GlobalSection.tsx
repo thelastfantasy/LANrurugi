@@ -30,6 +30,8 @@ export function GlobalSection({
   setLocalprogress,
   authprogress,
   setAuthprogress,
+  devmode,
+  setDevmode,
   newbadgemode,
   setNewbadgemode,
   llmApiKeySet,
@@ -57,6 +59,8 @@ export function GlobalSection({
   setLocalprogress: (v: boolean) => void
   authprogress: boolean
   setAuthprogress: (v: boolean) => void
+  devmode: boolean
+  setDevmode: (v: boolean) => void
   newbadgemode: string
   setNewbadgemode: (v: string) => void
   llmApiKeySet: boolean
@@ -75,22 +79,22 @@ export function GlobalSection({
   const dropDatabase = useDropDatabase()
 
   return (
-    <CollapsibleSection icon="fa-cubes" title={t("Global Settings")}>
+    <CollapsibleSection icon="fa-cubes" title={t("settings.globalSettings")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
-          <Row label={t("Site Title")}>
+          <Row label={t("settings.siteTitle")}>
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={htmltitle} onChange={(e) => setHtmltitle(e.target.value)} type="text" />
             <br />
-            {t("The site title appears on most pages as...their title.")}
+            {t("settings.theSiteTitleAppearsOn")}
           </Row>
-          <Row label={t("MOTD")}>
+          <Row label={t("settings.motd")}>
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={motd} onChange={(e) => setMotd(e.target.value)} type="text" />
             <br />
-            {t("Slang for Message of the Day. Appears on top of the main Library view.")}
+            {t("settings.slangForMessageOfThe")}
           </Row>
-          <Row label={t("Language")}>
+          <Row label={t("settings.language")}>
             <select className="stdinput" style={{ width: "100%" }} value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="auto">{t("Automatic (browser default)")}</option>
+              <option value="auto">{t("settings.automaticBrowserDefault")}</option>
               {SUPPORTED_LANGUAGES.map(({ code, nativeName }) => (
                 <option key={code} value={code}>
                   {nativeName}
@@ -98,27 +102,25 @@ export function GlobalSection({
               ))}
             </select>
             <br />
-            {t("Select the language for the user interface. Set to Automatic to use your browser's language preference.")}
-            <br />
-            {t("Fully effective after restarting LANraragi.")}
+            {t("settings.selectTheLanguageForThe")}
           </Row>
-          <Row label={t("Archives per page")}>
+          <Row label={t("settings.archivesPerPage")}>
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={pagesize} onChange={(e) => setPagesize(Number(e.target.value))} type="number" />
             <br />
-            {t("Number of archives shown on a page in the main list.")}
+            {t("settings.numberOfArchivesShownOn")}
           </Row>
-          <Row label={t('"New" badge duration')}>
+          <Row label={t("settings.newBadgeDuration")}>
             <select className="stdinput" style={{ width: "100%" }} value={newbadgemode} onChange={(e) => setNewbadgemode(e.target.value)}>
-              <option value="until_opened">{t("Until the archive is opened")}</option>
-              <option value="until_finished">{t("Until the archive is fully read")}</option>
-              <option value="3d">{t("3 days after it was added")}</option>
-              <option value="7d">{t("7 days after it was added")}</option>
-              <option value="10d">{t("10 days after it was added")}</option>
+              <option value="until_opened">{t("settings.untilTheArchiveIsOpened")}</option>
+              <option value="until_finished">{t("settings.untilTheArchiveIsFully")}</option>
+              <option value="3d">{t("settings.3DaysAfterItWas")}</option>
+              <option value="7d">{t("settings.7DaysAfterItWas")}</option>
+              <option value="10d">{t("settings.10DaysAfterItWas")}</option>
             </select>
             <br />
-            {t('How long an archive keeps its "new" badge after being added to the library.')}
+            {t("settings.howLongAnArchiveKeeps")}
           </Row>
-          <Row label={t("DeepSeek API Key")}>
+          <Row label={t("settings.deepseekApiKey")}>
             {llmApiKeySet && !editingKey ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontFamily: "monospace", opacity: 0.7 }}>
@@ -132,7 +134,7 @@ export function GlobalSection({
                     setEditingKey(true)
                   }}
                 >
-                  {t("Change")}
+                  {t("settings.change")}
                 </button>
               </div>
             ) : (
@@ -154,41 +156,41 @@ export function GlobalSection({
                       setEditingKey(false)
                     }}
                   >
-                    {t("Cancel")}
+                    {t("common.cancel")}
                   </button>
                 )}
               </div>
             )}
             <br />
-            {t("Entering a DeepSeek API key significantly improves the reader's recommendation algorithm (LLM-based reranking). Currently only DeepSeek official API keys are supported.")}
+            {t("settings.enteringADeepseekApiKey")}
           </Row>
-          <Row label={t("Recommendation Precision")}>
+          <Row label={t("settings.recommendationPrecision")}>
             <select
               className="stdinput"
               style={{ width: "100%" }}
               value={recommendprecision}
               onChange={(e) => setRecommendprecision(e.target.value)}
             >
-              <option value="low">{t("Low (fastest, least CPU/storage)")}</option>
-              <option value="medium">{t("Medium (recommended)")}</option>
-              <option value="high">{t("High (most accurate, more CPU/storage)")}</option>
+              <option value="low">{t("settings.lowFastestLeastCpuStorage")}</option>
+              <option value="medium">{t("settings.mediumRecommended")}</option>
+              <option value="high">{t("settings.highMostAccurateMoreCpu")}</option>
             </select>
             <br />
-            {t("Controls how many similar archives are precomputed and cached for the reader's recommendation panel. Higher precision uses more CPU and Redis storage, scaled automatically to your server's hardware and library size.")}
+            {t("settings.controlsHowManySimilarArchives")}
             <br />
-            {t("Changing this triggers a background rebuild of the recommendation cache.")}
+            {t("settings.changingThisTriggersABackground")}
           </Row>
           <CheckboxRow
             id="enableresize"
             checked={enableresize}
             onChange={setEnableresize}
-            label={t("Resize Images in Reader")}
+            label={t("settings.resizeImagesInReader")}
           >
-            {t("Pages over the size threshold below are re-encoded to WebP when viewed. A page whose short edge exceeds 1064px is also downscaled to 1064px.")}
+            {t("settings.pagesOverTheSizeThreshold")}
           </CheckboxRow>
           {enableresize && (
             <>
-              <Row label={t("Image Size Threshold")}>
+              <Row label={t("settings.imageSizeThreshold")}>
                 <input
                   className="stdinput"
                   type="number"
@@ -198,9 +200,9 @@ export function GlobalSection({
                   onChange={(e) => setSizethreshold(Number(e.target.value))}
                 />
                 <br />
-                {t("(in KBs.) Maximum raw size an image can reach before being re-encoded. Default: 1536 KB (1.5 MB).")}
+                {t("settings.inKbsMaximumRawSize")}
               </Row>
-              <Row label={t("Resize Quality")}>
+              <Row label={t("settings.resizeQuality")}>
                 <input
                   className="stdinput"
                   type="number"
@@ -212,7 +214,7 @@ export function GlobalSection({
                   onChange={(e) => setReaderquality(Number(e.target.value))}
                 />
                 <br />
-                {t("WebP quality of the re-encoded images. Less quality = smaller image. (0-100) Default: 85.")}
+                {t("settings.webpQualityOfTheReencoded")}
               </Row>
             </>
           )}
@@ -220,53 +222,61 @@ export function GlobalSection({
             id="localprogress"
             checked={localprogress}
             onChange={setLocalprogress}
-            label={t("Clientside Progress Tracking")}
+            label={t("settings.clientsideProgressTracking")}
           >
-            {t("Enabling this option will save reading progression on the browser (through localStorage) instead of the server.")}
+            {t("settings.enablingThisOptionWillSave")}
             <br />
-            {t("Consider toggling this option if you're sharing the LANraragi instance with multiple users!")}
+            {t("settings.considerTogglingThisOptionIf")}
           </CheckboxRow>
           <CheckboxRow
             id="authprogress"
             checked={authprogress}
             onChange={setAuthprogress}
-            label={t("Authenticated Progress Tracking")}
+            label={t("settings.authenticatedProgressTracking")}
           >
-            {t("If enabled, server-side progress will only be saved if you're logged in with a password, and will override clientside progress. This allows guests to browse without affecting the main user's progress.")}
+            {t("settings.ifEnabledServersideProgressWill")}
             <br />
-            {t("Combine with clientside progress tracking to allow unauthenticated users to track progress locally.")}
+            {t("settings.combineWithClientsideProgressTracking")}
             <br />
-            {t("Fully effective after restarting LANraragi.")}
+            {t("settings.fullyEffectiveAfterRestartingLanraragi")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="devmode"
+            checked={devmode}
+            onChange={setDevmode}
+            label={t("settings.debugMode")}
+          >
+            {t("settings.enablingDebugModeWillShow")}
           </CheckboxRow>
           <ActionRow
             id="clean-db"
-            label={t("Clean Database")}
+            label={t("settings.cleanDatabase")}
             onClick={async () => {
               const result = await cleanDatabase.mutateAsync()
               onStatus(
-                t("{{count}} deleted entries.", { count: result.deleted }) +
+                t("settings.deletedEntries", { count: result.deleted }) +
                   (result.unlinked > 0
-                    ? " " + t("{{count}} unlinked entries — their file went missing.", { count: result.unlinked })
+                    ? " " + t("settings.unlinkedEntriesTheirFile", { count: result.unlinked })
                     : ""),
               )
             }}
           >
-            {t("Cleaning the database will remove entries that aren't on your filesystem.")}
+            {t("settings.cleaningTheDatabaseWillRemove")}
           </ActionRow>
           <ActionRow
             id="drop-db"
-            label={t("Reset Database")}
+            label={t("settings.resetDatabase")}
             onClick={async () => {
-              if (!(await confirmDialog(t("Clicking this button will reset the entire database and delete all settings and metadata.") ?? "", true))) return
+              if (!(await confirmDialog(t("settings.clickingThisButtonWillReset") ?? "", true))) return
               await dropDatabase.mutateAsync()
               setTimeout(() => navigate(routes.library()), 1500)
             }}
           >
             <span style={{ color: "red" }}>
-              <i className="fas fa-exclamation-triangle"></i> {t("Danger zone!")}
+              <i className="fas fa-exclamation-triangle"></i> {t("settings.dangerZone")}
             </span>
             <br />
-            {t("Clicking this button will reset the entire database and delete all settings and metadata.")}
+            {t("settings.clickingThisButtonWillReset")}
           </ActionRow>
         </tbody>
       </table>

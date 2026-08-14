@@ -53,7 +53,7 @@ export function Categories() {
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle")
 
   useApplyTheme()
-  useDocumentTitle(t("Modify Categories") ?? undefined)
+  useDocumentTitle(t("app.modifyCategories") ?? undefined)
 
   const selected = categories.data?.find((c) => c.id === selectedId)
   const isStatic = !!selected && !selected.search
@@ -114,7 +114,7 @@ export function Categories() {
       setStatus("saved")
       await refresh()
     } catch {
-      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" })
       setStatus("idle")
     }
   }
@@ -126,20 +126,20 @@ export function Categories() {
       const data = await createCategory.mutateAsync(result)
       setSelectedId(data.category_id)
     } catch {
-      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" })
     }
   }
 
   async function handleDelete() {
     if (!selectedId) return
-    if (!(await confirmDialog(t("The category will be deleted permanently.") ?? "", true))) return
+    if (!(await confirmDialog(t("categories.theCategoryWillBeDeleted") ?? "", true))) return
     try {
       await sendJson("DELETE", `/categories/${selectedId}`)
-      toast({ text: t("Category deleted!") ?? undefined, icon: "success" })
+      toast({ text: t("categories.categoryDeleted") ?? undefined, icon: "success" })
       setSelectedId("")
       await refresh()
     } catch {
-      toast({ heading: t("Error deleting category") ?? undefined, icon: "error" })
+      toast({ heading: t("categories.errorDeletingCategory") ?? undefined, icon: "error" })
     }
   }
 
@@ -157,7 +157,7 @@ export function Categories() {
       }
       setStatus("saved")
     } catch {
-      toast({ heading: t("Error linking bookmark button:") ?? undefined, icon: "error" })
+      toast({ heading: t("categories.errorLinkingBookmarkButton") ?? undefined, icon: "error" })
       setStatus("idle")
     }
   }
@@ -170,7 +170,7 @@ export function Categories() {
       setStatus("saved")
       await refresh()
     } catch {
-      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" })
       setStatus("idle")
     }
   }
@@ -178,10 +178,10 @@ export function Categories() {
   function predicateHelp() {
     toast({
       toastId: "predicateHelp",
-      heading: t("Writing a Predicate") ?? undefined,
+      heading: t("categories.writingAPredicate") ?? undefined,
       text:
         t(
-          "Predicates follow the same syntax as searches in the Archive Index. Check the Documentation for more information.",
+          "categories.predicatesFollowTheSameSyntax",
         ) ?? undefined,
       icon: "info",
       hideAfter: 20000,
@@ -191,35 +191,35 @@ export function Categories() {
   return (
     <div className="ido" style={{ textAlign: "center" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Categories")}
+        {t("categories.categories")}
       </h2>
       <br />
       <br />
       <div style={{ marginLeft: "auto", marginRight: "auto" }}>
         <div className="left-column" style={{ textAlign: "left", fontSize: FONT_SIZE_SM, width: 400 }}>
-          {t("Categories appear at the top of your window when browsing the Library.")}
+          {t("categories.categoriesAppearAtTheTop")}
           <br />
-          {t("There are two distinct kinds:")}
+          {t("categories.thereAreTwoDistinctKinds")}
           <ul>
             <li>
               <i className="fas fa-2x fa-folder-open" style={{ marginLeft: -30, width: 30 }}></i>{" "}
-              {t("Static Categories are arbitrary collections of Archives, where you can add as many items as you want.")}
+              {t("categories.staticCategoriesAreArbitraryCollections")}
             </li>
             <li>
               <i className="fas fa-2x fa-bolt" style={{ marginLeft: -25, width: 25 }}></i>{" "}
-              {t("Dynamic Categories contain all archives matching a given predicate, and automatically update alongside your library.")}
+              {t("categories.dynamicCategoriesContainAllArchives")}
             </li>
           </ul>
-          {t("You can create new categories here or edit existing ones.")}
+          {t("categories.youCanCreateNewCategories")}
           <br />
           <br />
           <div style={{ textAlign: "center" }}>
-            <input type="button" id="new-category" className="stdbtn" value={t("New Category") ?? undefined} onClick={() => void handleNewCategory()} />
+            <input type="button" id="new-category" className="stdbtn" value={t("common.newCategory") ?? undefined} onClick={() => void handleNewCategory()} />
           </div>
           <br />
-          {t("Select a category in the combobox below to edit its name, the archives it contains, or its predicate.")}
+          {t("categories.selectACategoryInThe")}
           <br />
-          <b>{t("All your modifications are saved automatically.")}</b>
+          <b>{t("categories.allYourModificationsAreSaved")}</b>
           <br />
           <br />
 
@@ -227,7 +227,7 @@ export function Categories() {
             <tbody>
               <tr>
                 <td>
-                  <h2>{t("Category:")}</h2>
+                  <h2>{t("categories.category")}</h2>
                 </td>
                 <td>
                   <select
@@ -236,7 +236,7 @@ export function Categories() {
                     value={selectedId}
                     onChange={(e) => setSelectedId(e.target.value)}
                   >
-                    <option value="">{t(" -- No Category -- ")}</option>
+                    <option value="">{t("common.NoCategory")}</option>
                     {categories.data?.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
@@ -248,14 +248,14 @@ export function Categories() {
               {selected && (
                 <>
                   <tr className="tag-options">
-                    <td style={{ textAlign: "right" }}>{t("Name:")}</td>
+                    <td style={{ textAlign: "right" }}>{t("categories.name")}</td>
                     <td>
                       <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => void saveDetails({ name })} />
                     </td>
                   </tr>
                   {!isStatic && (
                     <tr id="predicatefield" className="tag-options">
-                      <td style={{ textAlign: "right" }}>{t("Predicate:")}</td>
+                      <td style={{ textAlign: "right" }}>{t("categories.predicate")}</td>
                       <td>
                         <input value={search} onChange={(e) => setSearch(e.target.value)} onBlur={() => void saveDetails({ search })} />{" "}
                         <i
@@ -281,7 +281,7 @@ export function Categories() {
                           void saveDetails({ pinned: e.target.checked })
                         }}
                       />
-                      <label htmlFor="pinned">{t("Pin this Category")}</label>
+                      <label htmlFor="pinned">{t("categories.pinThisCategory")}</label>
                     </td>
                   </tr>
                   {isStatic && (
@@ -296,7 +296,7 @@ export function Categories() {
                           checked={bookmarkLinked}
                           onChange={(e) => void handleBookmarkLinkChange(e.target.checked)}
                         />
-                        <label htmlFor="bookmark-link">{t("Store Bookmarks in this Category")}</label>
+                        <label htmlFor="bookmark-link">{t("categories.storeBookmarksInThisCategory")}</label>
                       </td>
                     </tr>
                   )}
@@ -306,7 +306,7 @@ export function Categories() {
                       <input
                         id="delete"
                         type="button"
-                        value={t("Delete Category") ?? undefined}
+                        value={t("categories.deleteCategory") ?? undefined}
                         className="stdbtn"
                         onClick={() => void handleDelete()}
                       />
@@ -317,12 +317,12 @@ export function Categories() {
                     <td id="status" style={{ fontSize: FONT_SIZE_MD }}>
                       {status === "saving" && (
                         <>
-                          <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t("Saving your modifications...")}
+                          <i className="fas fa-spin fa-2x fa-compact-disc"></i> {t("categories.savingYourModifications")}
                         </>
                       )}
                       {status === "saved" && (
                         <>
-                          <i className="fas fa-2x fa-check-circle"></i> {t("Saved!")}
+                          <i className="fas fa-2x fa-check-circle"></i> {t("categories.saved")}
                         </>
                       )}
                     </td>
@@ -342,12 +342,12 @@ export function Categories() {
               <i className="fas fa-8x fa-air-freshener"></i>
               <br />
               <br />
-              <h2>{t("If you select a Static Category, your archives will appear here so you can add/remove them from the category.")}</h2>
+              <h2>{t("categories.ifYouSelectAStatic")}</h2>
             </div>
           ) : (
             <div id="staticcontent" className="checklist">
               <div id="tankoubonsection" style={{ marginBottom: 10 }}>
-                <h3 style={{ marginTop: 0 }}>{t("Tankoubons")}</h3>
+                <h3 style={{ marginTop: 0 }}>{t("categories.tankoubons")}</h3>
                 <ul id="tankoubonlist" style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
                   {tankoubons.data?.result.length ? (
                     tankoubons.data.result.map((tank) => (
@@ -359,13 +359,13 @@ export function Categories() {
                       />
                     ))
                   ) : (
-                    <li style={{ fontStyle: "italic" }}>{t("No Tankoubons in your library yet.")}</li>
+                    <li style={{ fontStyle: "italic" }}>{t("categories.noTankoubonsInYourLibrary")}</li>
                   )}
                 </ul>
               </div>
 
               <div id="archivesection">
-                <h3>{t("Archives")}</h3>
+                <h3>{t("categories.archives")}</h3>
                 <ul id="archivelist" style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
                   {archives.data?.length ? (
                     archives.data.map((a) => {
@@ -381,7 +381,7 @@ export function Categories() {
                         <Tooltip
                           label={
                             <>
-                              {t("This archive belongs to the following Tankoubon(s):")}
+                              {t("categories.thisArchiveBelongsToThe")}
                               {memberTanks.map((tank) => (
                                 <div key={tank.id}>
                                   {tank.name} (
@@ -423,7 +423,7 @@ export function Categories() {
                       )
                     })
                   ) : (
-                    <li style={{ fontStyle: "italic" }}>{t("No Archives in your library yet.")}</li>
+                    <li style={{ fontStyle: "italic" }}>{t("categories.noArchivesInYourLibrary")}</li>
                   )}
                 </ul>
               </div>
@@ -434,7 +434,7 @@ export function Categories() {
         <br />
       </div>
 
-      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

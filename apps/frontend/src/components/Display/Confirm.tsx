@@ -66,7 +66,7 @@ export function Confirm({
         <i className={`fa ${icon} fa-2x${danger ? " confirm-danger-icon" : ""}`} aria-hidden="true"></i>
         <p style={{ fontWeight: "bold", margin: "12px 0" }}>{message}</p>
         <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-          <input type="button" className="stdbtn" value={cancelLabel ?? t("Cancel") ?? undefined} onClick={onCancel} />
+          <input type="button" className="stdbtn" value={cancelLabel ?? t("common.cancel") ?? undefined} onClick={onCancel} />
           <input
             type="button"
             // `.stdbtn-danger`, not an inline `style={{ background: '#d33', ... }}` — a real class
@@ -75,7 +75,7 @@ export function Confirm({
             // entirely (a real, live-reported bug: the earlier inline-style version of this button
             // never visibly changed color on hover).
             className={danger ? "stdbtn stdbtn-danger" : "stdbtn"}
-            value={confirmLabel ?? t("OK") ?? undefined}
+            value={confirmLabel ?? t("common.ok") ?? undefined}
             onClick={onConfirm}
           />
         </div>

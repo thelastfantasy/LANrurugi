@@ -50,7 +50,10 @@ pub async fn require_api_key(
         }
     };
 
-    if !cfg.enable_pass {
+    // `no_fun_mode` deliberately overrides this bypass — see that field's own docs
+    // (`LiveAuthConfig::no_fun_mode`) for why `enable_pass: false` must not mean "wide open" once
+    // No-Fun Mode is on.
+    if !cfg.enable_pass && !cfg.no_fun_mode {
         return next.run(request).await;
     }
 
@@ -220,6 +223,7 @@ mod tests {
     fn cfg(enable_pass: bool) -> LiveAuthConfig {
         LiveAuthConfig {
             enable_pass,
+            no_fun_mode: false,
             password_hash: String::new(),
             session_secret: Vec::new(),
             access_token_lifetime_secs: 3_600,
@@ -241,6 +245,16 @@ mod tests {
         // here at the `LiveAuthConfig` level since `require_api_key` itself needs a live
         // `AppState`/Redis to run end-to-end (see `lanrurugi-server`'s `tests/auth_flow.rs`).
         assert!(!cfg(false).enable_pass);
+    }
+
+    #[test]
+    fn no_fun_mode_overrides_the_open_instance_bypass() {
+        // The actual condition `require_api_key` checks (`!enable_pass && !no_fun_mode`) — with
+        // `no_fun_mode: true`, an open instance (`enable_pass: false`) must NOT bypass auth,
+        // matching legacy's own `enable_nofun` forcing `logged_in_api` regardless of `enable_pass`.
+        let mut auth = cfg(false);
+        auth.no_fun_mode = true;
+        assert!(!(!auth.enable_pass && !auth.no_fun_mode));
     }
 
     #[test]

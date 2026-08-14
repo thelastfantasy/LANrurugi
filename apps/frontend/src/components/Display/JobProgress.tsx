@@ -118,7 +118,7 @@ export function JobProgressBar({
   // fresh reading into `lastReadings`, keeping the next render's delta accurate regardless of
   // which branch actually ends up displaying a speed.
   const speed = job.downloaded_bytes != null ? computeSpeed(job.id, job.downloaded_bytes) : null
-  const speedLabel = speed != null ? t("{{rate}}/s", { rate: formatBytes(speed) }) : null
+  const speedLabel = speed != null ? t("components.display.s", { rate: formatBytes(speed) }) : null
   // Absent cap = unlimited (no rule matched, or the matched rule declared no `max_bytes_per_sec`);
   // a present, positive cap is what the upload-queue UI highlights + tooltips (issue #2). Only the
   // speed figure itself is colored, not the surrounding byte-count/percentage text.
@@ -169,7 +169,7 @@ export function JobProgressBar({
       <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP, justifyContent: "center" }}>
         <i className="fa fa-circle-notch fa-spin" aria-hidden="true"></i>
         <span style={{ fontSize: FONT_SIZE_SM, whiteSpace: "nowrap" }}>
-          {t("{{size}} downloaded", { size: formatBytes(job.downloaded_bytes) })}
+          {t("components.display.downloaded", { size: formatBytes(job.downloaded_bytes) })}
           {speedLabel && (
             <>
               {" ("}

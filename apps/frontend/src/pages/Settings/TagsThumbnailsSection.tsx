@@ -84,22 +84,22 @@ export function TagsThumbnailsSection({
   const regenThumbnails = useRegenThumbnails()
 
   return (
-    <CollapsibleSection icon="fa-tags" title={t("Tags and Thumbnails")}>
+    <CollapsibleSection icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
-          <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("Use high-quality thumbnails for pages")}>
-            {t("LANraragi generates lower-quality thumbnails for archive pages for performance reasons.")}
+          <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("settings.useHighqualityThumbnailsForPages")}>
+            {t("settings.lanraragiGeneratesLowerqualityThumbnailsFor")}
             <br />
-            {t("If this option is checked, it will instead generate page thumbnails at the same quality as cover thumbnails.")}
+            {t("settings.ifThisOptionIsChecked")}
           </CheckboxRow>
-          <CheckboxRow id="enablewebp" checked={enablewebp} onChange={setEnablewebp} label={t("Use WebP for thumbnails")}>
-            {t("If checked, thumbnails are generated as WebP, which is smaller than JPEG at the same quality. If unchecked, thumbnails are generated as JPEG instead.")}
+          <CheckboxRow id="enablewebp" checked={enablewebp} onChange={setEnablewebp} label={t("settings.useWebpForThumbnails")}>
+            {t("settings.ifCheckedThumbnailsAreGenerated")}
             <br />
             <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
-            {t("Changing this regenerates every thumbnail in the library, so they all stay in the same format.")}
+            {t("settings.changingThisRegeneratesEveryThumbnail")}
           </CheckboxRow>
           {enablewebp && (
-            <Row label={t("WebP Quality")}>
+            <Row label={t("settings.webpQuality")}>
               <input
                 className="stdinput"
                 type="number"
@@ -111,48 +111,48 @@ export function TagsThumbnailsSection({
                 onChange={(e) => setWebpquality(Number(e.target.value))}
               />
               <br />
-              {t("Quality of generated WebP thumbnails. Higher quality = larger files. (0-100)")}
+              {t("settings.qualityOfGeneratedWebpThumbnails")}
             </Row>
           )}
           <ActionRow
             id="genthumb-button"
-            label={t("Generate Missing Thumbnails")}
+            label={t("settings.generateMissingThumbnails")}
             onClick={async () => {
               await regenThumbnails.mutateAsync(false)
-              onStatus(t("Thumbnail generation queued.") ?? "")
+              onStatus(t("settings.thumbnailGenerationQueued") ?? "")
             }}
           >
-            {t("Generate Thumbnails for all archives that don't have one yet.")}
+            {t("settings.generateThumbnailsForAllArchives")}
           </ActionRow>
           <ActionRow
             id="forcethumb-button"
-            label={t("Regenerate all Thumbnails")}
+            label={t("settings.regenerateAllThumbnails")}
             onClick={async () => {
               await regenThumbnails.mutateAsync(true)
-              onStatus(t("Thumbnail regeneration queued.") ?? "")
+              onStatus(t("settings.thumbnailRegenerationQueued") ?? "")
             }}
           >
-            {t("Regenerate all thumbnails. This might take a while!")}
+            {t("settings.regenerateAllThumbnailsThisMight")}
           </ActionRow>
           <CheckboxRow
             id="usedateadded"
             checked={usedateadded}
             onChange={setUsedateadded}
-            label={t("Add Timestamp Tag")}
+            label={t("settings.addTimestampTag")}
           >
-            {t('If enabled, LANrurugi will add the UNIX timestamp of the current time as a tag under the "date_added" namespace to newly added archives.')}
+            {t("settings.ifEnabledLanrurugiWillAdd")}
           </CheckboxRow>
           {usedateadded && (
             <CheckboxRow
               id="usedatemodified"
               checked={usedatemodified}
               onChange={setUsedatemodified}
-              label={t('Use "Last modified" Time')}
+              label={t("settings.useLastModifiedTime")}
             >
-              {t('Enabling this will use file modified time instead of current time when setting "date_added" timestamps.')}
+              {t("settings.enablingThisWillUseFile")}
             </CheckboxRow>
           )}
-          <Row label={t("Timezone")}>
+          <Row label={t("settings.timezone")}>
             {/* `date_added` display + day-range search resolve in this IANA timezone so
                 every viewer agrees on which day an archive belongs to, regardless of
                 their own browser timezone (see `lanrurugi_search::engine`'s
@@ -178,7 +178,7 @@ export function TagsThumbnailsSection({
                 </optgroup>
               ))}
               {!isKnownTimezone(timezone) && (
-                <option value="__custom__">{t("Custom…")} ({timezone})</option>
+                <option value="__custom__">{t("settings.custom")} ({timezone})</option>
               )}
             </select>
             {!isKnownTimezone(timezone) && (
@@ -192,9 +192,9 @@ export function TagsThumbnailsSection({
               />
             )}
             <br />
-            {t("IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to display date_added tags and resolve date_added:YYYY-MM-DD searches to a calendar day. Defaults to UTC.")}
+            {t("settings.ianaTimezoneIdentifierEG")}
           </Row>
-          <Row label={t("Excluded Namespaces")}>
+          <Row label={t("settings.excludedNamespaces")}>
             <input
               className="stdinput"
               style={{ width: "100%" }}
@@ -204,11 +204,11 @@ export function TagsThumbnailsSection({
               type="text"
             />
             <br />
-            {t("Comma-separated list of tag namespaces to exclude from search suggestions and tag statistics.")}
+            {t("settings.commaseparatedListOfTagNamespaces")}
             <br />
-            {t("Clients will use this list to filter out noisy tags from autocomplete and tag clouds.")}
+            {t("settings.clientsWillUseThisList")}
           </Row>
-          <Row label={t("Tag Rules")}>
+          <Row label={t("settings.tagRules")}>
             <input id="tagruleson" className="fa" type="checkbox" checked={tagruleson} onChange={(e) => setTagruleson(e.target.checked)} />
             <br />
             <textarea
@@ -218,27 +218,27 @@ export function TagsThumbnailsSection({
               onChange={(e) => setTagrules(e.target.value)}
             />
             <br />
-            {t("When tagging archives using Plugins, the rules specified here will be applied to the tags before saving them to the database.")}
+            {t("settings.whenTaggingArchivesUsingPlugins")}
             <br />
-            {t("Split rules with linebreaks.")}
+            {t("settings.splitRulesWithLinebreaks")}
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t("<b>-tag | tag</b> : removes the tag (like a blacklist)") }} />
+            <span dangerouslySetInnerHTML={{ __html: t("settings.btagTagB") }} />
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t("<b>-namespace:*</b> : removes all tags within this namespace") }} />
+            <span dangerouslySetInnerHTML={{ __html: t("settings.bnamespaceBRemoves") }} />
             <br />
-            {t("namespace : strips the namespace from the tags")}
+            {t("settings.namespaceStripsTheNamespaceFrom")}
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t("<b>tag -> new-tag</b> : replaces one tag") }} />
+            <span dangerouslySetInnerHTML={{ __html: t("settings.tagRuleReplace") }} />
             <br />
             <span
               dangerouslySetInnerHTML={{
                 __html: t(
-                  "<b>tag => new-tag</b> : replaces one tag, but use a hash table internally for faster performance. These rules will be executed <i>once</i> after all other rules.",
+                  "settings.tagRuleHashReplace",
                 ),
               }}
             />
             <br />
-            <span dangerouslySetInnerHTML={{ __html: t("<b>namespace:* -> new-namespace:*</b> : replaces the namespace with the new one") }} />
+            <span dangerouslySetInnerHTML={{ __html: t("settings.bNamespaceNewnamespace") }} />
           </Row>
         </tbody>
       </table>

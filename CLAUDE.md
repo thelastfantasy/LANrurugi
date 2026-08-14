@@ -150,14 +150,25 @@ After editing any Rust code under `crates/`, run `cargo check` (from the workspa
 catches compilation errors in seconds instead of minutes. Only proceed to rebuild after check
 passes clean.
 
-**Always run Rust builds/tests through `scripts/cargo-container-run.sh cargo <subcommand> ...`**
-(e.g. `scripts/cargo-container-run.sh cargo check --workspace`), not a bare host-side `cargo`. That
-script caps CPU quota per invocation; real memory/priority capping (`memory.max`/`cpu.weight`) is
-enforced unconditionally at the host level via a personal, non-repo-tracked
-`~/.config/containers/containers.conf` (`[containers] cgroup_conf`) plus a `~/.local/bin/cargo`
-shim for any bare host `cargo` invocation that isn't containerized at all — see those files' own
-comments. Added after a real OOM crash (2026-07-21) and a `systemd-oomd` pressure-kill of an
-unrelated process during a workspace build (2026-08-13).
+**Always run Rust builds/tests through a `mise run` task** — `mise run test` / `mise run clippy` /
+`mise run fmt-check` / `mise run fmt` / `mise run build` / `mise run check-crate -- <crate> [<crate>
+...]` (the last one for fast single-crate iteration instead of `--workspace`), never a bare
+host-side `cargo` and never `scripts/cargo-container-run.sh` invoked directly — that script now
+refuses to run at all unless `$MISE_TASK_NAME` is set (i.e. it was reached through `mise run`), so
+a direct call fails fast with a pointer to the right task instead of silently skipping the
+guardrails below. Those guardrails: CPU quota per invocation; real memory/priority capping
+(`memory.max`/`cpu.weight`) enforced unconditionally at the host level via a personal,
+non-repo-tracked `~/.config/containers/containers.conf` (`[containers] cgroup_conf`) plus a
+`~/.local/bin/cargo` shim for any bare host `cargo` invocation that isn't containerized at all; a
+PSI (`/proc/pressure/memory`) check that refuses to start a new build while the host is already
+under real memory pressure; a cooldown between invocations so back-to-back calls don't pile
+pressure on top of each other before it's had a chance to settle; and an `flock` mutex so two
+invocations can never actually run concurrently (they queue, not race) — see those files' own
+comments. Added after a real OOM crash (2026-07-21), a `systemd-oomd` pressure-kill of an unrelated
+process during a workspace build (2026-08-13), and two more `systemd-oomd` kills of the VSCode
+window itself on 2026-08-14 (the second confirmed caused by several of these invocations
+overlapping — each individually passing its own point-in-time PSI check — before the cooldown/mutex
+above existed to prevent it).
 
 ## CPU-bound parallel work must cap its own resource usage
 

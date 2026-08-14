@@ -26,21 +26,21 @@ export function ArchiveFilesSection({
   const clearNewFlags = useClearNewFlags()
 
   return (
-    <CollapsibleSection icon="fa-file-archive" title={t("Archive Files")}>
+    <CollapsibleSection icon="fa-file-archive" title={t("settings.archiveFiles")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <ActionRow
             id="rescan-button"
-            label={t("Rescan Archive Directory")}
+            label={t("settings.rescanArchiveDirectory")}
             onClick={async () => {
-              onStatus(t("Rescanning...") ?? "")
+              onStatus(t("duplicates.rescanning") ?? "")
               await shinobuAction.mutateAsync("rescan")
-              onStatus(t("Rescan queued.") ?? "")
+              onStatus(t("settings.rescanQueued") ?? "")
             }}
           >
-            {t("Click this button to trigger a rescan of the Archive Directory in case you're missing files, or some data such as total page counts.")}
+            {t("settings.clickThisButtonToTrigger")}
           </ActionRow>
-          <Row label={t("Maximum Reader Cache Size")}>
+          <Row label={t("settings.maximumReaderCacheSize")}>
             <input
               className="stdinput"
               style={{ width: "100%" }}
@@ -50,50 +50,50 @@ export function ArchiveFilesSection({
               type="text"
             />
             <br />
-            {t("In MBs. This limits the reader's resized-page cache (recently viewed pages re-encoded to WebP for faster loading) — it does not affect files still waiting in the Upload page's conflict queue.")}
+            {t("settings.inMbsThisLimitsThe")}
             <br />
-            {t("Checked every 15 minutes; the oldest cached pages are removed first once this size is exceeded.")}
+            {t("settings.checkedEvery15MinutesThe")}
           </Row>
           <ActionRow
             id="clean-temp"
-            label={t("Clear Reader Cache")}
+            label={t("settings.clearReaderCache")}
             onClick={async () => {
               await cleanTempfolder.mutateAsync()
-              onStatus(t("Cache cleared.") ?? "")
+              onStatus(t("settings.cacheCleared") ?? "")
             }}
           >
             <br />
-            {t("Immediately empties the reader's resized-page cache described above. Files still waiting in the Upload page's conflict queue are not affected.")}
+            {t("settings.immediatelyEmptiesTheReaderS")}
           </ActionRow>
           <ActionRow
             id="reset-search-cache"
-            label={t("Reset Search Cache")}
+            label={t("settings.resetSearchCache")}
             onClick={async () => {
               await resetSearchCache.mutateAsync()
-              onStatus(t("Search cache cleared.") ?? "")
+              onStatus(t("settings.searchCacheCleared") ?? "")
             }}
           >
-            {t("The last searches done in the archive index are cached for faster loads.")}
+            {t("settings.theLastSearchesDoneIn")}
             <br />
-            {t("If something went wrong with said cache, you can reset it by clicking this button.")}
+            {t("settings.ifSomethingWentWrongWith")}
           </ActionRow>
           <ActionRow
             id="clear-new-tags"
-            label={t("Clear NEW flags")}
+            label={t("settings.clearNewFlags")}
             onClick={async () => {
               await clearNewFlags.mutateAsync()
-              onStatus(t("New flags cleared.") ?? "")
+              onStatus(t("settings.newFlagsCleared") ?? "")
             }}
           >
-            {t('Newly uploaded archives are marked as "new" in the index until you\'ve opened them.')}
+            {t("settings.newlyUploadedArchivesAreMarked")}
             <br />
-            {t("If you want to clear those flags, click this button.")}
+            {t("settings.ifYouWantToClear")}
           </ActionRow>
-          <CheckboxRow id="replacedupe" checked={replacedupe} onChange={setReplacedupe} label={t("Replace duplicated archives")}>
-            {t("If enabled, LANraragi will overwrite old archives when a newer one (with the same name) is uploaded through the Web Uploader or the Download System.")}
+          <CheckboxRow id="replacedupe" checked={replacedupe} onChange={setReplacedupe} label={t("settings.replaceDuplicatedArchives")}>
+            {t("settings.ifEnabledLanraragiWillOverwrite")}
             <br />
             <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
-            {t("This will delete metadata for old files when they're replaced! Use with caution.")}
+            {t("settings.thisWillDeleteMetadataFor")}
           </CheckboxRow>
         </tbody>
       </table>

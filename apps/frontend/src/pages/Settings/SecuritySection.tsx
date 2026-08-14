@@ -45,15 +45,18 @@ export function SecuritySection({
   const { t } = useTranslation()
 
   return (
-    <CollapsibleSection icon="fa-shield-alt" title={t("Security")}>
+    <CollapsibleSection icon="fa-shield-alt" title={t("settings.security")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
-          <CheckboxRow id="enablepass" checked={enablepass} onChange={setEnablepass} label={t("Enable Password")}>
-            {t("If enabled, everything that isn't reading will require a password.")}
+          <CheckboxRow id="enablepass" checked={enablepass} onChange={setEnablepass} label={t("settings.enablePassword")}>
+            {t("settings.ifEnabledEverythingThatIsn")}
+          </CheckboxRow>
+          <CheckboxRow id="nofunmode" checked={nofunmode} onChange={setNofunmode} label={t("settings.nofunMode")}>
+            {t("settings.requiresLoginForEveryRequest")}
           </CheckboxRow>
           {enablepass && (
             <>
-              <Row label={t("New Password")}>
+              <Row label={t("settings.newPassword")}>
                 <input
                   className="stdinput"
                   style={{ width: "100%" }}
@@ -63,7 +66,7 @@ export function SecuritySection({
                   type="password"
                 />
               </Row>
-              <Row label={t("New Password Confirmation")}>
+              <Row label={t("settings.newPasswordConfirmation")}>
                 <input
                   className="stdinput"
                   style={{ width: "100%" }}
@@ -73,16 +76,11 @@ export function SecuritySection({
                   type="password"
                 />
                 <br />
-                {t("Only edit these fields if you want to change your password.")}
+                {t("settings.onlyEditTheseFieldsIf")}
                 <br />
-                {t("The one already stored will be used otherwise.")}
+                {t("settings.theOneAlreadyStoredWill")}
               </Row>
-              <CheckboxRow id="nofunmode" checked={nofunmode} onChange={setNofunmode} label={t("No-Fun Mode")}>
-                {t("Enabling No-Fun Mode will lock reading archives behind the password as well.")}
-                <br />
-                {t("Fully effective after restarting LANraragi.")}
-              </CheckboxRow>
-              <Row label={t("Login Session Lifetime")}>
+              <Row label={t("settings.loginSessionLifetime")}>
                 <input
                   className="stdinput"
                   style={{ width: 80 }}
@@ -91,11 +89,11 @@ export function SecuritySection({
                   value={Math.round(accessTokenLifetimeSecs / SECS_PER_HOUR)}
                   onChange={(e) => setAccessTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_HOUR)}
                 />{" "}
-                {t("hours")}
+                {t("settings.hours")}
                 <br />
-                {t("How long you stay logged in before your browser needs to silently refresh its session (no re-login needed as long as the refresh window below hasn't also expired).")}
+                {t("settings.howLongYouStayLogged")}
               </Row>
-              <Row label={t("Session Refresh Window")}>
+              <Row label={t("settings.sessionRefreshWindow")}>
                 <input
                   className="stdinput"
                   style={{ width: 80 }}
@@ -104,16 +102,16 @@ export function SecuritySection({
                   value={Math.round(refreshTokenLifetimeSecs / SECS_PER_DAY)}
                   onChange={(e) => setRefreshTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_DAY)}
                 />{" "}
-                {t("days")}
+                {t("settings.days")}
                 <br />
-                {t("How long after logging in you can stay away before actually needing to re-enter your password. Each silent refresh above extends this window from the moment you logged in, not from the refresh itself.")}
+                {t("settings.howLongAfterLoggingIn")}
               </Row>
             </>
           )}
-          <CheckboxRow id="enablecors" checked={enablecors} onChange={setEnablecors} label={t("Enable CORS for the Client API")}>
-            {t("Have API requests support Cross-Origin Resource Sharing, which allows web browsers to access it off other domains.")}
+          <CheckboxRow id="enablecors" checked={enablecors} onChange={setEnablecors} label={t("settings.enableCorsForTheClient")}>
+            {t("settings.haveApiRequestsSupportCrossorigin")}
             <br />
-            {t("Turn this on if you want to access this service through a web-based wrapper (e.g. a userscript) used/hosted on another domain.")}
+            {t("settings.turnThisOnIfYou")}
           </CheckboxRow>
         </tbody>
       </table>

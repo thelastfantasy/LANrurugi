@@ -41,7 +41,7 @@ export function JobRow({
             checked={selected}
             disabled={!selectable}
             onChange={onToggleSelect}
-            aria-label={t("Select job") ?? undefined}
+            aria-label={t("jobs.selectJob") ?? undefined}
           />
         </td>
         <td
@@ -85,7 +85,7 @@ function JobDetail({ job }: { job: JobRecord }) {
   if (job.state === "failed") {
     return (
       <div style={{ fontSize: FONT_SIZE_SM }}>
-        <strong style={{ color: STATE_COLOR.failed }}>{t("Error")}: </strong>
+        <strong style={{ color: STATE_COLOR.failed }}>{t("jobs.error")}: </strong>
         <pre
           style={{
             margin: "4px 0 0",
@@ -98,7 +98,7 @@ function JobDetail({ job }: { job: JobRecord }) {
             borderRadius: 4,
           }}
         >
-          {job.error || t("(no error message captured)")}
+          {job.error || t("jobs.noErrorMessageCaptured")}
         </pre>
       </div>
     )
@@ -106,13 +106,13 @@ function JobDetail({ job }: { job: JobRecord }) {
   if (job.state === "finished") {
     const code =
       job.result == null
-        ? t("(no result)")
+        ? t("jobs.noResult")
         : typeof job.result === "string"
           ? job.result
           : JSON.stringify(job.result, null, 2)
     return (
       <div style={{ fontSize: FONT_SIZE_SM }}>
-        <strong>{t("Result")}: </strong>
+        <strong>{t("jobs.result")}: </strong>
         <div style={{ marginTop: 4 }}>
           <CodeBlock code={code} language="json" />
         </div>
@@ -121,7 +121,7 @@ function JobDetail({ job }: { job: JobRecord }) {
   }
   return (
     <div style={{ fontSize: FONT_SIZE_SM, color: STATE_COLOR.finished }}>
-      {t("This job is still running — no result yet.")}
+      {t("jobs.thisJobIsStillRunning")}
     </div>
   )
 }

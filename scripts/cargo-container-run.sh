@@ -12,8 +12,11 @@
 # reverted — this class of rootless-podman host doesn't delegate the `io` controller, so it breaks
 # every container outright.
 #
-# Usage: scripts/cargo-container-run.sh <cargo-subcommand-and-args...>
-#   e.g. scripts/cargo-container-run.sh cargo check -p lanrurugi-api
+# Usage: always through a `mise run` task — never invoked bare (enforced below via
+# `MISE_TASK_NAME`). See `.mise.toml`'s `[tasks.test]`/`[tasks.clippy]`/`[tasks.fmt-check]`/
+# `[tasks.fmt]`/`[tasks.build]`/`[tasks.check-crate]` for the fixed set of ways to call this;
+# `mise run check-crate -- <crate> [<crate> ...]` is the one for ad-hoc single-crate iteration
+# (`scripts/cargo-container-run.sh cargo check -p lanrurugi-api`'s old direct-call equivalent).
 # Prefer `-p <crate>` over `--workspace` whenever possible — `--workspace` compiles every crate
 # including ones unrelated to whatever you actually changed (this workspace's heaviest
 # dependencies, `rav1e`/`bindgen`/`aws-lc-sys`, only come from `lanrurugi-scanner`/
@@ -36,8 +39,100 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Must be invoked through a `mise run <task>` (never called bare) — every guardrail below this
+# point (PSI check, cooldown, reaper, cache cap) only helps if this script is actually the one
+# path everyone (including an agent working in this repo) goes through; a bare
+# `scripts/cargo-container-run.sh cargo ...` call in some ad-hoc shell session bypasses all of it
+# just as easily as a raw host-side `cargo` would. `mise run` always sets `MISE_TASK_NAME` in the
+# child process's environment (confirmed live via `env | grep -i mise` inside a real task run) —
+# checking for it costs nothing and catches every real invocation shape:
+#   - `mise run test` / `mise run clippy` / `mise run fmt-check` / `mise run fmt` / `mise run build`
+#     (the fixed-subcommand tasks in `.mise.toml`)
+#   - `mise run check-crate -- lanrurugi-api lanrurugi-storage` (the variadic `-p`-per-arg task)
+#   - `mise run` invoked transitively from `mise run check` (→ `npx lefthook run pre-push`, which
+#     itself shells out to the `rust-check`/`frontend-lint` lefthook jobs — but those jobs call
+#     `mise run clippy`/`mise run fmt-check` internally, not this script directly, so the
+#     environment variable is still set by the innermost `mise run`)
+#   - any *new* task added to `.mise.toml` in the future that runs this script — nothing here is
+#     tied to a specific task name, only to having gone through `mise run` at all
+if [ -z "${MISE_TASK_NAME:-}" ]; then
+  echo "error: scripts/cargo-container-run.sh must be run via 'mise run <task>', not called directly." >&2
+  echo "       Use one of: mise run test | mise run clippy | mise run fmt-check | mise run fmt |" >&2
+  echo "                   mise run build | mise run check-crate -- <crate> [<crate> ...]" >&2
+  echo "       (all defined in .mise.toml — add a new task there instead of calling this script bare)" >&2
+  exit 1
+fi
+
 CMD="$(command -v podman || command -v docker || true)"
 [ -n "$CMD" ] || { echo "error: podman/docker not found on PATH" >&2; exit 1; }
+
+# Serializes every invocation of this script — real concern, not theoretical: confirmed live
+# (2026-08-14) that issuing several of these back-to-back (`check`, `clippy` in the background,
+# `fmt-check`, `fmt`) let more than one actually overlap in the container runtime at once, each
+# individually passing the PSI check below (a snapshot at its own start) while the *combined*
+# concurrent memory usage still tripped `systemd-oomd` and killed the VSCode window. A cooldown
+# after each run (further below) prevents back-to-back-but-sequential calls from piling on, but
+# only `flock` actually prevents true overlap — two invocations racing to pass the PSI check within
+# the same instant, before either one's own container has started consuming memory yet. Blocks
+# (not fails) until free — a legitimate queue of calls (e.g. this script invoked from two different
+# terminals) should still all eventually run, just never at the same time; `flock`'s own blocking
+# wait is what the cooldown's explicit `sleep` message is modeled after. The lock file lives under
+# `.cargo-target` (gitignored, already this repo's scratch dir for this script) rather than `/tmp`,
+# so it doesn't collide with a *different* clone of this repo on the same machine.
+mkdir -p "$REPO_ROOT/.cargo-target"
+exec 9>"$REPO_ROOT/.cargo-target/.container-run.lock"
+if ! flock -n 9; then
+  echo "note: another cargo-container-run.sh invocation is in progress — waiting for it to finish (never running two at once)..." >&2
+  flock 9
+fi
+
+# Refuses to start a new build while the host is already under real memory pressure — every
+# guardrail above this point only caps what *this one invocation* can consume, which does nothing
+# if the system was already close to the edge before this script even ran. Confirmed live
+# (2026-08-14): a `cargo test -p lanrurugi-api -p lanrurugi-server` was launched right after
+# `systemd-oomd` had just killed an orphaned container for memory pressure — the host never
+# recovered, and six minutes later `systemd-oomd` killed the VSCode window itself. Reads the same
+# PSI (Pressure Stall Information) metric `systemd-oomd` itself watches
+# (`/proc/pressure/memory`'s `avg60`, a percentage of the last 60s spent with at least one task
+# stalled on memory) rather than a raw free-memory number, since free memory alone doesn't capture
+# reclaim *activity* — the actual thing that trips `systemd-oomd`'s own threshold (its default
+# config kills at 50% sustained pressure, see `journalctl -u systemd-oomd`).
+#
+# Deliberately fails outright with a message, not a sleep-and-retry loop — silently blocking makes
+# a single command's wall-clock time unpredictable and hides the real signal (the host needs
+# something to actually finish or be closed) behind a script that just looks "slow" instead.
+PSI_AVG60_THRESHOLD=20
+if [ -r /proc/pressure/memory ]; then
+  avg60="$(awk -F'avg60=' '/^some/ {split($2,a," "); print a[1]}' /proc/pressure/memory)"
+  if [ -n "$avg60" ] && awk -v v="$avg60" -v t="$PSI_AVG60_THRESHOLD" 'BEGIN{exit !(v>t)}'; then
+    echo "error: host memory pressure too high to start a new build (avg60=${avg60}%, threshold=${PSI_AVG60_THRESHOLD}%)." >&2
+    echo "       Close some memory-heavy apps or wait for current load to settle, then retry." >&2
+    echo "       (see /proc/pressure/memory, or 'journalctl -u systemd-oomd' for recent kills)" >&2
+    exit 1
+  fi
+fi
+
+# A single-snapshot PSI check (above) is not enough on its own — confirmed live (2026-08-14):
+# several back-to-back invocations (`check`, `clippy`, `fmt-check`, `fmt`) each individually passed
+# the `avg60` check, since `avg60` is a *trailing* 60s average that hadn't yet caught up to the
+# pressure the previous invocation was still causing — but the cumulative effect still tripped
+# `systemd-oomd` and killed the VSCode window six minutes after the first of that sequence started.
+# This cooldown forces real wall-clock time between invocations so pressure actually has a chance
+# to settle before the next one starts, rather than four checks in a row each seeing a stale,
+# not-yet-updated `avg60`. Stamp file, not an in-shell variable — this script is invoked fresh by a
+# new process every time, so nothing else could remember "when did the last invocation finish."
+COOLDOWN_SECS=15
+COOLDOWN_STAMP="$REPO_ROOT/.cargo-target/.last-container-run"
+if [ -f "$COOLDOWN_STAMP" ]; then
+  last_run="$(cat "$COOLDOWN_STAMP" 2>/dev/null || echo 0)"
+  now_epoch_cooldown="$(date +%s)"
+  elapsed=$((now_epoch_cooldown - last_run))
+  if [ "$elapsed" -lt "$COOLDOWN_SECS" ]; then
+    wait_secs=$((COOLDOWN_SECS - elapsed))
+    echo "note: another container run finished ${elapsed}s ago — waiting ${wait_secs}s for memory pressure to settle before starting this one" >&2
+    sleep "$wait_secs"
+  fi
+fi
 
 mkdir -p .cargo-target .cargo-registry
 
@@ -105,6 +200,13 @@ done
 ENV_FILE_ARGS=()
 [ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.local")
 [ -f "$REPO_ROOT/.env.test.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.test.local")
+
+# Stamped on exit regardless of success/failure (`trap ... EXIT`, not just appended after the run
+# below) — the cooldown at the top of this script must see "a container just ran" even when that
+# run failed or was interrupted, otherwise a failing command retried immediately (a very real
+# pattern: fix a compile error, rerun right away) would skip the cooldown entirely on exactly the
+# retry that matters most.
+trap 'date +%s > "$COOLDOWN_STAMP"' EXIT
 
 "$CMD" run --rm --network host --cpus="$cpus" \
   -v "$REPO_ROOT":/workspace \

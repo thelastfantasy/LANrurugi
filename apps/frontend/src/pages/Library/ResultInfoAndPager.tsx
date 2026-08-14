@@ -44,7 +44,7 @@ export function ResultInfoAndPager({
   return (
     <div>
       <div style={{ textAlign: "center", opacity: 0.7 }}>
-        {t("Showing {{start}} to {{end}} of {{total}} archives.", {
+        {t("library.showingStartToEndOf", {
           start: rangeStart,
           end: rangeEnd,
           total: totalFiltered,

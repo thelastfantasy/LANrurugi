@@ -162,13 +162,13 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
   // requirement (a user might legitimately want two "Color Pages" entries at different points in
   // a volume) and keep storing real display text exactly as before.
   const presets: { icon: string; title: string; value: string }[] = [
-    { icon: "fa-file-image", title: t("Cover") ?? "Cover", value: t("Cover") ?? "Cover" },
-    { icon: "fa-file-image", title: t("Back Cover") ?? "Back Cover", value: t("Back Cover") ?? "Back Cover" },
-    { icon: "fa-list", title: t("Table of Contents") ?? "Table of Contents", value: TOC_IDENTIFIER_TABLE_OF_CONTENTS },
-    { icon: "fa-palette", title: t("Color Pages") ?? "Color Pages", value: t("Color Pages") ?? "Color Pages" },
-    { icon: "fa-gift", title: t("Omake") ?? "Omake", value: t("Omake") ?? "Omake" },
-    { icon: "fa-pen-nib", title: t("Afterword") ?? "Afterword", value: t("Afterword") ?? "Afterword" },
-    { icon: "fa-image", title: t("Illustration") ?? "Illustration", value: t("Illustration") ?? "Illustration" },
+    { icon: "fa-file-image", title: t("reader.cover") ?? "Cover", value: t("reader.cover") ?? "Cover" },
+    { icon: "fa-file-image", title: t("reader.backCover") ?? "Back Cover", value: t("reader.backCover") ?? "Back Cover" },
+    { icon: "fa-list", title: t("reader.tableOfContents") ?? "Table of Contents", value: TOC_IDENTIFIER_TABLE_OF_CONTENTS },
+    { icon: "fa-palette", title: t("reader.colorPages") ?? "Color Pages", value: t("reader.colorPages") ?? "Color Pages" },
+    { icon: "fa-gift", title: t("reader.omake") ?? "Omake", value: t("reader.omake") ?? "Omake" },
+    { icon: "fa-pen-nib", title: t("reader.afterword") ?? "Afterword", value: t("reader.afterword") ?? "Afterword" },
+    { icon: "fa-image", title: t("reader.illustration") ?? "Illustration", value: t("reader.illustration") ?? "Illustration" },
   ]
   const Row = asMenuItems ? PopupMenuItem : "div"
   const chapterSelect = (
@@ -184,11 +184,11 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
       }}
     >
       <option value="" disabled>
-        {t("Chapter…")}
+        {t("reader.chapter")}
       </option>
       {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
         <option key={n} value={n}>
-          {t("Chapter {{n}}", { n })}
+          {t("reader.chapterN", { n })}
         </option>
       ))}
     </select>
@@ -259,7 +259,7 @@ export function QuickAddTocPopover({
       <PopupMenu
         ref={setMenuEl}
         style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: Z_OVERLAY_CONTENT }}
-        mainLabel={{ icon: "fa-bolt", text: t("Quick Add Chapter") ?? "Quick Add Chapter" }}
+        mainLabel={{ icon: "fa-bolt", text: t("reader.quickAddChapter") ?? "Quick Add Chapter" }}
       >
         <QuickAddTocOptions
           asMenuItems
@@ -313,7 +313,7 @@ export function ChapterActionMenu({
   const { t } = useTranslation()
   const { setMenuEl, pos } = useAnchoredMenuPosition(anchor)
   const icon = mode === "edit" ? "fa-pencil-alt" : "fa-trash-alt"
-  const label = mode === "edit" ? (t("Edit Chapter name") ?? "Edit Chapter name") : (t("Delete Chapter") ?? "Delete Chapter")
+  const label = mode === "edit" ? (t("common.editChapterName") ?? "Edit Chapter name") : (t("common.deleteChapter") ?? "Delete Chapter")
   // Tracks this menu's own open/closed lifetime in `openChapterActionMenuCount` (see that
   // constant's own docs for why a plain module-level counter, and the full registration-order
   // bug this exists to sidestep) — incremented on mount, decremented on unmount, so any

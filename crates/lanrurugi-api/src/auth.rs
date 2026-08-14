@@ -42,6 +42,14 @@ pub const DEFAULT_PASSWORD_HASH: &str =
 
 pub struct LiveAuthConfig {
     pub enable_pass: bool,
+    /// `nofunmode` (`Model/Config.pm::enable_nofun`) — legacy's real effect is forcing every
+    /// request through the login check *even when `enable_pass` is off*, so an admin can't
+    /// accidentally leave the whole library open by disabling password protection while still
+    /// believing No-Fun Mode is hiding it from anonymous visitors (`Utils/Routing.pm`'s
+    /// `logged_in_api`, applied unconditionally once `enable_nofun` is set, independent of
+    /// `enable_pass`'s own gate). Consumed by `procedure::require_api_key`'s `!enable_pass`
+    /// short-circuit, which this field disables.
+    pub no_fun_mode: bool,
     pub password_hash: String,
     pub session_secret: Vec<u8>,
     /// Overridable via the `access_token_lifetime_secs` setting (`settings.rs::NUMBER_FIELDS`) —
@@ -65,6 +73,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         .get("enablepass")
         .map(|v| v != "0")
         .unwrap_or(state.auth.enable_pass);
+    let no_fun_mode = fields.get("nofunmode").map(|v| v != "0").unwrap_or(false);
     let password_hash = fields
         .get("password")
         .cloned()
@@ -91,6 +100,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
 
     Ok(LiveAuthConfig {
         enable_pass,
+        no_fun_mode,
         password_hash,
         session_secret,
         access_token_lifetime_secs,

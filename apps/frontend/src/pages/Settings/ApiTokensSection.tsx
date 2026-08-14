@@ -194,7 +194,7 @@ function CreateTokenForm({
 
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("Name this token (e.g. \"Mihon phone\"):")}</p>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("settings.nameThisTokenEG")}</p>
       <input
         ref={nameRef}
         type="text"
@@ -210,16 +210,16 @@ function CreateTokenForm({
       <div style={{ display: "flex", gap: 12, marginBottom: 12, textAlign: "left" }}>
         <label style={{ flex: 1 }}>
           <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, marginBottom: 4 }}>
-            {t("Permission")}
+            {t("settings.permission")}
             <Tooltip
               wrapperStyle={{ alignItems: "center", top: 2 }}
               label={
                 <div style={{ textAlign: "left" }}>
                   <div>
-                    <strong>{t("Admin")}</strong>: {t("Full access except token management, account security, and database deletion.")}
+                    <strong>{t("settings.admin")}</strong>: {t("settings.fullAccessExceptTokenManagement")}
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    <strong>{t("Guest")}</strong>: {t("Read-only.")}
+                    <strong>{t("settings.guest")}</strong>: {t("settings.readonly")}
                   </div>
                 </div>
               }
@@ -233,12 +233,12 @@ function CreateTokenForm({
             value={role}
             onChange={(e) => setRole(e.target.value as TokenRole)}
           >
-            <option value="admin">{t("Admin (some permissions restricted)")}</option>
-            <option value="guest">{t("Guest (read-only)")}</option>
+            <option value="admin">{t("settings.adminSomePermissionsRestricted")}</option>
+            <option value="guest">{t("settings.guestReadonly")}</option>
           </select>
         </label>
         <label style={{ flex: 1 }}>
-          <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Expires")}</span>
+          <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("settings.expires")}</span>
           <select
             className="stdinput"
             style={{ width: "100%", height: 25, boxSizing: "border-box" }}
@@ -254,8 +254,8 @@ function CreateTokenForm({
         </label>
       </div>
       <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
+        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -284,7 +284,7 @@ export function ApiTokensSection() {
     const rawToken = response.data.token
     await infoDialog(
       <>
-        <p style={{ fontWeight: "bold" }}>{t("Copy this token now — it won't be shown again.")}</p>
+        <p style={{ fontWeight: "bold" }}>{t("settings.copyThisTokenNow")}</p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
           <input
             type="text"
@@ -295,7 +295,7 @@ export function ApiTokensSection() {
           />
           <IconButton
             icon="fas fa-copy"
-            title={t("Copy to clipboard") ?? undefined}
+            title={t("settings.copyToClipboard") ?? undefined}
             onClick={() => copyToClipboard(rawToken, t)}
             size={25}
           />
@@ -305,30 +305,30 @@ export function ApiTokensSection() {
   }
 
   async function handleRename(id: string, currentName: string) {
-    const name = await promptDialog(t("Rename this token:") ?? "", currentName)
+    const name = await promptDialog(t("settings.renameThisToken") ?? "", currentName)
     if (!name || !name.trim() || name.trim() === currentName) return
     try {
       await renameToken.mutateAsync({ id, name: name.trim() })
-      toast({ text: t("Token renamed.") ?? undefined, icon: "success" })
+      toast({ text: t("settings.tokenRenamed") ?? undefined, icon: "success" })
     } catch {
-      toast({ heading: t("Error renaming token") ?? undefined, icon: "error" })
+      toast({ heading: t("settings.errorRenamingToken") ?? undefined, icon: "error" })
     }
   }
 
   async function handleDelete(id: string, name: string) {
-    if (!(await confirmDialog(t("Revoke the token \"{{name}}\"? Any client using it will stop working immediately.", { name }) ?? "", true))) return
+    if (!(await confirmDialog(t("settings.revokeTheTokenNameAny", { name }) ?? "", true))) return
     try {
       await deleteToken.mutateAsync(id)
-      toast({ text: t("Token revoked.") ?? undefined, icon: "success" })
+      toast({ text: t("settings.tokenRevoked") ?? undefined, icon: "success" })
     } catch {
-      toast({ heading: t("Error revoking token") ?? undefined, icon: "error" })
+      toast({ heading: t("settings.errorRevokingToken") ?? undefined, icon: "error" })
     }
   }
 
   return (
-    <CollapsibleSection icon="fa-key" title={t("API Tokens")}>
+    <CollapsibleSection icon="fa-key" title={t("settings.apiTokens")}>
       <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center", padding: "0 12px" }}>
-        {t("First-party tokens for third-party clients (Tachiyomi/Mihon, OPDS readers, scripts) — sent as an Authorization: Bearer header. Each token can be individually named, tracked, and revoked.")}
+        {t("settings.firstpartyTokensForThirdpartyClients")}
         <br />
         <br />
         {/* `.stdbtn`'s own legacy CSS carries a flat `min-width: 150px` (built for its usual
@@ -339,16 +339,16 @@ export function ApiTokensSection() {
           className="stdbtn"
           type="button"
           style={{ minWidth: 0, width: "auto", padding: "0 12px" }}
-          value={t("New Token") ?? undefined}
+          value={t("settings.newToken") ?? undefined}
           onClick={() => setCreateDialogOpen(true)}
         />
         <br />
         <br />
       </div>
 
-      {tokens.isLoading && <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center" }}>{t("Loading…")}</div>}
+      {tokens.isLoading && <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center" }}>{t("common.loading")}</div>}
       {tokens.data?.length === 0 && (
-        <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center" }}>{t("No tokens yet.")}</div>
+        <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center" }}>{t("settings.noTokensYet")}</div>
       )}
 
       {tokens.data && tokens.data.length > 0 && (
@@ -366,12 +366,12 @@ export function ApiTokensSection() {
               secondary label rather than competing with the actual row data for attention. No
               border — rows are separated by generous padding alone (DeepSeek's own key-management
               table, cited as the visual reference this follows), not a hairline grid. */}
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("Name")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("ID")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("Created")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("Expires")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("Last Used")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("Last Used IP")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("jobs.name")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.id")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.created")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.expires")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.lastUsed")}</div>
+          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.lastUsedIp")}</div>
           <div></div>
 
           {tokens.data.map((token) => (
@@ -387,10 +387,10 @@ export function ApiTokensSection() {
                 <DateTimeStack epochSeconds={token.created_at} />
               </div>
               <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap" }}>
-                {token.expires_at ? <DateTimeStack epochSeconds={token.expires_at} /> : t("Permanent")}
+                {token.expires_at ? <DateTimeStack epochSeconds={token.expires_at} /> : t("settings.permanent")}
               </div>
               <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap" }}>
-                {token.last_used_at ? <DateTimeStack epochSeconds={token.last_used_at} /> : t("Never")}
+                {token.last_used_at ? <DateTimeStack epochSeconds={token.last_used_at} /> : t("settings.never")}
               </div>
               <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left" }}>
                 {token.last_used_ip ? <IpGeoLink ip={token.last_used_ip} /> : "—"}
@@ -399,14 +399,14 @@ export function ApiTokensSection() {
                 <IconButton
                   icon="fas fa-pencil"
                   size="medium"
-                  title={t("Rename") ?? undefined}
+                  title={t("edit.rename") ?? undefined}
                   onClick={() => void handleRename(token.id, token.name)}
                 />
                 <IconButton
                   icon="fas fa-trash"
                   className="stdbtn stdbtn-danger"
                   size="medium"
-                  title={t("Revoke") ?? undefined}
+                  title={t("settings.revoke") ?? undefined}
                   onClick={() => void handleDelete(token.id, token.name)}
                 />
               </div>

@@ -247,7 +247,7 @@ export function TankoubonEdit() {
   if (tankoubonFull.isLoading) {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", color: "var(--theme-muted)" }}>
-        {t("Loading library…")}
+        {t("common.loadingLibrary")}
       </div>
     )
   }
@@ -256,12 +256,12 @@ export function TankoubonEdit() {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">
-          {t("Failed to load archives: {{error}}", { error: String(tankoubonFull.error) })}
+          {t("common.failedToLoadArchivesError", { error: String(tankoubonFull.error) })}
         </p>
         <input
           className="stdbtn"
           type="button"
-          value={t("Return to Library") ?? undefined}
+          value={t("common.returnToLibrary") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -279,7 +279,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
   // Matches this page's own real heading text below ("Editing %1 (Tankoubon)") — no legacy
   // equivalent to cross-check against (Tankoubon editing is additive to this rewrite), so this
   // just keeps the tab title and the on-page heading in sync with each other.
-  useDocumentTitle(t("Editing %1 (Tankoubon)").replace("%1", tankoubon.name))
+  useDocumentTitle(t("tankoubonEdit.editing1Tankoubon").replace("%1", tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
   const stats = useStats(2)
@@ -333,7 +333,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
       archives,
       metadata: { name, summary, tags, chapter_names: Object.entries(chapterNames).map(([id, name]) => ({ id, name })) },
     })
-    toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
+    toast({ heading: t("edit.metadataSaved") ?? undefined, icon: "success" })
   }
 
   // Real legacy's own `edit.html.tt2` (`is_tank` branch) reorders this list via drag (`Sortable.
@@ -375,7 +375,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
   return (
     <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Editing %1 (Tankoubon)").replace("%1", tankoubon.name)}
+        {t("tankoubonEdit.editing1Tankoubon").replace("%1", tankoubon.name)}
       </h2>
 
       <form
@@ -385,7 +385,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
-            <span>{t("Title:")}</span>
+            <span>{t("edit.title")}</span>
             <input
               className="stdinput"
               type="text"
@@ -396,7 +396,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
-            <span>{t("Summary:")}</span>
+            <span>{t("edit.summary")}</span>
             <textarea
               className="stdinput"
               style={{ width: "100%", maxWidth: "none", minHeight: 72, boxSizing: "border-box" }}
@@ -407,19 +407,19 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>
-              {t("Tags")} <span style={{ fontSize: "6pt" }}>{t("(separated by hyphens, i.e : tag1, tag2)")}</span> :
+              {t("common.tags")} <span style={{ fontSize: "6pt" }}>{t("edit.separatedByHyphensIE")}</span> :
             </span>
             <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
-            <span>{t("Archives:")}</span>
+            <span>{t("tankoubonEdit.archives")}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
             {hasLlmKey && (
               <IconButtonWithTooltip
                 icon="fa fa-robot"
-                title={t("AI Smart Rename")}
-                description={t("Analyze the archive list and suggest a tankoubon title and chapter names for each volume")}
+                title={t("tankoubonEdit.aiSmartRename")}
+                description={t("tankoubonEdit.analyzeTheArchiveListAnd")}
                 style={{ alignSelf: "flex-start" }}
                 disabled={aiRename.isPending}
                 onClick={() => {
@@ -429,7 +429,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                     onSuccess: (data) => { setAiSuggestions(data) },
                     onError: (err) => {
                       setAiOverlayOpen(false)
-                      toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                      toast({ heading: t("tankoubonEdit.aiRenameFailed") ?? undefined, text: String(err), icon: "error" })
                     },
                   })
                 }}
@@ -506,12 +506,12 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                         onClick={() => navigate(routes.edit(archiveId))}
                         style={{ minWidth: 32 }}
                       >
-                        {t("Edit")}
+                        {t("tankoubonEdit.edit")}
                       </button>
                       <IconButton
                         icon="fa fa-times"
                         onClick={() => removeArchive(archiveId)}
-                        title={t("Remove from Tankoubon") ?? undefined}
+                        title={t("tankoubonEdit.removeFromTankoubon") ?? undefined}
                       />
                     </div>
 
@@ -533,7 +533,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                           <input
                             className="stdinput"
                             type="text"
-                            placeholder={t("Chapter name") ?? undefined}
+                            placeholder={t("tankoubonEdit.chapterName") ?? undefined}
                             value={chapterNames[archiveId] ?? ""}
                             onChange={(e) => setChapterNames((prev) => ({ ...prev, [archiveId]: e.target.value }))}
                             style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
@@ -541,8 +541,8 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                         )}
                         <IconButtonWithTooltip
                           icon="fa fa-robot"
-                          title={t("AI Chapter Name")}
-                          description={t("Suggest a chapter title based on series context and volume numbers")}
+                          title={t("tankoubonEdit.aiChapterName")}
+                          description={t("tankoubonEdit.suggestAChapterTitleBased")}
                           size="small"
                           style={{ fontSize: "7pt" }}
                           disabled={chapterAiLoading !== null}
@@ -556,14 +556,14 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                                   setChapterAiLoading(null)
                                   const prevName = chapterNames[archiveId] || tankoubon.chapter_names?.find((c) => c.id === archiveId)?.name
                                   if (data.name === prevName) {
-                                    toast({ heading: t("Chapter name unchanged"), text: data.name, icon: "info" })
+                                    toast({ heading: t("tankoubonEdit.chapterNameUnchanged"), text: data.name, icon: "info" })
                                   } else {
-                                    toast({ heading: t("Chapter name suggested"), text: data.name, icon: "success" })
+                                    toast({ heading: t("tankoubonEdit.chapterNameSuggested"), text: data.name, icon: "success" })
                                   }
                                 },
                                 onError: (err) => {
                                   setChapterAiLoading(null)
-                                  toast({ heading: t("AI rename failed") ?? undefined, text: String(err), icon: "error" })
+                                  toast({ heading: t("tankoubonEdit.aiRenameFailed") ?? undefined, text: String(err), icon: "error" })
                                 },
                               },
                             )
@@ -625,7 +625,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
           `}</style>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
-            <span>{t("Add Archive to Tankoubon:")}</span>
+            <span>{t("tankoubonEdit.addArchiveToTankoubon")}</span>
             <div style={{ display: "flex", gap: 6 }}>
               {/* The raw-ID paste-and-click-Add flow below is unchanged; this additionally
                   live-searches by title as the user types (debounced, `archiveSearch` above) and
@@ -664,7 +664,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                   onKeyDown={(e) => {
                     if (e.key === "Escape") setArchiveSearchOpen(false)
                   }}
-                  placeholder={t("Archive ID (40-character long)") ?? undefined}
+                  placeholder={t("tankoubonEdit.archiveId40characterLong") ?? undefined}
                 />
                 {archiveSearchOpen && archiveSearchResults.length > 0 && (
                   <PopupMenu
@@ -727,7 +727,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                 className="stdbtn"
                 type="button"
                 style={{ minWidth: 32 }}
-                value={t("Add") ?? undefined}
+                value={t("tankoubonEdit.add") ?? undefined}
                 onClick={() => void handleAddArchive()}
               />
             </div>
@@ -752,25 +752,25 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             <input
               className="stdbtn"
               type="button"
-              value={t("Update") ?? undefined}
+              value={t("tankoubonEdit.update") ?? undefined}
               onClick={() => void handleSave()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Delete Tankoubon") ?? undefined}
+              value={t("common.deleteTankoubon") ?? undefined}
               onClick={() => void handleDelete()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Read Tankoubon") ?? undefined}
+              value={t("tankoubonEdit.readTankoubon") ?? undefined}
               onClick={() => navigate(routes.reader(tankId))}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Return to Library") ?? undefined}
+              value={t("common.returnToLibrary") ?? undefined}
               onClick={() => navigate(routes.library())}
             />
           </div>

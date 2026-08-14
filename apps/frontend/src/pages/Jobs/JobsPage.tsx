@@ -37,7 +37,7 @@ export function Jobs() {
   const clearJobs = useClearJobs()
   const clearFinished = useClearFinishedJobs()
   useApplyTheme()
-  useDocumentTitle(t("Background Jobs") ?? undefined)
+  useDocumentTitle(t("jobs.backgroundJobs") ?? undefined)
 
   // Stabilize the array identity so the derived `useMemo`s below don't recompute every render when
   // `jobs.data` is referentially unchanged.
@@ -126,15 +126,15 @@ export function Jobs() {
     const { succeeded, failed } = await clearJobs.mutateAsync(ids)
     setSelected(new Set())
     setStatus(
-      t("Removed {{n}} jobs.", { n: succeeded }) +
-        (failed > 0 ? " " + t("{{n}} could not be removed.", { n: failed }) : ""),
+      t("jobs.removedNJobs", { n: succeeded }) +
+        (failed > 0 ? " " + t("jobs.couldNotBeRemoved", { n: failed }) : ""),
     )
   }
 
   async function handleClearFinished() {
     const result = await clearFinished.mutateAsync()
     setSelected(new Set())
-    setStatus(t("Cleared {{n}} finished jobs.", { n: result.cleared }) ?? "")
+    setStatus(t("jobs.clearedNFinishedJobs", { n: result.cleared }) ?? "")
   }
 
   const isEmpty = !jobs.isLoading && all.length === 0
@@ -142,16 +142,16 @@ export function Jobs() {
 
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12 }}>
-      <h1 className="ih">{t("Background Jobs")}</h1>
+      <h1 className="ih">{t("jobs.backgroundJobs")}</h1>
       <p style={{ fontSize: FONT_SIZE_SM }}>
-        {t("The background job console shows currently running and recently concluded tasks.")}
+        {t("jobs.theBackgroundJobConsoleShows")}
       </p>
 
       {/* US4 stat bar (T020) — each count is a clickable state filter (T021). */}
       <div className="control-btn-group" style={{ flexWrap: "wrap", gap: 4 }}>
         <FilterChip
           active={stateFilter === "all"}
-          label={t("All") ?? ""}
+          label={t("jobs.all") ?? ""}
           count={all.length}
           onClick={() => {
             setStateFilter("all")
@@ -178,7 +178,7 @@ export function Jobs() {
           className="stdinput"
           type="text"
           style={{ flexGrow: 1, minWidth: 160 }}
-          placeholder={t("Search by name…") ?? ""}
+          placeholder={t("jobs.searchByName") ?? ""}
           value={search}
           onChange={(e) => {
             setSearch(e.target.value)
@@ -195,8 +195,8 @@ export function Jobs() {
           onClick={() => void handleRemoveSelected()}
         >
           {removing
-            ? t("Removing…")
-            : t("Remove selected ({{n}})", { n: liveSelected.size })}
+            ? t("jobs.removing")
+            : t("jobs.removeSelectedN", { n: liveSelected.size })}
         </button>
         {/* Unscoped nuclear option (research.md §5 / FR-004): always every finished+failed job
             server-side, regardless of the active filter or selection. */}
@@ -206,13 +206,13 @@ export function Jobs() {
           disabled={clearFinished.isPending}
           onClick={() => void handleClearFinished()}
         >
-          {clearFinished.isPending ? t("Clearing…") : t("Clear all finished")}
+          {clearFinished.isPending ? t("jobs.clearing") : t("jobs.clearAllFinished")}
         </button>
         <input
           type="button"
           id="return"
           className="stdbtn"
-          value={t("Return to Library") ?? undefined}
+          value={t("common.returnToLibrary") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -229,10 +229,10 @@ export function Jobs() {
       {isEmpty && (
         <div id="nojobs" style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-inbox"></i>
-          <p>{t("No background jobs yet.")}</p>
+          <p>{t("jobs.noBackgroundJobsYet")}</p>
           <p style={{ fontSize: FONT_SIZE_SM }}>
             {t(
-              "Jobs will appear here as you trigger thumbnail regeneration, backups, restores, duplicate scans, and other background work.",
+              "jobs.jobsWillAppearHereAs",
             )}
           </p>
         </div>
@@ -243,7 +243,7 @@ export function Jobs() {
       {all.length > 0 && filtered.length === 0 && (
         <div style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-search"></i>
-          <p>{t("No jobs match the current filter.")}</p>
+          <p>{t("jobs.noJobsMatchTheCurrent")}</p>
         </div>
       )}
 
@@ -260,14 +260,14 @@ export function Jobs() {
                     <input
                       ref={selectAllRef}
                       type="checkbox"
-                      aria-label={t("Select all") ?? undefined}
+                      aria-label={t("jobs.selectAll") ?? undefined}
                       checked={allPageSelected}
                       onChange={toggleAll}
                     />
                   </th>
-                  <th style={{ textAlign: "left" }}>{t("Name")}</th>
-                  <th style={{ width: 100, textAlign: "center" }}>{t("State")}</th>
-                  <th style={{ width: 180, textAlign: "center" }}>{t("Progress")}</th>
+                  <th style={{ textAlign: "left" }}>{t("jobs.name")}</th>
+                  <th style={{ width: 100, textAlign: "center" }}>{t("jobs.state")}</th>
+                  <th style={{ width: 180, textAlign: "center" }}>{t("jobs.progress")}</th>
                   <th style={{ width: 28 }}></th>
                 </tr>
               </thead>
@@ -295,10 +295,10 @@ export function Jobs() {
               disabled={safePage === 0}
               onClick={() => setPage(safePage - 1)}
             >
-              {t("Previous")}
+              {t("jobs.previous")}
             </button>
             <span style={{ fontSize: FONT_SIZE_SM }}>
-              {t("Page {{n}} of {{total}}", { n: safePage + 1, total: pageCount })}
+              {t("jobs.pageNOfTotal", { n: safePage + 1, total: pageCount })}
             </span>
             <button
               type="button"
@@ -306,10 +306,10 @@ export function Jobs() {
               disabled={safePage >= pageCount - 1}
               onClick={() => setPage(safePage + 1)}
             >
-              {t("Next")}
+              {t("jobs.next")}
             </button>
             <label style={{ fontSize: FONT_SIZE_SM }}>
-              {t("per page")}
+              {t("jobs.perPage")}
               <select
                 className="stdinput"
                 style={{ marginLeft: 6, width: "auto" }}

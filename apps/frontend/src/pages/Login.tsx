@@ -20,7 +20,7 @@ export function Login() {
   const login = useLogin()
   const [password, setPassword] = useState("")
   useApplyTheme()
-  useDocumentTitle(t("Admin Login") ?? undefined)
+  useDocumentTitle(t("app.adminLogin") ?? undefined)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -35,13 +35,13 @@ export function Login() {
   return (
     <>
       <div className="ido" style={{ textAlign: "center" }}>
-        <p>{t("This page requires you to log on.")}</p>
+        <p>{t("login.thisPageRequiresYouTo")}</p>
 
         <form onSubmit={handleSubmit} name="loginForm" method="post">
           <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_XS }}>
             <tbody>
               <tr>
-                <td>{t("Admin Password:")}</td>
+                <td>{t("login.adminPassword")}</td>
                 <td>
                   <input
                     id="pw_field"
@@ -63,7 +63,7 @@ export function Login() {
                     type="submit"
                     className="stdbtn"
                     disabled={login.isPending}
-                    value={t("Login") ?? undefined}
+                    value={t("library.login") ?? undefined}
                     style={{ width: 60 }}
                   />
                 </td>
@@ -71,7 +71,7 @@ export function Login() {
               {login.isError && (
                 <tr style={{ fontSize: 23 }}>
                   <td colSpan={2} style={{ paddingTop: 5, textAlign: "center", verticalAlign: "middle" }}>
-                    {t("Wrong Password.")}
+                    {t("login.wrongPassword")}
                   </td>
                 </tr>
               )}

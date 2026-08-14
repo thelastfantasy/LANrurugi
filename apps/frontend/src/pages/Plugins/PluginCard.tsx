@@ -154,7 +154,7 @@ export function PluginCard({
             <>
               <h1 className="ih" style={{ display: "inline" }}>
                 {" "}
-                {t("Run Automatically")}:{" "}
+                {t("plugins.runAutomatically")}:{" "}
               </h1>
               <input
                 type="checkbox"
@@ -168,7 +168,7 @@ export function PluginCard({
           {plugin.login_from && (
             <>
               <i className="fa fa-plug" aria-hidden="true"></i>{" "}
-              {t("This plugin depends on the login plugin")} "{plugin.login_from}".
+              {t("plugins.thisPluginDependsOnThe")} "{plugin.login_from}".
             </>
           )}
         </div>
@@ -201,7 +201,7 @@ export function PluginCard({
                     className="stdbtn"
                     disabled={scriptRunning}
                     onClick={() => void triggerScript()}
-                    value={t("Trigger Script") ?? undefined}
+                    value={t("plugins.triggerScript") ?? undefined}
                   />
                 </td>
               </tr>

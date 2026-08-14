@@ -111,6 +111,7 @@ export interface Settings {
   enablecors: boolean
   localprogress: boolean
   authprogress: boolean
+  devmode: boolean
   enableresize: boolean
   hqthumbpages: boolean
   enablewebp: boolean

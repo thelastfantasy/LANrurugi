@@ -283,10 +283,10 @@ export function PageGridCell({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <PageNumberLabel hovered={hovered}>{t("Page {{n}}", { n: page })}</PageNumberLabel>
-        <OverviewThumbnail src={thumbnailSrc} alt={t("Page {{n}}", { n: page }) ?? undefined} />
+        <PageNumberLabel hovered={hovered}>{t("common.pageN", { n: page })}</PageNumberLabel>
+        <OverviewThumbnail src={thumbnailSrc} alt={t("common.pageN", { n: page }) ?? undefined} />
         {isPatch && (
-          <Tooltip label={t("Patch page")} wrapperStyle={{ position: "static" }}>
+          <Tooltip label={t("reader.patchPage")} wrapperStyle={{ position: "static" }}>
             <span
               style={{
                 position: "absolute",
@@ -320,7 +320,7 @@ export function PageGridCell({
         <PageGridActionIcon
           icon="fa-magnifying-glass"
           corner="bottom-left"
-          title={t("View Full Page") ?? undefined}
+          title={t("reader.viewFullPage") ?? undefined}
           hovered={hovered}
           onClick={(e) => {
             e.preventDefault()
@@ -334,7 +334,7 @@ export function PageGridCell({
             <PageGridActionIcon
               icon="fa-file-image"
               corner="top-right"
-              title={t("Set this Page as Thumbnail") ?? undefined}
+              title={t("reader.setThisPageAsThumbnail") ?? undefined}
               hovered={hovered}
               onClick={(e) => onSetThumbnail(e, page)}
             />
@@ -352,7 +352,7 @@ export function PageGridCell({
                 one (another real, live-reported bug). Following the cursor instead sidesteps
                 needing a meaningful wrapper box at all. */}
             <Tooltip
-              label={t("Add Chapter at this Page") + " " + t("(right-click for quick presets)")}
+              label={t("reader.addChapterAtThisPage") + " " + t("reader.rightclickForQuickPresets")}
               wrapperStyle={{ position: "static" }}
               anchor="cursor"
             >

@@ -28,7 +28,7 @@ export function PluginOptionsForm({ namespace }: { namespace: string }) {
   const { t } = useTranslation()
   const options = usePluginOptions(namespace)
 
-  if (options.isLoading) return <p>{t("Loading…")}</p>
+  if (options.isLoading) return <p>{t("common.loading")}</p>
   if (!options.data) return null
 
   // Keyed by namespace so switching which plugin's settings are open (unmount + fresh mount)
@@ -143,14 +143,14 @@ function PluginOptionsFormBody({
       }}
     >
       <h3 className="ih" style={{ fontSize: "1.0em", margin: "0 0 6px" }}>
-        {t("Download / Rate-limit Settings")}
+        {t("pluginOptions.downloadRatelimitSettings")}
       </h3>
       <table className="itg" style={{ width: "100%" }}>
         <thead>
           <tr className="jtr0">
-            <th>{t("Domain Pattern")}</th>
-            <th>{t("Max Concurrent")}</th>
-            <th>{t("Max KB/s")}</th>
+            <th>{t("pluginOptions.domainPattern")}</th>
+            <th>{t("pluginOptions.maxConcurrent")}</th>
+            <th>{t("pluginOptions.maxKbS")}</th>
             <th></th>
           </tr>
         </thead>
@@ -161,7 +161,7 @@ function PluginOptionsFormBody({
                 <input
                   className="stdinput"
                   value={row.pattern}
-                  placeholder={t("*.example.com") ?? undefined}
+                  placeholder={t("pluginOptions.ExampleCom") ?? undefined}
                   onChange={(e) => updateRow(i, { pattern: e.target.value })}
                 />
               </td>
@@ -189,7 +189,7 @@ function PluginOptionsFormBody({
                     "Delete"/"Remove" `fa-times`) instead of a labeled `.stdbtn` — a one-word
                     "Remove" button at `.stdbtn`'s default min-width was far wider than the column
                     needed. */}
-                <Tooltip label={t("Remove") ?? ""}>
+                <Tooltip label={t("pluginOptions.remove") ?? ""}>
                   <button type="button" className="stdbtn" style={ICON_BUTTON_STYLE} onClick={() => removeRow(i)}>
                     <i className="fa fa-times" aria-hidden="true"></i>
                   </button>
@@ -199,7 +199,7 @@ function PluginOptionsFormBody({
           ))}
         </tbody>
       </table>
-      <input type="button" className="stdbtn" value={t("Add Rule") ?? undefined} onClick={addRow} />
+      <input type="button" className="stdbtn" value={t("pluginOptions.addRule") ?? undefined} onClick={addRow} />
 
       {initial.bundle_as_archive && (
         <p>
@@ -235,14 +235,14 @@ function PluginOptionsFormBody({
           type="button"
           className="stdbtn"
           disabled={update.isPending}
-          value={t("Save Settings") ?? undefined}
+          value={t("pluginOptions.saveSettings") ?? undefined}
           onClick={() => void save()}
         />
         <input
           type="button"
           className="stdbtn"
           disabled={reset.isPending}
-          value={t("Reset to Defaults") ?? undefined}
+          value={t("pluginOptions.resetToDefaults") ?? undefined}
           onClick={() => void resetToDefaults()}
         />
       </div>

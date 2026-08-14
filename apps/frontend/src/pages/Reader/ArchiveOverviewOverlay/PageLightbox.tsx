@@ -393,7 +393,7 @@ export function PageLightbox({
               <img
                 key={pageUrl}
                 src={pageUrl}
-                alt={t("Page {{n}}", { n: previewPage }) ?? undefined}
+                alt={t("common.pageN", { n: previewPage }) ?? undefined}
                 style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
                 onLoad={(e) => {
                   const img = e.currentTarget
@@ -408,7 +408,7 @@ export function PageLightbox({
           </div>
 
           <div style={{ flex: "0 0 auto", textAlign: "center", padding: "8px 0", fontSize: 13 }}>
-            {t("Page {{n}}", { n: previewPage })}
+            {t("common.pageN", { n: previewPage })}
             {" :: "}
             {pageUrl ? (new URL(pageUrl, window.location.origin).searchParams.get("path") ?? "") : ""}
             {dimensions && ` :: ${dimensions.width} x ${dimensions.height}`}
@@ -423,7 +423,7 @@ export function PageLightbox({
                 {currentChapter.isStart ? (
                   <span style={{ fontWeight: "bold", color: palette.hoverText }}>{displayTocName(currentChapter.name, t)}</span>
                 ) : (
-                  <span>{t("{{name}} ({{count}})", { name: displayTocName(currentChapter.name, t), count: currentChapter.count })}</span>
+                  <span>{t("reader.count", { name: displayTocName(currentChapter.name, t), count: currentChapter.count })}</span>
                 )}
               </>
             )}
@@ -436,10 +436,10 @@ export function PageLightbox({
                   string here too instead of introducing a second, differently-worded label for
                   what is otherwise the identical feature just rendered inline. */}
               <span style={{ fontWeight: "bold", opacity: 0.85 }}>
-                <i className="fa fa-bolt" style={{ width: 18 }} aria-hidden="true"></i> {t("Quick Add Chapter")}
+                <i className="fa fa-bolt" style={{ width: 18 }} aria-hidden="true"></i> {t("reader.quickAddChapter")}
               </span>
               <QuickAddTocOptions asMenuItems={false} onPick={(title) => onQuickAddToc(previewPage, title)} />
-              <Tooltip label={t("Press 0 for Table of Contents, or 1-9 for that chapter number, to set the current page as that chapter's start.") ?? ""}>
+              <Tooltip label={t("reader.press0ForTableOf") ?? ""}>
                 <i className="fa fa-keyboard" aria-hidden="true" style={{ cursor: "help", color: palette.text, opacity: 0.7 }}></i>
               </Tooltip>
               {toc.length > 0 && (
@@ -448,7 +448,7 @@ export function PageLightbox({
                     className="fas fa-pencil-alt"
                     href="#"
                     style={{ padding: 4, fontSize: 14, color: palette.text }}
-                    title={t("Edit Chapter name") ?? undefined}
+                    title={t("common.editChapterName") ?? undefined}
                     onClick={(e) => {
                       e.preventDefault()
                       setEditTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -471,7 +471,7 @@ export function PageLightbox({
                     className="fas fa-trash-alt"
                     href="#"
                     style={{ padding: 4, fontSize: 14, color: palette.text }}
-                    title={t("Delete Chapter") ?? undefined}
+                    title={t("common.deleteChapter") ?? undefined}
                     onClick={(e) => {
                       e.preventDefault()
                       setRemoveTocMenuAt(e.currentTarget.getBoundingClientRect())
@@ -529,7 +529,7 @@ export function PageLightbox({
                       // which language the UI happens to be showing at the moment.
                       label: chapter.isStart
                         ? displayTocName(chapter.name, t)
-                        : (t("{{name}} ({{count}})", { name: displayTocName(chapter.name, t), count: chapter.ordinal }) ?? displayTocName(chapter.name, t)),
+                        : (t("reader.count", { name: displayTocName(chapter.name, t), count: chapter.ordinal }) ?? displayTocName(chapter.name, t)),
                       swatch: chapterSwatchColor(chapter.name, onDarkBg),
                     }
                   }

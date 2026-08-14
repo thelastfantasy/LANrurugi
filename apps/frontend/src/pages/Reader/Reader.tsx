@@ -539,8 +539,8 @@ export function Reader() {
       toast({
         text:
           direction === "prev"
-            ? (t("This is the first archive") ?? undefined)
-            : (t("This is the last archive") ?? undefined),
+            ? (t("reader.thisIsTheFirstArchive") ?? undefined)
+            : (t("reader.thisIsTheLastArchive") ?? undefined),
       })
       return
     }
@@ -625,7 +625,7 @@ export function Reader() {
       !archiveId ||
       !(await confirmDialog(
         t(
-          "Are you sure you want to delete this tankoubon? The archives will remain in your library but will no longer be grouped.",
+          "reader.confirmDeleteTankoubon",
         ) ?? "",
       ))
     ) {
@@ -678,8 +678,8 @@ export function Reader() {
   function startAutoNextPage() {
     if (readerSettings.autoNextPageInterval <= 0) {
       toast({
-        heading: t("Starting auto next page failed!") ?? undefined,
-        text: t("Please set the auto next page interval to a positive number.") ?? undefined,
+        heading: t("reader.startingAutoNextPageFailed") ?? undefined,
+        text: t("reader.pleaseSetTheAutoNext") ?? undefined,
         icon: "error",
         hideAfter: TOAST_DURATION_MS,
       })
@@ -744,7 +744,7 @@ export function Reader() {
       return
     }
     if (!loggedIn) {
-      const template = t("<a href='\\${url}'>Login</a> to toggle bookmark feature.") ?? ""
+      const template = t("reader.aHrefUrlLogin") ?? ""
       toast({
         text: template.replace("${url}", "/login"),
         html: true,
@@ -817,7 +817,7 @@ export function Reader() {
           return
         case "g": {
           void (async () => {
-            const value = await promptDialog(t("Go to page:") ?? "")
+            const value = await promptDialog(t("reader.goToPage") ?? "")
             const page = value ? parseInt(value, 10) : NaN
             if (!Number.isNaN(page)) selectPage(page)
           })()
@@ -991,14 +991,14 @@ export function Reader() {
     return (
       <div className="ido">
         <p>
-          {t("Failed to load archives: {{error}}", {
+          {t("common.failedToLoadArchivesError", {
             error: String(metadata.error ?? pages.error),
           })}
         </p>
         <input
           type="button"
           className="stdbtn"
-          value={t("Return to Library") ?? undefined}
+          value={t("common.returnToLibrary") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -1017,24 +1017,24 @@ export function Reader() {
     return (
       <div className="ido" style={{ textAlign: "center", padding: 40 }}>
         <i className="fas fa-8x fa-box-open" aria-hidden="true"></i>
-        <h2 style={{ marginTop: 16 }}>{t("This Tankoubon has no archives yet.")}</h2>
+        <h2 style={{ marginTop: 16 }}>{t("reader.thisTankoubonHasNoArchives")}</h2>
         <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "center" }}>
           <input
             type="button"
             className="stdbtn"
-            value={t("Edit Tankoubon") ?? undefined}
+            value={t("common.editTankoubon") ?? undefined}
             onClick={() => archiveId && navigate(routes.tankoubonEdit(archiveId))}
           />
           <input
             type="button"
             className="stdbtn"
-            value={t("Delete Tankoubon") ?? undefined}
+            value={t("common.deleteTankoubon") ?? undefined}
             onClick={() => void handleDeleteEmptyTankoubon()}
           />
           <input
             type="button"
             className="stdbtn"
-            value={t("Return to Library") ?? undefined}
+            value={t("common.returnToLibrary") ?? undefined}
             onClick={() => navigate(routes.library())}
           />
         </div>
@@ -1102,39 +1102,39 @@ export function Reader() {
   // duplicating (and inevitably drifting) the same shortcut list twice.
   const helpContent = (
     <div style={{ fontSize: FONT_SIZE_XS }}>
-      <p style={{ margin: "0 0 4px" }}>{t("You can navigate between pages using:")}</p>
+      <p style={{ margin: "0 0 4px" }}>{t("reader.youCanNavigateBetweenPages")}</p>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>{t("The arrow icons")}</li>
+        <li>{t("reader.theArrowIcons")}</li>
         <li>
-          {t("The")} <Key>A</Key>/<Key>D</Key> {t("keys")}
+          {t("reader.the")} <Key>A</Key>/<Key>D</Key> {t("reader.keys")}
         </li>
-        <li>{t("Your keyboard arrows (and the spacebar)")}</li>
-        <li>{t("Touching the left/right side of the image.")}</li>
+        <li>{t("reader.yourKeyboardArrowsAndThe")}</li>
+        <li>{t("reader.touchingTheLeftRightSide")}</li>
       </ul>
       <p style={{ margin: "0 0 4px" }}>
-        {t("When reading an archive from search results, you can also navigate between archives using:")}
+        {t("reader.whenReadingAnArchiveFrom")}
       </p>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
         <li>
-          <Key>,</Key> {t("and")} <Key>.</Key> {t("keys")}
+          <Key>,</Key> {t("reader.and")} <Key>.</Key> {t("reader.keys")}
         </li>
-        <li>{t("Reading past the first/last page")}</li>
+        <li>{t("reader.readingPastTheFirstLast")}</li>
       </ul>
-      <p style={{ margin: "0 0 4px" }}>{t("Other keyboard shortcuts:")}</p>
+      <p style={{ margin: "0 0 4px" }}>{t("reader.otherKeyboardShortcuts")}</p>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>{t("M: toggle manga mode (right-to-left reading)")}</li>
-        <li>{t("O: show advanced reader options.")}</li>
-        <li>{t("P: toggle double page mode")}</li>
-        <li>{t("Q: bring up the thumbnail index and archive options.")}</li>
-        <li>{t("R: open a random archive.")}</li>
-        <li>{t("F: toggle fullscreen mode")}</li>
-        <li>{t("B: toggle bookmark")}</li>
-        <li>{t("N: toggle auto next page")}</li>
-        <li>{t("shift+Left/Right: go to first page/last page")}</li>
-        <li>{t("G: go to page number")}</li>
-        <li>{t("S: set a Stamp")}</li>
+        <li>{t("reader.mToggleMangaModeRighttoleft")}</li>
+        <li>{t("reader.oShowAdvancedReaderOptions")}</li>
+        <li>{t("reader.pToggleDoublePageMode")}</li>
+        <li>{t("reader.qBringUpTheThumbnail")}</li>
+        <li>{t("reader.rOpenARandomArchive")}</li>
+        <li>{t("reader.fToggleFullscreenMode")}</li>
+        <li>{t("reader.bToggleBookmark")}</li>
+        <li>{t("reader.nToggleAutoNextPage")}</li>
+        <li>{t("reader.shiftleftRightGoToFirst")}</li>
+        <li>{t("reader.gGoToPageNumber")}</li>
+        <li>{t("reader.sSetAStamp")}</li>
       </ul>
-      <p style={{ margin: 0 }}>{t("To return to the archive index, touch the arrow pointing down or use Backspace.")}</p>
+      <p style={{ margin: 0 }}>{t("reader.toReturnToTheArchive")}</p>
     </div>
   )
 
@@ -1150,7 +1150,7 @@ export function Reader() {
         <a
           className="fas fa-cog fa-2x"
           href="#"
-          title={t("Reader Options") ?? undefined}
+          title={t("reader.readerOptions") ?? undefined}
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
@@ -1165,7 +1165,7 @@ export function Reader() {
           <a
             className="fas fa-question-circle fa-2x"
             href="#"
-            title={t("Help") ?? undefined}
+            title={t("reader.help") ?? undefined}
             style={{ marginRight: 3 }}
             onClick={(e) => {
               e.preventDefault()
@@ -1177,7 +1177,7 @@ export function Reader() {
           <a
             className={`${isBookmarked ? "fas" : "far"} fa-bookmark fa-2x toggle-bookmark${loggedIn ? "" : " disabled"}`}
             href="#"
-            title={t("Toggle Bookmark") ?? undefined}
+            title={t("library.toggleBookmark") ?? undefined}
             style={loggedIn ? { marginRight: 3 } : { marginRight: 3, opacity: 0.5, cursor: "not-allowed" }}
             onClick={(e) => {
               e.preventDefault()
@@ -1190,7 +1190,7 @@ export function Reader() {
         <a
           className={`fas ${readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"} fa-2x reading-direction`}
           href="#"
-          title={t("Reading Direction") ?? undefined}
+          title={t("reader.readingDirection") ?? undefined}
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
@@ -1200,7 +1200,7 @@ export function Reader() {
         <a
           className="fas fa-stopwatch fa-2x toggle-auto-next-page"
           href="#"
-          title={t("Auto Next Page") ?? undefined}
+          title={t("reader.autoNextPage") ?? undefined}
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
@@ -1212,7 +1212,7 @@ export function Reader() {
         <a
           className="fas fa-th fa-2x"
           href="#"
-          title={t("Archive Overview") ?? undefined}
+          title={t("reader.archiveOverview") ?? undefined}
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
@@ -1223,7 +1223,7 @@ export function Reader() {
         <a
           className={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
           href="#"
-          title={t("FullScreen") ?? undefined}
+          title={t("reader.fullscreen") ?? undefined}
           style={{ marginRight: 3 }}
           onClick={(e) => {
             e.preventDefault()
@@ -1278,19 +1278,19 @@ export function Reader() {
           beyond a port, not a missed one. */}
       <a
         className="fas fa-backward-step page-link archive-nav-link"
-        title={t("Previous Archive") ?? undefined}
+        title={t("reader.previousArchive") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE, display: navState.ids.length > 0 ? undefined : "none" }}
         onClick={() => void readAdjacentArchive("prev")}
       />
       <a
         className="fas fa-angle-double-left page-link"
-        title={t("First Page") ?? undefined}
+        title={t("reader.firstPage") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo("first")}
       />
       <a
         className="fas fa-angle-left page-link"
-        title={t("Previous Page") ?? undefined}
+        title={t("reader.previousPage") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo("prev")}
       />
@@ -1308,19 +1308,19 @@ export function Reader() {
       </div>
       <a
         className="fas fa-angle-right page-link"
-        title={t("Next Page") ?? undefined}
+        title={t("reader.nextPage") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo("next")}
       />
       <a
         className="fas fa-angle-double-right page-link"
-        title={t("Last Page") ?? undefined}
+        title={t("reader.lastPage") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo("last")}
       />
       <a
         className="fas fa-forward-step page-link archive-nav-link"
-        title={t("Next Archive") ?? undefined}
+        title={t("reader.nextArchive") ?? undefined}
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE, display: navState.ids.length > 0 ? undefined : "none" }}
         onClick={() => void readAdjacentArchive("next")}
       />
@@ -1368,8 +1368,8 @@ export function Reader() {
         </span>
         {" · "}
         <span className="file-info-orig">
-          {t("Original")}: {pageEntryName.split(".").pop()} {leftResizeInfo.origWidth} x {leftResizeInfo.origHeight} :: {origSizeText}
-          {" · "}{t("saved {{pct}}%", { pct: savedPct })}
+          {t("reader.original")}: {pageEntryName.split(".").pop()} {leftResizeInfo.origWidth} x {leftResizeInfo.origHeight} :: {origSizeText}
+          {" · "}{t("reader.savedPct", { pct: savedPct })}
         </span>
       </>
     )
@@ -1450,7 +1450,7 @@ export function Reader() {
                   data-page={i + 1}
                   className={hasRealHeight ? "reader-image" : "reader-image loading-placeholder"}
                   src={url.url}
-                  alt={`${t("Page")} ${i + 1}`}
+                  alt={`${t("reader.page")} ${i + 1}`}
                   loading="lazy"
                   draggable={false}
                   style={style}
@@ -1482,7 +1482,7 @@ export function Reader() {
                 ref={leftImgRef}
                 className="reader-image"
                 src={leftUrl}
-                alt={`${t("Page")} ${spread.left}`}
+                alt={`${t("reader.page")} ${spread.left}`}
                 fetchPriority="high"
                 onLoad={(e) => onImageLoad(spread.left, e)}
                 onError={onImageError}
@@ -1494,7 +1494,7 @@ export function Reader() {
                   id="img_doublepage"
                   className="reader-image"
                   src={rightUrl}
-                  alt={`${t("Page")} ${spread.right}`}
+                  alt={`${t("reader.page")} ${spread.right}`}
                   fetchPriority="high"
                   onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
                   onError={onImageError}
@@ -1528,7 +1528,7 @@ export function Reader() {
           <a
             id="return-to-index"
             style={{ cursor: "pointer" }}
-            title={t("Done reading? Go back to Archive Index") ?? undefined}
+            title={t("reader.doneReadingGoBackTo") ?? undefined}
             onClick={() => navigate(routes.library())}
           >
             <i className="fas fa-angle-down fa-3x"></i>
@@ -1539,17 +1539,17 @@ export function Reader() {
       <div id="i7" className="if">
         <i className="fas fa-caret-right fa-lg"></i>
         <a href={leftUrl} target="_blank" rel="noreferrer">
-          {t("View full-size image")}
+          {t("reader.viewFullsizeImage")}
         </a>
         <i className="fas fa-caret-right fa-lg"></i>
         <a style={{ cursor: "pointer" }} onClick={() => void goRandom()}>
-          {t("Switch to another random archive")}
+          {t("reader.switchToAnotherRandomArchive")}
         </a>
         {loggedIn && (
           <>
             <i className="fas fa-caret-right fa-lg"></i>
             <a style={{ cursor: "pointer" }} onClick={cleanCache}>
-              {t("Clean Archive Cache")}
+              {t("reader.cleanArchiveCache")}
             </a>
           </>
         )}
@@ -1618,11 +1618,11 @@ export function Reader() {
 
             {metadata.data?.title && (
               <p style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 4 }}>
-                {t("Currently reading")}: {metadata.data.title}
+                {t("reader.currentlyReading")}: {metadata.data.title}
               </p>
             )}
             <p style={{ fontSize: 16, fontWeight: "bold", color: "#fff" }}>
-              {t("You might also like")}
+              {t("reader.youMightAlsoLike")}
             </p>
             {archiveTransition.recommendations === null && (
               /* Skeleton while the (un-prefetched) LLM rerank is in flight — grey card shapes
@@ -1685,17 +1685,17 @@ export function Reader() {
                                 padding-based chip would be a flat rectangle, since the emoji
                                 glyph's own box is taller than its advance width. */}
                             {rec.is_tank && (
-                              <span title={t("Tankoubon") ?? undefined} style={badgeChipStyle}>
+                              <span title={t("library.tankoubon") ?? undefined} style={badgeChipStyle}>
                                 📚
                               </span>
                             )}
                             {rec.isnew && (
-                              <span title={t("New!") ?? undefined} style={badgeChipStyle}>
+                              <span title={t("library.new") ?? undefined} style={badgeChipStyle}>
                                 🆕
                               </span>
                             )}
                             {rec.is_read && (
-                              <span title={t("Read") ?? undefined} style={badgeChipStyle}>
+                              <span title={t("common.read") ?? undefined} style={badgeChipStyle}>
                                 👑
                               </span>
                             )}
@@ -1714,7 +1714,7 @@ export function Reader() {
               <input
                 type="button"
                 className="stdbtn"
-                value={t("Return to Library") ?? undefined}
+                value={t("common.returnToLibrary") ?? undefined}
                 onClick={() => navigate(routes.library())}
               />
             </div>
@@ -1725,7 +1725,7 @@ export function Reader() {
               circle, lightbox convention — neutral overlay chrome, not theme-colored. */}
           <button
             type="button"
-            aria-label={t("Close") ?? undefined}
+            aria-label={t("reader.close") ?? undefined}
             onClick={() => setArchiveTransition(null)}
             style={{
               position: "fixed",

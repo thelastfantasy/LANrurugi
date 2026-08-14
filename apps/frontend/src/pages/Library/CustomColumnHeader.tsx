@@ -23,12 +23,12 @@ export function CustomColumnHeader({
     <th id={`customheader${index}`} style={{ width: 100 }} className={sortby === namespace ? `sorting_${order}` : undefined}>
       <i
         className="fas fa-pencil-alt edit-header-btn"
-        title={t("Edit this column") ?? undefined}
+        title={t("library.editThisColumn") ?? undefined}
         style={{ cursor: "pointer" }}
         onClick={(e) => {
           e.stopPropagation()
           void (async () => {
-            const next = await promptDialog(t("Tag namespace") ?? "", namespace)
+            const next = await promptDialog(t("library.tagNamespace") ?? "", namespace)
             if (next?.trim()) setNamespace(next.trim())
           })()
         }}

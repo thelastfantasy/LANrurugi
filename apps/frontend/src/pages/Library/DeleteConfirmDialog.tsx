@@ -17,10 +17,10 @@ export function DeleteConfirmDialog({
       danger
       message={
         isTank
-          ? t("This will delete this Tankoubon grouping (archives inside it are not deleted).")
-          : t("This will delete both metadata and matching files from your system! Please use with caution.")
+          ? t("library.thisWillDeleteThisTankoubon")
+          : t("common.thisWillDeleteBothMetadata")
       }
-      confirmLabel={t("Yes, delete it") ?? undefined}
+      confirmLabel={t("library.yesDeleteIt") ?? undefined}
       onConfirm={onConfirm}
       onCancel={onCancel}
     />

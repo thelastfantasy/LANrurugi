@@ -22,25 +22,25 @@ export function QueueErrorText({ error }: { error: QueueError }) {
     case "plugin_reported":
       return <span>{t(error.error_code, error.data)}</span>
     case "plugin_execution_failed":
-      return <span>{t("Plugin {{plugin}} failed to run", { plugin: error.plugin })}</span>
+      return <span>{t("components.layout.pluginPluginFailedToRun", { plugin: error.plugin })}</span>
     case "malformed_plugin_response":
-      return <span>{t("Plugin {{plugin}} returned an unrecognized response", { plugin: error.plugin })}</span>
+      return <span>{t("components.layout.pluginPluginReturnedAnUnrecognized", { plugin: error.plugin })}</span>
     case "empty_plugin_result":
-      return <span>{t("Plugin {{plugin}} returned nothing usable", { plugin: error.plugin })}</span>
+      return <span>{t("components.layout.pluginPluginReturnedNothingUsable", { plugin: error.plugin })}</span>
     case "invalid_url":
-      return <span>{t("Invalid URL: {{url}}", { url: error.url })}</span>
+      return <span>{t("components.layout.invalidUrlUrl", { url: error.url })}</span>
     case "invalid_http_method":
-      return <span>{t("Invalid HTTP method: {{method}}", { method: error.method })}</span>
+      return <span>{t("components.layout.invalidHttpMethodMethod", { method: error.method })}</span>
     case "http_request_failed":
-      return <span>{t("Request failed: {{url}}", { url: error.url })}</span>
+      return <span>{t("components.layout.requestFailedUrl", { url: error.url })}</span>
     case "http_status":
       return (
-        <span>{t("Server responded with status {{status}}: {{url}}", { url: error.url, status: error.status })}</span>
+        <span>{t("components.layout.serverRespondedWithStatusStatus", { url: error.url, status: error.status })}</span>
       )
     case "write_failed":
-      return <span>{t("Failed to write the downloaded file to disk")}</span>
+      return <span>{t("components.layout.failedToWriteTheDownloaded")}</span>
     case "bundle_failed":
-      return <span>{t("Failed to bundle downloaded pages into one archive")}</span>
+      return <span>{t("components.layout.failedToBundleDownloadedPages")}</span>
     case "duplicate_archive":
       return (
         <span>
@@ -63,7 +63,7 @@ export function QueueErrorText({ error }: { error: QueueError }) {
     case "duplicate_filename":
       return (
         <span>
-          {t("The filename {{filename}} is already used by", { filename: error.filename })}{" "}
+          {t("components.layout.theFilenameFilenameIsAlready", { filename: error.filename })}{" "}
           <a
             href={routes.reader(error.existing_id)}
             onClick={(e) => {
@@ -76,15 +76,15 @@ export function QueueErrorText({ error }: { error: QueueError }) {
         </span>
       )
     case "duplicate_filename_cleaned":
-      return <span>{t("Expired, please download again")}</span>
+      return <span>{t("components.layout.expiredPleaseDownloadAgain")}</span>
     case "internal":
-      return <span>{t("An internal error occurred")}</span>
+      return <span>{t("components.layout.anInternalErrorOccurred")}</span>
     case "stale_after_restart":
-      return <span>{t("Download was interrupted by a server restart, please retry")}</span>
+      return <span>{t("components.layout.downloadWasInterruptedByA")}</span>
     case "already_patched":
       return (
         <span style={{ color: "#c79121" }}>
-          {t("Already patched — the unique pages from {{filename}} were previously patched into", {
+          {t("components.layout.alreadyPatchedTheUnique", {
             filename: error.filename,
           })}{" "}
           <a

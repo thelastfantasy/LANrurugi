@@ -22,7 +22,7 @@ export function BookmarkIcon({ archiveId }: { archiveId: string }) {
     e.stopPropagation()
     if (!loggedIn) {
       toast({
-        text: `<a href="${routes.login()}">${t("Login")}</a> ${t("to toggle bookmark feature.")}`,
+        text: `<a href="${routes.login()}">${t("library.login")}</a> ${t("library.toToggleBookmarkFeature")}`,
         html: true,
         icon: "warning",
       })
@@ -36,7 +36,7 @@ export function BookmarkIcon({ archiveId }: { archiveId: string }) {
   return (
     <i
       className={`${isBookmarked ? "fas" : "far"} fa-bookmark thumbnail-bookmark-icon${loggedIn ? "" : " disabled"}`}
-      title={t("Toggle Bookmark") ?? undefined}
+      title={t("library.toggleBookmark") ?? undefined}
       style={!loggedIn ? { opacity: 0.5, cursor: "not-allowed" } : { cursor: "pointer" }}
       onClick={(e) => void toggle(e)}
     ></i>

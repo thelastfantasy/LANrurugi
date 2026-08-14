@@ -29,11 +29,11 @@ export function PluginParametersForm({
         onClick={() => setOpen((o) => !o)}
       >
         <i className="fas fa-sliders-h fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
-        <b style={{ verticalAlign: "super" }}>{t("Plugin Settings")}</b>
+        <b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>
       </div>
       {open && (
         <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
-          {settings.isLoading && <p>{t("Loading…")}</p>}
+          {settings.isLoading && <p>{t("common.loading")}</p>}
           {settings.data && (
             <PluginParametersFormBody
               namespace={namespace}
@@ -113,7 +113,7 @@ function PluginParametersFormBody({
               type="button"
               className="stdbtn"
               disabled={update.isPending}
-              value={t("Save Plugin Settings") ?? undefined}
+              value={t("pluginParameters.savePluginSettings") ?? undefined}
               onClick={() => void update.mutateAsync({ customargs: values })}
             />
           </td>

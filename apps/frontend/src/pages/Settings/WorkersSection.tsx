@@ -15,53 +15,53 @@ export function WorkersSection({ onStatus }: { onStatus: (status: string) => voi
   const shinobuAction = useShinobuAction()
 
   return (
-    <CollapsibleSection icon="fa-satellite" title={t("Background Workers")}>
+    <CollapsibleSection icon="fa-satellite" title={t("settings.backgroundWorkers")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <tr>
             <td className="option-td">
-              <h2 className="ih">{t("Shinobu Status")}</h2>
+              <h2 className="ih">{t("settings.shinobuStatus")}</h2>
             </td>
             <td className="config-td">
               {shinobuStatus.data?.is_alive ? (
                 <span>
-                  {t("The Shinobu File Watcher is currently")}{" "}
+                  {t("settings.theShinobuFileWatcherIs")}{" "}
                   <h2 className="ih" style={{ display: "inline", color: "rgb(26, 165, 26)" }}>
-                    👍 {t("OK!")}
+                    👍 {t("settings.ok")}
                   </h2>
                 </span>
               ) : (
                 <span>
-                  {t("The Shinobu File Watcher is currently")}{" "}
+                  {t("settings.theShinobuFileWatcherIs")}{" "}
                   <h2 className="ih" style={{ display: "inline", color: "rgb(207, 37, 37)" }}>
-                    👹 {t("Kaput!")}
+                    👹 {t("settings.kaput")}
                   </h2>
                 </span>
               )}{" "}
-              ({t("PID:")} <span id="pid">{shinobuStatus.data?.pid}</span>)
+              ({t("settings.pid")} <span id="pid">{shinobuStatus.data?.pid}</span>)
               <br />
-              {t("This File Watcher is responsible for monitoring your content directory and automatically handling new archives as they come.")}
+              {t("settings.thisFileWatcherIsResponsible")}
               <br />
             </td>
           </tr>
           <ActionRow
             id="restart-button"
-            label={t("Restart File Watcher")}
+            label={t("settings.restartFileWatcher")}
             onClick={async () => {
               await shinobuAction.mutateAsync("restart")
-              onStatus(t("File Watcher restarted.") ?? "")
+              onStatus(t("settings.fileWatcherRestarted") ?? "")
             }}
           >
-            {t("If Shinobu is dead or unresponsive, you can reboot her by clicking this button.")}
+            {t("settings.ifShinobuIsDeadOr")}
           </ActionRow>
           <ActionRow
             id="open-minion"
-            label={t("Open Minion Console")}
+            label={t("settings.openMinionConsole")}
             onClick={() => navigate(routes.jobs())}
           >
-            {t("The Minion Worker handles spare tasks that are too long to execute within the request/response lifecycle of web applications.")}
+            {t("settings.theMinionWorkerHandlesSpare")}
             <br />
-            {t("The console shows currently running and concluded tasks.")}
+            {t("settings.theConsoleShowsCurrentlyRunning")}
           </ActionRow>
         </tbody>
       </table>

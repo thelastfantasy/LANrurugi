@@ -17,10 +17,10 @@ export function UpdateBanner() {
   useEffect(() => {
     if (!check.data) return
     toast({
-      heading: t("A new version of LANrurugi ({{version}}) is available!", {
+      heading: t("components.layout.aNewVersionOfLanrurugi", {
         version: check.data.latestVersion,
       }),
-      text: `<a href="${encodeURI(check.data.releaseUrl)}" target="_blank" rel="noreferrer">${t("Click here to check it out.")}</a>`,
+      text: `<a href="${encodeURI(check.data.releaseUrl)}" target="_blank" rel="noreferrer">${t("components.layout.clickHereToCheckIt")}</a>`,
       html: true,
       icon: "info",
       closeOnClick: false,

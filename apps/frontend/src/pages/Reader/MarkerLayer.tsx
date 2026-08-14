@@ -1299,7 +1299,7 @@ export function MarkerLayer({
                 void openEditorForExisting(stampId)
               }}
             >
-              {t("Edit Marker")}
+              {t("reader.editMarker")}
             </PopupMenuItem>
             <PopupMenuItem
               onClick={() => {
@@ -1307,7 +1307,7 @@ export function MarkerLayer({
                 deleteStamp.mutate(menu.stampId)
               }}
             >
-              {t("Delete Marker")}
+              {t("reader.deleteMarker")}
             </PopupMenuItem>
           </PopupMenu>
         </>

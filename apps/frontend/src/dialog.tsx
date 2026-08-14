@@ -579,7 +579,7 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
           `overflowX: 'auto'` guarantees a single row (with a scrollbar as the fallback, not a
           silent second row) rather than just hoping ten 24px cells + gaps happen to fit exactly.*/}
       <div role="tablist" style={{ display: "flex", flexWrap: "nowrap", overflowX: "auto", justifyContent: "space-between", gap: 2, marginBottom: 6 }}>
-        <TabButton selected={tab === "icons"} title={t("Icons") ?? undefined} onClick={() => setTab("icons")} palette={palette}>
+        <TabButton selected={tab === "icons"} title={t("app.icons") ?? undefined} onClick={() => setTab("icons")} palette={palette}>
           <i className="fas fa-icons" aria-hidden="true"></i>
         </TabButton>
         {/* Separates the Font Awesome "Icons" tab from the nine emoji-category tabs that follow —
@@ -637,7 +637,7 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
                 // small enough that a real user won't see this for more than a frame or two on
                 // any connection, but showing *nothing* at all during that gap would read as the
                 // picker being broken rather than just loading.
-                <span style={{ opacity: 0.6, padding: 4 }}>{t("Loading…") ?? undefined}</span>
+                <span style={{ opacity: 0.6, padding: 4 }}>{t("common.loading") ?? undefined}</span>
               )}
       </div>
     </div>
@@ -866,7 +866,7 @@ function StampEditorForm({
   // region), and the default name should say which one this actually is rather than reusing the
   // point-stamp wording for both.
   const [content, setContent] = useState(
-    defaultContent || (defaultRect ? t("Selection") : t("Marker")) || "Marker",
+    defaultContent || (defaultRect ? t("app.selection") : t("app.marker")) || "Marker",
   )
   // `icon` here is always the *base* value (`fa:<class>` or a plain emoji, never with a color
   // segment) — the one `IconPicker`'s own grid buttons compare their own (also always base) values
@@ -914,7 +914,7 @@ function StampEditorForm({
 
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("Enter Stamp name:")}</p>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("app.enterStampName")}</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
         {/* A live preview of the currently-picked icon (or the default marker's own bare pin, once
             none is chosen) right next to the name field — the picker below is a whole grid to
@@ -942,7 +942,7 @@ function StampEditorForm({
           className="stdinput"
           style={{ flex: 1, height: 25, boxSizing: "border-box" }}
           value={content}
-          placeholder={t("Marker") ?? undefined}
+          placeholder={t("app.marker") ?? undefined}
           autoFocus
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={(e) => {
@@ -959,7 +959,7 @@ function StampEditorForm({
         <ColorPickerWithHistory
           value={color}
           disabled={!isFaIcon}
-          title={t("Icon Color") ?? undefined}
+          title={t("app.iconColor") ?? undefined}
           history={iconColorHistory}
           onChange={(next) => {
             setColor(next)
@@ -977,9 +977,9 @@ function StampEditorForm({
           read as cramped at this dialog's 320px width (reported live: "排版太丑了"). */}
       {defaultRect && (
         <div style={{ textAlign: "left", marginBottom: 12, paddingTop: 12, borderTop: "1px solid currentColor" }}>
-          <p style={{ fontWeight: "bold", margin: "0 0 10px" }}>{t("Selection Rectangle")}</p>
+          <p style={{ fontWeight: "bold", margin: "0 0 10px" }}>{t("app.selectionRectangle")}</p>
           <div style={{ marginBottom: 12 }}>
-            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Icon Position")}</span>
+            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("app.iconPosition")}</span>
             <RectAnchorPicker
               anchor={anchor}
               onChange={(a) => {
@@ -992,7 +992,7 @@ function StampEditorForm({
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <div>
               <label htmlFor="stamp-rect-color" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
-                {t("Rectangle Color")}
+                {t("app.rectangleColor")}
               </label>
               <ColorPickerWithHistory
                 id="stamp-rect-color"
@@ -1005,7 +1005,7 @@ function StampEditorForm({
               />
             </div>
             <div>
-              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Fill Style")}</span>
+              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("app.fillStyle")}</span>
               <div role="tablist" style={{ display: "flex", gap: 2 }}>
                 {FILL_STYLES.map((f) => (
                   <OptionButton
@@ -1024,7 +1024,7 @@ function StampEditorForm({
               </div>
             </div>
             <div>
-              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Corner Style")}</span>
+              <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("app.cornerStyle")}</span>
               <div role="tablist" style={{ display: "flex", gap: 2 }}>
                 {(["sharp", "round"] as StampCorner[]).map((c) => (
                   <OptionButton
@@ -1051,7 +1051,7 @@ function StampEditorForm({
             </div>
           </div>
           <div style={{ marginTop: 12 }}>
-            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("Rectangle Display")}</span>
+            <span style={{ display: "block", fontSize: 13, marginBottom: 4 }}>{t("app.rectangleDisplay")}</span>
             <div role="tablist" style={{ display: "flex", gap: 2 }}>
               {(["hover", "always"] as StampDisplay[]).map((d) => (
                 <OptionButton
@@ -1072,8 +1072,8 @@ function StampEditorForm({
         </div>
       )}
       <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
+        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -1179,7 +1179,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
 
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("New Category")}</p>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("common.newCategory")}</p>
       {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
           `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
           than native radio inputs (visually inconsistent with the rest of the themed UI). */}
@@ -1192,7 +1192,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           style={{ flex: 1 }}
           onClick={() => setIsDynamic(false)}
         >
-          {t("Static Category")}
+          {t("app.staticCategory")}
         </button>
         <button
           type="button"
@@ -1202,12 +1202,12 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           style={{ flex: 1 }}
           onClick={() => setIsDynamic(true)}
         >
-          {t("Dynamic Category")}
+          {t("app.dynamicCategory")}
         </button>
       </div>
       <div style={{ textAlign: "left", marginBottom: 12 }}>
         <label htmlFor="new-category-name" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
-          {t("Enter a name for the new category")}
+          {t("app.enterANameForThe")}
         </label>
         {/* `height: 25` — matches the tab buttons/`Edit.tsx`'s own `.stdinput`/`<select>` override
             (issue #45), since legacy theme CSS's own `.stdinput` rule is a much shorter ~18px by
@@ -1219,7 +1219,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           className="stdinput"
           style={{ width: "100%", height: 25, boxSizing: "border-box" }}
           value={name}
-          placeholder={t("My Category") ?? undefined}
+          placeholder={t("app.myCategory") ?? undefined}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !isDynamic) submit()
@@ -1229,11 +1229,11 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
       {isDynamic && (
         <div style={{ textAlign: "left", marginBottom: 12 }}>
           <label htmlFor="new-category-search" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, marginBottom: 4 }}>
-            {t("Search Predicate")}
+            {t("app.searchPredicate")}
             <Tooltip
               label={
                 t(
-                  'Same syntax as the main search bar — a plain keyword (no namespace) matches the title or any tag, exactly like typing it into that search box. Separate multiple terms with a comma or space to require all of them; prefix a term with - to exclude it. A multi-word value needs quotes to keep its words together, e.g. female:"huge breasts". Example: language:chinese, -tag:full color, or just a keyword like 旗袍',
+                  "app.sameSyntaxAsTheMain",
                 ) ?? undefined
               }
             >
@@ -1251,8 +1251,8 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
         </div>
       )}
       <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
+        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -1284,7 +1284,7 @@ function RenameArchiveForm({
 
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("Enter the new file name:")}</p>
+      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("app.enterTheNewFileName")}</p>
       {/* The extension is a fixed suffix, not part of the editable field — see
           `renameArchiveDialog`'s own docs for why. Both halves are real `.stdinput`s (not a plain
           `<span>` for the extension) so the fixed suffix picks up the same real per-theme border/
@@ -1312,7 +1312,7 @@ function RenameArchiveForm({
             className="stdinput"
             readOnly
             tabIndex={-1}
-            aria-label={t("File extension (not editable)") ?? undefined}
+            aria-label={t("app.fileExtensionNotEditable") ?? undefined}
             size={extension.length + 1}
             style={{ flex: "0 0 auto", width: "auto", height: 25, boxSizing: "border-box", marginLeft: 4, textAlign: "center" }}
             value={`.${extension}`}
@@ -1320,8 +1320,8 @@ function RenameArchiveForm({
         )}
       </div>
       <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={submit} />
+        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
       </div>
     </div>
   )
@@ -1513,7 +1513,7 @@ export function DialogHost() {
         >
           <div style={{ margin: "0 0 12px" }}>{request.message}</div>
           <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-            <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={acknowledgeInfo} autoFocus />
+            <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={acknowledgeInfo} autoFocus />
           </div>
         </div>
       </>,
@@ -1614,11 +1614,11 @@ export function DialogHost() {
           />
         )}
         <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-          <input type="button" className="stdbtn" value={t("Cancel") ?? "Cancel"} onClick={onCancel} />
+          <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
           <input
             type="button"
             className={request.kind === "confirm" && request.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
-            value={t("OK") ?? "OK"}
+            value={t("common.ok") ?? "OK"}
             onClick={onConfirm}
           />
         </div>

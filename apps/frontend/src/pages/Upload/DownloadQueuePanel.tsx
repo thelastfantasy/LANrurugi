@@ -161,7 +161,7 @@ export function DownloadQueuePanel({
   return (
     <div style={{ marginTop: 16, textAlign: "left" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Download Queue")}
+        {t("upload.downloadQueue")}
       </h2>
 
       {/* `.control-btn-group` carries no actual CSS from any theme — a plain unstyled class name —
@@ -179,7 +179,7 @@ export function DownloadQueuePanel({
           disabled={selectableIds.length === 0}
           onClick={selectAll}
         >
-          {t("Select All")}
+          {t("upload.selectAll")}
         </button>
         <button
           type="button"
@@ -188,7 +188,7 @@ export function DownloadQueuePanel({
           disabled={selectableIds.length === 0}
           onClick={invertSelection}
         >
-          {t("Invert Selection")}
+          {t("upload.invertSelection")}
         </button>
         <button
           type="button"
@@ -203,7 +203,7 @@ export function DownloadQueuePanel({
             // `ensure_metadata_cached`) — no frontend fire-and-forget loop needed.
           }}
         >
-          {t("Start ({{n}})", { n: effectiveSelected.size })}
+          {t("upload.startN", { n: effectiveSelected.size })}
         </button>
         <button
           type="button"
@@ -212,7 +212,7 @@ export function DownloadQueuePanel({
           disabled={cleared === 0 || clearCompleted.isPending}
           onClick={() => void clearCompleted.mutateAsync()}
         >
-          {t("Clear Completed")}
+          {t("upload.clearCompleted")}
         </button>
         <button
           type="button"
@@ -224,7 +224,7 @@ export function DownloadQueuePanel({
             setSelected(new Set())
           }}
         >
-          {t("Delete ({{n}})", { n: effectiveSelected.size })}
+          {t("upload.deleteN", { n: effectiveSelected.size })}
         </button>
       </div>
 
@@ -242,7 +242,7 @@ export function DownloadQueuePanel({
           .map(([namespace, groupItems]) => {
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
-            const groupTitle = isLocalUpload ? t("From your computer") : (plugin?.name ?? namespace)
+            const groupTitle = isLocalUpload ? t("upload.fromYourComputer") : (plugin?.name ?? namespace)
             return (
               <CollapsibleSection
                 key={namespace}

@@ -92,7 +92,7 @@ export function RatingWidget({
   }
 
   return (
-    <Tooltip label={t("Click a star to rate. Right-click to clear the rating.")}>
+    <Tooltip label={t("components.form.clickAStarToRate")}>
       <span
         style={{ display: "inline-flex" }}
         onMouseLeave={() => setPreviewRating(null)}

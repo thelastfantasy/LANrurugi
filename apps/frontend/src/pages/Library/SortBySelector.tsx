@@ -26,14 +26,14 @@ export function SortBySelector({
 
   return (
     <div className="thumbnail-options" style={{ display: "flex", alignItems: "center" }}>
-      {t("Sort by:")}{" "}
+      {t("library.sortBy")}{" "}
       <select
         className="favtag-btn"
         value={sortby}
         onChange={(e) => onSortBy(e.target.value)}
       >
-        <option value="title">{t("Title")}</option>
-        <option value="date_added">{t("Date")}</option>
+        <option value="title">{t("common.title")}</option>
+        <option value="date_added">{t("library.date")}</option>
         {namespaces.map((ns) => (
           <option key={ns} value={ns}>
             {ns.charAt(0).toUpperCase() + ns.slice(1)}
@@ -44,7 +44,7 @@ export function SortBySelector({
         className={`fa fa-2x fa-sort-alpha-${order === "asc" ? "down" : "up"} table-option`}
         style={{ position: "relative", top: 6 }}
         href="#"
-        title={t("Sort Order") ?? undefined}
+        title={t("library.sortOrder") ?? undefined}
         onClick={(e) => {
           e.preventDefault()
           onToggleOrder()

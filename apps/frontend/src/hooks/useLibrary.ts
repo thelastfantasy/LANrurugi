@@ -180,10 +180,10 @@ useEffect(() => {
   if (loginStatus.data?.using_default_password && !defaultPasswordToastShownThisPageLoad) {
     defaultPasswordToastShownThisPageLoad = true
     toast({
-      heading: t("You're using the default password and that's super baka of you") ?? undefined,
+      heading: t("hooks.youReUsingTheDefault") ?? undefined,
       text:
         t(
-          'Login with password "kamimamita" and change that shit on the double. ...Or just disable it! Why not check the configuration options afterwards, while you\'re at it?',
+          "hooks.loginWithPasswordKamimamitaAnd",
         ) ?? undefined,
       icon: "warning",
       hideAfter: 25000,
@@ -198,7 +198,7 @@ useEffect(() => {
   if (localStorage.getItem(seenKey)) return
   localStorage.setItem(seenKey, "1")
   toast({
-    heading: t("Tip: right-click an archive for more actions!") ?? undefined,
+    heading: t("hooks.tipRightclickAnArchiveFor") ?? undefined,
     icon: "info",
     hideAfter: 8000,
   })
@@ -217,8 +217,8 @@ useEffect(() => {
   if (keys.length === 0) return
 
   toast({
-    heading: t("Migrating local reading progress to the server…") ?? undefined,
-    text: `${t("This only happens once — go grab a coffee, it won't take long.")} ☕`,
+    heading: t("hooks.migratingLocalReadingProgressTo") ?? undefined,
+    text: `${t("hooks.thisOnlyHappensOnce")} ☕`,
     icon: "info",
     hideAfter: 23000,
   })
@@ -247,8 +247,8 @@ useEffect(() => {
     }),
   ).then(() => {
     toast({
-      heading: `${t("Local progress migration complete!")} 🎉`,
-      text: t("Every archive with local-only reading progress has been synced to the server.") ?? undefined,
+      heading: `${t("hooks.localProgressMigrationComplete")} 🎉`,
+      text: t("hooks.everyArchiveWithLocalonlyReading") ?? undefined,
       icon: "success",
       hideAfter: 13000,
     })
@@ -356,7 +356,7 @@ function clearSelection() {
 // confirmation since there's nothing to lose yet.
 async function handleToggleMultiSelect() {
   if (multiSelect && selectedIds.length > 0) {
-    if (!(await confirmDialog(t("You have an active selection. Exiting will clear it. Continue?") ?? ""))) {
+    if (!(await confirmDialog(t("hooks.youHaveAnActiveSelection") ?? ""))) {
       return
     }
   }
@@ -397,7 +397,7 @@ async function mergeSelectionIntoTankoubon() {
       navigate(routes.tankoubonEdit(targetTank))
       return
     }
-    const name = await promptDialog(t("Enter a name for the new Tankoubon.") ?? "")
+    const name = await promptDialog(t("hooks.enterANameForThe") ?? "")
     if (!name?.trim()) return
     const result = await createTankoubon.mutateAsync(name.trim())
     await fetch(`/api/tankoubons/${result.tankoubon_id}`, {
@@ -408,7 +408,7 @@ async function mergeSelectionIntoTankoubon() {
     clearSelection()
     navigate(routes.tankoubonEdit(result.tankoubon_id))
   } catch {
-    toast({ heading: t("Error creating Tankoubon") ?? undefined, icon: "error" })
+    toast({ heading: t("hooks.errorCreatingTankoubon") ?? undefined, icon: "error" })
   }
 }
 

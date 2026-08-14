@@ -85,14 +85,14 @@ function SuggestionCard({
         void queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
         void queryClient.invalidateQueries({ queryKey: ["archives"] })
         void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
-        toast({ heading: t("Added to Tankoubon!") ?? undefined, icon: "success" })
+        toast({ heading: t("library.addedToTankoubon") ?? undefined, icon: "success" })
       } else {
         // Two-step, same shape TankoubonEdit's own create-then-populate flow would need to use
         // (there's no single "create with initial members" endpoint) — `useCreateTankoubon` only
         // takes a `name`, so the new Tankoubon's id isn't known until that first call resolves.
         const name = selectedIds
           .map((id) => titleById.get(id))
-          .find((title) => !!title) ?? t("New Tankoubon") ?? "New Tankoubon"
+          .find((title) => !!title) ?? t("library.newTankoubon") ?? "New Tankoubon"
         const { tankoubon_id } = await createTankoubon.mutateAsync(name)
         await sendJson("PUT", `/tankoubons/${tankoubon_id}`, { archives: selectedIds })
 
@@ -137,7 +137,7 @@ function SuggestionCard({
             }
           } catch (renameErr) {
             toast({
-              heading: t("AI rename failed — Tankoubon created without it") ?? undefined,
+              heading: t("library.aiRenameFailedTankoubon") ?? undefined,
               text: String(renameErr),
               icon: "warning",
             })
@@ -155,12 +155,12 @@ function SuggestionCard({
         void queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
         void queryClient.invalidateQueries({ queryKey: ["archives"] })
         void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
-        toast({ heading: `${t("Tankoubon created!")}: ${finalName}`, icon: "success" })
+        toast({ heading: `${t("library.tankoubonCreated")}: ${finalName}`, icon: "success" })
       }
       onDismissed()
     } catch (err) {
       toast({
-        heading: (isAddToExisting ? t("Error adding to tankoubon") : t("Error creating tankoubon")) ?? undefined,
+        heading: (isAddToExisting ? t("library.errorAddingToTankoubon") : t("library.errorCreatingTankoubon")) ?? undefined,
         text: String(err),
         icon: "error",
       })
@@ -177,7 +177,7 @@ function SuggestionCard({
       })
       onDismissed()
     } catch (err) {
-      toast({ heading: t("Error ignoring suggestion") ?? undefined, text: String(err), icon: "error" })
+      toast({ heading: t("library.errorIgnoringSuggestion") ?? undefined, text: String(err), icon: "error" })
     }
   }
 
@@ -226,9 +226,9 @@ function SuggestionCard({
         >
           <span style={{ fontSize: 13, fontWeight: 700 }}>
             {isAddToExisting
-              ? `${t("Suggest adding to")} "${suggestion.existing_tankoubon_id ? tankoubonNameById.get(suggestion.existing_tankoubon_id) ?? suggestion.existing_tankoubon_id : ""}"`
-              : t("Suggested Group")}{" "}
-            {page + 1} · {suggestion.archive_ids.length} {t("archives")}
+              ? `${t("library.suggestAddingTo")} "${suggestion.existing_tankoubon_id ? tankoubonNameById.get(suggestion.existing_tankoubon_id) ?? suggestion.existing_tankoubon_id : ""}"`
+              : t("library.suggestedGroup")}{" "}
+            {page + 1} · {suggestion.archive_ids.length} {t("library.archives")}
           </span>
           <span style={{ fontSize: 10, opacity: 0.4 }}>
             <i className="fa fa-robot" aria-hidden="true" />
@@ -310,7 +310,7 @@ function SuggestionCard({
             <input
               type="button"
               className="stdbtn ai-pill-btn"
-              value={t("Don't suggest this again") ?? undefined}
+              value={t("library.donTSuggestThisAgain") ?? undefined}
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
@@ -342,14 +342,14 @@ function SuggestionCard({
                  * read as sitting in the middle of a wide empty region rather than pinned to the
                  * button's own right edge. Growing the label instead pushes the toggle all the way
                  * right, matching the category-chip layout this is modeled on. */}
-                <span style={{ flex: 1, textAlign: "center" }}>{t("Create Tankoubon")}</span>
+                <span style={{ flex: 1, textAlign: "center" }}>{t("library.createTankoubon")}</span>
                 {/* `stopPropagation` on the Tooltip's own wrapper — without it, hovering to read
                  * the tooltip is harmless, but a stray click landing on the wrapper's own padding
                  * (just outside the checkbox's actual hit area) would bubble up to the button and
                  * fire handleConfirm, same class of bug the checkbox's own controlled `onChange`
                  * relies on staying scoped to just the checkbox. */}
                 <Tooltip
-                  label={t("Auto-rename and reorder chapters with AI")}
+                  label={t("library.autorenameAndReorderChaptersWith")}
                   wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}
                   zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
                 >
@@ -380,7 +380,7 @@ function SuggestionCard({
               <input
                 type="button"
                 className="stdbtn ai-pill-btn"
-                value={(isAddToExisting ? t("Add to Tankoubon") : t("Create Tankoubon")) ?? undefined}
+                value={(isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")) ?? undefined}
                 disabled={!canConfirm}
                 onClick={() => void handleConfirm()}
               />
@@ -454,7 +454,7 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
       onError: (err) => {
         if (cancelled) return
         onClose()
-        toast({ heading: t("AI grouping failed") ?? undefined, text: String(err), icon: "error" })
+        toast({ heading: t("library.aiGroupingFailed") ?? undefined, text: String(err), icon: "error" })
       },
     })
     return () => {
@@ -479,7 +479,7 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
         ) : suggestions.length === 0 ? (
           <div style={{ padding: "20px 0" }}>
             <i className="fas fa-3x fa-check-circle" aria-hidden="true" style={{ opacity: 0.5 }} />
-            <div style={{ marginTop: 12 }}>{t("No grouping suggestions — nothing in your library looks like an ungrouped series right now.")}</div>
+            <div style={{ marginTop: 12 }}>{t("library.noGroupingSuggestionsNothing")}</div>
           </div>
         ) : current ? (
           <SuggestionCard
@@ -512,7 +512,7 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setShowIgnored(e.target.checked)}
               style={{ margin: 0 }}
             />
-            {t("Show ignored combinations")} ({ignoredSuggestions.data.ignored.length})
+            {t("library.showIgnoredCombinations")} ({ignoredSuggestions.data.ignored.length})
           </label>
         )}
       </div>
@@ -543,7 +543,7 @@ function IgnoredSuggestionsList({
   if (entries.length === 0) {
     return (
       <div style={{ padding: "20px 0" }}>
-        <div>{t("No ignored combinations.")}</div>
+        <div>{t("library.noIgnoredCombinations")}</div>
       </div>
     )
   }
@@ -569,7 +569,7 @@ function IgnoredSuggestionsList({
             <div style={{ fontSize: 12 }}>
               {entry.existing_tankoubon_id && (
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                  {t("Add to")} "{tankoubonNameById.get(entry.existing_tankoubon_id) ?? entry.existing_tankoubon_id}"
+                  {t("library.addTo")} "{tankoubonNameById.get(entry.existing_tankoubon_id) ?? entry.existing_tankoubon_id}"
                 </div>
               )}
               {entry.archive_ids.map((id) => (
@@ -579,7 +579,7 @@ function IgnoredSuggestionsList({
             <input
               type="button"
               className="stdbtn"
-              value={t("Un-ignore") ?? undefined}
+              value={t("library.unignore") ?? undefined}
               disabled={unignoreGroupSuggestion.isPending}
               onClick={() =>
                 void unignoreGroupSuggestion.mutateAsync({

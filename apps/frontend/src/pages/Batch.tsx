@@ -70,7 +70,7 @@ export function Batch() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   useApplyTheme()
-  useDocumentTitle(t("Batch Operations") ?? undefined)
+  useDocumentTitle(t("batch.batchOperations") ?? undefined)
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -208,8 +208,8 @@ export function Batch() {
 
   return (
     <div className="ido">
-      <h1 className="ih">{t("Batch Operations")}</h1>
-      <p>{t("Select what you'd like to do, check archives you want to use it on, and get rolling!")}</p>
+      <h1 className="ih">{t("batch.batchOperations")}</h1>
+      <p>{t("batch.selectWhatYouDLike")}</p>
 
       <div>
         <div className="left-column" style={{ width: 400 }}>
@@ -218,11 +218,11 @@ export function Batch() {
               <tr>
                 <td>
                   <select id="batch-operation" className="favtag-btn" value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
-                    <option value="plugin">🧩 {t("Use Plugin")}</option>
-                    <option value="clearnew">🆕 {t("Remove New Flag")}</option>
-                    <option value="tagrules">📏 {t("Apply Tag Rules")}</option>
-                    <option value="addcat">📚 {t("Add To Category")}</option>
-                    <option value="delete">🗑️ {t("Delete Archive")}</option>
+                    <option value="plugin">🧩 {t("batch.usePlugin")}</option>
+                    <option value="clearnew">🆕 {t("batch.removeNewFlag")}</option>
+                    <option value="tagrules">📏 {t("batch.applyTagRules")}</option>
+                    <option value="addcat">📚 {t("batch.addToCategory")}</option>
+                    <option value="delete">🗑️ {t("common.deleteArchive")}</option>
                   </select>
                 </td>
               </tr>
@@ -237,7 +237,7 @@ export function Batch() {
                 <table>
                   <tbody>
                     <tr>
-                      <td>{t("Use plugin :")}</td>
+                      <td>{t("batch.usePluginLabel")}</td>
                       <td>
                         <select value={pluginNamespace} onChange={(e) => setPluginNamespace(e.target.value)} className="favtag-btn">
                           <option value=""></option>
@@ -250,7 +250,7 @@ export function Batch() {
                       </td>
                     </tr>
                     <tr>
-                      <td>{t("Timeout (max 20s):")}</td>
+                      <td>{t("batch.timeoutMax20s")}</td>
                       <td>
                         <input
                           type="number"
@@ -268,18 +268,18 @@ export function Batch() {
             )}
             {operation === "clearnew" && (
               <div className="operation clearnew-operation" style={{ textAlign: "center" }}>
-                {t('This removes the "new" flag from the selected archives.')}
+                {t("batch.thisRemovesTheNewFlag")}
               </div>
             )}
             {operation === "tagrules" && (
               <div className="operation tagrules-operation">
-                <input value={tagToAdd} onChange={(e) => setTagToAdd(e.target.value)} className="stdinput" placeholder={t("Tags") ?? undefined} />
+                <input value={tagToAdd} onChange={(e) => setTagToAdd(e.target.value)} className="stdinput" placeholder={t("common.tags") ?? undefined} />
               </div>
             )}
             {operation === "addcat" && (
               <div className="operation addcat-operation">
                 <select value={categoryTarget} onChange={(e) => setCategoryTarget(e.target.value)} className="favtag-btn">
-                  <option value="">{t(" -- No Category -- ")}</option>
+                  <option value="">{t("common.NoCategory")}</option>
                   {categories.data?.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -291,20 +291,20 @@ export function Batch() {
             {operation === "delete" && (
               <div className="operation delete-operation" style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 36 }}>💣👀💦💦</div>
-                <h3>{t("This will delete both metadata and matching files from your system! Please use with caution.")}</h3>
+                <h3>{t("common.thisWillDeleteBothMetadata")}</h3>
               </div>
             )}
           </div>
 
           <div className="tag-options">
-            <input type="button" id="check-uncheck" className="stdbtn" value={t("Select Archives") ?? undefined} onClick={() => setSelected(new Set(selected.size ? [] : (archives.data?.map((a) => a.arcid) ?? [])))} />
+            <input type="button" id="check-uncheck" className="stdbtn" value={t("batch.selectArchives") ?? undefined} onClick={() => setSelected(new Set(selected.size ? [] : (archives.data?.map((a) => a.arcid) ?? [])))} />
             <input
               type="button"
               id="start-batch"
               className="stdbtn"
               disabled={busy || selected.size === 0}
               onClick={() => void runSelectedOperation()}
-              value={t("Start Task") ?? undefined}
+              value={t("batch.startTask") ?? undefined}
             />
           </div>
           {status && <p>{status}</p>}
@@ -329,8 +329,8 @@ export function Batch() {
         </div>
       </div>
 
-      <input type="button" id="plugin-config" className="stdbtn" value={t("Plugin Configuration") ?? undefined} onClick={() => navigate(routes.pluginSettings())} />
-      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.settings())} />
+      <input type="button" id="plugin-config" className="stdbtn" value={t("common.pluginConfiguration") ?? undefined} onClick={() => navigate(routes.pluginSettings())} />
+      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.settings())} />
     </div>
   )
 }

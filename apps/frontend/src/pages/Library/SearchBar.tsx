@@ -55,7 +55,7 @@ export function SearchBar({
             }
             if (e.key === "Escape") onAutocompleteOpenChange(false)
           }}
-          placeholder={t("Search Title, Artist, Series, Language or Tags") ?? undefined}
+          placeholder={t("library.searchTitleArtistSeriesLanguage") ?? undefined}
         />
         {autocompleteOpen && tagSuggestions.length > 0 && (
           <PopupMenu
@@ -82,27 +82,27 @@ export function SearchBar({
         id="apply-search"
         className="searchbtn stdbtn"
         type="button"
-        value={t("Apply Filter") ?? undefined}
+        value={t("library.applyFilter") ?? undefined}
         onClick={onApplyFilter}
       />
       <input
         id="clear-search"
         className="searchbtn stdbtn"
         type="button"
-        value={t("Clear Filter") ?? undefined}
+        value={t("library.clearFilter") ?? undefined}
         onClick={onClearFilter}
       />
       <input
         id="msm-toggle"
         className={`searchbtn stdbtn${multiSelect ? " toggled" : ""}`}
         type="button"
-        value={t("Select Archives") ?? undefined}
+        value={t("batch.selectArchives") ?? undefined}
         onClick={() => void onToggleMultiSelect()}
       />
       <IconButtonWithTooltip
         icon="fa fa-robot"
-        title={t("AI Smart Create Tankoubon")}
-        description={t("Analyze archives not yet in any Tankoubon and suggest groups that likely belong to the same series")}
+        title={t("library.aiSmartCreateTankoubon")}
+        description={t("library.analyzeArchivesNotYetIn")}
         // Not `searchbtn` — that class carries a legacy `min-width: 100px !important` (sized for
         // this row's own text buttons like "Apply Filter"), which beats `IconButton`'s inline
         // `minWidth` and silently stretches it back into a wide button. `marginTop: 4` reproduces

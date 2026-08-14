@@ -29,7 +29,7 @@ export function Edit() {
   if (metadata.isLoading) {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", color: "var(--theme-muted)" }}>
-        {t("Loading library…")}
+        {t("common.loadingLibrary")}
       </div>
     )
   }
@@ -38,12 +38,12 @@ export function Edit() {
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">
-          {t("Failed to load archives: {{error}}", { error: String(metadata.error) })}
+          {t("common.failedToLoadArchivesError", { error: String(metadata.error) })}
         </p>
         <input
           className="stdbtn"
           type="button"
-          value={t("Return to Library") ?? undefined}
+          value={t("common.returnToLibrary") ?? undefined}
           onClick={() => navigate(routes.library())}
         />
       </div>
@@ -62,7 +62,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
   // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
   // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
-  useDocumentTitle(t("Editing %1").replace("%1", archive.title))
+  useDocumentTitle(t("edit.editing1").replace("%1", archive.title))
   const plugins = usePlugins("metadata")
   const settings = useSettings()
   const stats = useStats(2)
@@ -85,11 +85,11 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   // successful save via `Server.callAPIBody`'s built-in success-message handling.
   async function handleSave() {
     await updateMetadata.mutateAsync({ title, summary, tags })
-    toast({ heading: t("Metadata saved!") ?? undefined, icon: "success" })
+    toast({ heading: t("edit.metadataSaved") ?? undefined, icon: "success" })
   }
 
   async function handleDelete() {
-    if (!(await confirmDialog(t("Are you sure you want to delete this archive?") ?? "", true))) return
+    if (!(await confirmDialog(t("edit.areYouSureYouWant") ?? "", true))) return
     await deleteArchive.mutateAsync(archiveId)
     navigate("/")
   }
@@ -114,8 +114,8 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     // (dismissed explicitly once the mutation settles, below) so it stays up for however long the
     // wait actually takes, not a fixed guess.
     const pendingToastId = toast({
-      heading: t("Renaming…") ?? undefined,
-      text: t("This may take a moment if another operation is using the same filename — it will finish in the background even if you navigate away.") ?? undefined,
+      heading: t("edit.renaming") ?? undefined,
+      text: t("edit.thisMayTakeAMoment") ?? undefined,
       icon: "info",
       hideAfter: false,
       closeOnClick: false,
@@ -124,14 +124,14 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
       const result = await renameArchive.mutateAsync(nextStem.trim())
       dismissToast(pendingToastId)
       toast({
-        heading: t("Archive renamed to") ?? undefined,
+        heading: t("edit.archiveRenamedTo") ?? undefined,
         text: result.filename,
         icon: "success",
       })
     } catch (err) {
       dismissToast(pendingToastId)
       toast({
-        heading: t("Rename failed") ?? undefined,
+        heading: t("edit.renameFailed") ?? undefined,
         text: err instanceof ApiError ? err.message : String(err),
         icon: "error",
       })
@@ -167,11 +167,11 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         // only title).
         if (result.title && (settings.data?.replacetitles ?? true)) {
           setTitle(result.title)
-          toast({ heading: t("Archive title changed to") ?? undefined, text: result.title, icon: "info" })
+          toast({ heading: t("edit.archiveTitleChangedTo") ?? undefined, text: result.title, icon: "info" })
         }
         if (result.summary) {
           setSummary(result.summary)
-          toast({ heading: t("Archive summary updated!") ?? undefined, icon: "info" })
+          toast({ heading: t("edit.archiveSummaryUpdated") ?? undefined, icon: "info" })
         }
         if (result.tags) {
           // Matches legacy's own `Edit.addTag` (`edit.js:293-337`'s per-tag `Edit.addTag` calls
@@ -198,19 +198,19 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           // so via the "No new tags added!" branch below, not claim tags were added that weren't.
           if (actuallyNew.length > 0) {
             toast({
-              heading: t("Added the following tags") ?? undefined,
+              heading: t("edit.addedTheFollowingTags") ?? undefined,
               text: actuallyNew.join(", "),
               icon: "info",
               hideAfter: 7000,
             })
           } else {
-            toast({ heading: t("No new tags added!") ?? undefined, icon: "info" })
+            toast({ heading: t("edit.noNewTagsAdded") ?? undefined, icon: "info" })
           }
         } else {
-          toast({ heading: t("No new tags added!") ?? undefined, icon: "info" })
+          toast({ heading: t("edit.noNewTagsAdded") ?? undefined, icon: "info" })
         }
       } else {
-        toast({ text: data.error ?? t("unknown error") ?? undefined, icon: "error" })
+        toast({ text: data.error ?? t("edit.unknownError") ?? undefined, icon: "error" })
       }
     } finally {
       setPluginRunning(false)
@@ -226,7 +226,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           "Editing %1 by %2" heading variant never actually fires for a plain archive; always the
           plain "Editing %1" form. */}
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Editing %1").replace("%1", archive.title)}
+        {t("edit.editing1").replace("%1", archive.title)}
       </h2>
 
       <form
@@ -242,7 +242,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
               issue #45) — the input just stops growing at 450px while the grid column it sits in
               keeps stretching. Overriding it lets every field genuinely fill the column instead. */}
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", alignItems: "center", gap: 6 }}>
-            <span>{t("Current File Name:")}</span>
+            <span>{t("edit.currentFileName")}</span>
             <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} value={archive.filename} />
             {/* height: 18px matches the filename `.stdinput` next to it exactly (verified via
                 `getBoundingClientRect()` — that input renders at 18px tall under this theme's own
@@ -251,7 +251,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
             <input
               className="stdbtn"
               type="button"
-              value={t("Rename") ?? undefined}
+              value={t("edit.rename") ?? undefined}
               onClick={() => void handleRename()}
               disabled={renameArchive.isPending}
               style={{ minWidth: 70, height: 18, boxSizing: "border-box" }}
@@ -259,12 +259,12 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
-            <span>{t("ID:")}</span>
+            <span>{t("edit.id")}</span>
             <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} maxLength={255} value={archiveId} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
-            <span>{t("Title:")}</span>
+            <span>{t("edit.title")}</span>
             <input
               id="title"
               className="stdinput"
@@ -277,7 +277,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
-            <span>{t("Summary:")}</span>
+            <span>{t("edit.summary")}</span>
             <textarea
               id="summary"
               className="stdinput"
@@ -289,13 +289,13 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>
-              {t("Tags")} <span style={{ fontSize: "6pt" }}>{t("(separated by hyphens, i.e : tag1, tag2)")}</span> :
+              {t("common.tags")} <span style={{ fontSize: "6pt" }}>{t("edit.separatedByHyphensIE")}</span> :
             </span>
             <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
-            <span>{t("Import Tags from Plugin :")}</span>
+            <span>{t("edit.importTagsFromPlugin")}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", textAlign: "left" }}>
               {/* The help icon+tooltip sits after the button, at the row's own height, replacing
                   legacy's own separate "Help" button (`edit.js`'s `Edit.showHelp`, a click-triggered
@@ -310,7 +310,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                   value={selectedPlugin}
                   onChange={(e) => setSelectedPlugin(e.target.value)}
                 >
-                  <option value="">{t(" -- No Category -- ")}</option>
+                  <option value="">{t("common.NoCategory")}</option>
                   {plugins.data?.map((p) => (
                     <option key={p.namespace} value={p.namespace}>
                       {p.name}
@@ -324,13 +324,13 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                   style={{ minWidth: 90, height: 25, boxSizing: "border-box" }}
                   disabled={!selectedPlugin || pluginRunning}
                   onClick={() => void runPlugin()}
-                  value={t("Go!") ?? undefined}
+                  value={t("edit.go") ?? undefined}
                 />
 
                 <Tooltip
                   label={
                     <>
-                      <strong>{t("About Plugins")}</strong>
+                      <strong>{t("edit.aboutPlugins")}</strong>
                       <br />
                       {/* `dangerouslySetInnerHTML` — same pattern already used throughout
                           Settings.tsx/Plugins.tsx for legacy-sourced translation strings that
@@ -341,7 +341,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                       <span
                         dangerouslySetInnerHTML={{
                           __html: t(
-                            "You can use plugins to automatically fetch metadata for this archive. <br/> Just select a plugin from the dropdown and hit Go! <br/> Some plugins might provide an optional argument for you to specify. If that's the case, a textbox will be available to input said argument.",
+                            "edit.youCanUsePluginsTo",
                           ),
                         }}
                       />
@@ -371,7 +371,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <i className="fa fa-2x fa-exclamation-circle"></i>
-                {t("Using a Plugin will save any modifications to archive metadata you might have made !")}
+                {t("edit.usingAPluginWillSave")}
               </div>
             </div>
           </div>
@@ -380,25 +380,25 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
             <input
               className="stdbtn"
               type="button"
-              value={t("Save Metadata") ?? undefined}
+              value={t("edit.saveMetadata") ?? undefined}
               onClick={() => void handleSave()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Delete Archive") ?? undefined}
+              value={t("common.deleteArchive") ?? undefined}
               onClick={() => void handleDelete()}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Read Archive") ?? undefined}
+              value={t("edit.readArchive") ?? undefined}
               onClick={() => navigate(routes.reader(archiveId))}
             />
             <input
               className="stdbtn"
               type="button"
-              value={t("Return to Library") ?? undefined}
+              value={t("common.returnToLibrary") ?? undefined}
               onClick={() => navigate(routes.library())}
             />
           </div>

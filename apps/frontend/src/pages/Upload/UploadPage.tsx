@@ -38,7 +38,7 @@ export function Upload() {
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
   useApplyTheme()
-  useDocumentTitle(t("Upload Center") ?? undefined)
+  useDocumentTitle(t("upload.uploadCenter") ?? undefined)
 
   async function handleUpload(toUpload: File) {
     setUploadingCount((n) => n + 1)
@@ -138,32 +138,32 @@ export function Upload() {
       const data = await createCategory.mutateAsync(result)
       setCategory(data.category_id)
     } catch {
-      toast({ heading: t("Error modifying category") ?? undefined, icon: "error" })
+      toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" })
     }
   }
 
   return (
     <div className="ido" style={{ textAlign: "center", fontSize: FONT_SIZE_XS }}>
       <h1 className="ih" style={{ textAlign: "center" }}>
-        {t("Adding Archives to the Library")}
+        {t("upload.addingArchivesToTheLibrary")}
       </h1>
 
-      {t("Add files to your LANrurugi instance from your computer, or the Internet directly.")}
+      {t("upload.addFilesToYourLanrurugi")}
       <br />
       <br />
 
       <div style={{ marginLeft: "auto", marginRight: "auto" }}>
         <div className="left-column">
-          {t("Add uploaded files to category:")}
+          {t("upload.addUploadedFilesToCategory")}
           <select id="category" className="favtag-btn" value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="">{t(" -- No Category -- ")}</option>
+            <option value="">{t("common.NoCategory")}</option>
             {categories.data?.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
             ))}
           </select>
-          <Tooltip label={t("New Category") ?? undefined}>
+          <Tooltip label={t("common.newCategory") ?? undefined}>
             <a
               href="#"
               style={{ marginLeft: 6 }}
@@ -178,16 +178,16 @@ export function Upload() {
           <br />
           <br />
 
-          <h1 className="ih">{t("From your computer")}</h1>
+          <h1 className="ih">{t("upload.fromYourComputer")}</h1>
 
-          {t("You can drag and drop files into this window, or click the upload button.")}
+          {t("upload.youCanDragAndDrop")}
           <br />
           <br />
 
           <span className="stdbtn fileinput-button" style={{ minHeight: 50, padding: "8px 12px" }}>
             <i className="fas fa-download fa-2x" style={{ paddingTop: 6, paddingBottom: 5 }}></i>
             <br />
-            <span>{t("Add from your computer")}</span>
+            <span>{t("upload.addFromYourComputer")}</span>
             <input
               ref={fileInputRef}
               type="file"
@@ -203,21 +203,21 @@ export function Upload() {
 
           <br />
           <br />
-          <h1 className="ih">{t("From the Internet")}</h1>
+          <h1 className="ih">{t("upload.fromTheInternet")}</h1>
 
-          {t("You can download files from remote URLs directly into LANrurugi from here.")}
+          {t("upload.youCanDownloadFilesFrom")}
           <br />
-          {t("Download jobs will keep going even if you close this window!")}
-          <br />
-          <br />
-
-          {t("Type in your URLs (separated by a newline), and click the queue button.")}
-          <br />
-          {t("If a Downloader plugin is compatible with the URL, it'll be automatically used.")}
+          {t("upload.downloadJobsWillKeepGoing")}
           <br />
           <br />
 
-          <label htmlFor="urlForm">{t("URL(s) to download:")}</label>
+          {t("upload.typeInYourUrlsSeparated")}
+          <br />
+          {t("upload.ifADownloaderPluginIs")}
+          <br />
+          <br />
+
+          <label htmlFor="urlForm">{t("upload.urlSToDownload")}</label>
           <br />
           <textarea
             id="urlForm"
@@ -244,7 +244,7 @@ export function Upload() {
             style={{ width: 400, height: 100, whiteSpace: "pre" }}
           />
           <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.5, textAlign: "left" }}>
-            {t("Valid URL lines: {{count}}", { count: urls.split("\n").map((u) => u.trim()).filter(Boolean).length })}
+            {t("upload.validUrlLinesCount", { count: urls.split("\n").map((u) => u.trim()).filter(Boolean).length })}
           </div>
           <br />
 
@@ -256,13 +256,13 @@ export function Upload() {
           >
             <i className="fas fa-list fa-2x" style={{ paddingTop: 6, paddingBottom: 5 }}></i>
             <br />
-            <span>{t("Add to Queue")}</span>
+            <span>{t("upload.addToQueue")}</span>
           </span>
 
           {unmatchedUrls.length > 0 && (
             <div style={{ marginTop: 12, textAlign: "left", color: STATE_COLOR.failed }}>
               <i className="fa fa-exclamation-circle"></i>{" "}
-              {t("No installed download plugin recognizes {{n}} URL(s):", { n: unmatchedUrls.length })}
+              {t("upload.noInstalledDownloadPluginRecognizes", { n: unmatchedUrls.length })}
               <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
                 {unmatchedUrls.map((u) => (
                   <li key={u} style={{ wordBreak: "break-all" }}>
@@ -281,7 +281,7 @@ export function Upload() {
 
       <br />
       <br />
-      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

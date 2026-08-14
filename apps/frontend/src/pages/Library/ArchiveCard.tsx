@@ -27,10 +27,10 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   if (!showNew && !showCrown && !isTank && !showPatch) return null
   return (
     <div className="status-icons" style={{ display: "flex", gap: 1, flexShrink: 0, paddingTop: 2 }}>
-      {showNew && <span title={t("New!") ?? undefined} style={{ fontSize: "0.8em" }}>🆕</span>}
-      {showCrown && <span title={t("Read") ?? undefined} style={{ fontSize: "0.8em" }}>👑</span>}
-      {isTank && <span title={t("Tankoubon") ?? undefined} style={{ fontSize: "0.8em" }}>📚</span>}
-      {showPatch && <span title={t("Has a page patch") ?? undefined} style={{ fontSize: "0.8em" }}>🩹</span>}
+      {showNew && <span title={t("library.new") ?? undefined} style={{ fontSize: "0.8em" }}>🆕</span>}
+      {showCrown && <span title={t("common.read") ?? undefined} style={{ fontSize: "0.8em" }}>👑</span>}
+      {isTank && <span title={t("library.tankoubon") ?? undefined} style={{ fontSize: "0.8em" }}>📚</span>}
+      {showPatch && <span title={t("library.hasAPagePatch") ?? undefined} style={{ fontSize: "0.8em" }}>🩹</span>}
     </div>
   )
 }
@@ -45,7 +45,7 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   const isTank = isTankoubonId(archive.arcid) && archive.archive_count != null
   return (
     <div className="isnew">
-      <sup title={(isTank ? t("Tankoubon Page Count") : t("Page Count")) ?? undefined}>
+      <sup title={(isTank ? t("library.tankoubonPageCount") : t("library.pageCount")) ?? undefined}>
         {isTank
           ? `${archive.progress}/${archive.pagecount}/${archive.archive_count}`
           : `${archive.progress}/${archive.pagecount}`}

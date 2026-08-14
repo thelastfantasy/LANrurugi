@@ -60,7 +60,7 @@ export function SettingsMenu({
         href="#"
         className="fa fa-cog fa-2x table-option"
         style={{ position: "relative", }}
-        title={t("Index Settings") ?? undefined}
+        title={t("library.indexSettings") ?? undefined}
         onClick={(e) => {
           e.preventDefault()
           if (!open && ref.current) {
@@ -91,16 +91,16 @@ export function SettingsMenu({
           // The gear icon's own real title (`Index Settings`) — this menu's actual name, as
           // distinct from `Display Mode` right below, which is a sub-heading for just the
           // Thumbnail/Compact radio pair, not the whole menu.
-          mainLabel={{ icon: "fa-cog", text: t("Index Settings") ?? "Index Settings" }}
+          mainLabel={{ icon: "fa-cog", text: t("library.indexSettings") ?? "Index Settings" }}
         >
           <PopupMenuItem disabled>
-            <i className="fas fa-table" style={{ width: 18 }}></i> {t("Display Mode")}
+            <i className="fas fa-table" style={{ width: 18 }}></i> {t("library.displayMode")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setViewMode("thumbnail")}>
-            <input type="radio" readOnly checked={viewMode === "thumbnail"} /> {t("Thumbnail")}
+            <input type="radio" readOnly checked={viewMode === "thumbnail"} /> {t("library.thumbnail")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setViewMode("compact")}>
-            <input type="radio" readOnly checked={viewMode === "compact"} /> {t("Compact")}
+            <input type="radio" readOnly checked={viewMode === "compact"} /> {t("library.compact")}
           </PopupMenuItem>
           <PopupMenuSeparator />
           {/* `marginLeft: 0` overrides the browser's own native checkbox UA-stylesheet margin
@@ -115,7 +115,7 @@ export function SettingsMenu({
               checked={cropThumbs}
               style={{ marginLeft: 0 }}
             />{" "}
-            {t("Crop thumbnails")}
+            {t("library.cropThumbnails")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setHideCompleted(!hideCompleted)}>
             <input
@@ -124,7 +124,7 @@ export function SettingsMenu({
               checked={hideCompleted}
               style={{ marginLeft: 0 }}
             />{" "}
-            {t("Hide completed Archives")}
+            {t("library.hideCompletedArchives")}
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setGroupbyTanks(!groupbyTanks)}>
             <input
@@ -133,7 +133,7 @@ export function SettingsMenu({
               checked={groupbyTanks}
               style={{ marginLeft: 0 }}
             />{" "}
-            {t("Group Tankoubons")}
+            {t("library.groupTankoubons")}
           </PopupMenuItem>
         </PopupMenu>
       )}

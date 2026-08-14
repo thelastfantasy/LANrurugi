@@ -64,6 +64,22 @@ run = "scripts/cargo-container-run.sh cargo clippy --workspace --all-targets -- 
 description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook; see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo fmt --all --check"
 
+[tasks.fmt]
+description = "cargo fmt --all inside the dev container — auto-fixes what fmt-check flags (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo fmt --all"
+
+[tasks.check-crate]
+description = "cargo check -p <crate> inside the dev container — fast single-crate iteration check, not the full-workspace pre-push gate. Usage: mise run check-crate -- <crate-name> [<crate-name> ...]"
+# `run`'s multi-line form executes under `sh`, not bash — no arrays (`args=(...)`) available, so
+# this builds the repeated `-p <crate>` flags with `set --` instead, which is POSIX.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for c in "$@"; do args+=(-p "$c"); done
+scripts/cargo-container-run.sh cargo check "${args[@]}"
+"""
+
 [tasks.check]
 description = "tsc + eslint + clippy + fmt — must pass before committing"
 run = "npx lefthook run pre-push"

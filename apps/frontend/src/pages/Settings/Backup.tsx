@@ -20,14 +20,14 @@ export function Backup() {
 
   async function handleBackup() {
     setBusy(true)
-    setStatus(t("Backup generation in progress..."))
+    setStatus(t("settings.backupGenerationInProgress"))
     try {
       const response = await fetch("/api/database/backup", { method: "POST" })
       const { job } = (await response.json()) as { job: string }
       const jobStatus = await waitForJob(job)
 
       if (jobStatus.state === "failed") {
-        setStatus(t("Backup failed: {{error}}", { error: jobStatus.error ?? t("unknown error") }))
+        setStatus(t("settings.backupFailedError", { error: jobStatus.error ?? t("edit.unknownError") }))
         return
       }
 
@@ -40,9 +40,9 @@ export function Backup() {
       a.download = `lanrurugi-backup-${new Date().toISOString()}.json`
       a.click()
       URL.revokeObjectURL(url)
-      setStatus(t("Backup complete! Download will start automatically."))
+      setStatus(t("settings.backupCompleteDownloadWillStart"))
     } catch (e) {
-      setStatus(t("Backup failed: {{error}}", { error: String(e) }))
+      setStatus(t("settings.backupFailedError", { error: String(e) }))
     } finally {
       setBusy(false)
     }
@@ -50,7 +50,7 @@ export function Backup() {
 
   async function handleRestore(file: File) {
     setBusy(true)
-    setStatus(t("Uploading file..."))
+    setStatus(t("settings.uploadingFile"))
     try {
       const formData = new FormData()
       formData.append("file", file)
@@ -63,13 +63,13 @@ export function Backup() {
 
       if (jobStatus.state === "failed") {
         setStatus(
-          t("Restore failed: {{error}}", { error: jobStatus.error ?? t("unknown error") }),
+          t("settings.restoreFailedError", { error: jobStatus.error ?? t("edit.unknownError") }),
         )
       } else {
-        setStatus(t("Backup restored!"))
+        setStatus(t("settings.backupRestored"))
       }
     } catch (e) {
-      setStatus(t("Restore failed: {{error}}", { error: String(e) }))
+      setStatus(t("settings.restoreFailedError", { error: String(e) }))
     } finally {
       setBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
@@ -77,29 +77,29 @@ export function Backup() {
   }
 
   useApplyTheme()
-  useDocumentTitle(t("Database Backup/Restore") ?? undefined)
+  useDocumentTitle(t("settings.databaseBackupRestore") ?? undefined)
 
   return (
     <div className="ido" style={{ textAlign: "center" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Database Backup/Restore")}
+        {t("settings.databaseBackupRestore")}
       </h2>
 
       <br />
-      {t("You can backup your existing database here, or restore an existing backup.")}
+      {t("settings.youCanBackupYourExisting")}
       <br />
       <br />
-      {t("Backuping allows you to download a JSON file containing all your categories and archive IDs, and their matching metadata.")}
+      {t("settings.backupingAllowsYouToDownload")}
       <br />
       <span
         dangerouslySetInnerHTML={{
           __html: t(
-            "Restoring from a backup will restore this metadata, <b>for IDs which already exist in your database.</b>",
+            "settings.restoringFromABackupWill",
           ),
         }}
       />
       <br />
-      {t("(Categories will always be restored)")}
+      {t("settings.categoriesWillAlwaysBeRestored")}
 
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM, marginTop: 25, textAlign: "center" }}>
         <tbody id="files">
@@ -113,14 +113,14 @@ export function Backup() {
               >
                 <i className="fa fa-download fa-2x" style={{ paddingTop: 6, paddingBottom: 5 }}></i>
                 <br />
-                <span>{t("Backup Database")}</span>
+                <span>{t("settings.backupDatabase")}</span>
               </span>
             </td>
             <td>
               <span className="stdbtn fileinput-button" style={{ height: 50, display: "inline-block" }}>
                 <i className="fa fa-upload fa-2x" style={{ paddingTop: 6, paddingBottom: 5 }}></i>
                 <br />
-                <span>{t("Restore Backup")}</span>
+                <span>{t("settings.restoreBackup")}</span>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -144,7 +144,7 @@ export function Backup() {
         {busy && (
           <div id="processing">
             <i className="fa fa-3x fa-compact-disc fa-spin" style={{ marginTop: 20 }}></i>
-            <h3 id="processing-status">{t("Processing")}</h3>
+            <h3 id="processing-status">{t("settings.processing")}</h3>
           </div>
         )}
 
@@ -154,7 +154,7 @@ export function Backup() {
       <br />
       <br />
       <br />
-      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

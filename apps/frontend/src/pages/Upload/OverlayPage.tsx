@@ -642,7 +642,7 @@ export function OverlayPage({
               boxSizing: "border-box",
             }}
           >
-            {t("Striped area: not part of the scan — filled in to align the two versions")}
+            {t("upload.stripedAreaNotPartOf")}
           </span>
         )}
         <span
@@ -698,7 +698,7 @@ export function OverlayPage({
             marginTop: 2,
           }}
         >
-          {t("{{width}}×{{height}} · {{size}} · Sharpness: {{score}}", {
+          {t("upload.HeightSize", {
             width,
             height,
             size: formatBytes(fileSize),

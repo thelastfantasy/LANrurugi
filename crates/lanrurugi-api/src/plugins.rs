@@ -26,6 +26,7 @@ use crate::download_manager::ingest::ingest_downloaded_file;
 use crate::download_manager::settings::{merge, resolve_bundle_as_archive, resolve_domain_rules};
 use crate::download_manager::stream::{download_one, DownloadRequest as StreamDownloadRequest};
 use crate::download_manager::DownloadManager;
+use crate::tag_rules;
 use crate::AppState;
 
 /// The four categories a plugin's own `plugin_info().type` can declare — also the fixed set of
@@ -715,6 +716,26 @@ async fn get_plugin_relevant_settings(state: &AppState) -> Value {
     })
 }
 
+/// The `tagrules` setting's raw text, but only when `tagruleson` is enabled (`Model/Plugins.pm`'s
+/// own `if (LANraragi::Model::Config->enable_tagrules)` gate) — `None` means "don't rewrite
+/// anything", collapsing both "the switch is off" and "Redis is unreachable" into the same safe
+/// no-op rather than a metadata-plugin run failing outright over an unrelated config read.
+async fn get_computed_tagrules(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let fields: std::collections::HashMap<String, String> =
+        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+    let enabled = fields.get("tagruleson").map(|v| v != "0").unwrap_or(true);
+    if !enabled {
+        return None;
+    }
+    Some(
+        fields
+            .get("tagrules")
+            .cloned()
+            .unwrap_or_else(|| crate::settings::default_tagrules().to_string()),
+    )
+}
+
 fn extract_archive_id(oneshot: &str) -> Option<String> {
     if oneshot.len() < ARCHIVE_ID_LEN {
         return None;
@@ -1081,6 +1102,16 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         // not a blind overwrite.
         if let Some(new_tags) = data.get("tags").and_then(Value::as_str) {
             if !new_tags.trim().is_empty() {
+                // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags
+                // only, before they're merged into `old_tags`, and only when `tagruleson` is set.
+                let rewritten;
+                let new_tags = match get_computed_tagrules(state).await {
+                    Some(rules_text) => {
+                        rewritten = tag_rules::apply_tag_rules(new_tags, &rules_text);
+                        rewritten.as_str()
+                    }
+                    None => new_tags,
+                };
                 let mut seen = std::collections::HashSet::new();
                 let mut merged = Vec::new();
                 for t in old_tags

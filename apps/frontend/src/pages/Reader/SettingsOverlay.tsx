@@ -109,17 +109,17 @@ export function SettingsOverlay({
             box's own right edge, so the scrollbar (which tracks *this* element's own box, not the
             outer one) rendered nowhere near the actual rounded corner it needs to stay clear of. */}
         <div style={{ width: "100%", boxSizing: "border-box", overflowY: "auto", padding: "0 16px" }}>
-          <h2 style={{ textAlign: "center" }}>{t("Reader Options")}</h2>
+          <h2 style={{ textAlign: "center" }}>{t("reader.readerOptions")}</h2>
           <h1 style={{ textAlign: "center", fontSize: FONT_SIZE_MD, marginBottom: 16 }}>
-            {t("Those options save automatically -- Click around and find out!")}
+            {t("reader.thoseOptionsSaveAutomatically")}
           </h1>
 
-          <SettingSection title={t("Fit display to") ?? ""}>
+          <SettingSection title={t("reader.fitDisplayTo") ?? ""}>
             {(
               [
-                ["container", t("Container")],
-                ["fit-width", t("Width")],
-                ["fit-height", t("Height")],
+                ["container", t("reader.container")],
+                ["fit-width", t("reader.width")],
+                ["fit-height", t("reader.height")],
               ] as [FitMode, string][]
             ).map(([mode, label]) => (
               <input
@@ -140,8 +140,8 @@ export function SettingsOverlay({
               this component previously rendered all of them unconditionally. */}
           {settings.fitMode === "container" && (
             <SettingSection
-              title={t("Container Width (in pixels or percentage)") ?? ""}
-              description={t("The default value is 1200px, or 90% in Double Page Mode.") ?? undefined}
+              title={t("reader.containerWidthInPixelsOr") ?? ""}
+              description={t("reader.theDefaultValueIs1200px") ?? undefined}
             >
               {/* A short `placeholder` (not the full sentence removed from here — that's the
                   `description` above now, since it didn't fit this field's narrower width) so an
@@ -161,7 +161,7 @@ export function SettingsOverlay({
                 className="favtag-btn"
                 type="button"
                 style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                value={t("Apply") ?? undefined}
+                value={t("reader.apply") ?? undefined}
                 onClick={(e) => {
                   const input = e.currentTarget.previousElementSibling as HTMLInputElement
                   update({ containerWidth: input.value })
@@ -172,43 +172,43 @@ export function SettingsOverlay({
 
           {!settings.infiniteScroll && (
             <>
-              <SettingSection title={t("Page Rendering") ?? ""}>
+              <SettingSection title={t("reader.pageRendering") ?? ""}>
                 <input
                   className={btnClass(!settings.doublePageMode)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Single") ?? undefined}
+                  value={t("reader.single") ?? undefined}
                   onClick={() => update({ doublePageMode: false })}
                 />
                 <input
                   className={btnClass(settings.doublePageMode)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Double") ?? undefined}
+                  value={t("reader.double") ?? undefined}
                   onClick={() => update({ doublePageMode: true })}
                 />
               </SettingSection>
 
-              <SettingSection title={t("Reading Direction") ?? ""}>
+              <SettingSection title={t("reader.readingDirection") ?? ""}>
                 <input
                   className={btnClass(!settings.mangaMode)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Left to Right") ?? undefined}
+                  value={t("reader.leftToRight") ?? undefined}
                   onClick={() => update({ mangaMode: false })}
                 />
                 <input
                   className={btnClass(settings.mangaMode)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Right to Left") ?? undefined}
+                  value={t("reader.rightToLeft") ?? undefined}
                   onClick={() => update({ mangaMode: true })}
                 />
               </SettingSection>
 
               <SettingSection
-                title={t("How many images to preload") ?? ""}
-                description={t("The default is two images.") ?? undefined}
+                title={t("reader.howManyImagesToPreload") ?? ""}
+                description={t("reader.theDefaultIsTwoImages") ?? undefined}
               >
                 <input
                   id="preload-input"
@@ -224,7 +224,7 @@ export function SettingsOverlay({
                   className="favtag-btn"
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Apply") ?? undefined}
+                  value={t("reader.apply") ?? undefined}
                   onClick={(e) => {
                     const input = e.currentTarget.previousElementSibling as HTMLInputElement
                     update({ preloadCount: Number(input.value) || 2 })
@@ -232,19 +232,19 @@ export function SettingsOverlay({
                 />
               </SettingSection>
 
-              <SettingSection title={t("Header") ?? ""}>
+              <SettingSection title={t("reader.header") ?? ""}>
                 <input
                   className={btnClass(!settings.hideHeader)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Visible") ?? undefined}
+                  value={t("reader.visible") ?? undefined}
                   onClick={() => update({ hideHeader: false })}
                 />
                 <input
                   className={btnClass(settings.hideHeader)}
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("Hidden") ?? undefined}
+                  value={t("reader.hidden") ?? undefined}
                   onClick={() => update({ hideHeader: true })}
                 />
               </SettingSection>
@@ -252,68 +252,68 @@ export function SettingsOverlay({
           )}
 
           <SettingSection
-            title={t("Show Archive Overlay by default") ?? ""}
-            description={t("This will show the overlay with thumbnails every time you open a new Reader page.") ?? undefined}
+            title={t("reader.showArchiveOverlayByDefault") ?? ""}
+            description={t("reader.thisWillShowTheOverlay") ?? undefined}
           >
             <input
               className={btnClass(settings.showOverlayByDefault)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Enabled") ?? undefined}
+              value={t("reader.enabled") ?? undefined}
               onClick={() => update({ showOverlayByDefault: true })}
             />
             <input
               className={btnClass(!settings.showOverlayByDefault)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Disabled") ?? undefined}
+              value={t("reader.disabled") ?? undefined}
               onClick={() => update({ showOverlayByDefault: false })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t("Progression Tracking") ?? ""}
-            description={t("Disabling tracking will restart reading from page one every time you reopen the reader.") ?? undefined}
+            title={t("reader.progressionTracking") ?? ""}
+            description={t("reader.disablingTrackingWillRestartReading") ?? undefined}
           >
             <input
               className={btnClass(!settings.ignoreProgress)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Enabled") ?? undefined}
+              value={t("reader.enabled") ?? undefined}
               onClick={() => update({ ignoreProgress: false })}
             />
             <input
               className={btnClass(settings.ignoreProgress)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Disabled") ?? undefined}
+              value={t("reader.disabled") ?? undefined}
               onClick={() => update({ ignoreProgress: true })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t("Infinite Scrolling") ?? ""}
-            description={t("Display all images in a vertical view in the same page.") ?? undefined}
+            title={t("reader.infiniteScrolling") ?? ""}
+            description={t("reader.displayAllImagesInA") ?? undefined}
           >
             <input
               className={btnClass(settings.infiniteScroll)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Enabled") ?? undefined}
+              value={t("reader.enabled") ?? undefined}
               onClick={() => update({ infiniteScroll: true })}
             />
             <input
               className={btnClass(!settings.infiniteScroll)}
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Disabled") ?? undefined}
+              value={t("reader.disabled") ?? undefined}
               onClick={() => update({ infiniteScroll: false })}
             />
           </SettingSection>
 
           <SettingSection
-            title={t("Auto next page interval in seconds") ?? ""}
-            description={t("The default is 10 seconds.") ?? undefined}
+            title={t("reader.autoNextPageIntervalIn") ?? ""}
+            description={t("reader.theDefaultIs10Seconds") ?? undefined}
           >
             <input
               id="auto-next-page-input"
@@ -330,7 +330,7 @@ export function SettingsOverlay({
               className="favtag-btn"
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-              value={t("Apply") ?? undefined}
+              value={t("reader.apply") ?? undefined}
               onClick={(e) => {
                 const input = e.currentTarget.previousElementSibling as HTMLInputElement
                 update({ autoNextPageInterval: Number(input.value) || 10 })
@@ -339,7 +339,7 @@ export function SettingsOverlay({
           </SettingSection>
 
           {!settings.infiniteScroll && (
-            <SettingSection title={t("Toggle Stamps") ?? ""}>
+            <SettingSection title={t("reader.toggleStamps") ?? ""}>
               <input
                 className="fa"
                 type="checkbox"

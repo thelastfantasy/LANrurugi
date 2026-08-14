@@ -23,27 +23,27 @@ export function CategoryBar({
       <button
         type="button"
         className={`favtag-btn${selectedCategory === NEW_ONLY ? " toggled" : ""}`}
-        title={t("Archives added within the last day") ?? undefined}
+        title={t("library.archivesAddedWithinTheLast") ?? undefined}
         onClick={() => onToggleCategory(NEW_ONLY)}
       >
-        🆕 {t("New Archives")}
+        🆕 {t("library.newArchives")}
       </button>
       <button
         type="button"
         className={`favtag-btn${selectedCategory === UNTAGGED_ONLY ? " toggled" : ""}`}
-        title={t("Archives with no tags at all") ?? undefined}
+        title={t("library.archivesWithNoTagsAt") ?? undefined}
         onClick={() => onToggleCategory(UNTAGGED_ONLY)}
       >
-        🏷️ {t("Untagged Archives")}
+        🏷️ {t("library.untaggedArchives")}
       </button>
       {hasTankoubons && (
         <button
           type="button"
           className={`favtag-btn${selectedCategory === TANKOUBON_ONLY ? " toggled" : ""}`}
-          title={t("Tankoubon volumes") ?? undefined}
+          title={t("library.tankoubonVolumes") ?? undefined}
           onClick={() => onToggleCategory(TANKOUBON_ONLY)}
         >
-          📚 {t("Tankoubons")}
+          📚 {t("categories.tankoubons")}
         </button>
       )}
       {visible.map((c) => (
@@ -67,7 +67,7 @@ export function CategoryBar({
           }}
         >
           <option value="" disabled>
-            {t("More categories…")}
+            {t("library.moreCategories")}
           </option>
           {overflow.map((c) => (
             <option key={c.id} value={c.id}>

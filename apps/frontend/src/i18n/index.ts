@@ -1,6 +1,9 @@
 import i18n from "i18next"
 import LanguageDetector from "i18next-browser-languagedetector"
+import { useEffect } from "react"
 import { initReactI18next } from "react-i18next"
+
+import { useSettings } from "@/api/hooks"
 
 import asLocale from "./locales/as.json"
 import de from "./locales/de.json"
@@ -82,5 +85,21 @@ void i18n
       lookupLocalStorage: "lanrurugi_language",
     },
   })
+
+/** Applies the server-side `language` setting (Settings page's "Language" dropdown,
+ * `LRR_CONFIG.language`) on top of i18next's own `localStorage`/browser-navigator detection —
+ * that detector has no idea the server-side setting exists at all, so picking a language there
+ * previously did nothing (issue #85). `"auto"` (the default) intentionally leaves the detector's
+ * own choice alone. Mounted once in `Layout.tsx` alongside `useApplyTheme`, the same "sync a
+ * Settings-page value into a global, non-React API on every settings change" pattern. */
+export function useApplySettingsLanguage() {
+  const settings = useSettings()
+  const language = settings.data?.language
+  useEffect(() => {
+    if (!language || language === "auto") return
+    if (i18n.language === language) return
+    void i18n.changeLanguage(language)
+  }, [language])
+}
 
 export { i18n as default }

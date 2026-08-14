@@ -99,7 +99,7 @@ export function ComparisonResultModal({
     } catch {
       toast({
         heading:
-          t("Failed to resolve the conflict") ??
+          t("upload.failedToResolveTheConflict") ??
           "Failed to resolve the conflict",
         icon: "error",
       });
@@ -114,7 +114,7 @@ export function ComparisonResultModal({
     } catch {
       toast({
         heading:
-          t("Failed to resolve the conflict") ??
+          t("upload.failedToResolveTheConflict") ??
           "Failed to resolve the conflict",
         icon: "error",
       });
@@ -218,11 +218,11 @@ export function ComparisonResultModal({
         }}
       >
         <div>
-          <h3 style={{ margin: 0 }}>{t("AI Quality Comparison")}</h3>
+          <h3 style={{ margin: 0 }}>{t("upload.aiQualityComparison")}</h3>
           {summary ? (
             <>
               <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.8, marginTop: 4 }}>
-                {t("{{aligned}} of {{a}}/{{b}} pages matched", {
+                {t("upload.ofABPagesMatched", {
                   aligned: summary.aligned_pairs,
                   a: summary.a_total_pages,
                   b: summary.b_total_pages,
@@ -237,14 +237,14 @@ export function ComparisonResultModal({
                   alignItems: "center",
                 }}
               >
-                {t("A: {{name}} ({{size}})", {
+                {t("upload.aNameSize", {
                   name: summary.a_filename,
                   size: formatBytes(summary.a_file_size),
                 })}
                 <EntryTreePopover entries={summary.a_entries} />
               </div>
               <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.8, display: "flex", alignItems: "center" }}>
-                {t("B: {{name}} ({{size}})", {
+                {t("upload.bNameSize", {
                   name: summary.b_filename,
                   size: formatBytes(summary.b_file_size),
                 })}
@@ -254,7 +254,7 @@ export function ComparisonResultModal({
           ) : (
             <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.8, marginTop: 4 }}>
               <i className="fa fa-spinner fa-spin" aria-hidden="true" style={{ marginRight: 4 }}></i>
-              {t("Still comparing the rest of the pages…")}
+              {t("upload.stillComparingTheRestOf")}
             </div>
           )}
         </div>
@@ -279,20 +279,20 @@ export function ComparisonResultModal({
             <div style={{ padding: "4px 0" }}>
               <p style={{ margin: 0 }}>
                 {t(
-                  "These two files align almost page-for-page but appear to differ in language (e.g. original vs. a translated edition). They may both be worth keeping rather than picking one to discard.",
+                  "upload.theseTwoFilesAlignAlmost",
                 )}
               </p>
             </div>
           ) : summary.recommendation ? (
             <div style={{ padding: "4px 0", fontWeight: 700 }}>
-              {t("Suggestion: keep version {{side}}", {
+              {t("upload.suggestionKeepVersionSide", {
                 side: summary.recommendation === "a" ? "A" : "B",
               })}
             </div>
           ) : (
             <div style={{ padding: "4px 0" }}>
               {t(
-                "Not confident enough to suggest one automatically — compare the samples below yourself.",
+                "upload.notConfidentEnoughToSuggest",
               )}
             </div>
           )}
@@ -316,7 +316,7 @@ export function ComparisonResultModal({
               style={{ marginRight: 4 }}
             ></i>
             {t(
-              "Compare the sample pages below, then keep version A or B at the bottom. Hold Shift (or press and hold on touch) on a sample to see the other version in place.",
+              "upload.compareTheSamplePagesBelow",
             )}
           </div>
           <div
@@ -384,7 +384,7 @@ function TouchMagnifyToggleButton() {
         e.stopPropagation();
         active.toggleSide();
       }}
-      aria-label={t("Switch to the other version") ?? undefined}
+      aria-label={t("upload.switchToTheOtherVersion") ?? undefined}
       style={{
         position: "fixed",
         // 90, not 24 — the modal's own bottom Keep A/B button row (plus its recommendation bubble

@@ -162,6 +162,17 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     ("recommendprecision", "medium"),
 ];
 
+/// `STRING_FIELDS`' own `tagrules` default, exposed for `plugins.rs::get_computed_tagrules` to
+/// fall back to when the field has never been written to Redis at all — kept as a lookup over the
+/// single source of truth above rather than a second copy of the literal string.
+pub fn default_tagrules() -> &'static str {
+    STRING_FIELDS
+        .iter()
+        .find(|(key, _)| *key == "tagrules")
+        .map(|(_, default)| *default)
+        .expect("\"tagrules\" is a real STRING_FIELDS entry")
+}
+
 const NUMBER_FIELDS: &[(&str, i64)] = &[
     ("pagesize", DEFAULT_PAGE_SIZE),
     ("tempmaxsize", 500),
@@ -185,6 +196,15 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
     ("enablepass", true),
+    // `Model/Config.pm::enable_devmode` — legacy's Global-section "Debug Mode" checkbox. Consumed
+    // client-side by `/api/info`'s `debug_mode` field (`misc.rs`), which
+    // `apps/frontend/src/api/hooks.ts::useUpdateCheck` already reads to skip the GitHub-releases
+    // update check while developing (`enabled: !debugMode`) — that consumer existed before this
+    // field had any UI to set it from (issue #85's own follow-up survey). No server-side
+    // `development`/`production` log-verbosity switch like legacy's `LANraragi.pm` — this port's
+    // logging is already structured `tracing` output regardless of this flag, so only the
+    // update-check suppression applies here.
+    ("devmode", false),
     ("nofunmode", false),
     ("enablecors", false),
     ("localprogress", false),

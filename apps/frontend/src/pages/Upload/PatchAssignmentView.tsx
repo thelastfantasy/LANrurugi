@@ -118,21 +118,21 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
   return (
     <div style={{ position: "fixed", inset: 0, overflow: "hidden", overscrollBehavior: "none", boxSizing: "border-box", zIndex: 9600, background: "rgba(0,0,0,0.96)", display: "flex", flexDirection: "column", padding: 16, color: "#fff" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>{t("Arrange Extra Pages")}</h3>
+        <h3 style={{ margin: 0 }}>{t("upload.arrangeExtraPages")}</h3>
         <IconButton icon="fa fa-times" onClick={onCancel} size={32} className="modal-close-btn" style={{ borderRadius: "50%" }} />
       </div>
       <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.8, marginTop: 4 }}>
-        {t("Drag the outlined pages onto the row below to place them; {{placed}} of {{total}} placed.", { placed: placedCount, total: unmatchedPages.length })}
+        {t("upload.dragTheOutlinedPagesOnto", { placed: placedCount, total: unmatchedPages.length })}
       </div>
 
       {diffGroups.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8 }}>
           <button type="button" className="stdbtn" onClick={() => scrollToDiff(diffCursor - 1)} disabled={diffCursor === 0}>
-            <i className="fa fa-chevron-left" aria-hidden="true" style={{ marginRight: 4 }} />{t("Previous difference")}
+            <i className="fa fa-chevron-left" aria-hidden="true" style={{ marginRight: 4 }} />{t("upload.previousDifference")}
           </button>
-          <span style={{ fontSize: FONT_SIZE_SM, opacity: 0.8 }}>{t("{{current}} / {{total}}", { current: diffCursor + 1, total: diffGroups.length })}</span>
+          <span style={{ fontSize: FONT_SIZE_SM, opacity: 0.8 }}>{t("upload.total", { current: diffCursor + 1, total: diffGroups.length })}</span>
           <button type="button" className="stdbtn" onClick={() => scrollToDiff(diffCursor + 1)} disabled={diffCursor === diffGroups.length - 1}>
-            {t("Next difference")}<i className="fa fa-chevron-right" aria-hidden="true" style={{ marginLeft: 4 }} />
+            {t("upload.nextDifference")}<i className="fa fa-chevron-right" aria-hidden="true" style={{ marginLeft: 4 }} />
           </button>
         </div>
       )}
@@ -145,9 +145,9 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
           {/* 源行 */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontSize: FONT_SIZE_SM, opacity: 0.7 }}>{t("Source pages (dashed = extra, drag onto the row below)")}</span>
+              <span style={{ fontSize: FONT_SIZE_SM, opacity: 0.7 }}>{t("upload.sourcePagesDashedExtra")}</span>
               <button type="button" className="stdbtn" onClick={() => setGroups(buildDefaultGroups())} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <i className="fa fa-robot" aria-hidden="true" />{t("AI Suggested Positions")}
+                <i className="fa fa-robot" aria-hidden="true" />{t("upload.aiSuggestedPositions")}
               </button>
             </div>
             <Slot id="source">
@@ -166,8 +166,8 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
           {/* 目标行 */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ height: 28, display: "flex", alignItems: "center", fontSize: FONT_SIZE_SM, opacity: 0.7, marginBottom: 4 }}>
-              {t("Target pages (drop zone between each page)")}
-              <span style={{ marginLeft: 8, opacity: 0.6 }}>{t("(patched pages not shown)")}</span>
+              {t("upload.targetPagesDropZoneBetween")}
+              <span style={{ marginLeft: 8, opacity: 0.6 }}>{t("upload.patchedPagesNotShown")}</span>
             </div>
             <Slot id="target">
             <ScrollRow count={1} rowRef={targetRowRef} lenisApiRef={targetLenisRef}
@@ -197,18 +197,18 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
         {!preview ? (<>
-          <button type="button" className="stdbtn" onClick={onCancel}>{t("Cancel")}</button>
-          <button type="button" className="stdbtn" onClick={() => setPreview(true)}>{t("Preview")}</button>
+          <button type="button" className="stdbtn" onClick={onCancel}>{t("common.cancel")}</button>
+          <button type="button" className="stdbtn" onClick={() => setPreview(true)}>{t("upload.preview")}</button>
         </>) : (<>
-          <button type="button" className="stdbtn" onClick={() => setPreview(false)}>{t("Back")}</button>
-          <button type="button" className="stdbtn stdbtn-danger" onClick={() => onConfirm(buildInsertions())}>{t("Done")}</button>
+          <button type="button" className="stdbtn" onClick={() => setPreview(false)}>{t("upload.back")}</button>
+          <button type="button" className="stdbtn stdbtn-danger" onClick={() => onConfirm(buildInsertions())}>{t("upload.done")}</button>
         </>)}
       </div>
 
       {preview && (
         <div style={{ marginTop: 12, padding: 12, background: "rgba(255,255,255,0.06)", borderRadius: 6, maxHeight: "30vh", overflowY: "auto" }}>
-          <div style={{ fontSize: FONT_SIZE_SM, fontWeight: 700, marginBottom: 6 }}>{t("Preview")}</div>
-          {placedCount === 0 ? <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.7 }}>{t("No extra pages placed — nothing will be added.")}</div>
+          <div style={{ fontSize: FONT_SIZE_SM, fontWeight: 700, marginBottom: 6 }}>{t("upload.preview")}</div>
+          {placedCount === 0 ? <div style={{ fontSize: FONT_SIZE_SM, opacity: 0.7 }}>{t("upload.noExtraPagesPlaced")}</div>
             : diffGroups.map((group) => {
               const first = group[0]
               const pid = pageId(first.page_index)
@@ -231,8 +231,8 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
                 </div>
               })()
               const text = inSource
-                ? t("Source archive page {{n}}: {{where}}", { n: pages, where: t("unplaced") })
-                : (() => { const arr = groups.target ?? []; const idx = arr.indexOf(pid); let label = t("target archive, before first page"); if (idx >= 0) for (let j = idx - 1; j >= 0; j--) if (arr[j].startsWith("target-")) { label = t("target archive, after page {{n}}", { n: Number(arr[j].replace("target-", "")) + 1 }); break }; return t("Source archive page {{n}}: {{where}}", { n: pages, where: label }) })()
+                ? t("upload.sourceArchivePageNWhere", { n: pages, where: t("upload.unplaced") })
+                : (() => { const arr = groups.target ?? []; const idx = arr.indexOf(pid); let label = t("upload.targetArchiveBeforeFirstPage"); if (idx >= 0) for (let j = idx - 1; j >= 0; j--) if (arr[j].startsWith("target-")) { label = t("upload.targetArchiveAfterPageN", { n: Number(arr[j].replace("target-", "")) + 1 }); break }; return t("upload.sourceArchivePageNWhere", { n: pages, where: label }) })()
               return <div key={first.page_index} style={{ display: "block" }}><Tooltip label={tooltipContent} zIndex={9700} maxWidth={Math.min(imgCount * 12 * (window.innerWidth / 100) + 32, window.innerWidth * 0.95)}><span style={{ fontSize: FONT_SIZE_SM, opacity: 0.85 }}>{text}</span></Tooltip></div>
             })}
         </div>

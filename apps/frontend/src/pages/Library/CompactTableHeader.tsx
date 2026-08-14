@@ -18,12 +18,12 @@ export function CompactTableHeader({
   return (
     <tr>
       <th id="titleheader" className={sortby === "title" ? `sorting_${order}` : undefined}>
-        <SortableHeaderLink label={t("Title")} sortKey="title" onSort={onSort} />
+        <SortableHeaderLink label={t("common.title")} sortKey="title" onSort={onSort} />
       </th>
       {Array.from({ length: columns }, (_, i) => i + 1).map((i) => (
         <CustomColumnHeader key={i} index={i} sortby={sortby} order={order} onSort={onSort} />
       ))}
-      <th id="tagsheader">{t("Tags")}</th>
+      <th id="tagsheader">{t("common.tags")}</th>
     </tr>
   )
 }

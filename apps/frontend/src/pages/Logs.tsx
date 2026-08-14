@@ -38,32 +38,32 @@ export function Logs() {
   const [lines, setLines] = useState(100)
   const logLines = useLogLines(category, lines)
   useApplyTheme()
-  useDocumentTitle(t("Logs") ?? undefined)
+  useDocumentTitle(t("app.logs") ?? undefined)
 
   return (
     <div className="ido" style={{ textAlign: "center" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
-        {t("Application Logs")}
+        {t("logs.applicationLogs")}
       </h2>
 
       <br />
-      {t("You can check LANrurugi logs here for debugging purposes.")}
+      {t("logs.youCanCheckLanrurugiLogs")}
       <br />
-      {t("By default, this view only shows the last 100 lines of each logfile, newest lines last.")}
+      {t("logs.byDefaultThisViewOnly")}
       <br />
       <br />
       <ul>
-        <li>{t("General Logs pertain to the main application.")}</li>
-        <li>{t("Shinobu Logs correspond to the Background Worker.")}</li>
-        <li>{t("Plugin Logs are reserved for metadata plugins only.")}</li>
-        <li>{t("Mojolicious logs won't tell much unless you're running Debug Mode.")}</li>
-        <li>{t("Redis logs won't be available from here if you're running from source!")}</li>
+        <li>{t("logs.generalLogsPertainToThe")}</li>
+        <li>{t("logs.shinobuLogsCorrespondToThe")}</li>
+        <li>{t("logs.pluginLogsAreReservedFor")}</li>
+        <li>{t("logs.mojoliciousLogsWonTTell")}</li>
+        <li>{t("logs.redisLogsWonTBe")}</li>
       </ul>
       <br />
       <br />
 
       <h1 className="ih" style={{ float: "left", marginLeft: "5%" }}>
-        {t("Currently Viewing:")} <span id="indicator">{t(CATEGORY_LABELS[category])}</span>
+        {t("logs.currentlyViewing")} <span id="indicator">{t(CATEGORY_LABELS[category])}</span>
       </h1>
       <div style={{ marginRight: "5%", float: "right" }}>
         <a
@@ -76,7 +76,7 @@ export function Logs() {
         >
           <i style={{ paddingRight: 10 }} className="fa fa-sync-alt fa-2x"></i>
         </a>
-        {t("Lines:")}{" "}
+        {t("logs.lines")}{" "}
         <input
           type="number"
           min={0}
@@ -92,7 +92,7 @@ export function Logs() {
           <tr className="gtr1">
             <td>
               <pre id="log-container" className="log-panel">
-                {logLines.isLoading ? t("Loading library…") : logLines.data || t("No logs to be found here!")}
+                {logLines.isLoading ? t("common.loadingLibrary") : logLines.data || t("logs.noLogsToBeFound")}
               </pre>
             </td>
           </tr>
@@ -110,7 +110,7 @@ export function Logs() {
           />
         ))}
       </span>
-      <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }

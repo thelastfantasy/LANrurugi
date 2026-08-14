@@ -149,16 +149,16 @@ export function ConflictMenu({
       {onCompare && (
         <PopupMenuItem onClick={onCompare}>
           <i className="fa fa-robot" aria-hidden="true" style={{ marginRight: 6 }}></i>
-          {t("AI Suggestion")}
+          {t("upload.aiSuggestion")}
         </PopupMenuItem>
       )}
       <PopupMenuItem onClick={onOverwrite}>
         <i className="fa fa-clone" aria-hidden="true" style={{ marginRight: 6 }}></i>
-        {t("Overwrite")}
+        {t("upload.overwrite")}
       </PopupMenuItem>
       <PopupMenuItem onClick={onRename}>
         <i className="fa fa-i-cursor" aria-hidden="true" style={{ marginRight: 6 }}></i>
-        {t("Rename and Catalog")}
+        {t("upload.renameAndCatalog")}
       </PopupMenuItem>
     </PopupMenu>
   )
@@ -675,7 +675,7 @@ export function RenamePopover({
         }}
       >
         <li style={{ listStyle: "none", padding: "6px 10px", width }}>
-          <div style={{ fontSize: FONT_SIZE_SM, marginBottom: 4 }}>{t("New filename")}</div>
+          <div style={{ fontSize: FONT_SIZE_SM, marginBottom: 4 }}>{t("upload.newFilename")}</div>
           <TemplateInput
             template={template}
             onChange={setTemplate}
@@ -696,8 +696,8 @@ export function RenamePopover({
           {/* `{ext}` is an exception to the general "wrapped in parentheses" rule (see
               `shiftClickInsertion`), so it needs its own explanatory line. */}
           <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.6, marginTop: 4 }}>
-            <div>{t("Shift-click to insert wrapped in parentheses")}</div>
-            <div>{t("Shift-click {{ext}} to insert with a leading dot instead", { ext: "{ext}" })}</div>
+            <div>{t("upload.shiftclickToInsertWrappedIn")}</div>
+            <div>{t("upload.shiftclickExtToInsertWith", { ext: "{ext}" })}</div>
           </div>
           <code
             style={{
@@ -720,7 +720,7 @@ export function RenamePopover({
               style={{ minWidth: 0, width: "auto", padding: "2px 8px" }}
               onClick={onCancel}
             >
-              {t("Cancel")}
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -729,7 +729,7 @@ export function RenamePopover({
               disabled={pending || !resolved.trim()}
               onClick={() => onConfirm(resolved)}
             >
-              {t("Rename and Catalog")}
+              {t("upload.renameAndCatalog")}
             </button>
           </div>
         </li>

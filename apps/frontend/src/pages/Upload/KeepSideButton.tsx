@@ -34,7 +34,7 @@ function RecommendationBubble() {
         }}
       >
         <i className="fa fa-robot" aria-hidden="true"></i>
-        {t("AI recommends keeping this version")}
+        {t("upload.aiRecommendsKeepingThisVersion")}
       </div>
       {/* Two-layer triangle: a slightly larger bordered triangle underneath simulates the arrow's
           own outline (matching the bubble's `border`), a same-color triangle 1px inset on top
@@ -101,7 +101,7 @@ export function KeepSideButton({
           fontSize: FONT_SIZE_SM,
         }}
       >
-        {t("Keep version {{side}}", { side: side === "a" ? "A" : "B" })}
+        {t("upload.keepVersionSide", { side: side === "a" ? "A" : "B" })}
       </button>
     </div>
   );

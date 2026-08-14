@@ -5,6 +5,7 @@ import { Footer } from "@/components/Layout"
 import { UpdateBanner } from "@/components/Layout"
 
 import { useLoginStatus } from "./api/hooks"
+import { useApplySettingsLanguage } from "./i18n"
 import { useApplyTheme } from "./theme"
 
 // Legacy's own top nav (`~/LANraragi/templates/index.html.tt2`'s `<p id="nb">`, reused across
@@ -20,6 +21,7 @@ import { useApplyTheme } from "./theme"
 export function Layout() {
   const { t } = useTranslation()
   useApplyTheme()
+  useApplySettingsLanguage()
   const loginStatus = useLoginStatus()
   // Defaults to the logged-in link set while the status query is still in flight (its very first
   // load) rather than flashing the reduced anonymous nav for a moment — `loginStatus.data` is
@@ -28,16 +30,16 @@ export function Layout() {
 
   const links: Array<{ to: string; label: string; end?: boolean }> = loggedIn
     ? [
-        { to: "/upload", label: t("Add Archives") },
-        { to: "/duplicates", label: t("Duplicate Detection") },
-        { to: "/config", label: t("Settings") },
-        { to: "/config/categories", label: t("Modify Categories") },
-        { to: "/stats", label: t("Statistics") },
-        { to: "/logs", label: t("Logs") },
+        { to: "/upload", label: t("app.addArchives") },
+        { to: "/duplicates", label: t("app.duplicateDetection") },
+        { to: "/config", label: t("app.settings") },
+        { to: "/config/categories", label: t("app.modifyCategories") },
+        { to: "/stats", label: t("app.statistics") },
+        { to: "/logs", label: t("app.logs") },
       ]
     : [
-        { to: "/login", label: t("Admin Login") },
-        { to: "/stats", label: t("Statistics") },
+        { to: "/login", label: t("app.adminLogin") },
+        { to: "/stats", label: t("app.statistics") },
       ]
 
   return (

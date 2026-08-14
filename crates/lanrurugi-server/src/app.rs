@@ -19,6 +19,7 @@ use tower::service_fn;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+use lanrurugi_api::cors::apply_cors;
 use lanrurugi_api::procedure::require_api_key;
 
 /// `static_dir`, when present, is the built frontend (`frontend/dist` — the Docker image's
@@ -49,7 +50,10 @@ pub fn build_app(
     let api = lanrurugi_api::login::router()
         .merge(lanrurugi_api::settings::public_router())
         .merge(protected)
-        .with_state(state);
+        .with_state(state.clone())
+        // Outermost `/api/*` layer, before `require_api_key` — a preflight `OPTIONS` request must
+        // never reach the auth check (see `cors::apply_cors`'s own docs).
+        .layer(axum::middleware::from_fn_with_state(state, apply_cors));
 
     let mut router = Router::new().nest("/api", api);
 

@@ -45,7 +45,7 @@ export function Plugins() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   useApplyTheme()
   useLegacyConfigCss()
-  useDocumentTitle(t("Plugin Configuration") ?? undefined)
+  useDocumentTitle(t("common.pluginConfiguration") ?? undefined)
 
   async function runScript(path: string, params?: Record<string, string>) {
     setRunning(path)
@@ -70,7 +70,7 @@ export function Plugins() {
       const response = await fetch("/api/plugins/upload", { method: "POST", body })
       const data = (await response.json()) as { success: number; name?: string; error?: string }
       setUploadStatus(
-        data.success ? t("Plugin uploaded: {{name}}", { name: data.name }) : (data.error ?? t("Upload failed.") ?? ""),
+        data.success ? t("plugins.pluginUploadedName", { name: data.name }) : (data.error ?? t("plugins.uploadFailed") ?? ""),
       )
       if (data.success) await queryClient.invalidateQueries({ queryKey: ["plugins"] })
     } finally {
@@ -89,7 +89,7 @@ export function Plugins() {
         {group.type === "metadata" && (
           <div style={{ padding: "4px 0 8px 0" }}>
             <h1 className="ih" style={{ display: "inline" }}>
-              {t("Allow Plugins to replace archive titles:")}{" "}
+              {t("plugins.allowPluginsToReplaceArchive")}{" "}
             </h1>
             <input
               id="replacetitles"
@@ -101,13 +101,13 @@ export function Plugins() {
             <label htmlFor="replacetitles">
               <br />
               {t(
-                "If enabled, metadata plugins will be able to change the title of your archives alongside adding tags to them.",
+                "plugins.ifEnabledMetadataPluginsWill",
               )}
             </label>
           </div>
         )}
         {groupPlugins.length === 0 ? (
-          <p>{t("No plugins installed.")}</p>
+          <p>{t("plugins.noPluginsInstalled")}</p>
         ) : (
           <SortablePluginGroup type={group.type} plugins={groupPlugins} />
         )}
@@ -117,10 +117,10 @@ export function Plugins() {
 
   return (
     <div className="ido">
-      <h1 className="ih">{t("Plugins")}</h1>
+      <h1 className="ih">{t("plugins.plugins")}</h1>
       <p style={{ textAlign: "center" }}>
         <a href="/docs/" target="_blank" rel="noopener noreferrer">
-          <i className="fa fa-book"></i> {t("Plugin SDK Documentation")}
+          <i className="fa fa-book"></i> {t("plugins.pluginSdkDocumentation")}
         </a>
       </p>
 
@@ -135,21 +135,21 @@ export function Plugins() {
               to warrant a native Rust endpoint rather than a Deno-subprocess round trip. Source
               Finder / nHentai Source Converter are real `script`-type plugins and render as
               ordinary cards in the "Scripts" flyout above. */}
-          <CollapsibleSection icon="fa-scroll" title={t("Maintenance Scripts")}>
-              <p>{t("Library-wide maintenance scripts (operate on the whole database, not one archive).")}</p>
+          <CollapsibleSection icon="fa-scroll" title={t("plugins.maintenanceScripts")}>
+              <p>{t("plugins.librarywideMaintenanceScriptsOperateOn")}</p>
 
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
                 <span>
-                  <b>{t("Subfolders to Categories")}</b>
+                  <b>{t("plugins.subfoldersToCategories")}</b>
                   <br />
-                  {t("Scan your Content Folder and automatically create Static Categories for each subfolder.")}
+                  {t("plugins.scanYourContentFolderAnd")}
                 </span>
                 <input
                   type="button"
                   className="stdbtn"
                   disabled={running === "subfolders-to-categories"}
                   onClick={() => void runScript("subfolders-to-categories")}
-                  value={t("Run") ?? undefined}
+                  value={t("plugins.run") ?? undefined}
                 />
               </div>
           </CollapsibleSection>
@@ -187,7 +187,7 @@ export function Plugins() {
             `<span>` child, since form controls don't inherit a heading's bold by browser UA
             default the way ordinary text elements do. */}
         <span className="stdbtn fileinput-button" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ fontWeight: "normal" }}>{t("Upload Plugin")}</span>
+          <span style={{ fontWeight: "normal" }}>{t("plugins.uploadPlugin")}</span>
           <input
             ref={fileInputRef}
             type="file"
@@ -199,7 +199,7 @@ export function Plugins() {
             }}
           />
         </span>
-        <input type="button" id="return" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+        <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
       </h1>
     </div>
   )

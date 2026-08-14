@@ -200,11 +200,11 @@ export function EntryTreePopover({ entries }: { entries: ArchiveEntryInfo[] }) {
         label={
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              {t("Show internal file structure")}
+              {t("upload.showInternalFileStructure")}
             </div>
             <div style={{ opacity: 0.8 }}>
               {t(
-                "{{pages}} page image(s) out of {{files}} total file(s) in this archive (non-page files may include readme/torrent/etc).",
+                "upload.pageImageSOutOf",
                 { pages: pageCount, files: fileCount },
               )}
             </div>
@@ -228,7 +228,7 @@ export function EntryTreePopover({ entries }: { entries: ArchiveEntryInfo[] }) {
           }}
         >
           <i className="fa fa-sitemap" aria-hidden="true"></i>
-          {t("{{pages}}/{{files}} files", { pages: pageCount, files: fileCount })}
+          {t("upload.filesFiles", { pages: pageCount, files: fileCount })}
         </button>
       </Tooltip>
       {open && (

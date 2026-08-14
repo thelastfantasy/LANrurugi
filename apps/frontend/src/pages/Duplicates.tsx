@@ -21,7 +21,7 @@ export function Duplicates() {
   const clearDuplicates = useClearDuplicates()
   const deleteArchive = useDeleteArchive()
   useApplyTheme()
-  useDocumentTitle(t("Duplicate Detection") ?? undefined)
+  useDocumentTitle(t("app.duplicateDetection") ?? undefined)
 
   const [threshold, setThreshold] = useState(5)
   const [scanning, setScanning] = useState(false)
@@ -46,10 +46,10 @@ export function Duplicates() {
 
   return (
     <div className="ido">
-      <h1 className="ih">{t("Duplicate Detection")}</h1>
+      <h1 className="ih">{t("app.duplicateDetection")}</h1>
       <p>
         {t(
-          "This feature looks at archives across your database to try and find duplicates by comparing cover thumbnail hashes.",
+          "duplicates.thisFeatureLooksAtArchives",
         )}
       </p>
 
@@ -62,13 +62,13 @@ export function Duplicates() {
       {!hasResults && !duplicates.isLoading && (
         <div id="nodupes">
           <i className="fa fa-3x fa-check-circle"></i>
-          <p>{t("No duplicates found!")}</p>
+          <p>{t("duplicates.noDuplicatesFound")}</p>
         </div>
       )}
 
       <div className="control-btn-group">
         <label>
-          {t("Threshold:")}
+          {t("duplicates.threshold")}
           <input
             type="number"
             min={0}
@@ -80,10 +80,10 @@ export function Duplicates() {
           />
         </label>
         <button type="button" className="stdbtn find-duplicates" disabled={scanning} onClick={() => void handleScan()}>
-          {scanning ? t("Rescanning...") : t("Search for duplicates")}
+          {scanning ? t("duplicates.rescanning") : t("duplicates.searchForDuplicates")}
         </button>
         <button type="button" className="stdbtn clear-duplicates" onClick={() => clearDuplicates.mutate()}>
-          {t("Clear Results")}
+          {t("duplicates.clearResults")}
         </button>
       </div>
 
@@ -91,9 +91,9 @@ export function Duplicates() {
         <table id="ds" className="ds itg">
           <thead>
             <tr>
-              <th>{t("Title")}</th>
-              <th>{t("Filesize")}</th>
-              <th>{t("Action")}</th>
+              <th>{t("common.title")}</th>
+              <th>{t("duplicates.filesize")}</th>
+              <th>{t("duplicates.action")}</th>
             </tr>
           </thead>
           <tbody>
@@ -117,7 +117,7 @@ export function Duplicates() {
                   <td>{(archive.size / 1e6).toFixed(1)} MB</td>
                   <td>
                     <button type="button" className="stdbtn delete-archive action-button" onClick={() => void handleDelete(archive.arcid)}>
-                      {t("Delete")}
+                      {t("common.delete")}
                     </button>
                   </td>
                 </tr>
@@ -135,7 +135,7 @@ export function Duplicates() {
         </table>
       )}
 
-      <input type="button" id="goback" className="stdbtn" value={t("Return to Library") ?? undefined} onClick={() => navigate(routes.library())} />
+      <input type="button" id="goback" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )
 }
