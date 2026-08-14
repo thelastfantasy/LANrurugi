@@ -19,7 +19,7 @@ use tower::service_fn;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::middleware::auth::require_api_key;
+use lanrurugi_api::procedure::require_api_key;
 
 /// `static_dir`, when present, is the built frontend (`frontend/dist` — the Docker image's
 /// `LANRURUGI_STATIC_DIR`) served for every route `/api` doesn't claim, with unmatched paths

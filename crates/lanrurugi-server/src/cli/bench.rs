@@ -86,6 +86,12 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let compare_cache = Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
 
     // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
     // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
@@ -100,8 +106,8 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: args.library_dir.clone(),
@@ -134,6 +140,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
 
     {
@@ -150,7 +159,16 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let new_addr = listener.local_addr()?;
     tracing::info!(%new_addr, "bench: new-system instance listening");
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        // `into_make_service_with_connect_info` — required since `build_app` mounts
+        // `middleware::auth::require_api_key`, which extracts `ConnectInfo<SocketAddr>` on every
+        // request (for the API-token last-used-IP field); without this, every request to this
+        // bench-spawned instance would fail that extraction and 401.
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        {
             tracing::error!(error = %e, "bench: new-system server exited unexpectedly");
         }
     });

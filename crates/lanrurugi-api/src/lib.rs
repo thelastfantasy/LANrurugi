@@ -1,6 +1,8 @@
+pub mod api_tokens;
 pub mod archives;
 pub mod artist_backfill;
 pub mod auth;
+pub mod auth_context;
 pub mod bench;
 pub mod categories;
 pub mod common;
@@ -14,6 +16,7 @@ pub mod logs;
 pub mod misc;
 pub mod opds;
 pub mod plugins;
+pub mod procedure;
 pub mod recommend;
 pub mod recommend_llm;
 pub mod recommend_precompute;
@@ -40,6 +43,7 @@ use axum::Router;
 /// in separately, unprotected.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(api_tokens::router())
         .merge(archives::router())
         .merge(bench::router())
         .merge(categories::router())

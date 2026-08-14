@@ -701,7 +701,8 @@ pub struct UsePluginParams {
 /// consult (currently just `plugins/metadata/dateadded.ts`'s `usedateadded`/`usedatemodified`) —
 /// passed to every metadata/download/script call under `args["settings"]` rather than the plugin
 /// making its own round trip back into `GET /settings`, and rather than handing over the *entire*
-/// settings hash (which includes things like `apikey` a plugin has no business reading).
+/// settings hash (which includes things like `session_secret`/`password` a plugin has no
+/// business reading).
 async fn get_plugin_relevant_settings(state: &AppState) -> Value {
     let Ok(mut conn) = state.redis.config.get().await else {
         return json!({});

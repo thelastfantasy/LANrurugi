@@ -75,7 +75,6 @@ export interface Settings {
   language: string
   htmltitle: string
   motd: string
-  apikey: string
   excludednamespaces: string
   tagrules: string
   /** IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"`) — see `lanrurugi_search::engine`'s
@@ -94,6 +93,14 @@ export interface Settings {
    *  candidates the background precompute job keeps per archive's cached similar-archive list.
    *  Changing this triggers a full background rebuild (see `lanrurugi_api::settings::put_settings`). */
   recommendprecision: string
+  /** JWT access-token lifetime, in seconds — the short-lived cookie a login issues; a request
+   *  past this age transparently refreshes rather than failing (see `api/client.ts`'s own
+   *  refresh-then-retry interceptor). Issue #44. */
+  access_token_lifetime_secs: number
+  /** Refresh-token lifetime, in seconds — the longer-lived, rotating, revocable cookie that
+   *  actually re-issues access tokens. See `lanrurugi_storage::refresh_tokens`'s own docs for the
+   *  rotation/reuse-detection semantics. Issue #44. */
+  refresh_token_lifetime_secs: number
   pagesize: number
   tempmaxsize: number
   sizethreshold: number
@@ -560,6 +567,33 @@ export interface LoginStatus {
   /** Drives the homepage's "you're using the default password" warning toast — legacy's own
    * `[% IF usingdefpass %]` (`Controller/Index.pm`). */
   using_default_password: boolean
+}
+
+// `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` (issue #54) — first-party API token
+// management, replacing legacy's single fixed `apikey` mechanism. Mirrors
+// `lanrurugi_api::api_tokens::token_json` exactly — never carries the token's own hash or raw
+// value except immediately after creation (`ApiTokenCreateResponse` below).
+/** Matches `lanrurugi_storage::api_tokens::TokenRole`'s `#[serde(rename_all = "snake_case")]`
+ *  wire shape exactly. `admin`: full access except token management itself and the other
+ *  session-only-gated actions (see `lanrurugi_api::procedure::require_session`'s own docs).
+ *  `guest`: read-only — every non-`GET` request is rejected regardless of endpoint. */
+export type TokenRole = "admin" | "guest"
+
+export interface ApiToken {
+  id: string
+  name: string
+  created_at: number
+  role: TokenRole
+  /** Absolute Unix timestamp this token stops working, or `null` for a permanent token. */
+  expires_at: number | null
+  last_used_at: number | null
+  last_used_ip: string | null
+}
+
+/** `POST /api/tokens`'s response — same fields as `ApiToken` plus the raw token value, present
+ *  only this once (the server never stores or returns it again after this response). */
+export interface ApiTokenCreateResponse extends ApiToken {
+  token: string
 }
 
 // Matches `lanrurugi-api::stamps::StampJson` exactly (constitution Principle II, verified against

@@ -1,3 +1,4 @@
+pub mod api_tokens;
 pub mod bootstrap;
 pub mod compare_cache;
 pub mod download_queue;
@@ -8,4 +9,5 @@ pub mod plugin_options;
 pub mod rebuild;
 pub mod recommend_cache;
 pub mod redis;
+pub mod refresh_tokens;
 pub mod repository;

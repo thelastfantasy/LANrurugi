@@ -21,12 +21,46 @@ export class ValidationError extends ApiError {
   }
 }
 
-/** `/login` and `/logout` handle their own 401s (a wrong password, not a stale session) — only
- * every other endpoint's 401 means "you need to (re-)authenticate", so only those redirect. */
-function handleUnauthorized(path: string) {
-  if (path !== "/login" && path !== "/logout" && !window.location.pathname.startsWith("/login")) {
+/** `/login`, `/logout`, and `/token/refresh` itself handle their own 401s (a wrong password or an
+ * already-dead refresh token, not "the access token merely expired") — every other endpoint's 401
+ * first gets one shot at a transparent refresh-then-retry (see `tryRefresh`/`shouldAttemptRefresh`
+ * below) before falling back to a hard redirect. */
+function isAuthBootstrapPath(path: string): boolean {
+  return path === "/login" || path === "/logout" || path === "/token/refresh"
+}
+
+function redirectToLogin() {
+  if (!window.location.pathname.startsWith("/login")) {
     window.location.assign("/login")
   }
+}
+
+/** Dedupes concurrent 401s into a single real `POST /token/refresh` call — several requests can
+ * easily fail together (e.g. the Library page's own archives + categories + stats queries all
+ * firing near-simultaneously on an expired access token), and each independently calling refresh
+ * would race to rotate the same one-time-use refresh token, guaranteeing every call after the
+ * first hits `RotateOutcome::ReuseDetected` and gets its whole session revoked. Every caller
+ * within the same in-flight window shares this one promise instead. */
+let refreshInFlight: Promise<boolean> | null = null
+
+async function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch("/api/token/refresh", { method: "POST" })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
+/** Only ever attempted once per original request (`retried` guards this) — a refresh that
+ * succeeds but is immediately followed by another 401 means the *new* access token itself is
+ * already being rejected for some other reason (e.g. `enablepass` just got flipped, or the
+ * refreshed session is invalid some other way), and retrying forever would just hang the caller. */
+function shouldAttemptRefresh(path: string, retried: boolean): boolean {
+  return !retried && !isAuthBootstrapPath(path)
 }
 
 /** Tries to read a JSON error body (`{error: "..."}`) from the response;
@@ -36,22 +70,32 @@ async function readErrorBody(response: Response, path: string): Promise<string> 
   return body?.error ?? `Request to ${path} failed with ${response.status}`
 }
 
-export async function fetchJson<T>(path: string): Promise<T> {
+export async function fetchJson<T>(path: string, retried = false): Promise<T> {
   const response = await fetch(`/api${path}`)
 
   if (!response.ok) {
-    if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 401) {
+      if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
+        return fetchJson<T>(path, true)
+      }
+      redirectToLogin()
+    }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
   return (await response.json()) as T
 }
 
-export async function fetchText(path: string): Promise<string> {
+export async function fetchText(path: string, retried = false): Promise<string> {
   const response = await fetch(`/api${path}`)
 
   if (!response.ok) {
-    if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 401) {
+      if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
+        return fetchText(path, true)
+      }
+      redirectToLogin()
+    }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
@@ -63,6 +107,7 @@ export async function sendJson<T>(
   method: "PUT" | "POST" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
+  retried = false,
 ): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method,
@@ -71,10 +116,15 @@ export async function sendJson<T>(
   })
 
   if (!response.ok) {
-    if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 401) {
+      if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
+        return sendJson<T>(method, path, body, true)
+      }
+      redirectToLogin()
+    }
     if (response.status === 422) {
-      const body = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
-      if (body?.error && body.field) throw new ValidationError(body.error, body.field)
+      const errorBody = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
+      if (errorBody?.error && errorBody.field) throw new ValidationError(errorBody.error, errorBody.field)
     }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
@@ -92,6 +142,7 @@ export async function sendJsonForBlob(
   method: "PUT" | "POST" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
+  retried = false,
 ): Promise<{ blob: Blob; filename: string | null }> {
   const response = await fetch(`/api${path}`, {
     method,
@@ -100,7 +151,12 @@ export async function sendJsonForBlob(
   })
 
   if (!response.ok) {
-    if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 401) {
+      if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
+        return sendJsonForBlob(method, path, body, true)
+      }
+      redirectToLogin()
+    }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
 
@@ -116,6 +172,7 @@ export async function sendForm<T>(
   method: "PUT" | "POST" | "DELETE",
   path: string,
   params: Record<string, string | undefined>,
+  retried = false,
 ): Promise<T> {
   const body = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -124,7 +181,12 @@ export async function sendForm<T>(
   const response = await fetch(`/api${path}`, { method, body })
 
   if (!response.ok) {
-    if (response.status === 401) handleUnauthorized(path)
+    if (response.status === 401) {
+      if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
+        return sendForm<T>(method, path, params, true)
+      }
+      redirectToLogin()
+    }
     throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
   }
 

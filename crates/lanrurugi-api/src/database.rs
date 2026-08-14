@@ -18,15 +18,23 @@ use crate::AppState;
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 pub fn router() -> Router<AppState> {
+    // `/database/drop` — whole-library, irreversible ("数据销毁类") — is split into its own
+    // sub-router so `require_session` (see `crate::procedure`'s own module docs) applies to only
+    // this one route, not every other endpoint here. No API token, admin-role or not, may reach
+    // this; only a real session cookie can.
+    let dangerous = Router::new()
+        .route("/database/drop", post(drop_database))
+        .route_layer(axum::middleware::from_fn(crate::procedure::require_session));
+
     Router::new()
         .route("/database/stats", get(stats))
         .route("/database/backup", get(get_backup).post(queue_backup))
         .route("/database/backup/{jobid}", get(download_backup))
         .route("/database/restore", post(queue_restore))
         .route("/database/isnew", delete(clear_new_all))
-        .route("/database/drop", post(drop_database))
         .route("/database/clean", post(clean_database))
         .route("/database/rebuild-index", post(rebuild_index))
+        .merge(dangerous)
 }
 
 #[derive(Debug, Deserialize, Default)]

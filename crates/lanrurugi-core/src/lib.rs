@@ -1,4 +1,5 @@
 pub mod concurrency;
+pub mod crypto;
 pub mod entities;
 pub mod filename_lock;
 pub mod ids;

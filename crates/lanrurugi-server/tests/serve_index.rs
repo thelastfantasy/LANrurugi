@@ -55,13 +55,19 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
     let compare_cache = Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
     let state = AppState {
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
@@ -90,6 +96,9 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
 
     let dir = tempfile::tempdir().ok()?;

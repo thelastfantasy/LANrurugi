@@ -1,13 +1,21 @@
 //! Live authentication configuration, read from the same `LRR_CONFIG` hash legacy itself reads
-//! (`Model/Config.pm::enable_pass`/`get_apikey`/`get_password`, keys `enablepass`/`apikey`/
-//! `password`) so a value already set through legacy's settings page takes effect here with no
-//! migration step (Principle I), and a value changed through our own Settings page is live
-//! immediately — no server restart, matching legacy's own behavior of reading Redis fresh on
-//! every request rather than caching config at boot.
+//! (`Model/Config.pm::enable_pass`/`get_password`, keys `enablepass`/`password`) so a value
+//! already set through legacy's settings page takes effect here with no migration step
+//! (Principle I), and a value changed through our own Settings page is live immediately — no
+//! server restart, matching legacy's own behavior of reading Redis fresh on every request rather
+//! than caching config at boot.
+//!
+//! `apikey` (legacy's single fixed API key) is deliberately **not** read here anymore — issue #54
+//! replaced it with `lanrurugi_storage::api_tokens`'s real multi-token system (see
+//! `.specify/memory/constitution.md` Principle II's own annotation on this being a deliberate,
+//! pre-release break from legacy compatibility).
 //!
 //! `session_secret` has no legacy equivalent (legacy signs its session cookie with Mojolicious's
 //! own app-level secret, unrelated to Redis) — it's generated once on first use and persisted
-//! back to the same hash so subsequently issued tokens keep verifying across restarts.
+//! back to the same hash so subsequently issued tokens (both the JWT access token and the
+//! refresh token, which is itself hashed-and-stored rather than signed, but shares this same
+//! secret's lifecycle for simplicity — see `lanrurugi_core::session`) keep verifying across
+//! restarts.
 
 use std::collections::HashMap;
 
@@ -34,9 +42,15 @@ pub const DEFAULT_PASSWORD_HASH: &str =
 
 pub struct LiveAuthConfig {
     pub enable_pass: bool,
-    pub api_key: String,
     pub password_hash: String,
     pub session_secret: Vec<u8>,
+    /// Overridable via the `access_token_lifetime_secs` setting (`settings.rs::NUMBER_FIELDS`) —
+    /// falls back to `lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS` when unset.
+    pub access_token_lifetime_secs: u64,
+    /// Overridable via the `refresh_token_lifetime_secs` setting, same pattern as above — falls
+    /// back to `lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS`.
+    pub refresh_token_lifetime_secs: u64,
+    pub force_secure_cookies: bool,
 }
 
 /// Reads current auth-relevant settings, falling back to `state.auth`'s CLI-supplied defaults
@@ -51,14 +65,18 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         .get("enablepass")
         .map(|v| v != "0")
         .unwrap_or(state.auth.enable_pass);
-    let api_key = fields
-        .get("apikey")
-        .cloned()
-        .unwrap_or_else(|| state.auth.api_key.clone());
     let password_hash = fields
         .get("password")
         .cloned()
         .unwrap_or_else(|| DEFAULT_PASSWORD_HASH.to_string());
+    let access_token_lifetime_secs = fields
+        .get("access_token_lifetime_secs")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS);
+    let refresh_token_lifetime_secs = fields
+        .get("refresh_token_lifetime_secs")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS);
 
     let session_secret = match fields.get(SESSION_SECRET_FIELD) {
         Some(hex) if !hex.is_empty() => hex_decode(hex),
@@ -73,9 +91,11 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
 
     Ok(LiveAuthConfig {
         enable_pass,
-        api_key,
         password_hash,
         session_secret,
+        access_token_lifetime_secs,
+        refresh_token_lifetime_secs,
+        force_secure_cookies: state.auth.force_secure_cookies,
     })
 }
 
@@ -96,12 +116,13 @@ pub fn session_is_valid(cfg: &LiveAuthConfig, headers: &axum::http::HeaderMap) -
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock is after the Unix epoch")
         .as_secs();
-    lanrurugi_core::session::verify_token(&cfg.session_secret, &token, now)
+    lanrurugi_core::session::verify_access_token(&cfg.session_secret, &token, now).is_some()
 }
 
 /// Minimal `Cookie` header lookup — avoids pulling in a full cookie-jar crate for a single-name
-/// lookup.
-fn find_cookie(cookie_header: &str, name: &str) -> Option<String> {
+/// lookup. `pub(crate)` — also used by `login.rs`'s `refresh` handler to read the refresh-token
+/// cookie.
+pub(crate) fn find_cookie(cookie_header: &str, name: &str) -> Option<String> {
     for pair in cookie_header.split(';') {
         let pair = pair.trim();
         let mut it = pair.splitn(2, '=');

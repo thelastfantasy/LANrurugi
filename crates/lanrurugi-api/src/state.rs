@@ -6,12 +6,14 @@ use lanrurugi_core::filename_lock::{FilenameLockGuard, FilenameLocks};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
+use lanrurugi_storage::api_tokens::ApiTokenRepository;
 use lanrurugi_storage::compare_cache::CompareCacheRepository;
 use lanrurugi_storage::download_queue::DownloadQueueRepository;
 use lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository;
 use lanrurugi_storage::plugin_options::PluginOptionsRepository;
 use lanrurugi_storage::recommend_cache::RecommendCacheRepository;
 use lanrurugi_storage::redis::RedisDbs;
+use lanrurugi_storage::refresh_tokens::RefreshTokenRepository;
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, StampRepository,
 };
@@ -19,17 +21,23 @@ use tokio::sync::Mutex;
 
 use crate::download_manager::DownloadManager;
 
-/// API-key auth configuration. Mirrors legacy `LRR_CONF`'s `apikey`/`enable_pass` semantics
-/// (verified: `~/LANraragi/lib/LANraragi/Utils/Login.pm::is_logged_in_api`) — see
-/// `lanrurugi-server/src/middleware/auth.rs` for the actual check.
+/// Auth configuration not read live from Redis (unlike `enablepass`/token lifetimes, which
+/// `lanrurugi_api::auth::LiveAuthConfig` re-reads on every request) — set once at startup from
+/// CLI args/env and never changed after. No more `api_key` here (issue #54 replaced the legacy
+/// single-fixed-key mechanism with `lanrurugi_storage::api_tokens`'s real multi-token system —
+/// see `.specify/memory/constitution.md` Principle II's own annotation on this deliberate break).
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
-    /// Raw (not base64-encoded) API key. Empty means no key has ever been configured.
-    pub api_key: String,
     /// Legacy "password protection" toggle. When `false`, every request is authorized
-    /// regardless of `api_key` (an intentionally open instance) — matches
+    /// regardless of credentials (an intentionally open instance) — matches
     /// `$c->LRR_CONF->enable_pass == 0` short-circuiting the legacy check.
     pub enable_pass: bool,
+    /// Appends `; Secure` to both auth cookies when set — never inferred from a spoofable
+    /// `X-Forwarded-Proto` header (this app has no trusted-proxy allowlist to validate one
+    /// against); the operator opts in explicitly via `--force-secure-cookies` /
+    /// `LANRURUGI_FORCE_SECURE_COOKIES` once actually deployed behind HTTPS. Defaults `false`
+    /// for local-HTTP dev friendliness.
+    pub force_secure_cookies: bool,
 }
 
 /// Filesystem locations LANrurugi reads/writes outside Redis. `thumb_dir` mirrors legacy's
@@ -175,6 +183,21 @@ pub struct AppState {
     /// write succeeds. `None` in test/bench contexts (no SSE subscribers); real `serve` always
     /// sets this.
     pub download_queue_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    /// The SPA login flow's revocable refresh-token half (`lanrurugi_core::session` mints the
+    /// paired stateless JWT access token) — on the `config` logical DB, same placement as
+    /// `plugin_options`/`download_queue`/etc. See `lanrurugi_storage::refresh_tokens` module docs.
+    pub refresh_tokens: Arc<RefreshTokenRepository>,
+    /// First-party API tokens (issue #54), replacing legacy's single fixed `apikey` mechanism —
+    /// also on the `config` logical DB. See `lanrurugi_storage::api_tokens` module docs.
+    pub api_tokens: Arc<ApiTokenRepository>,
+    /// In-memory write-behind throttle for `ApiTokenRepository::touch_last_used` — keyed by
+    /// token id, storing the unix-seconds timestamp of the last Redis write for that token.
+    /// `middleware::auth::is_authorized` checks this before writing through on every
+    /// API-token-authenticated request; without it, a client hammering the API would turn
+    /// "record last-used time" into a Redis write on every single request. Mirrors the
+    /// "cheap in-memory check gates an expensive path" shape `plugin_options_generation` already
+    /// uses above, just keyed instead of a single counter.
+    pub api_token_last_touch: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 impl AppState {

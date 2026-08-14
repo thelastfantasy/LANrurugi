@@ -143,12 +143,21 @@ half of the server-side anti-flash-of-default-theme mechanism — see that file'
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
 any other Vite-served frontend file; no build step of its own to go stale.
 
-## Rust edits — check before rebuild
+## Rust edits — check before rebuild, and always through the resource-capped script
 
 After editing any Rust code under `crates/`, run `cargo check` (from the workspace root) BEFORE
 `mise run dev-rebuild`. A rebuild that fails inside the container wastes time; `cargo check`
 catches compilation errors in seconds instead of minutes. Only proceed to rebuild after check
 passes clean.
+
+**Always run Rust builds/tests through `scripts/cargo-container-run.sh cargo <subcommand> ...`**
+(e.g. `scripts/cargo-container-run.sh cargo check --workspace`), not a bare host-side `cargo`. That
+script caps CPU quota per invocation; real memory/priority capping (`memory.max`/`cpu.weight`) is
+enforced unconditionally at the host level via a personal, non-repo-tracked
+`~/.config/containers/containers.conf` (`[containers] cgroup_conf`) plus a `~/.local/bin/cargo`
+shim for any bare host `cargo` invocation that isn't containerized at all — see those files' own
+comments. Added after a real OOM crash (2026-07-21) and a `systemd-oomd` pressure-kill of an
+unrelated process during a workspace build (2026-08-13).
 
 ## CPU-bound parallel work must cap its own resource usage
 

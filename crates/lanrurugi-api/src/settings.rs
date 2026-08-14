@@ -39,9 +39,18 @@ pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 
 pub fn router() -> Router<AppState> {
+    // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change
+    // the admin password; only a real session cookie can. See `crate::procedure`'s own module
+    // docs for why this is a route-level layer on its own sub-router, not a check inside
+    // `put_settings`. `PUT /settings` itself stays outside this gate — see that handler's own
+    // docs for why its dangerous fields need a narrower, field-level check instead.
+    let password = Router::new()
+        .route("/settings/password", post(change_password))
+        .route_layer(axum::middleware::from_fn(crate::procedure::require_session));
+
     Router::new()
         .route("/settings", get(get_settings).put(put_settings))
-        .route("/settings/password", post(change_password))
+        .merge(password)
 }
 
 /// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s
@@ -128,7 +137,6 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
     ("motd", "Welcome to this Library running LANrurugi!"),
-    ("apikey", ""),
     ("excludednamespaces", "source, date_added"),
     // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
     // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
@@ -160,6 +168,19 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     ("sizethreshold", DEFAULT_SIZE_THRESHOLD),
     ("readerquality", DEFAULT_READER_QUALITY),
     ("webpquality", DEFAULT_WEBP_QUALITY),
+    // Issue #44 — the SPA login's JWT access-token / refresh-token lifetimes
+    // (`lanrurugi_core::session`, `lanrurugi_api::auth::LiveAuthConfig::load`). The one true
+    // default for each lives on `lanrurugi_core::session` itself (not duplicated here as a
+    // literal) since that's also where the fallback used when the field is entirely absent from
+    // `LRR_CONFIG` lives.
+    (
+        "access_token_lifetime_secs",
+        lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS as i64,
+    ),
+    (
+        "refresh_token_lifetime_secs",
+        lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS as i64,
+    ),
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
@@ -245,8 +266,24 @@ async fn get_settings(State(state): State<AppState>) -> Response {
     axum::Json(Value::Object(body)).into_response()
 }
 
+/// Fields `PUT /settings` refuses to accept from an API-token-authenticated request (any role) —
+/// "账号安全类" danger: toggling password protection off, toggling No-Fun mode, or widening the
+/// login-session lifetimes are all things that let whoever holds a token entrench or extend its
+/// own access, exactly what a stolen-but-scoped token must not be able to do. A narrower,
+/// per-field check rather than a whole-route `require_session` (unlike `/settings/password` or
+/// `/database/drop`) because this one endpoint also carries many harmless fields
+/// (`theme`/`motd`/`pagesize`/...) an otherwise-trusted admin-role token should still be able to
+/// update.
+const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
+    "enablepass",
+    "nofunmode",
+    "access_token_lifetime_secs",
+    "refresh_token_lifetime_secs",
+];
+
 async fn put_settings(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     axum::Json(body): axum::Json<Value>,
 ) -> Response {
     let Value::Object(fields) = body else {
@@ -256,6 +293,21 @@ async fn put_settings(
             "Expected a JSON object.",
         );
     };
+
+    if auth.is_some_and(|axum::extract::Extension(a)| a.is_token()) {
+        if let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
+            .iter()
+            .find(|f| fields.contains_key(**f))
+        {
+            return error(
+                StatusCode::FORBIDDEN,
+                "put_settings",
+                format!(
+                    "API tokens cannot change \"{field}\" — this requires a real login session."
+                ),
+            );
+        }
+    }
 
     let mut conn = match state.redis.config.get().await {
         Ok(c) => c,

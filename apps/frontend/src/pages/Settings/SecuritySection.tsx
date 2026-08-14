@@ -5,6 +5,12 @@ import { FONT_SIZE_SM } from "@/theme"
 
 import { CheckboxRow, Row } from "./shared"
 
+/** Seconds-per-hour/day converters for the two token-lifetime fields below — the backend/wire
+ *  format is always seconds (`Settings.access_token_lifetime_secs`/`refresh_token_lifetime_secs`),
+ *  but a raw seconds count is a hostile unit for a human to type ("14400" vs. "4 hours"). */
+const SECS_PER_HOUR = 3600
+const SECS_PER_DAY = 86400
+
 export function SecuritySection({
   enablepass,
   setEnablepass,
@@ -14,8 +20,10 @@ export function SecuritySection({
   setNewPassword2,
   nofunmode,
   setNofunmode,
-  apikey,
-  setApikey,
+  accessTokenLifetimeSecs,
+  setAccessTokenLifetimeSecs,
+  refreshTokenLifetimeSecs,
+  setRefreshTokenLifetimeSecs,
   enablecors,
   setEnablecors,
 }: {
@@ -27,8 +35,10 @@ export function SecuritySection({
   setNewPassword2: (v: string) => void
   nofunmode: boolean
   setNofunmode: (v: boolean) => void
-  apikey: string
-  setApikey: (v: string) => void
+  accessTokenLifetimeSecs: number
+  setAccessTokenLifetimeSecs: (v: number) => void
+  refreshTokenLifetimeSecs: number
+  setRefreshTokenLifetimeSecs: (v: number) => void
   enablecors: boolean
   setEnablecors: (v: boolean) => void
 }) {
@@ -72,14 +82,31 @@ export function SecuritySection({
                 <br />
                 {t("Fully effective after restarting LANraragi.")}
               </CheckboxRow>
-              <Row label={t("API Key")}>
-                <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={apikey} onChange={(e) => setApikey(e.target.value)} type="text" />
+              <Row label={t("Login Session Lifetime")}>
+                <input
+                  className="stdinput"
+                  style={{ width: 80 }}
+                  type="number"
+                  min={1}
+                  value={Math.round(accessTokenLifetimeSecs / SECS_PER_HOUR)}
+                  onChange={(e) => setAccessTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_HOUR)}
+                />{" "}
+                {t("hours")}
                 <br />
-                {t("If you wish to use the Client API and have a password, you'll have to set a key here.")}
+                {t("How long you stay logged in before your browser needs to silently refresh its session (no re-login needed as long as the refresh window below hasn't also expired).")}
+              </Row>
+              <Row label={t("Session Refresh Window")}>
+                <input
+                  className="stdinput"
+                  style={{ width: 80 }}
+                  type="number"
+                  min={1}
+                  value={Math.round(refreshTokenLifetimeSecs / SECS_PER_DAY)}
+                  onChange={(e) => setRefreshTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_DAY)}
+                />{" "}
+                {t("days")}
                 <br />
-                <span dangerouslySetInnerHTML={{ __html: t("Empty keys will <b>not</b> work!") }} />
-                <br />
-                <span dangerouslySetInnerHTML={{ __html: t("This key will need to be provided in every protected API call as the <i>Authorization</i> header.") }} />
+                {t("How long after logging in you can stay away before actually needing to re-enter your password. Each silent refresh above extends this window from the moment you logged in, not from the refresh itself.")}
               </Row>
             </>
           )}

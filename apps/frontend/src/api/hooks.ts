@@ -5,6 +5,8 @@ import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } f
 import type {
   AddToQueueItem,
   AddToQueueResponse,
+  ApiToken,
+  ApiTokenCreateResponse,
   ArchiveFilesResponse,
   ArchiveMetadata,
   BookmarkLinkResponse,
@@ -34,6 +36,7 @@ import type {
   TankoubonFullResponse,
   TankoubonListResponse,
   TankoubonMetadata,
+  TokenRole,
   UpdateQueueItemBody,
 } from "./types"
 
@@ -714,6 +717,55 @@ export function useLoginStatus() {
 export function useChangePassword() {
   return useMutation({
     mutationFn: (password: string) => sendForm("POST", "/settings/password", { password }),
+  })
+}
+
+// --- API token management (issue #54) -----------------------------------------------------------
+// Replaces legacy's single fixed `apikey` — see `crates/lanrurugi-api/src/api_tokens.rs`'s own
+// module docs. Mounted in the protected router, so these all require an already-valid session.
+
+export function useApiTokens() {
+  return useQuery({
+    queryKey: ["api-tokens"],
+    queryFn: () => fetchJson<ApiToken[]>("/tokens"),
+  })
+}
+
+/** Response's `data.token` is the raw value — present in this one response only, never
+ *  retrievable again afterward. Callers must show it to the user immediately (see
+ *  `Settings/ApiTokensSection.tsx`'s "new token" flow) since neither this hook nor any later
+ *  `useApiTokens()` refetch will ever see it again.
+ *
+ *  `expiresInSecs: undefined` (omitted) issues a permanent token — matches the backend's own
+ *  `expires_in_secs: Option<i64>` (`None` = permanent), so this hook forwards `undefined` as-is
+ *  rather than substituting a sentinel the server would have to special-case. */
+export function useCreateApiToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, role, expiresInSecs }: { name: string; role: TokenRole; expiresInSecs?: number }) =>
+      sendJson<{ data: ApiTokenCreateResponse }>("POST", "/tokens", {
+        name,
+        role,
+        expires_in_secs: expiresInSecs,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+  })
+}
+
+export function useDeleteApiToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => sendJson("DELETE", `/tokens/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+  })
+}
+
+export function useRenameApiToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      sendJson<{ data: ApiToken }>("PATCH", `/tokens/${encodeURIComponent(id)}`, { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
   })
 }
 

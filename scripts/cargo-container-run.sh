@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 # Runs a cargo subcommand inside the `lanrurugi-dev` container with the shared guardrails every
-# `mise run {test,clippy,fmt-check,build}` task uses — memory cap, capped parallelism, persistent
+# `mise run {test,clippy,fmt-check,build}` task uses — CPU quota, capped parallelism, persistent
 # target/registry cache, and an optional foreground-app-aware resource step-down. Added after a
-# real host crash (2026-07-21): an unbounded `--rm` container running `cargo build` on a
-# 32-core/28GB-RAM machine, hitting `rav1e`'s heavy codegen via the `image` crate's AVIF support,
-# plus a second concurrent build container, drove the system into OOM and a hard reboot (confirmed
-# via `journalctl`'s last pre-crash line being "Under memory pressure, flushing caches").
+# real host crash (2026-07-21) from an unbounded `cargo build` container.
+#
+# No `--memory`/`--cpu-shares` here: memory/priority capping is expected to come from a personal
+# `~/.config/containers/containers.conf` `cgroup_conf` override instead (not repo-tracked — every
+# contributor's machine differs), which podman applies to `memory.max`/`cpu.weight` unconditionally,
+# overriding any value this script would pass anyway. `--cpus` (`cpu.max`, a separate quota
+# mechanism `cgroup_conf` doesn't touch) still works and is kept. `--blkio-weight` was tried and
+# reverted — this class of rootless-podman host doesn't delegate the `io` controller, so it breaks
+# every container outright.
 #
 # Usage: scripts/cargo-container-run.sh <cargo-subcommand-and-args...>
-#   e.g. scripts/cargo-container-run.sh cargo test --workspace
+#   e.g. scripts/cargo-container-run.sh cargo check -p lanrurugi-api
+# Prefer `-p <crate>` over `--workspace` whenever possible — `--workspace` compiles every crate
+# including ones unrelated to whatever you actually changed (this workspace's heaviest
+# dependencies, `rav1e`/`bindgen`/`aws-lc-sys`, only come from `lanrurugi-scanner`/
+# `lanrurugi-imgcompare`'s AVIF support). `--workspace` is for a final pre-push sanity check, not
+# routine iteration.
+#
+# `CARGO_BUILD_JOBS=1` below is deliberate, not just "low" — parallelism itself (not just total
+# memory) is what spikes the page-reclaim activity `systemd-oomd` watches; capping *memory* alone
+# doesn't reduce how many rustc processes contend for pages at once. Spreading compilation out to
+# one unit at a time trades wall-clock time for never producing that spike in the first place
+# (2026-08-14: `systemd-oomd` killed both a build container *and* the VSCode window three times in
+# 20 minutes at the previous jobs=6 setting, immediately after `.cargo-target`'s 20GB auto-clean
+# forced a from-scratch `--workspace` compile).
+#
 # Optional env var (unset by default — a personal-machine tuning knob, not a repo default):
 #   CARGO_CONTAINER_YIELD_TO=<comma-separated exact process names> — step down CPU budget/priority
 #   while any of these processes are running. See that env var's own use below for details.
@@ -22,6 +41,35 @@ CMD="$(command -v podman || command -v docker || true)"
 
 mkdir -p .cargo-target .cargo-registry
 
+# Reap any stuck container from a *previous* invocation of this exact script whose own parent
+# process died without it (e.g. the parent shell got killed by `systemd-oomd` mid-build) — a
+# `--rm` container only self-removes on its own exit, not when whatever launched it dies, so one
+# can silently keep running (and consuming CPU/memory) indefinitely with nothing left to notice or
+# stop it. Confirmed live twice (2026-08-13, 2026-08-14): each was still `Up` for 11 minutes to
+# ~19 hours after its parent died, and both times was still actively contributing to the very
+# memory pressure that then went on to trip `systemd-oomd` again. Filtered by this script's own
+# image (`lanrurugi-dev`, distinct from `lrr-dev`'s own `lanrurugi-dev-full` — the persistent dev
+# server compose brings up, which must never be touched here) and by age (30 minutes — comfortably
+# longer than any real `-p <crate>` build this script is meant for should ever take at jobs=1;
+# older than that is almost certainly orphaned, not just slow).
+REAPER_MAX_AGE_SECS=1800
+now_epoch="$(date +%s)"
+# `--format json`'s own `.Created` is a raw Unix-epoch int — unlike the Go-template `{{.Created}}`/
+# `{{.CreatedAt}}` fields, which render a human date string podman's own locale/timezone
+# formatting makes unreliable to re-parse with `date -d` (a trailing zone abbreviation like "JST"
+# isn't accepted back by GNU date without first stripping it).
+if command -v jq >/dev/null 2>&1; then
+  while IFS=$'\t' read -r cid created_epoch; do
+    [ -n "$cid" ] || continue
+    age=$((now_epoch - created_epoch))
+    if [ "$age" -gt "$REAPER_MAX_AGE_SECS" ]; then
+      echo "note: reaping orphaned lanrurugi-dev container $cid (running ${age}s, likely orphaned by a killed parent shell)" >&2
+      "$CMD" stop -t 5 "$cid" >/dev/null 2>&1 || true
+    fi
+  done < <("$CMD" ps --filter ancestor=localhost/lanrurugi-dev:latest --format json 2>/dev/null \
+    | jq -r '.[] | "\(.Id)\t\(.Created)"')
+fi
+
 # 20GB soft cap on the persistent target cache — comfortably above one full workspace build's
 # incremental footprint, well below the 86GB an earlier unbounded version reached. `cargo clean`,
 # not deletion, so `.cargo-target`'s own directory structure stays intact.
@@ -33,51 +81,32 @@ if [ -n "$size_kb" ] && [ "$size_kb" -gt 20971520 ]; then
 fi
 
 # Foreground-app-aware step-down: if a process named in `$CARGO_CONTAINER_YIELD_TO` (comma-
-# separated exact process names — no default; this is a personal-machine tuning knob, not
-# something an open-source repo should hardcode a contributor's own game/app choices into) is
-# running, halve the CPU budget and drop the container's scheduling weight (`--cpu-shares`,
-# relative to the default 1024) so that process keeps priority under contention, rather than just
-# hoping `nproc`-wide parallelism doesn't starve it. Matched by exact process-name (`pgrep -x`,
-# comparing against `/proc/<pid>/comm`), deliberately NOT `pgrep -f` — that flag matches the full
-# command line of *every* process, including this very script's own invocation (whose shell
-# wrapper command text can itself legitimately contain the same text being searched for, e.g.
-# while being edited/tested), which was observed self-matching and producing false positives
-# during development. Example: `export CARGO_CONTAINER_YIELD_TO=dwproton` in your own shell
-# profile to step down while Wuthering Waves (run via the `dwproton` Proton build) is open.
-cpus=16
-cpu_shares=1024
-cargo_jobs=8
+# separated exact process names — a personal tuning knob, not a repo default) is running, cut the
+# CPU quota and `CARGO_BUILD_JOBS`. `pgrep -x`, not `-f` — `-f` matches this script's own command
+# line too and was observed self-matching. Example:
+# `export CARGO_CONTAINER_YIELD_TO=dwproton` to step down while that Proton game is open.
+cpus=4
+cargo_jobs=1
 IFS=',' read -ra YIELD_TO_PATTERNS <<< "${CARGO_CONTAINER_YIELD_TO:-}"
 for pattern in "${YIELD_TO_PATTERNS[@]}"; do
   [ -n "$pattern" ] || continue
   if pgrep -x "$pattern" >/dev/null 2>&1; then
-    echo "note: detected '$pattern' running (via \$CARGO_CONTAINER_YIELD_TO) — stepping down build resources (4 CPUs, low priority) so it keeps priority" >&2
-    cpus=4
-    cpu_shares=256
-    cargo_jobs=4
+    echo "note: detected '$pattern' running (via \$CARGO_CONTAINER_YIELD_TO) — stepping down build resources (2 CPUs) so it keeps priority" >&2
+    cpus=2
+    cargo_jobs=1
     break
   fi
 done
 
-# Forward .env.local (gitignored, per-machine — e.g. TEST_REAL_DOWNLOAD_URL/
-# TEST_REAL_DOWNLOAD_EXPECTED_FILENAME for stream.rs's opt-in real-server test) into the
-# container's environment, since the container otherwise starts with none of the host shell's
-# env vars. `--env-file` accepts the same KEY=VALUE format .env.local already uses.
-#
-# .env.test.local (also gitignored, `.env.*` in .gitignore) is a second, optional file for the
-# same purpose, kept SEPARATE from .env.local specifically for values containing spaces (real
-# archive titles, mostly) — `mise` (which also reads .env.local, for `mise run` tasks) requires
-# such values to be quoted, but podman/docker's own `--env-file` parser does NOT strip quotes the
-# way a shell or mise's dotenv parser does (confirmed live: a quoted value came through with the
-# literal `"` characters still embedded in it), so no single file/quoting-style satisfies both
-# readers at once. Real, copyrighted titles used only by opt-in real-data tests
-# (tankoubon_grouping.rs's LANRURUGI_TEST_TITLE_BRACKETED_HANDLE/_PLAIN_HANDLE etc.) belong here,
-# unquoted; anything mise itself also needs to read stays in .env.local.
+# Forward .env.local (gitignored, per-machine test config) into the container — it otherwise
+# starts with none of the host shell's env vars. .env.test.local is a second, optional file kept
+# separate for values containing spaces: mise's dotenv parser needs those quoted, but podman's
+# `--env-file` parser doesn't strip quotes, so no single file/quoting style satisfies both readers.
 ENV_FILE_ARGS=()
 [ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.local")
 [ -f "$REPO_ROOT/.env.test.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.test.local")
 
-"$CMD" run --rm --network host --memory=8g --memory-swap=8g --cpus="$cpus" --cpu-shares="$cpu_shares" \
+"$CMD" run --rm --network host --cpus="$cpus" \
   -v "$REPO_ROOT":/workspace \
   -v "$REPO_ROOT/.cargo-target":/workspace/target \
   -v "$REPO_ROOT/.cargo-registry":/usr/local/cargo/registry \

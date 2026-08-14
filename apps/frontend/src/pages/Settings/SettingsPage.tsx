@@ -11,6 +11,7 @@ import { routes } from "@/lib/routes"
 import { DEFAULT_THEME_ID, FONT_SIZE_SM, THEMES, useApplyTheme, useLegacyConfigCss } from "@/theme"
 import { toast } from "@/toast"
 
+import { ApiTokensSection } from "./ApiTokensSection"
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { SecuritySection } from "./SecuritySection"
@@ -68,7 +69,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [newPassword, setNewPassword] = useState("")
   const [newPassword2, setNewPassword2] = useState("")
   const [nofunmode, setNofunmode] = useState(settings.nofunmode)
-  const [apikey, setApikey] = useState(settings.apikey)
+  const [accessTokenLifetimeSecs, setAccessTokenLifetimeSecs] = useState(settings.access_token_lifetime_secs)
+  const [refreshTokenLifetimeSecs, setRefreshTokenLifetimeSecs] = useState(settings.refresh_token_lifetime_secs)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
@@ -102,7 +104,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       authprogress !== settings.authprogress ||
       enablepass !== settings.enablepass ||
       nofunmode !== settings.nofunmode ||
-      apikey !== settings.apikey ||
+      accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
+      refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
       replacedupe !== settings.replacedupe ||
@@ -119,7 +122,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recommendprecision !== settings.recommendprecision,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
-      localprogress, authprogress, enablepass, nofunmode, apikey, enablecors, tempmaxsize,
+      localprogress, authprogress, enablepass, nofunmode, accessTokenLifetimeSecs,
+      refreshTokenLifetimeSecs, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings,
@@ -148,7 +152,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       authprogress,
       enablepass,
       nofunmode,
-      apikey,
+      access_token_lifetime_secs: accessTokenLifetimeSecs,
+      refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
       enablecors,
       tempmaxsize,
       replacedupe,
@@ -319,11 +324,15 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setNewPassword2={setNewPassword2}
             nofunmode={nofunmode}
             setNofunmode={setNofunmode}
-            apikey={apikey}
-            setApikey={setApikey}
+            accessTokenLifetimeSecs={accessTokenLifetimeSecs}
+            setAccessTokenLifetimeSecs={setAccessTokenLifetimeSecs}
+            refreshTokenLifetimeSecs={refreshTokenLifetimeSecs}
+            setRefreshTokenLifetimeSecs={setRefreshTokenLifetimeSecs}
             enablecors={enablecors}
             setEnablecors={setEnablecors}
           />
+
+          <ApiTokensSection />
 
           <ArchiveFilesSection
             tempmaxsize={tempmaxsize}

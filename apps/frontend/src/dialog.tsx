@@ -196,6 +196,11 @@ type DialogRequest =
       defaultRect: StampRect | null
       resolve: (value: StampEditorResult | null) => void
     }
+  | {
+      kind: "info"
+      message: ReactNode
+      resolve: () => void
+    }
 
 let currentRequest: DialogRequest | null = null
 let listeners: (() => void)[] = []
@@ -222,6 +227,16 @@ export function promptDialog(message: string, defaultValue = ""): Promise<string
 export function confirmDialog(message: ReactNode, danger = false): Promise<boolean> {
   return new Promise((resolve) => {
     setRequest({ kind: "confirm", message, danger, resolve })
+  })
+}
+
+/** A single-button acknowledgement dialog — for content that must be shown once and can never be
+ *  recovered afterward if dismissed without reading (e.g. a freshly-issued API token's raw value,
+ *  `ApiTokensSection.tsx`), where a plain `toast()` isn't insistent enough and `confirmDialog`'s
+ *  Cancel/OK pair implies a real decision rather than "acknowledge and move on." */
+export function infoDialog(message: ReactNode): Promise<void> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "info", message, resolve: () => resolve() })
   })
 }
 
@@ -1402,6 +1417,12 @@ export function DialogHost() {
     close()
   }
 
+  function acknowledgeInfo() {
+    if (request?.kind !== "info") return
+    request.resolve()
+    close()
+  }
+
   if (request.kind === "newCategory") {
     return createPortal(
       <>
@@ -1459,6 +1480,41 @@ export function DialogHost() {
             onSubmit={submitRenameArchive}
             onCancel={cancelRenameArchive}
           />
+        </div>
+      </>,
+      document.body,
+    )
+  }
+
+  if (request.kind === "info") {
+    return createPortal(
+      <>
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={acknowledgeInfo} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="swal2-popup"
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: Z_OVERLAY_CONTENT,
+            display: "block",
+            width: 420,
+            padding: 20,
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" || e.key === "Enter") acknowledgeInfo()
+          }}
+        >
+          <div style={{ margin: "0 0 12px" }}>{request.message}</div>
+          <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+            <input type="button" className="stdbtn" value={t("OK") ?? "OK"} onClick={acknowledgeInfo} autoFocus />
+          </div>
         </div>
       </>,
       document.body,

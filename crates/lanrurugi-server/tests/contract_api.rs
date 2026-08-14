@@ -42,13 +42,19 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = std::sync::Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = std::sync::Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
     let state = AppState {
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
@@ -85,8 +91,23 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
-    Some((lanrurugi_server::app::build_app(state, None, None), redis))
+    // `MockConnectInfo` — `require_api_key` extracts `ConnectInfo<SocketAddr>` unconditionally (for
+    // the API-token last-used-IP field), which is normally supplied by
+    // `into_make_service_with_connect_info` at the real `axum::serve` call site; `.oneshot()`-based
+    // tests never go through that, so without this layer every request 500s on the missing
+    // extension before `enable_pass` is even checked. See axum's own `ConnectInfo` docs for this
+    // exact pattern.
+    let app = lanrurugi_server::app::build_app(state, None, None).layer(
+        axum::extract::connect_info::MockConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))),
+    );
+    Some((app, redis))
 }
 
 async fn get_json(app: &axum::Router, uri: &str) -> (axum::http::StatusCode, Value) {
@@ -298,13 +319,19 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = std::sync::Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = std::sync::Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
     let state = AppState {
         redis,
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
@@ -341,6 +368,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -356,7 +386,10 @@ async fn static_frontend_is_served_with_spa_fallback() {
     )
     .unwrap();
 
-    let app = lanrurugi_server::app::build_app(state, Some(static_dir.path().to_path_buf()), None);
+    let app = lanrurugi_server::app::build_app(state, Some(static_dir.path().to_path_buf()), None)
+        .layer(axum::extract::connect_info::MockConnectInfo(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        ));
 
     let get = |uri: &'static str| {
         let app = app.clone();
@@ -431,13 +464,19 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = std::sync::Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = std::sync::Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
     let state = AppState {
         redis,
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
@@ -474,6 +513,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -493,7 +535,10 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         state,
         Some(static_dir.path().to_path_buf()),
         Some(docs_dir.path().to_path_buf()),
-    );
+    )
+    .layer(axum::extract::connect_info::MockConnectInfo(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+    ));
 
     let get = |uri: &'static str| {
         let app = app.clone();
@@ -622,6 +667,12 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = std::sync::Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = std::sync::Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
 
     let library_dir = tempfile::tempdir().unwrap();
     let subfolder = library_dir.path().join("My Series");
@@ -659,8 +710,8 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            api_key: String::new(),
             enable_pass: false,
+            force_secure_cookies: false,
         },
         library: LibraryPaths {
             archive_dir: library_dir.path().to_path_buf(),
@@ -697,8 +748,16 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         download_cancellations: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
-    let app = lanrurugi_server::app::build_app(state, None, None);
+    let app = lanrurugi_server::app::build_app(state, None, None).layer(
+        axum::extract::connect_info::MockConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))),
+    );
 
     let response = app
         .clone()

@@ -94,6 +94,12 @@ continue to work against LANrurugi without modification.
 - New, LANrurugi-only functionality MAY freely add new endpoints; this principle constrains
   changes to *existing* endpoints only.
 
+(Note, added pre-release: this project has deliberately broken this principle's API-key
+authentication-semantics clause ahead of its 1.0 release — legacy's Bearer-base64(apikey)/`?key=`
+mechanisms were removed in favor of a first-party token system; third-party clients relying on
+that legacy auth scheme are no longer guaranteed to work without modification. Endpoint
+shapes/paths themselves are unaffected.)
+
 ### III. Resource-Conscious, Genuinely Concurrent Single-Process Architecture
 
 A primary motivation for this rewrite is lower idle resource usage and a simpler deployment

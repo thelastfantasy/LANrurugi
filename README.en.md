@@ -204,6 +204,23 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
   likely belong to the same series (local embedding model only, no LLM key required).
 
+### Authentication
+
+- **JWT short-lived access tokens + rotating refresh tokens, replacing a fixed 24-hour session.**
+  Login state is now backed by a real JWT (HS256) access token (short-lived) paired with a
+  revocable, single-use refresh token (OAuth 2.1-style rotation with reuse detection — replaying an
+  already-rotated refresh token burns the whole token family); the frontend transparently refreshes
+  an expired access token without forcing re-login. Both lifetimes are configurable on the Settings
+  page.
+- **A first-party API token management system, replacing legacy's single shared `apikey`.**
+  Legacy's "one fixed apikey string for the whole instance" is replaced by a real multi-token system
+  manageable from the Settings page — create, rename, and revoke named tokens, each with an Admin
+  (full access except token management, account security, and database deletion) or Guest
+  (read-only) role and an optional expiry, with the raw token shown exactly once at creation time.
+  This is a deliberate pre-release breaking change: third-party clients relying on legacy's
+  `Bearer base64(apikey)` / `?key=` mechanism are no longer guaranteed to work without modification
+  (see the API-contract-fidelity note below).
+
 ### Testing infrastructure
 
 - **A two-layer automated test suite that Phase 1 shipped without.** Vitest + React Testing
@@ -233,8 +250,13 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   is the size-aware *input*, not the hash primitive itself.
 - RAR/7z archives are still handled by shelling out to `unrar`/`7z`, matching legacy's own
   pragmatic approach, not reimplemented from scratch.
-- The REST API contract is derived directly from legacy's own OpenAPI spec, additive-only — the
-  explicit goal is *not breaking existing third-party clients*, not a redesigned API.
+- The REST API contract is derived directly from legacy's own OpenAPI spec, additive-only —
+  endpoint shapes/paths themselves are unaffected, and the explicit goal is *not a redesigned API*.
+  **The one deliberate exception is authentication itself**: legacy's `Bearer base64(apikey)` /
+  `?key=` scheme was intentionally replaced pre-release by the JWT + API token system described
+  above — the one deliberate departure from the "preserve API contract compatibility" principle
+  (see the corresponding note at the end of that principle in
+  `.specify/memory/constitution.md`).
 - The search engine is a direct port of legacy's Redis-based model (sorted sets, tag filtering),
   not a new search technology — parity was the actual goal here, evaluated and confirmed sufficient
   at this project's target scale.

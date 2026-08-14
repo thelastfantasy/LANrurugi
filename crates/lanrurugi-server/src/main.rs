@@ -81,14 +81,18 @@ struct ServeArgs {
     #[arg(long, env = "LANRURUGI_BIND", default_value = "0.0.0.0:3000")]
     bind: String,
 
-    /// Raw (non-base64) API key. Empty disables key-based auth entirely if `--no-pass` is also
-    /// set; otherwise API requests without a matching key are rejected once a key is configured.
-    #[arg(long, env = "LANRURUGI_API_KEY", default_value = "")]
-    api_key: String,
-
-    /// Disables password/API-key protection entirely (matches legacy `enable_pass = 0`).
+    /// Disables password/token protection entirely (matches legacy `enable_pass = 0`).
     #[arg(long, env = "LANRURUGI_NO_PASS", default_value_t = false)]
     no_pass: bool,
+
+    /// Appends `; Secure` to both auth cookies (JWT access token + refresh token) — only enable
+    /// this once actually deployed behind HTTPS (a browser silently drops a `Secure` cookie over
+    /// plain HTTP, breaking login entirely for local dev if left on by default). Not inferred
+    /// from `X-Forwarded-Proto`: this app has no trusted-proxy allowlist to validate that header
+    /// against, so trusting it here would let a request forge its way past a security-relevant
+    /// cookie flag.
+    #[arg(long, env = "LANRURUGI_FORCE_SECURE_COOKIES", default_value_t = false)]
+    force_secure_cookies: bool,
 
     /// Disables the file watcher on startup (it can still be started later via `/shinobu/restart`).
     #[arg(long, env = "LANRURUGI_NO_WATCH", default_value_t = false)]
@@ -283,6 +287,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let compare_cache = Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let refresh_tokens = Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -336,8 +346,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         repos: repos.clone(),
         jobs: jobs.clone(),
         auth: AuthConfig {
-            api_key: args.api_key,
             enable_pass: !args.no_pass,
+            force_secure_cookies: args.force_secure_cookies,
         },
         library: LibraryPaths {
             archive_dir: args.library_path.clone(),
@@ -370,6 +380,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         download_cancellations: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
     };
 
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of
@@ -681,7 +694,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     tracing::info!(bind = %args.bind, "lanrurugi serve listening");
-    axum::serve(listener, app).await?;
+    // `with_connect_info` — needed so `middleware::auth`'s API-token last-used-IP extraction can
+    // fall back to the raw peer address when `X-Forwarded-For` is absent (a direct connection,
+    // not behind a reverse proxy). See that extraction helper's own docs on why this is
+    // display-only, never a security decision.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
