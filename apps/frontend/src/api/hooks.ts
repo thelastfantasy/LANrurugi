@@ -1077,7 +1077,12 @@ export function useClearFinishedJobs() {
 // docs. Live updates arrive over SSE (`GET /download_queue/stream`), not polling — see
 // `useDownloadQueue`'s own EventSource wiring below.
 
-/** Partial fields an `update` delta carries — set-if-present merged over the existing item. */
+/** Partial fields an `update` delta carries — set-if-present merged over the existing item.
+ * Flat on the event itself (not nested under an `item` key) because every backend broadcast site
+ * (`update_queue_item_state` in `plugins.rs`, the `update`-kind sends in `download_queue.rs`)
+ * spreads these directly onto the JSON object alongside `kind` — unlike the `add` case below,
+ * whose payload really is the *whole* record under `item` (a freshly created queue entry, not a
+ * partial patch). */
 interface DownloadQueueItemPatch {
   id: string
   state?: DownloadQueueItem["state"]
@@ -1090,7 +1095,7 @@ interface DownloadQueueItemPatch {
 
 /** The `delta` event payload — `kind` decides how the client folds it into the cached list. */
 type DownloadQueueDelta =
-  | { kind: "update"; item: DownloadQueueItemPatch }
+  | ({ kind: "update" } & DownloadQueueItemPatch)
   | { kind: "add"; item: DownloadQueueItem }
   | { kind: "remove"; id: string }
 
@@ -1127,9 +1132,11 @@ export function useDownloadQueue() {
         if (!old) return old
         let items = old.items
         switch (data.kind) {
-          case "update":
-            items = items.map((it) => (it.id === data.item.id ? { ...it, ...data.item } : it))
+          case "update": {
+            const { type: _type, kind: _kind, ...patch } = data
+            items = items.map((it) => (it.id === patch.id ? { ...it, ...patch } : it))
             break
+          }
           case "add":
             // Append unless the id is somehow already present (e.g. the `full` bootstrap
             // raced ahead of this delta) — a replace then, never a duplicate row.

@@ -294,7 +294,14 @@ export interface JobsResponse {
 // mirrors `lanrurugi_storage::download_queue::DownloadQueueItem` field-for-field. Backed by
 // Redis so a queued/in-progress item survives a page refresh or a different browser tab; the
 // actual download itself is a `JobRecord` (`job_id` below links the two once started).
-export type DownloadQueueState = "queued" | "starting" | "downloading" | "done" | "error" | "cancelled"
+export type DownloadQueueState =
+  | "queued"
+  | "starting"
+  | "waiting"
+  | "downloading"
+  | "done"
+  | "error"
+  | "cancelled"
 
 /** An interpolation value in a `QueueError`'s `data` map — mirrors
  * `lanrurugi_core::queue_error::PluginErrorValue`'s untagged `String | Number` union. */

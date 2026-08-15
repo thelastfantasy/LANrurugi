@@ -238,7 +238,9 @@ export function QueueItemRow({
               padding: "2px 6px",
             }}
           >
-            {item.state === "downloading" || item.state === "starting" ? (
+            {item.state === "downloading" ||
+            item.state === "starting" ||
+            item.state === "waiting" ? (
               <>
                 <span
                   style={{
@@ -251,7 +253,11 @@ export function QueueItemRow({
                 >
                   {item.title ?? item.url}
                 </span>
-                {job ? (
+                {item.state === "waiting" ? (
+                  <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
+                    {t("upload.waiting")}
+                  </div>
+                ) : job ? (
                   job.rate_limit_bytes_per_sec != null &&
                   job.rate_limit_bytes_per_sec > 0 ? (
                     <RateLimitedProgressBar
@@ -435,6 +441,7 @@ export function QueueItemRow({
             )}
           </>
         ) : isLocalUpload ? null : item.state === "starting" ||
+          item.state === "waiting" ||
           item.state === "downloading" ? (
           <Tooltip label={t("upload.stop") ?? ""}>
             <button
@@ -491,9 +498,7 @@ export function QueueItemRow({
               type="button"
               className="stdbtn"
               style={ICON_BUTTON_STYLE}
-              disabled={
-                !metadataPlugin || item.state === "done" || fetchMetadata.isPending
-              }
+              disabled={!metadataPlugin || fetchMetadata.isPending}
               onClick={() => void handleFetchMetadata()}
             >
               <i
@@ -514,6 +519,7 @@ export function QueueItemRow({
             disabled={
               del.isPending ||
               item.state === "starting" ||
+              item.state === "waiting" ||
               item.state === "downloading"
             }
             onClick={() => void del.mutateAsync(item.id)}

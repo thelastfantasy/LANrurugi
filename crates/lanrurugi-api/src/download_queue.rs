@@ -89,13 +89,24 @@ async fn queue_stream(State(state): State<AppState>) -> Response {
         let queue_repo = queue_repo.clone();
         async move {
             match result {
-                Ok(event) => {
-                    let sse_event: Event = Event::default().event("delta").data(
-                        serde_json::to_string(
-                            &serde_json::json!({ "type": "delta", "item": event }),
-                        )
-                        .unwrap_or_default(),
-                    );
+                Ok(mut event) => {
+                    // `event` is already the flat `{ "kind": "update"/"add"/"remove", "id"/"item":
+                    // ..., ... }` object every broadcast site (`update_queue_item_state`, the
+                    // `add`/`remove` sites in this file and `upload.rs`) sends — the frontend's
+                    // `DownloadQueueDelta` type reads `data.kind`/`data.item`/`data.id` at the
+                    // *top* level (see `useDownloadQueue`'s SSE handler), so `type` must be merged
+                    // into this same object, not wrapped around it in a new `item` key. Wrapping
+                    // it (the previous shape here) put `kind` at `event.item.kind` instead of
+                    // `event.kind`, so `switch (data.kind)` never matched any real case and every
+                    // delta was silently dropped until the next `full` refetch — confirmed live: a
+                    // metadata-preview update landed in Redis and broadcast correctly, but the
+                    // Upload page's tooltip/title never updated without a manual page reload.
+                    if let serde_json::Value::Object(ref mut map) = event {
+                        map.insert("type".to_string(), serde_json::json!("delta"));
+                    }
+                    let sse_event: Event = Event::default()
+                        .event("delta")
+                        .data(serde_json::to_string(&event).unwrap_or_default());
                     Some(Ok::<_, std::convert::Infallible>(sse_event))
                 }
                 // Client fell behind the broadcast buffer — resend the full list instead of
@@ -562,12 +573,15 @@ fn is_startable(state: DownloadQueueState) -> bool {
     )
 }
 
-/// True while a download-queue item has a live background task actually transferring bytes for
-/// it — see `delete_queue_item`'s own docs for why these two states must not be deletable.
+/// True while a download-queue item has a live background task holding it — either actually
+/// transferring bytes, or blocked waiting for a concurrency permit to do so (`Waiting`) — see
+/// `delete_queue_item`'s own docs for why these states must not be deletable.
 fn is_in_flight(state: DownloadQueueState) -> bool {
     matches!(
         state,
-        DownloadQueueState::Starting | DownloadQueueState::Downloading
+        DownloadQueueState::Starting
+            | DownloadQueueState::Waiting
+            | DownloadQueueState::Downloading
     )
 }
 

@@ -118,10 +118,15 @@ export function Tooltip({
     }
 
     const spaceBelow = window.innerHeight - anchorRect.bottom
+    const spaceAbove = anchorRect.top
     const top =
-      spaceBelow >= bubbleRect.height || anchorRect.top < bubbleRect.height
+      spaceBelow >= bubbleRect.height
         ? anchorRect.bottom + GAP
-        : anchorRect.top - bubbleRect.height - GAP
+        : spaceAbove >= bubbleRect.height
+          ? anchorRect.top - bubbleRect.height - GAP
+          : spaceAbove >= spaceBelow
+            ? anchorRect.top - bubbleRect.height - GAP
+            : anchorRect.bottom + GAP
 
     // Left-aligned to the anchor's own left edge (not centered) — keeps the bubble visually
     // anchored to where the trigger text/icon actually starts.

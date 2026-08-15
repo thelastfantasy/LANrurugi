@@ -170,9 +170,18 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     }
   }
 
+  // Accepts three input shapes (issue report: pasting the full `https://` URL every time is
+  // needless friction when the type+ID is all that's actually used below):
+  //   - a full URL, scheme optional (`https://panda.chaika.moe/archive/25737` or
+  //     `panda.chaika.moe/archive/25737`) — `(?:https?:\/\/)?` makes the scheme itself optional.
+  //   - a bare numeric ID (`25737`) — defaults to `archive` (the type the plugin's own usage
+  //     example/error messages already center on; `gallery` is a different Chaika ID space this
+  //     plugin has no way to disambiguate from a bare number).
   let oneshotarg = lrr_info["arg"] ?? "";
-  if ((match = oneshotarg.match(/https?:\/\/panda\.chaika\.moe\/(gallery|archive)\/([0-9]*)\/?.*/))) {
+  if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
     apply_result(await tags_from_chaika_id(match[1], match[2], addextra, addother, addsource, jpntitle));
+  } else if ((match = oneshotarg.match(/^([0-9]+)$/))) {
+    apply_result(await tags_from_chaika_id("archive", match[1], addextra, addother, addsource, jpntitle));
   } else {
     //        # Try SHA-1 reverse search first
 
@@ -220,7 +229,8 @@ async function search_for_archive(
   let ua = perlCompat.userAgent();
   let res = (await ua.get(URL)).result;
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
-  const galleries = (res.json as { galleries: ChaikaGallery[] }).galleries;
+  const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
+  if (!galleries || galleries.length === 0) return "";
   return parse_chaika_json(galleries[0], addextra, addother, addsource, jpntitle);
 }
 
@@ -234,6 +244,7 @@ async function tags_from_chaika_id(
   jpntitle: string,
 ): Promise<[string, string] | ""> {
   let json = await get_json_from_chaika(type, ID);
+  if (!json) return "";
   return parse_chaika_json(json as ChaikaGallery, addextra, addother, addsource, jpntitle);
 }
 
@@ -246,13 +257,19 @@ async function tags_from_sha1(
   addsource: string,
   jpntitle: string,
 ): Promise<[string, string] | ""> {
-  let json_by_sha1 = await get_json_from_chaika('sha1', sha1);
-  return parse_chaika_json((json_by_sha1 as ChaikaGallery[])[0], addextra, addother, addsource, jpntitle);
+  let json_by_sha1 = await get_json_from_chaika('sha1', sha1) as ChaikaGallery[] | undefined;
+  if (!json_by_sha1 || json_by_sha1.length === 0) return "";
+  return parse_chaika_json(json_by_sha1[0], addextra, addother, addsource, jpntitle);
 }
 
 /** Calls Chaika's own jsearch API — `undefined` on an HTTP error response (mirrors legacy's own
- * bare `return;`; every caller passes this straight to `parse_chaika_json` without checking, same
- * as legacy, which would itself just die trying to dereference an undef there). */
+ * bare `return;`). Unlike legacy (which would just die dereferencing an undef further down), every
+ * caller here checks for `undefined`/an empty result and returns `""` (parse_chaika_json's own "no
+ * usable match" sentinel) instead of crashing — a real bug found live: a `sha1`-search miss (a
+ * completely normal "no match" outcome, not an error) reached `parse_chaika_json` unchecked and
+ * threw `Cannot read properties of undefined (reading 'tags')`, aborting the whole metadata fetch
+ * instead of falling through to the text-search fallback `execMetadata` already has for exactly
+ * this case. */
 async function get_json_from_chaika(type: string, value: string): Promise<unknown> {
   let logger = perlCompat.getLogger("Chaika.moe", "plugins");
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;

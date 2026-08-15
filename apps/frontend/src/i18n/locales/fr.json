@@ -533,5 +533,6 @@
   "upload.ratelimitedToLimitS": "Rate-limited to {{limit}}/s",
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
-  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart, please retry"
+  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
+  "upload.waiting": "Waiting…"
 }

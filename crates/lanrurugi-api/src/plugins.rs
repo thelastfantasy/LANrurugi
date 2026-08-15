@@ -1569,11 +1569,19 @@ pub(crate) async fn start_download(
         (async move {
             jobs.mark_active(&job_id_for_task).await;
             if let Some((repo, item_id)) = &queue_link {
+                // `Waiting`, not `Downloading` — this covers everything from here through the
+                // plugin's own `exec_download` call (resolving the real download URL(s)) up to
+                // the moment `run_managed_downloads` actually acquires a per-domain concurrency
+                // permit for the first resource, which is the only point real bytes start moving.
+                // `run_managed_downloads` itself transitions to `Downloading` once that permit is
+                // in hand (see its own docs) — previously this was set to `Downloading` far too
+                // early, before `DownloadManager::acquire` even ran, so a download stuck waiting
+                // on a busy domain's semaphore looked identical to one actually transferring bytes.
                 update_queue_item_state(
                     repo,
                     state_for_task.download_queue_tx.as_ref(),
                     item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
                     Some(job_id_for_task.clone()),
                     None,
                     None,
@@ -1687,6 +1695,7 @@ pub(crate) async fn start_download(
                     &source_url,
                     &cancel_for_task,
                     queue_item_id_for_task.as_deref(),
+                    queue_link.clone(),
                 )
                 .await
                 {
@@ -2008,11 +2017,29 @@ pub(crate) async fn ensure_metadata_cached(
         }
     }
 
-    let (plugin_ns, _info) = find_matching_plugin(state, &metadata_ns, &item.url).await?;
-    let args = serde_json::json!({ "url": item.url });
+    let (plugin_ns, info) = find_matching_plugin(state, &metadata_ns, &item.url).await?;
+    // Mirrors the shape `run_enabled_metadata_plugins_on_archive` builds for the same
+    // `execMetadata` contract (`ExecMetadataInfo` in the converted plugins — see
+    // `metadata/chaika.ts`'s own `let [addextra, ...] = lrr_info.customargs` destructure, which
+    // crashes with "undefined is not iterable" on anything short of a real array here). Passing
+    // only `{ "url": item.url }` (the previous shape) meant every converted metadata plugin's own
+    // `customargs`/`arg` reads saw `undefined` — this queue item has no archive yet, so there's no
+    // `existing_tags`/`archive_title`/`thumbnail_hash` to offer; `arg: item.url` is what lets a
+    // plugin's own URL-vs-ID parsing (e.g. chaika.ts's oneshot-arg regex) actually run instead of
+    // falling through to a lookup path that also expects fields this pre-archive stage can't
+    // supply.
+    let customargs = get_plugin_customargs(state, &plugin_ns, info.parameters.len()).await;
+    let args = serde_json::json!({
+        "url": item.url,
+        "arg": item.url,
+        "customargs": customargs,
+        "existing_tags": "",
+        "archive_title": "",
+        "thumbnail_hash": "",
+    });
     let result = state
         .plugins
-        .execute(&plugin_ns, "execMetadata", args)
+        .execute(&plugin_ns, "exec_metadata", args)
         .await
         .ok()?;
 
@@ -2127,6 +2154,10 @@ async fn run_managed_downloads(
     source_url: &str,
     cancel: &tokio_util::sync::CancellationToken,
     queue_item_id: Option<&str>,
+    queue_link: Option<(
+        Arc<lanrurugi_storage::download_queue::DownloadQueueRepository>,
+        String,
+    )>,
 ) -> Result<Vec<String>, lanrurugi_core::queue_error::QueueError> {
     let manager = download_manager_for(&state, &plugin_namespace).await;
     let declared = fetch_declared_options(&state, &plugin_namespace)
@@ -2210,6 +2241,16 @@ async fn run_managed_downloads(
     // were the real total.
     let mut known_totals: Vec<Option<u64>> = vec![None; resource_count];
 
+    // Flips the queue item from `Waiting` to `Downloading` the instant the *first* resource's
+    // concurrency permit is acquired — not before (that's still `Waiting`, however long a busy
+    // domain's semaphore takes to free up) and not again for subsequent resources in a
+    // multi-resource job (a second/third resource's own wait for its own permit is real, but the
+    // job as a whole already has bytes moving by then, so it must stay `Downloading`, not revert
+    // to `Waiting`). `AtomicBool` rather than a plain `bool` captured by value only because the
+    // callback closure passed to `download_one` is `Fn`, not `FnMut` (it must be callable through
+    // a shared `&dyn Fn()`, per that function's signature).
+    let downloading_state_set = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     let mut downloaded_files = Vec::new();
     for (index, req) in downloads.into_iter().enumerate() {
         let stream_req = StreamDownloadRequest {
@@ -2240,6 +2281,49 @@ async fn run_managed_downloads(
             known_totals
         });
 
+        let on_permit_acquired = {
+            let queue_link = queue_link.clone();
+            let state = state.clone();
+            let job_id = job_id.clone();
+            let downloading_state_set = downloading_state_set.clone();
+            move || {
+                if downloading_state_set.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let Some((repo, item_id)) = queue_link.clone() else {
+                    return;
+                };
+                let state = state.clone();
+                let job_id = job_id.clone();
+                // `download_one` calls this synchronously (not `.await`-able — see its own
+                // signature), so the actual Redis write is spawned off rather than blocking the
+                // transfer's own progress; a queue item with no `queue_link` (a one-off,
+                // non-queue-tracked download, if any caller ever uses that path) has nothing to
+                // update and just no-ops above.
+                tokio::spawn(async move {
+                    update_queue_item_state(
+                        &repo,
+                        state.download_queue_tx.as_ref(),
+                        &item_id,
+                        lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
+                        Some(job_id),
+                        None,
+                        None,
+                    )
+                    .await;
+                });
+            }
+        };
+
+        // Stable across a retry of the *same* queue item/resource (a Stop-then-Start, a crash, or
+        // a container restart all reuse the same `queue_item_id` and the same `index` within this
+        // job's own `downloads[]`) — exactly what `download_one`'s own `resume_key` docs need to
+        // find a previous attempt's partial file again (issue #88). `None` when this download
+        // isn't queue-tracked at all (`queue_item_id` is `None` for a one-off, non-queue-tracked
+        // caller, if any ever uses this path) — nothing to resume across since there's no stable
+        // identity to key a `.part` file off of.
+        let resume_key = queue_item_id.map(|id| format!("{id}-{index}"));
+
         let downloaded_result = download_one(
             &manager,
             &rules,
@@ -2248,6 +2332,8 @@ async fn run_managed_downloads(
             progress_tx,
             &state.library.temp_dir,
             cancel,
+            &on_permit_acquired,
+            resume_key.as_deref(),
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
@@ -2536,6 +2622,332 @@ mod tests {
         assert_eq!(field, "domain_rules[1].max_bytes_per_sec");
     }
 
+    /// Builds a minimal but real `AppState` against `LANRURUGI_TEST_REDIS_URL` — same pattern as
+    /// `lanrurugi-server/tests/contract_api.rs::test_app`, trimmed to just the fields
+    /// `run_managed_downloads` actually touches (no scanner/plugin-pool/recommender wiring, since
+    /// this test never touches a real plugin subprocess — it drives `run_managed_downloads`
+    /// directly with an already-parsed `downloads[]`, the same way `start_download` would after a
+    /// real plugin's `exec_download` call returns).
+    async fn test_state() -> Option<AppState> {
+        let redis_url = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
+        let redis = lanrurugi_storage::redis::RedisDbs::connect(&redis_url).ok()?;
+        let repos = crate::Repositories::new(&redis);
+        Some(AppState {
+            redis: redis.clone(),
+            repos,
+            jobs: lanrurugi_core::jobs::JobRegistry::new(),
+            auth: crate::AuthConfig {
+                enable_pass: false,
+                force_secure_cookies: false,
+            },
+            library: crate::LibraryPaths {
+                archive_dir: std::env::temp_dir(),
+                thumb_dir: std::env::temp_dir(),
+                temp_dir: std::env::temp_dir(),
+                log_dir: None,
+            },
+            scanner: lanrurugi_scanner::handle::ScannerHandle::new(),
+            plugins: Arc::new(lanrurugi_plugin::pool::PluginPool::new(
+                "deno",
+                std::path::PathBuf::from("/tmp/dispatcher.ts"),
+                std::path::PathBuf::from("/tmp/plugins"),
+            )),
+            plugins_dir: std::path::PathBuf::from("/tmp/plugins"),
+            download_managers: Default::default(),
+            thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(2)),
+            page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(2)),
+            plugin_options: Arc::new(lanrurugi_storage::plugin_options::PluginOptionsRepository::new(
+                redis.config.clone(),
+            )),
+            plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            download_queue: Arc::new(lanrurugi_storage::download_queue::DownloadQueueRepository::new(
+                redis.config.clone(),
+            )),
+            recommend_cache: Arc::new(lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(
+                redis.config.clone(),
+            )),
+            ignored_group_suggestions: Arc::new(
+                lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
+                    redis.config.clone(),
+                ),
+            ),
+            compare_cache: Arc::new(lanrurugi_storage::compare_cache::CompareCacheRepository::new(
+                redis.config.clone(),
+            )),
+            recommender: Arc::new(crate::recommend::RecommendService::new()),
+            new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+            download_cancellations: Default::default(),
+            filename_locks: Default::default(),
+            download_queue_tx: None,
+            refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
+                redis.config.clone(),
+            )),
+            api_tokens: Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+                redis.config.clone(),
+            )),
+            api_token_last_touch: Default::default(),
+        })
+    }
+
+    /// Real regression test for the `Waiting` → `Downloading` queue-state transition (this
+    /// session's own feature: a download blocked on a busy domain's concurrency permit must show
+    /// as `Waiting`, not `Downloading`, until it actually has a permit and bytes start moving —
+    /// previously `start_download` set `Downloading` at task-spawn time, before
+    /// `DownloadManager::acquire` ever ran, so a download queued behind a busy `max_concurrent: 1`
+    /// domain rule looked identical to one actually transferring bytes).
+    ///
+    /// Runs two independent single-resource downloads (two separate queue items, same plugin
+    /// namespace) against one real local HTTP server, with a domain rule capping that server's
+    /// host to `max_concurrent: 1` (the same shape as the real `chaika.ts`'s own
+    /// `*.chaika.moe` rule) — the first response is held open until the test explicitly releases
+    /// it, guaranteeing the second `run_managed_downloads` call is genuinely blocked on
+    /// `DownloadManager::acquire` (not just fast enough to race past it) when this test inspects
+    /// its queue item's state.
+    #[tokio::test]
+    async fn waiting_state_is_set_while_blocked_on_a_busy_domain_permit() {
+        let Some(state) = test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+
+        let hold_first = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release_first = std::sync::Arc::new(tokio::sync::Notify::new());
+        let hold_first_srv = hold_first.clone();
+        let release_first_srv = release_first.clone();
+        // Unique filenames (not just unique bodies) every run — `ingest_downloaded_file` rejects
+        // both a content-hash duplicate *and* a same-filename-in-the-same-dir collision, and the
+        // shared dev-image content dir (`archive_dir` in `test_state` is a plain `std::env::
+        // temp_dir()`, not a per-run scratch directory) persists whatever a previous run of this
+        // test already cataloged there.
+        let run_id = uuid::Uuid::new_v4();
+        let first_filename = format!("first-{run_id}.zip");
+        let second_filename = format!("second-{run_id}.zip");
+        let router = axum::Router::new()
+            .route(
+                &format!("/{first_filename}"),
+                axum::routing::get(move || {
+                    let hold_first_srv = hold_first_srv.clone();
+                    let release_first_srv = release_first_srv.clone();
+                    let run_id = run_id;
+                    async move {
+                        hold_first_srv.notify_one();
+                        release_first_srv.notified().await;
+                        format!("first resource body {run_id}").into_bytes()
+                    }
+                }),
+            )
+            .route(
+                &format!("/{second_filename}"),
+                axum::routing::get(move || async move {
+                    format!("second resource body {run_id}").into_bytes()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        // `DomainRule`/`DownloadManager` resolve purely by hostname string, matched against
+        // `req.url`'s own `host_str()` — the loopback IP address itself (not a symbolic name) is
+        // exactly what that resolves to for a `127.0.0.1`-bound test server.
+        let hostname = addr.ip().to_string();
+
+        // `run_managed_downloads` re-derives its own rules from `fetch_declared_options` (which
+        // will simply come back empty/error for this made-up namespace — no real `.ts` file
+        // backs it) merged with the plugin-options Redis override below. Since the override sets
+        // `domain_rules` to `Some(...)`, `resolve_domain_rules` uses it unconditionally
+        // (`settings.rs`'s own docs: override always wins when present), so this exercises the
+        // exact same production code path a real plugin's declared `pluginOptions()` would.
+        let plugin_namespace = format!("test/waiting-state-{}", uuid::Uuid::new_v4());
+        state
+            .plugin_options
+            .save(
+                &plugin_namespace,
+                &lanrurugi_storage::plugin_options::PluginOptionsOverride {
+                    domain_rules: Some(vec![
+                        lanrurugi_storage::plugin_options::DomainRuleOverride {
+                            pattern: Some(hostname.clone()),
+                            max_concurrent: Some(1),
+                            max_bytes_per_sec: None,
+                        },
+                    ]),
+                    bundle_as_archive: None,
+                    overwrite_on_duplicate: None,
+                },
+            )
+            .await
+            .expect("failed to persist the test's own domain-rule override");
+
+        async fn make_queue_item(
+            state: &AppState,
+            plugin_namespace: &str,
+            url: String,
+        ) -> lanrurugi_storage::download_queue::DownloadQueueItem {
+            state
+                .download_queue
+                .add(lanrurugi_storage::download_queue::NewQueueItem {
+                    origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                    url,
+                    plugin_namespace: plugin_namespace.to_string(),
+                    file_size: None,
+                    category: None,
+                    auto_fetch_metadata: false,
+                    overwrite_on_duplicate: false,
+                    state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+                })
+                .await
+                .expect("failed to create a test queue item")
+        }
+
+        let first_item = make_queue_item(
+            &state,
+            &plugin_namespace,
+            format!("http://{addr}/{first_filename}"),
+        )
+        .await;
+        let second_item = make_queue_item(
+            &state,
+            &plugin_namespace,
+            format!("http://{addr}/{second_filename}"),
+        )
+        .await;
+        // Mirrors what `start_download` itself does before ever calling `run_managed_downloads`
+        // (see that function's own docs) — this test calls `run_managed_downloads` directly
+        // (skipping the plugin-subprocess `exec_download` call `start_download` would normally
+        // make in between), so it must set this initial `Waiting` transition itself to accurately
+        // reproduce the real state machine `run_managed_downloads` expects to already be in.
+        for item in [&first_item, &second_item] {
+            update_queue_item_state(
+                &state.download_queue,
+                None,
+                &item.id,
+                lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                None,
+                None,
+                None,
+            )
+            .await;
+        }
+
+        async fn spawn_run(
+            state: &AppState,
+            plugin_namespace: &str,
+            addr: std::net::SocketAddr,
+            path: &str,
+            item_id: String,
+        ) -> tokio::task::JoinHandle<Result<Vec<String>, lanrurugi_core::queue_error::QueueError>>
+        {
+            let downloads = vec![DownloadRequestJson {
+                url: format!("http://{addr}{path}"),
+                method: None,
+                headers: Default::default(),
+                filename_hint: Some(path.trim_start_matches('/').to_string()),
+            }];
+            let job_id = state.jobs.create("download_url").await;
+            let state = state.clone();
+            let plugin_namespace = plugin_namespace.to_string();
+            let queue_link = Some((state.download_queue.clone(), item_id.clone()));
+            tokio::spawn(async move {
+                let cancel = tokio_util::sync::CancellationToken::new();
+                run_managed_downloads(
+                    state,
+                    plugin_namespace,
+                    downloads,
+                    job_id,
+                    None,
+                    false,
+                    "http://example.com/source",
+                    &cancel,
+                    Some(item_id.as_str()),
+                    queue_link,
+                )
+                .await
+            })
+        }
+
+        let first_task = spawn_run(
+            &state,
+            &plugin_namespace,
+            addr,
+            &format!("/{first_filename}"),
+            first_item.id.clone(),
+        )
+        .await;
+        // Wait for the first resource's own handler to actually start — proves the first (and
+        // only) permit was really acquired and that transfer is genuinely in flight, not just
+        // scheduled.
+        hold_first.notified().await;
+
+        let second_task = spawn_run(
+            &state,
+            &plugin_namespace,
+            addr,
+            &format!("/{second_filename}"),
+            second_item.id.clone(),
+        )
+        .await;
+        // Give the second task's own `run_managed_downloads` a real chance to reach
+        // `DownloadManager::acquire` and start blocking on the exhausted semaphore before this
+        // test inspects its queue state — a fixed short sleep rather than a signal from inside
+        // `acquire` itself, since there's no hook to notify from partway through a blocked
+        // `tokio::select!` without changing production code just for this test.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let first_mid_flight = state
+            .download_queue
+            .get(&first_item.id)
+            .await
+            .expect("redis lookup failed")
+            .expect("first queue item must still exist");
+        assert_eq!(
+            first_mid_flight.state,
+            lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
+            "the first item must be Downloading once its permit is actually held"
+        );
+
+        let second_mid_flight = state
+            .download_queue
+            .get(&second_item.id)
+            .await
+            .expect("redis lookup failed")
+            .expect("second queue item must still exist");
+        assert_eq!(
+            second_mid_flight.state,
+            lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+            "the second item must show Waiting while genuinely blocked on the first item's held \
+             permit — this is the core of this feature: previously it would have already been \
+             set to Downloading at task-spawn time, before ever reaching DownloadManager::acquire"
+        );
+
+        release_first.notify_one();
+        let first_ids = first_task
+            .await
+            .expect("task must not panic")
+            .expect("first resource must download successfully");
+        let second_ids = second_task
+            .await
+            .expect("task must not panic")
+            .expect("second resource must download successfully, now that the permit is free");
+        assert_eq!(first_ids.len(), 1);
+        assert_eq!(second_ids.len(), 1);
+
+        let second_done = state
+            .download_queue
+            .get(&second_item.id)
+            .await
+            .expect("redis lookup failed")
+            .expect("second queue item must still exist");
+        assert_eq!(
+            second_done.state,
+            lanrurugi_storage::download_queue::DownloadQueueState::Downloading,
+            "run_managed_downloads itself only ever advances state up to Downloading — the \
+             transition to Done is start_download's own responsibility (not exercised by this \
+             test, which calls run_managed_downloads directly)"
+        );
+
+        server.abort();
+    }
+
     /// Opt-in, real-server regression test exercising the actual `ehdl` (`plugins/download/
     /// ehentai.ts`) plugin end-to-end through the real Deno dispatcher: logs in via the real
     /// `login/ehentai` plugin (using this machine's own already-configured E-Hentai session
@@ -2687,6 +3099,8 @@ mod tests {
             progress_tx,
             &staging_dir,
             &tokio_util::sync::CancellationToken::new(),
+            &|| {},
+            None,
         )
         .await
         .expect("the real H@H download must succeed");

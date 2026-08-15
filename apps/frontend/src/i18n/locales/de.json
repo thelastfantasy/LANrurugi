@@ -503,6 +503,7 @@
   "Yes, delete it!": "Ja, lösche es!",
   "logs.youCanCheckLanrurugiLogs": "Hier kannst du Logs von LANrurugi zum Debuggen ansehen.",
   "categories.youCanCreateNewCategories": "Hier können neue Kategorien erstellt oder Bestehende verändert werden.",
+  "upload.waiting": "Waiting…",
   "upload.youCanDownloadFilesFrom": "Sie können hier Dateien über URLs direkt mit LANrurugi herunterladen.",
   "You can edit your Tag Rules in Server Configuration.": "Sie können die Tag Regeln in den Servereinstellungen ändern.",
   "reader.youCanNavigateBetweenPages": "Sie können zwischen den Seiten navigieren, indem Sie:",
@@ -523,5 +524,5 @@
   "upload.ratelimitedToLimitS": "Rate-limited to {{limit}}/s",
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
-  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart, please retry"
+  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off"
 }

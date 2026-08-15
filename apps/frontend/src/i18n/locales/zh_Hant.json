@@ -651,6 +651,7 @@
   "settings.youCanBackupYourExisting": "您可以在此備份現有資料庫，或還原現有的備份。",
   "logs.youCanCheckLanrurugiLogs": "您可以在此檢視 LANrurugi 的日誌以進行除錯。",
   "categories.youCanCreateNewCategories": "您可在此建立新分類或編輯現有分類。",
+  "upload.waiting": "Waiting…",
   "upload.youCanDownloadFilesFrom": "您可以在此處直接從遠端 URL 下載檔案至 LANrurugi。",
   "upload.youCanDragAndDrop": "您可以將檔案拖曳進此視窗，或點擊上傳按鈕。",
   "You can edit your Tag Rules in Server Configuration.": "您可以在伺服器設定中編輯標籤規則。",
@@ -682,5 +683,5 @@
   "upload.ratelimitedToLimitS": "已限速：{{limit}}/s",
   "upload.matchedRulePattern": "匹配規則：{{pattern}}",
   "Edit this plugin’s rate-limit settings": "編輯該插件的限速設定",
-  "components.layout.downloadWasInterruptedByA": "下載因伺服器重啟而中斷，請重試"
+  "components.layout.downloadWasInterruptedByA": "下載因伺服器重啟而中斷，重試時會嘗試從斷點繼續"
 }

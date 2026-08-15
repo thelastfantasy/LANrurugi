@@ -604,6 +604,7 @@
   "settings.youCanBackupYourExisting": "여기서 현재 데이터베이스를 백업하거나, 백업한 내용을 복원할 수 있습니다.",
   "logs.youCanCheckLanrurugiLogs": "디버깅 목적으로 LANrurugi 로그를 확인할 수 있습니다.",
   "categories.youCanCreateNewCategories": "여기에서 새 카테고리를 만들거나 생성한 카테고리를 편집할 수 있습니다.",
+  "upload.waiting": "Waiting…",
   "upload.youCanDownloadFilesFrom": "여기에서 LANrurugi에 원격 URL에서 직접 파일을 다운로드할 수 있습니다.",
   "upload.youCanDragAndDrop": "이 창에 파일을 끌어서 놓거나 업로드 버튼을 클릭할 수 있습니다.",
   "You can edit your Tag Rules in Server Configuration.": "서버 설정에서 태그 규칙을 편집할 수 있습니다.",
@@ -629,5 +630,5 @@
   "upload.ratelimitedToLimitS": "Rate-limited to {{limit}}/s",
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
-  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart, please retry"
+  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off"
 }

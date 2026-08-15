@@ -411,6 +411,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 if matches!(
                     item.state,
                     lanrurugi_storage::download_queue::DownloadQueueState::Starting
+                        | lanrurugi_storage::download_queue::DownloadQueueState::Waiting
                         | lanrurugi_storage::download_queue::DownloadQueueState::Downloading
                 ) {
                     item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
@@ -724,6 +725,7 @@ async fn sweep_stale_queue_items(state: &AppState) {
         if !matches!(
             item.state,
             lanrurugi_storage::download_queue::DownloadQueueState::Starting
+                | lanrurugi_storage::download_queue::DownloadQueueState::Waiting
                 | lanrurugi_storage::download_queue::DownloadQueueState::Downloading
         ) {
             continue;

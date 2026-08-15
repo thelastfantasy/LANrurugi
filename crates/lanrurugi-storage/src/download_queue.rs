@@ -33,6 +33,19 @@ type Result<T> = std::result::Result<T, DownloadQueueStorageError>;
 pub enum DownloadQueueState {
     Queued,
     Starting,
+    /// Dispatched to `download_manager::stream::download_one`, but blocked acquiring a
+    /// per-domain concurrency permit (`DownloadManager::acquire`) — a real, distinct phase from
+    /// `Downloading` (no bytes are moving yet, and may not for a while if the domain's
+    /// `max_concurrent` slots are all held by other in-flight downloads). Previously
+    /// indistinguishable from `Downloading` in the UI: the item was marked `Downloading` before
+    /// `acquire` even ran (`plugins.rs`'s `start_download`), so a download stuck waiting on a busy
+    /// domain looked identical to one actually transferring bytes, with a progress bar showing no
+    /// movement and no indication why. Treated the same as `Starting`/`Downloading` by
+    /// `is_in_flight` (a real background task holds this item) but *not* by `is_startable` — this
+    /// is a live in-progress phase, not a resumable rest state; `Stop` targets it via the same
+    /// `CancellationToken` as any other in-flight state, now actually observed while blocked on
+    /// the semaphore (see `DownloadManager::acquire`'s own docs).
+    Waiting,
     Downloading,
     Done,
     Error,

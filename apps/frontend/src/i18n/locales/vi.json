@@ -469,6 +469,7 @@
   "You can apply modifications to multiple archives in one go here.": "Bạn có thể sửa nhiều truyền cùng lúc tại đây.",
   "logs.youCanCheckLanrurugiLogs": "Bạn có thể kiểm tra nhật ký LANrurugi ở đây để phục vụ việc gỡ lỗi.",
   "categories.youCanCreateNewCategories": "Bạn có thể tạo danh mục mới tại đây hoặc sửa danh mục hiện có.",
+  "upload.waiting": "Waiting…",
   "upload.youCanDragAndDrop": "Bạn có thể kéo và thả file vào cửa sổ này hoặc nhấp vào nút tải lên.",
   "You can edit your Tag Rules in Server Configuration.": "Bạn có thể sửa Quy tắc Thẻ trong Cấu hình Máy chủ.",
   "reader.youCanNavigateBetweenPages": "Bạn có thể di chuyển giữa các trang bằng cách:",
@@ -488,5 +489,5 @@
   "upload.ratelimitedToLimitS": "Rate-limited to {{limit}}/s",
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
-  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart, please retry"
+  "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off"
 }

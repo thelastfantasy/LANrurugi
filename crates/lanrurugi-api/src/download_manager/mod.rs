@@ -83,7 +83,22 @@ impl DownloadManager {
     /// in-flight download already acquired from the old `Arc` (each holds its own clone, which
     /// stays valid independently of the map), so a settings change only ever governs downloads
     /// started after it, per FR-016.
-    pub async fn acquire(&self, hostname: &str, rules: &[DomainRule]) -> DownloadPermit {
+    ///
+    /// **Cancel-safe**: races the semaphore acquisition against `cancel` (`tokio::select!`) rather
+    /// than a bare `.await`, so a user pressing Stop while this call is blocked waiting for a busy
+    /// domain's permit actually takes effect immediately — previously `sem.acquire_owned().await`
+    /// ignored `cancel` entirely, so `stop_one` recorded a successful cancellation
+    /// (`CancellationToken::cancel()` itself can't fail) that the caller never actually observed
+    /// until a permit eventually freed up and the rest of `download_one` got a chance to check
+    /// `cancel.is_cancelled()` on its own. Returns `Err(DownloadError::Cancelled)` — the same
+    /// variant every other cancellation point in this pipeline already produces — rather than a
+    /// new error kind, so callers don't need a second cancellation check.
+    pub async fn acquire(
+        &self,
+        hostname: &str,
+        rules: &[DomainRule],
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<DownloadPermit, crate::download_manager::stream::DownloadError> {
         let resolved = resolve(rules, hostname);
         let key = resolved_key(rules, hostname);
 
@@ -105,20 +120,23 @@ impl DownloadManager {
                 }
                 entry.semaphore.clone()
             };
-            Some(
-                sem.acquire_owned()
-                    .await
-                    .expect("semaphore is never closed"),
-            )
+            let acquired = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return Err(crate::download_manager::stream::DownloadError::Cancelled);
+                }
+                permit = sem.acquire_owned() => permit.expect("semaphore is never closed"),
+            };
+            Some(acquired)
         } else {
             None
         };
 
-        DownloadPermit {
+        Ok(DownloadPermit {
             _permit: permit,
             max_bytes_per_sec: resolved.max_bytes_per_sec,
             matched_pattern: key,
-        }
+        })
     }
 
     pub fn rate_limiters(&self) -> &RateLimiterMap {
@@ -140,10 +158,17 @@ mod tests {
         }
     }
 
+    fn no_cancel() -> tokio_util::sync::CancellationToken {
+        tokio_util::sync::CancellationToken::new()
+    }
+
     #[tokio::test]
     async fn no_matching_rule_grants_an_unmanaged_permit_immediately() {
         let mgr = DownloadManager::new();
-        let permit = mgr.acquire("unrelated.com", &[]).await;
+        let permit = mgr
+            .acquire("unrelated.com", &[], &no_cancel())
+            .await
+            .unwrap();
         assert!(permit._permit.is_none());
     }
 
@@ -153,13 +178,17 @@ mod tests {
         let rules = vec![rule("example.com", 1)];
 
         // First permit acquires immediately.
-        let first = mgr.acquire("example.com", &rules).await;
+        let first = mgr
+            .acquire("example.com", &rules, &no_cancel())
+            .await
+            .unwrap();
 
         // A second acquire against the same (capacity-1) domain must not complete until the
         // first is dropped — proven by racing it against a short timeout.
         let mgr2 = mgr.clone();
         let rules2 = rules.clone();
-        let second = tokio::spawn(async move { mgr2.acquire("example.com", &rules2).await });
+        let second =
+            tokio::spawn(async move { mgr2.acquire("example.com", &rules2, &no_cancel()).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
@@ -171,7 +200,8 @@ mod tests {
         let second = tokio::time::timeout(std::time::Duration::from_secs(1), second)
             .await
             .expect("second acquire must complete once the first permit is released")
-            .expect("task must not panic");
+            .expect("task must not panic")
+            .unwrap();
         drop(second);
     }
 
@@ -184,7 +214,10 @@ mod tests {
 
         // Acquire under the narrow (capacity-1) rule and hold it — simulates an in-flight
         // download that started before a settings change.
-        let held = mgr.acquire("example.com", &narrow).await;
+        let held = mgr
+            .acquire("example.com", &narrow, &no_cancel())
+            .await
+            .unwrap();
 
         // A user now changes the setting to allow 5 concurrent downloads (FR-006). Multiple new
         // acquires against the *new* rule set must all succeed without waiting for `held` to be
@@ -194,10 +227,11 @@ mod tests {
         for _ in 0..4 {
             let permit = tokio::time::timeout(
                 std::time::Duration::from_millis(200),
-                mgr.acquire("example.com", &wide),
+                mgr.acquire("example.com", &wide, &no_cancel()),
             )
             .await
-            .expect("new capacity must admit additional concurrent downloads immediately");
+            .expect("new capacity must admit additional concurrent downloads immediately")
+            .unwrap();
             new_permits.push(permit);
         }
 
@@ -214,7 +248,10 @@ mod tests {
             max_bytes_per_sec: Some(1_048_576),
             description: None,
         }];
-        let permit = mgr.acquire("cdn.example.com", &rules).await;
+        let permit = mgr
+            .acquire("cdn.example.com", &rules, &no_cancel())
+            .await
+            .unwrap();
         assert_eq!(permit.matched_pattern, "*.example.com");
         assert_eq!(permit.max_bytes_per_sec, Some(1_048_576));
     }
@@ -222,8 +259,44 @@ mod tests {
     #[tokio::test]
     async fn acquire_returns_asterisk_when_unmanaged() {
         let mgr = DownloadManager::new();
-        let permit = mgr.acquire("unrelated.com", &[]).await;
+        let permit = mgr
+            .acquire("unrelated.com", &[], &no_cancel())
+            .await
+            .unwrap();
         assert_eq!(permit.matched_pattern, "*");
         assert_eq!(permit.max_bytes_per_sec, None);
+    }
+
+    #[tokio::test]
+    async fn acquire_is_cancel_safe_while_waiting_for_a_busy_semaphore() {
+        let mgr = Arc::new(DownloadManager::new());
+        let rules = vec![rule("example.com", 1)];
+
+        // Hold the only permit so a second acquire has to actually wait.
+        let held = mgr
+            .acquire("example.com", &rules, &no_cancel())
+            .await
+            .unwrap();
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mgr2 = mgr.clone();
+        let rules2 = rules.clone();
+        let cancel2 = cancel.clone();
+        let waiting =
+            tokio::spawn(async move { mgr2.acquire("example.com", &rules2, &cancel2).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("a cancelled acquire must return promptly, not wait for the permit")
+            .expect("task must not panic");
+        assert!(matches!(
+            result,
+            Err(crate::download_manager::stream::DownloadError::Cancelled)
+        ));
+
+        drop(held);
     }
 }

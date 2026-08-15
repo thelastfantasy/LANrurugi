@@ -133,11 +133,20 @@ independent/long-horizon addition (→ `m1`)? Assign the milestone at creation t
 
 The dev container (`compose.dev.yaml`) runs the frontend via `vite dev` with `apps/frontend`
 bind-mounted from the host, not a pre-built static bundle — so a pure frontend edit (`.tsx`/`.ts`/
-`.css` under `apps/frontend/`) is picked up by Vite's HMR immediately on save. `mise run
-dev-rebuild && dev-down && dev-up` is only needed when a change touches something baked into the
-image at build time: Rust code (`crates/`), plugin `.ts` files under `plugins/` (copied into the
-image, not bind-mounted), or the Dockerfile/compose files themselves. Don't reflexively rebuild
-after every change — check whether the edit was frontend-only first. This includes
+`.css` under `apps/frontend/`) is picked up by Vite's HMR immediately on save. `plugins/` is
+*also* bind-mounted (`compose.dev.yaml`'s own comment on that line explains why: `discover_
+namespaces` rescans the directory on every request rather than caching it once, and each plugin
+invocation spawns a fresh Deno subprocess that reads the `.ts` file straight off disk with no
+persistent compile cache to invalidate) — so a plugin `.ts` edit (new/changed `pluginInfo()`/
+`pluginOptions()`/`execDownload()`/etc.) also takes effect on the very next plugin call, no
+rebuild needed either. Verified live (2026-08-15): editing `chaika.ts`'s `pluginOptions()` and
+immediately curling `GET /api/plugins/options?namespace=download/chaika` from the running dev
+container returned the new value with zero rebuild step. `mise run dev-rebuild && dev-down &&
+dev-up` is only needed when a change touches something actually baked into the image at build
+time: Rust code (`crates/`), or the Dockerfile/compose files themselves (which also determine
+what ends up bind-mounted vs. baked in, in production the same `plugins/` files *are* baked in
+via `COPY` — this bind-mount-takes-precedence behavior is dev-only). Don't reflexively rebuild
+after every change — check whether the edit was frontend/plugin-only first. This includes
 `apps/frontend/index.html` itself — `vite.config.ts`'s `injectServerTheme` plugin (the dev-mode
 half of the server-side anti-flash-of-default-theme mechanism — see that file's own docs) uses
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as

@@ -68,6 +68,18 @@ export function pluginInfo() {
   };
 }
 
+export function pluginOptions() {
+  return {
+    domain_rules: [
+      {
+        pattern: "*.chaika.moe",
+        max_concurrent: 1,
+        description: "Limit simultaneous downloads from chaika.moe",
+      },
+    ],
+  };
+}
+
 
 export async function execDownload(hostArgs: Record<string, unknown>) {
   {

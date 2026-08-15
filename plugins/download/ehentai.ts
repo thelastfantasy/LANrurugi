@@ -196,10 +196,10 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
     return { error: { error_code: "You do not have enough GP to download this URL." } };
   }
   let finalURL = undefined;
-  let perlError;
+  let parseError;
   try {
     //        # Parse that to get the final URL
-  
+
     // No `/g` flag: with it, `.match()` returns every full-match string instead of the one
     // capture group this code actually needs (`match[1]` would be `undefined` — the converter's
     // own warning on this exact line; verified with a real Deno repro before fixing).
@@ -208,10 +208,10 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
       logger.info(`Final URL obtained: ${finalURL}`);
     }
   } catch (caughtError) {
-    perlError = caughtError;
+    parseError = caughtError;
   }
   let archivesize = params["forceresampled"] ? "a resampled" : "an original size";
-  if (perlError || finalURL === undefined) {
+  if (parseError || finalURL === undefined) {
     return { error: { error_code: "Couldn't proceed with download", data: { archivesize, content } } };
   }
   //    # Set URL query parameters to ?start=1 to automatically trigger the download.
