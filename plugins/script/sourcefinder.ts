@@ -6,35 +6,6 @@
 // including the E-Hentai/ExHentai domain-alias special case) and passes the result in as
 // `hostArgs.existing_archive_id` (see `ScriptHostArgs`'s own docs in `plugin-sdk.ts`).
 
-declare global {
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    getLogger(name: string, category: string): PerlLogger;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "urlfinder",
@@ -52,7 +23,7 @@ export function pluginInfo() {
 
 export async function runScript(hostArgs: Record<string, unknown>) {
   const url = (hostArgs["oneshot_param"] as string | undefined) ?? "";
-  const logger = perlCompat.getLogger("Source Finder", "plugins");
+  const logger = legacyCompat.getLogger("Source Finder", "plugins");
   logger.debug(`Looking for URL ${url}`);
 
   if (url.trim() === "") {

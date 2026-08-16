@@ -220,6 +220,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let dispatcher_path = args.temp_dir.join("dispatcher.ts");
     std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)?;
+    std::fs::write(
+        args.temp_dir.join("plugin-sdk.ts"),
+        lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+    )?;
     let plugins = Arc::new(PluginPool::new(
         args.deno_bin,
         dispatcher_path,

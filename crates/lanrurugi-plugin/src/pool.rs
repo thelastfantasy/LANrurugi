@@ -85,15 +85,28 @@ impl Worker {
         declared_read: bool,
     ) -> Result<Self> {
         let plugin_module = plugins_dir.join(format!("{namespace}.ts"));
-        // Deno must read the dispatcher + plugin `.ts` files to `import()` them at all — a
+        // `plugin-sdk.ts` is written out as `dispatcher_path`'s own sibling (every
+        // `lanrurugi_plugin::DISPATCHER_SCRIPT` write site has a matching
+        // `lanrurugi_plugin::PLUGIN_SDK_SCRIPT` write right next to it — see those sites' own
+        // comments), so this is a mechanical path join, not a lookup of anything Deno-side.
+        let plugin_sdk_path = dispatcher_path
+            .parent()
+            .expect("dispatcher_path always has a parent directory")
+            .join("plugin-sdk.ts");
+        // Deno must read the dispatcher + SDK + plugin `.ts` files to `import()` them at all — a
         // mechanical requirement, not a capability grant — so this baseline is always present,
-        // scoped to just those two files unless the plugin itself declared broader read access.
+        // scoped to just those files unless the plugin itself declared broader read access.
+        // `plugin-sdk.ts` is read by `dispatcher.ts` itself (a real `import` — see that file's own
+        // top-of-file comment for why `PluginErrorException` needs one there but a plugin file
+        // itself does not), so this worker process — which *is* the dispatcher process — needs the
+        // grant even though the plugin module it later `import()`s never touches that path itself.
         let read_flag = if declared_read {
             "--allow-read".to_string()
         } else {
             format!(
-                "--allow-read={},{}",
+                "--allow-read={},{},{}",
                 dispatcher_path.display(),
+                plugin_sdk_path.display(),
                 plugin_module.display()
             )
         };

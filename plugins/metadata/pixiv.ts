@@ -10,10 +10,6 @@
 //     instead nested one array inside another — fixed to `array.push(...otherArray)` everywhere
 //     this pattern occurs (`get_manga_data_from_dto`'s 3-tag push, and every `lrr_tags.push(...)`
 //     call in `get_hash_metadata_from_json`).
-//   - `res.is_error` / `res.headers.location` (real `Mojo::Message::Response` properties) and
-//     `ua.get(url, headers)` (real `Mojo::UserAgent::get`'s 2-arg form) — added to the local
-//     `PerlHttpResult`/`PerlUserAgent` overrides here rather than the shared declarations, since
-//     they're Mojo::UserAgent-specific and not every plugin needs them.
 //   - `Dumper(json)` (Perl's `Data::Dumper`) replaced with `JSON.stringify(json)`.
 //   - `declared_permissions.net`: this plugin only ever calls `www.pixiv.net` (AJAX + HTML
 //     fallback), verified against every URL literal in `execMetadata`'s call graph.
@@ -21,75 +17,6 @@
 // NOT part of this pass: migrating this plugin's metadata-side HTTP flow to a new
 // `download`-side contract — that's specs/005-download-plugin-progress's own separate,
 // not-yet-implemented plan for `plugins/download/pixiv.ts`, a different file.
-
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string, headers?: Record<string, string>): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-    readonly is_error: boolean;
-    readonly headers: { location?: string };
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
 
 export function pluginInfo() {
   return {
@@ -122,24 +49,22 @@ const SANITIZE_UNDERSCORE_PATTERN = /_/g;
 const SANITIZE_SPACE_DASH_PATTERN = / -/g;
 const HTML_ERROR_MARKER_PATTERN = /^error/;
 
-interface ExecMetadataInfo {
-  user_agent: PerlUserAgent;
-  user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-  arg?: string;
-  archive_title?: string;
+interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "archive_title">> {
+  user_agent: LegacyUserAgent;
+  user_agent_cookies?: LegacyCookie[];
 }
 
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
   const ua = lrr_info.user_agent;
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   const tag_languages_str = (hostArgs.arg as string | undefined) ?? "";
   const illust_id = find_illust_id(lrr_info);
   if (!illust_id) {
@@ -176,7 +101,7 @@ function sanitize(text: string): string {
   // if a dash is preceded by space, remove; otherwise keep.
   sanitized_text = sanitized_text.replace(SANITIZE_SPACE_DASH_PATTERN, " ");
   if (sanitized_text !== text) {
-    const logger = perlCompat.getLogger("Pixiv", "plugins");
+    const logger = legacyCompat.getLogger("Pixiv", "plugins");
     logger.info(`"${text}" was sanitized.`);
   }
   return sanitized_text;
@@ -325,14 +250,14 @@ function get_upload_date_from_dto(dto: PixivIllustDto): string[] {
 }
 
 function sanitize_summary(html_summary: string): string {
-  const dom = perlCompat.parseHtml(html_summary);
+  const dom = legacyCompat.parseHtml(html_summary);
   dom.find("script").each((node) => node.toString());
   return dom.toString();
 }
 
 function get_summary_from_dto(dto: PixivIllustDto): string {
   // summary is html escaped by default and requires unescape to render.
-  const summary = perlCompat.htmlUnescape(dto.illustComment);
+  const summary = legacyCompat.htmlUnescape(dto.illustComment);
   return sanitize_summary(summary);
 }
 
@@ -343,7 +268,7 @@ interface PixivHashData {
 }
 
 function get_hash_metadata_from_json(json: PixivFormattedJson, illust_id: string, tag_languages_str: string): PixivHashData {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   const hashdata: PixivHashData = { tags: "" };
 
   // get illustration metadata.
@@ -381,9 +306,9 @@ function get_hash_metadata_from_json(json: PixivFormattedJson, illust_id: string
 }
 
 function get_json_from_html(html: string): PixivFormattedJson {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   // get 'content' body.
-  const dom = perlCompat.parseHtml(html);
+  const dom = legacyCompat.parseHtml(html);
   const jsonstring = dom.at("meta#meta-preload-data")?.attr("content") ?? "{}";
   logger.debug(`Tentative JSON: ${jsonstring}`);
   return JSON.parse(jsonstring);
@@ -407,8 +332,8 @@ interface PixivAjaxJson {
   body?: PixivAjaxBody;
 }
 
-async function get_json_from_ajax(illust_id: string, ua: PerlUserAgent): Promise<PixivFormattedJson | undefined> {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+async function get_json_from_ajax(illust_id: string, ua: LegacyUserAgent): Promise<PixivFormattedJson | undefined> {
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   const ajax_url = `https://www.pixiv.net/ajax/illust/${illust_id}`;
   logger.debug(`Attempting to fetch JSON from AJAX endpoint: ${ajax_url}`);
   const res = (await ua.get(ajax_url, { Referer: "https://www.pixiv.net" })).result;
@@ -432,7 +357,7 @@ async function get_json_from_ajax(illust_id: string, ua: PerlUserAgent): Promise
 }
 
 function format_ajax_json(ajax_json: PixivAjaxJson, illust_id: string): PixivFormattedJson | undefined {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   const body = ajax_json.body;
   if (!body) {
     logger.error("Unexpected AJAX response format, missing 'body' key");
@@ -454,8 +379,8 @@ function format_ajax_json(ajax_json: PixivAjaxJson, illust_id: string): PixivFor
   return { illust: { [illust_id]: dto } };
 }
 
-async function get_html_from_illust_id(illust_id: string, ua: PerlUserAgent): Promise<string> {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+async function get_html_from_illust_id(illust_id: string, ua: LegacyUserAgent): Promise<string> {
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   // illustration ID to URL.
   let URL = `https://www.pixiv.net/en/artworks/${illust_id}/`;
   for (;;) {
@@ -485,8 +410,8 @@ async function get_html_from_illust_id(illust_id: string, ua: PerlUserAgent): Pr
   }
 }
 
-async function get_metadata_from_illust_id(illust_id: string, ua: PerlUserAgent, tag_languages_str: string): Promise<PixivHashData> {
-  const logger = perlCompat.getLogger("Pixiv", "plugins");
+async function get_metadata_from_illust_id(illust_id: string, ua: LegacyUserAgent, tag_languages_str: string): Promise<PixivHashData> {
+  const logger = legacyCompat.getLogger("Pixiv", "plugins");
   let hashdata: PixivHashData = { tags: "" };
 
   // Try nextjs ajax endpoint with server-side rendering fallback

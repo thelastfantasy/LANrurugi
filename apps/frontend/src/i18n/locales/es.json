@@ -435,7 +435,7 @@
   "batch.usePluginLabel": "Utilizar complemento:",
   "Version %1 %2": "Versión %1 - %2",
   "View LANrurugi Logs": "Ver registros de LANrurugi",
-  "View Mojolicious Logs": "Ver registros de Mojolicious",
+  "Ver registros de solicitudes HTTP": "Ver registros de solicitudes HTTP",
   "View Plugin Logs": "Ver registros de complementos",
   "View Redis Logs": "Ver registros de Redis",
   "View Shinobu Logs": "Ver registros de Shinobu",

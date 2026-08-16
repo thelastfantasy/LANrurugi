@@ -7,11 +7,13 @@
 //! (anything not matched below — legacy calls this one `lanraragi.log`, renamed here since
 //! "lanraragi" is the legacy project's own name, not a fitting label for this process's own
 //! catch-all events), `shinobu.log` (file-watcher/scanner activity), `plugins.log` (plugin
-//! execution), `redis.log` (Redis client activity), `mojo.log` (HTTP request tracing — legacy's
-//! underlying web framework is Mojolicious, hence the name; kept rather than renamed so
-//! `GET /logs/mojo` stays a recognizable one-to-one mapping for anyone who's used legacy's own
-//! Logs page). `init(None)` (`rebuild-index`/`bench`) keeps the original stderr-only behavior —
-//! those are one-shot CLI invocations, not something with an equivalent "categories" concept.
+//! execution), `redis.log` (Redis client activity), `http.log` (`tower_http`/`axum`'s own
+//! request-lifecycle tracing — legacy called the equivalent category `mojo`, after its underlying
+//! web framework Mojolicious; renamed here since this project runs Axum, not Mojolicious, and
+//! nothing about this project's own log category should stay pinned to a framework it doesn't
+//! use — issue #86, done pre-release with no real deployment's `mojo.log` to migrate). `init(None)`
+//! (`rebuild-index`/`bench`) keeps the original stderr-only behavior — those are one-shot CLI
+//! invocations, not something with an equivalent "categories" concept.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -57,7 +59,7 @@ fn categorize(target: &str) -> &'static str {
     } else if target.starts_with("redis") || target.starts_with("deadpool_redis") {
         "redis"
     } else if target.starts_with("tower_http") || target.starts_with("axum") {
-        "mojo"
+        "http"
     } else {
         "general"
     }
@@ -139,7 +141,7 @@ mod tests {
         assert_eq!(categorize("lanrurugi_plugin::pool"), "plugins");
         assert_eq!(categorize("redis::connection"), "redis");
         assert_eq!(categorize("deadpool_redis::pool"), "redis");
-        assert_eq!(categorize("tower_http::trace"), "mojo");
+        assert_eq!(categorize("tower_http::trace"), "http");
         assert_eq!(categorize("lanrurugi_api::archives"), "general");
     }
 }

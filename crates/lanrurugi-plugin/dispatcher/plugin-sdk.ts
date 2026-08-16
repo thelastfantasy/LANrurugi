@@ -1,3 +1,4 @@
+/// <reference types="../../../plugins/legacy-globals.d.ts" />
 /**
  * # LANrurugi Plugin SDK
  *
@@ -40,9 +41,44 @@
  * Everything below is what that generated code targets; write it by hand only for a genuinely new
  * (non-legacy-derived) plugin.
  *
- * The host-provided globals a plugin body can call (`perlCompat.*`, `PerlUserAgent`, ...) are
- * documented in `dispatcher.ts` itself, not repeated here — `deno doc` this file together with
- * that one (exactly what `mise run plugin-sdk-docs` does) to get both halves in one place.
+ * The host-provided globals a plugin body can call (`legacyCompat.*`, `LegacyUserAgent`, ...) are
+ * declared in a sibling file, `plugins/legacy-globals.d.ts` — deliberately *not* here, and
+ * deliberately *not* an `export`ed symbol from this module (issue #86). `plugins/legacy-globals.d.ts`
+ * is a pure global script (no top-level `import`/`export` in it at all), which is what lets
+ * `plugins/tsconfig.json` (covering every `.ts` file under `plugins/`) make it ambiently visible
+ * to every plugin file with zero boilerplate of its own — no `/// <reference>` line, no import,
+ * nothing (this replaced 31 files' worth of copy-pasted `declare global` boilerplate that used to
+ * live inline in each one, then briefly a one-line reference directive per file, before landing on
+ * this fully zero-touch shape). `dispatcher.ts` (the real runtime home of
+ * `globalThis.legacyCompat = {...}`) sits outside `plugins/` and so isn't covered by that
+ * project-wide config — it references `plugins/legacy-globals.d.ts` via its own explicit
+ * `/// <reference types="..." />` line instead, same as before.
+ *
+ * The same zero-boilerplate constraint is *also* why {@linkcode MetadataHostArgs},
+ * {@linkcode LoginHostArgs}, {@linkcode ScriptHostArgs}, and {@linkcode DownloadHostArgs} —
+ * despite being genuinely part of this SDK's protocol contract, not host-implementation
+ * plumbing — live in `plugins/legacy-globals.d.ts` too, not here (issue #86's later type-
+ * unification pass). `lanrurugi-plugin-converter`'s generated code narrows each entry point's own
+ * local info-hash interface with `extends Pick<AuthoritativeInterface, "key1" | "key2" | ...>`
+ * against these exact four (`render.rs`'s `authoritative_host_args_interface`) — a real symbol
+ * reference a generated plugin file needs to resolve with zero `import`/reference of its own, the
+ * same constraint that keeps `Legacy*`/`legacyCompat` out of this `export`-bearing module. Every
+ * *other* protocol type below (results, `PluginInfoResult`, permissions, ...) has no such
+ * constraint — nothing generated ever needs to reference them by name inside a plugin file's own
+ * source, only this module's own callers (`dispatcher.ts`, `deno doc`, a future Rust-side
+ * `protocol.rs` comparison) do, so they stay right here as ordinary `export`s.
+ *
+ * `deno doc` this file together with `dispatcher.ts` (exactly what `mise run plugin-sdk-docs`
+ * does) to get the protocol-type half in one place — `plugins/legacy-globals.d.ts`'s own host
+ * globals aren't currently included in that generated doc output (a plain `deno doc` invocation
+ * against a global script produces nothing useful; folding it in would need its own follow-up).
+ * `deno doc --json` (same two input files) is also confirmed to work, producing structured
+ * per-symbol output (JSDoc text, resolved `tsType`, source `location`) that's a more natural fit
+ * for a future documentation site's own Markdown generation (issue #52) than the fixed
+ * pre-rendered HTML bundle `--html` produces — the one thing to know before wiring that up:
+ * `--json`'s `nodes` keys and every symbol's `location.filename` are absolute `file://` paths on
+ * whatever machine generated them, so a conversion step needs to strip/remap those before the
+ * output is portable to another machine or CI.
  *
  * @module
  */
@@ -146,78 +182,6 @@ export interface PluginInfoResult {
   sidecar_files?: string[];
 }
 
-/** A cookie exactly as `Mojo::Cookie::Response->new(name => ..., value => ..., domain => ...,
- * path => ...)` shapes it in the legacy Perl source this was converted from — see `dispatcher.ts`'s
- * own `PerlCookie` docs. */
-export interface PerlCookieLike {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-}
-
-/** `hostArgs` for `execMetadata`. In practice a converted plugin's generated entry point binds
- * the *whole* object to one variable (`let lrr_info = hostArgs as Record<string, any>;`) and reads
- * individual fields off it by name — this interface exists so a hand-written plugin (or this doc)
- * has something concrete to check field names against. */
-export interface MetadataHostArgs {
-  /** Present when the call was made against a real archive (`GET /plugins/use_plugin?id=...`);
-   * absent for a settings-page "test this plugin" dry run. */
-  archive_id?: string;
-  /** The archive's current stored `tags` string (comma-separated, possibly empty) — matches
-   * legacy's own `exec_metadata_plugin` (`Model/Plugins.pm`), whose `%infohash` always includes
-   * `existing_tags`. Several real converted plugins (`chaika`/`ehentai`/`fakku`/`hitomi`/`mems`/
-   * `nhentai`) parse this for an existing `source:`-style tag as a fallback when no `arg`/oneshot
-   * URL was given (e.g. every auto-run/watcher-triggered call, which never has one) — present
-   * (possibly `""`) whenever `archive_id` is, absent only for a settings-page dry run with no real
-   * archive at all. */
-  existing_tags?: string;
-  /** The archive's current stored `title` — same legacy `%infohash` field (`archive_title`).
-   * Several real converted plugins (`chaika`/`ehentai`/`fakku`/`mems`/`pixiv`) fall back to parsing
-   * an embedded ID out of this when neither `arg` nor `existing_tags` yielded one. Same presence
-   * rule as {@linkcode existing_tags}. */
-  archive_title?: string;
-  /** The single free-text "run once" value (see {@linkcode PluginInfoResult.oneshot_arg}) —
-   * `undefined`/absent for any call that isn't a manual one-shot run. Distinct from {@linkcode
-   * customargs}. */
-  arg?: string;
-  /** This plugin's own persisted per-{@linkcode PluginParameter} values, positionally matching
-   * {@linkcode PluginInfoResult.parameters} (`customargs[0]` is `parameters[0]`'s saved value,
-   * etc.) — always present, one entry per declared parameter, `""` for any never configured. */
-  customargs: string[];
-  /** The archive's on-disk path — fetched by the host once per call
-   * (`lanrurugi-api::plugins::use_plugin_sync`) so a filename-deriving plugin (e.g. "Filename
-   * Parsing") doesn't need its own round trip back into the API just to resolve an ID to a path. */
-  file_path?: string;
-  /** `file_path`'s own last-modified time (Unix seconds) — resolved host-side (a plain `stat`
-   * call) alongside `file_path` itself so a plugin needing this (currently only
-   * `plugins/metadata/dateadded.ts`) doesn't need its own filesystem read permission just for
-   * this one call. Absent when `file_path` itself is absent, or the `stat` call failed. */
-  file_modified_time?: number;
-  /** A small, deliberately narrow subset of the server's global settings (`LRR_CONFIG`) a
-   * metadata plugin might need to consult — currently just `usedateadded`/`usedatemodified`
-   * (`plugins/metadata/dateadded.ts`'s own settings-driven defaults). Not the *entire* settings
-   * hash (constitution Principle IV: no broader access than a plugin actually needs). */
-  settings?: { usedateadded: boolean; usedatemodified: boolean };
-  /** Another archive's stored `tags` string, resolved host-side by extracting a 40-character
-   * archive ID out of this call's own {@linkcode arg} — currently only computed (and only
-   * non-null) for `plugins/metadata/copyarchivetags.ts`, which has no other way to read a
-   * *different* archive's metadata from inside the Deno sandbox (no direct storage access).
-   * `null` when `arg` contains no valid ID, or that ID doesn't resolve to a real archive. */
-  other_archive_tags?: string | null;
-  /** Content of every file listed in this plugin's own {@linkcode
-   * PluginInfoResult.sidecar_files}, keyed by that same filename — present (possibly empty) only
-   * when `sidecar_files` was non-empty; a missing/unreadable/non-UTF-8 file is just absent from
-   * this map rather than failing the whole call. */
-  sidecar_files?: Record<string, string>;
-  /** Populated only when this plugin (or the one it declares via {@linkcode
-   * PluginInfoResult.login_from}) needs a logged-in session — see {@linkcode LoginResult}'s own
-   * docs for where this comes from. A converted plugin's entry point rehydrates this into a real
-   * `perlCompat.userAgent()` instance before its body runs (`render.rs`'s
-   * `render_user_agent_hydration_preamble`). */
-  user_agent_cookies?: PerlCookieLike[];
-}
-
 /** A plugin-authored error — `error_code` doubles as an i18n lookup key (the frontend's
  * `apps/frontend/src/i18n/locales/*.json` use literal English sentences as keys, not symbolic
  * codes; a missing translation falls back to rendering `error_code` itself verbatim, i18next's
@@ -272,82 +236,16 @@ export interface MetadataResult {
   error?: PluginError;
 }
 
-/** `hostArgs` for `execLogin` — the plugin's own persisted parameter values (credentials,
- * typically — see {@linkcode MetadataHostArgs.customargs}'s own docs, same shape), never an
- * `archive_id`/`file_path` (a login plugin never runs against a specific archive). Re-sent on
- * *every* call to whatever declares this plugin as its `login_from` (never a cached session —
- * see {@linkcode PluginInfoResult.login_from}), so credentials always reflect the current saved
- * settings. */
-export interface LoginHostArgs {
-  customargs: string[];
-}
-
 /** `execLogin`'s return shape. Only `cookies` is ever read by the host
  * (`lanrurugi-api::plugins::with_login_cookies`), which folds it into the *next*
  * metadata/download call's {@linkcode MetadataHostArgs.user_agent_cookies} — every other property
- * a real `perlCompat.userAgent()` instance exposes is a function, which `JSON.stringify` silently
+ * a real `legacyCompat.userAgent()` instance exposes is a function, which `JSON.stringify` silently
  * drops crossing the dispatcher's newline-delimited-JSON boundary (see `dispatcher.ts`'s own
- * `PerlUserAgent.cookies` docs), so returning the whole `ua` object works, but only this field
+ * `LegacyUserAgent.cookies` docs), so returning the whole `ua` object works, but only this field
  * survives. */
 export interface LoginResult {
-  cookies?: PerlCookieLike[];
+  cookies?: LegacyCookie[];
   error?: PluginError;
-}
-
-/** One archive as passed into a `"script"`-type plugin that needs to inspect/rewrite tags across
- * the whole library (`ScriptHostArgs.archives`) — deliberately just the two fields any such script
- * plugin in this corpus actually needs, not the full archive record (constitution Principle IV). */
-export interface ScriptArchiveTags {
-  id: string;
-  tags: string;
-}
-
-/** `hostArgs` for `runScript` — legacy's three Scripts plugins operate library-wide (not against
- * one archive), so unlike {@linkcode MetadataHostArgs} there's no `archive_id`/`file_path` here
- * either. A Deno-sandboxed plugin has no direct Redis/archive-storage access, so any script that
- * needs to *read* every archive's tags (`nhsrcconv`) gets them pre-fetched into {@linkcode
- * archives} rather than reaching for storage itself; a script that needs to *write* tags returns
- * its intended changes in {@linkcode ScriptResult.updates} instead of writing them directly — the
- * host applies them after the call returns (same shape both ways, so a plugin's own transform
- * logic is the only real content). `urlfinder`'s one host-computed lookup
- * (`Model::Stats::is_url_recorded`, a `LRR_URLMAP` hash read this repo doesn't maintain — resolved
- * host-side as a full tag-scan instead, mirroring `GET /database/stats`'s own same simplification)
- * is exposed as {@linkcode existing_archive_id}. */
-export interface ScriptHostArgs {
-  /** The single free-text "run once" value (see {@linkcode PluginInfoResult.oneshot_arg}) — same
-   * meaning as {@linkcode MetadataHostArgs.arg}, named to match legacy's own
-   * `$lrr_info->{oneshot_param}` field exactly (`SourceFinder.pm`'s only real input). */
-   oneshot_param?: string;
-  /** This plugin's own persisted per-{@linkcode PluginParameter} values — same meaning as
-   * {@linkcode MetadataHostArgs.customargs}. */
-  customargs: string[];
-  /** Every archive's `id`/`tags`, host-fetched once before the call — present (possibly empty)
-   * only for a script plugin whose namespace the host recognizes as needing it (currently just
-   * `script/nhentaisourceconverter`); `undefined` for every other script plugin, including a
-   * third-party one uploaded via `POST /plugins/upload` (no way to know it needs this without a
-   * declarative opt-in this SDK doesn't have yet — such a plugin can still request a narrower,
-   * per-archive equivalent through the same mechanism {@linkcode MetadataHostArgs.other_archive_tags}
-   * uses, if a future need arises). */
-  archives?: ScriptArchiveTags[];
-  /** Host-resolved archive ID whose `source:` tag matches {@linkcode oneshot_param} (after
-   * trimming and the E-Hentai/ExHentai domain-alias special case) — present (possibly `null`) only
-   * for `script/urlfinder`, `undefined` for every other script plugin. */
-  existing_archive_id?: string | null;
-  /** The library's real archive-directory root, absolute path — present only for
-   * `script/foldertocat`, which (unlike every other plugin in this corpus) needs genuine, broad
-   * filesystem read access to walk the whole content tree itself via `Deno.readDir`
-   * (`declared_permissions.read: true`, an unrestricted `--allow-read` grant — see
-   * `lanrurugi_plugin::pool::Worker::spawn`), matching legacy's own `FolderToCat.pm::run_script`
-   * (`File::Find` over `LANraragi::Model::Config->get_userdir`) exactly rather than having the
-   * host pre-walk it and hand over a file list, which would make a since-requested Rust-vs-TS
-   * performance comparison meaningless (the I/O would happen only once, on the Rust side, either
-   * way). `undefined` for every other script plugin. */
-  library_path?: string;
-  /** Maps each already-catalogued archive's on-disk path to its ID — present only for
-   * `script/foldertocat`, needed to resolve the files `Deno.readDir` finds back to real archive
-   * IDs before returning its computed category groupings (a plugin has no direct storage access
-   * to look this up itself). `undefined` for every other script plugin. */
-  archive_id_by_path?: Record<string, string>;
 }
 
 /** `runScript`'s return shape — deliberately a loose bag of fields (mirrors legacy's own
@@ -381,25 +279,6 @@ export interface ScriptResult {
    * identical job. Not a generic field every script plugin is expected to fill in (`foldertocat`
    * only). */
   elapsed_ms?: number;
-}
-
-/** `hostArgs` for `execDownload` — the user-supplied URL/ID to download, plus an optional target
- * category (`POST /download_url?url=...&catid=...`). Unlike `execMetadata` there's no
- * `archive_id`/`file_path`: nothing has been catalogued yet at this point, that's the whole job
- * this entry point exists to do. */
-export interface DownloadHostArgs {
-  /** Mirrors legacy's own `%infohash` shape (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:171-175`,
-   * `url => $input`) — every real download plugin in this corpus reads `hostArgs.url`. */
-  url: string;
-  category?: string;
-  user_agent_cookies?: PerlCookieLike[];
-  /** This plugin's own persisted per-{@linkcode PluginParameter} values — same meaning as
-   * {@linkcode MetadataHostArgs.customargs}. Legacy passes the equivalent (`%settings`, converted
-   * from its own persisted array into a keyed hash) as a *separate* positional argument to
-   * `provide_url($lrr_info, %params)` (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:163-179`)
-   * rather than folding it into the info hash the way this repo does — e.g. `ehentai.ts`'s own
-   * `forceresampled` toggle reads `hostArgs.customargs[0]` exactly like a metadata plugin would. */
-  customargs: string[];
 }
 
 /** One resource to fetch, as part of {@linkcode DownloadResult.downloads} — see that field's own
@@ -495,3 +374,4 @@ export interface PluginOptionsResult {
     description: string;
   };
 }
+

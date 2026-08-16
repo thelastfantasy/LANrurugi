@@ -10,73 +10,6 @@
 // `hostArgs.arg` value (a since-fixed host-side limitation) — now reads the real per-parameter
 // values from `hostArgs.customargs`, positionally matching `pluginInfo().parameters`.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "ezeplugin",
@@ -99,25 +32,21 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    file_path: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "file_path" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash
   let [origin_title, additional_tags] = lrr_info.customargs;
-  //# Plugin parameters
-  let logger = perlCompat.getLogger("eze", "plugins");
+  let logger = legacyCompat.getLogger("eze", "plugins");
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["info.json"];
-  let [name, path, suffix] = perlCompat.fileparse(lrr_info["file_path"]);
+  let [name, path, suffix] = legacyCompat.fileparse(lrr_info["file_path"]);
   // `create_path` (`~/LANraragi/lib/LANraragi/Utils/Path.pm`) is a Windows-long-path
   // compatibility shim — on `IS_UNIX` (this project's only real deployment target, per
   // constitution) it's the identity function, so the wrapper is dropped entirely rather than
@@ -125,8 +54,6 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let path_nearby_json = path + name + '.json';
   let filepath = undefined;
   let delete_after_parse = undefined;
-  //    #Extract info.json
-
   if (path_in_archive) {
     filepath = path_in_archive;
     logger.debug(`Found file in archive at ${filepath}`);
@@ -138,32 +65,22 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else {
     throw new PluginErrorException("No in-archive info.json or {archive_name}.json file found!");
   }
-  //    #Open it
-
   let stringjson = "";
   let fh = filepath;
   if (fh === undefined) { throw new PluginErrorException("Could not open the requested file."); }
   for (let row of (fh ?? "").split(/\r?\n/)) {
-    row = perlCompat.chomp(row);
+    row = legacyCompat.chomp(row);
     stringjson += row;
   }
-  //    #Use Mojo::JSON to decode the string into a hash
-
   let hashjson = JSON.parse(stringjson);
   logger.debug(`Loaded the following JSON: ${stringjson}`);
   if (hashjson["gallery_info"] == undefined) {
     return { error: { error_code: "The info.json file could not be parsed as an eze file!" } };
   }
-  //    #Parse it
-
   let [tags, title] = tags_from_eze_json(origin_title, additional_tags, hashjson);
   if (delete_after_parse) {
-    //        #Delete it
-  
     ;
   }
-  //    #Return tags
-
   logger.info(`Sending the following tags to LRR: ${tags}`);
   if (title) {
     logger.info(`Parsed title is ${title}`);
@@ -176,27 +93,19 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 function tags_from_eze_json(...args: any[]) {
   let [origin_title, additional_tags, hash] = args.slice(0);
   let return_ = "";
-  //    #Tags are in gallery_info -> tags -> one array per namespace
-
   let tags = hash["gallery_info"]["tags"];
-  //    # Titles returned by eze are in complete E-H notation.
-
   let title = hash["gallery_info"]["title"];
   if (origin_title && hash["gallery_info"]["title_original"]) {
     title = hash["gallery_info"]["title_original"];
   }
-  title = perlCompat.trim(title);
+  title = legacyCompat.trim(title);
   for (let namespace of Object.keys(tags).sort()) {
-    //        # Get the array for this namespace and iterate on it
-  
     let members = tags[namespace];
     for (let tag of members) {
       if (!(return_ === "")) { return_ += ", "; }
       return_ += namespace + ":" + tag;
     }
   }
-  //    # Add source tag if possible
-
   let site = hash["gallery_info"]["source"]["site"];
   let gid = hash["gallery_info"]["source"]["gid"];
   let gtoken = hash["gallery_info"]["source"]["token"];
@@ -204,8 +113,6 @@ function tags_from_eze_json(...args: any[]) {
   let uploader = hash["gallery_info_full"]["uploader"];
   let timestamp = hash["gallery_info_full"]["date_uploaded"];
   if (timestamp) {
-    //        # convert microsecond to second
-  
     timestamp = timestamp / 1000;
   } else {
     let upload_date = hash["gallery_info"]["upload_date"];
@@ -230,7 +137,5 @@ function tags_from_eze_json(...args: any[]) {
   if (site && gid && gtoken) {
     return_ += `, source:${site}.org/g/${gid}/${gtoken}`;
   }
-  //    #Done-o
-
   return [return_, title];
 }

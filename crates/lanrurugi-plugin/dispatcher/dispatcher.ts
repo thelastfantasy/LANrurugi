@@ -12,216 +12,43 @@
 //
 // No external module imports (not even Deno's own std streams helpers) so that a plugin's
 // `--allow-net` grant is never implicitly widened by the dispatcher's own startup needs. Same
-// reasoning is why `perlCompat` below is a plain global assignment rather than a separate module
-// a plugin would need to `import` — that would need its own path added to the plugin's
-// `--allow-read` grant (see `lanrurugi_plugin::pool::Worker::spawn`'s default, which is scoped to
-// exactly this dispatcher file and the one plugin file being run); a global needs no extra grant
-// at all, since it's set in this same already-trusted process before the plugin module loads.
+// reasoning is why `legacyCompat`/`PluginErrorException` below are plain global assignments rather
+// than something a plugin would need to `import`: a plugin file lives under `plugins_dir`, which
+// has no fixed relative path to this file's own directory (both are independent, runtime-supplied
+// CLI args — `--plugins-dir`/`--temp-dir`) — a plugin file's own top-level `import` specifier has
+// to be a static string, so it can't reach into a path it won't know until runtime. A global needs
+// no such path and no extra `--allow-read` grant at all, since it's set in this same
+// already-trusted process before the plugin module loads.
+//
+// `PluginErrorException` itself is `import`ed for real from `plugin-sdk.ts` right below (needing
+// its own `--allow-read` grant — `lanrurugi_plugin::pool::Worker::spawn` grants `plugin-sdk.ts`'s
+// path, written as `dispatcher_path`'s own sibling by every `DISPATCHER_SCRIPT` write site) since
+// *this* import's specifier can be a static relative path (`dispatcher.ts` and `plugin-sdk.ts`
+// always share one directory, `temp_dir`) — only a *plugin* file's own import of it would have the
+// unresolvable-path problem above. Re-exposed as a global (`globalThis.PluginErrorException`
+// below) purely so every plugin file can `throw new PluginErrorException(...)` without its own
+// import at all (issue #86) — every plugin file still gets the exact same class reference this
+// process's `catch` below checks with `instanceof`, since both paths ultimately go through this
+// one already-imported module.
+//
+// The `/// <reference types="../../../plugins/legacy-globals.d.ts" />` directive right below is a
+// *type-checker-only* hint — it costs nothing at runtime (erased entirely by the time `deno run`
+// executes this file, same as any other `.d.ts`-style ambient declaration). It's what lets
+// `plugins/legacy-globals.d.ts` (the canonical home for `Legacy*`/`legacyCompat`/
+// `PluginErrorException`'s own ambient types — see that file's own docs) actually type-check this
+// file's `globalThis.legacyCompat = {...}`/`globalThis.PluginErrorException = ...` assignments
+// below. Every plugin file under `plugins/` sees the same declarations with no reference line of
+// its own at all (`plugins/tsconfig.json` makes that file ambiently visible project-wide) — this
+// file needs its own explicit line only because it lives outside `plugins/`, so that project
+// boundary doesn't cover it.
+/// <reference types="../../../plugins/legacy-globals.d.ts" />
+import { PluginErrorException } from "./plugin-sdk.ts";
 
 interface PluginRequest {
   request_id: string;
   plugin: string;
   method: string;
   args: unknown;
-}
-
-/** A cookie as `Mojo::Cookie::Response->new(name => ..., value => ..., domain => ..., path =>
- * ...)` shapes it — `lanrurugi-plugin-converter` renders that legacy constructor call straight to
- * an object literal of this shape (see `render.rs::try_match_legacy_http_constructor`), so `cookie_jar`
- * below takes it as plain data rather than a real class instance. */
-interface PerlCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-}
-
-interface PerlHttpResult {
-  body: string;
-  code: number;
-  /** `$res->dom` (`Mojo::Message::Body`'s own DOM-parsing shortcut) — parses `body` as HTML
-   * on first access. A getter (not parsed eagerly at fetch time) since most call sites only ever
-   * read `.body` as plain text and never touch `.dom` at all. */
-  readonly dom: PerlDomNode;
-  /** `$res->json` (`Mojo::Message::Body`'s own JSON-decoding shortcut) — parses `body` as JSON on
-   * first access. Real `Mojo::Message::Body::json` returns `undef` on a parse failure rather than
-   * throwing (legacy code routinely checks `if (defined $res->json)` or wraps the whole call in
-   * `eval {}` expecting exactly that); matched here by returning `undefined` instead of letting
-   * `JSON.parse` throw. */
-  readonly json: unknown;
-}
-
-/** `Mojo::DOM`'s return shape for `->at(selector)`/`->find(selector)` results — enough of its
- * chainable node API (`->text`, `->attr(name)`, `->parent`, `->find(selector)->each`) to cover
- * every call site across the legacy plugin corpus (verified: every `->at(...)`/`->find(...)`
- * selector string across `~/LANraragi/lib/LANraragi/Plugin/**\/*.pm` is a single simple selector —
- * a tag name, `.class`, `#id`, or `[attr=val]`/`[attr^=val]`, never a descendant combinator or
- * pseudo-class). Deliberately not a real DOM (no `querySelector`, no live tree, no `Node`
- * interface) and not backed by a third-party HTML-parsing library (`dispatcher.ts`'s own docs:
- * no external module imports at all, so a plugin's `--allow-net`/`--allow-read` grant is never
- * implicitly widened by the dispatcher's own needs) — a small hand-rolled parser and selector
- * matcher, sized to exactly what this corpus exercises. */
-interface PerlDomNode {
-  text: string;
-  attr(name: string): string | undefined;
-  parent: PerlDomNode | undefined;
-  at(selector: string): PerlDomNode | undefined;
-  find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-  /** `->to_string` — real `Mojo::DOM` re-serializes the (possibly-modified) tree back to markup;
-   * this shim is read-only (no `->remove`/mutation support), so the original source markup never
-   * actually changes after parsing, and returning that original string verbatim is equivalent to
-   * a real serialization for every real call site in the legacy plugin corpus (both existing uses
-   * — `EHentai.pm`/`Pixiv.pm` — only ever call it on the *root* `Mojo::DOM->new(...)`/`->dom`
-   * result to substring-search the whole page, never on a sub-node after `->at()`/`->find()`). */
-  toString(): string;
-}
-
-/** `perlCompat.userAgent()`'s return shape — enough of `Mojo::UserAgent`'s own chainable
- * surface (`->cookie_jar->add(...)`, `->max_redirects(n)->get(url)->result->body`) to cover what
- * the legacy plugin corpus actually calls, backed by `fetch()` instead of a real CPAN HTTP
- * client. Not a general Mojo::UserAgent reimplementation — no proxy/auth/multipart support, no
- * `Mojo::Message`-family object model, just the one GET/POST-with-cookies-and-redirects idiom
- * every login/download plugin so far has used. */
-/** `$tx->req->headers->header(name => value)` — the one piece of `Mojo::Transaction` surface an
- * `->on('start', sub ($ua, $tx) {...})` handler (see `PerlUserAgent.on` below) actually reaches
- * into across the legacy plugin corpus (always to set a static request header, never to read
- * anything back off `$tx`), so this is intentionally not a general `Mojo::Transaction` shim. */
-interface PerlTransaction {
-  req: { headers: { header(name: string, value: string): void } };
-}
-
-interface PerlUserAgent {
-  cookie_jar: { add(cookie: PerlCookie): void };
-  max_redirects(n: number): PerlUserAgent;
-  /** `$ua->transactor->name($value)` — sets the default `User-Agent` header every subsequent
-   * `get`/`post` call on this instance sends. */
-  transactor: { name(value: string): void };
-  /** `$ua->on(start => sub ($ua, $tx) {...})` — real `Mojo::UserAgent` fires this before *every*
-   * request; every real call site in the legacy plugin corpus only uses it to set one or more
-   * static headers via `$tx->req->headers->header(...)`, never anything request-specific (e.g.
-   * inspecting `$tx->req->url`), so it's faithfully enough modeled by running `handler` once,
-   * immediately, against a synthetic `tx` whose header setter writes into this instance's default
-   * headers (applied to every `get`/`post` call from then on) rather than actually re-invoking it
-   * per request. Only the `"start"` event is recognized — legacy's other events
-   * (`error`/`finish`/etc.) have no real use in this corpus and aren't modeled. */
-  on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-  get(url: string): Promise<{ result: PerlHttpResult }>;
-  /** `kind` mirrors Mojo::UserAgent's own `->post($url => form => {...})` /
-   * `->post($url => json => {...})` calling convention — `form` URL-encodes `data` as
-   * `application/x-www-form-urlencoded` (string values only, matching real HTML form semantics);
-   * `json` sends it as a `application/json` body (`data` may be any JSON-serializable value —
-   * verified against the one real `json`-kind call site in the corpus, which passes a nested
-   * object with an array value, not just flat strings). */
-  post(
-    url: string,
-    kind: "form" | "json",
-    data: Record<string, string> | Record<string, unknown>,
-  ): Promise<{ result: PerlHttpResult }>;
-  /** A plain, JSON-serializable snapshot of this instance's cookie jar (the *same* live array the
-   * `get`/`post`/`cookie_jar.add` closures above mutate, not a copy) — every other property here
-   * is a function, which `JSON.stringify` silently drops, so a `do_login`-derived plugin's
-   * `return ua;` would otherwise cross `handleRequest`'s `writeLine` (below) as an empty object.
-   * The host (`lanrurugi-api::plugins::with_login_cookies`) reads this off `exec_login`'s result
-   * and threads it back into a later `exec_metadata`/`exec_download`/`exec_script` call as
-   * `hostArgs.user_agent_cookies`, which `lanrurugi-plugin-converter`'s generated entry points
-   * rehydrate into a fresh `userAgent()` instance (see `render.rs`'s
-   * `render_user_agent_hydration_preamble`) — a live object with closures can't itself cross that
-   * same JSON boundary, so this plain-array snapshot is what actually gets to do the traveling. */
-  cookies: PerlCookie[];
-}
-
-/** `get_logger($name, $category)`/`get_plugin_logger()`'s return shape. The legacy versions write
- * to a real rotating log file on disk (`LANraragi::Utils::Logging`); most converted plugins don't
- * get filesystem write access under `declared_permissions` (constitution Principle IV), so this
- * logs to stderr instead — safe because `dispatcher.ts`'s own stdout is reserved for its
- * newline-delimited JSON protocol (see `writeLine` below) and stderr doesn't share that stream. */
-interface PerlLogger {
-  debug(msg: string): void;
-  info(msg: string): void;
-  warn(msg: string): void;
-  error(msg: string): void;
-}
-
-// Perl-semantics-preserving helpers for `lanrurugi-plugin-converter`'s output — centralized here
-// (rather than inlined at every call site during conversion) specifically for the cases where a
-// literal 1:1 substitution would be wrong or where Perl has no native JS equivalent at all, so a
-// semantic fix only ever needs to happen in one place instead of in every already-converted
-// plugin file. The `declare global` block right below exists only here at the *implementation*
-// site for documentation; `lanrurugi-plugin-converter` repeats just the type signature (not the
-// implementation) at the top of every file it generates, since Deno's per-file type-checking
-// can't be relied on to see a `declare global` written in this unrelated dispatcher file.
-declare global {
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    /** Perl's `reverse(@list)` returns a *new* list; JS's `Array.prototype.reverse` mutates its
-     * receiver in place. Spreads into a fresh array first so converted code doesn't pick up a
-     * mutation side effect the original Perl never had. */
-    reverse<T>(list: readonly T[]): T[];
-    /** Perl's `chomp($x)` mutates `$x` in place, stripping exactly one trailing `"\n"` (Perl's
-     * default `$/` record separator — not `"\r\n"`). JS can't mutate a caller's local binding
-     * through a function call, so converted code must reassign the result itself:
-     * `x = perlCompat.chomp(x)`, mirroring `chomp $x;`'s own mutating spirit as closely as a
-     * pure function can. */
-    chomp(s: string): string;
-    /** A minimal `sprintf` covering the format-spec subset actually used across the legacy
-     * plugin corpus (`%s`, `%d`, `%f` with optional width/precision) — not a full reimplementation
-     * of Perl's considerably larger `sprintf` grammar. */
-    sprintf(format: string, ...args: unknown[]): string;
-    /** `Mojo::UserAgent->new` — see `PerlUserAgent`'s own docs for exactly what's covered. Every
-     * plugin using this must still declare its own real target host(s) in `declared_permissions`
-     * (constitution Principle IV); this shim runs inside that same already-permission-scoped
-     * process, so it's bound by whatever `--allow-net` grant the plugin itself was started with,
-     * same as a plugin calling `fetch()` directly would be. */
-    userAgent(): PerlUserAgent;
-    /** `get_logger($name, $category)` — see `PerlLogger`'s own docs for exactly what's covered. */
-    getLogger(name: string, category: string): PerlLogger;
-    /** `Mojo::Util::html_unescape` — decodes HTML entities (named: `&amp;`/`&lt;`/`&quot;`/etc.,
-     * and numeric: `&#39;`/`&#x27;`). No native JS equivalent outside a real DOM (a `textarea`
-     * element's `.value` trick, unavailable in this Deno sandbox — there's no `document`), so
-     * reimplemented directly against the HTML5 entity table's most common names rather than
-     * pulling in a full HTML entity library for what the legacy plugin corpus only ever uses on
-     * scraped titles/summaries (a handful of the same few entities in practice). */
-    htmlUnescape(s: string): string;
-    /** `Mojo::DOM->new(html)` / `Mojo::DOM->new->xml(1)->parse(xml)` — parses markup and returns
-     * its root node. `xml` toggles case-sensitive tag matching (real XML/custom elements like
-     * `<Genre>` in a ComicInfo.xml file) vs HTML's traditionally case-insensitive tag names; see
-     * `PerlDomNode`'s own docs for what's covered. */
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    /** Perl's `sleep($seconds)` blocks synchronously; JS has no synchronous sleep, so this is a
-     * `setTimeout`-backed `Promise` instead — every call site must `await` it (the converter's
-     * own `sleep` mapping in `render.rs` always emits the `await`, forcing the enclosing function
-     * `async` the same way an awaited `->get()`/`->post()` Mojo call already does). */
-    sleep(seconds: number): Promise<void>;
-    /** `LANraragi::Utils::Generic::get_version` — legacy reads this straight out of its own
-     * `package.json` (`version`/`homepage` fields) once and caches it; this returns the
-     * equivalent static values for this project instead of trying to read a Rust crate's
-     * `Cargo.toml` from within the Deno sandbox. Update these two literals if
-     * `Cargo.toml`'s `[workspace.package]` `version`/`repository` ever changes. */
-    getVersion(): { version: string; homepage: string };
-    /** Perl's `ref($x)` builtin — returns `"HASH"`/`"ARRAY"` for a hashref/arrayref, or `""` for
-     * anything else (a plain scalar, `undef`, etc.), matching Perl's own string-truthiness rule
-     * closely enough that `ref($x)` used as a bare boolean condition (`return if ref $x;`) works
-     * unmodified once translated. Only hashref/arrayref detection — real Perl `ref()` also
-     * recognizes `CODE`/`SCALAR`/blessed-object-class-name, none of which the legacy plugin
-     * corpus's own use of `ref()` ever tests for. */
-    refType(x: unknown): string;
-    /** `LANraragi::Utils::String::trim` — strips leading/trailing whitespace, returning `""` for
-     * `null`/`undefined` instead of throwing (unlike JS's own `String.prototype.trim`, which
-     * requires a real string receiver). */
-    trim(s: string | null | undefined): string;
-    /** `File::Basename::fileparse($path, $suffix_pattern)` — every real call site in the legacy
-     * plugin corpus passes the same "match a trailing dot plus any run of non-dot characters"
-     * suffix pattern (i.e. "the last extension"), so the second argument is accepted but ignored
-     * rather than genuinely interpreting an arbitrary suffix pattern. Returns
-     * `[name-without-extension, directory-with-trailing-slash, extension-with-leading-dot]`,
-     * matching Perl's own return order. */
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    /** `LANraragi::Utils::Redis::redis_decode` — legacy re-decodes a value read back from Redis
-     * as UTF-8, since Perl's own Redis client hands back raw bytes. Deno's Redis client (and
-     * every string this dispatcher otherwise touches) is already a proper UTF-8 JS string by the
-     * time a plugin sees it, so this is a pure pass-through. */
-    redis_decode(s: string): string;
-  };
 }
 
 // ── Minimal HTML/XML parser + CSS-subset selector matcher (Mojo::DOM shim) ───────────────────────
@@ -439,12 +266,12 @@ function findAll(root: RawNode, selector: ParsedSelector, caseSensitive: boolean
  * via the same `htmlUnescape` used elsewhere, since real markup routinely carries `&amp;`-escaped
  * text nodes. */
 function nodeText(node: RawNode): string {
-  return globalThis.perlCompat.htmlUnescape(node.ownText).trim();
+  return globalThis.legacyCompat.htmlUnescape(node.ownText).trim();
 }
 
-/** Builds a `PerlHttpResult` whose `dom` getter lazily parses `body` on first access (see that
+/** Builds a `LegacyHttpResult` whose `dom` getter lazily parses `body` on first access (see that
  * interface's own docs for why this is a getter rather than parsing eagerly on every response). */
-function makeHttpResult(body: string, code: number): PerlHttpResult {
+function makeHttpResult(body: string, code: number, headers: Headers): LegacyHttpResult {
   return {
     body,
     code,
@@ -458,6 +285,19 @@ function makeHttpResult(body: string, code: number): PerlHttpResult {
         return undefined;
       }
     },
+    // `Mojo::Message::is_error` — true for any 4xx/5xx status (real `Mojo::Message::Response`
+    // reserves this for the response-side subclass; every legacy `->result->is_error` call site
+    // in the corpus only ever checks it on a response, never a request, so it's fine to expose it
+    // unconditionally here rather than modeling the request/response class split at all).
+    get is_error() {
+      return code >= 400;
+    },
+    // `Mojo::Headers`'s own `->location` accessor, the only one anything in the legacy corpus
+    // reads off a response's headers — not a general header-access surface (`Mojo::Headers` has
+    // many more; this is scoped to exactly what's actually used).
+    get headers() {
+      return { location: headers.get("Location") ?? undefined };
+    },
   };
 }
 
@@ -467,8 +307,8 @@ function makeHttpResult(body: string, code: number): PerlHttpResult {
  * doesn't record which mode produced it). `sourceMarkup` is the original string this whole tree
  * was parsed from, threaded the same way so `->to_string` works from any node reached via
  * `->parent`/`->at`/`->find` navigation, not just the root. */
-function wrapNode(node: RawNode, caseSensitive: boolean, sourceMarkup: string): PerlDomNode {
-  const wrapped: PerlDomNode = {
+function wrapNode(node: RawNode, caseSensitive: boolean, sourceMarkup: string): LegacyDomNode {
+  const wrapped: LegacyDomNode = {
     get text() {
       return nodeText(node);
     },
@@ -487,7 +327,18 @@ function wrapNode(node: RawNode, caseSensitive: boolean, sourceMarkup: string): 
         wrapNode(n, caseSensitive, sourceMarkup)
       );
       return Object.assign(matches, {
-        each<T>(fn: (n: PerlDomNode, i: number) => T): T[] {
+        each<T>(fn: (n: LegacyDomNode, i: number) => T): T[] {
+          return matches.map((n, i) => fn(n, i));
+        },
+      });
+    },
+    children(selector?: string) {
+      const parsed = selector ? parseSelector(selector) : undefined;
+      const matches = node.children
+        .filter((child) => !parsed || nodeMatches(child, parsed, caseSensitive))
+        .map((child) => wrapNode(child, caseSensitive, sourceMarkup));
+      return Object.assign(matches, {
+        each<T>(fn: (n: LegacyDomNode, i: number) => T): T[] {
           return matches.map((n, i) => fn(n, i));
         },
       });
@@ -499,7 +350,7 @@ function wrapNode(node: RawNode, caseSensitive: boolean, sourceMarkup: string): 
   return wrapped;
 }
 
-globalThis.perlCompat = {
+globalThis.legacyCompat = {
   reverse<T>(list: readonly T[]): T[] {
     return [...list].reverse();
   },
@@ -525,12 +376,12 @@ globalThis.perlCompat = {
       },
     );
   },
-  userAgent(): PerlUserAgent {
-    const cookies: PerlCookie[] = [];
+  userAgent(): LegacyUserAgent {
+    const cookies: LegacyCookie[] = [];
     let followRedirects = false;
     // Set via `transactor.name(...)` (always just `User-Agent`) and/or `on('start', ...)` (any
     // header the handler's synthetic `tx.req.headers.header(...)` calls choose) — see
-    // `PerlUserAgent.on`'s docs above for why a one-shot registration-time call stands in for
+    // `LegacyUserAgent.on`'s docs above for why a one-shot registration-time call stands in for
     // real per-request firing here.
     const defaultHeaders: Record<string, string> = {};
 
@@ -551,7 +402,7 @@ globalThis.perlCompat = {
     // Stored per `(name, domain, path)`, matching real cookie-jar semantics: setting a cookie
     // already in the jar for that exact scope replaces its value instead of appending a stale
     // duplicate the jar would otherwise keep sending forever.
-    const store = (cookie: PerlCookie) => {
+    const store = (cookie: LegacyCookie) => {
       const idx = cookies.findIndex(
         (c) => c.name === cookie.name && c.domain === cookie.domain && c.path === cookie.path,
       );
@@ -592,14 +443,14 @@ globalThis.perlCompat = {
       }
     };
 
-    const ua: PerlUserAgent = {
+    const ua: LegacyUserAgent = {
       cookie_jar: {
-        add(cookie: PerlCookie) {
+        add(cookie: LegacyCookie) {
           store(cookie);
         },
       },
       cookies,
-      max_redirects(n: number): PerlUserAgent {
+      max_redirects(n: number): LegacyUserAgent {
         followRedirects = n > 0;
         return ua;
       },
@@ -620,13 +471,13 @@ globalThis.perlCompat = {
           },
         });
       },
-      async get(url: string) {
+      async get(url: string, headers?: Record<string, string>) {
         const res = await fetch(url, {
-          headers: { ...defaultHeaders, Cookie: cookieHeaderFor(url) },
+          headers: { ...defaultHeaders, ...headers, Cookie: cookieHeaderFor(url) },
           redirect: followRedirects ? "follow" : "manual",
         });
         captureSetCookies(url, res);
-        return { result: makeHttpResult(await res.text(), res.status) };
+        return { result: makeHttpResult(await res.text(), res.status, res.headers) };
       },
       async post(url: string, kind: "form" | "json", data) {
         const isJson = kind === "json";
@@ -643,12 +494,12 @@ globalThis.perlCompat = {
           redirect: followRedirects ? "follow" : "manual",
         });
         captureSetCookies(url, res);
-        return { result: makeHttpResult(await res.text(), res.status) };
+        return { result: makeHttpResult(await res.text(), res.status, res.headers) };
       },
     };
     return ua;
   },
-  getLogger(name: string, category: string): PerlLogger {
+  getLogger(name: string, category: string): LegacyLogger {
     const line = (level: string, msg: string) =>
       console.error(`[${category}] [${level}] ${name}: ${msg}`);
     return {
@@ -687,7 +538,7 @@ globalThis.perlCompat = {
       return named[entity] ?? full;
     });
   },
-  parseHtml(markup: string, xml = false): PerlDomNode {
+  parseHtml(markup: string, xml = false): LegacyDomNode {
     return wrapNode(parseMarkup(markup, xml), xml, markup);
   },
   sleep(seconds: number): Promise<void> {
@@ -718,6 +569,11 @@ globalThis.perlCompat = {
     return s;
   },
 };
+
+// Re-exposed as a global so every plugin file can `throw new PluginErrorException(...)` without
+// its own `import` (see this file's own top-of-file comment on the import right above for why a
+// plugin file can't statically `import` `plugin-sdk.ts` at all).
+globalThis.PluginErrorException = PluginErrorException;
 
 const [pluginsDir, namespace] = Deno.args;
 if (!pluginsDir || !namespace) {
@@ -766,17 +622,25 @@ async function handleRequest(req: PluginRequest) {
     const message = e instanceof Error ? e.message : String(e);
     // A plugin's own `PluginErrorException` (`plugin-sdk.ts`) carries a structured, translatable
     // `{error_code, data}` pair the Rust host can turn into `QueueError::PluginReported` instead
-    // of an opaque string. Detected by property shape, not `instanceof` — this file deliberately
-    // has zero external imports (see this file's own header comment: importing `plugin-sdk.ts`
-    // here would need its path added to every plugin worker's `--allow-read` grant), so it never
-    // holds the exact same class reference the dynamically-`import()`'d plugin module threw.
+    // of an opaque string. Real `instanceof` works here (unlike before issue #86's SDK reorg) since
+    // this file and every plugin file both `import` the identical `plugin-sdk.ts` module — Deno
+    // caches modules by resolved URL, so both sides hold the same class reference. The
+    // property-shape fallback below still covers a plugin that throws a plain `Error` with
+    // `error_code`/`data` bolted on by hand instead of using the real class (never happens in this
+    // repo's own corpus, but costs nothing to keep tolerating).
     const withCode = e as Error & { error_code?: unknown; data?: unknown };
     const error_code =
-      e instanceof Error && typeof withCode.error_code === "string" ? withCode.error_code : undefined;
+      e instanceof PluginErrorException
+        ? e.error_code
+        : e instanceof Error && typeof withCode.error_code === "string"
+          ? withCode.error_code
+          : undefined;
     const data =
-      e instanceof Error && typeof withCode.data === "object"
-        ? (withCode.data as Record<string, string | number> | undefined)
-        : undefined;
+      e instanceof PluginErrorException
+        ? e.data
+        : e instanceof Error && typeof withCode.data === "object"
+          ? (withCode.data as Record<string, string | number> | undefined)
+          : undefined;
     writeLine({
       request_id: req.request_id,
       ok: false,

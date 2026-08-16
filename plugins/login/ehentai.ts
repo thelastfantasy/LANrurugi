@@ -15,57 +15,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
 export function pluginInfo() {
   return {
     namespace: "ehlogin",
@@ -89,22 +38,16 @@ export function pluginInfo() {
 
 
 export async function execLogin(hostArgs: { customargs: string[] }) {
-  //    # Login plugins only receive the parameters entered by the user.
-
   const [ipb_member_id, ipb_pass_hash, star, igneous] = hostArgs.customargs;
   return get_user_agent(ipb_member_id, ipb_pass_hash, star, igneous);
 }
 
 function get_user_agent(...args: any[]) {
   let [ipb_member_id, ipb_pass_hash, star, igneous] = args.slice(0);
-  let logger = perlCompat.getLogger("E-Hentai Login", "plugins");
-  let ua = perlCompat.userAgent();
+  let logger = legacyCompat.getLogger("E-Hentai Login", "plugins");
+  let ua = legacyCompat.userAgent();
   if (ipb_member_id !== "" && ipb_pass_hash !== "") {
     logger.info(`Cookies provided (${ipb_member_id} ${ipb_pass_hash} ${star} ${igneous})!`);
-    //        #Setup the needed cookies with both domains
-  
-    //        #They should translate to exhentai cookies with the igneous value generated
-  
     ua.cookie_jar.add({name: 'ipb_member_id', value: ipb_member_id, domain: 'exhentai.org', path: '/'});
     ua.cookie_jar.add({name: 'ipb_member_id', value: ipb_member_id, domain: 'e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'ipb_pass_hash', value: ipb_pass_hash, domain: 'exhentai.org', path: '/'});
@@ -114,8 +57,6 @@ function get_user_agent(...args: any[]) {
     ua.cookie_jar.add({name: 'star', value: star, domain: 'e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'igneous', value: igneous, domain: 'e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'ipb_coppa', value: '0', domain: 'forums.e-hentai.org', path: '/'});
-    //        #Skips the "offensive warning" screen so that such galleries archive gIDs can be easily retrieved by Download script.
-  
     ua.cookie_jar.add({name: 'nw', value: '1', domain: 'exhentai.org', path: '/'});
     ua.cookie_jar.add({name: 'nw', value: '1', domain: 'e-hentai.org', path: '/'});
   } else {

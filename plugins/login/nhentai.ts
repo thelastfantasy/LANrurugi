@@ -10,57 +10,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
 export function pluginInfo() {
   return {
     namespace: "nhapiauth",
@@ -81,13 +30,11 @@ export function pluginInfo() {
 
 
 export async function execLogin(hostArgs: Record<string, unknown>) {
-  //    # Login plugins only receive the parameters entered by the user.
-
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let key = hostArgs.arg as string;
-  let logger = perlCompat.getLogger("nHentai API Auth", "plugins");
-  let ua = perlCompat.userAgent();
-  let version_info = perlCompat.getVersion();
+  let logger = legacyCompat.getLogger("nHentai API Auth", "plugins");
+  let ua = legacyCompat.userAgent();
+  let version_info = legacyCompat.getVersion();
   let version = version_info["version"];
   let homepage = version_info["homepage"];
   ua.transactor.name(`LANraragi/${version} (+${homepage})`);

@@ -9,73 +9,6 @@
 // namespace-matching regex was pulled out to a single shared constant instead of being
 // duplicated between the TXT and JSON parsers.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "Hdoujinplugin",
@@ -108,19 +41,18 @@ interface ParsedMetadata {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    file_path: string;
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "file_path">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  let logger = perlCompat.getLogger("HDoujin", "plugins");
+  let logger = legacyCompat.getLogger("HDoujin", "plugins");
   let archive_file_path = lrr_info["file_path"];
   const sidecarFiles = hostArgs.sidecar_files as Record<string, string> | undefined;
 
@@ -137,7 +69,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 
 function get_tags_from_hdoujin_txt_file(_archive_file_path: string, file_contents: string): ParsedMetadata {
   let match: RegExpMatchArray | null;
-  let logger = perlCompat.getLogger("HDoujin", "plugins");
+  let logger = legacyCompat.getLogger("HDoujin", "plugins");
   let title = "";
   let tags = "";
   let summary = "";
@@ -168,10 +100,10 @@ function get_tags_from_hdoujin_txt_file(_archive_file_path: string, file_content
 }
 
 function get_tags_from_hdoujin_json_file(_archive_file_path: string, file_contents: string): ParsedMetadata {
-  let logger = perlCompat.getLogger("HDoujin", "plugins");
+  let logger = legacyCompat.getLogger("HDoujin", "plugins");
   let json_str = "";
   for (let row of file_contents.split(/\r?\n/)) {
-    json_str += perlCompat.chomp(row);
+    json_str += legacyCompat.chomp(row);
   }
   let json_hash = JSON.parse(json_str);
   logger.debug(`Found and loaded the following JSON: ${json_str}`);

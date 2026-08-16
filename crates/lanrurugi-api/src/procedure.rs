@@ -112,7 +112,7 @@ pub async fn require_api_key(
 /// `"token:<id>"` (never a raw token value, which `AuthContext` never carries in the first place),
 /// so an admin can answer "who did this" from the logs alone. Lands in the same `general.log`
 /// category every other `lanrurugi_api`/`lanrurugi_server` event not otherwise categorized does
-/// (`lanrurugi_server::telemetry::categorize`) — not `mojo.log` (that category is reserved for
+/// (`lanrurugi_server::telemetry::categorize`) — not `http.log` (that category is reserved for
 /// `tower_http`/`axum`'s own framework-level request-lifecycle events, a different concern from
 /// this app-level identity audit trail).
 fn trace_request(request: &Request, auth: &AuthContext, allowed: bool) {

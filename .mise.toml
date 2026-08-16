@@ -98,10 +98,18 @@ run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release
 
 [tasks.plugin-sdk-docs]
 description = "Generate the plugin-authoring SDK reference (deno doc --html) into target/plugin-sdk-docs/"
+# `plugins/legacy-globals.d.ts` is included alongside the other two (issue #86's type-unification
+# pass) — `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs`/
+# `PluginErrorException` live there now (not in plugin-sdk.ts), since a converted plugin file needs
+# to reference them with zero `import`/reference of its own (see that file's own docs on why); this
+# doc build needs the same file passed in explicitly for those symbols to appear in the output at
+# all — confirmed live (a `deno doc --html` run without it silently drops every one of these
+# symbols from the generated reference, no error, they just aren't there).
 run = """
 deno doc --html --name="LANrurugi Plugin SDK" --output=target/plugin-sdk-docs \
   crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts \
-  crates/lanrurugi-plugin/dispatcher/dispatcher.ts
+  crates/lanrurugi-plugin/dispatcher/dispatcher.ts \
+  plugins/legacy-globals.d.ts
 echo "Open target/plugin-sdk-docs/index.html"
 """
 

@@ -505,7 +505,7 @@
   "batch.usePluginLabel": "Gunakan plugin:",
   "Version %1 %2": "Versi %1 - %2",
   "View LANrurugi Logs": "Lihat Pencatatan LANrurugi",
-  "View Mojolicious Logs": "Lihat Pencatatan Mojolicious",
+  "Lihat Pencatatan Permintaan HTTP": "Lihat Pencatatan Permintaan HTTP",
   "View Plugin Logs": "Lihat Pencatatan Plugin",
   "View Redis Logs": "Lihat Pencatatan Redis",
   "View Shinobu Logs": "Lihat Pencatatan Shinobu",

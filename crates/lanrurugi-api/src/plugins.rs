@@ -13,7 +13,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
-use lanrurugi_plugin::protocol::PluginInfo;
+use lanrurugi_plugin::protocol::{
+    DownloadRequest as PluginDownloadRequest, DownloadResult as PluginDownloadResult, PluginError,
+    PluginInfo,
+};
 use lanrurugi_storage::id::ARCHIVE_ID_LEN;
 use lanrurugi_storage::keys::CONFIG_KEY;
 use serde::Deserialize;
@@ -1414,35 +1417,6 @@ pub struct DownloadUrlParams {
     catid: Option<String>,
 }
 
-/// One `downloads[]` entry as `execDownload` returns it — mirrors
-/// `contracts/plugin-download-protocol.md`'s wire shape field-for-field.
-#[derive(Debug, Deserialize)]
-struct DownloadRequestJson {
-    url: String,
-    method: Option<String>,
-    #[serde(default)]
-    headers: std::collections::HashMap<String, String>,
-    filename_hint: Option<String>,
-}
-
-/// A plugin's own structured error (`plugin-sdk.ts`'s `PluginError`) — `error_code` is itself an
-/// i18n lookup key (see that type's own docs), `data` its interpolation params.
-#[derive(Debug, Clone, Deserialize)]
-struct PluginErrorJson {
-    error_code: String,
-    #[serde(default)]
-    data: Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
-}
-
-/// `execDownload`'s full return shape — see `contracts/plugin-download-protocol.md`'s extended
-/// `DownloadResult`. Exactly one of `downloads`/`file_path`/`error` is expected to be present.
-#[derive(Debug, Default, Deserialize)]
-struct PluginDownloadResult {
-    downloads: Option<Vec<DownloadRequestJson>>,
-    file_path: Option<String>,
-    error: Option<PluginErrorJson>,
-}
-
 /// `POST /download_url` — finds an enabled download-type plugin whose `url_regex` matches `url`
 /// and queues it as a background job (verified shape: `~/LANraragi/tools/openapi.yaml`'s
 /// `downloadUrl` operation). No `url_regex` field exists on `protocol::PluginInfo` yet (only
@@ -1569,19 +1543,20 @@ pub(crate) async fn start_download(
         (async move {
             jobs.mark_active(&job_id_for_task).await;
             if let Some((repo, item_id)) = &queue_link {
-                // `Waiting`, not `Downloading` — this covers everything from here through the
-                // plugin's own `exec_download` call (resolving the real download URL(s)) up to
-                // the moment `run_managed_downloads` actually acquires a per-domain concurrency
-                // permit for the first resource, which is the only point real bytes start moving.
-                // `run_managed_downloads` itself transitions to `Downloading` once that permit is
-                // in hand (see its own docs) — previously this was set to `Downloading` far too
-                // early, before `DownloadManager::acquire` even ran, so a download stuck waiting
-                // on a busy domain's semaphore looked identical to one actually transferring bytes.
+                // `Starting`, not `Waiting` — this covers the plugin's own `exec_download` call
+                // (resolving the real download URL(s), e.g. `ehentai.ts`'s own archiver.php
+                // round-trip, which can genuinely take several seconds to tens of seconds waiting
+                // on the *source site*, nothing to do with this host's own concurrency limits at
+                // all). `Waiting` is reserved for the real, distinct phase once
+                // `run_managed_downloads` actually calls `DownloadManager::acquire` and is blocked
+                // on a busy domain's own semaphore (see that state's own docs) — conflating the two
+                // made every download look concurrency-limited even when the delay was entirely a
+                // slow upstream site response.
                 update_queue_item_state(
                     repo,
                     state_for_task.download_queue_tx.as_ref(),
                     item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Starting,
                     Some(job_id_for_task.clone()),
                     None,
                     None,
@@ -1614,11 +1589,28 @@ pub(crate) async fn start_download(
             let source_url = url.clone();
             let args = json!({ "url": url, "category": category, "customargs": customargs });
             let args = with_login_cookies(&state_for_task, &info, args).await;
+            // Diagnostic only: this call covers the whole `Starting` phase (the plugin's own
+            // `execDownload` body — its own network requests, if any, plus Deno worker
+            // spawn/IPC round-trip) with previously zero visibility into where time actually
+            // went if it took unexpectedly long (see `DownloadManager::acquire`'s own matching
+            // diagnostic for the *next* phase, `Waiting` — this repo had no log coverage for
+            // either half of a slow download until both were added together).
+            let exec_start = std::time::Instant::now();
             let plugin_result = match plugins
                 .execute(&plugin_namespace_for_task, "exec_download", args)
                 .await
             {
-                Ok(data) => data,
+                Ok(data) => {
+                    let elapsed = exec_start.elapsed();
+                    if elapsed.as_millis() > 500 {
+                        tracing::info!(
+                            plugin = %plugin_namespace_for_task,
+                            elapsed_ms = elapsed.as_millis() as u64,
+                            "exec_download plugin call finished after taking a while"
+                        );
+                    }
+                    data
+                }
                 Err(e) => {
                     let queue_error = queue_error_from_pool_error(&plugin_namespace_for_task, &e);
                     if let Some((repo, item_id)) = &queue_link {
@@ -1853,7 +1845,7 @@ fn queue_error_from_pool_error(
 /// `plugin-sdk.ts`'s `MetadataResult.error`/`DownloadResult.error` docs).
 fn queue_error_from_plugin_error(
     plugin: &str,
-    err: &PluginErrorJson,
+    err: &PluginError,
 ) -> lanrurugi_core::queue_error::QueueError {
     lanrurugi_core::queue_error::QueueError::PluginReported {
         plugin: plugin.to_string(),
@@ -2147,7 +2139,7 @@ async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: 
 async fn run_managed_downloads(
     state: AppState,
     plugin_namespace: String,
-    downloads: Vec<DownloadRequestJson>,
+    downloads: Vec<PluginDownloadRequest>,
     job_id: String,
     category: Option<String>,
     overwrite: bool,
@@ -2323,6 +2315,27 @@ async fn run_managed_downloads(
         // caller, if any ever uses this path) — nothing to resume across since there's no stable
         // identity to key a `.part` file off of.
         let resume_key = queue_item_id.map(|id| format!("{id}-{index}"));
+
+        // Real `Waiting` starts here — right before the call that may actually block acquiring a
+        // per-domain concurrency permit (`DownloadManager::acquire`, inside `download_one`). Skips
+        // this write entirely once `on_permit_acquired` has already flipped the item to
+        // `Downloading` for an earlier resource in the same multi-resource job (`downloading_state_
+        // set`'s own docs) — a later resource's own wait for its permit is real, but the job as a
+        // whole already has bytes moving, so it must stay `Downloading`, not revert to `Waiting`.
+        if !downloading_state_set.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some((repo, item_id)) = &queue_link {
+                update_queue_item_state(
+                    repo,
+                    state.download_queue_tx.as_ref(),
+                    item_id,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                    Some(job_id.clone()),
+                    None,
+                    None,
+                )
+                .await;
+            }
+        }
 
         let downloaded_result = download_one(
             &manager,
@@ -2814,14 +2827,16 @@ mod tests {
         // Mirrors what `start_download` itself does before ever calling `run_managed_downloads`
         // (see that function's own docs) — this test calls `run_managed_downloads` directly
         // (skipping the plugin-subprocess `exec_download` call `start_download` would normally
-        // make in between), so it must set this initial `Waiting` transition itself to accurately
-        // reproduce the real state machine `run_managed_downloads` expects to already be in.
+        // make in between), so it must set this initial `Starting` transition itself to accurately
+        // reproduce the real state machine `run_managed_downloads` expects to already be in
+        // (`run_managed_downloads` itself sets the real `Waiting` transition, right before it may
+        // actually block on `DownloadManager::acquire`).
         for item in [&first_item, &second_item] {
             update_queue_item_state(
                 &state.download_queue,
                 None,
                 &item.id,
-                lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                lanrurugi_storage::download_queue::DownloadQueueState::Starting,
                 None,
                 None,
                 None,
@@ -2837,7 +2852,7 @@ mod tests {
             item_id: String,
         ) -> tokio::task::JoinHandle<Result<Vec<String>, lanrurugi_core::queue_error::QueueError>>
         {
-            let downloads = vec![DownloadRequestJson {
+            let downloads = vec![PluginDownloadRequest {
                 url: format!("http://{addr}{path}"),
                 method: None,
                 headers: Default::default(),
@@ -3028,6 +3043,11 @@ mod tests {
         let dispatcher_path = temp_dir.join("lrr-ehdl-integration-test-dispatcher.ts");
         std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
             .expect("failed to write out the real dispatcher script");
+        std::fs::write(
+            temp_dir.join("plugin-sdk.ts"),
+            lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+        )
+        .expect("failed to write out the real plugin SDK script");
         let pool =
             lanrurugi_plugin::pool::PluginPool::new("deno", dispatcher_path.clone(), plugins_dir);
 
@@ -3158,6 +3178,11 @@ mod tests {
             std::env::temp_dir().join("lrr-nhsrcconv-integration-test-dispatcher.ts");
         std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
             .expect("failed to write out the real dispatcher script");
+        std::fs::write(
+            std::env::temp_dir().join("plugin-sdk.ts"),
+            lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+        )
+        .expect("failed to write out the real plugin SDK script");
         let pool =
             lanrurugi_plugin::pool::PluginPool::new("deno", dispatcher_path.clone(), plugins_dir);
 

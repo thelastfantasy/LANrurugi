@@ -15,77 +15,6 @@
 //   - `declared_permissions.net`: this plugin only ever calls `fakku_host` (`www.fakku.net`),
 //     verified against every URL literal in `execMetadata`'s call graph.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    // Direct children only (optionally filtered by `selector`) — distinct from `find`, which also
-    // matches nested descendants; `metadata_parent.children('div')`'s real Perl semantics
-    // (`Mojo::DOM::children`) depend on that distinction.
-    children(selector?: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "fakkumetadata",
@@ -121,23 +50,19 @@ const SKIPPED_NAMESPACES = ["Tags", "Pages", "Description", "Direction", "Favori
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    existing_tags: string;
-    archive_title: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
   const ua = lrr_info.user_agent;
   const [add_source, safe_mode] = lrr_info.customargs;
-  const logger = perlCompat.getLogger("FAKKU", "plugins");
+  const logger = legacyCompat.getLogger("FAKKU", "plugins");
 
   if (!fakku_cookie_exists(ua)) {
     throw new PluginErrorException("Not logged in to FAKKU! Set your FAKKU SID in the plugin settings page!");
@@ -145,7 +70,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 
   // If the user specified a oneshot argument, use it as-is (we could stand to pre-check it to see
   // if it really is a FAKKU URL but meh). No URL? Look for a "source:" tag in the existing tags.
-  let fakku_URL = lrr_info.arg;
+  // Explicit `string | undefined` annotation: `lrr_info.arg`'s own type is a non-optional
+  // `string` (this file's local `ExecMetadataInfo` picks it required from `MetadataHostArgs`),
+  // but this variable itself must still admit `undefined` for the two reassignments below
+  // (`get_url_from_tags`/`search_for_fakku_url`, both of which can genuinely return none) — a bare
+  // `let` here would infer the narrower non-optional type from this first assignment alone.
+  let fakku_URL: string | undefined = lrr_info.arg;
   if (!fakku_URL) fakku_URL = get_url_from_tags(lrr_info.existing_tags);
   // Assume URLs coming from the one-shot parameter or tags are reliable.
   const URL_safe = !!fakku_URL;
@@ -165,12 +95,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     throw new PluginErrorException("Exact title match not found");
   }
   logger.info(`Sending the following tags to LRR: ${newtags}`);
-  //    #Return a hash containing the new metadata - it will be integrated in LRR.
-
   return { tags: newtags, title: newtitle, summary: newSummary };
 }
 
-async function search_for_fakku_url(title: string, ua: PerlUserAgent): Promise<string> {
+async function search_for_fakku_url(title: string, ua: LegacyUserAgent): Promise<string> {
   const dom = await get_search_result_dom(title, ua);
   // Get the first link on the page that starts with '/hentai/'
   const path = dom.at('[href^="/hentai/"]')?.attr("href");
@@ -181,8 +109,8 @@ async function search_for_fakku_url(title: string, ua: PerlUserAgent): Promise<s
  * see `SEARCH_BREAKING_CHARS_PATTERN`'s own doc comment for the character-class rationale, and
  * `strip_bracketed_runs` for why bracket-stripping needs actual bracket-depth scanning rather than
  * a JS regex (the original Perl uses a recursive subpattern `(?0)` JS's regex engine can't do). */
-async function get_search_result_dom(title: string, ua: PerlUserAgent): Promise<PerlDomNode> {
-  const logger = perlCompat.getLogger("FAKKU", "plugins");
+async function get_search_result_dom(title: string, ua: LegacyUserAgent): Promise<LegacyDomNode> {
+  const logger = legacyCompat.getLogger("FAKKU", "plugins");
 
   title = title.replace(SEARCH_BREAKING_CHARS_PATTERN, "");
   // Removes everything inside [ ] as well as the brackets themselves
@@ -219,8 +147,8 @@ function strip_bracketed_runs(title: string): string {
   return result;
 }
 
-async function get_dom_from_fakku(url: string, ua: PerlUserAgent): Promise<PerlDomNode> {
-  const logger = perlCompat.getLogger("FAKKU", "plugins");
+async function get_dom_from_fakku(url: string, ua: LegacyUserAgent): Promise<LegacyDomNode> {
+  const logger = legacyCompat.getLogger("FAKKU", "plugins");
   const res = (await ua.max_redirects(5).get(url)).result;
   const html = res.body;
 
@@ -234,23 +162,23 @@ async function get_dom_from_fakku(url: string, ua: PerlUserAgent): Promise<PerlD
 
 async function get_tags_from_fakku(
   url: string,
-  ua: PerlUserAgent,
+  ua: LegacyUserAgent,
   add_url: boolean,
 ): Promise<[string, string, string]> {
-  const logger = perlCompat.getLogger("FAKKU", "plugins");
+  const logger = legacyCompat.getLogger("FAKKU", "plugins");
   const dom = await get_dom_from_fakku(url, ua);
   // find the "suggest more tags" link and use parent div — not ideal, but the divs don't have
   // named classes anymore
   const tags_parent = dom.at('[data-tippy-content="Suggest More Tags"]')?.parent;
   // div that contains other divs with title, namespaced tags (artist, magazine, etc.) and misc tags
   const metadata_parent = tags_parent?.parent?.parent;
-  const title = perlCompat.trim(metadata_parent?.at("h1")?.text);
+  const title = legacyCompat.trim(metadata_parent?.at("h1")?.text);
   logger.debug(`Parsed title: ${title}`);
   const tags: string[] = [];
 
   // Finds the DIV for the Summary. If it doesn't exist, or FAKKU has no real description, keep it blank.
   const summ_div = dom.at('meta[name="description"]');
-  let summary = summ_div ? perlCompat.htmlUnescape(summ_div.attr("content") ?? "") : "";
+  let summary = summ_div ? legacyCompat.htmlUnescape(summ_div.attr("content") ?? "") : "";
   if (FREE_SAMPLE_BLURB_PATTERN.test(summary) || summary === NO_DESCRIPTION_TEXT) {
     summary = "";
   }
@@ -261,7 +189,7 @@ async function get_tags_from_fakku(
     const row = div.children().each((child) => child);
     if (row.length !== 2) continue;
     const namespace = row[0].text;
-    const value = trim_CRLF(perlCompat.trim(row[1].at("a")?.text ?? row[1].text));
+    const value = trim_CRLF(legacyCompat.trim(row[1].at("a")?.text ?? row[1].text));
     // edge case: the gallery is in the top 10 of 2 categories
     if (DUPLICATE_TOP_TEN_TEXT.includes(value)) continue;
     logger.debug(`Parsed row: ${namespace}`);
@@ -274,7 +202,7 @@ async function get_tags_from_fakku(
   // might be worth filtering by links starting with '/tags/*' but that filters out the special "unlimited" tag
   const tag_links = tags_parent?.find("a").each((link) => link) ?? [];
   for (const link of tag_links) {
-    const tag = trim_CRLF(perlCompat.trim(link.text));
+    const tag = trim_CRLF(legacyCompat.trim(link.text));
     if (tag !== "+" && tag !== "") {
       tags.push(tag.toLowerCase());
     }
@@ -292,8 +220,8 @@ function trim_CRLF(s: string): string {
   return s.replace(/\r?\n/g, "");
 }
 
-function fakku_cookie_exists(ua: PerlUserAgent): boolean {
-  const logger = perlCompat.getLogger("FAKKU", "plugins");
+function fakku_cookie_exists(ua: LegacyUserAgent): boolean {
+  const logger = legacyCompat.getLogger("FAKKU", "plugins");
   logger.debug("Checking Cookies");
   const cookies = ua.cookies;
   if (cookies && cookies.length > 0) {

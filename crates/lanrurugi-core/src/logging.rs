@@ -3,4 +3,4 @@
 //! shared between `lanrurugi_server::telemetry` (writes them) and `lanrurugi_api::logs` (serves
 //! them back over `GET /logs/{category}`), so the two can't drift out of sync.
 
-pub const CATEGORIES: &[&str] = &["general", "shinobu", "plugins", "redis", "mojo"];
+pub const CATEGORIES: &[&str] = &["general", "shinobu", "plugins", "redis", "http"];

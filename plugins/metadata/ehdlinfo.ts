@@ -16,73 +16,6 @@
 //     positionally bound to `customargs[0..2]` — the converter had only wired one generic `arg`
 //     value.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 const METADATA_FILE = "info.txt";
 
 /** `read_file`'s little state machine over `info.txt`'s lines — mirrors the real EH-Downloader
@@ -137,7 +70,7 @@ interface EhdInfoParams {
 }
 
 export async function execMetadata(hostArgs: Record<string, unknown>) {
-  const logger = perlCompat.getLogger("EHDL info.txt", "plugins");
+  const logger = legacyCompat.getLogger("EHDL info.txt", "plugins");
   const customargs = (hostArgs.customargs as string[] | undefined) ?? [];
   const params: EhdInfoParams = {
     replace_title: !!customargs[0],
@@ -166,7 +99,7 @@ function read_file(fileContents: string, params: EhdInfoParams): ParsedInfoTxt {
   let reading_section: ReadingSection = ReadingSection.Info;
 
   for (const rawLine of fileContents.split(/\r?\n/)) {
-    const line = perlCompat.trim(rawLine);
+    const line = legacyCompat.trim(rawLine);
     let match: RegExpMatchArray | null;
 
     if (!line) {
@@ -176,7 +109,7 @@ function read_file(fileContents: string, params: EhdInfoParams): ParsedInfoTxt {
       // try guessing the file format
       if ((match = line.match(TITLE_OR_DESCRIPTION_LINE))) {
         const ns = match[1] === "title" ? "title" : "summary";
-        hashdata[ns] = perlCompat.trim(match[2]);
+        hashdata[ns] = legacyCompat.trim(match[2]);
         reading_section = ReadingSection.Flat;
       } else {
         hashdata.title = line;
@@ -192,9 +125,9 @@ function read_file(fileContents: string, params: EhdInfoParams): ParsedInfoTxt {
       }
     } else if (reading_section === ReadingSection.Info) {
       if ((match = line.match(CATEGORY_LINE))) {
-        tags.category = perlCompat.trim(match[1]);
+        tags.category = legacyCompat.trim(match[1]);
       } else if ((match = line.match(POSTED_LINE))) {
-        tags.timestamp = String(convert_to_epoch(perlCompat.trim(match[1])));
+        tags.timestamp = String(convert_to_epoch(legacyCompat.trim(match[1])));
       } else if ((match = line.match(LANGUAGE_LINE))) {
         tags.language = match[1].toLowerCase();
       } else if (TAGS_HEADER_LINE.test(line)) {
@@ -209,7 +142,7 @@ function read_file(fileContents: string, params: EhdInfoParams): ParsedInfoTxt {
     } else if (reading_section === ReadingSection.Flat) {
       if ((match = line.match(FLAT_NAMESPACE_LINE))) {
         const ns = match[1];
-        const value = perlCompat.trim(match[2]);
+        const value = legacyCompat.trim(match[2]);
         const existing = tags[ns];
         if (existing !== undefined) {
           (existing as string[]).push(value);
@@ -252,5 +185,5 @@ function convert_to_epoch(datetime: string): number {
 }
 
 function split_tags_to_array(tagsString: string): string[] {
-  return tagsString.split(",").map((tag) => perlCompat.trim(tag));
+  return tagsString.split(",").map((tag) => legacyCompat.trim(tag));
 }

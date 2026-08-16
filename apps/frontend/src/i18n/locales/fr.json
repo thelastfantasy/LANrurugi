@@ -501,7 +501,7 @@
   "batch.usePluginLabel": "Utiliser le plugin :",
   "Version %1 %2": "Version %1 - %2",
   "View LANrurugi Logs": "Voir les Logs LANrurugi",
-  "View Mojolicious Logs": "Voir les Logs Mojolicious",
+  "Voir les journaux de requêtes HTTP": "Voir les journaux de requêtes HTTP",
   "View Plugin Logs": "Voir les Logs Plugin",
   "View Redis Logs": "Voir les Logs Redis",
   "View Shinobu Logs": "Voir les Logs Shinobu",

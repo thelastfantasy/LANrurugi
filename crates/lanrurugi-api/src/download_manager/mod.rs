@@ -120,6 +120,21 @@ impl DownloadManager {
                 }
                 entry.semaphore.clone()
             };
+            // Diagnostic only: `available_permits()` legitimately dips below `capacity` for
+            // ordinary reasons (an in-flight download holding a permit) — this is logged purely so
+            // a real "why did this download wait so long" investigation has *something* to look at
+            // (previously nothing at all was logged here, making that question unanswerable from
+            // logs alone — see issue #86's own session notes on this exact gap).
+            let available_before = sem.available_permits();
+            let wait_start = std::time::Instant::now();
+            if available_before == 0 {
+                tracing::info!(
+                    hostname,
+                    matched_pattern = %key,
+                    max_concurrent,
+                    "download waiting for a concurrency permit — all slots currently held"
+                );
+            }
             let acquired = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
@@ -127,6 +142,16 @@ impl DownloadManager {
                 }
                 permit = sem.acquire_owned() => permit.expect("semaphore is never closed"),
             };
+            let waited = wait_start.elapsed();
+            if waited.as_millis() > 500 {
+                tracing::info!(
+                    hostname,
+                    matched_pattern = %key,
+                    max_concurrent,
+                    waited_ms = waited.as_millis() as u64,
+                    "download acquired its concurrency permit after waiting"
+                );
+            }
             Some(acquired)
         } else {
             None

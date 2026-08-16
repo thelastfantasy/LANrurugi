@@ -56,6 +56,10 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
 
     let dispatcher_path = temp_dir.join("dispatcher.ts");
     std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)?;
+    std::fs::write(
+        temp_dir.join("plugin-sdk.ts"),
+        lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+    )?;
     let plugins = Arc::new(PluginPool::new(
         "deno".to_string(),
         dispatcher_path,

@@ -310,25 +310,69 @@ fn info_hash_interface_name(export_name: &str) -> String {
     format!("{capitalized}Info")
 }
 
+/// Maps an entry point's export name to the authoritative `plugin-sdk.ts` interface describing
+/// its real `hostArgs` shape — `execMetadata` → `MetadataHostArgs`, `execDownload` →
+/// `DownloadHostArgs`, `runScript` → `ScriptHostArgs`. `execLogin`/`LoginHostArgs` never reaches
+/// [`render_info_hash_interface`] at all (`render_entry_sub` is always called with
+/// `has_info_hash: false` for it — a login plugin's own hash has no per-archive fields worth
+/// generating a narrowed interface for), so this only needs to cover the three that do.
+fn authoritative_host_args_interface(export_name: &str) -> &'static str {
+    match export_name {
+        "execDownload" => "DownloadHostArgs",
+        "runScript" => "ScriptHostArgs",
+        _ => "MetadataHostArgs", // execMetadata, and any future entry point sharing its shape.
+    }
+}
+
 /// Renders the `interface NAME { ... }` declaration for a generated info-hash parameter type —
 /// always includes `user_agent`/`user_agent_cookies` (see `render_user_agent_hydration_preamble`'s
 /// own docs: the host unconditionally injects both into the info hash before the plugin's own
 /// code ever runs, regardless of whether the plugin's own source happens to read them back), plus
-/// every key `collect_static_hash_keys` found actually being read. Every field's value type is
-/// `string` — a deliberate simplification: `$lrr_info->{key}` values in the real legacy corpus are
-/// overwhelmingly plain strings (URLs, IDs, titles), and this generated type only needs to be
-/// permissive enough that real accesses in the source still type-check, not a perfect model of
-/// every possible caller-supplied value.
-fn render_info_hash_interface(iface_name: &str, keys: &[String]) -> String {
-    let mut out = format!("  interface {iface_name} {{\n");
-    out.push_str("    user_agent: PerlUserAgent;\n");
-    out.push_str("    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];\n");
-    for key in keys {
-        if key == "user_agent" || key == "user_agent_cookies" {
-            continue; // already emitted above, unconditionally.
-        }
-        out.push_str(&format!("    {key}: string;\n"));
-    }
+/// every key `collect_static_hash_keys` found actually being read.
+///
+/// Field types are `Required<Pick<AuthoritativeInterface, "key1" | "key2" | ...>>` against the
+/// real `plugin-sdk.ts`/`plugins/legacy-globals.d.ts` interface (`MetadataHostArgs`/
+/// `DownloadHostArgs`/`ScriptHostArgs` — see [`authoritative_host_args_interface`]) rather than
+/// each field independently guessed as `string` — the old approach was a real, live-verified
+/// source of drift: `customargs` is actually `string[]`, not `string`, and every converted plugin
+/// that reads it needed a hand-fix to correct the guess (`plugins/metadata/ehentai.ts`'s own
+/// `customargs: string[]` is exactly that manual correction, made necessary by this exact bug —
+/// issue #86). `Pick` also means a key `collect_static_hash_keys` found that *isn't* a real field
+/// on the authoritative interface (a typo, or a name that doesn't actually exist in the host
+/// contract) fails `deno check` instead of silently type-checking as `string` — a real, useful
+/// signal this generator didn't have before.
+///
+/// `Required<...>` (not bare `Pick<...>`) matters because most authoritative fields are
+/// genuinely optional (`arg?: string`, `existing_tags?: string`, ...) — the host may not always
+/// supply them. But every converted plugin's own generated body reads these fields unconditionally
+/// (`lrr_info["existing_tags"].match(...)`, no `?.`/undefined check — a faithful translation of
+/// Perl's own `$lrr_info->{existing_tags}`, which is simply `undef` rather than a type error if
+/// absent), so a bare `Pick` here would make `deno check` correctly flag every one of those reads
+/// as "possibly undefined" — a real regression this exact live-verified case caught (confirmed via
+/// a real re-conversion of `EHentai.pm`: `TS2532` on `lrr_info["oneshot_param"].match(...)`).
+/// `Required` matches what the *old*, independently-guessed-`string`-per-field approach always
+/// implicitly assumed (every field non-optional), while still deriving the actual value type from
+/// the authoritative interface instead of a blind `string` guess.
+fn render_info_hash_interface(iface_name: &str, keys: &[String], export_name: &str) -> String {
+    let authoritative = authoritative_host_args_interface(export_name);
+    let picked: Vec<&String> = keys
+        .iter()
+        .filter(|key| key.as_str() != "user_agent" && key.as_str() != "user_agent_cookies")
+        .collect();
+    let mut out = if picked.is_empty() {
+        format!("  interface {iface_name} {{\n")
+    } else {
+        let pick_keys = picked
+            .iter()
+            .map(|key| format!("\"{key}\""))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        format!(
+            "  interface {iface_name} extends Required<Pick<{authoritative}, {pick_keys}>> {{\n"
+        )
+    };
+    out.push_str("    user_agent: LegacyUserAgent;\n");
+    out.push_str("    user_agent_cookies?: LegacyCookie[];\n");
     out.push_str("  }\n");
     out
 }
@@ -469,7 +513,7 @@ struct EntryContext {
 pub struct Renderer {
     shift_cursor: usize,
     entry: Option<EntryContext>,
-    /// Set whenever the `perlCompat.userAgent()`-returned object's `get`/`post` (the only
+    /// Set whenever the `legacyCompat.userAgent()`-returned object's `get`/`post` (the only
     /// genuinely async operations this converter recognizes) get awaited (see
     /// `render_expr_sequence`'s `-> result` lookahead) — a helper sub that ends up needing
     /// `await` must be declared `async function`, unlike the fire-and-forget default every other
@@ -493,10 +537,6 @@ pub struct Renderer {
     /// parsed. Set once by `lib.rs::convert_source_with_path` before rendering any subs.
     pub plugin_name: Option<String>,
     pub warnings: Vec<String>,
-    /// Set whenever a `perlCompat.*` call is emitted (see `render_named_call`) — lets the caller
-    /// (`lib.rs::convert_source_with_path`) prepend the ambient type stub only when the generated
-    /// code actually references it, rather than on every file regardless of need.
-    pub uses_perl_compat: bool,
     /// Names of helper subs (in *this same file*) already known to compile to an `async function`
     /// — used by `render_named_call` to `await` a call to one of them. Perl has no `async`/`await`
     /// distinction at all (every call, however it resolves, just blocks), so nothing in the
@@ -547,7 +587,6 @@ impl Renderer {
             plugin_name: None,
             warnings: Vec::new(),
             known_async_subs: std::collections::HashSet::new(),
-            uses_perl_compat: false,
             imported_external_modules: std::collections::HashSet::new(),
             uri_typed_vars: std::collections::HashSet::new(),
         }
@@ -657,7 +696,7 @@ impl Renderer {
             None
         };
         if let Some((iface_name, keys)) = &info_hash_interface {
-            out.push_str(&render_info_hash_interface(iface_name, keys));
+            out.push_str(&render_info_hash_interface(iface_name, keys, export_name));
         }
         self.entry = Some(EntryContext {
             first_param_name: first_param_name.map(str::to_string),
@@ -679,16 +718,15 @@ impl Renderer {
     /// plugin fresh itself and folding the resulting cookies into `hostArgs.user_agent_cookies`
     /// (a plain, JSON-serializable array — a live `Mojo::UserAgent`-equivalent object can't cross
     /// the dispatcher's JSON-RPC boundary) — this preamble rehydrates that back into a real,
-    /// usable `perlCompat.userAgent()` instance *before* any of the plugin's own converted
+    /// usable `legacyCompat.userAgent()` instance *before* any of the plugin's own converted
     /// code runs, so `lrr_info["user_agent"]` (whatever the plugin itself calls its info-hash
     /// variable — this doesn't know or care) resolves correctly no matter which shift/destructure
     /// idiom that plugin's own code happens to use to bind it. Scoped in its own block so the
     /// `info` alias it introduces can never collide with a name the plugin's own code picks.
     fn render_user_agent_hydration_preamble(&mut self) -> String {
-        self.uses_perl_compat = true;
         "  {\n    \
          const info = hostArgs as Record<string, any>;\n    \
-         info.user_agent = perlCompat.userAgent();\n    \
+         info.user_agent = legacyCompat.userAgent();\n    \
          for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {\n      \
          info.user_agent.cookie_jar.add(c);\n    \
          }\n  \
@@ -1891,7 +1929,7 @@ impl Renderer {
         let mut i = 0;
         while i < tokens.len() {
             // `EXPR->get(URL)->result` / `EXPR->post(URL, form => {...})->result` —
-            // `perlCompat.userAgent()`'s `get`/`post` are real `fetch()` calls under the hood
+            // `legacyCompat.userAgent()`'s `get`/`post` are real `fetch()` calls under the hood
             // (see `dispatcher.ts`), unlike every synchronous call this renderer otherwise emits,
             // so this one chain shape needs an `await` wrapped around the *receiver plus the
             // call* (not just the call — `EXPR.get(url)` is the promise, not `EXPR` alone).
@@ -1994,7 +2032,7 @@ impl Renderer {
             // `EXPR->to_string` (`Mojo::DOM`'s no-parens string-conversion method — Perl doesn't
             // require parens on a zero-arg method call) — without this, the generic `->` → `.`
             // token mapping renders it as `expr.to_string` (a *property* access, not a call),
-            // which is both the wrong JS method name (`PerlDomNode` only exposes `toString()`,
+            // which is both the wrong JS method name (`LegacyDomNode` only exposes `toString()`,
             // matching the real JS stringification convention) and missing its `()` entirely.
             // Checked narrowly (must be immediately preceded by a rendered `->` in `parts`) so an
             // unrelated bareword named `to_string` elsewhere is never mistaken for this.
@@ -2128,7 +2166,6 @@ impl Renderer {
                 }
                 let receiver = join_parts(&parts);
                 parts.clear();
-                self.uses_perl_compat = true;
                 self.used_await = true;
                 parts.push(format!(
                     "(await {receiver}.{name}({})).result",
@@ -2356,7 +2393,7 @@ impl Renderer {
             }
             // `ref EXPR` (Perl's no-parens named-unary-operator form — `ref(EXPR)` is handled by
             // `try_match_call`'s generic "Word + `Structure::List`" case via `render_named_call`
-            // instead) — same shape as `lc`/`uc` above, just routed through `perlCompat.refType`
+            // instead) — same shape as `lc`/`uc` above, just routed through `legacyCompat.refType`
             // (see its own docs) instead of a native JS method. Covers both a value position
             // (`my $t = ref $x;`) and a bare boolean-truthiness position (`return if ref $x;`,
             // which works unmodified in JS too — `""` is falsy, a non-empty type name isn't,
@@ -2367,8 +2404,7 @@ impl Renderer {
             {
                 let end = self.chain_end(tokens, i + 1);
                 let operand = self.render_expr_sequence(&tokens[i + 1..end]);
-                self.uses_perl_compat = true;
-                parts.push(format!("perlCompat.refType({operand})"));
+                parts.push(format!("legacyCompat.refType({operand})"));
                 i = end;
                 continue;
             }
@@ -2538,9 +2574,9 @@ impl Renderer {
     /// `Mojo::UserAgent->new` / `Mojo::UserAgent->new()` and `Mojo::Cookie::Response->new(k => v,
     /// ...)` — the two legacy-plugin-corpus idioms that aren't just vocabulary substitution:
     /// `Mojo::UserAgent` is a real CPAN HTTP client with no JS equivalent at all (routed through
-    /// `perlCompat.userAgent()`, a `fetch()`-backed shim — see `dispatcher.ts`), and
+    /// `legacyCompat.userAgent()`, a `fetch()`-backed shim — see `dispatcher.ts`), and
     /// `Mojo::Cookie::Response->new(...)` is Mojo's hash-literal-shaped constructor call for a
-    /// plain data record (`{name, value, domain, path}`) that `perlCompat.userAgent()`'s
+    /// plain data record (`{name, value, domain, path}`) that `legacyCompat.userAgent()`'s
     /// `cookie_jar.add` expects as a plain object, not a real class instance — so this renders
     /// straight to `{ name: ..., value: ..., domain: ..., path: ... }` rather than `new
     /// Mojo::Cookie::Response(...)` (which wouldn't even be valid JS: `::` isn't a legal
@@ -2572,9 +2608,8 @@ impl Renderer {
         let has_list = tokens.get(i + 3).map(|t| t.class.as_str()) == Some("PPI::Structure::List");
 
         if name == "Mojo::UserAgent" {
-            self.uses_perl_compat = true;
             let consumed = if has_list { 4 } else { 3 };
-            return Some(("perlCompat.userAgent()".to_string(), consumed));
+            return Some(("legacyCompat.userAgent()".to_string(), consumed));
         }
 
         // `URI->new()` (bare placeholder, real corpus case: `Download/EHentai.pm`'s `my $finalURL
@@ -2618,7 +2653,7 @@ impl Renderer {
 
         // `Mojo::DOM->new(html)` (parses immediately) / `Mojo::DOM->new->xml(1)->parse(xml_str)`
         // (constructs empty, flips XML mode, then parses) — both end up calling
-        // `perlCompat.parseHtml(markup, xml)`; only the argument source and the `xml` flag differ.
+        // `legacyCompat.parseHtml(markup, xml)`; only the argument source and the `xml` flag differ.
         // Verified against every real call site in the legacy plugin corpus: `Mojo::DOM->new`
         // is always immediately followed by either `(markup)` or `->xml(1)->parse(markup)`, never
         // used bare (e.g. built once and parsed later) or with `->xml(0)`/no `xml` call at all in
@@ -2630,8 +2665,7 @@ impl Renderer {
                 let list = tokens[i + 3];
                 let args = self.render_call_args(list);
                 if args.len() == 1 {
-                    self.uses_perl_compat = true;
-                    return Some((format!("perlCompat.parseHtml({})", args[0]), 4));
+                    return Some((format!("legacyCompat.parseHtml({})", args[0]), 4));
                 }
                 return None;
             }
@@ -2675,10 +2709,9 @@ impl Renderer {
             if parse_args.len() != 1 {
                 return None;
             }
-            self.uses_perl_compat = true;
             let xml_arg = if xml_on { "true" } else { "false" };
             return Some((
-                format!("perlCompat.parseHtml({}, {xml_arg})", parse_args[0]),
+                format!("legacyCompat.parseHtml({}, {xml_arg})", parse_args[0]),
                 after_xml + 3 - i,
             ));
         }
@@ -2803,7 +2836,7 @@ impl Renderer {
     /// encode the third (data) argument. Rendered through the generic `render_call_args` path,
     /// that bareword falls through to `render_word`'s catch-all (`_ => word.to_string()`) and
     /// comes out as a bare, undeclared JS identifier reference — this instead forces it to a
-    /// string literal, matching `PerlUserAgent.post`'s own `kind: "form" | "json"` parameter
+    /// string literal, matching `LegacyUserAgent.post`'s own `kind: "form" | "json"` parameter
     /// (see `dispatcher.ts`).
     fn render_post_call_args(&mut self, list: &PpiNode) -> Vec<String> {
         let inner: Vec<&PpiNode> = list
@@ -2871,30 +2904,26 @@ impl Renderer {
             }
             // Perl's `chomp($x)` mutates `$x` in place; JS can't do that through a function call,
             // so the reassignment has to happen at the call site. Routed through the shared
-            // `perlCompat.chomp` (see `dispatcher.ts`) rather than inlined, both for the fix to
+            // `legacyCompat.chomp` (see `dispatcher.ts`) rather than inlined, both for the fix to
             // live in one place and because Perl's `chomp` only strips a trailing `"\n"` (its
             // `$/` record separator), not `"\r\n"` — an easy detail to get subtly wrong inline.
             "chomp" if args.len() == 1 => {
-                self.uses_perl_compat = true;
                 let operand = paren_wrap(&args[0]);
-                format!("{operand} = perlCompat.chomp({operand})")
+                format!("{operand} = legacyCompat.chomp({operand})")
             }
             "lc" if args.len() == 1 => format!("{}.toLowerCase()", paren_wrap(&args[0])),
             "uc" if args.len() == 1 => format!("{}.toUpperCase()", paren_wrap(&args[0])),
             // `LANraragi::Utils::String::trim` — imported in 8 of the 19 Metadata plugins.
             "trim" if args.len() == 1 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.trim({})", args[0])
+                format!("legacyCompat.trim({})", args[0])
             }
-            // `File::Basename::fileparse($path, qr/\.[^.]*/)` — see `perlCompat.fileparse`'s own
+            // `File::Basename::fileparse($path, qr/\.[^.]*/)` — see `legacyCompat.fileparse`'s own
             // docs (`dispatcher.ts`) for why the second argument is dropped rather than rendered.
             "fileparse" if args.len() == 2 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.fileparse({})", args[0])
+                format!("legacyCompat.fileparse({})", args[0])
             }
             "redis_decode" if args.len() == 1 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.redis_decode({})", args[0])
+                format!("legacyCompat.redis_decode({})", args[0])
             }
             // Perl's `int` truncates toward zero (`int(-1.5) == -1`), same as `Math.trunc` (not
             // `Math.floor`, which would round the wrong way for negatives — a real behavior
@@ -2908,23 +2937,21 @@ impl Renderer {
             "rand" if args.is_empty() => "Math.random()".to_string(),
             // Perl's `sleep($seconds)` blocks synchronously. JS has no synchronous sleep at all
             // (short of a busy-wait or `Atomics.wait`, neither appropriate here) — routed through
-            // `perlCompat.sleep` (a `setTimeout`-backed `Promise`, see `dispatcher.ts`) and
+            // `legacyCompat.sleep` (a `setTimeout`-backed `Promise`, see `dispatcher.ts`) and
             // `await`-ed, which forces the enclosing sub to become `async` (see `used_await`'s own
             // docs — the same mechanism the `->get()`/`->post()` Mojo idiom already relies on).
             "sleep" if args.len() == 1 => {
-                self.uses_perl_compat = true;
                 self.used_await = true;
-                format!("await perlCompat.sleep({})", args[0])
+                format!("await legacyCompat.sleep({})", args[0])
             }
             "length" if args.len() == 1 => format!("{}.length", paren_wrap(&args[0])),
             "scalar" if args.len() == 1 => format!("{}.length", paren_wrap(&args[0])),
             // `ref($x)` (parenthesized form — the no-parens `ref $x` form is handled by its own
             // check in `render_expr_sequence`, same reasoning as `lc`/`uc` there) — see
-            // `perlCompat.refType`'s own docs for exactly what's covered (hashref/arrayref
+            // `legacyCompat.refType`'s own docs for exactly what's covered (hashref/arrayref
             // detection only, the only two kinds this corpus ever actually tests for).
             "ref" if args.len() == 1 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.refType({})", args[0])
+                format!("legacyCompat.refType({})", args[0])
             }
             "keys" if args.len() == 1 => format!("Object.keys({})", args[0]),
             "values" if args.len() == 1 => format!("Object.values({})", args[0]),
@@ -2974,28 +3001,25 @@ impl Renderer {
                 format!("{}.unshift({})", paren_wrap(&args[0]), args[1..].join(", "))
             }
             // Perl's `reverse` returns a *new* reversed list; JS's `.reverse()` mutates the
-            // array in place. Routed through `perlCompat.reverse` (which spreads into a fresh
+            // array in place. Routed through `legacyCompat.reverse` (which spreads into a fresh
             // array first) rather than inlined, so the non-mutating fix lives in one place.
             "reverse" if args.len() == 1 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.reverse({})", args[0])
+                format!("legacyCompat.reverse({})", args[0])
             }
             // Perl's `sprintf` has no native JS equivalent at all (unlike the above, which are
             // JS-native methods with a subtly different calling convention or mutation
-            // behavior) — `perlCompat.sprintf` covers the format-spec subset the legacy plugin
+            // behavior) — `legacyCompat.sprintf` covers the format-spec subset the legacy plugin
             // corpus actually uses (see `dispatcher.ts`), not Perl's full `sprintf` grammar.
             "sprintf" if !args.is_empty() => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.sprintf({})", args.join(", "))
+                format!("legacyCompat.sprintf({})", args.join(", "))
             }
             // `LANraragi::Utils::Logging::get_logger($name, $category)` writes to a real
             // rotating log file on disk — most converted plugins don't get filesystem write
             // access (constitution Principle IV's narrow `declared_permissions`), so
-            // `perlCompat.getLogger` logs to stderr instead (safe: `dispatcher.ts`'s stdout is
+            // `legacyCompat.getLogger` logs to stderr instead (safe: `dispatcher.ts`'s stdout is
             // reserved for its own newline-delimited JSON protocol, and stderr doesn't share it).
             "get_logger" if args.len() == 2 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.getLogger({}, {})", args[0], args[1])
+                format!("legacyCompat.getLogger({}, {})", args[0], args[1])
             }
             // `get_plugin_logger()` takes no arguments at all — at runtime it fills in the
             // logger's name via Perl's `caller` reflection plus the calling plugin's own
@@ -3003,20 +3027,19 @@ impl Renderer {
             // this resolves the same name at *conversion* time instead, from the same metadata
             // this converter already parsed (`Renderer::plugin_name`).
             "get_plugin_logger" if args.is_empty() => {
-                self.uses_perl_compat = true;
                 let name = self.plugin_name.as_deref().unwrap_or("plugin");
-                format!("perlCompat.getLogger({name:?}, \"plugins\")")
+                format!("legacyCompat.getLogger({name:?}, \"plugins\")")
             }
             // `URI::Escape::uri_escape_utf8` and JS's native `encodeURIComponent` reserve the
             // exact same "never escape" character set (`A-Za-z0-9-_.!~*'()`, verified against
             // real `perl -MURI::Escape -e 'print uri_escape_utf8(...)'` output across every ASCII
             // punctuation character) and both percent-encode multi-byte UTF-8 sequences byte-by-
-            // byte in uppercase hex — a direct native mapping, no `perlCompat` shim needed.
+            // byte in uppercase hex — a direct native mapping, no `legacyCompat` shim needed.
             "uri_escape_utf8" | "uri_escape" if args.len() == 1 => {
                 format!("encodeURIComponent({})", args[0])
             }
             // `Mojo::JSON::decode_json`/`from_json` both parse a JSON string into a plain
-            // Perl data structure — exactly what `JSON.parse` does; no `perlCompat` shim needed.
+            // Perl data structure — exactly what `JSON.parse` does; no `legacyCompat` shim needed.
             // (`Mojo::JSON::encode_json`/`to_json`, the encode direction, map the same way onto
             // `JSON.stringify` — included here even though the corpus scan that motivated this
             // pass only found the decode direction in actual use, since it's the same reasoning
@@ -3029,10 +3052,9 @@ impl Renderer {
             }
             // `Mojo::Util::html_unescape` decodes HTML entities (`&amp;` → `&`, `&#39;` → `'`,
             // etc.) — no native JS equivalent outside a real DOM (which this Deno sandbox doesn't
-            // have), so routed through `perlCompat.htmlUnescape` (see `dispatcher.ts`).
+            // have), so routed through `legacyCompat.htmlUnescape` (see `dispatcher.ts`).
             "html_unescape" if args.len() == 1 => {
-                self.uses_perl_compat = true;
-                format!("perlCompat.htmlUnescape({})", args[0])
+                format!("legacyCompat.htmlUnescape({})", args[0])
             }
             // A call to another sub in this same file, already known (from an earlier
             // fixed-point pass — see `known_async_subs`'s own docs) to render as `async`. Perl
@@ -3069,8 +3091,7 @@ impl Renderer {
             // this can't be routed through `try_match_call`'s "Word + `Structure::List`" pattern
             // the way every *parenthesized* call is (there's no list here at all to match on).
             "PPI::Token::Word" if node.content.as_deref() == Some("get_version") => {
-                self.uses_perl_compat = true;
-                "perlCompat.getVersion()".to_string()
+                "legacyCompat.getVersion()".to_string()
             }
             // A fully package-qualified name (`LANraragi::Utils::Database::get_tags`,
             // `Time::Piece`, `Mojo::File`, ...) — either an external CPAN module or another
@@ -4338,9 +4359,8 @@ mod tests {
                 "get_logger",
                 &["\"EH Downloader\"".into(), "\"plugins\"".into()]
             ),
-            "perlCompat.getLogger(\"EH Downloader\", \"plugins\")"
+            "legacyCompat.getLogger(\"EH Downloader\", \"plugins\")"
         );
-        assert!(r.uses_perl_compat);
     }
 
     #[test]
@@ -4353,28 +4373,24 @@ mod tests {
         r.plugin_name = Some("Tag Copier".to_string());
         assert_eq!(
             r.render_named_call("get_plugin_logger", &[]),
-            "perlCompat.getLogger(\"Tag Copier\", \"plugins\")"
+            "legacyCompat.getLogger(\"Tag Copier\", \"plugins\")"
         );
-        assert!(r.uses_perl_compat);
     }
 
     #[test]
     fn render_named_call_routes_reverse_chomp_sprintf_through_perl_compat() {
         let mut r = Renderer::new();
-        assert!(!r.uses_perl_compat);
 
         assert_eq!(
             r.render_named_call("reverse", &["list".into()]),
-            "perlCompat.reverse(list)"
+            "legacyCompat.reverse(list)"
         );
-        assert!(r.uses_perl_compat);
 
         let mut r = Renderer::new();
         assert_eq!(
             r.render_named_call("chomp", &["line".into()]),
-            "line = perlCompat.chomp(line)"
+            "line = legacyCompat.chomp(line)"
         );
-        assert!(r.uses_perl_compat);
 
         let mut r = Renderer::new();
         assert_eq!(
@@ -4382,9 +4398,8 @@ mod tests {
                 "sprintf",
                 &["\"%s: %d\"".into(), "name".into(), "count".into()]
             ),
-            "perlCompat.sprintf(\"%s: %d\", name, count)"
+            "legacyCompat.sprintf(\"%s: %d\", name, count)"
         );
-        assert!(r.uses_perl_compat);
     }
 
     #[test]
@@ -4392,7 +4407,6 @@ mod tests {
         let mut r = Renderer::new();
         r.render_named_call("push", &["arr".into(), "x".into()]);
         r.render_named_call("index", &["haystack".into(), "\"needle\"".into()]);
-        assert!(!r.uses_perl_compat);
     }
 
     #[test]
@@ -4463,7 +4477,7 @@ mod tests {
         // Legacy unconditionally bundles a fresh-logged-in (or blank) `user_agent` into the info
         // hash for every get_tags/provide_url/run_script call — mirrored here by rehydrating
         // `hostArgs.user_agent_cookies` (whatever the host attached, via that plugin's own
-        // `login_from`) into a real, usable `perlCompat.userAgent()` instance before the
+        // `login_from`) into a real, usable `legacyCompat.userAgent()` instance before the
         // plugin's own converted code runs, regardless of what that plugin calls its info-hash
         // variable.
         let block = node(
@@ -4492,21 +4506,20 @@ mod tests {
         let mut r = Renderer::new();
         let out = r.render_entry_sub(&found, "execMetadata", None, true);
         assert!(
-            out.contains("info.user_agent = perlCompat.userAgent();"),
+            out.contains("info.user_agent = legacyCompat.userAgent();"),
             "got: {out}"
         );
         assert!(
             out.contains("info.user_agent.cookie_jar.add(c);"),
             "got: {out}"
         );
-        assert!(r.uses_perl_compat);
 
         // Must NOT appear for `do_login` (`has_info_hash = false`) — legacy's `do_login` gets no
         // info hash at all, so there's nothing to hang a `user_agent` off of.
         let mut r2 = Renderer::new();
         let out2 = r2.render_entry_sub(&found, "execLogin", None, false);
         assert!(
-            !out2.contains("perlCompat.userAgent()"),
+            !out2.contains("legacyCompat.userAgent()"),
             "login has no info hash to hydrate a user_agent onto, got: {out2}"
         );
     }
@@ -4788,8 +4801,7 @@ mod tests {
         let tokens = [word("Mojo::UserAgent"), op("->"), word("new")];
         let refs: Vec<&PpiNode> = tokens.iter().collect();
         let mut r = Renderer::new();
-        assert_eq!(r.render_expr_sequence(&refs), "perlCompat.userAgent()");
-        assert!(r.uses_perl_compat);
+        assert_eq!(r.render_expr_sequence(&refs), "legacyCompat.userAgent()");
 
         // Also accepts the `->new()` parenthesized-empty-call spelling.
         let tokens_with_parens = [
@@ -4800,13 +4812,13 @@ mod tests {
         ];
         let refs2: Vec<&PpiNode> = tokens_with_parens.iter().collect();
         let mut r2 = Renderer::new();
-        assert_eq!(r2.render_expr_sequence(&refs2), "perlCompat.userAgent()");
+        assert_eq!(r2.render_expr_sequence(&refs2), "legacyCompat.userAgent()");
     }
 
     #[test]
     fn mojo_cookie_response_new_maps_to_a_plain_object_not_a_class_instance() {
         // `Mojo::Cookie::Response->new(name => 'x', value => $v)` — Mojo's hash-literal-shaped
-        // constructor call; `perlCompat.userAgent()`'s `cookie_jar.add` expects a plain
+        // constructor call; `legacyCompat.userAgent()`'s `cookie_jar.add` expects a plain
         // object, not `new Mojo::Cookie::Response(...)` (which also wouldn't be valid JS: `::`
         // isn't a legal identifier character).
         let list = node(
@@ -4842,7 +4854,7 @@ mod tests {
 
     #[test]
     fn mojo_get_result_chain_gets_awaited_and_makes_its_sub_async() {
-        // `$ua->get($url)->result` — `perlCompat.userAgent()`'s `get`/`post` are real
+        // `$ua->get($url)->result` — `legacyCompat.userAgent()`'s `get`/`post` are real
         // `fetch()` calls, so this chain needs `await` wrapped around the *receiver plus the
         // call* (`ua.get(url)`, not just `get(url)`), and the sub it appears in must become
         // `async function` (it isn't the mandatory entry point, which is already always async).
@@ -4892,7 +4904,6 @@ mod tests {
             out.contains("let x = (await ua.get(url)).result;"),
             "got: {out}"
         );
-        assert!(r.uses_perl_compat);
     }
 
     #[test]
@@ -5034,8 +5045,7 @@ mod tests {
         let tokens = [word("get_version")];
         let refs: Vec<&PpiNode> = tokens.iter().collect();
         let out = r.render_expr_sequence(&refs);
-        assert_eq!(out, "perlCompat.getVersion()");
-        assert!(r.uses_perl_compat);
+        assert_eq!(out, "legacyCompat.getVersion()");
     }
 
     #[test]

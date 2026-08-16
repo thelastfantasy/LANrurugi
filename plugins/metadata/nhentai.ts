@@ -18,73 +18,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "nhplugin",
@@ -110,51 +43,33 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    existing_tags: string;
-    file_path: string;
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "file_path">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash
   let ua = lrr_info["user_agent"];
-  //# UserAgent from login plugin
   let add_uploaded = hostArgs.arg as string;
-  //# Parameters
-  let logger = perlCompat.getLogger("nHentai", "plugins");
-  //    # Work your magic here - You can create subs below to organize the code better
-
+  let logger = legacyCompat.getLogger("nHentai", "plugins");
   let galleryID = "";
-  //    # Quick regex to get the nh gallery id from the provided url or source tag.
-
   if ((match = (lrr_info["arg"] ?? "").match(/.*\/g\/([0-9]+).*/))) {
     galleryID = match[1];
     logger.debug(`Skipping search and using gallery ${galleryID} from oneshot args`);
   } else if ((match = lrr_info["existing_tags"].match(/.*source:\s*(?:https?:\/\/)?nhentai\.net\/g\/([0-9]*).*/gi))) {
-    //        # Matching URL Scheme like 'https://' is only for backward compatible purpose.
-  
     galleryID = match[1];
     logger.debug(`Skipping search and using gallery ${galleryID} from source tag`);
   } else {
     logger.debug("Searching gallery by title (filename)");
-    //        # lrr_info's file_path is taken straight from the filesystem, which might not be proper UTF-8.
-  
-    let file_path = perlCompat.redis_decode(lrr_info["file_path"]);
-    //        #Get Gallery ID by hand if the user didn't specify a URL
-  
+    let file_path = legacyCompat.redis_decode(lrr_info["file_path"]);
     galleryID = await get_gallery_id_from_title(file_path, ua);
   }
-  //    # Did we detect a nHentai gallery?
-
   if (! galleryID) {
     let message = "No matching nHentai Gallery Found!";
     logger.info(message);
@@ -163,14 +78,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   logger.debug(`Detected nHentai gallery ID is ${galleryID}`);
   let hashdata = await get_tags_from_nh(galleryID, ua, add_uploaded);
   logger.info("Sending the following tags to LRR: " + hashdata["tags"]);
-  //    #Return a hash containing the new metadata - it will be integrated in LRR.
-
   return hashdata;
 }
 
 async function get_search_json(...args: any[]) {
   let [title, ua] = args.slice(0);
-  let logger = perlCompat.getLogger("nHentai", "plugins");
+  let logger = legacyCompat.getLogger("nHentai", "plugins");
   let URL = "https://nhentai.net/api/v2/search?query=" + encodeURIComponent(title);
   let res = (await ua.get(URL)).result;
   if (res.is_error) {
@@ -184,8 +97,8 @@ async function get_search_json(...args: any[]) {
 async function get_gallery_id_from_title(...args: any[]) {
   let match: RegExpMatchArray | null;
   let [file, ua] = args.slice(0);
-  let [title, filepath, suffix] = perlCompat.fileparse(file);
-  let logger = perlCompat.getLogger("nHentai", "plugins");
+  let [title, filepath, suffix] = legacyCompat.fileparse(file);
+  let logger = legacyCompat.getLogger("nHentai", "plugins");
   if ((match = title.match(/\{(\d*)\}.*$/gm))) {
     logger.debug(`Got ${1} from file.`);
     return match[1];
@@ -200,7 +113,7 @@ async function get_gallery_id_from_title(...args: any[]) {
 
 async function get_json_from_nh(...args: any[]) {
   let [gID, ua] = args.slice(0);
-  let logger = perlCompat.getLogger("nHentai", "plugins");
+  let logger = legacyCompat.getLogger("nHentai", "plugins");
   let URL = `https://nhentai.net/api/v2/galleries/${gID}`;
   let res = (await ua.get(URL)).result;
   if (res.is_error) {
@@ -248,8 +161,6 @@ async function get_tags_from_nh(...args: any[]) {
       tags.push(`timestamp:${upload.join(", ")}`);
     }
     if ((tags > 0)) { tags.push(`source:nhentai.net/g/${gID}`); }
-    //        # Use NH's "pretty" names (romaji titles without extraneous data we already have like (Event)[Artist], etc)
-  
     hashdata["tags"] = tags.join(', ');
     hashdata["title"] = get_title_from_json(json);
   }

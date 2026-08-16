@@ -21,76 +21,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    /** Mojo::Message's real `is_error` — true for any 4xx/5xx HTTP status
-     * (`~/LANraragi/lib/LANraragi/Plugin/Metadata/Chaika.pm:161`'s `$res->is_error`). */
-    is_error: boolean;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "trabant",
@@ -135,31 +65,22 @@ interface ChaikaGallery {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    thumbnail_hash: string;
-    archive_title: string;
-    existing_tags: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "thumbnail_hash" | "archive_title" | "existing_tags" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash
   let [addextra, addother, addsource, jpntitle] = lrr_info.customargs;
-  //# Plugin parameters
-  let logger = perlCompat.getLogger("Chaika.moe", "plugins");
+  let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let newtags = "";
   let newtitle = "";
-  //    # Parse the given link to see if we can extract type and ID
-
   // Each of these three lookup functions returns `""` (nothing usable found) or a real
   // `[tags, title]` pair — never applying array destructuring directly to a bare `""` result,
   // which would silently produce `undefined`/`undefined` rather than the empty string
@@ -183,12 +104,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else if ((match = oneshotarg.match(/^([0-9]+)$/))) {
     apply_result(await tags_from_chaika_id("archive", match[1], addextra, addother, addsource, jpntitle));
   } else {
-    //        # Try SHA-1 reverse search first
-
     logger.info("Using thumbnail hash " + lrr_info["thumbnail_hash"]);
     apply_result(await tags_from_sha1(lrr_info["thumbnail_hash"], addextra, addother, addsource, jpntitle));
-    //        # Try text search if it fails
-
     if (newtags === "") {
       logger.info("No results, falling back to text search.");
       apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
@@ -200,8 +117,6 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     throw new PluginErrorException(message);
   } else {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
-    //        #Return a hash containing the new metadata
-  
     return { tags: newtags, title: newtitle };
   }
 }
@@ -215,7 +130,7 @@ async function search_for_archive(
   addsource: string,
   jpntitle: string,
 ): Promise<[string, string] | ""> {
-  let logger = perlCompat.getLogger("Chaika.moe", "plugins");
+  let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   // Auto-lowercase the title for better results, and strip hyphens/apostrophes (they apparently
   // break search).
   title = title.toLowerCase().replace(/-|'/g, " ");
@@ -226,7 +141,7 @@ async function search_for_archive(
     URL = URL + encodeURIComponent("language:english") + "+";
   }
   logger.debug(`Calling ${URL}`);
-  let ua = perlCompat.userAgent();
+  let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
@@ -271,9 +186,9 @@ async function tags_from_sha1(
  * instead of falling through to the text-search fallback `execMetadata` already has for exactly
  * this case. */
 async function get_json_from_chaika(type: string, value: string): Promise<unknown> {
-  let logger = perlCompat.getLogger("Chaika.moe", "plugins");
+  let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;
-  let ua = perlCompat.userAgent();
+  let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
   if (res.is_error) {
     return undefined;

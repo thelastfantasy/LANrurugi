@@ -21,73 +21,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "ehdl",
@@ -133,26 +66,20 @@ export function pluginOptions() {
 export async function execDownload(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecDownloadInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    url: string;
-    customargs: string[];
+  interface ExecDownloadInfo extends Required<Pick<DownloadHostArgs, "url" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecDownloadInfo;
   let params = { forceresampled: lrr_info.customargs[0] };
-  let logger = perlCompat.getLogger("EH Downloader", "plugins");
-  //    # Get the URL to download
-
-  //    # We don't really download anything here, we just use the E-H URL to get an archiver URL that can be downloaded normally.
-
+  let logger = legacyCompat.getLogger("EH Downloader", "plugins");
   let url = lrr_info["url"];
   let gID = "";
   let gToken = "";
@@ -168,8 +95,6 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   logger.debug(`gID: ${gID}, gToken: ${gToken}`);
   let archiverurl = `${domain}\/archiver.php?gid=${gID}&token=${gToken}`;
   logger.info(`Archiver URL: ${archiverurl}`);
-  //    # Do a quick GET to check for potential errors
-
   let archiverHtml = (await lrr_info["user_agent"].max_redirects(5).get(archiverurl)).result.body;
   if (archiverHtml.indexOf("Invalid archiver key") != -1) {
     return { error: { error_code: "Invalid archiver key", data: { archiverurl } } };
@@ -177,8 +102,6 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   if (archiverHtml.indexOf("This page requires you to log on.") != -1) {
     return { error: { error_code: "Invalid E*Hentai login credentials. Please make sure the login plugin has proper settings set." } };
   }
-  //    # POST to the archiver form with the corresponding archive quality
-
   let dltype = undefined;
   let dlcheck = undefined;
   if (params["forceresampled"]) {
@@ -198,8 +121,6 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   let finalURL = undefined;
   let parseError;
   try {
-    //        # Parse that to get the final URL
-
     // No `/g` flag: with it, `.match()` returns every full-match string instead of the one
     // capture group this code actually needs (`match[1]` would be `undefined` — the converter's
     // own warning on this exact line; verified with a real Deno repro before fixing).
@@ -214,11 +135,7 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   if (parseError || finalURL === undefined) {
     return { error: { error_code: "Couldn't proceed with download", data: { archivesize, content } } };
   }
-  //    # Set URL query parameters to ?start=1 to automatically trigger the download.
-
   finalURL.search = "start=1";
-  //    # All done!
-
   // `filename_hint` matters here: the H@H archive-serving URL's own last path segment isn't a
   // real filename (confirmed via a real download landing on the literal string `"2"`, no
   // extension at all, since neither a `Content-Disposition` header nor this hint was available for

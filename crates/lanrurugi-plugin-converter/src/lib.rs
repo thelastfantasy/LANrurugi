@@ -46,9 +46,19 @@ pub fn convert_file(path: &Path) -> Result<ConversionOutput, ConvertError> {
 /// subprocess, not a library linked into this binary), so this writes `source` to a temp file
 /// first; callers with an existing on-disk file should use [`convert_file`] instead to avoid
 /// that redundant copy.
+///
+/// The temp filename mixes the process ID with a per-process atomic counter (not just the
+/// process ID alone, which every thread in this process shares) — real, confirmed-live bug this
+/// fixes: two concurrent `convert_source` calls on different threads of the same process (e.g.
+/// `cargo test`'s default multi-threaded test runner, which is exactly how this was caught) would
+/// otherwise race on the exact same temp path, so one call's `remove_file` could delete the file
+/// out from under the other call's still-in-flight `perl` subprocess read of it, or one call's
+/// `write` could silently replace the source another concurrently-running call was mid-read on.
 pub fn convert_source(source: &str) -> Result<ConversionOutput, ConvertError> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temp_path = std::env::temp_dir().join(format!(
-        "lanrurugi-plugin-converter-input-{}.pm",
+        "lanrurugi-plugin-converter-input-{}-{unique}.pm",
         std::process::id()
     ));
     std::fs::write(&temp_path, source).map_err(|e| ConvertError::Read(temp_path.clone(), e))?;
@@ -56,13 +66,6 @@ pub fn convert_source(source: &str) -> Result<ConversionOutput, ConvertError> {
     let _ = std::fs::remove_file(&temp_path);
     result
 }
-
-/// Ambient type signature for the `perlCompat` global `dispatcher.ts` defines at runtime (see
-/// that file) — repeated here rather than shared via an import because Deno's per-file
-/// type-checking can't be relied on to see a `declare global` written in that unrelated file.
-/// Only prepended to output that actually calls `perlCompat.*` (`Renderer::uses_perl_compat`),
-/// so a plugin with no need for it stays free of unused boilerplate.
-const PERL_COMPAT_TYPE_STUB: &str = "declare global {\n  interface PerlTransaction {\n    req: { headers: { header(name: string, value: string): void } };\n  }\n  interface PerlUserAgent {\n    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };\n    max_redirects(n: number): PerlUserAgent;\n    transactor: { name(value: string): void };\n    on(event: \"start\", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;\n    get(url: string): Promise<{ result: PerlHttpResult }>;\n    post(url: string, kind: \"form\" | \"json\", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;\n    cookies: { name: string; value: string; domain: string; path: string }[];\n  }\n  interface PerlHttpResult {\n    body: string;\n    code: number;\n    readonly dom: PerlDomNode;\n    readonly json: unknown;\n  }\n  interface PerlLogger {\n    debug(msg: string): void;\n    info(msg: string): void;\n    warn(msg: string): void;\n    error(msg: string): void;\n  }\n  interface PerlDomNode {\n    text: string;\n    attr(name: string): string | undefined;\n    parent: PerlDomNode | undefined;\n    at(selector: string): PerlDomNode | undefined;\n    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };\n    toString(): string;\n  }\n  // deno-lint-ignore no-var\n  var perlCompat: {\n    reverse<T>(list: readonly T[]): T[];\n    chomp(s: string): string;\n    sprintf(format: string, ...args: unknown[]): string;\n    userAgent(): PerlUserAgent;\n    getLogger(name: string, category: string): PerlLogger;\n    htmlUnescape(s: string): string;\n    parseHtml(markup: string, xml?: boolean): PerlDomNode;\n    sleep(seconds: number): Promise<void>;\n    getVersion(): { version: string; homepage: string };\n    refType(x: unknown): string;\n    trim(s: string | null | undefined): string;\n    fileparse(path: string, suffixPattern?: unknown): [string, string, string];\n    redis_decode(s: string): string;\n  };\n}\n";
 
 fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutput, ConvertError> {
     let plugin_info_fields =
@@ -183,11 +186,7 @@ fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutpu
         _ => {}
     }
 
-    let ts = if renderer.uses_perl_compat {
-        format!("{PERL_COMPAT_TYPE_STUB}\n{metadata_ts}\n{sub_ts}")
-    } else {
-        format!("{metadata_ts}\n{sub_ts}")
-    };
+    let ts = format!("{metadata_ts}\n{sub_ts}");
     Ok(ConversionOutput {
         ts,
         warnings: renderer.warnings,
@@ -195,8 +194,8 @@ fn convert_source_with_path(source: &str, path: &Path) -> Result<ConversionOutpu
 }
 
 /// One full rendering pass over every sub, given a `known_async_subs` set from a previous pass
-/// (empty on the very first call). Returns the renderer (for its accumulated warnings/
-/// `uses_perl_compat` flag), the concatenated rendered TS, and the set of sub names *this pass*
+/// (empty on the very first call). Returns the renderer (for its accumulated warnings), the
+/// concatenated rendered TS, and the set of sub names *this pass*
 /// discovered need `async` (checked via `Renderer::used_await` immediately after each individual
 /// `render_sub`/`render_entry_sub` call, since that flag is reset and re-set per call) — the
 /// caller (`convert_source_with_path`) feeds this back in as the next pass's `known_async_subs`
@@ -241,4 +240,87 @@ fn render_all_subs(
         }
     }
     (renderer, sub_ts, async_this_pass)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for issue #86: a freshly-converted plugin must never again carry an
+    /// inline `declare global` block, bare `Perl*`/`perlCompat.*` boilerplate, or even a
+    /// `/// <reference>` line — the shared ambient types now live once in
+    /// `plugins/legacy-globals.d.ts`, a global (no-`import`/`export`) script that
+    /// `plugins/tsconfig.json` makes ambiently visible to every `.ts` file under `plugins/` with
+    /// zero per-file marker of any kind, so a future accidental reversion to the old inline-stub
+    /// (or even the intermediate one-line-reference) approach fails this test immediately instead
+    /// of silently reintroducing per-file boilerplate.
+    #[test]
+    fn a_converted_plugin_using_legacy_compat_gets_zero_boilerplate() {
+        let src = r#"
+            sub plugin_info {
+                return ( name => "X", type => "metadata", namespace => "x" );
+            }
+            sub get_tags {
+                my $logger = get_logger( "X", "plugins" );
+                $logger->debug("hello");
+                return ();
+            }
+        "#;
+        let output = convert_source(src).expect("a minimal but real plugin must convert cleanly");
+
+        assert!(
+            !output.ts.contains("declare global"),
+            "must not inline a declare global block anymore — got:\n{}",
+            output.ts
+        );
+        assert!(
+            !output.ts.contains("/// <reference"),
+            "a plugin file must carry zero reference directives — ambient visibility comes from \
+             plugins/tsconfig.json alone — got:\n{}",
+            output.ts
+        );
+        assert!(
+            !output.ts.contains("PerlUserAgent")
+                && !output.ts.contains("PerlLogger")
+                && !output.ts.contains("PerlDomNode")
+                && !output.ts.contains("PerlTransaction")
+                && !output.ts.contains("PerlHttpResult"),
+            "must not reference any Perl*-prefixed type name anymore — got:\n{}",
+            output.ts
+        );
+        assert!(
+            !output.ts.contains("perlCompat."),
+            "must call legacyCompat.*, not perlCompat.* — got:\n{}",
+            output.ts
+        );
+        assert!(
+            output.ts.contains("legacyCompat.getLogger("),
+            "the generated call site itself must use the renamed global — got:\n{}",
+            output.ts
+        );
+    }
+
+    /// Same zero-boilerplate guarantee holds even for a plugin kind (`login`) whose entry point
+    /// (`do_login`) receives no info hash at all (`entry_point_has_info_hash`), so never triggers
+    /// `render_user_agent_hydration_preamble`'s own `legacyCompat.userAgent()` call — there's no
+    /// per-plugin "does this one need the reference line" branch left to get wrong, since no
+    /// plugin file gets one at all anymore (ambient visibility is a `plugins/tsconfig.json`-level
+    /// property, not a per-file one).
+    #[test]
+    fn a_converted_login_plugin_also_gets_zero_boilerplate() {
+        let src = r#"
+            sub plugin_info {
+                return ( name => "X", type => "login", namespace => "x" );
+            }
+            sub do_login {
+                return ( cookies => [] );
+            }
+        "#;
+        let output = convert_source(src).expect("a minimal but real plugin must convert cleanly");
+        assert!(
+            !output.ts.contains("declare global") && !output.ts.contains("/// <reference"),
+            "got:\n{}",
+            output.ts
+        );
+    }
 }

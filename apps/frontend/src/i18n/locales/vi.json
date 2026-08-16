@@ -453,7 +453,7 @@
   "batch.usePluginLabel": "Dùng plugin :",
   "Version %1 %2": "Phiên bản %1 - %2",
   "View LANrurugi Logs": "Xem nhật ký LANrurugi",
-  "View Mojolicious Logs": "Xem nhật ký Mojolicious",
+  "Xem nhật ký yêu cầu HTTP": "Xem nhật ký yêu cầu HTTP",
   "View Plugin Logs": "Xem nhật ký Plugin",
   "View Redis Logs": "Xem nhật ký Redis",
   "View Shinobu Logs": "Xem nhật ký Shinobu",

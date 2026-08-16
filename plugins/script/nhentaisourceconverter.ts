@@ -6,19 +6,6 @@
 // apply afterward, rather than writing storage itself (see `ScriptHostArgs`'s own docs in
 // `plugin-sdk.ts`).
 
-declare global {
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    getLogger(name: string, category: string): PerlLogger;
-  };
-}
-
 export function pluginInfo() {
   return {
     namespace: "nhsrcconv",
@@ -33,7 +20,7 @@ export function pluginInfo() {
 }
 
 export async function runScript(hostArgs: Record<string, unknown>) {
-  const logger = perlCompat.getLogger("nHentai Source Converter", "plugins");
+  const logger = legacyCompat.getLogger("nHentai Source Converter", "plugins");
   const archives = (hostArgs["archives"] as { id: string; tags: string }[] | undefined) ?? [];
 
   let modified = 0;

@@ -7,73 +7,6 @@
 //     matches; JS .match() with /g returns only full-match strings, not captures. Verify this call 
 //     site by hand.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "hentaiathome",
@@ -94,51 +27,37 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    file_path: string;
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "file_path">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash
-  let logger = perlCompat.getLogger("HentaiAtHome plugin", "plugins");
+  let logger = legacyCompat.getLogger("HentaiAtHome plugin", "plugins");
   let file = lrr_info["file_path"];
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["galleryinfo.txt"];
   if ((! path_in_archive)) { throw new PluginErrorException("No galleryinfo.txt file found in this archive!"); }
-  //    # Extract galleryinfo.txt
-
   let filepath = path_in_archive;
-  //    # Open it
-
   let fh = filepath;
   if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }
   let tag = "";
   let title = "";
   for (let line of (fh ?? "").split(/\r?\n/)) {
-    //        # Check if the line starts with Title:
-  
     if ((match = line.match(/Title: (.*)/))) {
       title = match[1];
     }
-    //        # Check if the line starts with Uploaded By:
-  
     if ((match = line.match(/Uploaded By: (.*)/))) {
       tag += `uploader:${1}, `;
     }
-    //        # Check if the line starts with Upload Time:
-  
     if ((match = line.match(/Upload Time: (.*)/))) {
       tag += `upload_time:${1}, `;
     }
-    //        # Check if the line starts with TAGS:
-  
     if ((match = line.match(/Tags: (.*)/))) {
       tag += match[1];
       return { tags: tag, title: title };

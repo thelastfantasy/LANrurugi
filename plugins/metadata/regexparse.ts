@@ -31,57 +31,6 @@
 // means extending the SDK contract (Rust `PluginInfo` struct + the settings-page parameter form
 // too), out of scope for this pass.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
 /** Legacy's own `${PLUGIN_TAG_NS}` namespace (`"parsed:"`) for non-standard captured tags —
  * hoisted above `pluginInfo()` (unlike the converter's original ordering, which put it after and
  * left the two parameter descriptions below referencing it as a dead, non-interpolating
@@ -152,30 +101,28 @@ interface ParseFilenameParams {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    file_path: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "file_path" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
   const [check_trailing_tags, keep_all_captures, regex_string] = lrr_info.customargs;
 
   // lrr_info's file_path is taken straight from the filesystem, which might not be proper UTF-8.
   // Run a decode to make sure we can derive tags with the proper encoding.
-  const decoded_path = perlCompat.redis_decode(lrr_info.file_path);
+  const decoded_path = legacyCompat.redis_decode(lrr_info.file_path);
   const filename = get_filename_without_extension(decoded_path);
   const [tags, title] = parse_filename(filename, {
     check_trailing_tags: !!check_trailing_tags,
     keep_all_captures: !!keep_all_captures,
     regex_string: regex_string ?? "",
   });
-  const logger = perlCompat.getLogger("Filename Parsing", "plugins");
+  const logger = legacyCompat.getLogger("Filename Parsing", "plugins");
   if (tags === "" && title === "") {
     logger.info("Regex match failed, no changes");
     return { tags: "" };
@@ -211,8 +158,8 @@ function parse_filename(filename: string, params: ParseFilenameParams): [string,
   const captures: Record<string, string> = match.groups ?? {};
 
   // Extract special cases
-  if (captures.title) title = perlCompat.trim(captures.title);
-  let tail = captures.tail ? perlCompat.trim(captures.tail) : "";
+  if (captures.title) title = legacyCompat.trim(captures.title);
+  let tail = captures.tail ? legacyCompat.trim(captures.tail) : "";
 
   if (tail) {
     // match trailing_tags (...{Tags}.ext)
@@ -229,7 +176,7 @@ function parse_filename(filename: string, params: ParseFilenameParams): [string,
         const captured = bracketMatch[1] ?? bracketMatch[2] ?? bracketMatch[3];
         if (captured !== undefined) items.push(captured);
       }
-      other_captures = items.filter((it) => perlCompat.trim(it)).join(",");
+      other_captures = items.filter((it) => legacyCompat.trim(it)).join(",");
     }
   }
 
@@ -237,14 +184,14 @@ function parse_filename(filename: string, params: ParseFilenameParams): [string,
   // Process all named capture groups dynamically
   for (const name of Object.keys(captures)) {
     if (name === "title" || name === "tail") continue;
-    const value = perlCompat.trim(captures[name]);
+    const value = legacyCompat.trim(captures[name]);
     if (!value) continue;
 
     // Strip trailing digits to get the namespace (e.g., artist2 -> artist)
     const namespace = name.replace(TRAILING_DIGITS_PATTERN, "");
     if (namespace === "tag") {
       // Simple tags - no namespace, skip _classify_item
-      tags.push(...value.split(",").map((it) => perlCompat.trim(it)));
+      tags.push(...value.split(",").map((it) => legacyCompat.trim(it)));
     } else if (namespace === "artist") {
       tags.push(...parse_artist_value(value));
     } else if (namespace === "event") {
@@ -268,15 +215,15 @@ function parse_artist_value(artist: string): string[] {
   // is the artist name, the rest is the circle.
   const match = artist.match(CIRCLE_ARTIST_PATTERN);
   if (match) {
-    tags.push("group:" + perlCompat.trim(match[1]));
-    artist = perlCompat.trim(match[2]);
+    tags.push("group:" + legacyCompat.trim(match[1]));
+    artist = legacyCompat.trim(match[2]);
   }
   tags.push(...parse_captured_value_for_namespace(artist, "artist:"));
   return tags;
 }
 
 function parse_captured_value_for_namespace(capture: string, namespace: string): string[] {
-  return capture.split(",").map((it) => _classify_item(perlCompat.trim(it), namespace));
+  return capture.split(",").map((it) => _classify_item(legacyCompat.trim(it), namespace));
 }
 
 function _classify_item(item: string, namespace: string): string {

@@ -1000,7 +1000,7 @@ export function useClearDuplicates() {
   })
 }
 
-export const LOG_CATEGORIES = ["general", "shinobu", "plugins", "redis", "mojo"] as const
+export const LOG_CATEGORIES = ["general", "shinobu", "plugins", "redis", "http"] as const
 
 export type LogCategory = (typeof LOG_CATEGORIES)[number]
 

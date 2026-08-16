@@ -12,18 +12,20 @@ const CATEGORY_LABELS: Record<LogCategory, string> = {
   shinobu: "Shinobu",
   plugins: "Plugins",
   redis: "Redis",
-  mojo: "Web Server",
+  http: "HTTP",
 }
 
-// Matches legacy's own button copy exactly (`logs.html.tt2`'s `#show-*` buttons), distinct from
-// `CATEGORY_LABELS` above (which is just the bare category name, used for the "Currently Viewing:"
-// indicator).
+// Matches legacy's own button copy exactly (`logs.html.tt2`'s `#show-*` buttons) for every
+// category except `http` (legacy calls the equivalent category `mojo`, after its own underlying
+// web framework — this project runs Axum, not Mojolicious, so the button copy names the protocol
+// instead of a framework this project doesn't use — issue #86), distinct from `CATEGORY_LABELS`
+// above (which is just the bare category name, used for the "Currently Viewing:" indicator).
 const CATEGORY_BUTTON_LABELS: Record<LogCategory, string> = {
   general: "View LANrurugi Logs",
   shinobu: "View Shinobu Logs",
   plugins: "View Plugin Logs",
   redis: "View Redis Logs",
-  mojo: "View Mojolicious Logs",
+  http: "View HTTP Request Logs",
 }
 
 // Mirrors legacy's `~/LANraragi/templates/logs.html.tt2` — the intro paragraph + per-category
@@ -56,7 +58,7 @@ export function Logs() {
         <li>{t("logs.generalLogsPertainToThe")}</li>
         <li>{t("logs.shinobuLogsCorrespondToThe")}</li>
         <li>{t("logs.pluginLogsAreReservedFor")}</li>
-        <li>{t("logs.mojoliciousLogsWonTTell")}</li>
+        <li>{t("logs.httpLogsWonTTell")}</li>
         <li>{t("logs.redisLogsWonTBe")}</li>
       </ul>
       <br />

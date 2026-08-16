@@ -488,7 +488,7 @@
   "batch.usePluginLabel": "Nutze Erweiterung :",
   "Version %1 %2": "Version %1 - %2",
   "View LANrurugi Logs": "LANrurugi-Logs ansehen",
-  "View Mojolicious Logs": "Mojolicious-Logs ansehen",
+  "HTTP-Anfrage-Protokolle anzeigen": "HTTP-Anfrage-Protokolle anzeigen",
   "View Plugin Logs": "Plugin-Logs ansehen",
   "View Redis Logs": "Redis-Logs ansehen",
   "View Shinobu Logs": "Shinobu-Logs ansehen",

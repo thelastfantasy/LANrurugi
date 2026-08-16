@@ -11,35 +11,6 @@
 // a file list — a host-side pre-walk would make any Rust-vs-TS timing comparison meaningless,
 // since the actual I/O would only ever happen once, on the Rust side, either way.
 
-declare global {
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    getLogger(name: string, category: string): PerlLogger;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 // Mirrors `lanrurugi_scanner::watcher::WATCHED_EXTENSIONS` exactly (verified against that
 // module's own doc comment, itself verified against legacy's `~/LANraragi/lib/Shinobu.pm`).
 const WATCHED_EXTENSIONS = new Set([
@@ -101,7 +72,7 @@ async function walkSubfolders(
 }
 
 export async function runScript(hostArgs: Record<string, unknown>) {
-  const logger = perlCompat.getLogger("Subfolders to Categories (TS)", "plugins");
+  const logger = legacyCompat.getLogger("Subfolders to Categories (TS)", "plugins");
   const libraryPath = hostArgs["library_path"] as string | undefined;
   const archiveIdByPath = (hostArgs["archive_id_by_path"] as Record<string, string> | undefined) ?? {};
   const customargs = (hostArgs["customargs"] as string[] | undefined) ?? [];

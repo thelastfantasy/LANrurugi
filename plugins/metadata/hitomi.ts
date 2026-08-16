@@ -6,83 +6,12 @@
 //   - all three `/g`-flag warnings were false alarms for single-match-then-capture use (`.match()`
 //     without `g` already returns `[fullMatch, group1, ...]` in JS) — the stray `g` flags (which
 //     Perl needs for its own `while (/.../g)` iteration idiom, not used here) were just dropped.
-//   - `res.is_error` (a real `Mojo::Message::Response` property) — added to the local
-//     `PerlHttpResult` interface here rather than the shared one, since it's Mojo::UserAgent-
-//     specific and no other converted plugin currently needs it.
 //   - `extract_tags(...)` returns an array (Perl's `push(@tags, extract_tags(...))` flattens it
 //     into the caller's list) — the converter's literal `tags.push(extract_tags(...))` instead
 //     pushed one nested array as a single element; fixed to `tags.push(...extract_tags(...))`.
 //   - `declared_permissions.net`: this plugin only ever calls `ltn.gold-usergeneratedcontent.net`
 //     (Hitomi's own gallery-info JS host), verified against the one URL literal in
 //     `get_js_from_hitomi`.
-
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-    readonly is_error: boolean;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
 
 export function pluginInfo() {
   return {
@@ -126,20 +55,17 @@ interface HitomiGalleryJson {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    existing_tags: string;
-    file_path: string;
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "file_path">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  const logger = perlCompat.getLogger("Hitomi", "plugins");
+  const logger = legacyCompat.getLogger("Hitomi", "plugins");
 
   let galleryID: string | undefined = "";
   // Quick regex to get the hitomi gallery id from the provided url or source tag.
@@ -170,8 +96,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 }
 
 function get_gallery_id_from_title(file: string): string | undefined {
-  const [title] = perlCompat.fileparse(file);
-  const logger = perlCompat.getLogger("Hitomi", "plugins");
+  const [title] = legacyCompat.fileparse(file);
+  const logger = legacyCompat.getLogger("Hitomi", "plugins");
   logger.debug(`Attempting to parse id from title ${title}`);
   const match = title.match(GALLERY_ID_FROM_TITLE_PATTERN);
   if (match) {
@@ -182,10 +108,10 @@ function get_gallery_id_from_title(file: string): string | undefined {
 }
 
 async function get_js_from_hitomi(gID: string): Promise<HitomiGalleryJson | undefined> {
-  const logger = perlCompat.getLogger("Hitomi", "plugins");
+  const logger = legacyCompat.getLogger("Hitomi", "plugins");
   const gJS = `https://ltn.gold-usergeneratedcontent.net/galleries/${gID}.js`;
   logger.debug(`Hitomi JS: ${gJS}`);
-  const ua = perlCompat.userAgent();
+  const ua = legacyCompat.userAgent();
   const res = (await ua.get(gJS)).result;
   logger.debug("Hitomi raw JS: " + res.body);
   if (res.is_error) {
@@ -204,7 +130,7 @@ async function get_js_from_hitomi(gID: string): Promise<HitomiGalleryJson | unde
 }
 
 function get_tags_from_taglist(json: HitomiGalleryJson): string[] {
-  const logger = perlCompat.getLogger("Hitomi", "plugins");
+  const logger = legacyCompat.getLogger("Hitomi", "plugins");
   const tags: string[] = [];
 
   if (json.tags) {
@@ -230,7 +156,7 @@ function get_tags_from_taglist(json: HitomiGalleryJson): string[] {
 }
 
 function extract_tags(
-  logger: PerlLogger,
+  logger: LegacyLogger,
   list: Record<string, string>[],
   arrayname: string,
   namespace: string,
@@ -252,7 +178,7 @@ interface HitomiHashData {
 
 async function get_tags_from_Hitomi(gID: string): Promise<HitomiHashData> {
   const hashdata: HitomiHashData = { tags: "" };
-  const logger = perlCompat.getLogger("Hitomi", "plugins");
+  const logger = legacyCompat.getLogger("Hitomi", "plugins");
   const json = await get_js_from_hitomi(gID);
   if (json) {
     logger.debug("Got fully formed JS from Hitomi");

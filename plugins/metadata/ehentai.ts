@@ -26,75 +26,6 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — the
-// frontend's `apps/frontend/src/i18n/locales/*.json` use literal English sentences as keys, not
-// symbolic codes; write it as a natural, stable phrase that does not embed any dynamic value
-// (that goes in `data` instead), so the same `error_code` translates regardless of which specific
-// value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "ehplugin",
@@ -128,39 +59,26 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    existing_tags: string;
-    archive_title: string;
-    thumbnail_hash: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "thumbnail_hash" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash
   let ua = lrr_info["user_agent"];
   let [lang, usethumbs, search_gid, enablepanda, jpntitle, additionaltags, expunged] =
     lrr_info.customargs;
-  //# Plugin parameters
-  //    # Use the logger to output status - they'll be passed to a specialized logfile and written to STDOUT.
-
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
-  //    # Work your magic here - You can create subroutines below to organize the code better
-
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let gID = "";
   let gToken = "";
   let domain = (enablepanda ? 'https://exhentai.org' : 'https://e-hentai.org');
   let hasSrc = 0;
-  //    # Quick regex to get the E-H archive ids from the provided url or source tag
-
   if ((match = (lrr_info["arg"] ?? "").match(/.*\/g\/([0-9]*)\/([0-z]*)\/*.*/))) {
     gID = match[1];
     gToken = match[2];
@@ -171,8 +89,6 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     hasSrc = 1;
     logger.debug(`Skipping search and using gallery ${gID} / ${gToken} from source tag`);
   } else {
-    //        # Craft URL for Text Search on EH if there's no user argument
-  
     try {
       [gID, gToken] = await lookup_gallery(lrr_info["archive_title"], lrr_info["existing_tags"], lrr_info["thumbnail_hash"], ua, domain, lang, usethumbs, search_gid, expunged);
     } catch (e: any) {
@@ -189,29 +105,21 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   }
   let [ehtags, ehtitle] = await get_tags_from_EH(ua, gID, gToken, jpntitle, additionaltags);
   let hashdata: Record<string, any> = { tags: ehtags };
-  //    # Add source URL and title if possible/applicable
-
   if (hashdata["tags"] !== "") {
     if (! hasSrc) {
       hashdata["tags"] += ", source:" + (domain.split('://')) [1] + `/g/${gID}/${gToken}`;
     }
     hashdata["title"] = ehtitle;
   }
-  //    #Return a hash containing the new metadata - it will be integrated in LRR.
-
   return hashdata;
 }
 
 async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, domain: any, defaultlanguage: any, usethumbs: any, search_gid: any, expunged: any) {
   let match: RegExpMatchArray | null;
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let URL = "";
-  //    #Thumbnail reverse image search
-
   if (thumbhash !== "" && usethumbs) {
     logger.info("Reverse Image Search Enabled, trying now.");
-    //        #search with image SHA hash
-  
     URL = domain + "?f_shash=" + thumbhash + "&fs_similar=on&fs_covers=on";
     logger.debug(`Using URL ${URL} (archive thumbnail hash)`);
     let [gId, gToken] = await ehentai_parse(URL, ua);
@@ -219,8 +127,6 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
       return [gId, gToken];
     }
   }
-  //    # Search using gID if present in title name
-
   let [title_gid] = (match = title.match(/\[([0-9]+)\]/g));
   if (search_gid && title_gid) {
     URL = domain + "?f_search=" + encodeURIComponent(`gid:${title_gid}`);
@@ -230,12 +136,8 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
       return [gId, gToken];
     }
   }
-  //    # Regular text search (advanced options: Disable default filters for: Language, Uploader, Tags)
-
   URL = domain + "?advsearch=1&f_sfu=on&f_sft=on&f_sfl=on" + "&f_search=" + encodeURIComponent("\"" + title + "\"");
   let has_artist = 0;
-  //    # Add artist tag from the OG tags if it exists (and only contains ASCII characters)
-
   if ((match = tags.match(/.*artist:\s?([^,]*),*.*/gi))) {
     let artist = match[1];
     if ((match = artist.match(/^[\x00-\x7F]*$/))) {
@@ -243,13 +145,9 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
       has_artist = 1;
     }
   }
-  //    # Add the language override, if it's defined.
-
   if (defaultlanguage !== "") {
     URL = URL + "+" + encodeURIComponent(`language:${defaultlanguage}`);
   }
-  //    # Search expunged galleries if the option is enabled.
-
   if (expunged) {
     URL = URL + "&f_sh=on";
   }
@@ -258,36 +156,26 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
 }
 
 async function ehentai_parse(url: any, ua: any) {
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let dom = await search_gallery(url, ua);
-  //    # Get the first row of the search results
-
-  //    # The "glink" class is parented by a <a> tag containing the gallery link in href.
-
-  //    # This works in Minimal, Minimal+ and Compact modes, which should be enough.
-
   let glink_element = dom.at(".glink");
   if (! glink_element) {
     logger.debug("No gallery found in search results");
     return ["", ""];
   }
   let firstgal = glink_element.parent.attr('href');
-  //    # A EH link looks like xhentai.org/g/{gallery id}/{gallery token}
-
   url = (firstgal.split('hentai.org/g/')) [1];
   let [gID, gToken] = (url.split('/'));
   if (dom.toString().indexOf("You are opening") != -1) {
     let rand = 15 + Math.trunc((Math.random() * 51 - 15));
     logger.info(`Sleeping for ${rand} seconds due to EH excessive requests warning`);
-    await perlCompat.sleep(rand);
+    await legacyCompat.sleep(rand);
   }
-  //    #Returning shit yo
-
   return [gID, gToken];
 }
 
 async function search_gallery(url: any, ua: any) {
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let res = (await ua.max_redirects(5).get(url)).result;
   if (res.body.indexOf("Your IP address has been") != -1) {
     throw new PluginErrorException("Temporarily banned from EH for excessive pageloads.");
@@ -297,7 +185,7 @@ async function search_gallery(url: any, ua: any) {
 
 async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, additionaltags: any) {
   let uri = 'https://api.e-hentai.org/api.php';
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let jsonresponse = await get_json_from_EH(ua, gID, gToken);
   let data = jsonresponse["gmetadata"];
   let tags = data[0]["tags"];
@@ -313,9 +201,7 @@ async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, a
     tags.push(`uploader:${ehuploader}`);
     tags.push(`timestamp:${ehtimestamp}`);
   }
-  //    # Unescape title received from the API as it might contain some HTML characters
-
-  ehtitle = perlCompat.htmlUnescape(ehtitle);
+  ehtitle = legacyCompat.htmlUnescape(ehtitle);
   let ehtags = tags.join(', ');
   logger.info(`Sending the following tags to LRR: ${ehtags}`);
   return [ehtags, ehtitle];
@@ -323,9 +209,7 @@ async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, a
 
 async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let uri = 'https://api.e-hentai.org/api.php';
-  let logger = perlCompat.getLogger("E-Hentai", "plugins");
-  //    #Execute the request
-
+  let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let rep = (await ua.post(uri, "json", {method: "gdata", gidlist: [[gID, gToken]], namespace: 1})).result;
   let textrep = rep.body;
   logger.debug(`E-H API returned this JSON: ${textrep}`);

@@ -158,7 +158,15 @@ for category in "${CATEGORIES[@]}"; do
       cat "$tmp_ts"
     } > "$dest_path"
 
-    if deno check "$dest_path" >/dev/null 2>&1; then
+    # `--config` explicitly, not relying on Deno's own upward config auto-discovery — real,
+    # confirmed-live gotcha (issue #86): a `deno.json`'s `compilerOptions.types` entry (how
+    # `plugins/deno.json` gives every plugin file ambient access to `plugin-sdk.ts`'s shared
+    # `declare global` block — `LegacyUserAgent`/`legacyCompat`/etc. — with zero per-file
+    # boilerplate, not even a `/// <reference>` line) is NOT picked up by plain auto-discovery the
+    # way tsc/Node tooling would lead you to expect; it only takes effect when `--config` names the
+    # file explicitly, verified directly against this exact deno version by running both ways
+    # side-by-side against the same file.
+    if deno check --config "$REPO_ROOT/plugins/deno.json" "$dest_path" >/dev/null 2>&1; then
       clean+=("$category/$dest_name")
     else
       dirty+=("$category/$dest_name")

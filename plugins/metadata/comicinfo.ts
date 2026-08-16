@@ -5,73 +5,6 @@
 // Known limitations (from the converter's own warnings — review, don't blindly trust):
 //   - external Perl module reference has no JS equivalent: Mojo::DOM
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "comicinfo",
@@ -91,39 +24,29 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    file_path: string;
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "file_path">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  //# Global info hash, contains various metadata provided by LRR
-  //    #Use the logger to output status - they'll be passed to a specialized logfile and written to STDOUT.
-
-  let logger = perlCompat.getLogger("ComicInfo", "plugins");
+  let logger = legacyCompat.getLogger("ComicInfo", "plugins");
   let file = lrr_info["file_path"];
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["ComicInfo.xml"];
   if ((! path_in_archive)) { throw new PluginErrorException("No ComicInfo.xml file found in the archive"); }
-  //    #Extract ComicInfo.xml
-
   let filepath = path_in_archive;
-  //    #Read file into string
-
   let stringxml = "";
   let fh = filepath;
   if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }
   for (let line of (fh ?? "").split(/\r?\n/)) {
-    line = perlCompat.chomp(line);
+    line = legacyCompat.chomp(line);
     stringxml += line;
   }
-  //    #Parse file into DOM object and extract tags
-
   let genre = undefined;
   let calibretags = undefined;
   let group = undefined;
@@ -134,51 +57,47 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let series = undefined;
   let character = undefined;
   let publisher = undefined;
-  let result = perlCompat.parseHtml(stringxml, true).at('Genre');
+  let result = legacyCompat.parseHtml(stringxml, true).at('Genre');
   if ((result !== undefined && result !== null)) {
     genre = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Tags');
+  result = legacyCompat.parseHtml(stringxml, true).at('Tags');
   if ((result !== undefined && result !== null)) {
     calibretags = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Characters');
+  result = legacyCompat.parseHtml(stringxml, true).at('Characters');
   if ((result !== undefined && result !== null)) {
     character = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Web');
+  result = legacyCompat.parseHtml(stringxml, true).at('Web');
   if ((result !== undefined && result !== null)) {
     url = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Writer');
+  result = legacyCompat.parseHtml(stringxml, true).at('Writer');
   if ((result !== undefined && result !== null)) {
     group = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Penciller');
+  result = legacyCompat.parseHtml(stringxml, true).at('Penciller');
   if ((result !== undefined && result !== null)) {
     artist = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('LanguageISO');
+  result = legacyCompat.parseHtml(stringxml, true).at('LanguageISO');
   if ((result !== undefined && result !== null)) {
     lang = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Title');
+  result = legacyCompat.parseHtml(stringxml, true).at('Title');
   if ((result !== undefined && result !== null)) {
     title = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Series');
+  result = legacyCompat.parseHtml(stringxml, true).at('Series');
   if ((result !== undefined && result !== null)) {
     series = result.text;
   }
-  result = perlCompat.parseHtml(stringxml, true).at('Publisher');
+  result = legacyCompat.parseHtml(stringxml, true).at('Publisher');
   if ((result !== undefined && result !== null)) {
     publisher = result.text;
   }
-  //    #Delete local file
-
   ;
-  //    #Add prefix and concatenate
-
   let found_tags = [] as any[];
   found_tags = try_add_tags(found_tags, "group:", group);
   found_tags = try_add_tags(found_tags, "artist:", artist);
@@ -192,7 +111,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     genres.push(calibretags.split(','));
   }
   for (let genre_tag of genres) {
-    found_tags.push(perlCompat.trim(genre_tag));
+    found_tags.push(legacyCompat.trim(genre_tag));
   }
   let tags = found_tags.join(", ");
   logger.info(`Sending the following tags to LRR: ${tags}`);
@@ -205,7 +124,7 @@ function try_add_tags(...args: any[]) {
   let tags = args[2] ?? "";
   let tags_array = tags.split(',');
   for (let tag of tags_array) {
-    found_tags.push(prefix + perlCompat.trim(tag));
+    found_tags.push(prefix + legacyCompat.trim(tag));
   }
   return found_tags;
 }

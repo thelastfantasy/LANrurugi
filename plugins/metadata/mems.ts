@@ -18,73 +18,6 @@
 //     this file (copied from `plugins/metadata/ehentai.ts`'s own identical private helpers)
 //     instead of attempting a cross-plugin import the runtime has no mechanism for.
 
-declare global {
-  interface PerlTransaction {
-    req: { headers: { header(name: string, value: string): void } };
-  }
-  interface PerlUserAgent {
-    cookie_jar: { add(cookie: { name: string; value: string; domain: string; path: string }): void };
-    max_redirects(n: number): PerlUserAgent;
-    transactor: { name(value: string): void };
-    on(event: "start", handler: (ua: PerlUserAgent, tx: PerlTransaction) => void): void;
-    get(url: string): Promise<{ result: PerlHttpResult }>;
-    post(url: string, kind: "form" | "json", data: Record<string, string> | Record<string, unknown>): Promise<{ result: PerlHttpResult }>;
-    cookies: { name: string; value: string; domain: string; path: string }[];
-  }
-  interface PerlHttpResult {
-    body: string;
-    code: number;
-    readonly dom: PerlDomNode;
-    readonly json: unknown;
-  }
-  interface PerlLogger {
-    debug(msg: string): void;
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-  }
-  interface PerlDomNode {
-    text: string;
-    attr(name: string): string | undefined;
-    parent: PerlDomNode | undefined;
-    at(selector: string): PerlDomNode | undefined;
-    find(selector: string): PerlDomNode[] & { each<T>(fn: (node: PerlDomNode, index: number) => T): T[] };
-    toString(): string;
-  }
-  // deno-lint-ignore no-var
-  var perlCompat: {
-    reverse<T>(list: readonly T[]): T[];
-    chomp(s: string): string;
-    sprintf(format: string, ...args: unknown[]): string;
-    userAgent(): PerlUserAgent;
-    getLogger(name: string, category: string): PerlLogger;
-    htmlUnescape(s: string): string;
-    parseHtml(markup: string, xml?: boolean): PerlDomNode;
-    sleep(seconds: number): Promise<void>;
-    getVersion(): { version: string; homepage: string };
-    refType(x: unknown): string;
-    trim(s: string | null | undefined): string;
-    fileparse(path: string, suffixPattern?: unknown): [string, string, string];
-    redis_decode(s: string): string;
-  };
-}
-
-// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `PluginErrorException` — defined
-// locally (not imported) since a plugin file is loaded via a standalone `import()` with no
-// relative-path relationship to the SDK file, and the dispatcher's catch block detects this by
-// property shape (`error_code`/`data` on a thrown `Error`), not `instanceof`, for exactly that
-// reason (see `dispatcher.ts`'s own comment on this). `error_code` is an i18n lookup key — write
-// it as a natural, stable phrase that does not embed any dynamic value (that goes in `data`
-// instead), so the same `error_code` translates regardless of which specific value triggered it.
-class PluginErrorException extends Error {
-  constructor(
-    public error_code: string,
-    public data?: Record<string, string | number>,
-  ) {
-    super(error_code);
-  }
-}
-
 export function pluginInfo() {
   return {
     namespace: "memsplugin",
@@ -119,29 +52,23 @@ export function pluginInfo() {
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   {
     const info = hostArgs as Record<string, any>;
-    info.user_agent = perlCompat.userAgent();
+    info.user_agent = legacyCompat.userAgent();
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo {
-    user_agent: PerlUserAgent;
-    user_agent_cookies?: { name: string; value: string; domain: string; path: string }[];
-    arg?: string;
-    existing_tags: string;
-    archive_title: string;
-    customargs: string[];
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "customargs">> {
+    user_agent: LegacyUserAgent;
+    user_agent_cookies?: LegacyCookie[];
   }
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
   let ua = lrr_info["user_agent"];
-  let logger = perlCompat.getLogger("Mayriad's EH Master Script", "plugins");
+  let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let gallery_id = '';
   let gallery_token = '';
   let [save_jpn_title, save_additional_metadata, use_exhentai] = lrr_info.customargs;
-  //    # Use the URL from oneshot parameters or source tag first when applicable.
-
   if ((match = (lrr_info["arg"] ?? "").match(/e(?:x|-)hentai\.org\/g\/(\d+)\/([0-9a-z]+)/i))) {
     gallery_id = match[1];
     gallery_token = match[2];
@@ -160,26 +87,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
       throw new PluginErrorException(file_error);
     }
   }
-  //    # Retrieve metadata directly using EH API.
-
   logger.info('Source identified. Calling E-Hentai metadata plugin to retrieve metadata from EH API.');
   let [eh_all_tags, eh_title] = await get_tags_from_EH(ua, gallery_id, gallery_token, save_jpn_title, save_additional_metadata);
-  //    # Add source URL and title if possible.
-
   if (eh_all_tags !== "") {
-    //        # Title is always updated to hide the identifiers and also to reflect title changes due to rename petitions.
-  
     let metadata: Record<string, any> = { tags: eh_all_tags, title: eh_title };
-    //        # Add the source tag outside get_tags_from_EH(), so that this tag is only added when metadata has been
-  
-    //        # successfully retrieved; otherwise $metadata{tags} may only contain this source tag and truly untagged
-  
-    //        # galleries may be incorrectly hidden.
-  
     let host = (use_exhentai ? 'exhentai.org' : 'e-hentai.org');
     metadata["tags"] += `, source:${host}/g/${gallery_id}/${gallery_token}`;
-    //        # Return a hash containing the new metadata to be added to LRR.
-  
     return metadata;
   } else {
     let source_error = 'No matching EH gallery found. The archive title may have incorrect gallery identifiers.';
@@ -196,7 +109,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 // carries its own copy rather than attempting a cross-plugin import that the runtime has no
 // mechanism for.
 async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, additionaltags: any) {
-  let logger = perlCompat.getLogger("Mayriad's EH Master Script", "plugins");
+  let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let jsonresponse = await get_json_from_EH(ua, gID, gToken);
   let data = jsonresponse["gmetadata"];
   let tags = data[0]["tags"];
@@ -212,9 +125,7 @@ async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, a
     tags.push(`uploader:${ehuploader}`);
     tags.push(`timestamp:${ehtimestamp}`);
   }
-  //    # Unescape title received from the API as it might contain some HTML characters
-
-  ehtitle = perlCompat.htmlUnescape(ehtitle);
+  ehtitle = legacyCompat.htmlUnescape(ehtitle);
   let ehtags = tags.join(', ');
   logger.info(`Sending the following tags to LRR: ${ehtags}`);
   return [ehtags, ehtitle];
@@ -222,9 +133,7 @@ async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, a
 
 async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let uri = 'https://api.e-hentai.org/api.php';
-  let logger = perlCompat.getLogger("Mayriad's EH Master Script", "plugins");
-  //    #Execute the request
-
+  let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let rep = (await ua.post(uri, "json", {method: "gdata", gidlist: [[gID, gToken]], namespace: 1})).result;
   let textrep = rep.body;
   logger.debug(`E-H API returned this JSON: ${textrep}`);

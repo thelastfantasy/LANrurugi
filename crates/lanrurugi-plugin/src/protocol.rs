@@ -153,3 +153,112 @@ pub struct PluginOptionsResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overwrite_on_duplicate: Option<OverwriteOnDuplicateOption>,
 }
+
+/// A plugin-authored error — mirrors `plugin-sdk.ts`'s `PluginError` field-for-field. `error_code`
+/// doubles as an i18n lookup key (see that interface's own docs for the full naming convention);
+/// `data` is its interpolation params.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginError {
+    pub error_code: String,
+    #[serde(default)]
+    pub data:
+        Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+}
+
+/// A single cookie exactly as `plugin-sdk.ts`'s `LegacyCookie`/`plugins/legacy-globals.d.ts`
+/// shapes it — round-tripped host-side between `exec_login`'s result and the next
+/// `exec_metadata`/`exec_download`/`exec_script` call's `hostArgs.user_agent_cookies` (see
+/// `lanrurugi-api::plugins::with_login_cookies`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+}
+
+/// `execMetadata`'s return shape — mirrors `plugin-sdk.ts`'s `MetadataResult` field-for-field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetadataResult {
+    #[serde(default)]
+    pub tags: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub error: Option<PluginError>,
+}
+
+/// `execLogin`'s return shape — mirrors `plugin-sdk.ts`'s `LoginResult` field-for-field. Only
+/// `cookies` is ever read by the host (`lanrurugi-api::plugins::with_login_cookies`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginResult {
+    #[serde(default)]
+    pub cookies: Option<Vec<PluginCookie>>,
+    #[serde(default)]
+    pub error: Option<PluginError>,
+}
+
+/// One archive's `id`/`tags`, as passed into or returned from a `"script"`-type plugin — mirrors
+/// `plugin-sdk.ts`'s `ScriptArchiveTags` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptArchiveTags {
+    pub id: String,
+    pub tags: String,
+}
+
+/// `runScript`'s return shape — mirrors `plugin-sdk.ts`'s `ScriptResult` field-for-field. A
+/// deliberately loose bag of fields (see that interface's own docs for why): each real script
+/// plugin only ever populates the subset it needs.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ScriptResult {
+    #[serde(default)]
+    pub total: Option<u32>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub error: Option<PluginError>,
+    #[serde(default)]
+    pub modified: Option<u32>,
+    #[serde(default)]
+    pub updates: Option<Vec<ScriptArchiveTags>>,
+    #[serde(default)]
+    pub categories_to_create: Option<Vec<ScriptCategoryToCreate>>,
+    #[serde(default)]
+    pub delete_old_categories: Option<bool>,
+    #[serde(default)]
+    pub elapsed_ms: Option<f64>,
+}
+
+/// One static Category `runScript`'s result asks the host to create — mirrors `plugin-sdk.ts`'s
+/// `ScriptResult.categories_to_create` element shape field-for-field (`foldertocat`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptCategoryToCreate {
+    pub name: String,
+    pub archive_ids: Vec<String>,
+}
+
+/// One `downloads[]` entry as `execDownload` returns it — mirrors `plugin-sdk.ts`'s
+/// `DownloadRequest` and `contracts/plugin-download-protocol.md`'s wire shape field-for-field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DownloadRequest {
+    pub url: String,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub filename_hint: Option<String>,
+}
+
+/// `execDownload`'s full return shape — mirrors `plugin-sdk.ts`'s `DownloadResult` and
+/// `contracts/plugin-download-protocol.md`'s extended `DownloadResult`. Exactly one of
+/// `downloads`/`file_path`/`error` is expected to be present.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DownloadResult {
+    #[serde(default)]
+    pub downloads: Option<Vec<DownloadRequest>>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub error: Option<PluginError>,
+}
