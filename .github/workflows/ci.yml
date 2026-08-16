@@ -48,12 +48,22 @@ jobs:
       # against these at build time. `ubuntu-latest` doesn't ship them, so linking failed with
       # "mold: fatal: library not found: bz2" (first library alphabetically probed; the others
       # would have failed the same way one at a time without this).
-      - name: Install libarchive build dependencies + redis-server
+      #
+      # `perl`/`cpanminus` here too: `lanrurugi-plugin-converter`'s own `cargo test` now shells out
+      # to a real `perl` + PPI invocation (`ppi.rs`'s own doc comment — genuinely parsing legacy
+      # Perl plugin source needs a real Perl parser, not a hand-rolled one), confirmed via a real
+      # CI failure (run 31936693031) where both of its "converts cleanly, zero boilerplate" tests
+      # failed with "Can't locate PPI.pm in @INC" — `ubuntu-latest` ships a bare `perl` with no CPAN
+      # modules preinstalled. The host binary itself (`lanrurugi-server`) never needs Perl; this is
+      # purely a `cargo test`-time dependency of the offline conversion tool, same as
+      # `Dockerfile.build`'s own `perl cpanminus` + `cpanm PPI JSON::PP` steps.
+      - name: Install libarchive build dependencies + redis-server + perl/PPI
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
-            redis-server
+            redis-server perl cpanminus
+          sudo cpanm --notest PPI JSON::PP
 
       # A `services.redis` Docker container can't be started with a custom `--databases` count
       # (the `services:` schema only allows docker-run flags via `options`, not overriding the
