@@ -23,19 +23,18 @@ use crate::state::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget};
 
 pub fn router() -> Router<AppState> {
+    // Token management itself must never be reachable via API-token auth (even an admin-role
+    // token) — only a real session-cookie login (a human who's already proven the admin password)
+    // may create/list/revoke/rename tokens. Enforced by `require_api_key` itself (issue #91's
+    // `route_policy.csv` `deny` rules for `token_admin`/`token_guest` against these routes) — see
+    // `procedure.rs`'s own module docs for why this used to be a separate `route_layer` and no
+    // longer is.
     Router::new()
         .route("/tokens", get(list_tokens).post(create_token))
         .route(
             "/tokens/{id}",
             axum::routing::delete(delete_token).patch(rename_token),
         )
-        // Token management itself must never be reachable via API-token auth (even an admin-role
-        // token) — only a real session-cookie login (a human who's already proven the admin
-        // password) may create/list/revoke/rename tokens. `route_layer` applies this middleware
-        // only to these two routes, right at their own definition — see `require_session`'s own
-        // docs for why this must be a *route*-level layer, not a check inside `require_api_key`
-        // itself.
-        .route_layer(axum::middleware::from_fn(crate::procedure::require_session))
 }
 
 fn now_secs() -> i64 {

@@ -205,29 +205,18 @@ pub async fn record_automatic(
 }
 
 pub fn router() -> Router<AppState> {
+    // Deletion (single or bulk) and changing the retention window are both Session-only — an API
+    // token (any role) must never be able to erase its own trail or shorten how long it survives,
+    // the same reasoning `database.rs`'s `/database/drop` and `api_tokens.rs`'s whole router
+    // already apply to their own irreversible/self-incriminating actions. Enforced by
+    // `require_api_key` itself now (issue #91's `route_policy.csv` `deny` rules for these three
+    // exact `(role, path, method)` combinations), not a separate `route_layer` here — see
+    // `procedure.rs`'s own module docs for why the two enforcement layers were merged into one.
     Router::new()
-        .route("/activity", get(list_activity))
+        .route("/activity", get(list_activity).delete(bulk_delete_activity))
         .route("/activity/facets", get(get_facets))
-        .route("/activity/retention", get(get_retention))
-        // Deletion (single or bulk) and changing the retention window are both Session-only — an
-        // API token (any role) must never be able to erase its own trail or shorten how long it
-        // survives, the same reasoning `database.rs`'s `/database/drop` and `api_tokens.rs`'s
-        // whole router already apply to their own irreversible/self-incriminating actions. Query/
-        // facets/retention-read above stay on the plain `require_api_key`-gated router (read
-        // access via a token is fine) — only these three mutating routes get the extra
-        // `require_session` gate. Deliberately a *separate* `.route()` for `DELETE /activity`
-        // rather than chaining `.delete(...)` onto the same `/activity` route as `list_activity`'s
-        // `GET`: `route_layer` applies per merged sub-router, not per HTTP method on a shared
-        // path, so `GET`+`DELETE` sharing one `.route()` call would have put them both under (or
-        // both outside) the same gate — confirmed by re-reading `require_session`'s own docs
-        // before writing this, not assumed.
-        .merge(
-            Router::new()
-                .route("/activity", axum::routing::delete(bulk_delete_activity))
-                .route("/activity/{id}", axum::routing::delete(delete_activity))
-                .route("/activity/retention", axum::routing::put(put_retention))
-                .route_layer(axum::middleware::from_fn(crate::procedure::require_session)),
-        )
+        .route("/activity/{id}", axum::routing::delete(delete_activity))
+        .route("/activity/retention", get(get_retention).put(put_retention))
 }
 
 /// Whether `target` still points at a real, undeleted resource — checked live against the

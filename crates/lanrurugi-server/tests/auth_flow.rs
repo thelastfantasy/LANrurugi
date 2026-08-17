@@ -7,7 +7,7 @@
 //! integration test in this workspace — skips gracefully if unset.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use lanrurugi_api::{AppState, AuthConfig, LibraryPaths, Repositories};
 use lanrurugi_core::jobs::JobRegistry;
@@ -15,6 +15,17 @@ use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
 use lanrurugi_storage::redis::RedisDbs;
 use tower::ServiceExt;
+
+/// Serializes every test in this file against the shared real Redis instance — both suites here
+/// call `purge_all_refresh_and_api_tokens`, which wipes *every* refresh/API-token key regardless
+/// of which test wrote it, so running two tests concurrently means one's purge can delete the
+/// other's still-in-use tokens mid-flight. Same failure mode (and same fix) as
+/// `serve_index.rs::theme_field_lock`/`settings_toggles.rs::config_field_lock` — confirmed live
+/// here too once this file grew a second test function.
+fn redis_state_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 /// `enable_pass: true` — unlike every other integration test in this workspace (which run with
 /// auth disabled to focus on the endpoint under test), this suite exists specifically to exercise
@@ -193,11 +204,46 @@ async fn request(
         .unwrap()
 }
 
+/// Same shape as [`request`], but for issue #91's own Casbin-route-policy tests: a `cookie` for
+/// Session auth, an optional `bearer` for API-token auth (never both at once in these tests), and
+/// a JSON body instead of form-encoded — `create_token`/`change_password` both expect
+/// `application/json`, not the login form's `application/x-www-form-urlencoded`.
+async fn request_json(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    bearer: Option<&str>,
+    json_body: Option<&str>,
+) -> axum::http::Response<axum::body::Body> {
+    let mut builder = axum::http::Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header(axum::http::header::COOKIE, cookie);
+    }
+    if let Some(bearer) = bearer {
+        builder = builder.header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {bearer}"),
+        );
+    }
+    let body = if let Some(json_body) = json_body {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
+        axum::body::Body::from(json_body.to_string())
+    } else {
+        axum::body::Body::empty()
+    };
+    app.clone()
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
 /// The full lifecycle in one test (rather than split across several) because each step's Redis
 /// state depends on the previous step's cookies — splitting would just mean re-deriving the same
 /// login/refresh chain repeatedly.
 #[tokio::test]
 async fn login_then_protected_request_then_refresh_then_logout_revokes_everything() {
+    let _guard = redis_state_lock().lock().await;
     let Some((app, redis)) = test_app().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
@@ -362,6 +408,104 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
         refresh_after_logout.status(),
         axum::http::StatusCode::UNAUTHORIZED,
         "logout must actually revoke the refresh-token family, not just clear the browser's cookies"
+    );
+
+    purge_all_refresh_and_api_tokens(&redis).await;
+}
+
+/// Issue #91's own consolidation of `require_api_key` + `require_session` into one Casbin-backed
+/// check — end-to-end coverage that a real Session can reach a Session-only route
+/// (`POST /database/drop`, chosen since it needs no request body to reach the auth check) while a
+/// real Admin-role API token (created through the live `POST /tokens` endpoint, not hand-built)
+/// gets `403 Forbidden`, mirroring `authz::tests::admin_token_may_not_call_any_session_only_route`'s
+/// own unit-level coverage but through the actual HTTP router this time — the exact case that
+/// regressed once already this session (`require_api_key`'s `enable_pass: false` short-circuit
+/// briefly stopped routing through `check_route` at all before this test existed).
+#[tokio::test]
+async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_session() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+
+    let login_resp = request(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some("password=kamimamita"),
+    )
+    .await;
+    assert_eq!(login_resp.status(), axum::http::StatusCode::OK);
+    let login_cookies = set_cookie_values(&login_resp);
+    let cookie = cookie_header(&login_cookies);
+
+    // A real Admin-role token, issued through the live endpoint (not fabricated) — the whole
+    // point is exercising the exact same code path a real client would.
+    let create_resp = request_json(
+        &app,
+        "POST",
+        "/api/tokens",
+        Some(&cookie),
+        None,
+        Some(r#"{"name":"authz-test-admin","role":"admin"}"#),
+    )
+    .await;
+    assert_eq!(create_resp.status(), axum::http::StatusCode::OK);
+    let create_bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_bytes).unwrap();
+    let raw_token = create_json["data"]["token"]
+        .as_str()
+        .expect("create_token must return the raw token value")
+        .to_string();
+
+    // The Admin token must be rejected — `/database/drop` is Session-only regardless of role.
+    let drop_via_token = request_json(
+        &app,
+        "POST",
+        "/api/database/drop",
+        None,
+        Some(&raw_token),
+        None,
+    )
+    .await;
+    assert_eq!(
+        drop_via_token.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "an Admin-role API token must never reach a Session-only route"
+    );
+
+    // The real Session, by contrast, must be let through to the handler itself — asserting
+    // anything other than 403 here (a `200`, or a `500` from the handler's own logic) is enough
+    // to prove `check_route` didn't block it; this test isn't about `drop_database`'s own
+    // behavior once reached.
+    let drop_via_session = request_json(
+        &app,
+        "POST",
+        "/api/database/drop",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_ne!(
+        drop_via_session.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "a real Session must not be blocked from a route it's explicitly allowed to reach"
+    );
+
+    // `GET /api/theme` — merged in *before* `require_api_key`'s layer (see `app.rs::build_app`'s
+    // own docs) — must stay reachable with zero credentials at all, unaffected by anything above.
+    let theme_resp = request(&app, "GET", "/api/theme", None, None).await;
+    assert_eq!(
+        theme_resp.status(),
+        axum::http::StatusCode::OK,
+        "an unauthenticated request to the public /theme endpoint must never be blocked by the \
+         protected router's own Casbin check"
     );
 
     purge_all_refresh_and_api_tokens(&redis).await;

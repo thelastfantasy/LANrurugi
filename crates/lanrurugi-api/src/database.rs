@@ -21,15 +21,13 @@ use lanrurugi_storage::activity::{action_types, ActivityTarget};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 pub fn router() -> Router<AppState> {
-    // `/database/drop` — whole-library, irreversible ("数据销毁类") — is split into its own
-    // sub-router so `require_session` (see `crate::procedure`'s own module docs) applies to only
-    // this one route, not every other endpoint here. No API token, admin-role or not, may reach
-    // this; only a real session cookie can.
-    let dangerous = Router::new()
-        .route("/database/drop", post(drop_database))
-        .route_layer(axum::middleware::from_fn(crate::procedure::require_session));
-
+    // `/database/drop` — whole-library, irreversible ("数据销毁类") — no API token, admin-role or
+    // not, may reach this; only a real session cookie can. Enforced by `require_api_key` itself
+    // (issue #91's `route_policy.csv` `deny` rule for `token_admin`/`token_guest` against this
+    // exact route) — see `procedure.rs`'s own module docs for why this used to be a separate
+    // `route_layer`-gated sub-router and no longer is.
     Router::new()
+        .route("/database/drop", post(drop_database))
         .route("/database/stats", get(stats))
         .route("/database/backup", get(get_backup).post(queue_backup))
         .route("/database/backup/{jobid}", get(download_backup))
@@ -37,7 +35,6 @@ pub fn router() -> Router<AppState> {
         .route("/database/isnew", delete(clear_new_all))
         .route("/database/clean", post(clean_database))
         .route("/database/rebuild-index", post(rebuild_index))
-        .merge(dangerous)
 }
 
 #[derive(Debug, Deserialize, Default)]

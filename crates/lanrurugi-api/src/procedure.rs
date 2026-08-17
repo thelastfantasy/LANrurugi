@@ -1,21 +1,29 @@
 //! The "procedure" pipeline every protected request goes through — one place that owns
 //! authentication, authorization, and request-level tracing together, rather than scattering
-//! those three concerns across separate files. Two composable pieces, applied at different layers
-//! (see each function's own docs for why):
+//! those three concerns across separate files.
 //!
-//! - [`require_api_key`] — the base procedure, `.layer()`-ed on the whole protected router
-//!   (`lanrurugi-server`'s `app.rs`). Resolves *who* is making this request (a real session, or a
-//!   first-party API token with a role), rejects outright if that's nobody, rejects a `Guest`-role
-//!   token's non-`GET` request, and — regardless of which path let the request through — records
-//!   one structured trace event (`operator`, `client_ip`) and inserts [`crate::auth_context::AuthContext`]
-//!   into the request's extensions for the pieces below to read.
-//! - [`require_session`] — an additional gate, `.route_layer()`-ed directly onto specific routes at
-//!   their own definition site (`api_tokens.rs`'s `/tokens*`, `database.rs`'s `/database/drop`,
-//!   `settings.rs`'s `/settings/password`) — routes no API token, admin-role or not, may ever
-//!   reach. Reads the `AuthContext` `require_api_key` already inserted; a route-level layer (not a
-//!   condition inside `require_api_key` itself) because axum only resolves *which* route matched
-//!   — and therefore which route-level layers apply — *after* the outer `.layer()` stack has
-//!   already run, so this check couldn't live in `require_api_key` even if we wanted it to.
+//! [`require_api_key`] is the single gate, `.layer()`-ed on the whole protected router
+//! (`lanrurugi-server`'s `app.rs`). Resolves *who* is making this request (a real session, or a
+//! first-party API token with a role), rejects outright if that's nobody, records one structured
+//! trace event (`operator`, `client_ip`), inserts [`crate::auth_context::AuthContext`] into the
+//! request's extensions, and — via [`crate::authz::check_route`] against `policy/route_policy.csv`
+//! — rejects any request the resolved role isn't allowed to make against the actual matched route
+//! (`axum::extract::MatchedPath`) and method, covering both a `Guest`-role token's blanket
+//! GET-only restriction and the handful of Session-only routes (`/tokens*`,
+//! `/database/drop`, `/settings/password`) no API token, admin-role or not, may ever reach.
+//!
+//! Before issue #91, this was two separate pieces — `require_api_key` (identity only) plus a
+//! second `require_session` middleware individually `.route_layer()`-ed onto each session-only
+//! route's own sub-router, on the assumption that a route-aware check couldn't live in
+//! `require_api_key` without knowing the matched route pattern, which axum only resolves *after*
+//! the outer `.layer()` stack has already run. That assumption turned out to be wrong —
+//! `MatchedPath` resolves correctly even read from an outer `.layer()` — so the two checks are now
+//! one: `require_api_key` itself calls `check_route`, and `route_policy.csv` is the one place
+//! that says which role may reach which route. An admin-role token hitting `/database/drop` used
+//! to be *allowed through* `require_api_key`'s own identity check and only rejected afterward by
+//! the separate `require_session` layer; now `require_api_key`'s single `check_route` call
+//! rejects it directly, since `token_admin` was never in that route's own allow-list to begin
+//! with.
 //!
 //! **Deliberately does not implement legacy's own API-key semantics anymore** — the
 //! `Authorization: Bearer base64(apikey)` header format and the undocumented `?key=` query
@@ -26,7 +34,7 @@
 //! `.specify/memory/constitution.md`.
 
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
-use axum::http::{Method, StatusCode};
+use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -36,6 +44,7 @@ use crate::AppState;
 pub async fn require_api_key(
     State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    matched_path: MatchedPath,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -52,8 +61,18 @@ pub async fn require_api_key(
 
     // `no_fun_mode` deliberately overrides this bypass — see that field's own docs
     // (`LiveAuthConfig::no_fun_mode`) for why `enable_pass: false` must not mean "wide open" once
-    // No-Fun Mode is on.
+    // No-Fun Mode is on. No `AuthContext` is ever inserted here (there's no identity to attach —
+    // this is the literal "anyone at all" case), but the Session-only routes must still be
+    // unreachable even on an open instance (`route_policy.csv`'s own `anonymous` deny rules for
+    // `/tokens*`/`/database/drop`/`/settings/password` exist specifically for this — an open
+    // instance was never meant to let a random caller drop the whole database), so this still
+    // routes through `check_route` with `auth: None` rather than skipping straight to `next`.
     if !cfg.enable_pass && !cfg.no_fun_mode {
+        let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
+        let authz = crate::authz::Authz::get().await;
+        if !crate::authz::check_route(&authz.route, None, &obj, request.method().as_str()) {
+            return route_forbidden_response();
+        }
         return next.run(request).await;
     }
 
@@ -71,15 +90,9 @@ pub async fn require_api_key(
                         },
                         client_ip,
                     };
-                    // `Guest` is read-only by HTTP method alone — see `AuthContext::is_guest_token`'s
-                    // own docs for why this is a blanket rule rather than a per-endpoint allowlist.
-                    if auth.is_guest_token() && request.method() != Method::GET {
+                    if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
                         trace_request(&request, &auth, false);
-                        return (
-                            StatusCode::FORBIDDEN,
-                            "This token is read-only (guest role) and cannot make non-GET requests.",
-                        )
-                            .into_response();
+                        return route_forbidden_response();
                     }
                     trace_request(&request, &auth, true);
                     request.extensions_mut().insert(auth);
@@ -100,12 +113,48 @@ pub async fn require_api_key(
             method: AuthMethod::Session,
             client_ip,
         };
+        // Always allowed today (`route_policy.csv`'s own `p, session, /*, *, allow` has no
+        // exceptions), but still routed through the same `authorize_route` check as the `Token`
+        // branch above rather than skipped — `route_policy.csv` stays the one place that can say
+        // "no" to *any* role, including `session`, without this function's own code needing to
+        // change to enforce a future Session-side restriction.
+        if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
+            trace_request(&request, &auth, false);
+            return route_forbidden_response();
+        }
         trace_request(&request, &auth, true);
         request.extensions_mut().insert(auth);
         return next.run(request).await;
     }
 
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+}
+
+/// Shared by both the `Token` and `Session` branches of [`require_api_key`] — see that function's
+/// own docs on why both go through the identical [`crate::authz::check_route`] call against
+/// `policy/route_policy.csv` rather than the `Token` branch alone. Takes `method` as an already-
+/// extracted `&str` rather than `&Request` itself — holding a live `&Request` reference across
+/// the `.await` inside here makes the enclosing future `!Sync` (axum's own `Request`/`Body` wraps
+/// a `Box<dyn HttpBody>`, which isn't `Sync`), and `FromFn`'s own `Service` impl requires the
+/// whole `require_api_key` future to be `Sync` — confirmed live as a real compile failure only
+/// after adding this function, not present in either of the two branches' predecessor code.
+async fn authorize_route(matched_path: &MatchedPath, method: &str, auth: &AuthContext) -> bool {
+    let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
+    let authz = crate::authz::Authz::get().await;
+    crate::authz::check_route(&authz.route, Some(auth), &obj, method)
+}
+
+/// Covers every reason [`authorize_route`] can say no — a `Guest`-role token's non-`GET` request,
+/// or any role hitting a route `route_policy.csv` denies it (the Session-only routes, formerly
+/// `require_session`'s own separate check — see this module's own top-level docs). Deliberately
+/// generic rather than trying to guess which specific rule fired, since `route_policy.csv` is the
+/// single source of truth for that and a wrong guess here would be actively misleading.
+fn route_forbidden_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        "Your current credentials are not authorized to make this request.",
+    )
+        .into_response()
 }
 
 /// One structured event per authenticated (or rejected) request — `operator` is `"session"` or
@@ -124,46 +173,6 @@ fn trace_request(request: &Request, auth: &AuthContext, allowed: bool) {
         allowed,
         "authenticated api request"
     );
-}
-
-/// Route-level gate for the handful of endpoints no API token — `Guest` or `Admin` role alike —
-/// may ever reach: token management itself (`/tokens*`), and the other two "danger" categories
-/// confirmed for this project (account-security: `POST /settings/password`; data-destruction:
-/// `POST /database/drop`). Only a real session cookie (a human who's already typed the actual
-/// admin password) may call these. Applied via `.route_layer(axum::middleware::from_fn(require_session))`
-/// directly at each such route's own definition — see this module's own top-level docs for why a
-/// route-level layer, not a check inside `require_api_key`, is what axum's layering model actually
-/// requires here.
-///
-/// `PUT /settings` is a partial exception to this pattern: it's one generic endpoint covering many
-/// fields of very different sensitivity (`theme`/`motd`/`pagesize` alongside `enablepass`/
-/// `nofunmode`/the token-lifetime settings), so a whole-route `require_session` would also block
-/// harmless field updates a `Guest`-blocked-but-otherwise-trusted admin-role token should still be
-/// able to make. That endpoint instead does its own narrower, field-level check inside
-/// `settings::put_settings` by reading the same `AuthContext` this function reads.
-///
-/// Backed by [`crate::authz`] (issue #91) rather than a hardcoded "any token at all" check — reads
-/// `policy/route_policy.csv` via [`crate::authz::Authz::get`] (a process-global, not an
-/// `AppState` field — see that function's own docs on why), keyed on the actual matched route
-/// pattern (`MatchedPath`, axum's own `{param}` syntax, translated to Casbin's `:param` via
-/// [`crate::authz::axum_path_to_casbin`]) and HTTP method, so the *set* of session-only routes
-/// lives in one declarative file instead of being implied by which handlers happen to have this
-/// middleware mounted on them. Still mounted the exact same way (`.route_layer(from_fn(require_session))`
-/// at each route's own definition) — only what happens *inside* changed, not where it's called
-/// from.
-pub async fn require_session(matched_path: MatchedPath, request: Request, next: Next) -> Response {
-    let auth = request.extensions().get::<AuthContext>();
-    let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
-    let method = request.method().as_str();
-    let authz = crate::authz::Authz::get().await;
-    if !crate::authz::check_route(&authz.route, auth, &obj, method) {
-        return (
-            StatusCode::FORBIDDEN,
-            "This action requires a real login session, not an API token.",
-        )
-            .into_response();
-    }
-    next.run(request).await
 }
 
 /// `Authorization: Bearer <value>` — unlike legacy's own header (`Bearer base64(apikey)`, an

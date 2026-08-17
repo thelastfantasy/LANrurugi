@@ -39,18 +39,16 @@ pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 
 pub fn router() -> Router<AppState> {
-    // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change
-    // the admin password; only a real session cookie can. See `crate::procedure`'s own module
-    // docs for why this is a route-level layer on its own sub-router, not a check inside
-    // `put_settings`. `PUT /settings` itself stays outside this gate — see that handler's own
-    // docs for why its dangerous fields need a narrower, field-level check instead.
-    let password = Router::new()
-        .route("/settings/password", post(change_password))
-        .route_layer(axum::middleware::from_fn(crate::procedure::require_session));
-
+    // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
+    // admin password; only a real session cookie can. Enforced by `require_api_key` itself
+    // (issue #91's `route_policy.csv` `deny` rule for `token_admin`/`token_guest` against this
+    // exact route) — see `procedure.rs`'s own module docs for why this used to be a separate
+    // `route_layer`-gated sub-router and no longer is. `PUT /settings` itself stays outside this
+    // rule — see that handler's own docs for why its dangerous fields need a narrower, field-level
+    // check instead.
     Router::new()
         .route("/settings", get(get_settings).put(put_settings))
-        .merge(password)
+        .route("/settings/password", post(change_password))
 }
 
 /// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s

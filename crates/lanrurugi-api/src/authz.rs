@@ -90,13 +90,16 @@ pub async fn activity_enforcer() -> Enforcer {
         .expect("activity_policy.csv is malformed")
 }
 
-/// Route-level check — replaces the four separate `.route_layer(require_session)` mounts and
-/// `settings.rs::put_settings`'s own inline `is_token()` check with one call each handler makes
-/// against the shared policy file instead of hand-rolling its own condition. `obj` is the route's
-/// own declared path pattern exactly as written in its `Router::route(...)` call (e.g.
-/// `"/activity/{id}"` — Axum's own `{id}` capture syntax, translated to Casbin's `:id` `keyMatch2`
-/// syntax by [`axum_path_to_casbin`] before this is called), not the concrete request URI (which
-/// would need every numeric/hash id in the policy file itself).
+/// Route-level check — backs `require_api_key`'s own single enforcement point (issue #91; see
+/// `procedure.rs`'s own module docs for the merge from two separate middlewares into this one).
+/// `obj` is expected to be axum's own `MatchedPath` as read from inside `require_api_key`
+/// (translated to Casbin's `:param` `keyMatch2` syntax by [`axum_path_to_casbin`] first) — which,
+/// because `require_api_key` is `.layer()`-ed *inside* the `.nest("/api", ...)` boundary
+/// (`app.rs::build_app`), always carries the `/api` prefix (`/api/database/drop`, not
+/// `/database/drop`), confirmed live and now what every `route_policy.csv` rule is written
+/// against. Never the bare path a `router()` function's own `.route(...)` call declares, and never
+/// the concrete request URI either (which would need every numeric/hash id spelled out in the
+/// policy file itself).
 pub fn check_route(
     enforcer: &Enforcer,
     auth: Option<&AuthContext>,
@@ -233,51 +236,66 @@ mod tests {
     // through one process-wide instance the way an integration test touching real storage would
     // need to.
 
+    // Every `obj` string below carries the `/api` prefix — `route_policy.csv`'s own top-level
+    // comment explains why (`MatchedPath`, read by `require_api_key`, reflects the full post-
+    // `.nest("/api", ...)` path, not the bare path each `router()` function's own `.route(...)`
+    // calls declare). Omitting the prefix here would make these unit tests pass against a
+    // `route_policy.csv` that doesn't actually match what `require_api_key` sees in production —
+    // exactly the gap that let a real Admin-role token through `/database/drop` once already
+    // this session, only caught by a real end-to-end HTTP test
+    // (`lanrurugi-server/tests/auth_flow.rs::session_only_route_rejects_a_real_admin_token_but_accepts_a_real_session`),
+    // not by these pure in-memory ones.
+
     #[tokio::test]
     async fn session_may_call_every_session_only_route() {
         let e = route_enforcer().await;
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/activity",
+            "/api/activity",
             "DELETE"
         ));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/activity/abc",
+            "/api/activity/abc",
             "DELETE"
         ));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/activity/retention",
+            "/api/activity/retention",
             "PUT"
         ));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/database/drop",
+            "/api/database/drop",
             "POST"
         ));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/settings/password",
+            "/api/settings/password",
             "POST"
         ));
-        assert!(check_route(&e, Some(&session_auth()), "/tokens", "GET"));
-        assert!(check_route(&e, Some(&session_auth()), "/tokens", "POST"));
+        assert!(check_route(&e, Some(&session_auth()), "/api/tokens", "GET"));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/tokens/abc",
+            "/api/tokens",
+            "POST"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/tokens/abc",
             "PATCH"
         ));
         assert!(check_route(
             &e,
             Some(&session_auth()),
-            "/tokens/abc",
+            "/api/tokens/abc",
             "DELETE"
         ));
     }
@@ -286,48 +304,68 @@ mod tests {
     async fn admin_token_may_not_call_any_session_only_route() {
         let e = route_enforcer().await;
         let admin = token_auth(TokenRole::Admin);
-        assert!(!check_route(&e, Some(&admin), "/activity", "DELETE"));
-        assert!(!check_route(&e, Some(&admin), "/activity/abc", "DELETE"));
-        assert!(!check_route(&e, Some(&admin), "/activity/retention", "PUT"));
-        assert!(!check_route(&e, Some(&admin), "/database/drop", "POST"));
-        assert!(!check_route(&e, Some(&admin), "/settings/password", "POST"));
-        assert!(!check_route(&e, Some(&admin), "/tokens", "GET"));
-        assert!(!check_route(&e, Some(&admin), "/tokens", "POST"));
-        assert!(!check_route(&e, Some(&admin), "/tokens/abc", "PATCH"));
-        assert!(!check_route(&e, Some(&admin), "/tokens/abc", "DELETE"));
+        assert!(!check_route(&e, Some(&admin), "/api/activity", "DELETE"));
+        assert!(!check_route(
+            &e,
+            Some(&admin),
+            "/api/activity/abc",
+            "DELETE"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&admin),
+            "/api/activity/retention",
+            "PUT"
+        ));
+        assert!(!check_route(&e, Some(&admin), "/api/database/drop", "POST"));
+        assert!(!check_route(
+            &e,
+            Some(&admin),
+            "/api/settings/password",
+            "POST"
+        ));
+        assert!(!check_route(&e, Some(&admin), "/api/tokens", "GET"));
+        assert!(!check_route(&e, Some(&admin), "/api/tokens", "POST"));
+        assert!(!check_route(&e, Some(&admin), "/api/tokens/abc", "PATCH"));
+        assert!(!check_route(&e, Some(&admin), "/api/tokens/abc", "DELETE"));
     }
 
     #[tokio::test]
     async fn admin_token_may_call_every_ordinary_route_and_method() {
         let e = route_enforcer().await;
         let admin = token_auth(TokenRole::Admin);
-        assert!(check_route(&e, Some(&admin), "/archives", "GET"));
-        assert!(check_route(&e, Some(&admin), "/archives/abc", "PUT"));
-        assert!(check_route(&e, Some(&admin), "/archives/abc", "DELETE"));
-        assert!(check_route(&e, Some(&admin), "/activity", "GET"));
-        assert!(check_route(&e, Some(&admin), "/activity/facets", "GET"));
+        assert!(check_route(&e, Some(&admin), "/api/archives", "GET"));
+        assert!(check_route(&e, Some(&admin), "/api/archives/abc", "PUT"));
+        assert!(check_route(&e, Some(&admin), "/api/archives/abc", "DELETE"));
+        assert!(check_route(&e, Some(&admin), "/api/activity", "GET"));
+        assert!(check_route(&e, Some(&admin), "/api/activity/facets", "GET"));
     }
 
     #[tokio::test]
     async fn guest_token_is_read_only_everywhere() {
         let e = route_enforcer().await;
         let guest = token_auth(TokenRole::Guest);
-        assert!(check_route(&e, Some(&guest), "/archives", "GET"));
-        assert!(check_route(&e, Some(&guest), "/activity", "GET"));
-        assert!(!check_route(&e, Some(&guest), "/archives/abc", "PUT"));
-        assert!(!check_route(&e, Some(&guest), "/archives/abc", "DELETE"));
-        assert!(!check_route(&e, Some(&guest), "/tokens", "GET"));
+        assert!(check_route(&e, Some(&guest), "/api/archives", "GET"));
+        assert!(check_route(&e, Some(&guest), "/api/activity", "GET"));
+        assert!(!check_route(&e, Some(&guest), "/api/archives/abc", "PUT"));
+        assert!(!check_route(
+            &e,
+            Some(&guest),
+            "/api/archives/abc",
+            "DELETE"
+        ));
+        assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
     }
 
     #[tokio::test]
     async fn anonymous_open_instance_may_call_ordinary_routes_but_not_session_only_ones() {
         // `require_api_key` only ever short-circuits (no `AuthContext` inserted at all) when
-        // `enable_pass=false` — the four session-only routes still individually gate through
-        // `require_session`/`check_route` in that case, `auth: None`.
+        // `enable_pass=false` — the four session-only routes still individually go through
+        // `check_route` in that case, `auth: None`.
         let e = route_enforcer().await;
-        assert!(check_route(&e, None, "/archives", "GET"));
-        assert!(!check_route(&e, None, "/database/drop", "POST"));
-        assert!(!check_route(&e, None, "/tokens", "GET"));
+        assert!(check_route(&e, None, "/api/archives", "GET"));
+        assert!(!check_route(&e, None, "/api/database/drop", "POST"));
+        assert!(!check_route(&e, None, "/api/tokens", "GET"));
     }
 
     fn session_auth() -> AuthContext {
