@@ -18,6 +18,7 @@ pub mod login;
 pub mod logs;
 pub mod misc;
 pub mod opds;
+pub mod opensearch;
 pub mod plugins;
 pub mod procedure;
 pub mod recommend;

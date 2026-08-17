@@ -47,6 +47,10 @@ pub fn build_app(
     // Cloned before `.with_state` moves the original — `serve_index`'s own closure below (registered
     // well after `state` would otherwise be gone) needs its own copy of the same shared `AppState`.
     let index_state = state.clone();
+    // Also cloned before `.with_state` below moves `state` — `opensearch::router()` needs its own
+    // copy, mounted at the bare (non-`/api`-nested) top level (see that module's own docs on why
+    // it must be reachable without going through `require_api_key` at all).
+    let opensearch_state = state.clone();
     let api = lanrurugi_api::login::router()
         .merge(lanrurugi_api::settings::public_router())
         .merge(protected)
@@ -55,7 +59,9 @@ pub fn build_app(
         // never reach the auth check (see `cors::apply_cors`'s own docs).
         .layer(axum::middleware::from_fn_with_state(state, apply_cors));
 
-    let mut router = Router::new().nest("/api", api);
+    let mut router = Router::new()
+        .nest("/api", api)
+        .merge(lanrurugi_api::opensearch::router().with_state(opensearch_state));
 
     if let Some(dir) = docs_dir {
         router = router.nest_service("/docs", ServeDir::new(dir));

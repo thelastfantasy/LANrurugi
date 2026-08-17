@@ -193,7 +193,10 @@ fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
 /// exists to validate the header against, so this is inherently spoofable by a request that
 /// reaches the proxy able to set its own `X-Forwarded-For` — acceptable for a display/audit field,
 /// unacceptable for anything gating access, which is why nothing here does that.
-fn client_ip(headers: &axum::http::HeaderMap, peer_addr: std::net::SocketAddr) -> Option<String> {
+pub(crate) fn client_ip(
+    headers: &axum::http::HeaderMap,
+    peer_addr: std::net::SocketAddr,
+) -> Option<String> {
     if let Some(forwarded) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
         if let Some(first) = forwarded.split(',').next() {
             let trimmed = first.trim();

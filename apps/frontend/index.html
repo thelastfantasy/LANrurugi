@@ -8,6 +8,11 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-status-bar-style" content="black" />
     <link rel="manifest" href="/app.webappmanifest" />
+    <!-- Browser-autodiscoverable OpenSearch (issue #90) — `href` is a fixed absolute path (the
+         browser always resolves it against whatever origin actually served this page), the
+         per-Host/per-client-IP dynamic content lives entirely in `GET /opensearch.xml`'s own
+         response (`lanrurugi-api::opensearch`), not here. -->
+    <link rel="search" type="application/opensearchdescription+xml" title="LANrurugi" href="/opensearch.xml" />
     <title>LANrurugi</title>
     <!--
       Synchronous, blocking (deliberately not `type="module"`/`defer`/`async`) — applies a theme

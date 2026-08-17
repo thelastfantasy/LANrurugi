@@ -48,6 +48,7 @@ Playwright 前端测试覆盖），以及 `specs/005-download-plugin-progress/`�
 - **first-party API Token 管理系统取代旧版共享 apikey。** 旧版"整个实例共用一个固定 apikey 字符串"的机制被替换为可在设置页创建/重命名/撤销的多 Token 系统，每个 Token 可选 Admin（除 Token 管理/账号安全/数据库清空外的完整权限）或 Guest（只读）角色与到期时间，创建时一次性显示原始 Token 供复制；这是一项刻意的发布前破坏性变更，依赖旧版 `Bearer base64(apikey)` / `?key=` 机制的第三方客户端不再保证免修改可用（详见下方"刻意不作为改进"章节旁注）。
 - **操作活动记录（审计日志）。** 结构化、持久化、可按操作者/操作类型/时间范围过滤的操作记录页面，区分手动操作（Session/Token 发起）与自动操作（扫描器入库、元数据插件自动运行），评分变更独立分类并展示新旧星级对比，设置页/插件页各分区支持深链接精准跳转到具体改动位置。可见性/删除权限见下方 Casbin 权限模型条目。
 - **基于 Casbin 的声明式权限模型取代散落各处的硬编码判断。** 路由级"是否需要真实 Session 登录"（Token 管理、账号安全、数据库清空等）与 activity 记录的可见性范围，统一收敛为两份随代码走、经代码审查的 policy 文件（而非运行时可改的配置），替代旧版散落在各 handler 里的零散 `if is_token()`/`is_guest_token()` 判断。activity 记录的具体可见性规则：Session 可见全部记录并可删除；Admin Token 可见自身与全部 Guest Token 的记录（不含 Session 与其他 Admin Token）；Guest Token 仅可见自身记录；删除操作仅限 Session。
+- **浏览器可自动发现的动态 OpenSearch 搜索。** `GET /opensearch.xml`（免登录，`Cache-Control: no-store`）按实际访问的域名/`X-Forwarded-Host`/`X-Forwarded-Proto` 动态生成搜索 URL 模板，内容随客户端 IP 变化；浏览器地址栏/搜索栏发起的搜索直接落到 Library 页的既有 `?q=` 搜索状态，无需额外点击。
 
 ### 数据完整性与重复检测
 
