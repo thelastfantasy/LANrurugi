@@ -15,9 +15,18 @@ describe("buildSearchToken", () => {
     expect(buildSearchToken("female", "huge breasts", false)).toBe('female:"huge breasts"')
   })
 
-  it("quotes a bare (non-namespaced) multi-word value the same way", () => {
-    expect(buildSearchToken("other", "堕とされたい熟女達", false)).toBe("堕とされたい熟女達")
-    expect(buildSearchToken("other", "堕とされたい 熟女達", false)).toBe('"堕とされたい 熟女達"')
+  // `LANRURUGI_TEST_TITLE_MULTIWORD_JA` — a real, non-synthetic multi-word Japanese archive title,
+  // kept out of source per this repo's own convention (real copyrighted work titles never
+  // hardcoded — see .env.example's own docs on TEST_REAL_DOWNLOAD_URL et al. for the same
+  // reasoning applied elsewhere). Unset by default; this test is skipped (not failed) when it's
+  // missing, since a synthetic ASCII placeholder wouldn't actually exercise the CJK-text code path
+  // this test cares about.
+  const multiwordJaTitle = process.env.LANRURUGI_TEST_TITLE_MULTIWORD_JA
+  it.skipIf(!multiwordJaTitle)("quotes a bare (non-namespaced) multi-word value the same way", () => {
+    const title = multiwordJaTitle as string
+    const singleWord = title.replace(/\s+/g, "")
+    expect(buildSearchToken("", singleWord, false)).toBe(singleWord)
+    expect(buildSearchToken("", title, false)).toBe(`"${title}"`)
   })
 })
 

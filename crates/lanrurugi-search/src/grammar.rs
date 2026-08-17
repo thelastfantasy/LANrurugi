@@ -229,12 +229,14 @@ mod tests {
 
     #[test]
     fn bare_keywords_space_separated() {
-        let tokens = compute_search_filter("ジロウ 堕とされたい熟女達");
+        // Synthetic (non-real-title) CJK text — this test only cares that a bare space between
+        // two multi-byte tokens splits them, not about any specific real archive's content.
+        let tokens = compute_search_filter("さくら まぼろしの物語");
         assert_eq!(
             tokens,
             vec![
-                tok("ジロウ", false, false),
-                tok("堕とされたい熟女達", false, false)
+                tok("さくら", false, false),
+                tok("まぼろしの物語", false, false)
             ]
         );
     }
@@ -293,12 +295,13 @@ mod tests {
 
     #[test]
     fn negation_combines_with_a_bare_space_separated_keyword() {
-        let tokens = compute_search_filter("-ジロウ 堕とされたい熟女達");
+        // Synthetic CJK text, same reasoning as `bare_keywords_space_separated` above.
+        let tokens = compute_search_filter("-さくら まぼろしの物語");
         assert_eq!(
             tokens,
             vec![
-                tok("ジロウ", true, false),
-                tok("堕とされたい熟女達", false, false)
+                tok("さくら", true, false),
+                tok("まぼろしの物語", false, false)
             ]
         );
     }
