@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 
 import { useApiTokens, useCreateApiToken, useDeleteApiToken, useRenameApiToken } from "@/api/hooks"
 import type { TokenRole } from "@/api/types"
-import { CollapsibleSection, Tooltip } from "@/components/Display"
+import { CollapsibleSection, DateTimeStack, IpGeoLink, ShortId, Tooltip } from "@/components/Display"
 import { IconButton } from "@/components/Display/IconButton"
 import { confirmDialog, infoDialog, promptDialog } from "@/dialog"
 import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
@@ -47,94 +47,6 @@ function copyToClipboard(value: string, t: (key: string) => string | null) {
     .writeText(value)
     .then(() => toast({ heading: t("Copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 }))
     .catch(() => toast({ heading: t("Failed to copy.") ?? undefined, icon: "error" }))
-}
-
-/** Loopback/private/link-local ranges (IPv4 + IPv6) — a geolocation lookup for any of these
- *  resolves to nothing meaningful (there's no real-world location for "this machine" or "someone
- *  on the LAN"), so `IpGeoLink` skips linking for these and just renders plain text instead of a
- *  dead-end link. Deliberately loose/best-effort (string prefix checks, not a real CIDR parser) —
- *  this is a display convenience, not a security boundary; a value that slips through and gets
- *  linked anyway just means one extra click to a lookup that says "private range," not a defect
- *  that matters. */
-function isPrivateOrLocalIp(ip: string): boolean {
-  if (ip === "127.0.0.1" || ip === "::1" || ip === "0.0.0.0") return true
-  if (/^10\./.test(ip)) return true
-  if (/^192\.168\./.test(ip)) return true
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true
-  if (/^169\.254\./.test(ip)) return true // link-local (IPv4)
-  if (/^f[cd][0-9a-f]{2}:/i.test(ip)) return true // fc00::/7, unique local (IPv6)
-  if (/^fe80:/i.test(ip)) return true // link-local (IPv6)
-  return false
-}
-
-/** Links a `last_used_ip` value out to an IP-geolocation lookup — skipped for a private/local
- *  address (see `isPrivateOrLocalIp`), rendered as plain text instead since there's nothing a geo
- *  lookup could tell you about one. The scheme/host are always the fixed `https://ipinfo.io/`
- *  literal below — `ip` is only ever interpolated as an `encodeURIComponent`-escaped *path
- *  segment*, never used as the href's own scheme/host — because `last_used_ip` is sourced from
- *  `X-Forwarded-For` (see `AuthContext`/`client_ip`'s own docs: spoofable, display-only, never a
- *  security control). Building `href={ip}` directly would let whoever controls that header hand an
- *  admin viewing this table a `javascript:`-scheme link to click inside their own authenticated
- *  session — this construction makes that impossible regardless of what the header contains.
- *  `rel="noopener noreferrer"` — `noreferrer` so this admin's own presence on this page/instance
- *  isn't leaked to the third-party lookup site via the `Referer` header, `noopener` so the opened
- *  tab can't reach back into this one via `window.opener`. */
-function IpGeoLink({ ip }: { ip: string }) {
-  if (isPrivateOrLocalIp(ip)) return <>{ip}</>
-  return (
-    <a
-      href={`https://ipinfo.io/${encodeURIComponent(ip)}`}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      {ip}
-    </a>
-  )
-}
-
-/** Date and time on their own lines — `toLocaleString()`'s combined "2026/8/14 10:05:34" was
- *  overflowing its grid column at this table's own font size, since `whiteSpace: "nowrap"` (needed
- *  so the two halves don't wrap at an arbitrary space) left nothing shorter to wrap to. Splitting
- *  the value itself into two deliberate lines gives the same "never breaks mid-word" guarantee
- *  without needing the column to be wide enough for the full combined string in one line. */
-function DateTimeStack({ epochSeconds }: { epochSeconds: number }) {
-  const date = new Date(epochSeconds * 1000)
-  return (
-    <>
-      {date.toLocaleDateString()}
-      <br />
-      {date.toLocaleTimeString()}
-    </>
-  )
-}
-
-/** The full UUID (36 chars) took too much width for a column that's mostly useful for "confirm
- *  which row this is" rather than actually being read character-by-character — visually clipped to
- *  its first 7 characters (matching `git`'s own default short-hash length, a familiar convention
- *  for "enough to usually disambiguate, not the whole thing") via `overflow: hidden` on a
- *  fixed-width container, rather than actually truncating the *text*: the full id is still the
- *  real DOM text content underneath, so a click selecting "everything in this element" (the handler
- *  below) selects the complete value ready to copy, not just whatever few characters happen to be
- *  visible. The native `title` hover tooltip also still shows the full value without needing to
- *  click first. */
-function ShortId({ id }: { id: string }) {
-  function selectAll(e: React.MouseEvent<HTMLSpanElement>) {
-    const selection = window.getSelection()
-    if (!selection) return
-    const range = document.createRange()
-    range.selectNodeContents(e.currentTarget)
-    selection.removeAllRanges()
-    selection.addRange(range)
-  }
-  return (
-    <span
-      title={id}
-      onClick={selectAll}
-      style={{ display: "inline-block", width: "7ch", overflow: "hidden", cursor: "text" }}
-    >
-      {id}
-    </span>
-  )
 }
 
 /** Marks each token's role right in the Name column — no separate Role column, an icon +
@@ -326,7 +238,7 @@ export function ApiTokensSection() {
   }
 
   return (
-    <CollapsibleSection icon="fa-key" title={t("settings.apiTokens")}>
+    <CollapsibleSection id="api-tokens" icon="fa-key" title={t("settings.apiTokens")}>
       <div style={{ fontSize: FONT_SIZE_SM, textAlign: "center", padding: "0 12px" }}>
         {t("settings.firstpartyTokensForThirdpartyClients")}
         <br />

@@ -807,3 +807,77 @@ div.id4 {
 .file-info-orig {
   color: #ef5350;
 }
+
+/* Additive — no legacy equivalent (issue #87's Activity page). Reuses this theme's own accent hue
+   (same value as .tankoubon-member-row above) for visual consistency with this theme's existing
+   "this row/item is special" convention, per the project's custom-color rule.
+   `.activity-row-automatic`: background for a scanner/metadata-plugin-triggered row, distinct from
+   a human-triggered one at a glance — a lower alpha than `.tankoubon-member-row`'s own since this
+   paints potentially many rows across a whole page rather than highlighting one.
+   `.activity-combobox-item-highlighted`: the filter Combobox's own keyboard/pointer-highlighted
+   item state (Base UI's `data-highlighted` attribute).
+   `.activity-chip-danger`: the database.* action-type chip/badge — reuses `.stdbtn-danger`'s own
+   colors verbatim rather than a new value, since it's the same "this indicates something
+   destructive" semantic this theme already has a color for. */
+.activity-row-automatic {
+  background-color: rgba(59, 151, 234, 0.12);
+}
+
+.activity-combobox-item-highlighted[data-highlighted] {
+  background-color: rgba(59, 151, 234, 0.18);
+}
+
+.activity-chip-danger {
+  background-color: #C0392B;
+  color: #FFFFFF;
+}
+
+.activity-chip-danger:hover {
+  background-color: #E74C3C;
+}
+
+/* A revoked-token actor chip's `fa-user-slash` icon — just the icon's own `color`, not a
+   background, since it sits inside that token's own rotation-colored chip rather than getting a
+   dedicated background of its own. Same red as `.activity-chip-danger`'s resting background. */
+.activity-chip-danger-icon {
+  color: #C0392B;
+}
+
+/* Whole-row hover highlight (PC width only — `ActivityRow.tsx`'s own `narrow`-mode card doesn't
+   use this class). `.activity-row` is `display: contents` (yields its cells straight into the
+   parent grid, owns no box of its own to paint a background on directly), so the child combinator
+   targets each of its actual cells instead — same accent hue as `.activity-row-automatic` above,
+   at a higher alpha so a hover is clearly visible layered on top of that background too, on both
+   a manual and an automatic row. A plain per-cell `background-color` alone left visible gaps
+   between cells (the parent grid's own 12px `columnGap`, confirmed live: the highlight read as
+   separate painted blocks with the page's own background showing through the gaps) — `box-shadow`
+   alone was tried next and made it *worse* (a hollow ring around each cell instead of a filled
+   block, confirmed live: `box-shadow` paints only outside an element's own border box, never fills
+   its interior, so the shadow and the cell's own unfilled background read as two visually distinct
+   layers). The real fix needed both: each cell in `ActivityRow.tsx` now carries a small negative
+   `margin` (`-6px` each side) with matching extra `padding` added back (so its own content doesn't
+   shift), physically extending every cell's real box half the gap's width into the gap on both
+   sides — adjacent cells' extended edges then overlap in the middle of the gap, so a plain
+   `background-color` here (no `box-shadow` needed at all now) paints one visually continuous band
+   with no seam. `.activity-row-content` layers its *own* highlight on top of the row's — not a
+   replacement, since the row highlight should stay visible everywhere else in that same row while
+   the content cell additionally reads as "this part is independently clickable", the same way a
+   link inside an otherwise plain, already-hovered paragraph still gets its own underline.
+   `.activity-row-delete-btn` stays hidden until the row itself is hovered, then it participates in
+   the row's own flex/grid layout normally — an always-visible delete icon on every row read as far
+   more cluttered than one that only appears for the row the user is actually looking at. */
+.activity-row:hover > * {
+  background-color: rgba(59, 151, 234, 0.2);
+}
+
+.activity-row:hover > .activity-row-content:hover {
+  background-color: rgba(59, 151, 234, 0.45);
+}
+
+.activity-row-delete-btn {
+  visibility: hidden;
+}
+
+.activity-row:hover .activity-row-delete-btn {
+  visibility: visible;
+}

@@ -358,6 +358,7 @@ pub struct PutPluginPriorityBody {
 /// own docs for why this check exists at all.
 async fn put_plugin_priority(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     axum::Json(body): axum::Json<PutPluginPriorityBody>,
 ) -> Response {
     let mut conn = match state.redis.config.get().await {
@@ -392,6 +393,19 @@ async fn put_plugin_priority(
             );
         }
     }
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::PLUGIN_PRIORITY_UPDATE,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: None,
+            label: Some(body.kind.clone()),
+            kind: Some("plugin".to_string()),
+        },
+        None,
+        Some(json!({ "order": body.order, "skipped": skipped })),
+    )
+    .await;
     axum::Json(json!({ "operation": "put_plugin_priority", "success": 1, "skipped": skipped }))
         .into_response()
 }
@@ -1221,6 +1235,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
 
 async fn use_plugin_sync(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(params): Query<UsePluginParams>,
 ) -> Response {
     let Some(plugin) = params.plugin else {
@@ -1306,6 +1321,19 @@ async fn use_plugin_sync(
         Ok(data) => {
             apply_script_tag_updates(&state, &plugin, &data).await;
             apply_foldertocat_categories(&state, &plugin, &data).await;
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::PLUGIN_EXECUTE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: params.id.clone(),
+                    label: Some(plugin.clone()),
+                    kind: Some("plugin".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             axum::Json(json!({
                 "operation": "use_plugin",
                 "success": 1,
@@ -1435,6 +1463,7 @@ pub struct DownloadUrlParams {
 /// progress/concurrency/rate-limit treatment), or `error`.
 async fn download_url(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(params): Query<DownloadUrlParams>,
 ) -> Response {
     let Some(url) = params.url.clone().filter(|u| !u.is_empty()) else {
@@ -1460,6 +1489,23 @@ async fn download_url(
         );
     };
 
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::PLUGIN_URL_DOWNLOAD_TRIGGER,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: None,
+            label: Some(url.clone()),
+            kind: Some("download_url".to_string()),
+        },
+        None,
+        Some(json!({ "plugin": plugin, "category": params.catid })),
+    )
+    .await;
+
+    // `None` — out of scope for now (see `download_queue.rs::start_queue_item`'s own docs on the
+    // equivalent patch-back-on-completion wiring; this `/download_url` path could get the same
+    // treatment later but wasn't part of this change).
     let job_id = start_download(
         state,
         plugin.clone(),
@@ -1467,6 +1513,7 @@ async fn download_url(
         url,
         params.catid.clone(),
         false,
+        None,
         None,
     )
     .await;
@@ -1490,6 +1537,7 @@ async fn download_url(
 /// makes an *in-progress* (not just not-yet-started) queued download's state survive a page
 /// refresh or a different browser tab, since both poll `GET /download_queue` independently of
 /// this job's own lifetime.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_download(
     state: AppState,
     plugin_namespace: String,
@@ -1501,6 +1549,13 @@ pub(crate) async fn start_download(
         Arc<lanrurugi_storage::download_queue::DownloadQueueRepository>,
         String,
     )>,
+    // The `download_queue.start` activity entry this download was launched from (see
+    // `download_queue.rs::start_queue_item`'s own docs) — threaded through to
+    // `run_managed_downloads`'s own success branch so it can patch that entry's `after` with the
+    // real resulting `archive_ids` once ingestion actually finishes, rather than the caller trying
+    // to record a result before the work has even started. `None` for the `/download_url` path
+    // (out of scope for now — see that call site's own comment).
+    activity_entry_id: Option<String>,
 ) -> String {
     let job_id = state.jobs.create("download_url").await;
     let jobs = state.jobs.clone();
@@ -1707,6 +1762,19 @@ pub(crate) async fn start_download(
                                 None,
                                 None,
                                 Some(ids.clone()),
+                            )
+                            .await;
+                        }
+                        // Patches the `download_queue.start` entry this download was launched
+                        // from (see `start_download`'s own docs) with the real result now that
+                        // ingestion has actually finished — this is what makes a completed
+                        // download's own activity record show *which archive(s)* it became,
+                        // rather than only ever showing the pre-download intent.
+                        if let Some(entry_id) = &activity_entry_id {
+                            crate::activity::patch_after(
+                                &state_for_task,
+                                entry_id,
+                                json!({ "archive_ids": ids }),
                             )
                             .await;
                         }
@@ -2437,7 +2505,11 @@ fn sanitize_plugin_filename(name: &str) -> String {
 /// On any validation failure the just-written file is removed, so a bad upload never leaves a
 /// half-installed plugin sitting in `plugins_dir` (mirrors legacy's own `unlink($output_file)`
 /// cleanup in `process_upload`'s error branch).
-async fn upload_plugin(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+async fn upload_plugin(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    mut multipart: Multipart,
+) -> Response {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name: Option<String> = None;
 
@@ -2552,10 +2624,28 @@ async fn upload_plugin(State(state): State<AppState>, mut multipart: Multipart) 
         );
     }
 
+    let final_namespace = format!(
+        "{CUSTOM_PLUGIN_DIR}/{}/{}",
+        info.kind,
+        file_name.trim_end_matches(".ts")
+    );
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::PLUGIN_UPLOAD,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(final_namespace.clone()),
+            label: Some(info.name.clone()),
+            kind: Some("plugin".to_string()),
+        },
+        None,
+        Some(json!({ "type": info.kind })),
+    )
+    .await;
     axum::Json(json!({
         "operation": "upload_plugin",
         "success": 1,
-        "namespace": format!("{CUSTOM_PLUGIN_DIR}/{}/{}", info.kind, file_name.trim_end_matches(".ts")),
+        "namespace": final_namespace,
         "name": info.name,
         "type": info.kind,
     }))
@@ -2699,6 +2789,9 @@ mod tests {
                 redis.config.clone(),
             )),
             api_token_last_touch: Default::default(),
+            activity: Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+                redis.config.clone(),
+            )),
         })
     }
 

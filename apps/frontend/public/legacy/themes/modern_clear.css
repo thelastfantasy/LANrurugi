@@ -941,3 +941,53 @@ div.id4 a:hover {
 .file-info-orig {
   color: #c62828;
 }
+
+/* Additive — no legacy equivalent (issue #87's Activity page). Reuses this theme's own accent hue
+   (same value as .tankoubon-member-row above) for visual consistency with this theme's existing
+   "this row/item is special" convention, per the project's custom-color rule.
+   `.activity-row-automatic`: background for a scanner/metadata-plugin-triggered row, distinct from
+   a human-triggered one at a glance — a lower alpha than `.tankoubon-member-row`'s own since this
+   paints potentially many rows across a whole page rather than highlighting one.
+   `.activity-combobox-item-highlighted`: the filter Combobox's own keyboard/pointer-highlighted
+   item state (Base UI's `data-highlighted` attribute).
+   `.activity-chip-danger`: the database.* action-type chip/badge — reuses `.stdbtn-danger`'s own
+   colors verbatim rather than a new value, since it's the same "this indicates something
+   destructive" semantic this theme already has a color for. */
+.activity-row-automatic {
+  background-color: rgba(237, 37, 83, 0.12);
+}
+
+.activity-combobox-item-highlighted[data-highlighted] {
+  background-color: rgba(237, 37, 83, 0.18);
+}
+
+.activity-chip-danger {
+  background-color: #C0392B;
+  color: #FFFFFF;
+}
+
+.activity-chip-danger:hover {
+  background-color: #E74C3C;
+}
+
+.activity-chip-danger-icon {
+  color: #C0392B;
+}
+
+/* See modern.css's own docs on this block (whole-row/content-cell hover highlight + delete-button
+   reveal-on-row-hover) — same accent hue as this theme's own `.activity-row-automatic` above. */
+.activity-row:hover > * {
+  background-color: rgba(237, 37, 83, 0.2);
+}
+
+.activity-row:hover > .activity-row-content:hover {
+  background-color: rgba(237, 37, 83, 0.45);
+}
+
+.activity-row-delete-btn {
+  visibility: hidden;
+}
+
+.activity-row:hover .activity-row-delete-btn {
+  visibility: visible;
+}

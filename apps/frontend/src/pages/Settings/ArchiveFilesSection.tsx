@@ -26,7 +26,7 @@ export function ArchiveFilesSection({
   const clearNewFlags = useClearNewFlags()
 
   return (
-    <CollapsibleSection icon="fa-file-archive" title={t("settings.archiveFiles")}>
+    <CollapsibleSection id="archive-files" icon="fa-file-archive" title={t("settings.archiveFiles")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <ActionRow

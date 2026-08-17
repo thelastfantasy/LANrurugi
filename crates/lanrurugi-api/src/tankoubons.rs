@@ -17,9 +17,12 @@ use lanrurugi_core::ids::{ArchiveId, TankId};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::activity::record_manual;
 use crate::archives::ArchiveMetadataJson;
+use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 
 /// Matches legacy's default `archives_per_page` (verified: `ServerInfo` example in
 /// `tools/openapi.yaml`).
@@ -148,6 +151,7 @@ pub struct CreateTankoubonParams {
 
 async fn create_or_rename_tankoubon(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Form(params): axum::Form<CreateTankoubonParams>,
 ) -> Response {
     let now = SystemTime::now()
@@ -242,6 +246,32 @@ async fn create_or_rename_tankoubon(
                 {
                     tracing::warn!(%tankid, error = %e, "failed to add new tank to search index");
                 }
+            }
+            let target = ActivityTarget {
+                id: Some(tankid.0.clone()),
+                label: Some(grouping.name.clone()),
+                kind: Some("tankoubon".to_string()),
+            };
+            if is_new {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_CREATE,
+                    target,
+                    None,
+                    None,
+                )
+                .await;
+            } else if old_name != grouping.name {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_RENAME,
+                    target,
+                    Some(json!({ "name": old_name })),
+                    Some(json!({ "name": grouping.name })),
+                )
+                .await;
             }
             axum::Json(json!({
                 "operation": "create_tankoubon",
@@ -750,6 +780,7 @@ async fn update_tankoubon_progress(
 async fn update_tankoubon(
     State(state): State<AppState>,
     Path(id): Path<TankId>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Json(body): axum::Json<UpdateTankoubonBody>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
@@ -772,6 +803,7 @@ async fn update_tankoubon(
     // Captured before `body.metadata` is moved out of below.
     let tags_set_explicitly = body.metadata.as_ref().is_some_and(|m| m.tags.is_some());
     let old_name = grouping.name.clone();
+    let old_summary = grouping.summary.clone();
     // `updated_at` is bumped below, but only if something other than a bare rating change
     // actually happened — see that check's own comment for why a rating alone is excluded.
     let old_tags = grouping.tags.clone();
@@ -859,6 +891,60 @@ async fn update_tankoubon(
             }
             sync_tankoubon_thumbnail_with_first_archive(&state, &grouping, old_first.as_ref())
                 .await;
+
+            // Split the same way `archives.rs::update_archive_metadata` splits
+            // `ARCHIVE_RATING_UPDATE` from `ARCHIVE_METADATA_UPDATE` — `non_rating_change` above
+            // already carries the exact "was this genuinely more than a rating tweak" signal
+            // (computed for the unrelated `updated_at` sort-bump suppression, reused here), so no
+            // second detection pass is needed. This endpoint recorded no activity at all before —
+            // see `TANKOUBON_METADATA_UPDATE`'s own docs.
+            let old_tag_set: std::collections::HashSet<&str> = old_tags
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let new_tag_set: std::collections::HashSet<&str> = grouping
+                .tags
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let tags_added: Vec<&str> = new_tag_set.difference(&old_tag_set).copied().collect();
+            let tags_removed: Vec<&str> = old_tag_set.difference(&new_tag_set).copied().collect();
+            let target = ActivityTarget {
+                id: Some(id.0.clone()),
+                label: Some(grouping.name.clone()),
+                kind: Some("tankoubon".to_string()),
+            };
+            if !non_rating_change {
+                if !tags_added.is_empty() || !tags_removed.is_empty() {
+                    record_manual(
+                        &state,
+                        auth.as_ref().map(|e| &e.0),
+                        action_types::TANKOUBON_RATING_UPDATE,
+                        target,
+                        Some(json!({ "rating": tags_removed.first() })),
+                        Some(json!({ "rating": tags_added.first() })),
+                    )
+                    .await;
+                }
+            } else {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_METADATA_UPDATE,
+                    target,
+                    Some(json!({ "name": old_name, "summary": old_summary })),
+                    Some(json!({
+                        "name": grouping.name,
+                        "summary": grouping.summary,
+                        "tags_added": tags_added,
+                        "tags_removed": tags_removed,
+                    })),
+                )
+                .await;
+            }
+
             axum::Json(json!({ "operation": "update_tankoubon", "success": 1 })).into_response()
         }
         Err(e) => error(
@@ -952,7 +1038,11 @@ pub struct UpdateTankoubonMetadata {
     chapter_names: Option<Vec<lanrurugi_core::entities::ChapterNameEntry>>,
 }
 
-async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
+async fn delete_tankoubon(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<TankId>,
+) -> Response {
     // Fetched before delete purely to know which member archives (if any) need restoring to
     // `TANKGROUPED_KEY`, and the tank's own current name for the title-index cleanup — a missing/
     // already-gone grouping just means nothing to restore/clean up.
@@ -987,6 +1077,19 @@ async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>)
                     tracing::warn!(%id, error = %e, "failed to remove tank title search index");
                 }
             }
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TANKOUBON_DELETE,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: Some(old_name).filter(|n| !n.is_empty()),
+                    kind: Some("tankoubon".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             axum::Json(json!({ "operation": "delete_tankoubon", "success": 1 })).into_response()
         }
         Err(e) => error(
@@ -999,6 +1102,7 @@ async fn delete_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>)
 
 async fn add_to_tankoubon(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
@@ -1052,6 +1156,21 @@ async fn add_to_tankoubon(
                 sync_tankoubon_thumbnail_with_first_archive(&state, &grouping, old_first.as_ref())
                     .await;
             }
+            if newly_added {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_MEMBER_ADD,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: Some(grouping.name.clone()).filter(|n| !n.is_empty()),
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    None,
+                    Some(json!({ "archive": archive.0 })),
+                )
+                .await;
+            }
             axum::Json(json!({ "operation": "add_to_tankoubon", "success": 1 })).into_response()
         }
         Err(e) => error(
@@ -1064,6 +1183,7 @@ async fn add_to_tankoubon(
 
 async fn remove_from_tankoubon(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
     let mut grouping = match state.repos.groupings.get(&id).await {
@@ -1103,6 +1223,21 @@ async fn remove_from_tankoubon(
                 }
                 sync_tankoubon_thumbnail_with_first_archive(&state, &grouping, old_first.as_ref())
                     .await;
+            }
+            if was_present {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_MEMBER_REMOVE,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: Some(grouping.name.clone()).filter(|n| !n.is_empty()),
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Some(json!({ "archive": archive.0 })),
+                    None,
+                )
+                .await;
             }
             axum::Json(json!({ "operation": "remove_from_tankoubon", "success": 1 }))
                 .into_response()

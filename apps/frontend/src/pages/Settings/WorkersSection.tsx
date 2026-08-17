@@ -15,7 +15,7 @@ export function WorkersSection({ onStatus }: { onStatus: (status: string) => voi
   const shinobuAction = useShinobuAction()
 
   return (
-    <CollapsibleSection icon="fa-satellite" title={t("settings.backgroundWorkers")}>
+    <CollapsibleSection id="background-workers" icon="fa-satellite" title={t("settings.backgroundWorkers")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <tr>

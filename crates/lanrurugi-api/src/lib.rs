@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod api_tokens;
 pub mod archives;
 pub mod artist_backfill;
@@ -45,6 +46,7 @@ use axum::Router;
 /// in separately, unprotected.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(activity::router())
         .merge(api_tokens::router())
         .merge(archives::router())
         .merge(bench::router())

@@ -13,8 +13,11 @@ use lanrurugi_backup::build::BackupDocument;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::activity::record_manual;
+use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 pub fn router() -> Router<AppState> {
@@ -178,7 +181,11 @@ async fn download_backup(State(state): State<AppState>, Path(jobid): Path<String
     }
 }
 
-async fn queue_restore(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+async fn queue_restore(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    mut multipart: Multipart,
+) -> Response {
     let mut file_bytes: Option<Vec<u8>> = None;
     loop {
         let field = match multipart.next_field().await {
@@ -207,6 +214,20 @@ async fn queue_restore(State(state): State<AppState>, mut multipart: Multipart) 
             )
         }
     };
+
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_RESTORE,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        None,
+    )
+    .await;
 
     let job_id = state.jobs.create("restore").await;
     let jobs = state.jobs.clone();
@@ -245,7 +266,10 @@ async fn queue_restore(State(state): State<AppState>, mut multipart: Multipart) 
     axum::Json(json!({ "operation": "queue_restore", "success": 1, "job": job_id })).into_response()
 }
 
-async fn clear_new_all(State(state): State<AppState>) -> Response {
+async fn clear_new_all(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     let archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
         Err(e) => {
@@ -256,6 +280,7 @@ async fn clear_new_all(State(state): State<AppState>) -> Response {
             )
         }
     };
+    let mut cleared = 0u32;
     for mut archive in archives {
         if archive.isnew {
             archive.isnew = false;
@@ -263,15 +288,34 @@ async fn clear_new_all(State(state): State<AppState>) -> Response {
             let _ =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, &archive.id, false)
                     .await;
+            cleared += 1;
         }
     }
+
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_CLEAR_NEW_FLAGS,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        Some(json!({ "cleared": cleared })),
+    )
+    .await;
+
     axum::Json(json!({ "operation": "clear_new_all", "success": 1 })).into_response()
 }
 
 /// Deliberately dangerous — see the endpoint's own legacy description ("might lock you out of the
 /// server as a client"). Drops every logical DB this instance knows about, matching legacy's
 /// `drop_database`'s `FLUSHALL` semantics (which is server-wide, not scoped to one DB).
-async fn drop_database(State(state): State<AppState>) -> Response {
+async fn drop_database(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     for pool in [
         &state.redis.archive,
         &state.redis.minion,
@@ -285,6 +329,26 @@ async fn drop_database(State(state): State<AppState>) -> Response {
                 .await;
         }
     }
+
+    // Written *after* the FLUSHDB loop above — including the `config` DB this very entry would
+    // otherwise land in — deliberately: `record_manual` re-reads the retention setting and
+    // re-derives a fresh id/timestamp *after* the wipe, so this one record survives its own
+    // triggering operation instead of being flushed along with everything else a half-second
+    // earlier would have caused.
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_DROP,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        None,
+    )
+    .await;
+
     axum::Json(json!({ "operation": "drop_database", "success": 1 })).into_response()
 }
 
@@ -294,7 +358,10 @@ async fn drop_database(State(state): State<AppState>) -> Response {
 /// outright. This differs from legacy's exact trigger (a `LRR_FILEMAP` cross-reference mismatch,
 /// verified in `Utils/Database.pm::clean_database`) but preserves the same observable two-run
 /// behavior for the common case (file deleted from disk out from under LANrurugi).
-async fn clean_database(State(state): State<AppState>) -> Response {
+async fn clean_database(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     let archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
         Err(e) => {
@@ -322,6 +389,20 @@ async fn clean_database(State(state): State<AppState>) -> Response {
         }
     }
 
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_CLEAN,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        Some(json!({ "deleted": deleted, "unlinked": unlinked })),
+    )
+    .await;
+
     axum::Json(json!({
         "operation": "clean_database",
         "success": 1,
@@ -337,7 +418,24 @@ async fn clean_database(State(state): State<AppState>) -> Response {
 /// on-disk content now hashes differently (T074/T075), then does a full directory scan to
 /// discover and catalogue any previously-invisible sibling files the historical false-merge
 /// defect had hidden (T074, completing data-model.md's "Rebuild/Reindex operation").
-async fn rebuild_index(State(state): State<AppState>) -> Response {
+async fn rebuild_index(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_REBUILD_INDEX,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        None,
+    )
+    .await;
+
     let job_id = state.jobs.create("rebuild_index").await;
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();

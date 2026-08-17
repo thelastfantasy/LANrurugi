@@ -6,6 +6,7 @@ use lanrurugi_core::filename_lock::{FilenameLockGuard, FilenameLocks};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
+use lanrurugi_storage::activity::ActivityRepository;
 use lanrurugi_storage::api_tokens::ApiTokenRepository;
 use lanrurugi_storage::compare_cache::CompareCacheRepository;
 use lanrurugi_storage::download_queue::DownloadQueueRepository;
@@ -198,6 +199,12 @@ pub struct AppState {
     /// "cheap in-memory check gates an expensive path" shape `plugin_options_generation` already
     /// uses above, just keyed instead of a single counter.
     pub api_token_last_touch: Arc<Mutex<HashMap<String, i64>>>,
+    /// Operator activity log (issue #87) — a structured, persisted record of who did what,
+    /// distinct from the unstructured `tracing`-based request log
+    /// (`procedure::trace_request`). Also on the `config` logical DB, same placement as
+    /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
+    /// docs for the full data model/retention/query design.
+    pub activity: Arc<ActivityRepository>,
 }
 
 impl AppState {

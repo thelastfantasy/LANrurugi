@@ -16,8 +16,11 @@ use lanrurugi_storage::api_tokens::TokenRole;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::activity::record_manual;
+use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::state::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -88,6 +91,7 @@ struct CreateTokenBody {
 
 async fn create_token(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Json(body): axum::Json<CreateTokenBody>,
 ) -> Response {
     let name = body.name.trim();
@@ -109,6 +113,19 @@ async fn create_token(
         .await
     {
         Ok(issued) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_CREATE,
+                ActivityTarget {
+                    id: Some(issued.record.id.clone()),
+                    label: Some(issued.record.name.clone()),
+                    kind: Some("token".to_string()),
+                },
+                None,
+                Some(json!({ "role": issued.record.role, "expires_at": issued.record.expires_at })),
+            )
+            .await;
             let mut body = token_json(&issued.record);
             // The one and only time the raw value is ever sent to a client — see the storage
             // layer's own docs on why it's never stored, and `token_json`'s own docs on why it's
@@ -124,8 +141,12 @@ async fn create_token(
     }
 }
 
-async fn delete_token(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.api_tokens.get(&id).await {
+async fn delete_token(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    let existing = match state.api_tokens.get(&id).await {
         Ok(None) => return not_found("delete_token", format!("token {id} does not exist.")),
         Err(e) => {
             return error(
@@ -134,10 +155,25 @@ async fn delete_token(State(state): State<AppState>, Path(id): Path<String>) -> 
                 e.to_string(),
             )
         }
-        Ok(Some(_)) => {}
-    }
+        Ok(Some(record)) => record,
+    };
     match state.api_tokens.delete(&id).await {
-        Ok(()) => ok("delete_token", []),
+        Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_REVOKE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: Some(existing.name.clone()),
+                    kind: Some("token".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
+            ok("delete_token", [])
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "delete_token",
@@ -153,6 +189,7 @@ struct RenameTokenBody {
 
 async fn rename_token(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path(id): Path<String>,
     axum::Json(body): axum::Json<RenameTokenBody>,
 ) -> Response {
@@ -164,9 +201,31 @@ async fn rename_token(
             "name cannot be empty",
         );
     }
+    let old_name = state
+        .api_tokens
+        .get(&id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.name);
     match state.api_tokens.rename(&id, name.to_string()).await {
         Ok(None) => not_found("rename_token", format!("token {id} does not exist.")),
-        Ok(Some(record)) => ok("rename_token", [("data", token_json(&record))]),
+        Ok(Some(record)) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_RENAME,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: Some(record.name.clone()),
+                    kind: Some("token".to_string()),
+                },
+                old_name.map(|n| json!({ "name": n })),
+                Some(json!({ "name": record.name })),
+            )
+            .await;
+            ok("rename_token", [("data", token_json(&record))])
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "rename_token",

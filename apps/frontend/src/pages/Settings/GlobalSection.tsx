@@ -79,7 +79,7 @@ export function GlobalSection({
   const dropDatabase = useDropDatabase()
 
   return (
-    <CollapsibleSection icon="fa-cubes" title={t("settings.globalSettings")}>
+    <CollapsibleSection id="global" icon="fa-cubes" title={t("settings.globalSettings")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <Row label={t("settings.siteTitle")}>

@@ -297,6 +297,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
         redis.config.clone(),
     ));
+    let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+        redis.config.clone(),
+    ));
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -387,6 +390,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
+        activity,
     };
 
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of
@@ -561,10 +565,45 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             while let Some(id) = new_archive_rx.recv().await {
+                let label = state
+                    .repos
+                    .archives
+                    .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|a| a.title);
+                let target = lanrurugi_storage::activity::ActivityTarget {
+                    id: Some(id.clone()),
+                    label: label.clone(),
+                    kind: Some("archive".to_string()),
+                };
+                let scanner_entry_id = lanrurugi_api::activity::record_automatic(
+                    &state,
+                    "scanner",
+                    lanrurugi_storage::activity::action_types::SCANNER_INGEST,
+                    target.clone(),
+                    None,
+                )
+                .await;
+
                 // Recommendation-cache precompute for the final, plugin-enriched title happens
                 // inside this call itself (once, after every enabled plugin has run) — see its
                 // own doc comment.
                 lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+
+                lanrurugi_api::activity::record_automatic(
+                    &state,
+                    "metadata_plugin",
+                    lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
+                    target,
+                    Some(lanrurugi_storage::activity::CausedBy {
+                        reason: "scanner_ingest".to_string(),
+                        source_entry_id: scanner_entry_id,
+                        description: "Ran automatically after scanner ingestion".to_string(),
+                    }),
+                )
+                .await;
             }
         });
     }

@@ -18,11 +18,14 @@ use lanrurugi_storage::download_queue::{DownloadQueueState, NewQueueItem, QueueI
 use serde_json::json;
 use sha1::{Digest, Sha1};
 
+use crate::activity::record_manual;
+use crate::auth_context::AuthContext;
 use crate::common::error;
 use crate::download_manager::ingest::ingest_downloaded_file;
 use crate::download_manager::stream::DownloadedFile;
 use crate::plugins::update_queue_item_state;
 use crate::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 
 /// Axum's `Multipart` extractor enforces `DefaultBodyLimit`'s built-in 2 MB default when no
 /// layer overrides it — real manga archives routinely exceed that by 100x, so uploads failed
@@ -56,7 +59,11 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+async fn upload_archive(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    mut multipart: Multipart,
+) -> Response {
     let mut file_bytes: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut checksum: Option<String> = None;
@@ -243,8 +250,30 @@ async fn upload_archive(State(state): State<AppState>, mut multipart: Multipart)
             // *then* every enabled metadata plugin runs and appends on top
             // (`set_tags(..., append=1)`) — matched here by calling this after, not before, the
             // user-supplied-fields block above.
-            crate::plugins::run_enabled_metadata_plugins_on_archive(&state, &ingested.archive_id)
-                .await;
+            let plugin_summary = crate::plugins::run_enabled_metadata_plugins_on_archive(
+                &state,
+                &ingested.archive_id,
+            )
+            .await;
+
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::ARCHIVE_UPLOAD,
+                ActivityTarget {
+                    id: Some(ingested.archive_id.clone()),
+                    label: Some(file_name.clone()),
+                    kind: Some("archive".to_string()),
+                },
+                None,
+                Some(json!({
+                    "metadata_plugins_ran": plugin_summary.successes,
+                    "metadata_plugins_failed": plugin_summary.failures,
+                    "tags_added": plugin_summary.added_tags,
+                    "title_updated": plugin_summary.new_title,
+                })),
+            )
+            .await;
 
             update_queue_item_state(
                 &state.download_queue,

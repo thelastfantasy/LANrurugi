@@ -17,8 +17,11 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::activity::record_manual;
+use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -190,7 +193,11 @@ struct AddQueueBody {
 /// validation is that `plugin_namespace` actually resolves to an installed plugin — invalid
 /// entries are rejected individually (`rejected: [{url, reason}]`) rather than failing the whole
 /// batch, so one bad URL in a pasted list doesn't block the rest.
-async fn add_to_queue(State(state): State<AppState>, body: axum::Json<AddQueueBody>) -> Response {
+async fn add_to_queue(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    body: axum::Json<AddQueueBody>,
+) -> Response {
     let mut added = Vec::new();
     let mut rejected = Vec::new();
 
@@ -214,6 +221,24 @@ async fn add_to_queue(State(state): State<AppState>, body: axum::Json<AddQueueBo
                     if let Some(tx) = &state.download_queue_tx {
                         let _ = tx.send(serde_json::json!({ "kind": "add", "item": saved }));
                     }
+                    // `title` is always `None` this early (no metadata fetched yet at add time),
+                    // so `label` is just the url — but `after.url` is still set for consistency
+                    // with `start_queue_item`'s own shape, so the frontend can render every
+                    // `download_queue.*` entry's operation content the same way regardless of
+                    // which point in the item's lifecycle wrote it.
+                    record_manual(
+                        &state,
+                        auth.as_ref().map(|e| &e.0),
+                        action_types::DOWNLOAD_QUEUE_ADD,
+                        ActivityTarget {
+                            id: Some(saved.id.clone()),
+                            label: Some(saved.url.clone()),
+                            kind: Some("download_queue_item".to_string()),
+                        },
+                        None,
+                        Some(json!({ "url": saved.url.clone() })),
+                    )
+                    .await;
                     added.push(saved);
                 }
                 Err(e) => rejected.push(json!({ "url": item.url, "reason": e.to_string() })),
@@ -305,7 +330,11 @@ async fn update_queue_item(
 /// gone), with no queue row left to show progress or a Stop button to actually interrupt the
 /// transfer. The frontend's own delete button already disables for these states — this is the
 /// server-side backstop for any caller that bypasses that (e.g. a direct API call).
-async fn delete_queue_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn delete_queue_item(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
     let item = match state.download_queue.get(&id).await {
         Ok(Some(item)) if is_in_flight(item.state) => {
             return error(
@@ -346,6 +375,19 @@ async fn delete_queue_item(State(state): State<AppState>, Path(id): Path<String>
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": &id }));
             }
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_DELETE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: item.as_ref().map(|i| i.url.clone()),
+                    kind: Some("download_queue_item".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             ok("delete_download_queue_item", [])
         }
         Err(e) => error(
@@ -360,8 +402,45 @@ async fn delete_queue_item(State(state): State<AppState>, Path(id): Path<String>
 /// time) `plugin_namespace`, marks it `Starting`, and launches the real download via
 /// `plugins::start_download` with `queue_link` set so the background task keeps this item's
 /// `state`/`job_id`/`error` current as the download proceeds.
-async fn start_queue_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match start_one(&state, &id).await {
+async fn start_queue_item(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    // Written *before* `start_one` (which launches the real background download/ingest task),
+    // not after — `activity_entry_id` is threaded through `start_one`/`plugins::start_download`/
+    // `run_managed_downloads` so that background task can patch this same entry's own `after`
+    // once ingestion actually finishes (`activity::patch_after`), rather than this handler trying
+    // to record the *result* of work that hasn't happened yet by the time it returns. Recording
+    // this early means the entry exists even if `start_one` itself then fails (e.g. `NotQueued`)
+    // — matches every other write-then-maybe-fail site in this file already accepting a record
+    // for an attempt, not just a guaranteed success.
+    //
+    // `label` prefers the item's own already-fetched `title` (from an earlier metadata preview)
+    // when one exists, falling back to the raw `url` otherwise — unlike an archive/tankoubon/
+    // token there's no per-item detail page `targetLink` can send the user to
+    // (`download_queue_item` links to the whole upload/queue page), so a title alone wouldn't let
+    // two different downloads be told apart. `after.url` is set unconditionally alongside it so
+    // the frontend can always show the real source link even when a title is also present
+    // (`OperationDescription.tsx`'s own docs).
+    let item = state.download_queue.get(&id).await.ok().flatten();
+    let (label, url) = item
+        .map(|i| (i.title.clone().unwrap_or_else(|| i.url.clone()), i.url))
+        .unzip();
+    let activity_entry_id = record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DOWNLOAD_QUEUE_START,
+        ActivityTarget {
+            id: Some(id.clone()),
+            label,
+            kind: Some("download_queue_item".to_string()),
+        },
+        None,
+        url.map(|u| json!({ "url": u })),
+    )
+    .await;
+    match start_one(&state, &id, activity_entry_id).await {
         Ok(job_id) => axum::Json(
             json!({ "operation": "start_download_queue_item", "success": 1, "job": job_id }),
         )
@@ -395,7 +474,10 @@ async fn start_queue_item(State(state): State<AppState>, Path(id): Path<String>)
 /// `POST /download_queue/start_all` — every `Queued`-state item, fired concurrently (each spawns
 /// its own independent background task already; per-domain concurrency/rate-limiting is enforced
 /// downstream by the existing `DownloadManager`, so no additional throttling is needed here).
-async fn start_all(State(state): State<AppState>) -> Response {
+async fn start_all(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     let items = match state.download_queue.list_all().await {
         Ok(items) => items,
         Err(e) => {
@@ -411,7 +493,7 @@ async fn start_all(State(state): State<AppState>) -> Response {
         .filter(|i| i.state == DownloadQueueState::Queued)
         .map(|i| i.id)
         .collect();
-    start_many(&state, ids).await
+    start_many(&state, auth.as_ref().map(|e| &e.0), ids).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,20 +506,61 @@ struct StartSelectedBody {
 /// frontend can pass a selection without first checking each item's current state.
 async fn start_selected(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     body: axum::Json<StartSelectedBody>,
 ) -> Response {
-    start_many(&state, body.ids.clone()).await
+    start_many(&state, auth.as_ref().map(|e| &e.0), body.ids.clone()).await
 }
 
-async fn start_many(state: &AppState, ids: Vec<String>) -> Response {
+async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<String>) -> Response {
     let mut started = Vec::new();
     let mut skipped = Vec::new();
     for id in ids {
-        match start_one(state, &id).await {
+        // Same per-item `download_queue.start` entry `start_queue_item` writes for a single start
+        // — written *before* `start_one` for the same reason that one is (see its own docs): the
+        // entry needs to exist so `start_one`/`plugins::start_download`'s background task can
+        // patch its `after` with the real `archive_ids` once ingestion finishes. A bulk start
+        // launching N items is N individual downloads exactly as much as N separate single-starts
+        // would be — each deserves its own record for the same reason each shows up as its own
+        // row in the download queue, not a `bulk_start`-only summary a user can't click into for
+        // any *one* item's own eventual result.
+        let item = state.download_queue.get(&id).await.ok().flatten();
+        let (label, url) = item
+            .map(|i| (i.title.clone().unwrap_or_else(|| i.url.clone()), i.url))
+            .unzip();
+        let activity_entry_id = record_manual(
+            state,
+            auth,
+            action_types::DOWNLOAD_QUEUE_START,
+            ActivityTarget {
+                id: Some(id.clone()),
+                label,
+                kind: Some("download_queue_item".to_string()),
+            },
+            None,
+            url.map(|u| json!({ "url": u })),
+        )
+        .await;
+        match start_one(state, &id, activity_entry_id).await {
             Ok(job_id) => started.push(json!({ "id": id, "job": job_id })),
             Err(StartError::NotQueued) => {} // silent no-op, per contract
             Err(e) => skipped.push(json!({ "id": id, "reason": start_error_message(&e) })),
         }
+    }
+    if !started.is_empty() {
+        record_manual(
+            state,
+            auth,
+            action_types::DOWNLOAD_QUEUE_BULK_START,
+            ActivityTarget {
+                id: None,
+                label: Some(format!("{} items", started.len())),
+                kind: Some("download_queue_item".to_string()),
+            },
+            None,
+            Some(json!({ "started": started, "skipped": skipped })),
+        )
+        .await;
     }
     axum::Json(json!({ "started": started, "skipped": skipped })).into_response()
 }
@@ -455,6 +578,7 @@ struct DeleteSelectedBody {
 /// its running download task is unsafe), so this only matters for a caller that bypasses it.
 async fn delete_selected(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     body: axum::Json<DeleteSelectedBody>,
 ) -> Response {
     let mut deleted = Vec::new();
@@ -483,6 +607,21 @@ async fn delete_selected(
             deleted.push(id.clone());
         }
     }
+    if !deleted.is_empty() {
+        record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            action_types::DOWNLOAD_QUEUE_DELETE,
+            ActivityTarget {
+                id: None,
+                label: Some(format!("{} items", deleted.len())),
+                kind: Some("download_queue_item".to_string()),
+            },
+            None,
+            Some(json!({ "ids": deleted })),
+        )
+        .await;
+    }
     axum::Json(json!({ "deleted": deleted })).into_response()
 }
 
@@ -506,7 +645,11 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
-async fn start_one(state: &AppState, id: &str) -> Result<String, StartError> {
+async fn start_one(
+    state: &AppState,
+    id: &str,
+    activity_entry_id: Option<String>,
+) -> Result<String, StartError> {
     let mut item = state
         .download_queue
         .get(id)
@@ -541,6 +684,23 @@ async fn start_one(state: &AppState, id: &str) -> Result<String, StartError> {
         .await
         .map_err(|_| StartError::PluginMissing)?;
 
+    // A retry (state was `Error`/`Cancelled`, not a fresh `Queued` item) clears whatever
+    // title/tags a *previous* run already cached — `plugins.rs::start_download`'s own
+    // post-download `ensure_metadata_cached` call is gated on `item.title.is_none()` when
+    // `auto_fetch_metadata` is off (its own doc comment: "avoid re-fetching metadata that's
+    // already been fetched"), which is the right call for a first run but silently skips a real
+    // re-fetch on retry once a *prior* attempt already got as far as caching a title before
+    // later failing/being stopped — confirmed live: a retried item kept showing the stale title
+    // from before its failure instead of asking the metadata plugin again. Clearing
+    // `metadata_preview_at` too, not just `title`/`metadata_preview`, matters just as much: that
+    // field alone drives `ensure_metadata_cached`'s own independent 10-minute TTL cache-hit
+    // check, which would otherwise return the stale cached value even after `title` was cleared.
+    if item.state != DownloadQueueState::Queued {
+        item.title = None;
+        item.metadata_preview = None;
+        item.metadata_preview_at = None;
+    }
+
     item.state = DownloadQueueState::Starting;
     state
         .download_queue
@@ -556,6 +716,7 @@ async fn start_one(state: &AppState, id: &str) -> Result<String, StartError> {
         item.category.clone(),
         item.overwrite_on_duplicate,
         Some((state.download_queue.clone(), item.id.clone())),
+        activity_entry_id,
     )
     .await;
 
@@ -607,10 +768,29 @@ fn has_running_duplicate(
 /// already finished on its own just before this request landed — both are `NotRunning`, not an
 /// error worth surfacing loudly, since the desired end state ("this item isn't downloading") is
 /// already true either way.
-async fn stop_queue_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn stop_queue_item(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
     match stop_one(&state, &id).await {
-        Ok(()) => axum::Json(json!({ "operation": "stop_download_queue_item", "success": 1 }))
-            .into_response(),
+        Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_STOP,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
+            axum::Json(json!({ "operation": "stop_download_queue_item", "success": 1 }))
+                .into_response()
+        }
         Err(StopError::NotFound) => {
             not_found("stop_download_queue_item", format!("Item {id} not found."))
         }
@@ -680,6 +860,7 @@ struct OverwriteQueueItemBody {
 /// from afterward.
 async fn overwrite_queue_item(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path(id): Path<String>,
     body: axum::Json<OverwriteQueueItemBody>,
 ) -> Response {
@@ -743,6 +924,19 @@ async fn overwrite_queue_item(
             if let Some(bytes) = pre_built_patch {
                 write_prebuilt_patch(&state, &archive_id, bytes).await;
             }
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_OVERWRITE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: Some(archive_id.clone()),
+                    kind: Some("download_queue_item".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             axum::Json(
                 json!({ "operation": "overwrite_download_queue_item", "success": 1, "archive_id": archive_id }),
             )
@@ -924,14 +1118,44 @@ struct RenameQueueItemBody {
 /// already-downloaded bytes — see `ingest::resolve_rename`'s own docs.
 async fn rename_queue_item(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path(id): Path<String>,
     body: axum::Json<RenameQueueItemBody>,
 ) -> Response {
+    // Captured before `resolve_conflict` runs — that call consumes/clears the item's own
+    // `pending_filename_conflict` as part of resolving it, so `original_filename` (the "before"
+    // half of this rename) is only ever available to read here, ahead of time.
+    let old_filename = state
+        .download_queue
+        .get(&id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|item| item.pending_filename_conflict)
+        .map(|conflict| conflict.original_filename);
+
     match resolve_conflict(&state, &id, ResolveAction::Rename(body.filename.clone())).await {
-        Ok(archive_id) => axum::Json(
-            json!({ "operation": "rename_download_queue_item", "success": 1, "archive_id": archive_id }),
-        )
-        .into_response(),
+        Ok(archive_id) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_RENAME,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: Some(archive_id.clone()),
+                    kind: Some("download_queue_item".to_string()),
+                },
+                // `name` — matches the field name every other rename-type action type uses (see
+                // `archives.rs::rename_archive`'s own docs on this unification).
+                old_filename.map(|name| json!({ "name": name })),
+                Some(json!({ "name": body.filename })),
+            )
+            .await;
+            axum::Json(
+                json!({ "operation": "rename_download_queue_item", "success": 1, "archive_id": archive_id }),
+            )
+            .into_response()
+        }
         Err(e) => resolve_error_response("rename_download_queue_item", &id, e),
     }
 }
@@ -1073,7 +1297,11 @@ async fn resolve_compare_conflict(state: &AppState, id: &str) -> ResolveOutcome 
 /// plain request/response fallback for any caller that doesn't want SSE — the frontend's own
 /// `ComparisonResultModal` flow now goes through the stream endpoint instead (see that handler's
 /// own docs for why).
-async fn compare_queue_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn compare_queue_item(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
     // Re-opening a comparison the user already ran should be instant, not re-run the whole
     // perceptual-hash/DP-alignment pipeline from scratch — reported live: "每次打开都要等待". The
     // cached value is invalidated (deleted) the moment this conflict is actually resolved
@@ -1129,6 +1357,20 @@ async fn compare_queue_item(State(state): State<AppState>, Path(id): Path<String
             tracing::warn!(%id, error = %e, "failed to cache comparison result");
         }
     }
+
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DOWNLOAD_QUEUE_COMPARE,
+        ActivityTarget {
+            id: Some(id.clone()),
+            label: None,
+            kind: Some("download_queue_item".to_string()),
+        },
+        None,
+        None,
+    )
+    .await;
 
     axum::Json(json!({ "result": result })).into_response()
 }
@@ -2062,7 +2304,10 @@ fn resolve_error_response(operation: &str, id: &str, e: ResolveConflictError) ->
 /// `DELETE /download_queue/{id}` (which does clean up a `pending_filename_conflict`'s own staged
 /// temp file — `Done` items never carry one, so this handler has nothing analogous to worry
 /// about).
-async fn clear_completed(State(state): State<AppState>) -> Response {
+async fn clear_completed(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     let items = match state.download_queue.list_all().await {
         Ok(items) => items,
         Err(e) => {
@@ -2090,6 +2335,21 @@ async fn clear_completed(State(state): State<AppState>) -> Response {
         for id in &ids {
             let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
         }
+    }
+    if cleared > 0 {
+        record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            action_types::DOWNLOAD_QUEUE_CLEAR_COMPLETED,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("download_queue_item".to_string()),
+            },
+            None,
+            Some(json!({ "cleared": cleared })),
+        )
+        .await;
     }
     ok(
         "clear_completed_download_queue",

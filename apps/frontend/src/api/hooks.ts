@@ -1,8 +1,12 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 
 import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
 import type {
+  ActivityFacets,
+  ActivityFilter,
+  ActivityPage,
+  ActivityRetention,
   AddToQueueItem,
   AddToQueueResponse,
   ApiToken,
@@ -1357,5 +1361,76 @@ export function useDeleteSelectedQueue() {
     mutationFn: (ids: string[]) =>
       sendJson<{ deleted: string[] }>("POST", "/download_queue/delete_selected", { ids }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
+  })
+}
+
+/** `GET /activity` (issue #87) — cursor-paginated, so `filter.cursor` changing between calls is
+ *  a "load next page" request, not a "these are different independent results" one:
+ *  `placeholderData: keepPreviousData` keeps the previous page's rows on screen while the next
+ *  page loads instead of flashing to an empty/loading state. */
+export function useActivity(filter: ActivityFilter) {
+  return useQuery({
+    queryKey: ["activity", filter],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (filter.cursor) params.set("cursor", filter.cursor)
+      if (filter.limit != null) params.set("limit", String(filter.limit))
+      if (filter.start_ts != null) params.set("start_ts", String(filter.start_ts))
+      if (filter.end_ts != null) params.set("end_ts", String(filter.end_ts))
+      // Comma-separated — matches the backend's own `ListActivityParams::actor`/`action_type`
+      // query-param convention (`activity.rs::split_csv_param`).
+      if (filter.actors && filter.actors.length > 0) params.set("actor", filter.actors.join(","))
+      if (filter.actionTypes && filter.actionTypes.length > 0) {
+        params.set("action_type", filter.actionTypes.join(","))
+      }
+      return fetchJson<ActivityPage>(`/activity?${params.toString()}`)
+    },
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useActivityFacets() {
+  return useQuery({
+    queryKey: ["activity-facets"],
+    queryFn: () => fetchJson<ActivityFacets>("/activity/facets"),
+  })
+}
+
+export function useDeleteActivityEntry() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => sendJson("DELETE", `/activity/${encodeURIComponent(id)}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["activity"] })
+      queryClient.invalidateQueries({ queryKey: ["activity-facets"] })
+    },
+  })
+}
+
+export function useBulkDeleteActivityEntries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      sendJson<{ deleted_count: number }>("DELETE", "/activity", { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["activity"] })
+      queryClient.invalidateQueries({ queryKey: ["activity-facets"] })
+    },
+  })
+}
+
+export function useActivityRetention() {
+  return useQuery({
+    queryKey: ["activity-retention"],
+    queryFn: () => fetchJson<ActivityRetention>("/activity/retention"),
+  })
+}
+
+export function useUpdateActivityRetention() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (retentionSecs: number | null) =>
+      sendJson("PUT", "/activity/retention", { retention_secs: retentionSecs }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["activity-retention"] }),
   })
 }

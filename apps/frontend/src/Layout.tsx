@@ -36,6 +36,7 @@ export function Layout() {
         { to: "/config/categories", label: t("app.modifyCategories") },
         { to: "/stats", label: t("app.statistics") },
         { to: "/logs", label: t("app.logs") },
+        { to: "/activity", label: t("app.activity") },
       ]
     : [
         { to: "/login", label: t("app.adminLogin") },

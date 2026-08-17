@@ -458,7 +458,11 @@ async function deleteArchive(archiveId: string, isTank: boolean) {
 
 function handleContextMenu(e: MouseEvent, archive: ArchiveMetadata, source: "grid" | "carousel" = "grid") {
   e.preventDefault()
-  setContextMenu({ archive, x: e.clientX, y: e.clientY, source })
+  // Document-relative (`clientX/Y` + current scroll offset), not viewport-relative — paired with
+  // `ArchiveContextMenu.tsx`'s own `position: "absolute"` (not `"fixed"`) so the menu stays
+  // anchored to the thumbnail it was opened next to and scrolls along with the page, instead of
+  // staying pinned to the same screen coordinates while the page scrolls underneath it.
+  setContextMenu({ archive, x: e.clientX + window.scrollX, y: e.clientY + window.scrollY, source })
 }
 
 function applyTagSearch(namespacedTag: string) {

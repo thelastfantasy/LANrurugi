@@ -150,25 +150,38 @@ pub async fn search(
                     pagecount > 0 && progress >= pagecount
                 }
                 mode => {
-                    // Unknown mode or a missing/unparseable `date_added` tag → treat as still
-                    // new (same conservative fallback as `effective_isnew`).
-                    let Some(days) = mode.strip_suffix('d').and_then(|d| d.parse::<u64>().ok())
-                    else {
-                        continue;
-                    };
-                    let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
-                    let Some(added) = tags.split(',').find_map(|t| {
-                        t.trim()
-                            .strip_prefix("date_added:")
-                            .and_then(|v| v.parse::<u64>().ok())
-                    }) else {
-                        continue;
-                    };
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    now.saturating_sub(added) >= days * 24 * 60 * 60
+                    // A time-window mode also lapses once the archive is finished (same
+                    // threshold `until_finished` uses above), mirroring
+                    // `lanrurugi_api::archives::effective_isnew`'s own identical addition — see
+                    // that function's own docs for why (an archive read to completion on day one
+                    // of a `3d` window used to keep matching `newonly` for the rest of the
+                    // window while also having already dropped out of the "On Deck" carousel's
+                    // own unrelated `hidecompleted` filter).
+                    let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
+                    let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
+                    if pagecount > 0 && progress >= pagecount {
+                        true
+                    } else {
+                        // Unknown mode or a missing/unparseable `date_added` tag → treat as
+                        // still new (same conservative fallback as `effective_isnew`).
+                        let Some(days) = mode.strip_suffix('d').and_then(|d| d.parse::<u64>().ok())
+                        else {
+                            continue;
+                        };
+                        let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+                        let Some(added) = tags.split(',').find_map(|t| {
+                            t.trim()
+                                .strip_prefix("date_added:")
+                                .and_then(|v| v.parse::<u64>().ok())
+                        }) else {
+                            continue;
+                        };
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        now.saturating_sub(added) >= days * 24 * 60 * 60
+                    }
                 }
             };
             if !lapsed {

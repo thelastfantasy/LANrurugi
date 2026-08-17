@@ -314,7 +314,10 @@ async fn put_settings(
         );
     };
 
-    if auth.is_some_and(|axum::extract::Extension(a)| a.is_token()) {
+    if auth
+        .as_ref()
+        .is_some_and(|axum::extract::Extension(a)| a.is_token())
+    {
         if let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
             .iter()
             .find(|f| fields.contains_key(**f))
@@ -388,6 +391,19 @@ async fn put_settings(
         .flatten()
         .is_some_and(|s| !s.trim().is_empty());
 
+    // Snapshotted before the write loop consumes `fields` — never includes `password`/
+    // `session_secret` (both `continue`d past below without being written at all here, so there's
+    // nothing meaningful to record for them anyway; `password` changes go through
+    // `change_password`'s own separate audit entry instead). Only the *names* of changed fields
+    // are recorded, not their values — settings cover everything from a `motd` string to API
+    // token lifetimes, and logging arbitrary field values here would risk incidentally recording
+    // something sensitive a future field addition didn't anticipate.
+    let changed_fields: Vec<String> = fields
+        .keys()
+        .filter(|k| *k != "password" && *k != "session_secret")
+        .cloned()
+        .collect();
+
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
@@ -409,6 +425,22 @@ async fn put_settings(
                 )
             }
         };
+    }
+
+    if !changed_fields.is_empty() {
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|axum::extract::Extension(a)| a),
+            lanrurugi_storage::activity::action_types::SETTINGS_UPDATE,
+            lanrurugi_storage::activity::ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("settings".to_string()),
+            },
+            None,
+            Some(json!({ "changed_fields": changed_fields })),
+        )
+        .await;
     }
 
     if new_enablewebp.is_some_and(|v| v != previous_enablewebp) {
@@ -476,6 +508,7 @@ struct ChangePasswordForm {
 /// unless the user explicitly means to set an empty password.
 async fn change_password(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     axum::Form(form): axum::Form<ChangePasswordForm>,
 ) -> Response {
     let hashed = match password::hash_password(&form.password) {
@@ -502,6 +535,20 @@ async fn change_password(
     let result: Result<(), _> = conn.hset(CONFIG_KEY, "password", hashed).await;
     match result {
         Ok(()) => {
+            // Never records the password itself, before or after — only that a change happened.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|axum::extract::Extension(a)| a),
+                lanrurugi_storage::activity::action_types::SETTINGS_PASSWORD_CHANGE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("settings".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             axum::Json(json!({ "operation": "change_password", "success": 1 })).into_response()
         }
         Err(e) => error(

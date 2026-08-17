@@ -45,7 +45,7 @@ export function SecuritySection({
   const { t } = useTranslation()
 
   return (
-    <CollapsibleSection icon="fa-shield-alt" title={t("settings.security")}>
+    <CollapsibleSection id="security" icon="fa-shield-alt" title={t("settings.security")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <CheckboxRow id="enablepass" checked={enablepass} onChange={setEnablepass} label={t("settings.enablePassword")}>

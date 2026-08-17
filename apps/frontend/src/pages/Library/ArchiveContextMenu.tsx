@@ -108,7 +108,12 @@ export function ArchiveContextMenu({
           onClose()
         }}
       />
-      <PopupMenu style={{ position: "fixed", top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
+      {/* `position: "absolute"` (document-relative), not `"fixed"` (viewport-relative) — paired
+          with `useLibrary.ts::handleContextMenu` already converting `x`/`y` to document-relative
+          coordinates (`clientX/Y` + scroll offset) at capture time, so the menu stays anchored to
+          the thumbnail it was opened next to and scrolls along with the page instead of staying
+          pinned to the same screen position while the page scrolls underneath it. */}
+      <PopupMenu style={{ position: "absolute", top: y, left: x, zIndex: Z_OVERLAY_CONTENT }}>
         {loggedIn && (
           <>
             {/* A compact icon-only row at the very top of the menu (Firefox's own right-click

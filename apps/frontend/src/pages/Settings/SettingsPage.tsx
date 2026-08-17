@@ -7,6 +7,7 @@ import type { Settings as SettingsType } from "@/api/types"
 import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
 import { DEFAULT_THEME_ID, FONT_SIZE_SM, THEMES, useApplyTheme, useLegacyConfigCss } from "@/theme"
 import { toast } from "@/toast"
@@ -41,6 +42,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   useDocumentTitle(t("settings.adminSettings") ?? undefined)
+  useSectionDeepLink()
   const logout = useLogout()
   const info = useServerInfo()
   const updateSettings = useUpdateSettings()
@@ -269,7 +271,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             onStatus={setStatus}
           />
 
-          <CollapsibleSection icon="fa-paint-brush" title={t("settings.theme")}>
+          <CollapsibleSection id="theme" icon="fa-paint-brush" title={t("settings.theme")}>
               <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
                 <tbody>
                   <tr>

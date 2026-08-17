@@ -14,8 +14,11 @@ use lanrurugi_core::ids::{ArchiveId, CategoryId};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::activity::record_manual;
+use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
+use lanrurugi_storage::activity::{action_types, ActivityTarget};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 const BOOKMARK_LINK_FIELD: &str = "bookmark_link";
@@ -74,6 +77,7 @@ pub struct CreateCategoryParams {
 
 async fn create_category(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Form(params): axum::Form<CreateCategoryParams>,
 ) -> Response {
     let now = SystemTime::now()
@@ -104,12 +108,27 @@ async fn create_category(
         pinned: params.pinned,
     };
     match state.repos.categories.save(&category).await {
-        Ok(()) => axum::Json(json!({
-            "operation": "create_category",
-            "category_id": catid,
-            "success": 1,
-        }))
-        .into_response(),
+        Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::CATEGORY_CREATE,
+                ActivityTarget {
+                    id: Some(catid.0.clone()),
+                    label: Some(category.name.clone()),
+                    kind: Some("category".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
+            axum::Json(json!({
+                "operation": "create_category",
+                "category_id": catid,
+                "success": 1,
+            }))
+            .into_response()
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "create_category",
@@ -146,7 +165,10 @@ async fn get_bookmark_link(State(state): State<AppState>) -> Response {
 
 /// `DELETE /categories/bookmark_link` — unlinks the bookmark icon from whatever category it was
 /// pointed at, returning that category's id (legacy `Model::Category::remove_bookmark_link`).
-async fn remove_bookmark_link(State(state): State<AppState>) -> Response {
+async fn remove_bookmark_link(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
     let mut conn = match state.redis.config.get().await {
         Ok(c) => c,
         Err(e) => {
@@ -162,6 +184,19 @@ async fn remove_bookmark_link(State(state): State<AppState>) -> Response {
         .await
         .unwrap_or_default();
     let _: Result<(), _> = conn.hdel(CONFIG_KEY, BOOKMARK_LINK_FIELD).await;
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::CATEGORY_BOOKMARK_UPDATE,
+        ActivityTarget {
+            id: Some(category_id.clone()),
+            label: None,
+            kind: Some("category".to_string()),
+        },
+        Some(json!({ "bookmark_link": category_id })),
+        Some(json!({ "bookmark_link": null })),
+    )
+    .await;
     axum::Json(json!({
         "operation": "remove_bookmark_link",
         "success": 1,
@@ -175,6 +210,7 @@ async fn remove_bookmark_link(State(state): State<AppState>) -> Response {
 /// — a dynamic category has no fixed archive list to add/remove membership from).
 async fn update_bookmark_link(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path(id): Path<CategoryId>,
 ) -> Response {
     match state.repos.categories.get(&id).await {
@@ -187,7 +223,7 @@ async fn update_bookmark_link(
             })),
         )
             .into_response(),
-        Ok(Some(_)) => {
+        Ok(Some(c)) => {
             let mut conn = match state.redis.config.get().await {
                 Ok(c) => c,
                 Err(e) => {
@@ -201,6 +237,19 @@ async fn update_bookmark_link(
             let _: Result<(), _> = conn
                 .hset(CONFIG_KEY, BOOKMARK_LINK_FIELD, id.as_str())
                 .await;
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::CATEGORY_BOOKMARK_UPDATE,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: Some(c.name.clone()),
+                    kind: Some("category".to_string()),
+                },
+                None,
+                Some(json!({ "bookmark_link": id.0 })),
+            )
+            .await;
             axum::Json(json!({
                 "operation": "update_bookmark_link",
                 "success": 1,
@@ -291,9 +340,27 @@ async fn update_category(
     }
 }
 
-async fn delete_category(State(state): State<AppState>, Path(id): Path<CategoryId>) -> Response {
+async fn delete_category(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<CategoryId>,
+) -> Response {
+    let existing = state.repos.categories.get(&id).await.ok().flatten();
     match state.repos.categories.delete(&id).await {
         Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::CATEGORY_DELETE,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: existing.map(|c| c.name),
+                    kind: Some("category".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             axum::Json(json!({ "operation": "delete_category", "success": 1 })).into_response()
         }
         Err(e) => error(

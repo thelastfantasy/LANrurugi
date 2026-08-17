@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod api_tokens;
 pub mod bootstrap;
 pub mod compare_cache;

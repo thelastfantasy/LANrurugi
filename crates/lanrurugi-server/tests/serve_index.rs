@@ -61,6 +61,9 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
     let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
         redis.config.clone(),
     ));
+    let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+        redis.config.clone(),
+    ));
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -99,6 +102,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
+        activity,
     };
 
     let dir = tempfile::tempdir().ok()?;

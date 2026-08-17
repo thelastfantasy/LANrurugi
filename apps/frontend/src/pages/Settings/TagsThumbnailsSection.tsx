@@ -84,7 +84,7 @@ export function TagsThumbnailsSection({
   const regenThumbnails = useRegenThumbnails()
 
   return (
-    <CollapsibleSection icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
+    <CollapsibleSection id="tags-thumbnails" icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
           <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("settings.useHighqualityThumbnailsForPages")}>

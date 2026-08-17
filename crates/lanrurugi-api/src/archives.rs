@@ -43,7 +43,13 @@ const CORRUPTED_PAGE_PLACEHOLDER: &[u8] = include_bytes!("../assets/corrupted_pa
 /// `newbadgemode` setting (see `settings::STRING_FIELDS`'s `newbadgemode` doc): `until_opened`
 /// shows it whenever the flag is set (legacy's own behavior); `until_finished` hides it once
 /// `lastreadpage` reaches `pagecount`; a `Nd` window hides it once `date_added` (parsed from the
-/// archive's own `date_added:<unix>` tag) is more than N days old — an archive without a
+/// archive's own `date_added:<unix>` tag) is more than N days old, **or** once the archive is
+/// finished (same `lastreadpage >= pagecount` threshold `until_finished` uses) — whichever comes
+/// first. Without that second condition, an archive read to completion on day one of a `3d`
+/// window kept showing 🆕 for the rest of the window while also silently dropping out of the
+/// Library homepage's "On Deck" carousel (that carousel's own `hidecompleted` filter only looks
+/// at progress, never at `isnew`) — same underlying flag, two independent display rules that used
+/// to disagree about whether a finished archive was still "new". An archive without a
 /// `date_added` tag is treated as still-new (conservative: the flag was set, there's just no
 /// timestamp to age it against). Never mutates the stored flag — the mode decides *display*
 /// only; explicit clearing (`DELETE /archives/{id}/isnew`) stays orthogonal, and
@@ -57,6 +63,9 @@ pub(crate) fn effective_isnew(a: &lanrurugi_core::entities::Archive, mode: &str)
         "until_opened" => true,
         "until_finished" => a.lastreadpage < a.pagecount,
         _ => {
+            if a.pagecount > 0 && a.lastreadpage >= a.pagecount {
+                return false;
+            }
             let Some(days) = mode.strip_suffix('d').and_then(|d| d.parse::<u64>().ok()) else {
                 // Unknown mode — fall back to showing the badge rather than silently hiding it.
                 return true;
@@ -262,6 +271,7 @@ async fn get_archive_deprecated(
 async fn delete_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -283,6 +293,19 @@ async fn delete_archive(
             // user-triggered destructive action (unlinks the archive's file from disk, not just a
             // DB record).
             tracing::info!(%id, filename = %archive.name, "deleted archive");
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: Some(id.to_string()),
+                    label: Some(archive.name.clone()),
+                    kind: Some("archive".to_string()),
+                },
+                None,
+                None,
+            )
+            .await;
             // Best-effort, matching every other indexer call site in this file (`update_title_index`/
             // `update_tag_indexes` above) — a search-index cleanup failure shouldn't undo an already
             // committed archive deletion, just leave a ghost id behind (logged) for a future rescan
@@ -609,6 +632,7 @@ async fn download_archive(
 async fn delete_patch(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
     let mut archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -643,6 +667,21 @@ async fn delete_patch(
             );
         }
     }
+
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(id.to_string()),
+            label: Some(archive.name.clone()),
+            kind: Some("archive".to_string()),
+        },
+        None,
+        None,
+    )
+    .await;
+
     axum::Json(json!({ "operation": "delete_patch", "success": 1 })).into_response()
 }
 
@@ -680,6 +719,7 @@ struct RenameArchiveParams {
 async fn rename_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     axum::Json(params): axum::Json<RenameArchiveParams>,
 ) -> Response {
     let mut archive = match state.repos.archives.get(&id).await {
@@ -881,6 +921,25 @@ async fn rename_archive(
             .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
             .await;
     }
+
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(id.to_string()),
+            label: Some(new_filename.clone()),
+            kind: Some("archive".to_string()),
+        },
+        // `name` — matches `tankoubon.rename`/`token.rename`'s own `before`/`after` field name for
+        // the identical "this resource's own display name changed" shape, so the frontend's
+        // activity-description renderer can read one shared `{ name: string }` shape across every
+        // rename-type action type instead of special-casing this one's field name (`filename`, its
+        // pre-unification name) apart from the others.
+        Some(json!({ "name": old_filename_str })),
+        Some(json!({ "name": new_filename })),
+    )
+    .await;
 
     axum::Json(json!({ "operation": "rename_archive", "success": 1, "filename": new_filename }))
         .into_response()
@@ -1189,6 +1248,7 @@ pub struct RegenThumbsParams {
 async fn regen_thumbs(
     State(state): State<AppState>,
     Query(params): Query<RegenThumbsParams>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
     let archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
@@ -1210,6 +1270,24 @@ async fn regen_thumbs(
             )
         }
     };
+
+    // Recorded here (the manually-triggered `POST /regen_thumbs` entry point), not inside
+    // `spawn_regen_thumbnails_job` itself — that function is shared with `settings::put_settings`'s
+    // own `enablewebp`-change codepath, whose regeneration is a side effect of a `settings.update`
+    // entry already being recorded there, not a separate user-initiated action of its own.
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::ARCHIVE_THUMB_REGEN,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        },
+        None,
+        Some(json!({ "force": params.force, "archive_count": archives.len() })),
+    )
+    .await;
 
     let job_id = spawn_regen_thumbnails_job(&state, archives, thumb_settings, params.force).await;
 
@@ -1341,6 +1419,7 @@ pub struct UpdateMetadataParams {
 async fn update_archive_metadata(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(params): Query<UpdateMetadataParams>,
 ) -> Response {
     let mut archive = match state.repos.archives.get(&id).await {
@@ -1357,6 +1436,7 @@ async fn update_archive_metadata(
 
     let old_title = archive.title.clone();
     let old_tags = archive.tags.clone();
+    let old_summary = archive.summary.clone();
 
     if let Some(title) = params.title.filter(|t| !t.is_empty()) {
         archive.title = title;
@@ -1370,6 +1450,80 @@ async fn update_archive_metadata(
 
     match state.repos.archives.save(&archive).await {
         Ok(()) => {
+            // `tags_added`/`tags_removed` — the actual set difference, computed here rather than
+            // handing the frontend two raw comma-joined strings to parse and diff itself: this is
+            // the one place that already knows both the old and new tag string, Rust's own
+            // `HashSet` difference is no more code than the frontend's would be, and precomputing
+            // it means the activity feed's own tag-diff display (added in green, removed
+            // strikethrough-red) never needs a second, independently-maintained copy of "how to
+            // split/compare a tag string" living in TypeScript.
+            let old_tag_set: std::collections::HashSet<&str> = old_tags
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let new_tag_set: std::collections::HashSet<&str> = archive
+                .tags
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let tags_added: Vec<&str> = new_tag_set.difference(&old_tag_set).copied().collect();
+            let tags_removed: Vec<&str> = old_tag_set.difference(&new_tag_set).copied().collect();
+
+            // A rating-only change (the Library page's right-click star widget's own write path,
+            // `useLibrary.ts::updateRating`) rebuilds and resends the *entire* tags string just to
+            // add/change/remove one `rating:` tag, title/summary always untouched — recorded under
+            // its own dedicated action type instead of the generic `ARCHIVE_METADATA_UPDATE`, so
+            // "rated this" doesn't read as an ambiguous "updated metadata"/tag-diff entry (direct
+            // feedback: a rating change buried in a full tag-diff obscured that it was *just* a
+            // rating). At most one `rating:` tag can ever exist at a time (`RatingWidget`'s own
+            // `setRating` always filters the old one out before appending the new one), so a real
+            // rating-only change is exactly "≤1 added and ≤1 removed, both `rating:`-prefixed" —
+            // anything else touching tags (even alongside a rating change) falls through to the
+            // generic path below instead of trying to represent a mixed change as two entries.
+            let is_rating_only_change = archive.title == old_title
+                && archive.summary == old_summary
+                && tags_added.len() <= 1
+                && tags_removed.len() <= 1
+                && tags_added.iter().all(|t| t.starts_with("rating:"))
+                && tags_removed.iter().all(|t| t.starts_with("rating:"))
+                && (!tags_added.is_empty() || !tags_removed.is_empty());
+
+            if is_rating_only_change {
+                crate::activity::record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    lanrurugi_storage::activity::action_types::ARCHIVE_RATING_UPDATE,
+                    lanrurugi_storage::activity::ActivityTarget {
+                        id: Some(id.to_string()),
+                        label: Some(archive.title.clone()),
+                        kind: Some("archive".to_string()),
+                    },
+                    Some(json!({ "rating": tags_removed.first() })),
+                    Some(json!({ "rating": tags_added.first() })),
+                )
+                .await;
+            } else {
+                crate::activity::record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    lanrurugi_storage::activity::action_types::ARCHIVE_METADATA_UPDATE,
+                    lanrurugi_storage::activity::ActivityTarget {
+                        id: Some(id.to_string()),
+                        label: Some(archive.title.clone()),
+                        kind: Some("archive".to_string()),
+                    },
+                    Some(json!({ "title": old_title, "summary": old_summary })),
+                    Some(json!({
+                        "title": archive.title,
+                        "summary": archive.summary,
+                        "tags_added": tags_added,
+                        "tags_removed": tags_removed,
+                    })),
+                )
+                .await;
+            }
             if archive.title != old_title {
                 if let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,

@@ -96,6 +96,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let api_tokens = Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
         redis.config.clone(),
     ));
+    let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+        redis.config.clone(),
+    ));
 
     // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
     // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
@@ -147,6 +150,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
+        activity,
     };
 
     {

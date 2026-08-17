@@ -642,3 +642,84 @@ export interface BookmarkLinkResponse {
   category_id: string
   error?: string
 }
+
+// `/activity*` (issue #87) — structured, persisted operator activity records, distinct from the
+// unstructured `tracing`-based request log. Matches `lanrurugi_storage::activity::ActivityEntry`.
+export type ActivityActorKind = "session" | "token" | "system" | "anonymous"
+
+export interface ActivityActor {
+  kind: ActivityActorKind
+  id: string | null
+  display_name: string | null
+}
+
+export interface ActivityTarget {
+  id: string | null
+  label: string | null
+  kind: string | null
+  /** Whether this target still exists (checked live against the database at list-fetch time) —
+   * only ever set for `archive`/`tankoubon` kinds (see `activity.rs::target_exists`'s own docs),
+   * `undefined` for every other kind (not applicable, not "unknown"). `false` means the resource
+   * was deleted by some *other*, unrelated action after this entry was written (a rating/metadata
+   * update on an archive later deleted) — the row still renders its own historical content, just
+   * with its title struck through and no longer a live link. */
+  exists?: boolean
+}
+
+export interface ActivityCausedBy {
+  reason: string
+  source_entry_id: string | null
+  description: string
+}
+
+export interface ActivityEntry {
+  id: string
+  timestamp: number
+  actor: ActivityActor
+  auto_or_manual: "manual" | "automatic"
+  action_type: string
+  target: ActivityTarget
+  client_ip: string | null
+  before: unknown | null
+  after: unknown | null
+  caused_by: ActivityCausedBy | null
+}
+
+export interface ActivityPage {
+  entries: ActivityEntry[]
+  next_cursor: string | null
+  total_estimate: number | null
+}
+
+export interface ActivityFacetActionType {
+  value: string
+  count: number
+}
+
+export interface ActivityFacetActor {
+  kind: ActivityActorKind
+  id: string | null
+  display_name: string
+  count: number
+}
+
+export interface ActivityFacets {
+  action_types: ActivityFacetActionType[]
+  actors: ActivityFacetActor[]
+}
+
+export interface ActivityFilter {
+  cursor?: string
+  limit?: number
+  start_ts?: number
+  end_ts?: number
+  /** OR'd together — matches the backend's own `ActivityFilter::actor_keys` semantics (a single
+   *  entry has exactly one actor, so this can only ever be "match any of", never "match all of"). */
+  actors?: string[]
+  /** OR'd together — same reasoning as `actors` above. */
+  actionTypes?: string[]
+}
+
+export interface ActivityRetention {
+  retention_secs: number | null
+}

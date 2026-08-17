@@ -3,6 +3,7 @@ import { ToastContainer } from "react-toastify"
 
 import { DialogHost } from "./dialog"
 import { Layout } from "./Layout"
+import { ActivityPage } from "./pages/Activity"
 import { Batch } from "./pages/Batch"
 import { Categories } from "./pages/Categories"
 import { Duplicates } from "./pages/Duplicates"
@@ -31,6 +32,7 @@ export function App() {
         <Route path="/reader/:archiveId" element={<Reader />} />
         <Route element={<Layout />}>
           <Route path="/" element={<Library />} />
+          <Route path="/activity" element={<ActivityPage />} />
           <Route path="/edit/:archiveId" element={<Edit />} />
           <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
           <Route path="/config/categories" element={<Categories />} />

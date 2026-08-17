@@ -7,6 +7,7 @@ import { usePlugins, useSettings, useUpdateSettings } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
 import { CollapsibleSection } from "@/components/Display"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
 import { useApplyTheme, useLegacyConfigCss } from "@/theme"
 
@@ -46,6 +47,7 @@ export function Plugins() {
   useApplyTheme()
   useLegacyConfigCss()
   useDocumentTitle(t("common.pluginConfiguration") ?? undefined)
+  useSectionDeepLink()
 
   async function runScript(path: string, params?: Record<string, string>) {
     setRunning(path)
@@ -81,7 +83,7 @@ export function Plugins() {
   function renderGroupFlyout(group: { type: PluginInfo["type"]; icon: string; label: string }) {
     const groupPlugins = plugins.data?.filter((p) => p.type === group.type) ?? []
     return (
-      <CollapsibleSection icon={group.icon} title={t(group.label)} key={group.type}>
+      <CollapsibleSection id={group.type} icon={group.icon} title={t(group.label)} key={group.type}>
         {/* Legacy's own `plugins.html.tt2:84-91` — sits at the top of the Metadata Plugins flyout
             body, above the plugin list itself. Gates whether a metadata plugin's returned `title`
             is actually applied to an archive (`Edit.tsx`'s own `handleSave`/`runPlugin`); tags and
@@ -135,7 +137,7 @@ export function Plugins() {
               to warrant a native Rust endpoint rather than a Deno-subprocess round trip. Source
               Finder / nHentai Source Converter are real `script`-type plugins and render as
               ordinary cards in the "Scripts" flyout above. */}
-          <CollapsibleSection icon="fa-scroll" title={t("plugins.maintenanceScripts")}>
+          <CollapsibleSection id="maintenance-scripts" icon="fa-scroll" title={t("plugins.maintenanceScripts")}>
               <p>{t("plugins.librarywideMaintenanceScriptsOperateOn")}</p>
 
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>

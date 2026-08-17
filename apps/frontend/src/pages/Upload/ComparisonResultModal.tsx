@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useKeepSideB, useOverwriteQueueItem } from "@/api/hooks";
 import type { ExportPatchInsertion } from "@/api/types";
 import { formatBytes, IconButton } from "@/components/Display";
+import { useIsNarrowViewport } from "@/hooks";
 import { createTouchMagnifyStore, TouchMagnifyStoreContext, useTouchMagnifyStore } from "@/store";
 import { FONT_SIZE_MD, FONT_SIZE_SM } from "@/theme";
 import { toast } from "@/toast";
@@ -13,20 +14,6 @@ import { KeepSideButton } from "./KeepSideButton";
 import { OverlayPage } from "./OverlayPage";
 import { PatchAssignmentView } from "./PatchAssignmentView";
 import type { StreamingCompareState } from "./useCompareStream";
-
-/** True below the breakpoint where a 3-column sample grid shrinks images too small to actually
- * judge quality by — single column is the only usable layout there. */
-function useIsNarrowViewport(): boolean {
-  const query = "(max-width: 640px)";
-  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mql = window.matchMedia(query);
-    const onChange = () => setNarrow(mql.matches);
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-  return narrow;
-}
 
 /** Full-screen result viewer for `GET /download_queue/{id}/compare/stream` — its own full-viewport
  * overlay (not the shared `Modal`) since judging image quality needs near-real reading resolution.

@@ -163,6 +163,12 @@ export function Reader() {
 
   const params = new URLSearchParams(window.location.search)
   const startPage = Number(params.get("p")) || null
+  // `?overview=1` deep-links straight into the archive overview overlay open (the Activity page's
+  // own `archive.metadata_update`/`archive.rating_update` operation-content links use this — a
+  // rating/metadata change has no dedicated detail page of its own, and the overview overlay is
+  // the real "here's this archive's tags/rating/summary" surface, matching what those entries are
+  // actually about far better than the plain reader view or the Edit page ever did).
+  const startWithOverview = params.get("overview") === "1"
 
   const [pageOverride, setPageOverride] = useState<number | null>(startPage)
   // Whether the overlay's initial value came from `showOverlayByDefault` auto-opening it (true on
@@ -171,9 +177,11 @@ export function Reader() {
   // prop below): auto-opening on every single page load *and* also yanking the scroll position to
   // hunt down the current page every time was a real, reported annoyance, even though auto-opening
   // itself is an intentional, user-requested feature (no legacy equivalent) worth keeping as-is.
-  const openedByDefaultSetting = useRef(readerSettings.showOverlayByDefault)
+  // `startWithOverview` also counts as a non-`autoFocus` open for the same reason — the Activity
+  // link's whole point is showing the archive's current tags/rating, not hunting down a page.
+  const openedByDefaultSetting = useRef(readerSettings.showOverlayByDefault || startWithOverview)
   const [overlay, setOverlay] = useState<OverlayKind>(
-    readerSettings.showOverlayByDefault ? "archive" : null,
+    readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   )
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [widespreads, setWidespreads] = useState<Record<number, boolean>>({})

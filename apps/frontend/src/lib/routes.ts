@@ -16,6 +16,12 @@ export const routes = {
   library: () => "/",
   login: () => "/login",
   reader: (archiveId: string) => `/reader/${archiveId}`,
+  // `?overview=1` opens straight into the archive overview overlay (`Reader.tsx`'s own
+  // `startWithOverview` reads it) — used by the Activity page's own `archive.metadata_update`/
+  // `archive.rating_update` operation-content links, whose real subject is "this archive's tags/
+  // rating/summary changed", which the overview overlay shows directly rather than the plain
+  // reader view or the Edit page (neither of which surfaces a rating at all).
+  readerOverview: (archiveId: string) => `/reader/${archiveId}?overview=1`,
   edit: (archiveId: string) => `/edit/${archiveId}`,
   tankoubonEdit: (tankId: string) => `/tankoubon/${tankId}/edit`,
   upload: () => "/upload",
@@ -24,12 +30,23 @@ export const routes = {
   backup: () => "/backup",
   logs: () => "/logs",
   jobs: () => "/jobs",
+  activity: () => "/activity",
   batch: () => "/batch",
-  settings: () => "/config",
+  // `section` deep-links to one of Settings' own accordions (`CollapsibleSection`'s own `id`
+  // prop — "global"/"theme"/"security"/"api-tokens"/"archive-files"/"tags-thumbnails"/
+  // "background-workers") — `useSectionDeepLink` reads `?section=<id>`, opens the matching
+  // section, and scrolls it into view. The Activity page's own operation-content links use this to
+  // jump straight to "which settings section changed" for a `settings.update`/`token.*`/etc.
+  // entry instead of just the bare settings landing page.
+  settings: (section?: string) => (section ? `/config?section=${encodeURIComponent(section)}` : "/config"),
   categories: () => "/config/categories",
   // `focus` deep-links to a specific plugin's download/rate-limit settings section (issue #2):
   // Plugins.tsx reads `?focus=<namespace>` and scrolls that section into view + briefly highlights
   // it. Omit for the plain plugin-list landing.
   pluginSettings: (focus?: string) =>
     focus ? `/config/plugins?focus=${encodeURIComponent(focus)}` : "/config/plugins",
+  // `section` deep-links to one of Plugins' own accordions (`CollapsibleSection`'s own `id` prop —
+  // a plugin `type` value "login"/"download"/"script"/"metadata", or "maintenance-scripts") — same
+  // `useSectionDeepLink` mechanism as `settings` above, for `plugin.*` activity entries.
+  pluginSection: (section: string) => `/config/plugins?section=${encodeURIComponent(section)}`,
 } as const
