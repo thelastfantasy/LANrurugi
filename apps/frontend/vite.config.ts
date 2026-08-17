@@ -1,8 +1,28 @@
 import path from 'node:path'
 
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+/** `http-proxy` (what Vite's own `server.proxy`/`preview.proxy` wrap) rewrites the outgoing
+ * `Host` header to match the proxy *target* by default — fine for `/api/*` (nothing there reads
+ * `Host`), but `GET /opensearch.xml` (issue #90) specifically builds its URL template from the
+ * real browser-visible `Host`/`X-Forwarded-Host`, so without this the dev-mode-installed search
+ * engine would point at the backend's own internal `127.0.0.1:3001` instead of whatever
+ * `localhost:3000`/LAN address the user actually opened — confirmed live. Sets
+ * `X-Forwarded-Host`/`X-Forwarded-Proto` from the *inbound* request (which still has the real
+ * values at this point) — `resolve_base_url` already prefers those over the bare `Host` header,
+ * matching this app's own documented reverse-proxy deployment convention, so dev mode now takes
+ * exactly the same code path a real production reverse proxy would. */
+function preserveOriginalHostHeader(): NonNullable<ProxyOptions['configure']> {
+  return (proxy) => {
+    proxy.on('proxyReq', (proxyReq, req) => {
+      const host = req.headers.host
+      if (host) proxyReq.setHeader('X-Forwarded-Host', host)
+      proxyReq.setHeader('X-Forwarded-Proto', 'http')
+    })
+  }
+}
 
 /** Fills in `index.html`'s inline anti-flash-of-default-theme script's `id="theme-init"
  * data-theme="..."` attribute (see that file's own docs) with the real current theme in `vite
@@ -78,7 +98,22 @@ export default defineConfig({
       // dev` point at a `compose.yaml`-run container instead (which always binds 3000 itself,
       // per its own `network_mode: host` + `LANRURUGI_BIND` default — meaning `vite dev` can't
       // also bind 3000 in that case; run it with `--port <other>` alongside this override).
-      '/api': `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+      '/api': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+        configure: preserveOriginalHostHeader(),
+      },
+      // `/opensearch.xml` (issue #90) lives outside `/api` on purpose — `lanrurugi_api::opensearch`'s
+      // own docs explain why (must stay reachable before login, same as `/api/login` itself, but
+      // mounted at a bare path since a browser's OpenSearch autodiscovery fetches exactly the
+      // `href` `index.html`'s own `<link rel="search">` names, verbatim, no `/api` prefix to add).
+      // Without this entry, `vite dev`'s own SPA fallback silently serves `index.html` for it
+      // instead (confirmed live: Firefox's "could not install search engine" error was actually
+      // Vite returning HTML with `Content-Type: text/html`, not the Rust backend's real XML —
+      // nothing to do with login state, which this path never required in the first place).
+      '/opensearch.xml': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+        configure: preserveOriginalHostHeader(),
+      },
     },
   },
   // `vite preview` (used by Playwright's per-worker e2e fixture, see tests/e2e/fixtures.ts) needs
@@ -88,7 +123,14 @@ export default defineConfig({
   // backend port so a bare `vite preview` outside the e2e harness still works sensibly.
   preview: {
     proxy: {
-      '/api': `http://127.0.0.1:${process.env.LANRURUGI_E2E_BACKEND_PORT ?? '3000'}`,
+      '/api': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_E2E_BACKEND_PORT ?? '3000'}`,
+        configure: preserveOriginalHostHeader(),
+      },
+      '/opensearch.xml': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_E2E_BACKEND_PORT ?? '3000'}`,
+        configure: preserveOriginalHostHeader(),
+      },
     },
   },
 })
