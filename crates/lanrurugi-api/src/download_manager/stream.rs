@@ -1221,10 +1221,20 @@ mod tests {
     async fn a_cancelled_download_resumes_from_where_it_left_off_on_retry() {
         let full_body: Vec<u8> = (0..5000u32).map(|n| (n % 256) as u8).collect();
         let full_body_for_route = full_body.clone();
+        // Signaled by the route handler below once it's handed a few chunks to the response
+        // stream — a real synchronization point the test waits on before cancelling (see this
+        // test's own cancellation comment further down for why a guessed delay isn't good enough,
+        // and why this waits for a few chunks rather than just the first), independent of
+        // `progress_tx`'s own throttled reporting interval (too coarse to ever fire mid-transfer
+        // for a body this small — `download_one`'s internal `PROGRESS_REPORT_INTERVAL` is 200ms,
+        // longer than this whole 5000-byte transfer takes).
+        let early_chunk_sent = std::sync::Arc::new(tokio::sync::Notify::new());
+        let early_chunk_sent_for_route = early_chunk_sent.clone();
         let router = axum::Router::new().route(
             "/archive.zip",
             axum::routing::get(move |headers: axum::http::HeaderMap| {
                 let full_body = full_body_for_route.clone();
+                let early_chunk_sent = early_chunk_sent_for_route.clone();
                 async move {
                     // A real, minimal `Range: bytes=N-` responder — enough to exercise the
                     // real client-side `Range`/`If-Range`/`206` handling in `download_one`
@@ -1261,11 +1271,29 @@ mod tests {
                         body_bytes
                             .chunks(200)
                             .map(|c| Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(c)))
-                            .collect::<Vec<_>>(),
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .enumerate(),
                     )
-                    .then(|chunk| async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                        chunk
+                    .then(move |(i, chunk)| {
+                        let early_chunk_sent = early_chunk_sent.clone();
+                        async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            // Notified after the *third* chunk (not the first) — signaling right
+                            // as the first chunk leaves the server races the client's own
+                            // read-then-write of that chunk (the network round trip plus
+                            // `download_one`'s own `tokio::select!` scheduling isn't instant),
+                            // confirmed live as a real failure mode (the cancellation landing
+                            // before any bytes were actually written to disk). Three chunks' worth
+                            // of head start (15ms of the server's own per-chunk pacing) reliably
+                            // gives the client time to have written real bytes by the time this
+                            // fires, while still leaving most of the 25-chunk transfer left to
+                            // interrupt.
+                            if i == 2 {
+                                early_chunk_sent.notify_one();
+                            }
+                            chunk
+                        }
                     });
                     let mut response = axum::body::Body::from_stream(chunk_stream).into_response();
                     *response.status_mut() = status;
@@ -1297,17 +1325,25 @@ mod tests {
             filename_hint: Some("archive.zip".to_string()),
         };
 
-        // First attempt: cancel partway through. The server above deliberately paces its response
-        // in 200-byte chunks every 5ms (25 chunks total for the 5000-byte body), so cancelling
-        // after a few chunks' worth of time reliably lands mid-transfer rather than racing the
-        // whole response arriving instantly.
+        // First attempt: cancel partway through. Rather than guessing a wall-clock delay long
+        // enough to land after the first chunk but short enough to land before the whole 5000-byte
+        // body finishes (a real, confirmed-flaky failure mode under CI's own scheduling jitter —
+        // too short cancels before any bytes arrive at all, too long lets the transfer complete
+        // uninterrupted; `download_one`'s own `progress_tx` reporting is too coarse-grained to use
+        // instead — its 200ms throttle interval is longer than this whole transfer takes, so it
+        // never fires until the transfer's already done), this waits on `early_chunk_sent` — a
+        // real synchronization signal the route handler above fires the instant it hands its first
+        // chunk to the response stream — before cancelling, guaranteeing the cancellation always
+        // lands after real bytes have started arriving but (per the server's own 5ms-per-chunk
+        // pacing across 25 chunks) still well before the transfer completes.
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_after = cancel.clone();
+        let early_chunk_sent_waiter = early_chunk_sent.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(55)).await;
+            early_chunk_sent_waiter.notified().await;
             cancel_after.cancel();
         });
-        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
         let first_attempt = download_one(
             &manager,
             &[],
