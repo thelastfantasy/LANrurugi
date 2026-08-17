@@ -348,6 +348,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Eager, not lazy-on-first-request — a malformed checked-in policy/model file (see
+    // `authz::route_enforcer`'s own docs on why that `expect` is the right call there) should
+    // fail server boot outright, not the first real request that happens to hit `require_session`.
+    lanrurugi_api::authz::Authz::get().await;
+
     let state = AppState {
         redis: redis.clone(),
         repos: repos.clone(),

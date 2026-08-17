@@ -4,6 +4,7 @@ pub mod archives;
 pub mod artist_backfill;
 pub mod auth;
 pub mod auth_context;
+pub mod authz;
 pub mod bench;
 pub mod categories;
 pub mod common;

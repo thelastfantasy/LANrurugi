@@ -25,7 +25,7 @@
 //! authentication semantics" clause — see that principle's own annotation in
 //! `.specify/memory/constitution.md`.
 
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -141,13 +141,22 @@ fn trace_request(request: &Request, auth: &AuthContext, allowed: bool) {
 /// harmless field updates a `Guest`-blocked-but-otherwise-trusted admin-role token should still be
 /// able to make. That endpoint instead does its own narrower, field-level check inside
 /// `settings::put_settings` by reading the same `AuthContext` this function reads.
-pub async fn require_session(request: Request, next: Next) -> Response {
-    let is_token = request
-        .extensions()
-        .get::<AuthContext>()
-        .map(AuthContext::is_token)
-        .unwrap_or(false);
-    if is_token {
+///
+/// Backed by [`crate::authz`] (issue #91) rather than a hardcoded "any token at all" check — reads
+/// `policy/route_policy.csv` via [`crate::authz::Authz::get`] (a process-global, not an
+/// `AppState` field — see that function's own docs on why), keyed on the actual matched route
+/// pattern (`MatchedPath`, axum's own `{param}` syntax, translated to Casbin's `:param` via
+/// [`crate::authz::axum_path_to_casbin`]) and HTTP method, so the *set* of session-only routes
+/// lives in one declarative file instead of being implied by which handlers happen to have this
+/// middleware mounted on them. Still mounted the exact same way (`.route_layer(from_fn(require_session))`
+/// at each route's own definition) — only what happens *inside* changed, not where it's called
+/// from.
+pub async fn require_session(matched_path: MatchedPath, request: Request, next: Next) -> Response {
+    let auth = request.extensions().get::<AuthContext>();
+    let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
+    let method = request.method().as_str();
+    let authz = crate::authz::Authz::get().await;
+    if !crate::authz::check_route(&authz.route, auth, &obj, method) {
         return (
             StatusCode::FORBIDDEN,
             "This action requires a real login session, not an API token.",

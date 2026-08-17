@@ -315,6 +315,7 @@ const DEFAULT_LIMIT: isize = 50;
 
 async fn list_activity(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Query(params): Query<ListActivityParams>,
 ) -> Response {
     let limit = params
@@ -333,8 +334,10 @@ async fn list_activity(
         .await
     {
         Ok(page) => {
+            let visible =
+                filter_visible_entries(&state, auth.as_ref().map(|e| &e.0), page.entries).await;
             let entries = join_all(
-                page.entries
+                visible
                     .iter()
                     .map(|entry| entry_json_with_exists(&state, entry)),
             )
@@ -352,6 +355,66 @@ async fn list_activity(
             e.to_string(),
         ),
     }
+}
+
+/// Filters a page of already-fetched entries down to the ones `auth` may actually see — issue
+/// #91's own resource-level rule (`session` sees everything, an admin-role token sees its own
+/// entries plus every guest-role token's, a guest-role token sees only its own). Runs *after* the
+/// storage-level query, not as a Redis-side filter — `ActivityRepository::list_page` has no
+/// concept of "visible to whom" at all, and folding that in there would mean every future caller
+/// of `list_page` (there's only this one today, but the repository itself is generic storage) has
+/// to reason about authorization, not just this one HTTP-facing handler.
+///
+/// A `Token`-kind entry's own role is looked up once per distinct token id (not once per entry —
+/// `role_cache` — since a busy token can easily have several entries on the same page) via
+/// `state.api_tokens.get`; a since-revoked token (lookup returns `None`) maps to
+/// `authz::can_view_activity_entry`'s own conservative `"token_revoked"` bucket, visible only to
+/// `session`.
+async fn filter_visible_entries(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    entries: Vec<ActivityEntry>,
+) -> Vec<ActivityEntry> {
+    let requester_role = crate::authz::requester_role(auth);
+    let requester_id = crate::authz::requester_id(auth);
+    let authz = crate::authz::Authz::get().await;
+
+    let mut role_cache: std::collections::HashMap<
+        String,
+        Option<lanrurugi_storage::api_tokens::TokenRole>,
+    > = std::collections::HashMap::new();
+    let mut visible = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let token_role = if entry.actor.kind == lanrurugi_storage::activity::ActorKind::Token {
+            let id = entry.actor.id.clone().unwrap_or_default();
+            if let Some(role) = role_cache.get(&id) {
+                *role
+            } else {
+                let role = state
+                    .api_tokens
+                    .get(&id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.role);
+                role_cache.insert(id, role);
+                role
+            }
+        } else {
+            None
+        };
+        if crate::authz::can_view_activity_entry(
+            &authz.activity,
+            requester_role,
+            requester_id,
+            entry.actor.kind,
+            entry.actor.id.as_deref(),
+            token_role,
+        ) {
+            visible.push(entry);
+        }
+    }
+    visible
 }
 
 /// Turns a raw `actor_key` string ("session" / "token:<id>" / "system:<x>" / "anonymous" — see
@@ -397,7 +460,48 @@ async fn describe_actor_facet(state: &AppState, actor_key: &str) -> Value {
     json!({ "kind": kind, "id": id, "display_name": display_name })
 }
 
-async fn get_facets(State(state): State<AppState>) -> Response {
+/// Turns a facet's own `(kind, id)` string pair (already resolved by [`describe_actor_facet`])
+/// into the `token_role` [`crate::authz::can_view_activity_entry`] expects — same lookup
+/// [`filter_visible_entries`] does per-entry, but there's no page of `ActivityEntry`s here to
+/// cache a role lookup across (facets aggregate the *whole* retention window, already one row per
+/// distinct actor), so this just looks up fresh each call.
+async fn facet_actor_role(
+    state: &AppState,
+    kind: &str,
+    id: Option<&str>,
+) -> Option<lanrurugi_storage::api_tokens::TokenRole> {
+    if kind != "token" {
+        return None;
+    }
+    let id = id?;
+    state
+        .api_tokens
+        .get(id)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.role)
+}
+
+fn facet_actor_kind(kind: &str) -> lanrurugi_storage::activity::ActorKind {
+    use lanrurugi_storage::activity::ActorKind;
+    match kind {
+        "session" => ActorKind::Session,
+        "token" => ActorKind::Token,
+        "system" => ActorKind::System,
+        _ => ActorKind::Anonymous,
+    }
+}
+
+async fn get_facets(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+) -> Response {
+    let auth = auth.as_ref().map(|e| &e.0);
+    let requester_role = crate::authz::requester_role(auth);
+    let requester_id = crate::authz::requester_id(auth);
+    let authz = crate::authz::Authz::get().await;
+
     match state.activity.facets().await {
         Ok(facets) => {
             let action_types: Vec<Value> = facets
@@ -407,7 +511,21 @@ async fn get_facets(State(state): State<AppState>) -> Response {
                 .collect();
             let mut actors = Vec::with_capacity(facets.actors.len());
             for f in &facets.actors {
-                let mut described = describe_actor_facet(&state, &f.value).await;
+                let described = describe_actor_facet(&state, &f.value).await;
+                let kind = described["kind"].as_str().unwrap_or_default();
+                let id = described["id"].as_str();
+                let token_role = facet_actor_role(&state, kind, id).await;
+                if !crate::authz::can_view_activity_entry(
+                    &authz.activity,
+                    requester_role,
+                    requester_id,
+                    facet_actor_kind(kind),
+                    id,
+                    token_role,
+                ) {
+                    continue;
+                }
+                let mut described = described;
                 described["count"] = json!(f.count);
                 actors.push(described);
             }

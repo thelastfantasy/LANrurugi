@@ -1,0 +1,50 @@
+p, session, /*, *, allow
+
+p, token_admin, /*, GET, allow
+p, token_admin, /*, POST, allow
+p, token_admin, /*, PUT, allow
+p, token_admin, /*, DELETE, allow
+
+p, token_guest, /*, GET, allow
+
+# `enable_pass=false` (an intentionally open instance) never inserts an `AuthContext` at all —
+# `require_api_key` short-circuits straight past every check *except* still routing through
+# `require_session` for the four session-only routes below (see `procedure.rs`'s own docs: the
+# no_fun_mode carve-out is a separate, narrower concern). `anonymous` therefore needs the same
+# "everything except session-only routes" shape `token_admin` has, not `token_guest`'s stricter
+# GET-only shape — the pre-Casbin behavior being replicated here never limited an open instance's
+# anonymous callers to read-only.
+p, anonymous, /*, GET, allow
+p, anonymous, /*, POST, allow
+p, anonymous, /*, PUT, allow
+p, anonymous, /*, DELETE, allow
+
+p, token_admin, /activity, DELETE, deny
+p, token_admin, /activity/:id, DELETE, deny
+p, token_admin, /activity/retention, PUT, deny
+p, token_admin, /database/drop, POST, deny
+p, token_admin, /settings/password, POST, deny
+p, token_admin, /tokens, GET, deny
+p, token_admin, /tokens, POST, deny
+p, token_admin, /tokens/:id, PATCH, deny
+p, token_admin, /tokens/:id, DELETE, deny
+
+p, token_guest, /activity, DELETE, deny
+p, token_guest, /activity/:id, DELETE, deny
+p, token_guest, /activity/retention, PUT, deny
+p, token_guest, /database/drop, POST, deny
+p, token_guest, /settings/password, POST, deny
+p, token_guest, /tokens, GET, deny
+p, token_guest, /tokens, POST, deny
+p, token_guest, /tokens/:id, PATCH, deny
+p, token_guest, /tokens/:id, DELETE, deny
+
+p, anonymous, /activity, DELETE, deny
+p, anonymous, /activity/:id, DELETE, deny
+p, anonymous, /activity/retention, PUT, deny
+p, anonymous, /database/drop, POST, deny
+p, anonymous, /settings/password, POST, deny
+p, anonymous, /tokens, GET, deny
+p, anonymous, /tokens, POST, deny
+p, anonymous, /tokens/:id, PATCH, deny
+p, anonymous, /tokens/:id, DELETE, deny
