@@ -562,3 +562,73 @@ input[type="checkbox"]:disabled {
   border-bottom-width: 1px;
   border-bottom-style: solid;
 }
+
+/* TagCloud.tsx's 3D word cloud (issue #89) — hover-scale on the INNER span only, never the outer
+ * item TagCloud.js itself writes a fresh `transform` to on every animation frame (see that
+ * component's own top docs on why a `:hover` rule on the outer element would just get stomped out
+ * a frame later). `cursor: default` on the sphere's own container itself — the words aren't links
+ * to a *different page* (matches the old 2D jQCloud port's own behavior in that one specific
+ * sense: no `href`, no navigation), but each one IS clickable now (`onTagClick` — jumps to and
+ * highlights its own row in `#tagList` below), hence `cursor: pointer` on the item itself once
+ * hovered, not the sphere as a whole (moving the mouse across empty space between words inside
+ * the sphere's own bounding box should still read as "nothing to click here"). Not gated behind
+ * `prefers-reduced-motion` — that setting targets involuntary/ambient motion (the sphere's own
+ * continuous drift, already suppressed via `TagCloud.tsx`'s own `keep: false` under that
+ * preference), not a deliberate hover response to the user's own pointer movement.
+ *
+ * `color: var(--tag-cloud-level)` — `TagCloud.tsx` itself sets `--tag-cloud-level` (a per-item
+ * inline style) to whichever of the ten `--tag-cloud-level-1`..`-10` custom properties that
+ * item's own weight level maps to; each of the five real theme files defines all ten (see each
+ * theme file's own `.tag-cloud-3d` block), a real ten-step gradient rather than legacy's own
+ * four-color `w{n}` grouping this replaced (see `TagCloud.tsx`'s own top docs for why). */
+.tag-cloud-3d-container {
+  cursor: default;
+}
+.tag-cloud-3d-item {
+  cursor: pointer;
+}
+.tag-cloud-3d-inner {
+  display: inline-block;
+  color: var(--tag-cloud-level);
+  transition: transform 0.18s ease;
+}
+.tag-cloud-3d-item:hover .tag-cloud-3d-inner {
+  transform: scale(1.35);
+}
+
+/* `#tagList`'s own row, briefly flashed after a `.tag-cloud-3d-item` click above jumps here —
+ * `scroll-margin-top` (not a plain `scrollIntoView({block: 'start'})` with no offset) so the
+ * highlighted row doesn't land flush against the accordion's own top edge, same reasoning
+ * `useSectionDeepLink.ts`'s own scroll target uses. A first version used each theme's own accent
+ * hue (matching `.tankoubon-member-row`'s convention) but was reported live as too subtle to
+ * actually catch the eye against a page full of already-colored namespace tags — unlike that row
+ * highlight (one flat-colored list, any accent reads as "different"), here the highlight has to
+ * compete with the tags' own namespace colors right next to it. A fixed attention-color yellow
+ * (not a per-theme accent) plus a real `outline` reads as "flagged" regardless of which theme's
+ * palette it lands on, which is exactly the point here — this is one deliberate exception to the
+ * project's usual "reuse the theme's own accent hue" custom-color convention, not an oversight. */
+.tag-list-highlighted {
+  scroll-margin-top: 80px;
+  border-radius: 4px;
+  outline: 2px solid rgba(255, 187, 0, 0.9);
+  outline-offset: 2px;
+  animation: tag-list-highlight-flash 0.6s ease-in-out 3;
+}
+/* Flashes 3 times (1.8s total) then settles on the animation's own final frame — a steady
+ * `rgba(255, 221, 0, 0.35)` background, same value the flash itself ends on, so there's no visible
+ * jump once `animation` stops running. */
+@keyframes tag-list-highlight-flash {
+  0%,
+  100% {
+    background-color: rgba(255, 221, 0, 0.35);
+  }
+  50% {
+    background-color: rgba(255, 221, 0, 0.75);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tag-list-highlighted {
+    animation: none;
+    background-color: rgba(255, 221, 0, 0.35);
+  }
+}

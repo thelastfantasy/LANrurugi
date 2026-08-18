@@ -1095,6 +1095,7 @@
   "oneshot_param doesn't contain a valid archive ID": "oneshot_param 不包含有效的档案 ID",
   "pages": "页",
   "stats.pagesRead": "已阅读的页面",
+  "stats.noTagsToShow": "暂无标签可显示。",
   "jobs.perPage": "每页",
   "reader.savedPct": "省 {{pct}}%",
   "reader.shiftleftRightGoToFirst": "shift+箭头键：跳到首尾页",

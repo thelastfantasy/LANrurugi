@@ -4,7 +4,9 @@ import { useNavigate } from "react-router-dom"
 import { useArchives, useServerInfo, useStats } from "@/api/hooks"
 import { CollapsibleSection } from "@/components/Display"
 import { TagCloud } from "@/components/Display"
+import { sphereSizeRatio } from "@/components/Display/TagCloud"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { tagKey, useTagCloudHighlight } from "@/hooks/useTagCloudHighlight"
 import { routes } from "@/lib/routes"
 import { getTagSearchURL } from "@/lib/tagFormat"
 import { useApplyTheme } from "@/theme"
@@ -31,8 +33,18 @@ export function Stats() {
   const info = useServerInfo()
   useApplyTheme()
   useDocumentTitle(t("stats.libraryStatistics") ?? undefined)
+  // `TagCloud`'s own `onTagClick` target: opens `#detailedStats` (via `CollapsibleSection`'s real
+  // controlled `open`), scrolls to the clicked tag's own `#tagList` row, and flashes it — all
+  // state-driven (see the hook's own docs for why), no `document.querySelector`/`classList` here.
+  const tagHighlight = useTagCloudHighlight()
 
   const sorted = [...(stats.data ?? [])].sort((a, b) => b.weight - a.weight)
+  // Same curve `TagCloud.tsx`'s own `radius` already shrinks by for a small tag count (see that
+  // function's own docs) — reused here so `#tagCloud`'s *container* shrinks in lockstep with the
+  // sphere inside it, instead of a small sphere floating in the middle of an unchanged, still-large
+  // square (live-reported: shrinking only the sphere just moved the "too much empty space"
+  // complaint from inside the sphere to around it).
+  const tagCloudSizeRatio = sphereSizeRatio(sorted.length)
 
   const archiveCount = archives.data?.length ?? 0
   const contentSizeGb = (archives.data ?? []).reduce((sum, a) => sum + a.size, 0) / 1e9
@@ -97,8 +109,38 @@ export function Stats() {
         </div>
       ) : (
         <>
-          <div id="tagCloud" style={{ width: "80%", height: 500, marginLeft: "auto", marginRight: "auto" }}>
-            <TagCloud tags={sorted} />
+          {/* `aspect-ratio: 1` (not a fixed `height: 500`, the old 2D jQCloud port's own value) —
+              `TagCloud.tsx`'s own 3D sphere is always circular regardless of its container's shape
+              (see that component's own docs on why `radius` is derived from `Math.min(width,
+              height)`), so a wide-but-short container (this page's real `width: 80%` on a typical
+              desktop viewport is noticeably wider than the old fixed 500px tall) left the sphere
+              constrained to the short side with a lot of dead horizontal space on either side —
+              live-reported, confirmed via a real `getBoundingClientRect()` measurement (a 960×500
+              container only ever fit a 450×450 sphere). `maxHeight: '70vh'` — a plain unclamped
+              square on a wide desktop viewport (`width: 80%` of a wide window is itself wide) grew
+              tall enough to need real scrolling to reach `#detailedStats` below it, also
+              live-reported. `vh` (viewport-relative, not a fixed px cap like an earlier version of
+              this used) scales with the actual screen rather than clamping to one arbitrary number
+              that reads differently tall/short depending on the visitor's own display — `TagCloud`'s
+              own `RADIUS_RATIO` already accounts for the sphere's own internal ~75%-of-box spread
+              factor, so the tags' real visible extent still reaches close to whichever edge (width-
+              or height-constrained) ends up shorter here. `width` itself is scaled by
+              `tagCloudSizeRatio` (min 80% * 0.3 = 24%) — `aspect-ratio: 1` then derives a matching
+              smaller height automatically, so the container shrinks in lockstep with the sphere
+              inside it for a small tag count rather than leaving a small sphere floating inside an
+              unchanged, still-large square. */}
+          <div
+            id="tagCloud"
+            style={{
+              width: `${80 * tagCloudSizeRatio}%`,
+              aspectRatio: "1",
+              maxHeight: "70vh",
+              marginLeft: "auto",
+              marginRight: "auto",
+              transition: "width 0.3s ease",
+            }}
+          >
+            <TagCloud tags={sorted} onTagClick={tagHighlight.highlightTag} />
           </div>
 
           <ul
@@ -106,7 +148,13 @@ export function Stats() {
             id="detailedStats"
             style={{ width: "80%", marginLeft: "auto", marginRight: "auto" }}
           >
-            <CollapsibleSection icon="fa-chart-bar" title={t("stats.detailedStats")}>
+            <CollapsibleSection
+              id="detailed-stats"
+              icon="fa-chart-bar"
+              title={t("stats.detailedStats")}
+              open={tagHighlight.detailedStatsOpen}
+              onOpenChange={tagHighlight.onDetailedStatsOpenChange}
+            >
               {/* Legacy's own real value here is a column-flex-wrap layout with a fixed,
                   content-count-independent height (`max-width: 80vw; display: flex; height:
                   calc(2048px - 25vw); flex-direction: column; flex-wrap: wrap`) — designed to
@@ -134,23 +182,37 @@ export function Stats() {
                   gap: "4px 16px",
                   maxHeight: 500,
                   overflowY: "auto",
+                  // A row's own `.tag-list-highlighted` outline sits 2px *outside* its box
+                  // (`outline-offset`) — with no padding here, a highlighted row landing on the
+                  // very first flex line had that outline's top edge clipped by this container's
+                  // own `overflow-y: auto` boundary (live-reported, visible in a screenshot as a
+                  // flat-cut top edge only the first row ever showed). This padding gives the
+                  // outline room on every side regardless of which row gets highlighted.
+                  padding: 4,
                 }}
               >
-                {sorted.map((tag) => (
-                  <a
-                    key={`${tag.namespace ?? ""}:${tag.text}`}
-                    href={getTagSearchURL(tag.namespace ?? "", tag.text)}
-                    title={tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
-                    className={tag.namespace ? `${tag.namespace}-tag` : undefined}
-                    style={{ maxWidth: "95%", display: "flex" }}
-                  >
-                    <span style={{ textOverflow: "ellipsis", whiteSpace: "nowrap", overflow: "hidden", minWidth: 0, maxWidth: "100%" }}>
-                      {tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
-                    </span>
-                    &nbsp;
-                    <b>({tag.weight})</b>
-                  </a>
-                ))}
+                {sorted.map((tag) => {
+                  const key = tagKey(tag)
+                  const isHighlighted = tagHighlight.highlightedKey === key
+                  return (
+                    <a
+                      key={key}
+                      ref={tagHighlight.highlightedRowRef(key)}
+                      href={getTagSearchURL(tag.namespace ?? "", tag.text)}
+                      title={tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
+                      className={[tag.namespace ? `${tag.namespace}-tag` : null, isHighlighted ? "tag-list-highlighted" : null]
+                        .filter(Boolean)
+                        .join(" ")}
+                      style={{ maxWidth: "95%", display: "flex" }}
+                    >
+                      <span style={{ textOverflow: "ellipsis", whiteSpace: "nowrap", overflow: "hidden", minWidth: 0, maxWidth: "100%" }}>
+                        {tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}
+                      </span>
+                      &nbsp;
+                      <b>({tag.weight})</b>
+                    </a>
+                  )
+                })}
               </div>
               <br />
               {t("stats.theseStatisticsOnlyShowTags")}

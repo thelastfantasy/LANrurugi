@@ -18,6 +18,8 @@ export function CollapsibleSection({
   icon,
   title,
   defaultOpen = false,
+  open: openProp,
+  onOpenChange,
   caretStyle = "up-down",
   children,
 }: {
@@ -30,15 +32,28 @@ export function CollapsibleSection({
   icon: string
   title: React.ReactNode
   defaultOpen?: boolean
+  /** Controlled open state — when provided (with `onOpenChange`), this component no longer owns
+   * `open` itself and a caller drives it externally (e.g. a hook that wants to expand this section
+   * as a real state update rather than simulating a click on `.collapsible-title`). Omit both for
+   * the original fully-uncontrolled behavior. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   caretStyle?: "up-down" | "right-down"
   children: React.ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const isControlled = openProp !== undefined
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
+  const open = isControlled ? openProp : uncontrolledOpen
   const caretClass = caretStyle === "right-down" ? "caret-right-down" : "caret-right"
+
+  function toggle() {
+    if (isControlled) onOpenChange?.(!open)
+    else setUncontrolledOpen((o) => !o)
+  }
 
   return (
     <li className="option-flyout" data-section-id={id}>
-      <div className={`collapsible-title ${caretClass}${open ? " active" : ""}`} onClick={() => setOpen((o) => !o)}>
+      <div className={`collapsible-title ${caretClass}${open ? " active" : ""}`} onClick={toggle}>
         <i className={`fa ${icon}`} aria-hidden="true"></i> {title}
       </div>
       {/* Rendered even while closed once this section has an `id` — a deep link needs the body's

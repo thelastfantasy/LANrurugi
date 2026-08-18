@@ -946,3 +946,21 @@ div.id4 a:hover {
 .activity-row:hover .activity-row-delete-btn {
   visibility: visible;
 }
+
+/* TagCloud.tsx's 3D word cloud (issue #89) — see modern.css's own matching block for the full
+   design rationale. Ten-step gradient from this theme's own real body text color (#EFEAEA, level
+   1) to its own accent hue (#D83B66, same value already used by .tankoubon-member-row above,
+   level 10), linearly interpolated in RGB. */
+.tag-cloud-3d {
+  --tag-cloud-level-1: #efeaea;
+  --tag-cloud-level-2: #ecd7db;
+  --tag-cloud-level-3: #eac3cd;
+  --tag-cloud-level-4: #e7b0be;
+  --tag-cloud-level-5: #e59caf;
+  --tag-cloud-level-6: #e289a1;
+  --tag-cloud-level-7: #e07592;
+  --tag-cloud-level-8: #dd6283;
+  --tag-cloud-level-9: #db4e75;
+  --tag-cloud-level-10: #d83b66;
+}
+

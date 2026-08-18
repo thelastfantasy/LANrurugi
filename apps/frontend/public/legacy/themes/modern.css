@@ -881,3 +881,26 @@ div.id4 {
 .activity-row:hover .activity-row-delete-btn {
   visibility: visible;
 }
+
+/* TagCloud.tsx's 3D word cloud (issue #89) — ten-step gradient from this theme's own real `body`
+   text color (#DDDDDD, level 1 — lowest-weight tags) to its own accent hue (#3B97EA, same value
+   already used by .tankoubon-member-row/.activity-row-automatic above, level 10 — highest-weight
+   tags), linearly interpolated in RGB. Replaces legacy's own four-color `w{n}` grouping (verified:
+   legacy's real div.jqcloud span.w{n} rules only ever define 4 distinct colors across 10 weight
+   levels) with a real ten-step gradient — a live-reported "colors look monotonous" complaint traced
+   directly back to that legacy grouping, not a porting mistake. Starting from this theme's own body
+   text color (not white/black) guarantees contrast against this theme's own background regardless
+   of which theme is active, without needing a separate per-theme contrast check. */
+.tag-cloud-3d {
+  --tag-cloud-level-1: #dddddd;
+  --tag-cloud-level-2: #cbd5de;
+  --tag-cloud-level-3: #b9cde0;
+  --tag-cloud-level-4: #a7c6e1;
+  --tag-cloud-level-5: #95bee3;
+  --tag-cloud-level-6: #83b6e4;
+  --tag-cloud-level-7: #71aee6;
+  --tag-cloud-level-8: #5fa7e7;
+  --tag-cloud-level-9: #4d9fe9;
+  --tag-cloud-level-10: #3b97ea;
+}
+

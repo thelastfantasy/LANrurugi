@@ -1033,6 +1033,7 @@
   "nhentai-source-converter": "nhentai-source-converter",
   "oneshot_param doesn't contain a valid archive ID": "oneshot_param doesn't contain a valid archive ID",
   "stats.pagesRead": "pages read",
+  "stats.noTagsToShow": "No tags to show yet.",
   "jobs.perPage": "per page",
   "reader.savedPct": "saved {{pct}}%",
   "reader.shiftleftRightGoToFirst": "shift+Left/Right: go to first page/last page",
