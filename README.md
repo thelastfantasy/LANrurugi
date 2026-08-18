@@ -49,6 +49,7 @@ Playwright 前端测试覆盖），以及 `specs/005-download-plugin-progress/`�
 - **操作活动记录（审计日志）。** 结构化、持久化、可按操作者/操作类型/时间范围过滤的操作记录页面，区分手动操作（Session/Token 发起）与自动操作（扫描器入库、元数据插件自动运行），评分变更独立分类并展示新旧星级对比，设置页/插件页各分区支持深链接精准跳转到具体改动位置。可见性/删除权限见下方 Casbin 权限模型条目。
 - **基于 Casbin 的声明式权限模型取代散落各处的硬编码判断。** 路由级"是否需要真实 Session 登录"（Token 管理、账号安全、数据库清空等）与 activity 记录的可见性范围，统一收敛为两份随代码走、经代码审查的 policy 文件（而非运行时可改的配置），替代旧版散落在各 handler 里的零散 `if is_token()`/`is_guest_token()` 判断。activity 记录的具体可见性规则：Session 可见全部记录并可删除；Admin Token 可见自身与全部 Guest Token 的记录（不含 Session 与其他 Admin Token）；Guest Token 仅可见自身记录；删除操作仅限 Session。
 - **浏览器可自动发现的动态 OpenSearch 搜索。** `GET /opensearch.xml`（免登录，`Cache-Control: no-store`）按实际访问的域名/`X-Forwarded-Host`/`X-Forwarded-Proto` 动态生成搜索 URL 模板，内容随客户端 IP 变化；浏览器地址栏/搜索栏发起的搜索直接落到 Library 页的既有 `?q=` 搜索状态，无需额外点击。
+- **真 3D 标签云取代旧版 2D jQCloud。** 词云球体持续自转、可拖拽/悬停交互，按权重十档渐变着色（五套主题各自定义色带，而非旧版仅有的四色分组）；点击球面上的词自动展开下方详细统计并滚动高亮对应行；标签数量较少时球体与外层容器同步按比例收缩，避免大库变小库后留下一片空球悬浮的空旷画面。
 
 ### 数据完整性与重复检测
 
