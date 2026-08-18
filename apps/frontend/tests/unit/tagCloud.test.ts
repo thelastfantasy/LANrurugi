@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { escapeHtml, levelFor, sphereSizeRatio } from "@/components/Display/TagCloud"
+import { densityScale, escapeHtml, fontSizeScale, levelFor, sphereSizeRatio } from "@/components/Display/TagCloud"
 
 describe("levelFor", () => {
   it("maps the minimum weight to level 1 and the maximum to level 10", () => {
@@ -59,5 +59,54 @@ describe("sphereSizeRatio", () => {
     // Doubling tagCount (10 -> 20) should more than double the *gain* above the floor, since the
     // curve is `t^2` (convex), not linear.
     expect(at20 - 0.3).toBeGreaterThan(2 * (at10 - 0.3))
+  })
+})
+
+describe("densityScale", () => {
+  it("returns full density (1) at and above the full-width threshold", () => {
+    expect(densityScale(480)).toBe(1)
+    expect(densityScale(960)).toBe(1)
+  })
+
+  it("does not shrink an ordinary desktop-height-constrained container", () => {
+    // A live-reported regression: `#tagCloud`'s own `maxHeight: 70vh` (Stats.tsx) means a normal
+    // desktop browser window under ~800px tall gives this component a container whose *short
+    // side* is height-, not width-, constrained — e.g. 560px tall on a 1280x800 viewport. An
+    // earlier, higher threshold (640) treated that as "small" and shrank density on an entirely
+    // ordinary desktop window; 480 must sit below that common case.
+    expect(densityScale(560)).toBe(1)
+  })
+
+  it("returns the floor ratio at zero/negative widths", () => {
+    expect(densityScale(0)).toBeCloseTo(0.4)
+    expect(densityScale(-100)).toBeCloseTo(0.4)
+  })
+
+  it("interpolates linearly between the floor and full-width threshold", () => {
+    // Halfway across the 0-480 range (240px) should read back halfway between 0.4 and 1.0.
+    expect(densityScale(240)).toBeCloseTo(0.4 + (1 - 0.4) * 0.5, 5)
+  })
+
+  it("shrinks a real phone-width container well below full density", () => {
+    // ~306px is this project's own live-measured `#tagCloud` container width on a 390px-wide
+    // phone viewport (80% of 390, minus layout chrome) — the concrete case this was added for.
+    expect(densityScale(306)).toBeLessThan(0.85)
+    expect(densityScale(306)).toBeGreaterThan(0.4)
+  })
+})
+
+describe("fontSizeScale", () => {
+  it("mirrors densityScale's own thresholds but with its own 0.7 floor", () => {
+    expect(fontSizeScale(480)).toBe(1)
+    expect(fontSizeScale(0)).toBeCloseTo(0.7)
+    expect(fontSizeScale(-50)).toBeCloseTo(0.7)
+  })
+
+  it("does not shrink an ordinary desktop-height-constrained container", () => {
+    expect(fontSizeScale(560)).toBe(1)
+  })
+
+  it("interpolates linearly between its own floor and the full-width threshold", () => {
+    expect(fontSizeScale(240)).toBeCloseTo(0.7 + (1 - 0.7) * 0.5, 5)
   })
 })

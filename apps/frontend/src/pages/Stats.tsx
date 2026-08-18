@@ -197,6 +197,10 @@ export function Stats() {
                   return (
                     <a
                       key={key}
+                      // For external/test locators only — the highlight mechanism itself
+                      // (useTagCloudHighlight.ts) never reads this back, it's driven entirely by
+                      // React state (`highlightedKey`/`className`) and the `ref` callback below.
+                      data-tag-key={key}
                       ref={tagHighlight.highlightedRowRef(key)}
                       href={getTagSearchURL(tag.namespace ?? "", tag.text)}
                       title={tag.namespace ? `${tag.namespace}:${tag.text}` : tag.text}

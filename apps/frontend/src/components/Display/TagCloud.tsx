@@ -70,6 +70,35 @@ import type { StatTag } from "@/api/types"
  * the sphere entirely still resumes normal drift immediately since the outer transform was never
  * touched by the hover rule at all.
  *
+ * ## Touch drag (the library itself has none)
+ *
+ * `TagCloud`'s own `_init` only ever binds `mousemove` (confirmed by reading its source), and only
+ * inside `if (!isTouchDevice || isTouchDevice.matches)` where `isTouchDevice =
+ * window.matchMedia('(hover: hover)')` — on a genuinely touch-only device that query never
+ * matches, so the library *never registers a pointer listener there at all*: dispatching synthetic
+ * `MouseEvent`s (a first version of this tried exactly that) reaches no listener, since none was
+ * ever attached — live-verified via a real mobile-viewport emulation, where a `window` listener
+ * added purely to confirm delivery *did* see the synthetic events land, while the sphere's own
+ * rotation stayed completely unaffected by them regardless. The library computes its per-frame
+ * rotation from `self.mouseX`/`self.mouseY` — ordinary, ungated public instance fields (`_next()`
+ * just reads whatever they currently hold, no `hover`-capability check on *that* path) — so this
+ * writes them directly on `touchstart`/`touchmove` using the same `(pointerX - sphereCenterX) / 5`
+ * formula the library's own `mousemove` handler uses, sidestepping the construction-time guard
+ * instead of trying to satisfy it. `active` (also a plain public field) is set `true` for the
+ * duration of a touch so `_next()`'s own `!self.keep && !self.active` reset branch — which
+ * gradually pulls `mouseX`/`mouseY` back toward their initial values once "inactive" — doesn't
+ * fight an in-progress drag under `prefers-reduced-motion` (`keep: false` there, see below).
+ *
+ * ## Wheel zoom
+ *
+ * The library's own `radius` is fixed at construction time with no runtime resize API, so zoom is
+ * layered on top rather than reaching into the library: a `wheel` listener on the *container*
+ * (`containerRef`, not `sphereEl` — zoom should work even while hovering empty space around the
+ * sphere) adjusts a CSS `transform: scale(...)` on `sphereEl` itself, clamped to `[MIN_ZOOM,
+ * MAX_ZOOM]`. This composes cleanly with the library's own per-item `translate3d(...) scale(...)`
+ * writes (a parent transform scales the whole already-positioned sphere uniformly) without this
+ * component needing to know anything about the library's internal per-item math.
+ *
  * ## `destroy()`'s real leak, worked around
  *
  * `TagCloud`'s own `destroy()` (confirmed by reading its source, not assumed) removes the DOM
@@ -112,6 +141,63 @@ const FULL_SIZE_TAG_COUNT = Math.round(MAX_TAGS * 0.2)
 // small-but-legible sphere instead of a barely-visible dot, and `levelFor`'s own font-size range
 // still needs enough room to not visually collide even at the smallest tag counts.
 const MIN_SIZE_RATIO = 0.3
+// Wheel-zoom bounds for the `sphereEl` CSS `scale(...)` — see this file's own top "Wheel zoom"
+// docs. 0.5–2.5 gives a real, visually obvious zoom range in both directions without letting the
+// sphere shrink to illegibility or grow far enough past the container to make every tag equally
+// hard to read at the extreme.
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 2.5
+// Below this container short-side width, the *number of tags actually rendered* starts shrinking
+// below `MAX_TAGS` — a real library's full 150-tag set at a ~360-390px phone-width container was
+// live-reported as severely overlapping/illegible (`sphereSizeRatio` alone doesn't help here since
+// it's driven by *tag count*, not *container size*, and a real library easily has 150+ genuinely
+// distinct tags well past that function's own `FULL_SIZE_TAG_COUNT` threshold). At/above this
+// width the full `MAX_TAGS` still renders, same as before this was added. Deliberately kept well
+// below a typical desktop/tablet width rather than a rounder-looking 640/768 — `#tagCloud`'s own
+// `maxHeight: '70vh'` (`Stats.tsx`) means the container's real *short side* is height-constrained,
+// not width-constrained, on any desktop browser window under ~800px tall (a 960px-wide desktop
+// container easily comes out ~560px tall there); a 640px threshold caught that ordinary-desktop
+// case too and shrank density on a perfectly normal, wide desktop window — live-reported and
+// confirmed via `getBoundingClientRect()` (`clientHeight: 560` on a 1280×800 desktop viewport).
+// 480 sits below that common desktop short-side floor while still comfortably covering real phone
+// widths (~360-430px).
+const DENSITY_FULL_WIDTH_PX = 480
+// The floor for `densityScale` at the very smallest container widths — never renders fewer than
+// this fraction of `MAX_TAGS` so a phone still shows a real, populated-looking cloud rather than a
+// handful of words. Paired with `FONT_SIZE_SCALE_FLOOR` below (see "reduces density AND size"
+// live feedback) — shrinking count alone still left some overlap at the very smallest widths,
+// shrinking font alone still left too many words crammed in, so both move together.
+const DENSITY_MIN_SCALE = 0.4
+// The floor for the base font size scale (see `FONT_SIZE_PERCENT`'s own base in the container's
+// `font` style) at the smallest container widths — keeps individual words from shrinking below
+// legibility even though there are still meaningfully fewer, smaller words than the desktop case.
+const FONT_SIZE_SCALE_FLOOR = 0.7
+
+/** How much to shrink the *rendered tag count* below `MAX_TAGS` for a small container — linear
+ * from `DENSITY_MIN_SCALE` (at width 0) up to 1.0 (at `DENSITY_FULL_WIDTH_PX` or wider). Exported
+ * for direct unit-test coverage of the curve, same reasoning as `sphereSizeRatio`. */
+export function densityScale(containerShortSidePx: number): number {
+  if (containerShortSidePx >= DENSITY_FULL_WIDTH_PX) return 1
+  if (containerShortSidePx <= 0) return DENSITY_MIN_SCALE
+  const t = containerShortSidePx / DENSITY_FULL_WIDTH_PX
+  return DENSITY_MIN_SCALE + (1 - DENSITY_MIN_SCALE) * t
+}
+
+/** Companion to `densityScale` — how much to shrink the base font size (the container's own `font`
+ * CSS, which every item's `FONT_SIZE_PERCENT` is relative to) for the same small-container case.
+ * Same linear curve/inputs, independent constant floor since font legibility and word count are
+ * separate concerns that both needed to move for a live-reported "still too dense on phone" report
+ * after `densityScale` alone. */
+export function fontSizeScale(containerShortSidePx: number): number {
+  if (containerShortSidePx >= DENSITY_FULL_WIDTH_PX) return 1
+  if (containerShortSidePx <= 0) return FONT_SIZE_SCALE_FLOOR
+  const t = containerShortSidePx / DENSITY_FULL_WIDTH_PX
+  return FONT_SIZE_SCALE_FLOOR + (1 - FONT_SIZE_SCALE_FLOOR) * t
+}
+// `deltaY` units vary a lot across devices/browsers (line vs. pixel vs. page mode) — dividing by
+// this keeps a single wheel "click" from jumping several zoom steps at once on a high-resolution
+// trackpad, while a normal mouse wheel still produces a clearly visible per-notch zoom change.
+const ZOOM_SENSITIVITY = 1000
 
 /** Scales `radius` down for a small `tagCount`, from `MIN_SIZE_RATIO` (at 1 tag) up to 1.0 (at
  * `FULL_SIZE_TAG_COUNT` tags or more) — exported so `tests/unit/tagCloud.test.ts` can cover the
@@ -158,14 +244,16 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
   // current.
   const onTagClickRef = useRef(onTagClick)
   onTagClickRef.current = onTagClick
+  // Current wheel-zoom level, persisted across `build()` reruns (resize/tag-set changes) so a
+  // resize mid-zoom doesn't silently reset a visitor's own zoom back to 1 — only ever read/written
+  // by the `wheel` listener and `build()`'s own initial `transform` write.
+  const zoomRef = useRef(1)
 
   // Ranked by weight first, *then* capped — the tags that get dropped when the set is large are
-  // always the least-weighted ones, never an arbitrary/first-N-in-API-order slice.
-  const sortedDesc = [...tags].sort((a, b) => b.weight - a.weight)
-  const rendered = sortedDesc.slice(0, MAX_TAGS)
-  const weights = rendered.map((t) => t.weight)
-  const maxWeight = weights[0] ?? 0
-  const minWeight = weights[weights.length - 1] ?? 0
+  // always the least-weighted ones, never an arbitrary/first-N-in-API-order slice. Capped at
+  // `MAX_TAGS` here (an absolute ceiling regardless of container size); `build()` itself applies
+  // a further, container-size-dependent cap via `densityScale` on top of this.
+  const sortedDesc = [...tags].sort((a, b) => b.weight - a.weight).slice(0, MAX_TAGS)
 
   function build() {
     const container = containerRef.current
@@ -175,6 +263,18 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
     // across `destroy()` calls — see this file's own top docs on why `destroy()`'s real RAF-leak
     // makes "never truly reuse the old element" the actual mitigation, not just tidiness.
     container.replaceChildren()
+
+    // Real container pixel size determines both how many tags actually render (`densityScale`)
+    // and the base font size they render at (`fontSizeScale`) — see those functions' own docs. A
+    // real 150-tag library at a phone-width (~360-390px) container was live-reported as severely
+    // overlapping/illegible when this was still a fixed `MAX_TAGS` regardless of container size.
+    const shortSide = Math.min(container.clientWidth, container.clientHeight)
+    const effectiveMaxTags = Math.max(1, Math.round(MAX_TAGS * densityScale(shortSide)))
+    const rendered = sortedDesc.slice(0, effectiveMaxTags)
+    const weights = rendered.map((tag) => tag.weight)
+    const maxWeight = weights[0] ?? 0
+    const minWeight = weights[weights.length - 1] ?? 0
+
     if (rendered.length === 0) {
       instanceRef.current = null
       // Graceful empty-state (issue #89's own "tag count is small or zero" requirement) — a bare
@@ -187,6 +287,10 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
     }
     const sphereEl = document.createElement("div")
     container.appendChild(sphereEl)
+    // Re-applies whatever zoom level a visitor already dragged the wheel to before this rebuild
+    // (resize/tag-set change) — see this file's own top "Wheel zoom" docs and `zoomRef` above.
+    sphereEl.style.transformOrigin = "center"
+    sphereEl.style.transform = `scale(${zoomRef.current})`
 
     // Radius derived from the real container box (not a fixed constant) so the sphere fills
     // whatever space `Stats.tsx` gives this component — matches the old 2D port's own
@@ -195,8 +299,12 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
     // `sphereSizeRatio` additionally shrinks it for a small `rendered.length` (see that function's
     // own docs) — `Math.max(80, ...)` still applies afterward as an absolute floor so this never
     // collapses to an illegibly tiny sphere even for a 1-tag library.
-    const shortSide = Math.min(container.clientWidth, container.clientHeight)
     const radius = Math.max(80, Math.round(shortSide * RADIUS_RATIO * sphereSizeRatio(rendered.length)))
+    // See this file's own top "reduces density AND size" docs on `fontSizeScale` — applied to the
+    // container's own base `font-size` below (every item's `FONT_SIZE_PERCENT` is a percentage of
+    // this), not to `FONT_SIZE_PERCENT` itself, so the existing 1-10 weight-level ratios between
+    // tags stay identical at any container size.
+    container.style.fontSize = `${(10 * fontSizeScale(shortSide)).toFixed(2)}px`
 
     const texts = rendered.map((tag) => {
       const level = levelFor(tag.weight, minWeight, maxWeight)
@@ -215,19 +323,24 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     const instance = TagCloudLib(sphereEl, texts, {
       radius,
-      // `keep: false` under reduced-motion — the sphere still responds to direct mouse/touch drag
-      // (the accessibility target is "no *involuntary* motion", not "no interactivity at all"),
-      // but decelerates back to a stop instead of drifting forever once the pointer leaves,
-      // matching this issue's own "static 3D or manual-interaction-only" reduced-motion
-      // requirement without a second, entirely separate non-animated rendering path to maintain.
-      keep: !prefersReducedMotion,
-      initSpeed: prefersReducedMotion ? "slow" : "normal",
       containerClass: "tag-cloud-3d",
       itemClass: "tag-cloud-3d-item",
       useHTML: true,
     })
     instanceRef.current = Array.isArray(instance) ? (instance[0] ?? null) : instance
 
+    // Reduced motion → genuinely static by default, not just "drifting more slowly": an earlier
+    // version used `keep: false` + `initSpeed: 'slow'`, but the library's own `_next()` (read its
+    // source) treats `initSpeed` as a *target* rotation speed to converge back toward whenever the
+    // pointer isn't active, not a decaying-to-zero one — `mouseX0`/`mouseY0` derived from
+    // `initSpeed` are non-zero constants, so even `'slow'` settles into a real, indefinite,
+    // constant-speed spin rather than ever actually stopping (live-confirmed with a 1.5s-later
+    // `transform` sample that was still visibly different). `pause()` (the same method the
+    // existing per-tag hover-pause below already uses) is a real, unconditional freeze —
+    // `_next()`'s very first line is `if (self.paused) return`. Interactivity is preserved by
+    // `resume()`-ing for the duration of an explicit drag/touch (below) and `pause()`-ing again
+    // once it ends, rather than ever leaving it free-running.
+    if (prefersReducedMotion) instanceRef.current?.pause()
     if (pausedByVisibilityRef.current) instanceRef.current?.pause()
 
     // Delegated (not per-item) — see this file's own top "Hovering a tag pauses" docs. `.closest`
@@ -243,7 +356,8 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
       // `relatedTarget` is where the pointer is going *to*; if that's still inside the same
       // `.tag-cloud-3d-item`, this isn't a real "left the tag" event yet.
       if (related instanceof Element && related.closest(".tag-cloud-3d-item")) return
-      if (!pausedByVisibilityRef.current) instanceRef.current?.resume()
+      // Reduced motion never auto-resumes on its own — only an active drag/touch (below) does.
+      if (!pausedByVisibilityRef.current && !prefersReducedMotion) instanceRef.current?.resume()
     })
 
     // Also delegated — a click maps back to the real `StatTag` it came from via DOM position. Note
@@ -264,6 +378,64 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
       const tag = rendered[index]
       if (tag) onTagClickRef.current?.(tag)
     })
+
+    // Touch drag — see this file's own top "Touch drag" docs. Writes `mouseX`/`mouseY`/`active`
+    // directly on the library instance rather than dispatching synthetic `mousemove` events (an
+    // earlier version of this did that, but it never actually worked: confirmed live that the
+    // library's own `_init` only calls `TagCloud._on(..., 'mousemove', ...)` inside an
+    // `if (!isTouchDevice || isTouchDevice.matches)` guard, where `isTouchDevice` is
+    // `window.matchMedia('(hover: hover)')` — on a real touch-only device that media query never
+    // matches, so the library *never registers a mousemove listener at all* there, and no amount
+    // of dispatching synthetic events reaches a listener that was never attached. `mouseX`/
+    // `mouseY`/`active` are ordinary public instance fields with no such guard on *reading* them
+    // (`_next()`'s own per-frame rotation math just reads whatever they currently hold) — writing
+    // them directly sidesteps the construction-time guard entirely instead of trying to satisfy
+    // it. `active: true` during a touch keeps `_next()`'s own `!self.keep && !self.active` reset
+    // branch from fighting the drag by continuously pulling `mouseX`/`mouseY` back toward their
+    // initial values while a finger is still down.
+    const rawInstance = instanceRef.current as unknown as { mouseX: number; mouseY: number; active: boolean } | null
+    function applyTouchAsPointer(touch: Touch) {
+      if (!rawInstance) return
+      const rect = sphereEl.getBoundingClientRect()
+      rawInstance.mouseX = (touch.clientX - (rect.left + rect.width / 2)) / 5
+      rawInstance.mouseY = (touch.clientY - (rect.top + rect.height / 2)) / 5
+    }
+    // `{ passive: true }` — this never calls `preventDefault()` (a touch drag inside the sphere
+    // still lets the page itself scroll normally at the same time, which reads as more natural
+    // than fighting the browser's own scroll gesture for a decorative word cloud), so marking it
+    // passive lets the browser optimize the scroll path instead of waiting to see if a handler
+    // will cancel it.
+    sphereEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (!rawInstance) return
+        rawInstance.active = true
+        // Reduced motion is `pause()`d by default (see above) — a touch drag is exactly the
+        // "explicit manual interaction" the `prefers-reduced-motion` guidance still allows, so
+        // `resume()` here lets it actually respond to the finger, then `pause()`s again on
+        // `touchend` below rather than left free-running afterward.
+        if (prefersReducedMotion) instanceRef.current?.resume()
+        const touch = e.touches[0]
+        if (touch) applyTouchAsPointer(touch)
+      },
+      { passive: true },
+    )
+    sphereEl.addEventListener(
+      "touchmove",
+      (e) => {
+        const touch = e.touches[0]
+        if (touch) applyTouchAsPointer(touch)
+      },
+      { passive: true },
+    )
+    sphereEl.addEventListener(
+      "touchend",
+      () => {
+        if (rawInstance) rawInstance.active = false
+        if (prefersReducedMotion) instanceRef.current?.pause()
+      },
+      { passive: true },
+    )
   }
 
   useLayoutEffect(() => {
@@ -288,6 +460,28 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
     }
     document.addEventListener("visibilitychange", onVisibilityChange)
     return () => document.removeEventListener("visibilitychange", onVisibilityChange)
+  }, [])
+
+  // Wheel zoom — see this file's own top "Wheel zoom" docs. Registered once on the *container*
+  // (stable for this component's whole lifetime, unlike `sphereEl` which `build()` recreates on
+  // every resize/tag-set change) rather than rewired inside `build()` itself; looks up the
+  // *current* `sphereEl` by class at event time so it always finds whichever generation `build()`
+  // most recently created, without needing its own dependency on `build()`'s own rebuild timing.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    function onWheel(e: WheelEvent) {
+      const sphereEl = container?.querySelector<HTMLElement>(".tag-cloud-3d")
+      if (!sphereEl) return
+      e.preventDefault()
+      const next = zoomRef.current - e.deltaY / ZOOM_SENSITIVITY
+      zoomRef.current = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
+      sphereEl.style.transform = `scale(${zoomRef.current})`
+    }
+    // `{ passive: false }` — `preventDefault()` above is required to stop the wheel gesture from
+    // also scrolling the page itself while zooming the sphere.
+    container.addEventListener("wheel", onWheel, { passive: false })
+    return () => container.removeEventListener("wheel", onWheel)
   }, [])
 
   return (
