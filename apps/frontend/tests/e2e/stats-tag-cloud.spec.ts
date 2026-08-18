@@ -47,12 +47,18 @@ test.describe("stats tag cloud", { tag: "@stats" }, () => {
 
   // How many archives to tag with a "make sure the sphere actually renders this one" tag — this
   // suite's own worker backend accumulates real tags across every test that's run against it
-  // (fixtures.ts's backend is worker-scoped, not per-test), so a tag this test needs *visibly
-  // rendered in the capped/density-scaled 3D sphere* (not just present in the uncapped detailed
-  // stats list below it) needs a weight comfortably higher than anything else realistically
-  // already in there, not just "more than 1" — live-confirmed flaky at weight 1 once the worker
-  // had accumulated enough tags from other tests in this same suite.
-  const HIGH_WEIGHT_ARCHIVE_COUNT = 20
+  // (fixtures.ts's backend is worker-scoped, not per-test, and shared with several *other* spec
+  // files' own uploads in CI where multiple suites land on the same worker), so a tag this test
+  // needs *visibly rendered in the capped/density-scaled 3D sphere* (not just present in the
+  // uncapped detailed stats list below it) needs a weight higher than `Stats.tsx`'s own
+  // `useStats(2)` floor and comfortable room under `TagCloud.tsx`'s `MAX_TAGS = 150` cap — 5 clears
+  // both without needing to literally outrank every other tag in the library. A first version used
+  // 20, which pushed real CI runners (2 vCPU GitHub Actions runners, not this repo's own dev
+  // machine) into upload timeouts across the *entire* e2e suite, not just this file — confirmed via
+  // a real failed CI run where `archive-lifecycle.spec.ts`/`reader.spec.ts`/`upload.spec.ts`, none
+  // of which this change touches, also started timing out once this suite's own extra 60 concurrent
+  // uploads (3 tests × 20 each) landed on the same shared runner.
+  const HIGH_WEIGHT_ARCHIVE_COUNT = 5
 
   /** Tags `HIGH_WEIGHT_ARCHIVE_COUNT` distinct archives with the same tag so it ranks near the top
    * of the sphere's own weight ordering regardless of whatever else this shared worker's library
