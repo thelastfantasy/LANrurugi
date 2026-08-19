@@ -3,7 +3,7 @@ import LanguageDetector from "i18next-browser-languagedetector"
 import { useEffect } from "react"
 import { initReactI18next } from "react-i18next"
 
-import { useSettings } from "@/api/hooks"
+import { useLoginStatus, usePublicSettings, useSettings } from "@/api/hooks"
 
 import asLocale from "./locales/as.json"
 import de from "./locales/de.json"
@@ -91,10 +91,20 @@ void i18n
  * that detector has no idea the server-side setting exists at all, so picking a language there
  * previously did nothing (issue #85). `"auto"` (the default) intentionally leaves the detector's
  * own choice alone. Mounted once in `Layout.tsx` alongside `useApplyTheme`, the same "sync a
- * Settings-page value into a global, non-React API on every settings change" pattern. */
+ * Settings-page value into a global, non-React API on every settings change" pattern — and, per
+ * issue #92, the same auth-gated-`/settings`-401s-while-logged-out fix `useApplyTheme` itself
+ * needed: `useSettings()` is disabled outright while logged out (rather than fetched and left to
+ * 401, which `client.ts`'s own global 401 handler force-navigates away from regardless of this
+ * hook's own readiness to just fall back), falling back to the public `/theme` endpoint's now
+ * also-`language`-carrying response instead. */
 export function useApplySettingsLanguage() {
-  const settings = useSettings()
-  const language = settings.data?.language
+  const loginStatus = useLoginStatus()
+  // `=== true`, not `?? true` — see `theme.ts::useApplyTheme`'s own identical fix for why treating
+  // "login status still loading" as "assume logged in" here would still let this fire (and 401)
+  // during that brief window on every logged-out page load.
+  const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
+  const publicSettings = usePublicSettings({ enabled: settings.data === undefined })
+  const language = settings.data?.language ?? publicSettings.data?.language
   useEffect(() => {
     if (!language || language === "auto") return
     if (i18n.language === language) return

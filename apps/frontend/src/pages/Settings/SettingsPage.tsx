@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
+import { ApiError } from "@/api/client"
 import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from "@/api/hooks"
 import type { Settings as SettingsType } from "@/api/types"
 import { CollapsibleSection } from "@/components/Display"
@@ -30,6 +31,12 @@ export function Settings() {
   }
 
   if (settings.isError || !settings.data) {
+    // See `LibraryPage.tsx`'s own identical guard: a 401 here just means `RequireAuth`
+    // (`RouteGuards.tsx`) is already about to navigate to `/login` in reaction to the same
+    // invalidated `login-status` query — rendering nothing for that one render avoids flashing a
+    // generic "failed to load" message for what's actually a routine session expiry.
+    if (settings.error instanceof ApiError && settings.error.status === 401) return null
+
     return (
       <div className="ido">{t("common.failedToLoadArchivesError", { error: String(settings.error) })}</div>
     )

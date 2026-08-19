@@ -10,6 +10,10 @@ export * from "./Confirm"
 
 export * from "./DateTimeStack"
 
+export * from "./ErrorBoundary"
+
+export * from "./ForbiddenPage"
+
 export * from "./IconButton"
 
 export * from "./IpGeoLink"
@@ -17,6 +21,8 @@ export * from "./IpGeoLink"
 export * from "./JobProgress"
 
 export * from "./Modal"
+
+export * from "./NotFoundPage"
 
 export * from "./PopupMenu"
 

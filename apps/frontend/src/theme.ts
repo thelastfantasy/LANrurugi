@@ -2,7 +2,7 @@ import { useEffect } from "react"
 
 import { THEME_STORAGE_KEY } from "@/lib/storageKeys"
 
-import { usePublicTheme, useSettings } from "./api/hooks"
+import { useLoginStatus, usePublicSettings, useSettings } from "./api/hooks"
 
 // Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
 // css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
@@ -181,11 +181,24 @@ export function useLegacyConfigCss() {
  * Popup menus are a from-scratch `PopupMenu` component styled with Tailwind + the `MENU_PALETTE`
  * table above — no menu-plugin CSS file is linked in for them at all. */
 export function useApplyTheme() {
-  const settings = useSettings()
+  const loginStatus = useLoginStatus()
+  // issue #92: `GET /settings` also carries the API key and other genuinely secret fields, so it's
+  // auth-gated and 401s when nothing's logged in yet — previously this ran unconditionally anyway
+  // (the `publicTheme` fallback below existed for the resulting *data*, but the 401 itself still
+  // reached `client.ts`'s own *global* 401 handler, which force-navigates to `/login` regardless
+  // of whether the calling hook has a fallback ready). Deliberately `=== true`, not `?? true` —
+  // `Layout.tsx`'s own nav-link default treats "login status still loading" as "assume logged in"
+  // (a reasonable UI default there), but doing the same *here* means `useSettings` still fires
+  // during that brief window for every visitor, logged in or not — a real, live-confirmed 401 on
+  // every single logged-out page load — since `loginStatus.data` starts `undefined` regardless of
+  // which way it eventually resolves. `publicTheme` below already covers the resulting "no
+  // `settings.data` yet" gap while this stays disabled, so this costs a logged-in visitor nothing
+  // beyond momentarily reading the public theme/language instead of the authenticated copy.
+  const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
   // Only ever actually fetched when `settings` has no data to offer (see the enabled check below)
-  // — i.e. pre-login, where `/settings` 401s. Once authenticated, `settings.data` wins and this
-  // stays idle.
-  const publicTheme = usePublicTheme({ enabled: settings.data === undefined })
+  // — i.e. pre-login, where `settings` above is disabled entirely rather than fetched-and-401ing.
+  // Once authenticated, `settings.data` wins and this stays idle.
+  const publicTheme = usePublicSettings({ enabled: settings.data === undefined })
 
   useEffect(() => {
     ensureLink(LEGACY_STRUCTURAL_CSS_ID, "/legacy/lrr.css")
@@ -202,8 +215,18 @@ export function useApplyTheme() {
   // for that flash was itself re-introducing it. Only apply the `DEFAULT_THEME_ID` fallback once
   // both queries have actually settled (succeeded or errored) with no real value between them —
   // until then, leave whatever's already applied alone rather than guessing.
+  // `settings` itself is now `enabled: false` for the whole time a visitor is logged out (see
+  // above) — a disabled query never transitions to `isSuccess`/`isError` at all (it just sits at
+  // its initial `pending` status forever), so without this, `settingsSettled` below would never
+  // become `true` pre-login and the `DEFAULT_THEME_ID` fallback could never kick in even once
+  // `publicTheme` itself has genuinely settled. `settings` stays disabled for as long as
+  // `loginStatus` itself hasn't resolved to `true` — including the initial "still loading" window,
+  // not just a confirmed "not logged in" — so once `loginStatus` has settled one way or the other,
+  // `settings` being disabled (still) *is* its own settled state, nothing further to wait on.
+  const settingsDisabledAndLoginStatusSettled =
+    settings.data === undefined && (loginStatus.isSuccess || loginStatus.isError)
   const publicThemeEnabled = settings.data === undefined
-  const settingsSettled = settings.isSuccess || settings.isError
+  const settingsSettled = settings.isSuccess || settings.isError || settingsDisabledAndLoginStatusSettled
   const publicThemeSettled = !publicThemeEnabled || publicTheme.isSuccess || publicTheme.isError
   const resolvedTheme = settings.data?.theme ?? publicTheme.data?.theme
   useEffect(() => {

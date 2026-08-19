@@ -1080,5 +1080,10 @@
   "settings.restoreFailedError": "復元に失敗しました : {{error}}",
   "settings.uploadingFile": "ファイルをアップロードしています...",
   "tankoubonEdit.edit": "編集",
-  "upload.editThisPluginSRatelimit": "このプラグインのレート制限設定を編集"
+  "upload.editThisPluginSRatelimit": "このプラグインのレート制限設定を編集",
+  "common.notFoundTitle": "ページが見つかりません",
+  "common.notFoundMessage": "このページは存在しないか、アドレスが間違っています。",
+  "common.forbiddenTitle": "アクセスが拒否されました",
+  "common.forbiddenLoggedInMessage": "現在の権限ではこの操作を実行できません。",
+  "common.forbiddenLoggedOutMessage": "この内容にアクセスするにはログインが必要です。"
 }

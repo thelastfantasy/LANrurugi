@@ -99,10 +99,36 @@ pub async fn fetch_theme_for_html_injection(state: &AppState) -> Option<String> 
         .filter(|theme| KNOWN_THEME_FILES.contains(&theme.as_str()))
 }
 
+/// Raw `language` field lookup, same shape as [`fetch_theme`] — `None` only on an actual Redis
+/// failure, defaulting to `"auto"` (matching `STRING_FIELDS`'s own default) whenever the field
+/// itself was never set.
+async fn fetch_language(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let language: Option<String> = conn.hget(CONFIG_KEY, "language").await.ok()?;
+    Some(language.unwrap_or_else(|| "auto".to_string()))
+}
+
+/// issue #92: this response also carries `language` now, not just `theme` — `useApplyTheme`/
+/// `useApplySettingsLanguage` (`apps/frontend/src/theme.ts`/`i18n/index.ts`) both used to read
+/// their respective field off the full, auth-gated `GET /settings` (which 401s pre-login, since
+/// that response also carries the API key and other genuinely secret fields that can't be made
+/// public) — every page rendered before a session exists (the Login page's own bespoke
+/// `usePublicTheme` fallback aside) hit that 401, and the *global* 401 handler in `client.ts`
+/// force-navigates to `/login` on every single one regardless of whether the calling hook itself
+/// already had a fallback ready, defeating issue #92's own "stay on the page, don't redirect"
+/// requirement for anything rendered while logged out (the new 404 page very much included —
+/// live-reported as a real double-navigation: the 404 content flashes, then `/login` anyway).
+/// `theme`/`language` are the only two fields anything needs before a session exists, and neither
+/// is remotely secret, so folding `language` into this already-public endpoint is simpler than
+/// standing up a whole second public settings surface for one more field.
 async fn get_theme(State(state): State<AppState>) -> Response {
-    match fetch_theme(&state).await {
-        Some(theme) => axum::Json(json!({ "theme": theme })).into_response(),
-        None => error(
+    let theme = fetch_theme(&state).await;
+    let language = fetch_language(&state).await;
+    match (theme, language) {
+        (Some(theme), Some(language)) => {
+            axum::Json(json!({ "theme": theme, "language": language })).into_response()
+        }
+        _ => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "get_theme",
             "failed to reach redis".to_string(),

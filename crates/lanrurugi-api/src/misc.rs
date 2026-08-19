@@ -17,9 +17,25 @@ use crate::AppState;
 use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/info", get(server_info))
-        .route("/llm/key-status", get(llm_key_status))
+    Router::new().route("/llm/key-status", get(llm_key_status))
+}
+
+/// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s
+/// `build_app` (same pattern as `settings::public_router`/`login::router`) — issue #92:
+/// `Footer.tsx`/`UpdateBanner.tsx` both call `useServerInfo()` unconditionally on every page,
+/// including ones that must render *before* a session exists (a visitor who isn't logged in
+/// hitting the new 404 catch-all route, or `/stats`, which legacy itself lets an anonymous
+/// visitor view — `Layout.tsx`'s own anonymous nav still links to it). With `/info` behind
+/// `require_api_key`, that call 401'd and `client.ts`'s own `redirectToLogin()` force-navigated
+/// away from whatever page the visitor was actually looking at — live-reported as "opening an
+/// unknown URL while logged out double-navigates: the 404 page flashes, then it jumps to
+/// /login anyway", which defeated issue #92's own "stay on the page/URL, don't redirect"
+/// requirement. `server_info`'s own payload (library name/MOTD/version/archive count/page-size
+/// settings) has no secret in it — no API key, no password hash, nothing session-scoped — so
+/// exposing it to an anonymous caller is the same class of decision `settings::public_router`'s
+/// own `/theme` already made, not a new precedent.
+pub fn public_router() -> Router<AppState> {
+    Router::new().route("/info", get(server_info))
 }
 
 async fn server_info(State(state): State<AppState>) -> Response {

@@ -11,8 +11,11 @@ import { useApplyTheme } from "./theme"
 // Legacy's own top nav (`~/LANraragi/templates/index.html.tt2`'s `<p id="nb">`, reused across
 // every page) is a single centered text line of links — Font Awesome caret icons separating bold
 // links, styled by `p#nb`/`p#nb a` in the copied theme CSS (`useApplyTheme`) — but the *set* of
-// links depends on `[% IF userlogged %]`: six links when logged in, only "Admin Login" +
-// "Statistics" when not (verified against the real template, not assumed).
+// links depends on `[% IF userlogged %]`: six links when logged in. Legacy itself shows "Admin
+// Login" + "Statistics" when logged out (verified against the real template) — deliberately NOT
+// matched here: the anonymous nav is just "Admin Login" alone, since surfacing a link to a page
+// that isn't the login flow itself reads as more functionality than an unauthenticated visitor
+// actually has available, not a legacy-parity requirement worth keeping.
 // Batch Operations/Plugin Configuration/Database Backup-Restore aren't here because legacy
 // doesn't put them here either — they're buttons on the Settings page itself
 // (`~/LANraragi/templates/config.html.tt2`'s left column: `#plugin-config`/`#backup`/`#batch`),
@@ -38,10 +41,7 @@ export function Layout() {
         { to: "/logs", label: t("app.logs") },
         { to: "/activity", label: t("app.activity") },
       ]
-    : [
-        { to: "/login", label: t("app.adminLogin") },
-        { to: "/stats", label: t("app.statistics") },
-      ]
+    : [{ to: "/login", label: t("app.adminLogin") }]
 
   return (
     <div>

@@ -153,11 +153,11 @@ async fn nofunmode_forces_auth_even_when_enable_pass_is_off() {
     // Baseline: `enable_pass: false` alone really does bypass auth (sanity-checks the test's own
     // premise before asserting `nofunmode` changes it).
     clear_config_field(&redis, "nofunmode").await;
-    let resp = request(&app, "GET", "/api/info").await;
+    let resp = request(&app, "GET", "/api/settings").await;
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
     set_config_field(&redis, "nofunmode", "1").await;
-    let resp = request(&app, "GET", "/api/info").await;
+    let resp = request(&app, "GET", "/api/settings").await;
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
 
     clear_config_field(&redis, "nofunmode").await;
@@ -174,7 +174,7 @@ async fn cors_headers_absent_when_disabled() {
     };
     clear_config_field(&redis, "enablecors").await;
 
-    let resp = request(&app, "GET", "/api/info").await;
+    let resp = request(&app, "GET", "/api/settings").await;
     assert!(resp.headers().get("Access-Control-Allow-Origin").is_none());
 }
 
@@ -190,7 +190,7 @@ async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     };
     set_config_field(&redis, "enablecors", "1").await;
 
-    let resp = request(&app, "OPTIONS", "/api/info").await;
+    let resp = request(&app, "OPTIONS", "/api/settings").await;
     assert_eq!(resp.status(), axum::http::StatusCode::NO_CONTENT);
     assert_eq!(
         resp.headers().get("Access-Control-Allow-Origin").unwrap(),
@@ -207,7 +207,7 @@ async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
 
     // A real (non-OPTIONS) request still needs to actually authenticate — CORS headers are added
     // on top of the normal auth flow, not a bypass for anything but the preflight itself.
-    let unauth_resp = request(&app, "GET", "/api/info").await;
+    let unauth_resp = request(&app, "GET", "/api/settings").await;
     assert_eq!(unauth_resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(
         unauth_resp

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
+import { ApiError } from "@/api/client"
 import {
   type TankoubonAiRenameResponse,
   useAiRenameChapter,
@@ -253,6 +254,11 @@ export function TankoubonEdit() {
   }
 
   if (tankoubonFull.isError || !tankoubon) {
+    // See `LibraryPage.tsx`'s own identical guard: a 401 here just means `RequireAuth`
+    // (`RouteGuards.tsx`) is already about to navigate to `/login` in reaction to the same
+    // invalidated `login-status` query.
+    if (tankoubonFull.error instanceof ApiError && tankoubonFull.error.status === 401) return null
+
     return (
       <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
         <p className="text-red-500">

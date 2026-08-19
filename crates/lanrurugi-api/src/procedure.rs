@@ -149,12 +149,20 @@ async fn authorize_route(matched_path: &MatchedPath, method: &str, auth: &AuthCo
 /// `require_session`'s own separate check — see this module's own top-level docs). Deliberately
 /// generic rather than trying to guess which specific rule fired, since `route_policy.csv` is the
 /// single source of truth for that and a wrong guess here would be actively misleading.
+///
+/// Routed through [`crate::common::error`] (the same `{operation, error, success: 0}` JSON shape
+/// every other error response in this crate uses), not a bare `(StatusCode, &str)` — an earlier
+/// version returned plain text here, which every other 403/404 producer in this crate doesn't:
+/// the frontend's own `readErrorBody()` (`apps/frontend/src/api/client.ts`) always attempts
+/// `response.json()` first and only falls back to a generic "request failed" string if that
+/// parse fails, so a plain-text body here silently lost the real denial reason on its way to any
+/// UI meant to surface it (issue #92's own 403 page).
 fn route_forbidden_response() -> Response {
-    (
+    crate::common::error(
         StatusCode::FORBIDDEN,
+        "authorize_route",
         "Your current credentials are not authorized to make this request.",
     )
-        .into_response()
 }
 
 /// One structured event per authenticated (or rejected) request — `operator` is `"session"` or

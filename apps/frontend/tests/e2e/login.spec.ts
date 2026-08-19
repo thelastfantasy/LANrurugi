@@ -24,4 +24,12 @@ test.describe("login", { tag: "@login" }, () => {
     await expect(page.getByText("Wrong Password.")).toBeVisible()
     await expect(page).toHaveURL("/login")
   })
+
+  test("an already-authenticated session visiting /login is bounced straight to the library", async ({ page }) => {
+    await page.request.post("/api/login", { form: { password: "kamimamita" } })
+
+    await page.goto("/login")
+
+    await expect(page).toHaveURL("/")
+  })
 })

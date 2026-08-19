@@ -14,6 +14,10 @@ import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 // redirect text this previously (incorrectly) reused. `[% INCLUDE footer %]` sits *outside* the
 // closing `</div>` of `.ido` in the real template (a body-level sibling, not nested inside the
 // card), so `<Footer />` here is a sibling of `.ido`, not a child of it.
+//
+// Route protection (an already-logged-in session never sees this form) lives in `RequireGuest`
+// (`App.tsx`'s wrapper around this route), not here — keeps this component focused on the form
+// itself.
 export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()

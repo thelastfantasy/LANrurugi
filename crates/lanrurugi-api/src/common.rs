@@ -27,7 +27,7 @@ pub fn error(status: StatusCode, operation: &str, message: impl Into<String>) ->
 }
 
 pub fn not_found(operation: &str, message: impl Into<String>) -> Response {
-    error(StatusCode::BAD_REQUEST, operation, message)
+    error(StatusCode::NOT_FOUND, operation, message)
 }
 
 fn merge_extra(body: &mut Value, extra: impl IntoIterator<Item = (&'static str, Value)>) {

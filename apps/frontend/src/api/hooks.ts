@@ -98,21 +98,29 @@ export function useTankoubons() {
   })
 }
 
-export function useSettings() {
+export function useSettings(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["settings"],
     queryFn: () => fetchJson<Settings>("/settings"),
+    enabled: options?.enabled,
   })
 }
 
-/** Unauthenticated equivalent of `useSettings().data?.theme` — the Login page renders before any
- * session exists, so the auth-gated `/settings` 401s there and `useApplyTheme` would otherwise
- * always fall back to the hardcoded default theme regardless of what's actually saved. Backed by
- * `GET /theme`, a separate public endpoint (see `lanrurugi_api::settings::public_router`). */
-export function usePublicTheme(options?: { enabled?: boolean }) {
+/** Unauthenticated equivalent of `useSettings().data?.theme`/`.language` — any page that can
+ * render before a session exists (the Login page, and per issue #92 now also the 404 page and
+ * anything else `Layout` wraps while logged out) needs these two fields without triggering the
+ * full, auth-gated `GET /settings` — that response also carries the API key and other genuinely
+ * secret fields, so it 401s pre-login, and `client.ts`'s own *global* 401 handler force-navigates
+ * to `/login` on any 401 regardless of whether the calling hook already has a fallback ready
+ * (`useApplyTheme`'s own `enabled: settings.data === undefined` gate below existed for exactly
+ * this, but couldn't stop the global redirect from firing first) — live-reported as a real
+ * double-navigation once the 404 catch-all route existed: its content flashed, then `/login`
+ * anyway. Backed by `GET /theme`, a separate public endpoint (see
+ * `lanrurugi_api::settings::public_router`) that now also returns `language`, not just `theme`. */
+export function usePublicSettings(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["theme"],
-    queryFn: () => fetchJson<{ theme: string }>("/theme"),
+    queryFn: () => fetchJson<{ theme: string; language: string }>("/theme"),
     enabled: options?.enabled,
   })
 }

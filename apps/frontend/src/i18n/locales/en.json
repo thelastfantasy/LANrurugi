@@ -1194,5 +1194,10 @@
   "activity.actionType.tankoubon.rename": "Rename Tankoubon",
   "activity.actionType.token.create": "Create API Token",
   "activity.actionType.token.rename": "Rename API Token",
-  "activity.actionType.token.revoke": "Revoke API Token"
+  "activity.actionType.token.revoke": "Revoke API Token",
+  "common.notFoundTitle": "Page Not Found",
+  "common.notFoundMessage": "This page doesn't exist, or the address is incorrect.",
+  "common.forbiddenTitle": "Access Denied",
+  "common.forbiddenLoggedInMessage": "Your current credentials are not authorized to make this request.",
+  "common.forbiddenLoggedOutMessage": "You need to be logged in to access this."
 }

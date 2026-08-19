@@ -1251,5 +1251,10 @@
   "activity.actionType.tankoubon.rename": "重命名单行本",
   "activity.actionType.token.create": "创建API令牌",
   "activity.actionType.token.rename": "重命名API令牌",
-  "activity.actionType.token.revoke": "撤销API令牌"
+  "activity.actionType.token.revoke": "撤销API令牌",
+  "common.notFoundTitle": "页面不存在",
+  "common.notFoundMessage": "该页面不存在，或地址有误。",
+  "common.forbiddenTitle": "无权访问",
+  "common.forbiddenLoggedInMessage": "你当前的权限不足以执行此操作。",
+  "common.forbiddenLoggedOutMessage": "你需要登录后才能访问此内容。"
 }

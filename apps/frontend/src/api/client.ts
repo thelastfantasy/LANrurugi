@@ -1,38 +1,27 @@
+import { ApiError, ValidationError } from "./apiError"
+import { queryClient } from "./queryClient"
 import type { JobStatus } from "./types"
 
-export class ApiError extends Error {
-  status: number
-
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
-/** A `422` field-level validation failure (spec FR-014, e.g. `PUT /plugins/options` rejecting a
- * non-positive `max_concurrent`/`max_bytes_per_sec`) — carries which field failed and why, so a
- * settings form can show an inline error next to the exact input instead of a generic message. */
-export class ValidationError extends ApiError {
-  field: string
-
-  constructor(message: string, field: string) {
-    super(422, message)
-    this.field = field
-  }
-}
+export { ApiError, ValidationError } from "./apiError"
 
 /** `/login`, `/logout`, and `/token/refresh` itself handle their own 401s (a wrong password or an
  * already-dead refresh token, not "the access token merely expired") — every other endpoint's 401
  * first gets one shot at a transparent refresh-then-retry (see `tryRefresh`/`shouldAttemptRefresh`
- * below) before falling back to a hard redirect. */
+ * below) before falling back to invalidating login status. */
 function isAuthBootstrapPath(path: string): boolean {
   return path === "/login" || path === "/logout" || path === "/token/refresh"
 }
 
-function redirectToLogin() {
-  if (!window.location.pathname.startsWith("/login")) {
-    window.location.assign("/login")
-  }
+/** A confirmed-dead session no longer redirects the caller itself (issue #92's own bug: a hard
+ * `window.location.assign("/login")` fires *after* this function returns, but doesn't stop the
+ * caller's own code from continuing to run and throwing — React gets one more render in first,
+ * during which whatever page called this paints its own "request failed" fallback for an instant
+ * before the browser actually navigates away). Instead this just marks `/login/status` stale;
+ * `RequireAuth` (`RouteGuards.tsx`), mounted on every authenticated route, is the *only* thing
+ * that ever navigates to `/login`, and it does so via `<Navigate>` — a real React Router
+ * transition, not a full page reload racing against in-flight renders. */
+function invalidateLoginStatus() {
+  void queryClient.invalidateQueries({ queryKey: ["login-status"] })
 }
 
 /** Dedupes concurrent 401s into a single real `POST /token/refresh` call — several requests can
@@ -78,7 +67,7 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
       if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
         return fetchJson<T>(path, true)
       }
-      redirectToLogin()
+      invalidateLoginStatus()
     }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
@@ -94,7 +83,7 @@ export async function fetchText(path: string, retried = false): Promise<string> 
       if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
         return fetchText(path, true)
       }
-      redirectToLogin()
+      invalidateLoginStatus()
     }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
@@ -120,7 +109,7 @@ export async function sendJson<T>(
       if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
         return sendJson<T>(method, path, body, true)
       }
-      redirectToLogin()
+      invalidateLoginStatus()
     }
     if (response.status === 422) {
       const errorBody = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
@@ -155,7 +144,7 @@ export async function sendJsonForBlob(
       if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
         return sendJsonForBlob(method, path, body, true)
       }
-      redirectToLogin()
+      invalidateLoginStatus()
     }
     throw new ApiError(response.status, await readErrorBody(response, path))
   }
@@ -185,7 +174,7 @@ export async function sendForm<T>(
       if (shouldAttemptRefresh(path, retried) && (await tryRefresh())) {
         return sendForm<T>(method, path, params, true)
       }
-      redirectToLogin()
+      invalidateLoginStatus()
     }
     throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`)
   }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
+import { ApiError } from "@/api/client"
 import {
   fetchRandomArchiveId,
   useArchiveMetadata,
@@ -19,7 +20,7 @@ import {
   useUpdateProgress,
   useUpdateTankoubonProgress,
 } from "@/api/hooks"
-import { Tooltip } from "@/components/Display"
+import { ForbiddenPage, NotFoundPage, Tooltip } from "@/components/Display"
 import { Footer } from "@/components/Layout"
 import { confirmDialog, promptDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -996,6 +997,22 @@ export function Reader() {
   }
 
   if (metadata.isError || pages.isError || !pages.data || !metadata.data) {
+    // issue #92: an archive/Tankoubon id that simply doesn't exist (backend now returns a real
+    // 404 for this — `crates/lanrurugi-api/src/common.rs::not_found`) or a permissions denial
+    // (403) both get their own real, dedicated content here — inline, at the *same* `/reader/:id`
+    // URL a visitor actually navigated to, never a `navigate()` to some other route. Anything
+    // else (network failure, 500, ...) keeps the original generic error message below; only a
+    // real `ApiError` with a matching `status` gets the specialized treatment; a bare `Error`
+    // (e.g. `fetch` itself rejecting on a network drop) falls through to the generic branch too.
+    const firstError = [metadata.error, pages.error].find((e) => e instanceof ApiError) as ApiError | undefined
+    if (firstError?.status === 404) return <NotFoundPage />
+    if (firstError?.status === 403) return <ForbiddenPage reason={firstError.message} />
+    // A 401 means the session just expired mid-view — `RequireAuth` (`RouteGuards.tsx`) is
+    // already reacting to the same invalidated `login-status` query and about to navigate to
+    // `/login`; rendering nothing for that one render avoids flashing the generic failure message
+    // below for what's actually a routine session expiry.
+    if (firstError?.status === 401) return null
+
     return (
       <div className="ido">
         <p>

@@ -251,7 +251,7 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
     purge_all_refresh_and_api_tokens(&redis).await;
 
     // No credentials at all: the protected endpoint must refuse.
-    let resp = request(&app, "GET", "/api/info", None, None).await;
+    let resp = request(&app, "GET", "/api/settings", None, None).await;
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
 
     // Legacy's own default password (`auth.rs::DEFAULT_PASSWORD_HASH` is its bcrypt hash) — no
@@ -305,7 +305,7 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
     let protected_resp = request(
         &app,
         "GET",
-        "/api/info",
+        "/api/settings",
         Some(&cookie_header(&login_cookies)),
         None,
     )
@@ -333,7 +333,7 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
     let protected_resp_2 = request(
         &app,
         "GET",
-        "/api/info",
+        "/api/settings",
         Some(&cookie_header(&rotated_cookies)),
         None,
     )
