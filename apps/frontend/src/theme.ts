@@ -107,6 +107,25 @@ export const Z_OVERLAY_CONTENT = 1001
 // doesn't silently reopen this same gap.
 export const Z_OVERLAY_TOOLTIP = 1100
 
+// A real, always-visible "this is floating above everything else" drop shadow for Base UI
+// (`Popover`/`Combobox`) popups — deliberately NOT `useMenuPalette()`'s own `shadow` value
+// (`PopupMenu.tsx`'s source of truth for right-click/gear menus), since two of the five real
+// themes (`g.css`/`ex.css`) set that value to the literal string `"none"` — a popup using it would
+// render with zero elevation cue at all on those two themes, reading as flatly stuck to the page
+// rather than floating over it. A fixed, theme-independent shadow is what actually gives "floats
+// above the page" its visual weight, regardless of which theme happens to be active.
+export const FLOATING_POPUP_SHADOW = "0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25)"
+
+// Scale/opacity enter+exit transition driven by Base UI's own `data-starting-style`/
+// `data-ending-style` attributes (its documented CSS-transition hook, present on the popup only
+// while it's actively animating in/out). Pair with an inline `transformOrigin: "var(--transform-
+// origin)"` (not a Tailwind arbitrary-value class for the same property, which would depend on
+// Tailwind's own CSS-custom-property interpolation support rather than a plain, guaranteed-to-work
+// inline style) so the scale animates from the edge closest to the trigger, matching where the
+// popup is actually anchored, rather than always from dead center.
+export const FLOATING_POPUP_TRANSITION_CLASSES =
+  "transition-[transform,opacity] duration-150 ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0"
+
 // Legacy's own real `.base-overlay` class (`lrr.css` — the Archive Overview modal's own outer
 // class, `#archivePagesOverlay`) carries a hardcoded `z-index: 9000`, far above every generic
 // overlay tier above — anything meant to render *on top of* that modal (rather than as a popup

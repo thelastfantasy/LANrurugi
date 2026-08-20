@@ -4,31 +4,10 @@ import type { ReactNode } from "react"
 import { Tooltip } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
-import { FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"
+import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"
 
 import { ActivityChip, CHIP_REMOVE_BUTTON_STYLE } from "./ActivityChip"
 import type { ChipColor } from "./activityColors"
-
-/** A real, always-visible "this is floating above everything else" drop shadow for the Activity
- * page's Combobox popups — deliberately NOT `palette.shadow` (`useMenuPalette`'s own per-theme
- * value, `PopupMenu.tsx`'s source of truth for right-click/gear menus), since two of the five real
- * themes (`g.css`/`ex.css`) set that value to the literal string `"none"` — a popup using it would
- * render with zero elevation cue at all on those two themes, reading as flatly stuck to the page
- * rather than floating over it. A fixed, theme-independent shadow (plus the scale/opacity
- * transition on `data-starting-style`/`data-ending-style` below, Base UI's own documented CSS
- * hook for this) is what actually gives "floats above the page" its visual weight, regardless of
- * which theme happens to be active. */
-const FLOATING_POPUP_SHADOW = "0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25)"
-
-/** Scale/opacity enter+exit transition driven by Base UI's own `data-starting-style`/
- * `data-ending-style` attributes (its documented CSS-transition hook, present on the popup only
- * while it's actively animating in/out) — paired with an inline `transformOrigin: "var(--transform-
- * origin)"` (not a Tailwind arbitrary-value class for the same property, which would depend on
- * Tailwind's own CSS-custom-property interpolation support rather than a plain, guaranteed-to-work
- * inline style) so the scale animates from the edge closest to the trigger, matching where the
- * popup is actually anchored, rather than always from dead center. */
-const FLOATING_POPUP_TRANSITION_CLASSES =
-  "transition-[transform,opacity] duration-150 ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0"
 
 /** Shared minimum row height for every control in the Activity filter bar (this multi-select
  * shell, the single-select time-range trigger, and — via `ActivityFilterBar.tsx`'s own use of this

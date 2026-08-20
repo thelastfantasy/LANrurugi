@@ -2,6 +2,8 @@ export * from "./AiSkeleton"
 
 export * from "./ArchiveChecklistItem"
 
+export * from "./ClickPopover"
+
 export * from "./CodeBlock"
 
 export * from "./CollapsibleSection"
