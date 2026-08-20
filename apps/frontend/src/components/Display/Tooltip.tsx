@@ -103,6 +103,17 @@ export function Tooltip({
     const bubble = bubbleRef.current
     if (!bubble) return
     const bubbleRect = bubble.getBoundingClientRect()
+    // The bubble's *unconstrained* height — once a previous `recompute()` call has already
+    // applied a `maxHeight` cap (see the `cappedAbove` case below), `bubbleRect.height` itself
+    // reads back as the *capped* height, not the content's real size, since `getBoundingClientRect`
+    // reflects the box as CSS `max-height` has already clamped it. Using that capped value as this
+    // call's own "does it fit" measurement made the bubble spuriously "fit" against the very space
+    // its cap was sized to (confirmed live: the second `recompute()` this component's own
+    // `document.fonts.ready` callback triggers was reading the first call's capped height, deciding
+    // it now fit `spaceAbove` after all, and clearing the cap/scrollbar it had just set). `scrollHeight`
+    // is unaffected by `max-height`/`overflow` — it's always the content's actual full height,
+    // capped or not.
+    const naturalHeight = bubble.scrollHeight
 
     // The point/box the bubble is placed relative to — a zero-size point at the cursor in
     // `'cursor'` mode (falling back to the trigger's bounds if no pointer position is known yet,
@@ -119,21 +130,48 @@ export function Tooltip({
 
     const spaceBelow = window.innerHeight - anchorRect.bottom
     const spaceAbove = anchorRect.top
-    const top =
-      spaceBelow >= bubbleRect.height
-        ? anchorRect.bottom + GAP
-        : spaceAbove >= bubbleRect.height
-          ? anchorRect.top - bubbleRect.height - GAP
-          : spaceAbove >= spaceBelow
-            ? anchorRect.top - bubbleRect.height - GAP
-            : anchorRect.bottom + GAP
+    const fitsBelow = spaceBelow >= naturalHeight
+    const fitsAbove = spaceAbove >= naturalHeight
+
+    let top: number
+    let maxHeight: number | undefined
+    if (fitsBelow) {
+      // Preferred/default side, unconstrained — matches the original two-side preference order.
+      top = anchorRect.bottom + GAP
+      maxHeight = undefined
+    } else if (fitsAbove) {
+      top = anchorRect.top - naturalHeight - GAP
+      maxHeight = undefined
+    } else {
+      // Neither side has room for the bubble at its natural height — pick whichever has more
+      // space (below wins ties, matching the preferred side above) and cap the bubble's height to
+      // what that side actually has, with a scrollbar for the rest, rather than either picking a
+      // side and letting it overflow the viewport (the original bug report: a tooltip opening
+      // downward near the bottom edge ran off-screen with no way to reach its own lower content)
+      // or assuming only the "opens upward" direction could ever be cramped (a later, narrower
+      // version of this fix only handled that one case, which turned out to be the wrong
+      // asymmetry — a downward-opening tooltip near the bottom edge hits the exact same problem).
+      if (spaceBelow >= spaceAbove) {
+        top = anchorRect.bottom + GAP
+        maxHeight = Math.max(0, spaceBelow - GAP * 2)
+      } else {
+        top = GAP
+        maxHeight = Math.max(0, spaceAbove - GAP * 2)
+      }
+    }
 
     // Left-aligned to the anchor's own left edge (not centered) — keeps the bubble visually
     // anchored to where the trigger text/icon actually starts.
     let left = anchorRect.left
     left = Math.max(GAP, Math.min(left, window.innerWidth - bubbleRect.width - GAP))
 
-    setStyle({ position: "fixed", top, left, visibility: "visible" })
+    setStyle({
+      position: "fixed",
+      top,
+      left,
+      visibility: "visible",
+      ...(maxHeight !== undefined ? { maxHeight, overflowY: "auto" } : { maxHeight: undefined, overflowY: undefined }),
+    })
   }
 
   useLayoutEffect(() => {
@@ -169,13 +207,20 @@ export function Tooltip({
       {children}
       {visible &&
         createPortal(
+          // Plain positioning shell — `top`/`left`/`position: fixed` only. Height-capping +
+          // scrolling live on `.swal2-popup` below instead (see that element's own `ref`/style),
+          // not here: this element has no border/background/radius of its own, so a scrollbar on
+          // *it* would render outside the popup's visible border — confirmed live: the very first
+          // version of the height-cap fix put `maxHeight`/`overflowY` here, and the resulting
+          // scrollbar sat flush with the portal's own edge, outside the rounded border the popup
+          // actually draws, looking like a stray scrollbar floating next to the tooltip rather
+          // than part of it.
           <div
-            ref={bubbleRef}
             role="tooltip"
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
             onContextMenu={(e) => { e.stopPropagation() }}
-            style={{ ...style, zIndex }}
+            style={{ position: style.position, top: style.top, left: style.left, visibility: style.visibility, zIndex }}
           >
             {/* `swal2-popup` (not an actual SweetAlert2 dialog — just its class name) — every
                 legacy theme already styles it for this "informational popup" role, so the tooltip
@@ -183,7 +228,15 @@ export function Tooltip({
                 so this element's own inline `fontSize` doesn't fight `lrr.css`'s
                 `.swal2-popup { font-size: 9pt !important }` (a plain style prop can't win against
                 `!important`, but a size on a child the outer rule doesn't target isn't in that
-                fight at all). */}
+                fight at all).
+                This element itself no longer scrolls — see the *next* nested `div`'s own comment
+                for why an `overflow-y: auto` element needs its border-radius'd ancestor to stay a
+                plain, non-scrolling box: with `overflowY`/`thin-scrollbar` here directly (an
+                earlier version of this fix), the scrollbar track sat flush against this element's
+                own rounded corners, visually clipping/covering them at the top and bottom — a
+                border-radius doesn't automatically clip a same-element scrollbar the way it clips
+                overflowing *content*. `ref`/`maxHeight`/`getBoundingClientRect` measurements in
+                `recompute()` stay on the *inner* scrolling div now (see below), not this one. */}
             <div
               className="swal2-popup"
               style={{
@@ -198,7 +251,21 @@ export function Tooltip({
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
               }}
             >
-              {label}
+              {/* The actual scrolling element — nested one level *inside* the rounded/padded
+                  `.swal2-popup` box above so the scrollbar track clears the rounded corners (see
+                  that element's own comment). `marginRight`/`paddingRight` claw back most of the
+                  parent's own 10px right padding — pushing the scrollbar itself close to the
+                  popup's edge (matching every other scrollbar in this app, which sits at its
+                  container's own edge, not visibly indented from it) while keeping a small,
+                  deliberate gap so the track still clears the rounded border rather than
+                  reproducing the very "flush against the corner" look this nesting fixed. */}
+              <div
+                ref={bubbleRef}
+                className="thin-scrollbar"
+                style={{ maxHeight: style.maxHeight, overflowY: style.overflowY, marginRight: -8, paddingRight: 2 }}
+              >
+                {label}
+              </div>
             </div>
           </div>,
           document.body,

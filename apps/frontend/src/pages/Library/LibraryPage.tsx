@@ -157,6 +157,7 @@ export function Library() {
               page={lib.page}
               pageCount={lib.pageCount}
               onPage={(p) => lib.navigateSearch({ page: p })}
+              buildHref={(p) => `/?${lib.buildSearch({ page: p })}`}
             />
           </div>
         )}

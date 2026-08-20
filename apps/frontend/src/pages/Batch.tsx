@@ -3,14 +3,16 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { sendJson, sleep } from "@/api/client"
-import { useArchives, useCategories, usePlugins, useSettings } from "@/api/hooks"
+import { ApiError, sendJson, sleep } from "@/api/client"
+import { useArchives, useBatchDeleteArchives, useCategories, usePlugins, useSettings } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 import { ArchiveChecklistItem } from "@/components/Display"
+import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { useApplyTheme } from "@/theme"
+import { toast } from "@/toast"
 
 async function fetchArchive(id: string): Promise<ArchiveMetadata> {
   const response = await fetch(`/api/archives/${id}/metadata`)
@@ -60,6 +62,7 @@ export function Batch() {
   const plugins = usePlugins("metadata")
   const settings = useSettings()
   const queryClient = useQueryClient()
+  const batchDeleteArchives = useBatchDeleteArchives()
 
   const [operation, setOperation] = useState<Operation>("plugin")
   const [selected, setSelected] = useState<Set<string>>(() => new Set(takePremadeSelection()))
@@ -183,16 +186,48 @@ export function Batch() {
 
   async function deleteSelected() {
     if (selected.size === 0) return
+    const count = selected.size
+    if (!(await confirmDialog(t("batch.confirmDeleteSelectedN", { n: count }) ?? "", true, true))) return
     setBusy(true)
     setStatus(null)
     try {
-      const count = selected.size
-      for (const id of selected) {
-        await fetch(`/api/archives/${id}`, { method: "DELETE" })
-      }
+      // One request for the whole batch (issue #63) — the backend does the same per-id delete
+      // work `DELETE /archives/{id}` always did, just server-side in a loop, and reports which
+      // ids actually succeeded so a partial failure (an id already deleted elsewhere, a locked
+      // file, ...) doesn't silently read as "all done" the way the old client-side loop did.
+      const response = await batchDeleteArchives.mutateAsync([...selected])
       setSelected(new Set())
-      setStatus(formatProgress(t, count, count))
+      if (response.deleted === response.total) {
+        setStatus(formatProgress(t, response.deleted, response.total))
+        toast({ text: formatProgress(t, response.deleted, response.total), icon: "success" })
+      } else {
+        const message = t("batch.deletedNOfMFailed", { deleted: response.deleted, total: response.total })
+        setStatus(message ?? null)
+        // Named per-title with its own failure reason, not just a bare count — "3 of 10 failed"
+        // alone gives no way to tell *which* 3 or *why* without cross-referencing ids by hand
+        // against server logs. Falls back to the bare id if the archive isn't in the already-loaded
+        // `archives.data` for some reason (most commonly: `error` already says "does not exist",
+        // so there's nothing in the library list to look the title up in).
+        const failedLines = response.results
+          .filter((r) => !r.success)
+          .map((r) => {
+            const title = archives.data?.find((a) => a.arcid === r.id)?.title ?? r.id
+            return r.error ? `${title}: ${r.error}` : title
+          })
+        // `deleted === 0` (every single one failed, not just some) still shows as `warning` here
+        // rather than `error` — the request itself succeeded (a real per-id result list came
+        // back, this isn't a network/auth failure), so it's a "here's what happened, some/all of
+        // it didn't go as planned" situation, same as a partial failure, just at 0%. The `catch`
+        // branch below is what's reserved for `error` — the request itself never completing.
+        toast({ heading: message ?? undefined, text: failedLines.join("\n"), icon: "warning" })
+      }
       await refresh()
+    } catch (err) {
+      toast({
+        heading: t("batch.deleteRequestFailed") ?? undefined,
+        text: err instanceof ApiError ? err.message : String(err),
+        icon: "error",
+      })
     } finally {
       setBusy(false)
     }

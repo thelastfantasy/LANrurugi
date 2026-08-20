@@ -237,26 +237,31 @@ impl RecommendService {
         let current_tags = current.tags.clone();
         let current_pagecount = current.pagecount;
         // The prefiltered shortlist only carries title from the embedding layer; re-attach the
-        // tags and pagecount from the repository for the LLM prompt.
-        let prefiltered: Vec<ArchiveMeta> = {
-            let all_meta = all;
-            ranked
-                .iter()
-                .map(|r| {
-                    let meta = all_meta
-                        .iter()
-                        .find(|a| a.id.to_string() == r.id)
-                        .map(|a| (a.tags.clone(), a.pagecount))
-                        .unwrap_or_default();
-                    ArchiveMeta {
-                        id: r.id.clone(),
-                        title: r.title.clone(),
-                        tags: meta.0,
-                        pagecount: meta.1,
-                    }
-                })
-                .collect()
-        };
+        // tags and pagecount from the repository for the LLM prompt. `ranked` is only
+        // `prefilter_limit`-sized (a few dozen), but `all` is the whole library — indexing it
+        // into a *borrowing* map first turns each lookup below from an O(library size) linear
+        // `.find()` scan into O(1) (same as the cache-hit path, `recommendations_from_cache`,
+        // already does) without cloning every archive's tags up front — only the handful that
+        // `ranked` actually hits get their `tags` copied into the final `ArchiveMeta`.
+        let all_by_id: std::collections::HashMap<String, (&str, u32)> = all
+            .iter()
+            .map(|a| (a.id.to_string(), (a.tags.as_str(), a.pagecount)))
+            .collect();
+        let prefiltered: Vec<ArchiveMeta> = ranked
+            .iter()
+            .map(|r| {
+                let (tags, pagecount) = all_by_id
+                    .get(&r.id)
+                    .map(|&(tags, pagecount)| (tags.to_string(), pagecount))
+                    .unwrap_or_default();
+                ArchiveMeta {
+                    id: r.id.clone(),
+                    title: r.title.clone(),
+                    tags,
+                    pagecount,
+                }
+            })
+            .collect();
         let result: Vec<Recommendation> = match crate::recommend_llm::llm_rerank(
             state,
             &current_title,

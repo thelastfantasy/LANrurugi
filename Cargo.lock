@@ -2015,6 +2015,7 @@ dependencies = [
  "lanrurugi-scanner",
  "lanrurugi-search",
  "lanrurugi-storage",
+ "percent-encoding",
  "rand 0.10.2",
  "rayon",
  "regex",

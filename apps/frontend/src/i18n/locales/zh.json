@@ -1256,5 +1256,9 @@
   "common.notFoundMessage": "该页面不存在，或地址有误。",
   "common.forbiddenTitle": "无权访问",
   "common.forbiddenLoggedInMessage": "你当前的权限不足以执行此操作。",
-  "common.forbiddenLoggedOutMessage": "你需要登录后才能访问此内容。"
+  "common.forbiddenLoggedOutMessage": "你需要登录后才能访问此内容。",
+  "batch.confirmDeleteSelectedN": "确定要删除选中的 {{n}} 个档案吗？这将从您的系统中删除元数据和匹配的文件，此操作无法撤销。",
+  "common.typeToConfirm": "请输入 \"{{word}}\" 以确认：",
+  "batch.deletedNOfMFailed": "已删除 {{deleted}} / {{total}} 个档案，部分失败，请查看日志。",
+  "batch.deleteRequestFailed": "批量删除请求失败"
 }

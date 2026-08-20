@@ -35,14 +35,20 @@ export function TagTable({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {namespaces.map((namespace) => (
-        <div key={namespace} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <div key={namespace} style={{ display: "flex", gap: 6, alignItems: "flex-start", minWidth: 0 }}>
           <div
             className={`caption-namespace ${namespace.toLowerCase()}-tag`}
             style={{ fontWeight: "bold", flex: "0 0 auto", whiteSpace: "nowrap", padding: 0 }}
           >
             {displayNamespace(namespace)}:
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap" }}>
+          {/* `minWidth: 0` — a flex item's implicit `min-width: auto` default sizes it to its
+              content's intrinsic width regardless of the row's own constraint, so a long unbroken
+              string (a `download:`/`source:` URL, which is `word-break: break-all` further down
+              but that alone can't shrink the *flex item itself*) overflowed the tooltip bubble's
+              own `max-width` instead of wrapping within it — confirmed live via the homepage's
+              hover tooltip on a chaika.moe `download:` tag. */}
+          <div style={{ display: "flex", flexWrap: "wrap", minWidth: 0 }}>
             {namespace.toLowerCase() === "rating" ? (
               // Still a real, working search-link chip (legacy's own real rating chip *is*
               // clickable — see `TagsTable`'s own docs in `ArchiveOverviewOverlay.tsx` for the
@@ -64,7 +70,21 @@ export function TagTable({
               </div>
             ) : (
               byNamespace[namespace].map((value, i) => (
-                <div key={i} className="gt">
+                // `.gt` (legacy, vendored per-theme — see g.css's own rule) hardcodes
+                // `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`, meant for
+                // short single-word tag chips — on a long unbroken value (a `download:`/`source:`
+                // URL) that clips the *middle* of the string at a fixed pixel width, which for a
+                // URL means the meaningful part (the path/gallery id at the end) disappears while
+                // the domain stays visible — confirmed live: a `panda.chaika.moe` download URL
+                // ellipsized right after the domain, hiding the actual archive id entirely. These
+                // three overrides don't touch the shared `.gt` class other short chips still use
+                // unmodified — only this one instance, so the value wraps across lines and stays
+                // fully readable/copyable instead of being silently truncated.
+                <div
+                  key={i}
+                  className="gt"
+                  style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
+                >
                   {namespace === "source" ? (
                     <a
                       href={/^https?:\/\//i.test(value) ? value : `https://${value}`}

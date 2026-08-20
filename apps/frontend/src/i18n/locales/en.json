@@ -1199,5 +1199,9 @@
   "common.notFoundMessage": "This page doesn't exist, or the address is incorrect.",
   "common.forbiddenTitle": "Access Denied",
   "common.forbiddenLoggedInMessage": "Your current credentials are not authorized to make this request.",
-  "common.forbiddenLoggedOutMessage": "You need to be logged in to access this."
+  "common.forbiddenLoggedOutMessage": "You need to be logged in to access this.",
+  "batch.confirmDeleteSelectedN": "Delete {{n}} selected archives? This will remove both metadata and matching files from your system — this cannot be undone.",
+  "common.typeToConfirm": "Type \"{{word}}\" to confirm:",
+  "batch.deletedNOfMFailed": "Deleted {{deleted}} of {{total}} archives — some failed, check the logs.",
+  "batch.deleteRequestFailed": "Batch delete request failed"
 }

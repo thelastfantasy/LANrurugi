@@ -34,6 +34,22 @@ export interface ArchiveMetadata {
   has_patch?: boolean
 }
 
+/** `DELETE /archives` (issue #63) — per-id outcome of a batch delete, so the caller can show
+ * exactly which archives failed instead of assuming the whole batch either fully succeeded or
+ * fully failed. */
+export interface BatchDeleteResult {
+  id: string
+  success: boolean
+  filename?: string
+  error?: string
+}
+
+export interface BatchDeleteArchivesResponse {
+  deleted: number
+  total: number
+  results: BatchDeleteResult[]
+}
+
 export interface CategoryMetadata {
   id: string
   name: string

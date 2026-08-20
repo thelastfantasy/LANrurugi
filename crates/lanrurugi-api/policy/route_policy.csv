@@ -32,6 +32,7 @@ p, anonymous, /api/*, DELETE, allow
 p, token_admin, /api/activity, DELETE, deny
 p, token_admin, /api/activity/:id, DELETE, deny
 p, token_admin, /api/activity/retention, PUT, deny
+p, token_admin, /api/archives, DELETE, deny
 p, token_admin, /api/database/drop, POST, deny
 p, token_admin, /api/settings/password, POST, deny
 p, token_admin, /api/tokens, GET, deny
@@ -42,6 +43,7 @@ p, token_admin, /api/tokens/:id, DELETE, deny
 p, token_guest, /api/activity, DELETE, deny
 p, token_guest, /api/activity/:id, DELETE, deny
 p, token_guest, /api/activity/retention, PUT, deny
+p, token_guest, /api/archives, DELETE, deny
 p, token_guest, /api/database/drop, POST, deny
 p, token_guest, /api/settings/password, POST, deny
 p, token_guest, /api/tokens, GET, deny
@@ -52,6 +54,7 @@ p, token_guest, /api/tokens/:id, DELETE, deny
 p, anonymous, /api/activity, DELETE, deny
 p, anonymous, /api/activity/:id, DELETE, deny
 p, anonymous, /api/activity/retention, PUT, deny
+p, anonymous, /api/archives, DELETE, deny
 p, anonymous, /api/database/drop, POST, deny
 p, anonymous, /api/settings/password, POST, deny
 p, anonymous, /api/tokens, GET, deny

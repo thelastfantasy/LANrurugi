@@ -177,6 +177,12 @@ type DialogRequest =
       kind: "confirm"
       message: ReactNode
       danger: boolean
+      // Set for a confirmation dangerous enough that a plain Cancel/OK pair isn't enough friction
+      // (e.g. batch-deleting an arbitrary number of archives at once, issue #63) — the confirm
+      // button stays disabled until the typed text exactly matches the localized word this holds
+      // (`common.delete`, upper-cased for `en` specifically — see `DialogHost`'s own resolution of
+      // this field for why only `en` gets that treatment).
+      requireTypedConfirmation: boolean
       resolve: (value: boolean) => void
     }
   | {
@@ -223,10 +229,20 @@ export function promptDialog(message: string, defaultValue = ""): Promise<string
  * confirm button with `.stdbtn-danger` (real red class, themed per theme file) instead of the
  * plain `.stdbtn` — same distinction `components/Display/Confirm.tsx`'s own `danger` prop makes,
  * so a call site whose confirm actually deletes files/data (not just a reversible grouping) reads
- * as visibly destructive rather than identical to a routine confirm. */
-export function confirmDialog(message: ReactNode, danger = false): Promise<boolean> {
+ * as visibly destructive rather than identical to a routine confirm.
+ *
+ * `requireTypedConfirmation` (default `false`) raises the bar further for an especially dangerous
+ * confirm (issue #63's own batch-delete, which can remove an arbitrary number of archives — every
+ * *other* delete entry point in the app only ever targets one thing at a time) — the confirm
+ * button stays disabled until the user types the localized word for "delete" exactly (see
+ * `DialogHost`'s own resolution of that word). */
+export function confirmDialog(
+  message: ReactNode,
+  danger = false,
+  requireTypedConfirmation = false,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    setRequest({ kind: "confirm", message, danger, resolve })
+    setRequest({ kind: "confirm", message, danger, requireTypedConfirmation, resolve })
   })
 }
 
@@ -1332,9 +1348,14 @@ function RenameArchiveForm({
  * `confirmDialog`/`newCategoryDialog` call can push a request into, regardless of which component
  * tree is currently mounted where. */
 export function DialogHost() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [, forceUpdate] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Backs the extra "type the word to confirm" field a `requireTypedConfirmation` request adds —
+  // module state (`currentRequest`) has no room for live keystroke-by-keystroke input the way this
+  // component's own local state does, and unlike the prompt dialog's plain `defaultValue`-seeded
+  // `inputRef`, this field always starts empty regardless of what request preceded it.
+  const [typedConfirmation, setTypedConfirmation] = useState("")
 
   useEffect(() => {
     const listener = () => forceUpdate((n) => n + 1)
@@ -1349,8 +1370,35 @@ export function DialogHost() {
   useEffect(() => {
     if (request?.kind === "prompt") inputRef.current?.select()
   }, [request])
+  // Resets whenever a *new* request object replaces the previous one (not on every render) —
+  // otherwise text typed for one confirm would still be sitting there, already "matching," the
+  // next time a `requireTypedConfirmation` dialog opens. Computed during render and compared
+  // against the previous request rather than reset from a `useEffect` (which `react-hooks/
+  // set-state-in-effect` flags for unconditionally calling `setState` in its body) — this is the
+  // "adjusting state when a prop changes" pattern React's own docs call out as the one case where
+  // a plain in-render conditional `setState` is the intended tool, not an effect.
+  const previousRequestRef = useRef<DialogRequest | null>(null)
+  if (previousRequestRef.current !== request) {
+    previousRequestRef.current = request
+    if (typedConfirmation !== "") setTypedConfirmation("")
+  }
 
   if (!request) return null
+
+  // Resolved once per render, not baked into the `DialogRequest` itself at `confirmDialog()`
+  // call time — the word has to reflect whatever language is active *when the dialog is shown*,
+  // which can differ from the call site's own module-load-time language if the user switches
+  // languages mid-session. Only `en` itself gets upper-cased (`common.delete` → "Delete" → "DELETE")
+  // — every other language, including the 11 without their own translation that fall back to the
+  // English string via `fallbackLng`, types that language's own `common.delete` value as-is per
+  // issue #63's own resolution (not forced to shout in English if their actual UI language isn't
+  // English, and not given a second, differently-cased copy of the same English word to maintain).
+  const requiredConfirmationWord =
+    request.kind === "confirm" && request.requireTypedConfirmation
+      ? i18n.resolvedLanguage === "en"
+        ? (t("common.delete") ?? "DELETE").toUpperCase()
+        : (t("common.delete") ?? "DELETE")
+      : null
 
   function close() {
     setRequest(null)
@@ -1558,6 +1606,11 @@ export function DialogHost() {
 
   const onCancel = request.kind === "prompt" ? cancelPrompt : confirmNo
   const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
+  // Blocks both the button and the Enter-key shortcut below until the typed word matches exactly
+  // (case-sensitive — `requiredConfirmationWord` is already the exact-cased target, upper-cased
+  // for `en` or not depending on language, so a lenient case-insensitive compare here would let
+  // "delete" satisfy an "DELETE" requirement and defeat the point of asking for the shoutier form).
+  const confirmationBlocked = requiredConfirmationWord !== null && typedConfirmation !== requiredConfirmationWord
 
   return createPortal(
     <>
@@ -1582,7 +1635,7 @@ export function DialogHost() {
         }}
         onKeyDown={(e) => {
           if (e.key === "Escape") onCancel()
-          if (e.key === "Enter" && request.kind === "confirm") onConfirm()
+          if (e.key === "Enter" && request.kind === "confirm" && !confirmationBlocked) onConfirm()
         }}
       >
         {/* Warning-triangle icon only for `confirm` (a yes/no decision about a — often
@@ -1613,11 +1666,33 @@ export function DialogHost() {
             }}
           />
         )}
+        {requiredConfirmationWord !== null && (
+          <div style={{ textAlign: "left", marginBottom: 12 }}>
+            <label htmlFor="dialog-typed-confirmation" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
+              {t("common.typeToConfirm", { word: requiredConfirmationWord }) ?? undefined}
+            </label>
+            <input
+              id="dialog-typed-confirmation"
+              type="text"
+              className="stdinput"
+              style={{ width: "100%", height: 25, boxSizing: "border-box" }}
+              value={typedConfirmation}
+              autoFocus
+              autoComplete="off"
+              onChange={(e) => setTypedConfirmation(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !confirmationBlocked) onConfirm()
+              }}
+            />
+          </div>
+        )}
         <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
           <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
           <input
             type="button"
+            disabled={confirmationBlocked}
             className={request.kind === "confirm" && request.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
+            style={confirmationBlocked ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
             value={t("common.ok") ?? "OK"}
             onClick={onConfirm}
           />

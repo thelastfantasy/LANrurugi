@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::domain_rules::DomainRule;
+use super::filename::resolve_filename;
 use super::DownloadManager;
 
 /// Re-resolves the effective rate limit (`max_bytes_per_sec`) for `hostname` — invoked on every
@@ -608,99 +609,10 @@ async fn download_one_inner(
     })
 }
 
-/// Determines the real filename for a downloaded resource, in priority order (contracts/
-/// plugin-download-protocol.md's `filename_hint` field docs):
-/// 1. The response's own `Content-Disposition` header (`filename=`/`filename*=`), when present
-///    and parseable — matches legacy `Model::Upload.pm::download_url`'s own real-file-name
-///    behavior (verified against that Perl source).
-/// 2. The plugin-supplied `filename_hint`, when the header is absent or unparseable.
-/// 3. A name derived from the URL's own path, as a last resort.
-fn resolve_filename(
-    response: &reqwest::Response,
-    filename_hint: Option<&str>,
-    url: &url::Url,
-) -> String {
-    if let Some(name) = content_disposition_filename(response) {
-        return sanitize_filename(&name);
-    }
-    if let Some(hint) = filename_hint {
-        return sanitize_filename(hint);
-    }
-    let from_path = url
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|s| !s.is_empty());
-    sanitize_filename(from_path.unwrap_or("download"))
-}
-
-/// Parses a `Content-Disposition` header's `filename=`/`filename*=` parameter. Deliberately
-/// simple (no full RFC 6266 `filename*=UTF-8''...` percent-decoding) since every real corpus
-/// source (Chaika/EHentai-style direct-file-download endpoints) sends the plain `filename=` form —
-/// good enough for this project's actual plugin corpus without pulling in a dedicated MIME/header
-/// parsing crate for a rarely-exercised edge case.
-///
-/// Reads the header's **raw bytes** (`.as_bytes()`), not `HeaderValue::to_str()` — a real,
-/// confirmed-live bug this fixes: `to_str()` only succeeds for visible-ASCII byte sequences and
-/// returns `Err` (silently swallowed by the old code's `.ok()?`) for anything else, so a server
-/// that puts a real UTF-8-encoded non-ASCII filename directly into a plain `filename="..."`
-/// parameter — not RFC-compliant (that should be `filename*=UTF-8''...`, percent-encoded), but
-/// confirmed against a real download source that sends raw UTF-8 bytes in a plain `filename=`
-/// parameter — made this function give up entirely and fall through to the plugin's own
-/// `filename_hint`/URL-derived fallback, discarding a perfectly real filename the server did
-/// provide.
-fn content_disposition_filename(response: &reqwest::Response) -> Option<String> {
-    let bytes = response
-        .headers()
-        .get(reqwest::header::CONTENT_DISPOSITION)?
-        .as_bytes();
-    // UTF-8 first (the real, confirmed-live case above) — Latin-1 as a last-resort fallback for a
-    // server that genuinely sends single-byte-per-character bytes (Latin-1 maps every byte to a
-    // Unicode code point of the identical value, so this conversion can never itself fail).
-    let header = String::from_utf8(bytes.to_vec())
-        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
-    for part in header.split(';') {
-        let part = part.trim();
-        if let Some(name) = part.strip_prefix("filename=") {
-            return Some(name.trim_matches('"').to_string());
-        }
-        if let Some(name) = part.strip_prefix("filename*=") {
-            // `UTF-8''actual-name` — strip the charset/lang prefix, leave percent-encoding as-is
-            // (good enough; a plugin-supplied `filename_hint` or the URL-derived fallback covers
-            // the rare case this doesn't fully resolve to something sane).
-            let name = name.rsplit("''").next().unwrap_or(name);
-            return Some(name.trim_matches('"').to_string());
-        }
-    }
-    None
-}
-
-/// Same reasoning as `upload.rs::sanitize_filename` — never used as a path, so a
-/// server/plugin-supplied name can't traverse outside the staging/archive directory.
-fn sanitize_filename(name: &str) -> String {
-    Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("download")
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
-
-    #[test]
-    fn sanitize_filename_strips_directory_traversal() {
-        assert_eq!(
-            sanitize_filename("../../etc/passwd/archive.zip"),
-            "archive.zip"
-        );
-    }
-
-    #[test]
-    fn sanitize_filename_falls_back_when_empty() {
-        assert_eq!(sanitize_filename(""), "download");
-    }
 
     /// Spins up a real local HTTP server (`axum`, already a workspace dependency — no new mock-
     /// server crate needed) so this test exercises the actual `reqwest` streaming path end to

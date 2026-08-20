@@ -343,7 +343,7 @@ async fn get_tankoubon_full(
     let mut full_data = Vec::with_capacity(page_ids.len());
     for id in &page_ids {
         if let Ok(Some(a)) = state.repos.archives.get(id).await {
-            full_data.push(ArchiveMetadataJson::from(&a));
+            full_data.push(ArchiveMetadataJson::from(a));
         }
     }
     let filtered = page_ids.len();

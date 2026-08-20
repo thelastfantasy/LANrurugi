@@ -13,6 +13,7 @@ import type {
   ApiTokenCreateResponse,
   ArchiveFilesResponse,
   ArchiveMetadata,
+  BatchDeleteArchivesResponse,
   BookmarkLinkResponse,
   CategoryMetadata,
   ComparisonResult,
@@ -452,6 +453,21 @@ export function useDeleteArchive() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["archives"] }),
+  })
+}
+
+/** `DELETE /archives` (issue #63) — one request for the Batch page's own "delete archives"
+ * operation instead of firing `DELETE /archives/{id}` once per selected id in a plain client-side
+ * loop (no atomicity, no way to tell which ids failed without diffing the library before/after).
+ * Session-only on the backend (`route_policy.csv` denies every token role) — a Token-authenticated
+ * caller gets a 403 if it ever reaches this, though the Batch page itself is only ever reachable
+ * from an authenticated browser session in the first place. */
+export function useBatchDeleteArchives() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      sendJson<BatchDeleteArchivesResponse>("DELETE", "/archives", { ids }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["archives"] }),
   })
 }

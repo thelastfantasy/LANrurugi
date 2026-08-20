@@ -31,6 +31,7 @@ export function ResultInfoAndPager({
   page,
   pageCount,
   onPage,
+  buildHref,
 }: {
   rangeStart: number
   rangeEnd: number
@@ -39,6 +40,12 @@ export function ResultInfoAndPager({
   page: number
   pageCount: number
   onPage: (page: number) => void
+  /** Builds a real, page-specific URL (the app's own `?p=N&...` query string, other params
+   * preserved) for a given 0-based page — so each pager link's `href` is something meaningful to
+   * right-click-copy/middle-click-open/hover-preview, not the placeholder `href="#"` this
+   * previously used (which right-click-copied as just the current page's own URL with a bare
+   * trailing `#`, carrying no page number at all). */
+  buildHref: (page: number) => string
 }) {
   const { t } = useTranslation()
   return (
@@ -60,12 +67,16 @@ export function ResultInfoAndPager({
           ) : (
             <a
               key={p}
-              href="#"
+              href={buildHref(p)}
               className={`paginate_button${p === page ? " current" : ""}`}
-              style={{ margin: "4px 0" }}
+              style={{ margin: "4px 0", ...(p === page ? { cursor: "default" } : undefined) }}
+              // The current page's own link stays a real, right-click-copyable/middle-click-
+              // openable `href` (its own URL) — only the plain-left-click "navigate" behavior is
+              // suppressed, since re-applying the page you're already on is a no-op that would
+              // otherwise still flash the library through a full re-fetch for nothing.
               onClick={(e) => {
                 e.preventDefault()
-                onPage(p)
+                if (p !== page) onPage(p)
               }}
             >
               {p + 1}

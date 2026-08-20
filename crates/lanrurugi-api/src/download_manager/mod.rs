@@ -6,6 +6,7 @@
 
 pub mod bundle;
 pub mod domain_rules;
+pub mod filename;
 pub mod ingest;
 pub mod live_rate;
 pub mod rate_limit;

@@ -1685,7 +1685,7 @@ pub(crate) async fn start_download(
                 }
             };
 
-            let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result.clone()) {
+            let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result) {
                 Ok(p) => p,
                 Err(e) => {
                     let queue_error =

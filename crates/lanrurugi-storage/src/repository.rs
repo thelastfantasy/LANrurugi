@@ -131,26 +131,28 @@ impl ArchiveRepository {
                 source: e,
             })?;
 
-        let fields: Vec<(&str, String)> = vec![
-            ("name", archive.name.clone()),
-            ("title", archive.title.clone()),
-            ("file", archive.file.clone()),
-            ("tags", archive.tags.clone()),
-            ("summary", archive.summary.clone()),
-            ("arcsize", archive.arcsize.to_string()),
-            ("pagecount", archive.pagecount.to_string()),
-            (
-                "isnew",
-                if archive.isnew { "true" } else { "false" }.to_string(),
-            ),
-            ("progress", archive.lastreadpage.to_string()),
-            ("lastreadtime", archive.lastreadtime.to_string()),
-            ("toc", toc_json),
-            ("stamps", stamps_json),
-            ("corrupted_pages", corrupted_pages_json),
+        // `archive: &Archive` already outlives this whole call, so the text fields below don't
+        // need deep-copying just to satisfy `hset_multiple`'s single-`V`-type requirement — `Cow`
+        // lets them stay borrowed (`Cow::Borrowed`) while the fields that were already going
+        // through `.to_string()` regardless (numbers/bools/the pre-serialized JSON blobs above)
+        // keep doing the same allocation they always did (`Cow::Owned`).
+        let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
+            ("name", archive.name.as_str().into()),
+            ("title", archive.title.as_str().into()),
+            ("file", archive.file.as_str().into()),
+            ("tags", archive.tags.as_str().into()),
+            ("summary", archive.summary.as_str().into()),
+            ("arcsize", archive.arcsize.to_string().into()),
+            ("pagecount", archive.pagecount.to_string().into()),
+            ("isnew", if archive.isnew { "true" } else { "false" }.into()),
+            ("progress", archive.lastreadpage.to_string().into()),
+            ("lastreadtime", archive.lastreadtime.to_string().into()),
+            ("toc", toc_json.into()),
+            ("stamps", stamps_json.into()),
+            ("corrupted_pages", corrupted_pages_json.into()),
             (
                 "has_patch",
-                if archive.has_patch { "true" } else { "false" }.to_string(),
+                if archive.has_patch { "true" } else { "false" }.into(),
             ),
         ];
         let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
@@ -330,14 +332,17 @@ impl CategoryRepository {
                 field: "archives",
                 source: e,
             })?;
-        let fields: Vec<(&str, String)> = vec![
-            ("name", category.name.clone()),
-            ("search", category.search.clone().unwrap_or_default()),
-            ("archives", archives_json),
+        // Same `Cow` reasoning as `ArchiveRepository::save` above — `category: &Category` already
+        // outlives this call, so the text fields don't need deep-copying just to unify with the
+        // fields that were already allocating (`archives_json`/the `pinned` bool-to-string).
+        let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
+            ("name", category.name.as_str().into()),
             (
-                "pinned",
-                if category.pinned { "1" } else { "0" }.to_string(),
+                "search",
+                category.search.as_deref().unwrap_or_default().into(),
             ),
+            ("archives", archives_json.into()),
+            ("pinned", if category.pinned { "1" } else { "0" }.into()),
         ];
         let _: () = conn.hset_multiple(category.catid.as_str(), &fields).await?;
         Ok(())

@@ -36,6 +36,7 @@ zip.workspace = true
 governor.workspace = true
 futures-util.workspace = true
 url.workspace = true
+percent-encoding.workspace = true
 sysinfo.workspace = true
 rayon.workspace = true
 regex.workspace = true

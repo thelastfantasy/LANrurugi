@@ -964,3 +964,15 @@ div.id4 a:hover {
   --tag-cloud-level-10: #d83b66;
 }
 
+/* Additive — no legacy equivalent. See g.css's own identical block for the full rationale (legacy's
+   own `.paginate_button.current` background reads as nearly unhighlighted against the page/button
+   backgrounds it sits between). Overrides the background with a solid fill in this theme's own
+   accent hue — same value as `#thumbs_container .id1.msm-selected`'s outline above — winning the
+   cascade by appearing later in the file rather than editing legacy's own declaration. White text
+   for contrast against the now-orange fill. */
+.paginate_button.current {
+  background: #E9A53A;
+  color: #FFFFFF;
+  font-weight: bold;
+}
+

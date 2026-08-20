@@ -259,6 +259,26 @@ input[type="checkbox"]:disabled {
   display: none;
 }
 
+/* A slim scrollbar (not hidden — `Tooltip.tsx`'s own height-capped bubble needs the user to
+ * actually see/grab it, unlike `.hide-scrollbar` above) for content that scrolls inside a small
+ * floating element, where the browser's default ~15-17px scrollbar track reads oversized and
+ * clutters a compact popup. Same "can't be done inline" reasoning as `.hide-scrollbar` —
+ * `scrollbar-width` isn't a valid React inline-style property and `::-webkit-scrollbar` is a
+ * pseudo-element inline styles can never reach at all. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.5);
+  border-radius: 3px;
+}
+
 /* Neither legacy's own CSS nor this port's copied theme files set `vertical-align` on
  * `.favtag-btn` — it defaults to `baseline`, so adjacent buttons whose *content* has different
  * glyph metrics (an emoji + CJK text vs. an emoji + Latin text vs. a run of star-rating emoji with

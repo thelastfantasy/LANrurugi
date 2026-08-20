@@ -142,9 +142,41 @@ impl From<&Archive> for ArchiveMetadataJson {
     }
 }
 
+/// By-value counterpart of the `&Archive` conversion above — for call sites where the caller's
+/// own `Archive` isn't needed afterward (e.g. `list_archives` mapping a whole `Vec<Archive>` it
+/// never reads again), this moves each field instead of deep-cloning it.
+impl From<Archive> for ArchiveMetadataJson {
+    fn from(a: Archive) -> Self {
+        Self {
+            arcid: a.id.to_string(),
+            extension: a.extension(),
+            isnew: a.isnew,
+            progress: a.lastreadpage,
+            pagecount: a.pagecount,
+            lastreadtime: a.lastreadtime,
+            size: a.arcsize,
+            summary: (!a.summary.is_empty()).then_some(a.summary),
+            title: a.title,
+            filename: a.name,
+            tags: a.tags,
+            toc: a
+                .toc
+                .into_iter()
+                .map(|t| TocJson {
+                    name: t.name,
+                    page: t.page,
+                })
+                .collect(),
+        }
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/archives", get(list_archives))
+        .route(
+            "/archives",
+            get(list_archives).delete(batch_delete_archives),
+        )
         .route("/archives/untagged", get(untagged_archives))
         .route(
             "/archives/{id}",
@@ -186,10 +218,38 @@ pub fn router() -> Router<AppState> {
         .route("/regen_thumbs", axum::routing::post(regen_thumbs))
 }
 
+/// `date_added:<unix_seconds>` lives inside the comma-separated `tags` string, not as its own
+/// Redis hash field or `Archive` struct field — same extraction `lanrurugi_search::engine` already
+/// does inline at its own two call sites (`newonly` mode's day-window check and `sortby=date_added`
+/// itself), duplicated here rather than shared since neither call site takes an `&Archive` (both
+/// work off raw Redis hash fields fetched separately). Missing/unparseable → `None`, sorted last
+/// (see `list_archives`) rather than defaulting to `0`/`u64::MAX`, which would silently and
+/// incorrectly claim to be either the oldest or newest archive in the library.
+fn parse_date_added(tags: &str) -> Option<u64> {
+    tags.split(',').find_map(|t| {
+        t.trim()
+            .strip_prefix("date_added:")
+            .and_then(|v| v.parse().ok())
+    })
+}
+
 async fn list_archives(State(state): State<AppState>) -> Response {
     match state.repos.archives.list_all().await {
-        Ok(archives) => {
-            let json: Vec<ArchiveMetadataJson> = archives.iter().map(Into::into).collect();
+        Ok(mut archives) => {
+            // Ingestion order, newest first — same `sortby=date_added&order=desc` semantics the
+            // Library homepage's own default search already uses (`lanrurugi_search::engine`'s
+            // `sort_ids`), including that function's own explicit rule that an archive missing
+            // `date_added` entirely stays pinned at the very back regardless of sort direction
+            // (that engine keeps unkeyed ids in a side list appended after reversing, specifically
+            // to avoid flipping them to the *front* under a descending sort — see that function's
+            // own comment). `Reverse(Option<u64>)` reproduces the same result from one `sort_by_key`
+            // call: `None` sorts as greater than any `Some(_)` once reversed, so an archive with no
+            // parseable `date_added` always lands last, and archives that do have one sort newest
+            // first — this is the one page in the app that reads `GET /archives` directly rather
+            // than going through `/search`'s own `sortby` param (issue #63's own follow-on), so it
+            // has to reproduce that ordering itself rather than getting it for free.
+            archives.sort_by_key(|a| std::cmp::Reverse(parse_date_added(&a.tags)));
+            let json: Vec<ArchiveMetadataJson> = archives.into_iter().map(Into::into).collect();
             axum::Json(json).into_response()
         }
         Err(e) => error(
@@ -268,23 +328,27 @@ async fn get_archive_deprecated(
     get_archive_metadata(state, path).await
 }
 
-async fn delete_archive(
-    State(state): State<AppState>,
-    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
-    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
-) -> Response {
-    let archive = match state.repos.archives.get(&id).await {
+/// Outcome of deleting one archive's DB record + best-effort on-disk/index/cache cleanup — shared
+/// by the single-archive [`delete_archive`] handler and [`batch_delete_archives`]'s per-id loop so
+/// the two never drift on what "delete an archive" actually does (file removal, search-index
+/// cleanup, recommend-cache eviction, stale download-queue entries, thumbnails, sidecar patch).
+enum DeleteOneOutcome {
+    NotFound,
+    Deleted { filename: String },
+    Error(String),
+}
+
+async fn delete_one_archive(
+    state: &AppState,
+    id: &lanrurugi_core::ids::ArchiveId,
+    auth: Option<&crate::auth_context::AuthContext>,
+) -> DeleteOneOutcome {
+    let archive = match state.repos.archives.get(id).await {
         Ok(Some(a)) => a,
-        Ok(None) => return not_found("delete_archive", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "delete_archive",
-                e.to_string(),
-            )
-        }
+        Ok(None) => return DeleteOneOutcome::NotFound,
+        Err(e) => return DeleteOneOutcome::Error(e.to_string()),
     };
-    match state.repos.archives.delete(&id).await {
+    match state.repos.archives.delete(id).await {
         Ok(()) => {
             // The only success-path log line this handler had before this was added — every other
             // outcome below is a best-effort cleanup failure (`warn!`) or silently discarded
@@ -294,8 +358,8 @@ async fn delete_archive(
             // DB record).
             tracing::info!(%id, filename = %archive.name, "deleted archive");
             crate::activity::record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
+                state,
+                auth,
                 lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
                 lanrurugi_storage::activity::ActivityTarget {
                     id: Some(id.to_string()),
@@ -312,7 +376,7 @@ async fn delete_archive(
             // to eventually reconcile.
             if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
                 &state.redis.search,
-                &id,
+                id,
                 &archive.title,
                 &archive.tags,
             )
@@ -389,20 +453,109 @@ async fn delete_archive(
             }
             let pages_dir = state.library.thumb_dir.join(shard).join(id.as_str());
             let _ = tokio::fs::remove_dir_all(&pages_dir).await;
-            axum::Json(json!({
-                "operation": "delete_archive",
-                "id": id,
-                "filename": archive.name,
-                "success": 1,
-            }))
-            .into_response()
+            DeleteOneOutcome::Deleted {
+                filename: archive.name,
+            }
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_archive",
-            e.to_string(),
-        ),
+        Err(e) => DeleteOneOutcome::Error(e.to_string()),
     }
+}
+
+async fn delete_archive(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+) -> Response {
+    match delete_one_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
+        DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
+        DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
+            "operation": "delete_archive",
+            "id": id,
+            "filename": filename,
+            "success": 1,
+        }))
+        .into_response(),
+        DeleteOneOutcome::Error(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_archive", e),
+    }
+}
+
+/// `DELETE /archives` (issue #63), body `{ids: [...]}` — same "plural resource, `DELETE` with a
+/// JSON body carrying which ones" shape `activity.rs::bulk_delete_activity` (`DELETE /activity`)
+/// already established in this codebase, not a `POST .../batch-delete` action-style path; `DELETE`
+/// *can* carry a request body per RFC 9110 (silently dropped by some older proxies/clients in
+/// practice, but Axum and this project's own frontend both handle it fine, and precedent already
+/// exists here). The Batch page's own "delete archives" operation previously fired
+/// `DELETE /archives/{id}` once per selected archive from the frontend as a plain sequential loop
+/// (no atomicity, no single audit point, and — since each request only ever reported its own
+/// pass/fail — no way for the caller to know *which* ids failed without diffing the library
+/// before/after). This does the same per-id work (`delete_one_archive`, identical cleanup to the
+/// single-delete endpoint) server-side in one request, and reports a per-id result list so the
+/// frontend can show exactly what happened rather than assuming full success.
+///
+/// Session-only (`route_policy.csv` denies every token role and `anonymous`) — deliberately
+/// stricter than every other archive-mutating endpoint in this file, all of which a Token (Admin
+/// or Guest) can call. A single wrong/leaked API token being able to wipe an arbitrary-sized slice
+/// of the library in one request is a materially larger blast radius than any one of the
+/// single-target endpoints token access already permits, and this project has no legitimate
+/// automation use case for bulk deletion the way it does for e.g. scripted uploads or metadata
+/// edits — so the extra restriction has no real workflow it breaks.
+async fn batch_delete_archives(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    axum::Json(body): axum::Json<BatchDeleteRequest>,
+) -> Response {
+    let auth = auth.as_ref().map(|e| &e.0);
+    let mut results = Vec::with_capacity(body.ids.len());
+    let mut deleted_count = 0u32;
+    for id in &body.ids {
+        let outcome = delete_one_archive(&state, id, auth).await;
+        results.push(match outcome {
+            DeleteOneOutcome::NotFound => BatchDeleteResult {
+                id: id.to_string(),
+                success: false,
+                filename: None,
+                error: Some(format!("{id} does not exist.")),
+            },
+            DeleteOneOutcome::Deleted { filename } => {
+                deleted_count += 1;
+                BatchDeleteResult {
+                    id: id.to_string(),
+                    success: true,
+                    filename: Some(filename),
+                    error: None,
+                }
+            }
+            DeleteOneOutcome::Error(e) => BatchDeleteResult {
+                id: id.to_string(),
+                success: false,
+                filename: None,
+                error: Some(e),
+            },
+        });
+    }
+    axum::Json(json!({
+        "operation": "batch_delete_archives",
+        "success": 1,
+        "deleted": deleted_count,
+        "total": body.ids.len(),
+        "results": results,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchDeleteRequest {
+    ids: Vec<lanrurugi_core::ids::ArchiveId>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchDeleteResult {
+    id: String,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 async fn get_archive_categories(
@@ -1744,11 +1897,13 @@ async fn fetch_page(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+        let content_type = image_content_type(&raw);
+        let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
-            content_type: image_content_type(&raw),
-            bytes: bytes::Bytes::from(raw.clone()),
+            content_type,
+            bytes: bytes::Bytes::from(raw),
             resized: false,
-            orig_size: raw.len() as u64,
+            orig_size,
             orig_width: 0,
             orig_height: 0,
         });
@@ -1822,11 +1977,12 @@ async fn fetch_page(
     // `optimize` is the per-request contract (set by `/files`'s own generated URLs); without it,
     // serve the original bytes. A renderable page with resize disabled also passes through.
     if !optimize || (!enable_resize && renderable) {
+        let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
             content_type,
-            bytes: bytes::Bytes::from(raw.clone()),
+            bytes: bytes::Bytes::from(raw),
             resized: false,
-            orig_size: raw.len() as u64,
+            orig_size,
             orig_width: 0,
             orig_height: 0,
         });
@@ -1835,11 +1991,12 @@ async fn fetch_page(
     // Byte-size check first (no decode needed) — under-threshold *renderable* pages pass through
     // untouched; a forced conversion skips this gate entirely.
     if !force_convert && (raw.len() / 1024) as i64 <= threshold {
+        let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
             content_type,
-            bytes: bytes::Bytes::from(raw.clone()),
+            bytes: bytes::Bytes::from(raw),
             resized: false,
-            orig_size: raw.len() as u64,
+            orig_size,
             orig_width: 0,
             orig_height: 0,
         });
@@ -1867,6 +2024,13 @@ async fn fetch_page(
         });
     }
 
+    // `raw` is still needed after this call regardless of which branch runs below (`Ok(Some(_))`
+    // reads its length; `Ok(None)` serves it back as-is), while `convert_to_webp`/
+    // `resize_if_over_threshold` both take their input by value (they `move` it into
+    // `run_blocking`) — so the source bytes have to be cloned into the conversion call either
+    // way. `orig_size` is captured up front so the `Ok(None)` branch can move the original `raw`
+    // out directly instead of cloning it a second time.
+    let orig_size = raw.len() as u64;
     let converted = if force_convert {
         lanrurugi_scanner::resize::convert_to_webp(raw.clone(), quality as u8)
             .await
@@ -1890,19 +2054,22 @@ async fn fetch_page(
                 content_type: "image/webp",
                 bytes: bytes::Bytes::from(resized),
                 resized: true,
-                orig_size: raw.len() as u64,
+                orig_size,
                 orig_width,
                 orig_height,
             })
         }
-        Ok(None) => Ok(FetchedPage {
-            content_type: image_content_type(&raw),
-            bytes: bytes::Bytes::from(raw.clone()),
-            resized: false,
-            orig_size: raw.len() as u64,
-            orig_width: 0,
-            orig_height: 0,
-        }),
+        Ok(None) => {
+            let content_type = image_content_type(&raw);
+            Ok(FetchedPage {
+                content_type,
+                bytes: bytes::Bytes::from(raw),
+                resized: false,
+                orig_size,
+                orig_width: 0,
+                orig_height: 0,
+            })
+        }
         Err(e) => Err(e.to_string()),
     }
 }

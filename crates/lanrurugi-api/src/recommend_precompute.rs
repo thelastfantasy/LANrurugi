@@ -215,16 +215,18 @@ pub async fn precompute_one(state: &AppState, archive_id: &str, title: &str) {
 
     let self_id = archive_id.to_string();
     let self_vector = vector.clone();
-    let others: Vec<(String, Vec<f32>)> = all_vectors
-        .iter()
-        .filter(|(id, _, _)| id != &self_id)
-        .map(|(id, _, v)| (id.clone(), v.clone()))
-        .collect();
+    // `Arc`-share the whole cached vector set into the blocking task instead of deep-cloning a
+    // filtered `Vec<(String, Vec<f32>)>` copy of it — every entry's own `Vec<f32>` embedding can
+    // be sizeable, and this runs on every archive ingest/title change, not just the one-off full
+    // rebuild below (which already uses this same `Arc` pattern for the same reason).
+    let all_vectors = Arc::new(all_vectors);
 
+    let self_id_for_blocking = self_id.clone();
     let (own_top_n, backfill_targets) = tokio::task::spawn_blocking(move || {
-        let mut scored: Vec<(String, f32)> = others
+        let mut scored: Vec<(String, f32)> = all_vectors
             .iter()
-            .map(|(id, v)| (id.clone(), cosine_similarity(&self_vector, v)))
+            .filter(|(id, _, _)| id != &self_id_for_blocking)
+            .map(|(id, _, v)| (id.clone(), cosine_similarity(&self_vector, v)))
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 

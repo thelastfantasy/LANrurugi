@@ -317,6 +317,38 @@ async fn token_matches(
         }
         return Ok(ids);
     }
+    if let Some((op, value)) = parse_rating_filter(&token.tag) {
+        let mut ids = HashSet::new();
+        for id in scope {
+            if id.starts_with("TANK") {
+                continue;
+            }
+            // `rating:` lives inside the archive's comma-separated `tags` string, same as
+            // `date_added:` above — not a dedicated Redis hash field the way `pages:`/`read:`'s
+            // `pagecount`/`progress` are, so this scans the tags string rather than a direct
+            // `HGET`. An archive with no `rating:` tag at all never matches any comparison
+            // (`None` from `find_map` short-circuits the whole `is_some_and` to `false`) rather
+            // than being treated as `rating:0` — an unrated archive isn't the same claim as one
+            // explicitly rated zero stars, and `rating:>=0` matching every unrated archive in the
+            // library would be a surprising, almost certainly unwanted result for that query.
+            let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+            let matches = tags
+                .split(',')
+                .find_map(|t| t.trim().strip_prefix("rating:")?.trim().parse::<f64>().ok())
+                .is_some_and(|rating| match op {
+                    "=" => rating == value,
+                    ">" => rating > value,
+                    ">=" => rating >= value,
+                    "<" => rating < value,
+                    "<=" => rating <= value,
+                    _ => false,
+                });
+            if matches {
+                ids.insert(id.clone());
+            }
+        }
+        return Ok(ids);
+    }
 
     // `date_added` (once its `_`/`%` glob-escaping is undone — see `parse_date_range`'s own docs)
     // only ever supports the `YYYY-MM-DD` day-range form above; a bare-timestamp write like
@@ -436,6 +468,36 @@ fn parse_numeric_filter(tag: &str) -> Option<(&'static str, &'static str, u32)> 
         }
     }
     rest.parse().ok().map(|n| (col, "=", n))
+}
+
+/// `rating:>=1`/`rating:<4`/`rating:=5`-style comparison filters — additive on top of the plain
+/// `rating:5` exact-tag search the generic tag-index lookup already handles (`token_matches`'s own
+/// fallthrough at the bottom of this function's call site). Deliberately requires an explicit
+/// operator (`>=`/`<=`/`>`/`<`/`=`) and returns `None` for a bare `rating:5` with no operator at
+/// all — unlike `parse_numeric_filter` above (whose `pages:100` bare-number form is already the
+/// *only* way to filter by page count, since there's no separate `pages:` tag-index to fall back
+/// to), `rating:5` already has a working, separately-tested exact-match path via the tag index
+/// (`INDEX_rating:5`), and this function claiming that same bare form would bypass it for a
+/// float-comparison path that produces an identical result the slower way (a full tags-string scan
+/// instead of an index lookup) for zero behavior change — no reason to duplicate work that already
+/// happens correctly. `f64`, not `u32` like `parse_numeric_filter` — `rating:` values are decimal
+/// (`rating:4.5`, one-tenth precision; see `apps/frontend/src/lib/utils/rating.ts`'s own docs on
+/// the storage format), so a `rating:>=4.5` filter has to compare against a real fraction, not
+/// truncate/reject it the way parsing straight into a `u32` would.
+fn parse_rating_filter(tag: &str) -> Option<(&'static str, f64)> {
+    let rest = tag.strip_prefix("rating:")?;
+    for (op_str, op) in [
+        (">=", ">="),
+        ("<=", "<="),
+        (">", ">"),
+        ("<", "<"),
+        ("=", "="),
+    ] {
+        if let Some(num) = rest.strip_prefix(op_str) {
+            return num.parse().ok().map(|n| (op, n));
+        }
+    }
+    None
 }
 
 /// Minimal glob matcher supporting `*` (any run) and `?` (single char) — the two wildcard forms
@@ -978,5 +1040,40 @@ mod tests {
             .zrem(TITLES_KEY, "book c\0".to_string() + &id)
             .await
             .unwrap();
+    }
+
+    // `parse_rating_filter` is a pure function — no Redis needed, unlike the `token_matches`-level
+    // integration tests above.
+    #[test]
+    fn parse_rating_filter_recognizes_every_operator() {
+        assert_eq!(parse_rating_filter("rating:>=1"), Some((">=", 1.0)));
+        assert_eq!(parse_rating_filter("rating:<=4"), Some(("<=", 4.0)));
+        assert_eq!(parse_rating_filter("rating:>3"), Some((">", 3.0)));
+        assert_eq!(parse_rating_filter("rating:<2"), Some(("<", 2.0)));
+        assert_eq!(parse_rating_filter("rating:=5"), Some(("=", 5.0)));
+    }
+
+    #[test]
+    fn parse_rating_filter_supports_decimal_precision() {
+        assert_eq!(parse_rating_filter("rating:>=4.5"), Some((">=", 4.5)));
+    }
+
+    // A bare `rating:5` (no operator) is deliberately NOT claimed by this function — it falls
+    // through to the existing exact-match tag-index lookup instead (see this function's own docs
+    // on why duplicating that path would be pointless).
+    #[test]
+    fn parse_rating_filter_ignores_bare_value_with_no_operator() {
+        assert_eq!(parse_rating_filter("rating:5"), None);
+    }
+
+    #[test]
+    fn parse_rating_filter_ignores_other_namespaces() {
+        assert_eq!(parse_rating_filter("pages:>=5"), None);
+        assert_eq!(parse_rating_filter("artist:jane"), None);
+    }
+
+    #[test]
+    fn parse_rating_filter_rejects_unparseable_numbers() {
+        assert_eq!(parse_rating_filter("rating:>=abc"), None);
     }
 }
