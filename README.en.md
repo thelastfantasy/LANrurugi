@@ -196,6 +196,9 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   00:00–24:00 in that timezone; legacy's own `date_added` is a bare Unix-seconds tag with no
   concept of "by day" search at all. Tag display and its search link now consistently show/resolve
   as `yyyy-mm-dd` in that same timezone.
+- **A `rating` comparison search syntax** (`rating>=1`, `rating<4`, `rating=5` — the last
+  equivalent to legacy's plain `rating:5`), supporting fractional values; legacy only ever
+  supported an exact-match `rating:N` tag.
 - **A "Mark as Read"/"Mark as Unread" context-menu item on Library grid cards**, setting reading
   progress directly to the last page or 0 — legacy has no way to manually toggle read status
   outside of actually paging through the archive.
@@ -203,6 +206,10 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
   Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
   likely belong to the same series (local embedding model only, no LLM key required).
+- **Bulk delete on the Batch Operations page**, backed by a dedicated `DELETE /api/archives`
+  endpoint restricted to real Session logins (API tokens are rejected outright). Requires typing
+  "delete"/`DELETE` to confirm; partial failures surface a toast listing each failed archive's own
+  error reason.
 
 ### Authentication
 
