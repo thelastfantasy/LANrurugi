@@ -9,6 +9,7 @@
   "(in KBs.) Maximum size an image can reach before being resized.": "（以KB为单位。）图像在调整大小之前可以达到的最大大小。",
   "jobs.noErrorMessageCaptured": "（未捕获错误信息）",
   "jobs.noResult": "（无结果）",
+  "jobs.resultTooLargeToDisplay": "（结果内容过大，未保留——已超出服务器单条任务结果的大小上限）",
   "upload.patchedPagesNotShown": "（不显示已 patch 的页面）",
   "reader.rightclickForQuickPresets": "（右键点击可快速选择预设项）",
   "edit.separatedByHyphensIE": "（用半角逗号分隔，例如：标签1，标签2）",

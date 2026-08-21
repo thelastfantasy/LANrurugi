@@ -66,6 +66,18 @@ pub struct JobStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_matched_pattern: Option<String>,
     pub result: Option<serde_json::Value>,
+    /// `true` only when `finish()` was handed a `result` whose serialized size exceeded
+    /// `MAX_JOB_RESULT_BYTES` — `result` itself is `None` in that case (the oversized value is
+    /// dropped, not truncated/partially kept, since a partial JSON value would need per-shape
+    /// truncation logic no generic job-result contract can express safely). `#[serde(default)]`
+    /// so an older client deserializing a response from a build that didn't have this field yet
+    /// (or vice versa) doesn't choke on its absence. Absent (`false`) is the overwhelmingly common
+    /// case for every job type today, so this isn't `skip_serializing_if`-hidden the way the
+    /// optional download-progress fields above are — those are "doesn't apply to this job type" by
+    /// design, this is "something unusual happened", worth always being present enough that a
+    /// caller checking for it doesn't need `?? false`.
+    #[serde(default)]
+    pub result_truncated: bool,
     pub error: Option<String>,
 }
 
@@ -81,6 +93,7 @@ impl JobStatus {
             rate_limit_bytes_per_sec: None,
             rate_limit_matched_pattern: None,
             result: None,
+            result_truncated: false,
             error: None,
         }
     }
@@ -104,6 +117,17 @@ pub enum ClearOutcome {
 /// plugin runs, URL downloads) — even frequent manual use wouldn't realistically approach this
 /// within one uptime. Tuned as a constant, not a user-facing setting (spec Assumptions).
 const MAX_TRACKED_JOBS: usize = 500;
+
+/// Upper bound (serialized JSON bytes) on a single job's own `result` field (issue #67):
+/// `MAX_TRACKED_JOBS` only ever constrained the *count* of tracked jobs, not how large any one
+/// job's own `result: Option<serde_json::Value>` could grow — a job whose caller hands `finish()`
+/// a genuinely large payload (e.g. a full duplicate-scan group listing, rather than just a count)
+/// could otherwise sit resident in memory for as long as that job stays tracked, times up to
+/// `MAX_TRACKED_JOBS` of them. 1 MiB is generous for what every current caller actually reports
+/// (counts, IDs, short summaries — `duplicates.rs`'s own scan job deliberately reports only
+/// `groups_found`, not the groups themselves, precisely to stay well under this) while still
+/// catching a future caller that accidentally dumps an unbounded collection in here.
+const MAX_JOB_RESULT_BYTES: usize = 1024 * 1024;
 
 /// In-process job registry. One instance is shared (via `Arc`) across the Axum app state and
 /// every background task that reports progress.
@@ -206,10 +230,30 @@ impl JobRegistry {
     }
 
     pub async fn finish(&self, id: &str, result: serde_json::Value) {
+        // `serde_json::to_vec` (not `.to_string().len()`) to measure the actual serialized byte
+        // size a JSON string produces, not a UTF-8-oblivious approximation — matters for a result
+        // containing non-ASCII archive titles/tags, which are byte-cheaper as UTF-8 but not 1:1
+        // with `.to_string()`'s own char count either way; this is the same "count what actually
+        // gets stored/transmitted" measurement whichever direction it errs, just correct instead
+        // of approximate.
+        let size = serde_json::to_vec(&result).map(|bytes| bytes.len());
+        let (result, result_truncated) = match size {
+            Ok(n) if n > MAX_JOB_RESULT_BYTES => {
+                tracing::warn!(
+                    job_id = id,
+                    size_bytes = n,
+                    limit_bytes = MAX_JOB_RESULT_BYTES,
+                    "job result exceeds MAX_JOB_RESULT_BYTES, dropping it"
+                );
+                (None, true)
+            }
+            _ => (Some(result), false),
+        };
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Finished;
             job.progress = 1.0;
-            job.result = Some(result);
+            job.result = result;
+            job.result_truncated = result_truncated;
         }
     }
 
@@ -537,5 +581,55 @@ mod tests {
             MAX_TRACKED_JOBS + 1,
             "registry temporarily exceeds the cap rather than dropping an in-flight job"
         );
+    }
+
+    #[tokio::test]
+    async fn finish_keeps_a_small_result_intact() {
+        let reg = JobRegistry::new();
+        let id = reg.create("find_duplicates").await;
+        reg.finish(&id, json!({ "groups_found": 3 })).await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.result, Some(json!({ "groups_found": 3 })));
+        assert!(!job.result_truncated);
+    }
+
+    #[tokio::test]
+    async fn finish_drops_a_result_over_the_size_cap_and_flags_it_truncated() {
+        let reg = JobRegistry::new();
+        let id = reg.create("verify").await;
+        // One giant string comfortably over MAX_JOB_RESULT_BYTES once JSON-serialized (quotes +
+        // escaping overhead aside, this alone already exceeds it).
+        let oversized = "x".repeat(MAX_JOB_RESULT_BYTES + 1);
+        reg.finish(&id, json!({ "suspect_groups": oversized }))
+            .await;
+
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(
+            job.result, None,
+            "oversized result must be dropped, not partially kept"
+        );
+        assert!(job.result_truncated);
+        assert_eq!(
+            job.state,
+            JobState::Finished,
+            "the job itself still finished successfully"
+        );
+    }
+
+    #[test]
+    fn result_truncated_defaults_to_false_when_absent_from_json() {
+        // A response from a build predating this field (or a hand-constructed JSON blob in a
+        // test/fixture) must still deserialize — `#[serde(default)]` is what makes that safe.
+        let value = json!({
+            "id": "abc",
+            "name": "backup",
+            "state": "finished",
+            "progress": 1.0,
+            "result": null,
+            "error": null,
+        });
+        let job: JobStatus = serde_json::from_value(value).unwrap();
+        assert!(!job.result_truncated);
     }
 }

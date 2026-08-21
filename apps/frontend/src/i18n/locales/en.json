@@ -9,6 +9,7 @@
   "(in KBs.) Maximum size an image can reach before being resized.": "(in KBs.) Maximum size an image can reach before being resized.",
   "jobs.noErrorMessageCaptured": "(no error message captured)",
   "jobs.noResult": "(no result)",
+  "jobs.resultTooLargeToDisplay": "(result too large — exceeded the server's per-job result size limit and was not retained)",
   "upload.patchedPagesNotShown": "(patched pages not shown)",
   "reader.rightclickForQuickPresets": "(right-click for quick presets)",
   "edit.separatedByHyphensIE": "(separated by hyphens, i.e : tag1, tag2)",

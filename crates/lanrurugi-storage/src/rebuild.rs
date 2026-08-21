@@ -92,6 +92,38 @@ pub async fn rekey_all(
     Ok(summary)
 }
 
+/// Issue #67: re-derives the `archive_id -> [category_id]`/`archive_id -> [tankoubon_id]` reverse
+/// indexes (`keys::archive_categories_key`/`archive_tankoubons_key`) from every Category/
+/// Grouping's own forward `archives` list. Needed because the reverse index didn't always exist: a
+/// Category/Grouping saved before this feature shipped has never had its membership written into
+/// the index at all, and nothing else in this codebase ever touches every Category/Grouping
+/// unconditionally except a full rebuild — this is that rebuild's hook for it.
+///
+/// Deliberately calls each repository's `reindex_archive_membership` (an unconditional `SADD`, no
+/// diffing) rather than just re-`save`-ing every entry unchanged: `save`'s own diff logic compares
+/// the *new* archives list being written against `self.get()`'s *current* stored state — for a
+/// category that's never been modified since before this index existed, those are identical (it's
+/// the same stored data being "saved" right back), so every diff comes up empty and no `SADD` ever
+/// happens. That's exactly the case this backfill exists to fix, so it can't route through `save`'s
+/// diff at all. Safe to run repeatedly (each `SADD` on an already-indexed archive is a harmless
+/// no-op) and cheap on an index that's already fully backfilled. Wired into
+/// `POST /database/rebuild-index`/`lanrurugi rebuild-index`, run unconditionally alongside the
+/// archive re-keying pass (not gated behind "did anything actually get rekeyed") so a fresh deploy
+/// of this feature is fully backfilled on the very next rebuild regardless of whether any archive
+/// ID happened to change.
+pub async fn backfill_reverse_indexes(
+    categories: &CategoryRepository,
+    groupings: &GroupingRepository,
+) -> Result<(), RepositoryError> {
+    for category in categories.list_all().await? {
+        categories.reindex_archive_membership(&category).await?;
+    }
+    for grouping in groupings.list_all().await? {
+        groupings.reindex_archive_membership(&grouping).await?;
+    }
+    Ok(())
+}
+
 async fn update_references(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
@@ -218,6 +250,130 @@ mod tests {
         assert_eq!(updated_grouping.archives, vec![new_id.clone()]);
 
         archives.delete(&new_id).await.unwrap();
+        categories.delete(&catid).await.unwrap();
+        groupings.delete(&tankid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn category_save_keeps_the_archive_reverse_index_in_sync() {
+        let Some(pool) = test_pool() else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let categories = CategoryRepository::new(pool.clone());
+        let archive_a = ArchiveId("a".repeat(40));
+        let archive_b = ArchiveId("b".repeat(40));
+
+        let catid = lanrurugi_core::ids::CategoryId("SET_1700000199".to_string());
+        categories
+            .save(&Category {
+                catid: catid.clone(),
+                name: "Cat".into(),
+                search: None,
+                archives: vec![archive_a.clone()],
+                pinned: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            categories.for_archive(&archive_a).await.unwrap().len(),
+            1,
+            "archive_a should be indexed after the first save"
+        );
+        assert_eq!(categories.for_archive(&archive_b).await.unwrap().len(), 0);
+
+        // Swap membership from archive_a to archive_b — `save` must diff against the previous
+        // state and update both archives' index entries, not just add the new one.
+        categories
+            .save(&Category {
+                catid: catid.clone(),
+                name: "Cat".into(),
+                search: None,
+                archives: vec![archive_b.clone()],
+                pinned: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            categories.for_archive(&archive_a).await.unwrap().len(),
+            0,
+            "archive_a must be removed from the index once no longer a member"
+        );
+        assert_eq!(categories.for_archive(&archive_b).await.unwrap().len(), 1);
+
+        categories.delete(&catid).await.unwrap();
+        assert_eq!(
+            categories.for_archive(&archive_b).await.unwrap().len(),
+            0,
+            "delete must clear the category out of its members' index entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_reverse_indexes_recovers_membership_saved_before_the_index_existed() {
+        let Some(pool) = test_pool() else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let categories = CategoryRepository::new(pool.clone());
+        let groupings = GroupingRepository::new(pool.clone());
+        let archive = ArchiveId("c".repeat(40));
+
+        let catid = lanrurugi_core::ids::CategoryId("SET_1700000299".to_string());
+        categories
+            .save(&Category {
+                catid: catid.clone(),
+                name: "Cat".into(),
+                search: None,
+                archives: vec![archive.clone()],
+                pinned: false,
+            })
+            .await
+            .unwrap();
+        let tankid = lanrurugi_core::ids::TankId("TANK_1700000299".to_string());
+        groupings
+            .save(&Grouping {
+                tankid: tankid.clone(),
+                name: "Tank".into(),
+                summary: String::new(),
+                tags: String::new(),
+                progress: 0,
+                archives: vec![archive.clone()],
+                thumbnail_manual: false,
+                thumbnail_source_archive: None,
+                thumbnail_source_page: None,
+                chapter_names: Default::default(),
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+
+        // Simulate a pre-existing deploy: wipe just the reverse-index entries `save` above wrote,
+        // as if this Category/Grouping had been created before the index existed at all.
+        let mut conn = pool.get().await.unwrap();
+        let _: () = deadpool_redis::redis::AsyncCommands::del(
+            &mut conn,
+            crate::keys::archive_categories_key(archive.as_str()),
+        )
+        .await
+        .unwrap();
+        let _: () = deadpool_redis::redis::AsyncCommands::del(
+            &mut conn,
+            crate::keys::archive_tankoubons_key(archive.as_str()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(categories.for_archive(&archive).await.unwrap().len(), 0);
+        assert_eq!(groupings.for_archive(&archive).await.unwrap().len(), 0);
+
+        backfill_reverse_indexes(&categories, &groupings)
+            .await
+            .unwrap();
+
+        assert_eq!(categories.for_archive(&archive).await.unwrap().len(), 1);
+        assert_eq!(groupings.for_archive(&archive).await.unwrap().len(), 1);
+
         categories.delete(&catid).await.unwrap();
         groupings.delete(&tankid).await.unwrap();
     }

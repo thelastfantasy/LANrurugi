@@ -280,6 +280,18 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         ),
         Err(e) => tracing::warn!(error = %e, "download queue: created_at backfill skipped"),
     }
+    // Issue #67: same "run it every startup, cheap no-op once already backfilled" pattern as
+    // `download_queue.backfill_created_at()` right above — a deploy that already had
+    // Categories/Tankoubons before this reverse index existed would otherwise stay permanently
+    // unindexed until someone thought to run a manual `rebuild-index`. `backfill_reverse_indexes`
+    // itself is safe to call unconditionally on every boot (each `save()` diffs against whatever's
+    // already indexed and only writes what's missing — see that function's own docs).
+    if let Err(e) =
+        lanrurugi_storage::rebuild::backfill_reverse_indexes(&repos.categories, &repos.groupings)
+            .await
+    {
+        tracing::warn!(error = %e, "archive-to-category/tankoubon reverse-index backfill skipped");
+    }
     let recommend_cache = Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -1025,6 +1037,14 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         skipped_known_failed = heal_summary.skipped_known_failed,
         "Pagecount heal complete"
     );
+
+    // Issue #67: same unconditional backfill as `POST /database/rebuild-index` — see that
+    // handler's own comment on why this doesn't gate behind `rekey_summary.rekeyed` being
+    // non-empty.
+    tracing::info!("Backfilling archive-to-category/tankoubon reverse indexes...");
+    lanrurugi_storage::rebuild::backfill_reverse_indexes(&repos.categories, &repos.groupings)
+        .await?;
+    tracing::info!("Reverse-index backfill complete");
 
     Ok(())
 }

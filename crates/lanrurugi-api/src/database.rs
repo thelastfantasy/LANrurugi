@@ -479,6 +479,20 @@ async fn rebuild_index(
 
         let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
 
+        // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
+        // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`
+        // reverse index existed has never had its membership written into it at all, regardless of
+        // whether this particular rebuild happened to change any archive ID.
+        if let Err(e) = lanrurugi_storage::rebuild::backfill_reverse_indexes(
+            &repos.categories,
+            &repos.groupings,
+        )
+        .await
+        {
+            jobs.fail(&job_id_for_task, e.to_string()).await;
+            return;
+        }
+
         jobs.finish(
             &job_id_for_task,
             json!({

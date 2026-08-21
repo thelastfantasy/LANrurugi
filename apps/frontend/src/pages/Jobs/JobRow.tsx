@@ -104,8 +104,9 @@ function JobDetail({ job }: { job: JobRecord }) {
     )
   }
   if (job.state === "finished") {
-    const code =
-      job.result == null
+    const code = job.result_truncated
+      ? t("jobs.resultTooLargeToDisplay")
+      : job.result == null
         ? t("jobs.noResult")
         : typeof job.result === "string"
           ? job.result

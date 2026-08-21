@@ -562,11 +562,12 @@ async fn get_archive_categories(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    match state.repos.categories.list_all().await {
+    // Issue #67: reverse-index-backed (`CategoryRepository::for_archive`) — no longer a
+    // `list_all()` full-library scan + linear `.contains()` check per category.
+    match state.repos.categories.for_archive(&id).await {
         Ok(categories) => {
             let matching: Vec<_> = categories
                 .into_iter()
-                .filter(|c| !c.is_dynamic() && c.archives.contains(&id))
                 .map(|c| {
                     json!({
                         "id": c.catid,
@@ -596,11 +597,12 @@ async fn get_archive_tankoubons(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    match state.repos.groupings.list_all().await {
+    // Issue #67: reverse-index-backed (`GroupingRepository::for_archive`) — no longer a
+    // `list_all()` full-library scan + linear `.contains()` check per grouping.
+    match state.repos.groupings.for_archive(&id).await {
         Ok(groupings) => {
             let ids: Vec<String> = groupings
                 .into_iter()
-                .filter(|g| g.archives.contains(&id))
                 .map(|g| g.tankid.into_string())
                 .collect();
             axum::Json(json!({

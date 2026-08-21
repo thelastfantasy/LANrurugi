@@ -299,6 +299,10 @@ export interface JobRecord {
   rate_limit_bytes_per_sec?: number
   rate_limit_matched_pattern?: string
   result: unknown | null
+  // Issue #67: `true` only when the job's own result exceeded the server's `MAX_JOB_RESULT_BYTES`
+  // cap — `result` is `null` in that case (dropped, not partially kept), and the Jobs page's
+  // detail view should show an explanatory message instead of an empty/missing result.
+  result_truncated: boolean
   error: string | null
 }
 

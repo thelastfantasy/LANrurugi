@@ -323,7 +323,65 @@ impl CategoryRepository {
         .await
     }
 
+    /// Every static category a given archive is currently a member of — the reverse-index-backed
+    /// replacement for what `get_archive_categories` (`lanrurugi-api`) used to answer by calling
+    /// `list_all()` and linearly `.contains()`-checking every category in the library (issue #67).
+    /// `SMEMBERS` the small per-archive index set first, then only `get()`s those specific
+    /// categories — a handful of targeted Redis round trips instead of one that scales with the
+    /// total number of categories in the library regardless of how many actually contain this
+    /// archive. Dynamic categories never appear here, matching `save`'s own indexing rule.
+    pub async fn for_archive(&self, archive_id: &ArchiveId) -> Result<Vec<Category>> {
+        let mut conn = self.pool.get().await?;
+        let catids: Vec<String> = conn
+            .smembers(crate::keys::archive_categories_key(archive_id.as_str()))
+            .await?;
+        let mut categories = Vec::with_capacity(catids.len());
+        for catid in catids {
+            if let Some(category) = self.get(&CategoryId(catid)).await? {
+                categories.push(category);
+            }
+        }
+        Ok(categories)
+    }
+
+    /// Unconditionally `SADD`s this category into every one of its current members' reverse-index
+    /// entries, with no diff-against-previous-state check — used only by
+    /// `rebuild::backfill_reverse_indexes`, which needs to (re-)index a category's membership
+    /// regardless of whether the category's own stored `archives` field has "changed" from
+    /// whatever's already in Redis. `save`'s own diffing can't do this: it diffs the *new* archives
+    /// list against `self.get()`'s *current* stored state, which for an already-saved,
+    /// never-modified category is identical to what's being "saved" again — every diff comes up
+    /// empty and no `SADD` happens, exactly the case (a category saved before this index existed,
+    /// re-saved unchanged) this backfill exists to fix. Never `SREM`s anything — a backfill only
+    /// ever needs to add missing entries back, not remove stale ones (nothing else in this codebase
+    /// can make the index *drop* membership it should still have without going through `save`'s own
+    /// correctly-diffed path).
+    pub(crate) async fn reindex_archive_membership(&self, category: &Category) -> Result<()> {
+        if category.is_dynamic() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await?;
+        for archive_id in &category.archives {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_categories_key(archive_id.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Creates a new static (non-dynamic) category or overwrites metadata on an existing one.
+    ///
+    /// Issue #67: also keeps the `archive_id -> [category_id]` reverse index
+    /// ([`crate::keys::archive_categories_key`]) in sync — diffed against whatever membership was
+    /// previously stored (an extra `get` before the write, only paid on save, not on the much
+    /// hotter read path this index exists to speed up) so a caller changing `category.archives`
+    /// never has to remember to touch the index separately. A dynamic category (`search` set) is
+    /// never indexed here (nor was its previous state, if it was static and just became dynamic —
+    /// `old_archives` comes up empty for a dynamic `previous`), matching `get_archive_categories`'s
+    /// own `!c.is_dynamic()` filter on the read side.
     pub async fn save(&self, category: &Category) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let archives_json =
@@ -344,12 +402,55 @@ impl CategoryRepository {
             ("archives", archives_json.into()),
             ("pinned", if category.pinned { "1" } else { "0" }.into()),
         ];
+
+        let previous = self.get(&category.catid).await?;
+        let old_archives: std::collections::HashSet<ArchiveId> = previous
+            .filter(|p| !p.is_dynamic())
+            .map(|p| p.archives.into_iter().collect())
+            .unwrap_or_default();
+        let new_archives: std::collections::HashSet<ArchiveId> = if category.is_dynamic() {
+            std::collections::HashSet::new()
+        } else {
+            category.archives.iter().cloned().collect()
+        };
+
         let _: () = conn.hset_multiple(category.catid.as_str(), &fields).await?;
+
+        for removed in old_archives.difference(&new_archives) {
+            let _: () = conn
+                .srem(
+                    crate::keys::archive_categories_key(removed.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
+        for added in new_archives.difference(&old_archives) {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_categories_key(added.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
         Ok(())
     }
 
     pub async fn delete(&self, catid: &CategoryId) -> Result<()> {
         let mut conn = self.pool.get().await?;
+        // Clear this category's own membership out of every member archive's reverse-index entry
+        // before dropping the category hash itself — otherwise a deleted category's ID would keep
+        // showing up in `get_archive_categories` responses for archives that were in it (a stale
+        // reverse-index entry pointing at a now-nonexistent `SET_*` key).
+        if let Some(category) = self.get(catid).await? {
+            for archive_id in &category.archives {
+                let _: () = conn
+                    .srem(
+                        crate::keys::archive_categories_key(archive_id.as_str()),
+                        catid.as_str(),
+                    )
+                    .await?;
+            }
+        }
         let _: () = conn.del(catid.as_str()).await?;
         Ok(())
     }
@@ -457,11 +558,52 @@ impl GroupingRepository {
         .await
     }
 
+    /// Every Tankoubon a given archive is currently a member of — reverse-index-backed, same
+    /// reasoning as `CategoryRepository::for_archive` (issue #67).
+    pub async fn for_archive(&self, archive_id: &ArchiveId) -> Result<Vec<Grouping>> {
+        let mut conn = self.pool.get().await?;
+        let tankids: Vec<String> = conn
+            .smembers(crate::keys::archive_tankoubons_key(archive_id.as_str()))
+            .await?;
+        let mut groupings = Vec::with_capacity(tankids.len());
+        for tankid in tankids {
+            if let Some(grouping) = self.get(&TankId(tankid)).await? {
+                groupings.push(grouping);
+            }
+        }
+        Ok(groupings)
+    }
+
+    /// Unconditionally `SADD`s this grouping into every one of its current members' reverse-index
+    /// entries — same "backfill needs an undiffed write" reasoning as
+    /// `CategoryRepository::reindex_archive_membership`, see that method's own docs.
+    pub(crate) async fn reindex_archive_membership(&self, grouping: &Grouping) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        for archive_id in &grouping.archives {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_tankoubons_key(archive_id.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Writes metadata members and the ordered archive-membership members in one call. Intended
     /// for create/full-replace; incremental add/remove-one-archive belongs in a higher-level
     /// service that also maintains `LRR_TANKGROUPED`/`LRR_TITLES` (lanrurugi-search).
+    ///
+    /// Issue #67: also keeps the `archive_id -> [tankoubon_id]` reverse index
+    /// ([`crate::keys::archive_tankoubons_key`]) in sync — same diff-against-previous-membership
+    /// approach as `CategoryRepository::save`, see that method's own docs for the reasoning.
     pub async fn save(&self, grouping: &Grouping) -> Result<()> {
         let mut conn = self.pool.get().await?;
+        let old_archives: std::collections::HashSet<ArchiveId> = self
+            .get(&grouping.tankid)
+            .await?
+            .map(|p| p.archives.into_iter().collect())
+            .unwrap_or_default();
         let _: () = conn.del(grouping.tankid.as_str()).await?;
 
         let mut members: Vec<(isize, String)> = vec![
@@ -533,11 +675,42 @@ impl GroupingRepository {
         let _: () = conn
             .zadd_multiple(grouping.tankid.as_str(), &zadd_args)
             .await?;
+
+        let new_archives: std::collections::HashSet<ArchiveId> =
+            grouping.archives.iter().cloned().collect();
+        for removed in old_archives.difference(&new_archives) {
+            let _: () = conn
+                .srem(
+                    crate::keys::archive_tankoubons_key(removed.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
+        for added in new_archives.difference(&old_archives) {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_tankoubons_key(added.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
         Ok(())
     }
 
     pub async fn delete(&self, tankid: &TankId) -> Result<()> {
         let mut conn = self.pool.get().await?;
+        // Same "clear the reverse-index entries before dropping the forward key" reasoning as
+        // `CategoryRepository::delete`.
+        if let Some(grouping) = self.get(tankid).await? {
+            for archive_id in &grouping.archives {
+                let _: () = conn
+                    .srem(
+                        crate::keys::archive_tankoubons_key(archive_id.as_str()),
+                        tankid.as_str(),
+                    )
+                    .await?;
+            }
+        }
         let _: () = conn.del(tankid.as_str()).await?;
         Ok(())
     }

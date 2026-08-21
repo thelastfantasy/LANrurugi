@@ -626,6 +626,7 @@
   "reader.isAReservedIdentifierAnd": "「{{value}}」は予約された識別子のため、区切りのタイトルには使用できません。この区切りのタイトルを入力してください：",
   "jobs.noErrorMessageCaptured": "（エラーメッセージは取得されませんでした）",
   "jobs.noResult": "（結果なし）",
+  "jobs.resultTooLargeToDisplay": "（結果が大きすぎるため保持されませんでした——サーバー側の1件あたりの結果サイズ上限を超えています）",
   "upload.patchedPagesNotShown": "（パッチ済みページは表示されません）",
   "reader.rightclickForQuickPresets": "（右クリックでクイックプリセット）",
   "1 month": "1ヶ月",

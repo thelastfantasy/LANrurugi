@@ -26,3 +26,23 @@ pub const TOTAL_PAGES_STAT_KEY: &str = "LRR_TOTALPAGESTAT";
 /// use to finish/verify the rename precisely, rather than guessing from `archive.name` alone
 /// (which is itself part of what may not have been saved yet).
 pub const PENDING_RENAME_KEY: &str = "LANRURUGI_PENDING_RENAME";
+
+/// Additive, LANrurugi-only. Reverse index (a Redis Set) from one archive ID to every static
+/// category it's currently a member of — `SET_<id>` members are the *forward* direction (a
+/// category's own `archives` field), and until this index existed, answering "which categories is
+/// this one archive in" (`GET /archives/{id}/categories`) meant `CategoryRepository::list_all()`
+/// scanning and linearly `.contains()`-checking every category in the library (issue #67).
+/// Maintained by `CategoryRepository::save`/`delete` themselves (diffed against the previous
+/// membership on every save, so a caller updating a category's `archives` field never has to
+/// remember to touch this index separately) — dynamic categories (a `search` predicate, no
+/// `archives` list of their own) are never indexed here, matching `get_archive_categories`'s own
+/// existing `!c.is_dynamic()` filter.
+pub fn archive_categories_key(archive_id: &str) -> String {
+    format!("LANRURUGI_ARCHIVE_CATEGORIES_{archive_id}")
+}
+
+/// Additive, LANrurugi-only. Same reverse-index reasoning as [`archive_categories_key`], but for
+/// Tankoubon (`TANK_*`) membership — maintained by `GroupingRepository::save`/`delete`.
+pub fn archive_tankoubons_key(archive_id: &str) -> String {
+    format!("LANRURUGI_ARCHIVE_TANKOUBONS_{archive_id}")
+}

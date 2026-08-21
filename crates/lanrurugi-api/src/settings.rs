@@ -87,12 +87,13 @@ async fn fetch_theme(state: &AppState) -> Option<String> {
 /// which substitutes this value directly into that file's inline anti-flash-of-default-theme
 /// `<script>` body via a plain string replace — not an HTML/JS-aware templating step — so an
 /// unconstrained value would be a real reflected-script-injection vector for anyone able to write
-/// an arbitrary string to `LRR_CONFIG`'s `theme` field (an authenticated action via `PUT
-/// /settings` today, which never validates `theme` against `KNOWN_THEME_FILES`; this check costs
-/// nothing and turns that into a no-op rather than counting on every future caller of the raw
-/// field to have independently remembered it's about to land inside a `<script>` tag). `None`
-/// whenever `fetch_theme` itself fails *or* the stored value isn't recognized — both already mean
-/// "fall back to `serve_index`'s own built-in default", so this doesn't distinguish them either.
+/// an arbitrary string to `LRR_CONFIG`'s `theme` field. `PUT /settings` itself now also validates
+/// `theme` against this exact same `KNOWN_THEME_FILES` list before ever writing it (issue #65's
+/// `validate_setting_field`), so this filter here is defense-in-depth against a value written some
+/// other way (directly in Redis, a legacy instance sharing the same database, etc.) rather than the
+/// only thing standing between a bad value and this `<script>` tag. `None` whenever `fetch_theme`
+/// itself fails *or* the stored value isn't recognized — both already mean "fall back to
+/// `serve_index`'s own built-in default", so this doesn't distinguish them either.
 pub async fn fetch_theme_for_html_injection(state: &AppState) -> Option<String> {
     fetch_theme(state)
         .await
@@ -251,6 +252,39 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // it directly rather than going through `Config.pm`'s settings-page field list.
     ("replacetitles", true),
 ];
+
+/// Checks a single `PUT /settings` field against the `STRING_FIELDS`/`NUMBER_FIELDS`/
+/// `BOOL_FIELDS` allowlist plus the `theme` field's own extra value check, returning the string
+/// form to `HSET` into `LRR_CONFIG` on success or a caller-facing error message on failure. Pulled
+/// out of `put_settings`'s write loop as a plain, `Redis`-free function so the field/value matrix
+/// (unknown key, wrong JSON type, invalid `theme` value) can be unit-tested directly rather than
+/// only reachable through a real HTTP request against a live Redis (issue #65).
+fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
+    let is_known_field = STRING_FIELDS.iter().any(|(k, _)| *k == key)
+        || NUMBER_FIELDS.iter().any(|(k, _)| *k == key)
+        || BOOL_FIELDS.iter().any(|(k, _)| *k == key);
+    if !is_known_field {
+        return Err(format!("Unknown settings field: \"{key}\"."));
+    }
+    if key == "theme" {
+        let is_valid_theme = value
+            .as_str()
+            .is_some_and(|s| KNOWN_THEME_FILES.contains(&s));
+        if !is_valid_theme {
+            return Err(format!(
+                "Invalid theme: {value}. Must be one of {KNOWN_THEME_FILES:?}."
+            ));
+        }
+    }
+    match value {
+        Value::String(s) => Ok(s.clone()),
+        Value::Bool(b) => Ok(if *b { "1" } else { "0" }.to_string()),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(format!(
+            "Field \"{key}\" must be a string, bool, or number."
+        )),
+    }
+}
 
 async fn get_settings(State(state): State<AppState>) -> Response {
     let mut conn = match state.redis.config.get().await {
@@ -415,30 +449,31 @@ async fn put_settings(
         .flatten()
         .is_some_and(|s| !s.trim().is_empty());
 
-    // Snapshotted before the write loop consumes `fields` — never includes `password`/
-    // `session_secret` (both `continue`d past below without being written at all here, so there's
-    // nothing meaningful to record for them anyway; `password` changes go through
-    // `change_password`'s own separate audit entry instead). Only the *names* of changed fields
-    // are recorded, not their values — settings cover everything from a `motd` string to API
-    // token lifetimes, and logging arbitrary field values here would risk incidentally recording
-    // something sensitive a future field addition didn't anticipate.
-    let changed_fields: Vec<String> = fields
-        .keys()
-        .filter(|k| *k != "password" && *k != "session_secret")
-        .cloned()
-        .collect();
+    // Only the *names* of changed fields are recorded, not their values — settings cover
+    // everything from a `motd` string to API token lifetimes, and logging arbitrary field values
+    // here would risk incidentally recording something sensitive a future field addition didn't
+    // anticipate. Populated inside the write loop below (not snapshotted from `fields` up front)
+    // now that unknown/invalid keys are rejected before ever reaching Redis — see the allowlist
+    // check immediately below.
+    let mut changed_fields: Vec<String> = Vec::new();
 
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
             continue;
         }
-        let stored = match &value {
-            Value::String(s) => s.clone(),
-            Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
-            Value::Number(n) => n.to_string(),
-            _ => continue,
+        // Issue #65: `put_settings` used to write *any* key whose value happened to be a
+        // string/bool/number straight into `LRR_CONFIG`, with no check against the known
+        // `STRING_FIELDS`/`NUMBER_FIELDS`/`BOOL_FIELDS` sets this same file already declares (and
+        // already uses to build `get_settings`'s own response) — an unrecognized key is now
+        // rejected outright rather than silently accepted, so the allowlist this file already
+        // maintains actually gates writes, not just reads. See `validate_setting_field`'s own
+        // tests for the field-type/theme-value matrix this checks.
+        let stored = match validate_setting_field(&key, &value) {
+            Ok(s) => s,
+            Err(msg) => return error(StatusCode::BAD_REQUEST, "put_settings", msg),
         };
+        changed_fields.push(key.clone());
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
             Ok(v) => v,
             Err(e) => {
@@ -580,5 +615,65 @@ async fn change_password(
             "change_password",
             e.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod validate_setting_field_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_an_unknown_key() {
+        let err = validate_setting_field("not_a_real_field", &json!("value")).unwrap_err();
+        assert!(err.contains("Unknown settings field"));
+    }
+
+    #[test]
+    fn accepts_a_known_string_field() {
+        let stored = validate_setting_field("motd", &json!("Hello")).unwrap();
+        assert_eq!(stored, "Hello");
+    }
+
+    #[test]
+    fn accepts_a_known_number_field() {
+        let stored = validate_setting_field("pagesize", &json!(50)).unwrap();
+        assert_eq!(stored, "50");
+    }
+
+    #[test]
+    fn accepts_a_known_bool_field_and_normalizes_to_1_or_0() {
+        assert_eq!(
+            validate_setting_field("devmode", &json!(true)).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            validate_setting_field("devmode", &json!(false)).unwrap(),
+            "0"
+        );
+    }
+
+    #[test]
+    fn rejects_a_known_field_with_the_wrong_json_type() {
+        let err = validate_setting_field("pagesize", &json!({"nested": "object"})).unwrap_err();
+        assert!(err.contains("must be a string, bool, or number"));
+    }
+
+    #[test]
+    fn accepts_every_real_theme_filename() {
+        for theme in KNOWN_THEME_FILES {
+            assert!(validate_setting_field("theme", &json!(theme)).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_a_bogus_theme_value() {
+        let err = validate_setting_field("theme", &json!("../../etc/passwd")).unwrap_err();
+        assert!(err.contains("Invalid theme"));
+    }
+
+    #[test]
+    fn rejects_a_non_string_theme_value() {
+        let err = validate_setting_field("theme", &json!(42)).unwrap_err();
+        assert!(err.contains("Invalid theme"));
     }
 }
