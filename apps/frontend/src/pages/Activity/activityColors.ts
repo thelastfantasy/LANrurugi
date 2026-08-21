@@ -85,3 +85,16 @@ export function actorKindColor(kind: string, tokenId?: string): ChipColor {
   }
   return ACTOR_KIND_COLORS[kind] ?? FALLBACK_NAMESPACE_COLOR
 }
+
+/** `"success"` | `"failure"` — matches `lanrurugi_storage::activity::Outcome`'s own `status`
+ * discriminant. Fixed green/red, the same universal success/failure convention every other status
+ * indicator in this app already uses (`Jobs/JobProgress.tsx`'s own `STATE_COLOR`), not derived from
+ * the active theme — same reasoning as every other color in this file. */
+const OUTCOME_COLORS: Record<string, ChipColor> = {
+  success: { bg: "#22c55e", text: "#ffffff" },
+  failure: { bg: "#dc2626", text: "#ffffff" },
+}
+
+export function outcomeColor(status: string): ChipColor {
+  return OUTCOME_COLORS[status] ?? FALLBACK_NAMESPACE_COLOR
+}

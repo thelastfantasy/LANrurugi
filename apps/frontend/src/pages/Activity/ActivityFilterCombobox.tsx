@@ -5,9 +5,9 @@ import { useTranslation } from "react-i18next"
 import { useApiTokens } from "@/api/hooks"
 import type { ActivityFacetActionType, ActivityFacetActor, ActivityFacets } from "@/api/types"
 
-import { actionTypeColor, actorKindColor } from "./activityColors"
+import { actionTypeColor, actorKindColor, outcomeColor } from "./activityColors"
 import { ActivityComboboxGroup, ActivityComboboxItem, ActivityComboboxShell, type ChipRenderResult } from "./ActivityCombobox"
-import { actionTypeLabel, compareActionTypesForDisplay } from "./activityTarget"
+import { actionTypeLabel, compareActionTypesForDisplay, outcomeLabel } from "./activityTarget"
 
 /** `actor` query values match `AuthContext::trace_label()`/the backend's own `actor_key` shape:
  * `"session"`, `"token:<id>"`, `"system:<subsystem>"`, `"anonymous"`. */
@@ -25,6 +25,12 @@ function actorKey(facet: ActivityFacetActor): string {
  * being handed to `onActionTypesChange`/`onActorsChange` below — callers never see the prefix. */
 const ACTION_PREFIX = "action:"
 const ACTOR_PREFIX = "actor:"
+const OUTCOME_PREFIX = "outcome:"
+
+/** Fixed two-value candidate list — unlike action types/actors, there's no facets endpoint to ask
+ * (`Outcome` only ever has these two variants, see that type's own docs), so this combobox's own
+ * "操作状态" group is hardcoded rather than derived from `facets`. */
+const OUTCOME_VALUES = ["success", "failure"] as const
 
 /** Single merged multi-select filter control for the Activity page — one combobox, exactly two
  * flat groups ("操作"/"用户"), replacing what was originally two separate comboboxes
@@ -44,22 +50,25 @@ const ACTOR_PREFIX = "actor:"
 export function ActivityFilterCombobox({
   actionTypes,
   actors,
-  onActionTypesAndActorsChange,
+  outcomes,
+  onFilterDimensionsChange,
   facets,
 }: {
   actionTypes: string[]
   actors: string[]
-  /** A single combined callback rather than separate `onActionTypesChange`/`onActorsChange` — one
-   * Base UI `onValueChange` event (e.g. picking an action-type chip) always changes exactly one of
-   * the two dimensions, but the *other* dimension's own callback still needs to fire in the same
-   * tick to keep `combinedValue` in sync. Two independent callbacks, each closing over the
-   * caller's own `filter` state and calling `onFilterChange({ ...filter, ... })`, read the SAME
-   * stale `filter` when called back-to-back in one handler — React doesn't re-run the closure
-   * between them — so the second call's spread silently discards the first call's change. Confirmed
-   * live: selecting an action-type chip never appeared in the input at all, because the immediately-
-   * following (no-op, empty-array) actor callback overwrote it a tick later. One callback receiving
-   * both next arrays at once lets the caller merge them into state in a single update instead. */
-  onActionTypesAndActorsChange: (actionTypes: string[], actors: string[]) => void
+  outcomes: string[]
+  /** A single combined callback rather than separate per-dimension callbacks — one Base UI
+   * `onValueChange` event (e.g. picking an action-type chip) always changes exactly one dimension,
+   * but the *other* dimensions' own callbacks still need to fire in the same tick to keep
+   * `combinedValue` in sync. Independent callbacks, each closing over the caller's own `filter`
+   * state and calling `onFilterChange({ ...filter, ... })`, read the SAME stale `filter` when
+   * called back-to-back in one handler — React doesn't re-run the closure between them — so a
+   * later call's spread silently discards an earlier call's change. Confirmed live (before this had
+   * a third dimension): selecting an action-type chip never appeared in the input at all, because
+   * the immediately-following (no-op, empty-array) actor callback overwrote it a tick later. One
+   * callback receiving every dimension's next array at once lets the caller merge them into state
+   * in a single update instead. */
+  onFilterDimensionsChange: (actionTypes: string[], actors: string[], outcomes: string[]) => void
   facets: ActivityFacets | undefined
 }) {
   const { t } = useTranslation()
@@ -124,19 +133,29 @@ export function ActivityFilterCombobox({
   const allItems = [
     ...actionTypeFacets.map((f) => ACTION_PREFIX + f.value),
     ...actorFacets.map((f) => ACTOR_PREFIX + actorKey(f)),
+    ...OUTCOME_VALUES.map((v) => OUTCOME_PREFIX + v),
   ]
-  const combinedValue = [...actionTypes.map((v) => ACTION_PREFIX + v), ...actors.map((v) => ACTOR_PREFIX + v)]
+  const combinedValue = [
+    ...actionTypes.map((v) => ACTION_PREFIX + v),
+    ...actors.map((v) => ACTOR_PREFIX + v),
+    ...outcomes.map((v) => OUTCOME_PREFIX + v),
+  ]
 
   function handleValueChange(next: string[]) {
     const nextActionTypes = next.filter((v) => v.startsWith(ACTION_PREFIX)).map((v) => v.slice(ACTION_PREFIX.length))
     const nextActors = next.filter((v) => v.startsWith(ACTOR_PREFIX)).map((v) => v.slice(ACTOR_PREFIX.length))
-    onActionTypesAndActorsChange(nextActionTypes, nextActors)
+    const nextOutcomes = next.filter((v) => v.startsWith(OUTCOME_PREFIX)).map((v) => v.slice(OUTCOME_PREFIX.length))
+    onFilterDimensionsChange(nextActionTypes, nextActors, nextOutcomes)
   }
 
   function renderChip(prefixedValue: string): ChipRenderResult {
     if (prefixedValue.startsWith(ACTION_PREFIX)) {
       const actionType = prefixedValue.slice(ACTION_PREFIX.length)
       return { content: actionTypeLabel(t, actionType), color: actionTypeColor(actionType) }
+    }
+    if (prefixedValue.startsWith(OUTCOME_PREFIX)) {
+      const status = prefixedValue.slice(OUTCOME_PREFIX.length)
+      return { content: outcomeLabel(t, status), color: outcomeColor(status) }
     }
     const key = prefixedValue.slice(ACTOR_PREFIX.length)
     const facet = actorFacets.find((f) => actorKey(f) === key)
@@ -180,6 +199,17 @@ export function ActivityFilterCombobox({
             ))}
           </ActivityComboboxGroup>
         )}
+
+        <ActivityComboboxGroup label={t("activity.filterGroupOutcomes") ?? ""}>
+          {OUTCOME_VALUES.map((status) => (
+            <ActivityComboboxItem
+              key={OUTCOME_PREFIX + status}
+              value={OUTCOME_PREFIX + status}
+              color={outcomeColor(status)}
+              label={outcomeLabel(t, status)}
+            />
+          ))}
+        </ActivityComboboxGroup>
       </ActivityComboboxShell>
     </Combobox.Root>
   )

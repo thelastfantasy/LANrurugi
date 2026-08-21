@@ -1407,6 +1407,7 @@ export function useActivity(filter: ActivityFilter) {
       if (filter.actionTypes && filter.actionTypes.length > 0) {
         params.set("action_type", filter.actionTypes.join(","))
       }
+      if (filter.outcomes && filter.outcomes.length > 0) params.set("outcome", filter.outcomes.join(","))
       return fetchJson<ActivityPage>(`/activity?${params.toString()}`)
     },
     placeholderData: keepPreviousData,

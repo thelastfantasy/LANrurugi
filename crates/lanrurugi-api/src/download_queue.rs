@@ -21,7 +21,7 @@ use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -235,13 +235,34 @@ async fn add_to_queue(
                             label: Some(saved.url.clone()),
                             kind: Some("download_queue_item".to_string()),
                         },
+                        Outcome::Success,
                         None,
                         Some(json!({ "url": saved.url.clone() })),
                     )
                     .await;
                     added.push(saved);
                 }
-                Err(e) => rejected.push(json!({ "url": item.url, "reason": e.to_string() })),
+                Err(e) => {
+                    // A real attempted-and-failed add (Redis write error), not a precondition
+                    // rejection — the plugin_namespace already resolved fine above.
+                    record_manual(
+                        &state,
+                        auth.as_ref().map(|e| &e.0),
+                        action_types::DOWNLOAD_QUEUE_ADD,
+                        ActivityTarget {
+                            id: None,
+                            label: Some(item.url.clone()),
+                            kind: Some("download_queue_item".to_string()),
+                        },
+                        Outcome::Failure {
+                            reason: e.to_string(),
+                        },
+                        None,
+                        None,
+                    )
+                    .await;
+                    rejected.push(json!({ "url": item.url, "reason": e.to_string() }));
+                }
             },
             Err(_) => rejected.push(json!({
                 "url": item.url,
@@ -384,17 +405,38 @@ async fn delete_queue_item(
                     label: item.as_ref().map(|i| i.url.clone()),
                     kind: Some("download_queue_item".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
             .await;
             ok("delete_download_queue_item", [])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_download_queue_item",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real Redis delete failure on an item that passed the in-flight check above —
+            // worth recording since the user's delete action genuinely didn't take effect.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_DELETE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: item.as_ref().map(|i| i.url.clone()),
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_download_queue_item",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -436,6 +478,10 @@ async fn start_queue_item(
             label,
             kind: Some("download_queue_item".to_string()),
         },
+        // Written before the attempt runs, same as `patch_after` can only enrich `after` later,
+        // not flip this to `Failure` — the real download outcome (network/plugin/ingest failure
+        // inside the background task `start_one` spawns) isn't observable from here yet.
+        Outcome::Success,
         None,
         url.map(|u| json!({ "url": u })),
     )
@@ -463,11 +509,30 @@ async fn start_queue_item(
             "start_download_queue_item",
             format!("Another item for the same URL as {id} is already downloading."),
         ),
-        Err(StartError::Storage(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "start_download_queue_item",
-            e,
-        ),
+        Err(StartError::Storage(e)) => {
+            // `start_one` itself hit a real Redis failure marking the item `Starting` — the
+            // download attempt never even got to spawn, worth recording since the earlier
+            // `Success` entry above would otherwise misleadingly stand alone as the only record.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_START,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure { reason: e.clone() },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "start_download_queue_item",
+                e,
+            )
+        }
     }
 }
 
@@ -537,6 +602,8 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
                 label,
                 kind: Some("download_queue_item".to_string()),
             },
+            // Same "written before the attempt runs" reasoning as `start_queue_item`'s own entry.
+            Outcome::Success,
             None,
             url.map(|u| json!({ "url": u })),
         )
@@ -544,6 +611,25 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
         match start_one(state, &id, activity_entry_id).await {
             Ok(job_id) => started.push(json!({ "id": id, "job": job_id })),
             Err(StartError::NotQueued) => {} // silent no-op, per contract
+            Err(StartError::Storage(e)) => {
+                // A real Redis failure marking the item `Starting` — mirrors
+                // `start_queue_item`'s own `StartError::Storage` failure record.
+                record_manual(
+                    state,
+                    auth,
+                    action_types::DOWNLOAD_QUEUE_START,
+                    ActivityTarget {
+                        id: Some(id.clone()),
+                        label: None,
+                        kind: Some("download_queue_item".to_string()),
+                    },
+                    Outcome::Failure { reason: e.clone() },
+                    None,
+                    None,
+                )
+                .await;
+                skipped.push(json!({ "id": id, "reason": e }));
+            }
             Err(e) => skipped.push(json!({ "id": id, "reason": start_error_message(&e) })),
         }
     }
@@ -557,6 +643,7 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
                 label: Some(format!("{} items", started.len())),
                 kind: Some("download_queue_item".to_string()),
             },
+            Outcome::Success,
             None,
             Some(json!({ "started": started, "skipped": skipped })),
         )
@@ -617,6 +704,7 @@ async fn delete_selected(
                 label: Some(format!("{} items", deleted.len())),
                 kind: Some("download_queue_item".to_string()),
             },
+            Outcome::Success,
             None,
             Some(json!({ "ids": deleted })),
         )
@@ -784,6 +872,7 @@ async fn stop_queue_item(
                     label: None,
                     kind: Some("download_queue_item".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
@@ -799,11 +888,29 @@ async fn stop_queue_item(
             "stop_download_queue_item",
             format!("Item {id} is not currently downloading."),
         ),
-        Err(StopError::Storage(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "stop_download_queue_item",
-            e,
-        ),
+        Err(StopError::Storage(e)) => {
+            // The item was genuinely in flight (found + is_in_flight) but the Redis read/write to
+            // actually cancel it failed — a real attempted-and-failed stop, unlike NotFound/NotRunning.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_STOP,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure { reason: e.clone() },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "stop_download_queue_item",
+                e,
+            )
+        }
     }
 }
 
@@ -933,6 +1040,7 @@ async fn overwrite_queue_item(
                     label: Some(archive_id.clone()),
                     kind: Some("download_queue_item".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
@@ -941,6 +1049,33 @@ async fn overwrite_queue_item(
                 json!({ "operation": "overwrite_download_queue_item", "success": 1, "archive_id": archive_id }),
             )
             .into_response()
+        }
+        // `Storage`/`Ingest` are a real attempted-and-failed re-catalogue (Redis or the actual
+        // ingest pipeline failed) — exactly the "did my download really succeed" signal this
+        // endpoint exists to answer. `NotFound`/`NoConflict` are precondition rejections handled
+        // inside `resolve_error_response` without a record.
+        Err(e @ (ResolveConflictError::Storage(_) | ResolveConflictError::Ingest(_))) => {
+            let reason = match &e {
+                ResolveConflictError::Storage(msg) | ResolveConflictError::Ingest(msg) => {
+                    msg.clone()
+                }
+                _ => unreachable!(),
+            };
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_OVERWRITE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure { reason },
+                None,
+                None,
+            )
+            .await;
+            resolve_error_response("overwrite_download_queue_item", &id, e)
         }
         Err(e) => resolve_error_response("overwrite_download_queue_item", &id, e),
     }
@@ -1145,6 +1280,7 @@ async fn rename_queue_item(
                     label: Some(archive_id.clone()),
                     kind: Some("download_queue_item".to_string()),
                 },
+                Outcome::Success,
                 // `name` — matches the field name every other rename-type action type uses (see
                 // `archives.rs::rename_archive`'s own docs on this unification).
                 old_filename.map(|name| json!({ "name": name })),
@@ -1155,6 +1291,31 @@ async fn rename_queue_item(
                 json!({ "operation": "rename_download_queue_item", "success": 1, "archive_id": archive_id }),
             )
             .into_response()
+        }
+        // Same reasoning as `overwrite_queue_item`'s own split — `Storage`/`Ingest` are a real
+        // attempted-and-failed re-catalogue, worth recording; `NotFound`/`NoConflict` aren't.
+        Err(e @ (ResolveConflictError::Storage(_) | ResolveConflictError::Ingest(_))) => {
+            let reason = match &e {
+                ResolveConflictError::Storage(msg) | ResolveConflictError::Ingest(msg) => {
+                    msg.clone()
+                }
+                _ => unreachable!(),
+            };
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_RENAME,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure { reason },
+                None,
+                None,
+            )
+            .await;
+            resolve_error_response("rename_download_queue_item", &id, e)
         }
         Err(e) => resolve_error_response("rename_download_queue_item", &id, e),
     }
@@ -1336,19 +1497,54 @@ async fn compare_queue_item(
     .await
     {
         Ok(Ok(result)) => result,
+        // The comparison itself genuinely ran (past the precondition checks in
+        // `resolve_compare_conflict`) and failed — a real perceptual-hash/decode error, worth
+        // recording since the user is left with no comparison result at all.
         Ok(Err(e)) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_COMPARE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "compare_download_queue_item",
                 e.to_string(),
-            )
+            );
         }
         Err(e) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_COMPARE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "compare_download_queue_item",
                 e.to_string(),
-            )
+            );
         }
     };
 
@@ -1367,6 +1563,7 @@ async fn compare_queue_item(
             label: None,
             kind: Some("download_queue_item".to_string()),
         },
+        Outcome::Success,
         None,
         None,
     )
@@ -2325,6 +2522,25 @@ async fn clear_completed(
         .collect();
     let cleared = ids.len();
     if let Err(e) = state.download_queue.delete_many(&ids).await {
+        // A real, attempted bulk-delete that hit a Redis failure (not just "nothing to do" —
+        // `cleared` items were already identified) — worth recording since the user's clear
+        // action genuinely didn't take effect.
+        record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            action_types::DOWNLOAD_QUEUE_CLEAR_COMPLETED,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("download_queue_item".to_string()),
+            },
+            Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "clear_completed_download_queue",
@@ -2346,6 +2562,7 @@ async fn clear_completed(
                 label: None,
                 kind: Some("download_queue_item".to_string()),
             },
+            Outcome::Success,
             None,
             Some(json!({ "cleared": cleared })),
         )

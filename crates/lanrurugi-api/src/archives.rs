@@ -366,6 +366,7 @@ async fn delete_one_archive(
                     label: Some(archive.name.clone()),
                     kind: Some("archive".to_string()),
                 },
+                lanrurugi_storage::activity::Outcome::Success,
                 None,
                 None,
             )
@@ -457,7 +458,27 @@ async fn delete_one_archive(
                 filename: archive.name,
             }
         }
-        Err(e) => DeleteOneOutcome::Error(e.to_string()),
+        Err(e) => {
+            // The archive was found (a real target existed) but the actual DB delete failed —
+            // a genuine attempted-and-failed deletion, not a pre-execution lookup miss.
+            crate::activity::record_manual(
+                state,
+                auth,
+                lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: Some(id.to_string()),
+                    label: Some(archive.name.clone()),
+                    kind: Some("archive".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            DeleteOneOutcome::Error(e.to_string())
+        }
     }
 }
 
@@ -800,10 +821,29 @@ async fn delete_patch(
             )
         }
     };
+    let patch_target = lanrurugi_storage::activity::ActivityTarget {
+        id: Some(id.to_string()),
+        label: Some(archive.name.clone()),
+        kind: Some("archive".to_string()),
+    };
     let patch_path = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
     if patch_path.exists() {
         if let Err(e) = tokio::fs::remove_file(&patch_path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
+                // A real attempted patch-file deletion that failed (the target existed, the
+                // disk operation itself errored) — worth recording.
+                crate::activity::record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
+                    patch_target,
+                    lanrurugi_storage::activity::Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
                 return error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "delete_patch",
@@ -815,6 +855,20 @@ async fn delete_patch(
     if archive.has_patch {
         archive.has_patch = false;
         if let Err(e) = state.repos.archives.save(&archive).await {
+            // Patch file removal already succeeded above; only the DB flag write failed — still
+            // a genuine attempted-and-failed operation.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
+                patch_target,
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "delete_patch",
@@ -827,11 +881,8 @@ async fn delete_patch(
         &state,
         auth.as_ref().map(|e| &e.0),
         lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
-        lanrurugi_storage::activity::ActivityTarget {
-            id: Some(id.to_string()),
-            label: Some(archive.name.clone()),
-            kind: Some("archive".to_string()),
-        },
+        patch_target,
+        lanrurugi_storage::activity::Outcome::Success,
         None,
         None,
     )
@@ -1019,6 +1070,24 @@ async fn rename_archive(
                 .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
                 .await;
         }
+        // A real attempted rename (past every pre-execution validation/conflict check above) that
+        // failed on the actual disk operation — worth recording.
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
+            lanrurugi_storage::activity::ActivityTarget {
+                id: Some(id.to_string()),
+                label: Some(old_filename_str.clone()),
+                kind: Some("archive".to_string()),
+            },
+            lanrurugi_storage::activity::Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "rename_archive",
@@ -1056,6 +1125,26 @@ async fn rename_archive(
         // `new_path` while the DB record isn't caught up yet, exactly the state the journal
         // exists to record. `repair_zombie_archives` will finish the job on next startup; a
         // manual retry of this same rename request would also just re-do this save.
+        //
+        // The disk rename already succeeded — only the DB record write failed — still a genuine
+        // attempted-and-failed operation (and a materially different, higher-severity failure mode
+        // than the disk-rename failure above: file and DB now disagree).
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
+            lanrurugi_storage::activity::ActivityTarget {
+                id: Some(id.to_string()),
+                label: Some(new_filename.clone()),
+                kind: Some("archive".to_string()),
+            },
+            lanrurugi_storage::activity::Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "rename_archive",
@@ -1086,6 +1175,7 @@ async fn rename_archive(
             label: Some(new_filename.clone()),
             kind: Some("archive".to_string()),
         },
+        lanrurugi_storage::activity::Outcome::Success,
         // `name` — matches `tankoubon.rename`/`token.rename`'s own `before`/`after` field name for
         // the identical "this resource's own display name changed" shape, so the frontend's
         // activity-description renderer can read one shared `{ name: string }` shape across every
@@ -1439,6 +1529,7 @@ async fn regen_thumbs(
             label: None,
             kind: Some("database".to_string()),
         },
+        lanrurugi_storage::activity::Outcome::Success,
         None,
         Some(json!({ "force": params.force, "archive_count": archives.len() })),
     )
@@ -1655,6 +1746,7 @@ async fn update_archive_metadata(
                         label: Some(archive.title.clone()),
                         kind: Some("archive".to_string()),
                     },
+                    lanrurugi_storage::activity::Outcome::Success,
                     Some(json!({ "rating": tags_removed.first() })),
                     Some(json!({ "rating": tags_added.first() })),
                 )
@@ -1669,6 +1761,7 @@ async fn update_archive_metadata(
                         label: Some(archive.title.clone()),
                         kind: Some("archive".to_string()),
                     },
+                    lanrurugi_storage::activity::Outcome::Success,
                     Some(json!({ "title": old_title, "summary": old_summary })),
                     Some(json!({
                         "title": archive.title,
@@ -1713,11 +1806,33 @@ async fn update_archive_metadata(
             }
             ok("update_metadata", [])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "update_metadata",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real attempted metadata write (title/tags/summary already merged in-memory) that
+            // failed to persist — worth recording. Always the generic action type here (not
+            // `ARCHIVE_RATING_UPDATE`) since the rating-only distinction only matters for a
+            // successful write's own display.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::ARCHIVE_METADATA_UPDATE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: Some(id.to_string()),
+                    label: Some(archive.title.clone()),
+                    kind: Some("archive".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "update_metadata",
+                e.to_string(),
+            )
+        }
     }
 }
 

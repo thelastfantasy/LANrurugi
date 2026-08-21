@@ -38,7 +38,7 @@ export function ActivityPage() {
   useDocumentTitle(t("activity.pageTitle") ?? undefined)
   const narrow = useIsNarrowViewport()
 
-  const [filter, setFilter] = useState<ActivityFilterState>({ actors: [], actionTypes: [] })
+  const [filter, setFilter] = useState<ActivityFilterState>({ actors: [], actionTypes: [], outcomes: [] })
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined])
   const [pageIndex, setPageIndex] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -52,6 +52,7 @@ export function ActivityPage() {
     end_ts: filter.end_ts,
     actors: filter.actors,
     actionTypes: filter.actionTypes,
+    outcomes: filter.outcomes,
   })
   const facets = useActivityFacets()
   const bulkDelete = useBulkDeleteActivityEntries()
@@ -147,7 +148,7 @@ export function ActivityPage() {
   // instead of `1fr` stops them stretching to an equal share of the row's width on a wide
   // viewport, which left a lot of empty space inside each chip's own column; "操作内容" (the one
   // column with genuinely variable-length content) absorbs whatever's left over via its own `1fr`.
-  const gridColumns = canDelete ? "auto auto auto auto 1fr auto" : "auto auto auto 1fr"
+  const gridColumns = canDelete ? "auto auto auto auto auto 1fr auto" : "auto auto auto auto 1fr"
 
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12, boxSizing: "border-box", position: "relative" }}>
@@ -197,9 +198,10 @@ export function ActivityPage() {
               {canDelete && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 4px", fontSize: FONT_SIZE_SM, opacity: 0.65 }}>
                   <input
+                    ref={selectAllCheckboxRef}
                     type="checkbox"
                     aria-label={t("activity.selectAll") ?? undefined}
-                    checked={entries.length > 0 && entries.every((e) => selected.has(e.id))}
+                    checked={allSelected}
                     onChange={toggleAllOnPage}
                   />
                   <span>{t("activity.selectAll")}</span>
@@ -251,6 +253,7 @@ export function ActivityPage() {
                 <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("activity.actor")}</div>
                 <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("activity.action")}</div>
                 <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("activity.operationContent")}</div>
+                <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("activity.outcome")}</div>
                 {canDelete && <div></div>}
 
                 {entries.map((entry) => (

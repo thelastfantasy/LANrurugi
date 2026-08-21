@@ -1,10 +1,14 @@
 import { useTranslation } from "react-i18next"
 
+import { useApiTokens } from "@/api/hooks"
 import type { ActivityEntry } from "@/api/types"
-import { CodeBlock, IpGeoLink, Modal } from "@/components/Display"
+import { CodeBlock, IpGeoLink, Modal, Tooltip } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
-import { actionTypeLabel } from "./activityTarget"
+import { actorChipParts } from "./activityActor"
+import { ActivityChip } from "./ActivityChip"
+import { outcomeColor } from "./activityColors"
+import { actionTypeLabel, outcomeLabel } from "./activityTarget"
 import { MetadataDiff, type MetadataUpdateAfter, type MetadataUpdateBefore } from "./MetadataDiff"
 import { OperationDescription } from "./OperationDescription"
 
@@ -31,6 +35,9 @@ export function ActivityDetailPanel({
   onDelete?: () => void
 }) {
   const { t } = useTranslation()
+  const apiTokens = useApiTokens()
+  const token = entry.actor.kind === "token" && entry.actor.id ? apiTokens.data?.find((tk) => tk.id === entry.actor.id) : undefined
+  const { label: actorLabel, color: actorColor, tooltip: actorTooltip } = actorChipParts(t, entry, token)
   const showMetadataDiff = METADATA_DIFF_ACTION_TYPES.has(entry.action_type) && entry.after != null
 
   return (
@@ -51,32 +58,61 @@ export function ActivityDetailPanel({
         {new Date(entry.timestamp * 1000).toLocaleString()}
       </div>
 
-      <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 12, rowGap: 6, fontSize: FONT_SIZE_SM }}>
+      {/* `alignItems: "baseline"` — grid's own default (`"stretch"`) stretches each `dt`/`dd` cell
+          to the row's full track height and top-aligns its content inside that box, which reads as
+          visually misaligned whenever the two cells' content has different line-height/font
+          metrics (a plain-text `dt` next to a `dd` wrapping an `ActivityChip`'s own padded pill,
+          e.g.) even though their boxes' own top edges are pixel-identical — confirmed live via
+          `getBoundingClientRect()`. Baseline alignment instead lines up each row's actual text
+          baselines, which is what "aligned" visually means here. Every `dd` below also gets an
+          explicit `margin: 0` — the `<dl>`/`<dd>` UA stylesheet default is a 40px *inline-start*
+          margin (a browser default meant for a plain unstyled definition list, not a CSS Grid
+          layout), which stacked on top of this grid's own 12px `columnGap` to leave a much wider
+          gap between the two columns than either value alone would suggest. */}
+      <dl
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          alignItems: "baseline",
+          columnGap: 12,
+          rowGap: 6,
+          fontSize: FONT_SIZE_SM,
+        }}
+      >
+        <dt style={{ opacity: 0.65 }}>{t("activity.outcome")}</dt>
+        <dd style={{ margin: 0 }}>
+          <ActivityChip color={outcomeColor(entry.outcome.status)}>{outcomeLabel(t, entry.outcome.status)}</ActivityChip>
+        </dd>
+
         <dt style={{ opacity: 0.65 }}>{t("activity.actor")}</dt>
-        <dd>
-          {entry.actor.kind === "token" && entry.actor.display_name
-            ? entry.actor.display_name
-            : entry.actor.kind === "system" && entry.actor.display_name
-              ? entry.actor.display_name
-              : entry.actor.kind === "session"
-                ? t("activity.sessionUser")
-                : t("activity.anonymousUser")}
-          {/* The row's own chip only shows the token id on hover (a `Tooltip`) — this is already
-              the full-detail view, so it's shown directly instead of hidden behind a hover. */}
-          {entry.actor.kind === "token" && entry.actor.id && (
-            <span style={{ fontFamily: "monospace", opacity: 0.65, marginLeft: 8 }}>({entry.actor.id})</span>
-          )}
+        <dd style={{ margin: 0 }}>
+          <ActivityChip color={actorColor}>
+            {actorTooltip ? (
+              <Tooltip label={actorTooltip} wrapperStyle={{ alignItems: "center" }}>
+                {actorLabel}
+              </Tooltip>
+            ) : (
+              actorLabel
+            )}
+          </ActivityChip>
         </dd>
 
         <dt style={{ opacity: 0.65 }}>{t("activity.operationContent")}</dt>
-        <dd>
+        <dd style={{ margin: 0 }}>
           <OperationDescription entry={entry} />
         </dd>
+
+        {entry.outcome.status === "failure" && (
+          <>
+            <dt style={{ opacity: 0.65 }}>{t("activity.failureReason")}</dt>
+            <dd style={{ margin: 0, color: outcomeColor("failure").bg }}>{entry.outcome.reason}</dd>
+          </>
+        )}
 
         {entry.client_ip && (
           <>
             <dt style={{ opacity: 0.65 }}>{t("activity.ipAddress")}</dt>
-            <dd>
+            <dd style={{ margin: 0 }}>
               <IpGeoLink ip={entry.client_ip} />
             </dd>
           </>
@@ -85,7 +121,7 @@ export function ActivityDetailPanel({
         {entry.caused_by && (
           <>
             <dt style={{ opacity: 0.65 }}>{t("activity.causedBy")}</dt>
-            <dd>{entry.caused_by.description}</dd>
+            <dd style={{ margin: 0 }}>{entry.caused_by.description}</dd>
           </>
         )}
       </dl>

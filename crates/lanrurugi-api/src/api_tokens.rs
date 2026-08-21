@@ -20,7 +20,7 @@ use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::state::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 pub fn router() -> Router<AppState> {
     // Token management itself must never be reachable via API-token auth (even an admin-role
@@ -121,6 +121,7 @@ async fn create_token(
                     label: Some(issued.record.name.clone()),
                     kind: Some("token".to_string()),
                 },
+                Outcome::Success,
                 None,
                 Some(json!({ "role": issued.record.role, "expires_at": issued.record.expires_at })),
             )
@@ -132,11 +133,31 @@ async fn create_token(
             body["token"] = json!(issued.raw_token);
             ok("create_token", [("data", body)])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "create_token",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real attempt to issue a token that failed at the Redis write itself — worth
+            // recording, unlike the earlier empty-name validation rejection above.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_CREATE,
+                ActivityTarget {
+                    id: None,
+                    label: Some(name.to_string()),
+                    kind: Some("token".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "create_token",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -167,17 +188,38 @@ async fn delete_token(
                     label: Some(existing.name.clone()),
                     kind: Some("token".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
             .await;
             ok("delete_token", [])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_token",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // The token was found (existing record above) and revocation was genuinely attempted
+            // but the Redis delete itself failed — worth recording.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_REVOKE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: Some(existing.name.clone()),
+                    kind: Some("token".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_token",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -219,16 +261,37 @@ async fn rename_token(
                     label: Some(record.name.clone()),
                     kind: Some("token".to_string()),
                 },
+                Outcome::Success,
                 old_name.map(|n| json!({ "name": n })),
                 Some(json!({ "name": record.name })),
             )
             .await;
             ok("rename_token", [("data", token_json(&record))])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "rename_token",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // The token exists (would otherwise have hit `Ok(None)` above) and a rename was
+            // genuinely attempted but the Redis write itself failed — worth recording.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TOKEN_RENAME,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: old_name.clone(),
+                    kind: Some("token".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "rename_token",
+                e.to_string(),
+            )
+        }
     }
 }

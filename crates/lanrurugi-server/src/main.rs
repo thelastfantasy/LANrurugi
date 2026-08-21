@@ -312,6 +312,16 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    // Same "run it every startup, cheap no-op once already backfilled" pattern as
+    // `backfill_reverse_indexes` above — `outcome` didn't always exist on `ActivityEntry`, so an
+    // instance with pre-existing activity history has entries `append` never indexed by outcome at
+    // write time (see `backfill_outcome_index`'s own docs for the live-confirmed symptom: filtering
+    // by outcome returned zero results despite unfiltered `GET /activity` showing plenty of
+    // entries).
+    match activity.backfill_outcome_index().await {
+        Ok(n) => tracing::info!(count = n, "activity: backfilled outcome index"),
+        Err(e) => tracing::warn!(error = %e, "activity: outcome-index backfill skipped"),
+    }
 
     // Constructed *before* the watcher/startup-scan below (which used to run first) so both can
     // be given a live `AppState` clone — needed to run every "自动运行"/enabled metadata plugin on
@@ -600,6 +610,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "scanner",
                     lanrurugi_storage::activity::action_types::SCANNER_INGEST,
                     target.clone(),
+                    lanrurugi_storage::activity::Outcome::Success,
                     None,
                 )
                 .await;
@@ -614,6 +625,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "metadata_plugin",
                     lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
                     target,
+                    lanrurugi_storage::activity::Outcome::Success,
                     Some(lanrurugi_storage::activity::CausedBy {
                         reason: "scanner_ingest".to_string(),
                         source_entry_id: scanner_entry_id,

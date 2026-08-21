@@ -10,6 +10,7 @@ import { TimeRangeCombobox, type TimeRangeValue } from "./TimeRangeCombobox"
 export interface ActivityFilterState extends TimeRangeValue {
   actors: string[]
   actionTypes: string[]
+  outcomes: string[]
 }
 
 export function ActivityFilterBar({
@@ -71,7 +72,8 @@ export function ActivityFilterBar({
             <ActivityFilterCombobox
               actionTypes={filter.actionTypes}
               actors={filter.actors}
-              onActionTypesAndActorsChange={(actionTypes, actors) => onFilterChange({ ...filter, actionTypes, actors })}
+              outcomes={filter.outcomes}
+              onFilterDimensionsChange={(actionTypes, actors, outcomes) => onFilterChange({ ...filter, actionTypes, actors, outcomes })}
               facets={facets}
             />
           </div>
@@ -87,7 +89,8 @@ export function ActivityFilterBar({
       <ActivityFilterCombobox
         actionTypes={filter.actionTypes}
         actors={filter.actors}
-        onActionTypesAndActorsChange={(actionTypes, actors) => onFilterChange({ ...filter, actionTypes, actors })}
+        outcomes={filter.outcomes}
+        onFilterDimensionsChange={(actionTypes, actors, outcomes) => onFilterChange({ ...filter, actionTypes, actors, outcomes })}
         facets={facets}
       />
       <TimeRangeCombobox onValueChange={(range) => onFilterChange({ ...filter, ...range })} />

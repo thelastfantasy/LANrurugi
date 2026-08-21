@@ -18,7 +18,7 @@ use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 const BOOKMARK_LINK_FIELD: &str = "bookmark_link";
@@ -118,6 +118,7 @@ async fn create_category(
                     label: Some(category.name.clone()),
                     kind: Some("category".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
@@ -129,11 +130,32 @@ async fn create_category(
             }))
             .into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "create_category",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // The category was actually built and a Redis write was attempted (not a validation
+            // rejection) — worth recording so a silent Redis failure isn't invisible in the audit
+            // trail.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::CATEGORY_CREATE,
+                ActivityTarget {
+                    id: Some(catid.0.clone()),
+                    label: Some(category.name.clone()),
+                    kind: Some("category".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "create_category",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -193,6 +215,7 @@ async fn remove_bookmark_link(
             label: None,
             kind: Some("category".to_string()),
         },
+        Outcome::Success,
         Some(json!({ "bookmark_link": category_id })),
         Some(json!({ "bookmark_link": null })),
     )
@@ -246,6 +269,7 @@ async fn update_bookmark_link(
                     label: Some(c.name.clone()),
                     kind: Some("category".to_string()),
                 },
+                Outcome::Success,
                 None,
                 Some(json!({ "bookmark_link": id.0 })),
             )
@@ -357,17 +381,39 @@ async fn delete_category(
                     label: existing.map(|c| c.name),
                     kind: Some("category".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
             .await;
             axum::Json(json!({ "operation": "delete_category", "success": 1 })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_category",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // Deletion was actually attempted against a category id that was found (or at least
+            // looked up) beforehand — a genuine storage failure, not a not-found/validation
+            // rejection, so it belongs in the audit trail.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::CATEGORY_DELETE,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: existing.map(|c| c.name),
+                    kind: Some("category".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_category",
+                e.to_string(),
+            )
+        }
     }
 }
 

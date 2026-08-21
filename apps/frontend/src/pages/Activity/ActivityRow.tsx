@@ -4,9 +4,10 @@ import { useApiTokens } from "@/api/hooks"
 import type { ActivityEntry } from "@/api/types"
 import { DateTimeStack, IconButton, Tooltip } from "@/components/Display"
 
+import { actorChipParts } from "./activityActor"
 import { ActivityChip } from "./ActivityChip"
-import { actionTypeColor, actorKindColor } from "./activityColors"
-import { actionTypeLabel } from "./activityTarget"
+import { actionTypeColor, outcomeColor } from "./activityColors"
+import { actionTypeLabel, outcomeLabel } from "./activityTarget"
 import { OperationDescription } from "./OperationDescription"
 
 /** One row of the Activity list. In wide mode this is a CSS grid row (`display: contents` — see
@@ -51,44 +52,7 @@ export function ActivityRow({
   const { t } = useTranslation()
   const apiTokens = useApiTokens()
   const token = entry.actor.kind === "token" && entry.actor.id ? apiTokens.data?.find((tk) => tk.id === entry.actor.id) : undefined
-
-  // `fa-user-shield` matches `Settings/ApiTokensSection.tsx`'s own `RoleMarker` — the same glyph
-  // that component already uses for a token's "full access" admin role, reused here since a
-  // Session actor is exactly that same full-access case (see `AuthMethod::Session`'s own docs:
-  // "a real human who's already proven the admin password, never subject to a Guest-role
-  // restriction") rather than inventing a second icon for the same concept. A token whose id no
-  // longer resolves (`!token`, looked up live against `apiTokens.data`) gets the same
-  // `fa-user-slash` treatment `ActivityFilterCombobox.tsx`'s own facet dropdown uses — this row's
-  // `entry.actor.display_name` is the real name snapshotted at write time (still legible after
-  // revocation, per `Actor::display_name`'s own docs), so unlike that dropdown's own bare-UUID
-  // fallback the icon is the only signal here that the token is actually gone now.
-  const actorLabel =
-    entry.actor.kind === "token" && entry.actor.id && !token
-      ? (
-          <>
-            <i className="fas fa-user-slash activity-chip-danger-icon" aria-hidden="true"></i>{" "}
-            {entry.actor.display_name ?? entry.actor.id}
-          </>
-        )
-      : entry.actor.kind === "token" || entry.actor.kind === "system"
-        ? (entry.actor.display_name ?? entry.actor.id ?? entry.actor.kind)
-        : entry.actor.kind === "session"
-          ? (
-              <>
-                <i className="fas fa-user-shield" aria-hidden="true"></i> {t("activity.sessionUser")}
-              </>
-            )
-          : t("activity.anonymousUser")
-
-  const actorColor = actorKindColor(entry.actor.kind, entry.actor.id ?? undefined)
-  const actorTooltip =
-    entry.actor.kind === "token" && entry.actor.id ? (
-      <>
-        <div style={{ fontFamily: "monospace" }}>{entry.actor.id}</div>
-        {token && <div>{t(token.role === "guest" ? "Guest" : "Admin")}</div>}
-        {!token && <div>{t("activity.revoked")}</div>}
-      </>
-    ) : undefined
+  const { label: actorLabel, color: actorColor, tooltip: actorTooltip } = actorChipParts(t, entry, token)
 
   const actorChip = (
     <ActivityChip color={actorColor}>
@@ -102,22 +66,24 @@ export function ActivityRow({
     </ActivityChip>
   )
   const actionChip = <ActivityChip color={actionTypeColor(entry.action_type)}>{actionTypeLabel(t, entry.action_type)}</ActivityChip>
+  const outcomeChip = <ActivityChip color={outcomeColor(entry.outcome.status)}>{outcomeLabel(t, entry.outcome.status)}</ActivityChip>
 
   if (narrow) {
     return (
       <div
         className={entry.auto_or_manual === "automatic" ? "activity-row-automatic" : undefined}
-        style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 4px", cursor: "pointer", minWidth: 0 }}
+        style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "10px 4px", cursor: "pointer", minWidth: 0 }}
         onClick={onOpenDetail}
       >
-        {/* Its own dedicated column, matching the delete button's own column on the other end of
-            the card — not inline with the time/chips row (an earlier version mixed it into that
-            wrapped row), so it stays put at a fixed position regardless of how many chips wrap onto
-            a second line, and both end columns share the same vertical-centering treatment
-            (`alignItems: "center"` on this card's own root, not `"flex-start"`) instead of pinning
-            to the card's top edge. */}
+        {/* `alignItems: "flex-start"` on the card's own root (not `"center"`, an earlier version)
+            — the checkbox now needs to line up with the *first* row (the time/chip row) specifically,
+            not the vertical center of the whole card, since the delete button that used to anchor a
+            second, independent column has moved down into the content column's own second row (see
+            that row's own comment below for why). `marginTop` nudges it down those few pixels to
+            match that first row's own line-height instead of sitting flush with the card's very top
+            edge. */}
         {selectable && (
-          <div style={{ flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ flexShrink: 0, marginTop: 3 }} onClick={(e) => e.stopPropagation()}>
             <input
               type="checkbox"
               aria-label={t("activity.selectEntry") ?? undefined}
@@ -128,13 +94,7 @@ export function ActivityRow({
         )}
         {/* `minWidth: 0` on this flex child is required for its own children's `overflow: hidden`/
             `textOverflow: ellipsis` (below) to ever take effect — see the wide-mode row's own note
-            on this same CSS gotcha. The delete button lives OUTSIDE this flex child instead of
-            inside its wrapping first line (an earlier version used `marginLeft: auto` within the
-            wrapped chip row) — a `margin-left: auto` item doesn't reliably wrap onto its own new
-            line once the preceding wrapped content nearly fills the row's width; it just overflows
-            the row instead, confirmed live as the actual cause of horizontal clipping on a real
-            390px-wide viewport. A sibling flex column, sized by its own content, can't be pushed
-            off-screen this way. */}
+            on this same CSS gotcha. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
             <span style={{ whiteSpace: "nowrap" }}>
@@ -142,22 +102,36 @@ export function ActivityRow({
             </span>
             {actorChip}
             {actionChip}
+            {outcomeChip}
           </div>
-          <div style={{ textAlign: "left", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            <OperationDescription entry={entry} />
+          {/* Delete button now shares this row with the operation-description text instead of
+              claiming its own full-height column at the card's outer edge (an earlier version) —
+              per direct feedback: when the chip row above wrapped onto two lines (a long actor/
+              action-type/outcome combination on a real narrow viewport), that separate column made
+              the delete button visually drift to the middle of a now-taller card, floating next to
+              whichever wrapped chip line happened to end up at its own vertical center rather than
+              anchored to any one row. Folding it into this second row instead means it always sits
+              next to the operation description specifically, regardless of how tall the chip row
+              above grows. `flex: 1, minWidth: 0` on the text span (not the wrapping row) is what
+              lets `textOverflow: ellipsis` still work with a fixed-width sibling now sharing the
+              row — see the wide-mode row's own matching note on this same requirement. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ textAlign: "left", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <OperationDescription entry={entry} />
+            </span>
+            {selectable && (
+              <div style={{ flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                <IconButton
+                  icon="fas fa-trash"
+                  className="stdbtn stdbtn-danger"
+                  size="medium"
+                  title={t("common.delete") ?? undefined}
+                  onClick={onDelete}
+                />
+              </div>
+            )}
           </div>
         </div>
-        {selectable && (
-          <div style={{ flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-            <IconButton
-              icon="fas fa-trash"
-              className="stdbtn stdbtn-danger"
-              size="medium"
-              title={t("common.delete") ?? undefined}
-              onClick={onDelete}
-            />
-          </div>
-        )}
       </div>
     )
   }
@@ -237,6 +211,7 @@ export function ActivityRow({
       >
         <OperationDescription entry={entry} />
       </div>
+      <div style={{ display: "flex", alignItems: "center", padding: "8px 6px", margin: "0 -6px" }}>{outcomeChip}</div>
       {selectable && (
         // Left-only negative margin (`"0 0 0 -6px"`) — this is the row's very last cell, so a
         // symmetric `-6px` would also push its *right* edge past the grid's own outer boundary

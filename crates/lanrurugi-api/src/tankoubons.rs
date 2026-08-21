@@ -22,7 +22,7 @@ use crate::archives::ArchiveMetadataJson;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 /// Matches legacy's default `archives_per_page` (verified: `ServerInfo` example in
 /// `tools/openapi.yaml`).
@@ -258,6 +258,7 @@ async fn create_or_rename_tankoubon(
                     auth.as_ref().map(|e| &e.0),
                     action_types::TANKOUBON_CREATE,
                     target,
+                    Outcome::Success,
                     None,
                     None,
                 )
@@ -268,6 +269,7 @@ async fn create_or_rename_tankoubon(
                     auth.as_ref().map(|e| &e.0),
                     action_types::TANKOUBON_RENAME,
                     target,
+                    Outcome::Success,
                     Some(json!({ "name": old_name })),
                     Some(json!({ "name": grouping.name })),
                 )
@@ -280,11 +282,37 @@ async fn create_or_rename_tankoubon(
             }))
             .into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "create_tankoubon",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real Redis write failure on the actual create/rename attempt — pick the same
+            // action type the success branch above would have used, so a failed create and a
+            // failed rename aren't indistinguishable in the log.
+            let action_type = if is_new {
+                action_types::TANKOUBON_CREATE
+            } else {
+                action_types::TANKOUBON_RENAME
+            };
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_type,
+                ActivityTarget {
+                    id: Some(tankid.0.clone()),
+                    label: Some(grouping.name.clone()),
+                    kind: Some("tankoubon".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "create_tankoubon",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -923,6 +951,7 @@ async fn update_tankoubon(
                         auth.as_ref().map(|e| &e.0),
                         action_types::TANKOUBON_RATING_UPDATE,
                         target,
+                        Outcome::Success,
                         Some(json!({ "rating": tags_removed.first() })),
                         Some(json!({ "rating": tags_added.first() })),
                     )
@@ -934,6 +963,7 @@ async fn update_tankoubon(
                     auth.as_ref().map(|e| &e.0),
                     action_types::TANKOUBON_METADATA_UPDATE,
                     target,
+                    Outcome::Success,
                     Some(json!({ "name": old_name, "summary": old_summary })),
                     Some(json!({
                         "name": grouping.name,
@@ -947,11 +977,37 @@ async fn update_tankoubon(
 
             axum::Json(json!({ "operation": "update_tankoubon", "success": 1 })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "update_tankoubon",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real Redis save failure on the actual update attempt — reuse the same
+            // rating-vs-metadata split the success branch uses so a failed rating tweak and a
+            // failed real edit aren't indistinguishable in the log.
+            let action_type = if non_rating_change {
+                action_types::TANKOUBON_METADATA_UPDATE
+            } else {
+                action_types::TANKOUBON_RATING_UPDATE
+            };
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_type,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: Some(grouping.name.clone()),
+                    kind: Some("tankoubon".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "update_tankoubon",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -1086,17 +1142,38 @@ async fn delete_tankoubon(
                     label: Some(old_name).filter(|n| !n.is_empty()),
                     kind: Some("tankoubon".to_string()),
                 },
+                Outcome::Success,
                 None,
                 None,
             )
             .await;
             axum::Json(json!({ "operation": "delete_tankoubon", "success": 1 })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "delete_tankoubon",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A real Redis delete failure on the actual delete attempt (not the earlier best-
+            // effort lookup) — the user's delete genuinely didn't take effect.
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::TANKOUBON_DELETE,
+                ActivityTarget {
+                    id: Some(id.0.clone()),
+                    label: Some(old_name).filter(|n| !n.is_empty()),
+                    kind: Some("tankoubon".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_tankoubon",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -1166,6 +1243,7 @@ async fn add_to_tankoubon(
                         label: Some(grouping.name.clone()).filter(|n| !n.is_empty()),
                         kind: Some("tankoubon".to_string()),
                     },
+                    Outcome::Success,
                     None,
                     Some(json!({ "archive": archive.0 })),
                 )
@@ -1173,11 +1251,34 @@ async fn add_to_tankoubon(
             }
             axum::Json(json!({ "operation": "add_to_tankoubon", "success": 1 })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "add_to_tankoubon",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // Only worth recording when this was actually a real member-add attempt (`newly_added`
+            // — a no-op re-add that failed to save is uninteresting, same triviality reasoning
+            // legacy would apply). A real Redis save failure here is a genuine failed add.
+            if newly_added {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_MEMBER_ADD,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: None,
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+            }
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "add_to_tankoubon",
+                e.to_string(),
+            )
+        }
     }
 }
 
@@ -1234,6 +1335,7 @@ async fn remove_from_tankoubon(
                         label: Some(grouping.name.clone()).filter(|n| !n.is_empty()),
                         kind: Some("tankoubon".to_string()),
                     },
+                    Outcome::Success,
                     Some(json!({ "archive": archive.0 })),
                     None,
                 )
@@ -1242,11 +1344,33 @@ async fn remove_from_tankoubon(
             axum::Json(json!({ "operation": "remove_from_tankoubon", "success": 1 }))
                 .into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "remove_from_tankoubon",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // Same "only a real attempted change" gating as `add_to_tankoubon`'s own failure
+            // record — `was_present` means the archive really was being removed, not a no-op.
+            if was_present {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::TANKOUBON_MEMBER_REMOVE,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: None,
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+            }
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "remove_from_tankoubon",
+                e.to_string(),
+            )
+        }
     }
 }
 

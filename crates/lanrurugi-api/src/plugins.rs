@@ -386,6 +386,24 @@ async fn put_plugin_priority(
         let key = plugin_settings_key(namespace);
         let result: Result<(), _> = conn.hset(&key, "priority", index.to_string()).await;
         if let Err(e) = result {
+            // A real attempted priority write (the namespace already passed the type check above)
+            // that failed on the actual Redis write — worth recording.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::PLUGIN_PRIORITY_UPDATE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: None,
+                    label: Some(body.kind.clone()),
+                    kind: Some("plugin".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "put_plugin_priority",
@@ -402,6 +420,7 @@ async fn put_plugin_priority(
             label: Some(body.kind.clone()),
             kind: Some("plugin".to_string()),
         },
+        lanrurugi_storage::activity::Outcome::Success,
         None,
         Some(json!({ "order": body.order, "skipped": skipped })),
     )
@@ -1330,6 +1349,7 @@ async fn use_plugin_sync(
                     label: Some(plugin.clone()),
                     kind: Some("plugin".to_string()),
                 },
+                lanrurugi_storage::activity::Outcome::Success,
                 None,
                 None,
             )
@@ -1342,13 +1362,34 @@ async fn use_plugin_sync(
             }))
             .into_response()
         }
-        Err(e) => axum::Json(json!({
-            "operation": "use_plugin",
-            "success": 0,
-            "type": info.kind,
-            "error": e.to_string(),
-        }))
-        .into_response(),
+        Err(e) => {
+            // The plugin was actually invoked (past discovery/info-lookup) and its own run
+            // failed/timed out/errored — this is the core reason `PLUGIN_EXECUTE` exists as an
+            // action type at all, the user needs to know their manual "run plugin" click failed.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::PLUGIN_EXECUTE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: params.id.clone(),
+                    label: Some(plugin.clone()),
+                    kind: Some("plugin".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            axum::Json(json!({
+                "operation": "use_plugin",
+                "success": 0,
+                "type": info.kind,
+                "error": e.to_string(),
+            }))
+            .into_response()
+        }
     }
 }
 
@@ -1498,6 +1539,7 @@ async fn download_url(
             label: Some(url.clone()),
             kind: Some("download_url".to_string()),
         },
+        lanrurugi_storage::activity::Outcome::Success,
         None,
         Some(json!({ "plugin": plugin, "category": params.catid })),
     )
@@ -2562,6 +2604,25 @@ async fn upload_plugin(
         );
     }
     if let Err(e) = tokio::fs::write(&staged_path, &bytes).await {
+        // A real attempted plugin-file upload (past the name-conflict check, a real file really
+        // submitted) that failed on the actual disk write — worth recording, unlike the
+        // pre-execution "no file provided"/"not a .ts file" rejections above.
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            lanrurugi_storage::activity::action_types::PLUGIN_UPLOAD,
+            lanrurugi_storage::activity::ActivityTarget {
+                id: Some(staged_namespace.clone()),
+                label: Some(file_name.clone()),
+                kind: Some("plugin".to_string()),
+            },
+            lanrurugi_storage::activity::Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "upload_plugin",
@@ -2638,6 +2699,7 @@ async fn upload_plugin(
             label: Some(info.name.clone()),
             kind: Some("plugin".to_string()),
         },
+        lanrurugi_storage::activity::Outcome::Success,
         None,
         Some(json!({ "type": info.kind })),
     )

@@ -477,11 +477,30 @@ async fn put_settings(
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
             Ok(v) => v,
             Err(e) => {
+                // Validation already passed for `key` — this is a real attempted write that
+                // failed at the Redis `HSET` itself, unlike the unknown-field/bad-type rejections
+                // above which never got this far.
+                crate::activity::record_manual(
+                    &state,
+                    auth.as_ref().map(|axum::extract::Extension(a)| a),
+                    lanrurugi_storage::activity::action_types::SETTINGS_UPDATE,
+                    lanrurugi_storage::activity::ActivityTarget {
+                        id: None,
+                        label: Some(key.clone()),
+                        kind: Some("settings".to_string()),
+                    },
+                    lanrurugi_storage::activity::Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
                 return error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "put_settings",
                     e.to_string(),
-                )
+                );
             }
         };
     }
@@ -496,6 +515,7 @@ async fn put_settings(
                 label: None,
                 kind: Some("settings".to_string()),
             },
+            lanrurugi_storage::activity::Outcome::Success,
             None,
             Some(json!({ "changed_fields": changed_fields })),
         )
@@ -604,17 +624,39 @@ async fn change_password(
                     label: None,
                     kind: Some("settings".to_string()),
                 },
+                lanrurugi_storage::activity::Outcome::Success,
                 None,
                 None,
             )
             .await;
             axum::Json(json!({ "operation": "change_password", "success": 1 })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "change_password",
-            e.to_string(),
-        ),
+        Err(e) => {
+            // A password change was genuinely attempted (hashing already succeeded) but the
+            // Redis write itself failed — worth recording, especially since this is a
+            // security-sensitive action.
+            crate::activity::record_manual(
+                &state,
+                auth.as_ref().map(|axum::extract::Extension(a)| a),
+                lanrurugi_storage::activity::action_types::SETTINGS_PASSWORD_CHANGE,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("settings".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "change_password",
+                e.to_string(),
+            )
+        }
     }
 }
 

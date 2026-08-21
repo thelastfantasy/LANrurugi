@@ -692,6 +692,12 @@ export interface ActivityCausedBy {
   description: string
 }
 
+// Matches `lanrurugi_storage::activity::Outcome`'s own `#[serde(tag = "status", rename_all =
+// "snake_case")]` internally-tagged shape — a real, discriminated union on `status`, not two
+// separate optional fields, so a `Failure` entry's `reason` is only ever reachable once the caller
+// has already narrowed on `status === "failure"`.
+export type ActivityOutcome = { status: "success" } | { status: "failure"; reason: string }
+
 export interface ActivityEntry {
   id: string
   timestamp: number
@@ -699,6 +705,7 @@ export interface ActivityEntry {
   auto_or_manual: "manual" | "automatic"
   action_type: string
   target: ActivityTarget
+  outcome: ActivityOutcome
   client_ip: string | null
   before: unknown | null
   after: unknown | null
@@ -738,6 +745,8 @@ export interface ActivityFilter {
   actors?: string[]
   /** OR'd together — same reasoning as `actors` above. */
   actionTypes?: string[]
+  /** `"success"` | `"failure"`, OR'd together — same reasoning as `actors`/`actionTypes` above. */
+  outcomes?: string[]
 }
 
 export interface ActivityRetention {

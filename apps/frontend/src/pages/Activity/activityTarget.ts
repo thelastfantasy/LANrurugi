@@ -88,6 +88,12 @@ export function isDeletionActionType(actionType: string): boolean {
   return DELETION_ACTION_TYPES.has(actionType)
 }
 
+/** `"success"` | `"failure"` → its i18n display label — same "one shared lookup" reasoning as
+ * `actionTypeLabel` above. */
+export function outcomeLabel(t: (key: string) => string | null, status: string): string {
+  return (status === "failure" ? t("activity.outcomeFailure") : t("activity.outcomeSuccess")) ?? status
+}
+
 /** `action_type` values whose `target.label`/`target.id` are both always `null` — a handful of
  * whole-database operations (`database.rs`'s own write sites confirm every one of these) that
  * have no single resource to name at all, not "a resource whose title happens to be missing this

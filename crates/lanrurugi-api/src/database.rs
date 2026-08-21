@@ -17,7 +17,7 @@ use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
 pub fn router() -> Router<AppState> {
@@ -221,6 +221,7 @@ async fn queue_restore(
             label: None,
             kind: Some("database".to_string()),
         },
+        Outcome::Success,
         None,
         None,
     )
@@ -230,6 +231,8 @@ async fn queue_restore(
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
+    let state_for_task = state.clone();
+    let auth_for_task = auth.as_ref().map(|e| e.0.clone());
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
@@ -256,7 +259,28 @@ async fn queue_restore(
                 )
                 .await;
             }
-            Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
+            Err(e) => {
+                // The restore was actually attempted (request already accepted, task running) and
+                // failed partway through — distinct from the earlier body/JSON validation
+                // rejections above, which never got this far.
+                record_manual(
+                    &state_for_task,
+                    auth_for_task.as_ref(),
+                    action_types::DATABASE_RESTORE,
+                    ActivityTarget {
+                        id: None,
+                        label: None,
+                        kind: Some("database".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+                jobs.fail(&job_id_for_task, e.to_string()).await;
+            }
         }
     });
 
@@ -298,6 +322,7 @@ async fn clear_new_all(
             label: None,
             kind: Some("database".to_string()),
         },
+        Outcome::Success,
         None,
         Some(json!({ "cleared": cleared })),
     )
@@ -313,6 +338,10 @@ async fn drop_database(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
 ) -> Response {
+    // Collected rather than discarded (the previous `let _: Result<(), _> = ...` silently dropped
+    // every pool's outcome) — this is a whole-library wipe, so a `FLUSHDB` that actually failed on
+    // any of the five logical DBs must not vanish without a trace.
+    let mut failures: Vec<String> = Vec::new();
     for pool in [
         &state.redis.archive,
         &state.redis.minion,
@@ -320,10 +349,16 @@ async fn drop_database(
         &state.redis.search,
         &state.redis.metrics,
     ] {
-        if let Ok(mut conn) = pool.get().await {
-            let _: Result<(), _> = deadpool_redis::redis::cmd("FLUSHDB")
-                .query_async(&mut conn)
-                .await;
+        match pool.get().await {
+            Ok(mut conn) => {
+                if let Err(e) = deadpool_redis::redis::cmd("FLUSHDB")
+                    .query_async::<()>(&mut conn)
+                    .await
+                {
+                    failures.push(e.to_string());
+                }
+            }
+            Err(e) => failures.push(e.to_string()),
         }
     }
 
@@ -332,6 +367,13 @@ async fn drop_database(
     // re-derives a fresh id/timestamp *after* the wipe, so this one record survives its own
     // triggering operation instead of being flushed along with everything else a half-second
     // earlier would have caused.
+    let outcome = if failures.is_empty() {
+        Outcome::Success
+    } else {
+        Outcome::Failure {
+            reason: failures.join("; "),
+        }
+    };
     record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -341,6 +383,7 @@ async fn drop_database(
             label: None,
             kind: Some("database".to_string()),
         },
+        outcome,
         None,
         None,
     )
@@ -395,6 +438,7 @@ async fn clean_database(
             label: None,
             kind: Some("database".to_string()),
         },
+        Outcome::Success,
         None,
         Some(json!({ "deleted": deleted, "unlinked": unlinked })),
     )
@@ -428,6 +472,7 @@ async fn rebuild_index(
             label: None,
             kind: Some("database".to_string()),
         },
+        Outcome::Success,
         None,
         None,
     )
@@ -445,9 +490,17 @@ async fn rebuild_index(
     // auto-tag them exactly the same way the watcher/startup scan would, so this just hands that
     // same consumer a clone of its sender rather than spawning a redundant one of its own.
     let new_archive_tx = state.new_archive_tx.clone();
+    let state_for_task = state.clone();
+    let auth_for_task = auth.as_ref().map(|e| e.0.clone());
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
+
+        let rebuild_failure_target = ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("database".to_string()),
+        };
 
         let rekey_summary = match lanrurugi_storage::rebuild::rekey_all(
             &repos.archives,
@@ -460,6 +513,20 @@ async fn rebuild_index(
         {
             Ok(s) => s,
             Err(e) => {
+                // The rebuild task actually started and failed partway through (re-keying pass) —
+                // distinct from the "request accepted" record already written above.
+                record_manual(
+                    &state_for_task,
+                    auth_for_task.as_ref(),
+                    action_types::DATABASE_REBUILD_INDEX,
+                    rebuild_failure_target,
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
                 jobs.fail(&job_id_for_task, e.to_string()).await;
                 return;
             }
@@ -489,6 +556,24 @@ async fn rebuild_index(
         )
         .await
         {
+            // Same reasoning as the re-key failure above — the rebuild ran and failed on its
+            // reverse-index backfill pass, a real operational failure worth its own record.
+            record_manual(
+                &state_for_task,
+                auth_for_task.as_ref(),
+                action_types::DATABASE_REBUILD_INDEX,
+                ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("database".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             jobs.fail(&job_id_for_task, e.to_string()).await;
             return;
         }

@@ -25,7 +25,7 @@ use crate::download_manager::ingest::ingest_downloaded_file;
 use crate::download_manager::stream::DownloadedFile;
 use crate::plugins::update_queue_item_state;
 use crate::AppState;
-use lanrurugi_storage::activity::{action_types, ActivityTarget};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 /// Axum's `Multipart` extractor enforces `DefaultBodyLimit`'s built-in 2 MB default when no
 /// layer overrides it — real manga archives routinely exceed that by 100x, so uploads failed
@@ -265,6 +265,7 @@ async fn upload_archive(
                     label: Some(file_name.clone()),
                     kind: Some("archive".to_string()),
                 },
+                Outcome::Success,
                 None,
                 Some(json!({
                     "metadata_plugins_ran": plugin_summary.successes,
@@ -315,6 +316,35 @@ async fn upload_archive(
                 None,
             )
             .await;
+
+            // Bytes were staged and cataloging was genuinely attempted (`PendingRename` is
+            // excluded — see the doc comment above the `match` this arm belongs to — since that
+            // case isn't a real failure, the bytes just await a user decision). Checked against
+            // `e` itself, not the converted `queue_error` — `IngestDownloadError::PendingRename`
+            // and a genuine filename collision both convert to the same
+            // `QueueError::DuplicateFilename` shape, so only the pre-conversion error
+            // distinguishes them.
+            if !matches!(
+                e,
+                crate::download_manager::ingest::IngestDownloadError::PendingRename(_)
+            ) {
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::ARCHIVE_UPLOAD,
+                    ActivityTarget {
+                        id: None,
+                        label: Some(file_name.clone()),
+                        kind: Some("archive".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+            }
 
             use lanrurugi_core::queue_error::QueueError;
             let (status, message, existing_id) = match &queue_error {

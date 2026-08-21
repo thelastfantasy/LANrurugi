@@ -1100,5 +1100,10 @@
   "batch.confirmDeleteSelectedN": "選択した {{n}} 件の档案を削除しますか？メタデータと対応するファイルの両方がシステムから削除されます。この操作は元に戻せません。",
   "common.typeToConfirm": "確認のため \"{{word}}\" と入力してください：",
   "batch.deletedNOfMFailed": "{{total}} 件中 {{deleted}} 件を削除しました。一部失敗しています。ログを確認してください。",
-  "batch.deleteRequestFailed": "一括削除リクエストが失敗しました"
+  "batch.deleteRequestFailed": "一括削除リクエストが失敗しました",
+  "activity.filterGroupOutcomes": "状態",
+  "activity.outcome": "状態",
+  "activity.outcomeSuccess": "成功",
+  "activity.outcomeFailure": "失敗",
+  "activity.failureReason": "失敗の理由"
 }

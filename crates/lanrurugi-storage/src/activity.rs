@@ -185,6 +185,41 @@ pub enum AutoOrManual {
     Automatic,
 }
 
+/// Whether the recorded action actually completed — every write site historically only ever
+/// called `record_manual`/`record_automatic` from its own success path, so a failed action (a 500,
+/// a validation rejection, a partial-failure branch) left no trace in the activity log at all
+/// despite being exactly the kind of event an operator audit trail exists to surface. Each write
+/// site was individually reviewed to add a `Failure` record on its own real failure branches (not
+/// mechanically bolted onto every `Err` in the file — several early-return validation failures,
+/// e.g. "unknown settings field", intentionally still don't get their own entry, since those are
+/// rejected before anything resembling the named action was attempted at all).
+///
+/// `#[serde(tag = "status")]` (an internally-tagged enum, not the default externally-tagged
+/// `{"failure": {"reason": "..."}}` shape) so the JSON stays flat and easy for the frontend to
+/// branch on with a single `outcome.status` string, matching how `AutoOrManual`/`ActorKind` above
+/// are already flat string enums the frontend switches on directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Outcome {
+    Success,
+    /// `reason` is a short, human-readable failure summary (an error's `Display` output, or a
+    /// validation-rejection message) — same "safe to show, not necessarily exhaustive" contract as
+    /// `JobStatus::error` (`lanrurugi_core::jobs`), not a full error chain/backtrace.
+    Failure {
+        reason: String,
+    },
+}
+
+impl Default for Outcome {
+    /// Every `ActivityEntry` persisted before this field existed was, definitionally, a recorded
+    /// success (see this enum's own docs on why failures were never recorded at all until now) —
+    /// `#[serde(default)]` on `ActivityEntry::outcome` deserializes an old stored record's missing
+    /// field to this, which is the historically accurate value, not an arbitrary placeholder.
+    fn default() -> Self {
+        Self::Success
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub id: String,
@@ -196,6 +231,8 @@ pub struct ActivityEntry {
     pub auto_or_manual: AutoOrManual,
     pub action_type: ActionType,
     pub target: ActivityTarget,
+    #[serde(default)]
+    pub outcome: Outcome,
     /// Display/diagnostic only — same disclaimer as `ApiTokenRecord::last_used_ip`: derived from
     /// `X-Forwarded-For`'s first hop or the raw peer address, spoofable from an untrusted network
     /// position with no trusted-proxy allowlist configured. `None` for `System`-actor entries
@@ -232,6 +269,22 @@ fn by_actor_key(actor_key: &str) -> String {
 
 fn by_action_type_key(action_type: &str) -> String {
     format!("LANRURUGI_ACTIVITY_BY_ACTION_{action_type}")
+}
+
+/// `outcome_key` is the fixed string `"success"`/`"failure"` (`Outcome`'s own `#[serde(tag =
+/// "status")]` discriminant) — unlike actor/action_type, there are only ever exactly these two
+/// values, so this index needs no `KNOWN_*` candidate-discovery set the way `KNOWN_ACTORS_KEY`/
+/// `KNOWN_ACTION_TYPES_KEY` provide for those (the frontend's outcome filter can hardcode both
+/// options rather than asking `facets()` what values exist).
+fn by_outcome_key(outcome_key: &str) -> String {
+    format!("LANRURUGI_ACTIVITY_BY_OUTCOME_{outcome_key}")
+}
+
+fn outcome_index_key(outcome: &Outcome) -> &'static str {
+    match outcome {
+        Outcome::Success => "success",
+        Outcome::Failure { .. } => "failure",
+    }
 }
 
 /// Every actor key that has ever appeared — the facets endpoint's candidate source (further
@@ -271,6 +324,11 @@ pub struct ActivityFilter {
     /// OR'd together — same reasoning as `actor_keys` above (a single entry has exactly one
     /// `action_type`, so this can only ever be a "match any of" filter, never "match all of").
     pub action_types: Vec<String>,
+    /// "success" | "failure" ([`outcome_index_key`]'s own format) — same OR-multiple/AND-across-
+    /// dimensions treatment as `actor_keys`/`action_types`. In practice the frontend only ever
+    /// offers exactly these two checkboxes, so this is almost always `[]` (no filter), `["success"]`,
+    /// `["failure"]`, or both (equivalent to no filter, but a legal query all the same).
+    pub outcome_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -386,6 +444,13 @@ impl ActivityRepository {
         let _: () = conn
             .sadd(KNOWN_ACTION_TYPES_KEY, &entry.action_type)
             .await?;
+        let _: () = conn
+            .zadd(
+                by_outcome_key(outcome_index_key(&entry.outcome)),
+                &entry.id,
+                entry.timestamp,
+            )
+            .await?;
 
         if let Some(secs) = ttl_secs {
             let ttl = secs.max(1);
@@ -398,20 +463,21 @@ impl ActivityRepository {
     /// continues strictly before it (exclusive), so the boundary entry from the previous page is
     /// never repeated. `limit` is expected to already be clamped by the caller (API layer).
     ///
-    /// Combines up to three filter dimensions:
+    /// Combines up to four filter dimensions:
     /// - time range alone (or no filter at all) → scans `ORDER_KEY` directly.
-    /// - `actor_keys` alone (one or more) → a single actor key scans `by_actor_key(actor)`
-    ///   directly; multiple are OR'd via a short-lived `ZUNIONSTORE`'d temp key (30s TTL,
-    ///   self-reaping) first, since a single entry only ever has one actor (see
-    ///   [`ActivityFilter::actor_keys`]'s own docs on why this is "any of", never "all of").
-    /// - `action_types` alone → same one-key-direct / multi-key-`ZUNIONSTORE`'d-temp-key
-    ///   treatment as `actor_keys`.
-    /// - both dimensions together → whichever of the two temp/direct keys each side resolved to
-    ///   are `ZINTERSTORE`'d into a further temp key (also 30s TTL) as the final scan source,
-    ///   since both inputs carry the same score (this entry's own timestamp) for any member they
-    ///   share, `ZINTERSTORE`'s default SUM aggregation doubles the score but preserves relative
-    ///   order, so the same `ZREVRANGEBYSCORE` pagination logic below still works unmodified
-    ///   against it.
+    /// - `actor_keys`/`action_types`/`outcome_keys`, each alone (one or more values) → a single
+    ///   value scans its own `by_*_key(...)` directly; multiple values within the *same* dimension
+    ///   are OR'd via a short-lived `ZUNIONSTORE`'d temp key (30s TTL, self-reaping) first, since a
+    ///   single entry only ever has one actor/one action_type/one outcome (see
+    ///   [`ActivityFilter::actor_keys`]'s own docs on why this is "any of", never "all of", within
+    ///   one dimension).
+    /// - two or more dimensions together → whichever direct/`ZUNIONSTORE`'d key each active
+    ///   dimension resolved to are `ZINTERSTORE`'d pairwise into a further temp key (also 30s TTL)
+    ///   as the final scan source, since every input carries the same score (this entry's own
+    ///   timestamp) for any member it shares — `ZINTERSTORE`'s default SUM aggregation multiplies
+    ///   the score by however many dimensions matched, but preserves relative order, so the same
+    ///   `ZREVRANGEBYSCORE` pagination logic below still works unmodified against it regardless of
+    ///   how many dimensions were combined.
     pub async fn list_page(
         &self,
         filter: &ActivityFilter,
@@ -426,43 +492,63 @@ impl ActivityRepository {
 
         let mut temp_keys: Vec<String> = Vec::new();
 
-        let actor_side = match filter.actor_keys.as_slice() {
-            [] => None,
-            [single] => Some(by_actor_key(single)),
-            many => {
-                let tmp = new_temp_key();
-                let source_keys: Vec<String> = many.iter().map(|a| by_actor_key(a)).collect();
-                let _: () = conn.zunionstore(&tmp, &source_keys).await?;
-                let _: () = conn.expire(&tmp, 30).await?;
-                temp_keys.push(tmp.clone());
-                Some(tmp)
+        // Resolves one filter dimension's `Vec<String>` of OR'd values (e.g. `actor_keys`) into a
+        // single Redis key to intersect against the others — `None` when the dimension carries no
+        // filter at all (every entry passes), a direct `by_*_key` lookup for exactly one value, or
+        // a fresh `ZUNIONSTORE`'d temp key when the caller selected more than one value within this
+        // dimension.
+        async fn resolve_dimension(
+            conn: &mut deadpool_redis::Connection,
+            values: &[String],
+            key_fn: impl Fn(&str) -> String,
+            temp_keys: &mut Vec<String>,
+        ) -> Result<Option<String>> {
+            match values {
+                [] => Ok(None),
+                [single] => Ok(Some(key_fn(single))),
+                many => {
+                    let tmp = new_temp_key();
+                    let source_keys: Vec<String> = many.iter().map(|v| key_fn(v)).collect();
+                    let _: () = conn.zunionstore(&tmp, &source_keys).await?;
+                    let _: () = conn.expire(&tmp, 30).await?;
+                    temp_keys.push(tmp.clone());
+                    Ok(Some(tmp))
+                }
             }
-        };
-        let action_type_side = match filter.action_types.as_slice() {
-            [] => None,
-            [single] => Some(by_action_type_key(single)),
-            many => {
-                let tmp = new_temp_key();
-                let source_keys: Vec<String> = many.iter().map(|a| by_action_type_key(a)).collect();
-                let _: () = conn.zunionstore(&tmp, &source_keys).await?;
-                let _: () = conn.expire(&tmp, 30).await?;
-                temp_keys.push(tmp.clone());
-                Some(tmp)
-            }
-        };
+        }
 
-        let base_key = match (actor_side, action_type_side) {
-            (Some(actor_key), Some(action_type_key)) => {
+        let actor_side =
+            resolve_dimension(&mut conn, &filter.actor_keys, by_actor_key, &mut temp_keys).await?;
+        let action_type_side = resolve_dimension(
+            &mut conn,
+            &filter.action_types,
+            by_action_type_key,
+            &mut temp_keys,
+        )
+        .await?;
+        let outcome_side = resolve_dimension(
+            &mut conn,
+            &filter.outcome_keys,
+            by_outcome_key,
+            &mut temp_keys,
+        )
+        .await?;
+
+        let active_dimensions: Vec<String> = [actor_side, action_type_side, outcome_side]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let base_key = match active_dimensions.as_slice() {
+            [] => ORDER_KEY.to_string(),
+            [single] => single.clone(),
+            many => {
                 let tmp = new_temp_key();
-                let _: () = conn
-                    .zinterstore(&tmp, &[actor_key, action_type_key])
-                    .await?;
+                let _: () = conn.zinterstore(&tmp, many).await?;
                 let _: () = conn.expire(&tmp, 30).await?;
                 temp_keys.push(tmp.clone());
                 tmp
             }
-            (Some(key), None) | (None, Some(key)) => key,
-            (None, None) => ORDER_KEY.to_string(),
         };
 
         let max_score = filter.end_ts.unwrap_or(i64::MAX);
@@ -482,6 +568,14 @@ impl ActivityRepository {
         let raw: Vec<(String, i64)> = conn
             .zrevrangebyscore_limit_withscores(&base_key, max_bound, min_score, 0, limit + 1)
             .await?;
+
+        // Read before the temp keys are torn down below — `base_key` itself may *be* one of them
+        // (whenever more than one filter dimension is active, see `active_dimensions` above), so
+        // `ZCARD`ing it after `DEL` would always read back 0 regardless of how many entries
+        // actually matched (a real bug this fixed: confirmed live, `total_estimate` silently came
+        // back `0` for any multi-dimension or multi-value-within-one-dimension query despite
+        // `entries` itself being correctly populated).
+        let total_estimate: usize = conn.zcard(&base_key).await.unwrap_or(0);
 
         for tmp in &temp_keys {
             let _: () = conn.del(tmp).await?;
@@ -510,8 +604,6 @@ impl ActivityRepository {
             None
         };
 
-        let total_estimate: usize = conn.zcard(&base_key).await.unwrap_or(0);
-
         Ok(ActivityPage {
             entries,
             next_cursor,
@@ -529,6 +621,38 @@ impl ActivityRepository {
         let mut conn = self.pool.get().await?;
         let _: () = conn.zrem(ORDER_KEY, id).await?;
         Ok(())
+    }
+
+    /// Re-derives `by_outcome_key`'s two sorted sets (`"success"`/`"failure"`) from every entry
+    /// still tracked in `ORDER_KEY` — needed because `outcome` didn't always exist on
+    /// `ActivityEntry`: every entry written before this field shipped was never indexed by outcome
+    /// at all (`append` only ever adds a new entry to this index at write time, never retroactively
+    /// re-indexes an old one), so filtering by outcome on an instance with pre-existing activity
+    /// history silently returned nothing for either "success" or "failure" until this ran once
+    /// (confirmed live: an instance with real history returned zero entries for `outcome=success`
+    /// despite `GET /activity` with no filter at all showing plenty of success entries). Safe to
+    /// run repeatedly — each `ZADD` on an already-indexed entry is a harmless no-op — and cheap on
+    /// an already-backfilled instance. Called unconditionally on every `serve` boot
+    /// (`lanrurugi-server/src/main.rs`), same "run it every startup" pattern as
+    /// `lanrurugi_storage::rebuild::backfill_reverse_indexes`.
+    pub async fn backfill_outcome_index(&self) -> Result<usize> {
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.zrange(ORDER_KEY, 0, -1).await?;
+        let mut backfilled = 0usize;
+        for id in ids {
+            let Some(entry) = self.get(&id).await? else {
+                continue;
+            };
+            let _: () = conn
+                .zadd(
+                    by_outcome_key(outcome_index_key(&entry.outcome)),
+                    &entry.id,
+                    entry.timestamp,
+                )
+                .await?;
+            backfilled += 1;
+        }
+        Ok(backfilled)
     }
 
     /// Every action type / actor key that has ever appeared, filtered down to only those with at
@@ -582,6 +706,9 @@ impl ActivityRepository {
         let _: () = conn
             .zrem(by_action_type_key(&entry.action_type), id)
             .await?;
+        let _: () = conn
+            .zrem(by_outcome_key(outcome_index_key(&entry.outcome)), id)
+            .await?;
         Ok(Some(entry))
     }
 
@@ -622,6 +749,7 @@ mod tests {
                 label: Some("Some Archive".to_string()),
                 kind: Some("archive".to_string()),
             },
+            outcome: Outcome::Success,
             client_ip: Some("127.0.0.1".to_string()),
             before: None,
             after: None,

@@ -26,6 +26,7 @@ use futures_util::future::join_all;
 use lanrurugi_core::ids::{ArchiveId, TankId};
 use lanrurugi_storage::activity::{
     ActivityEntry, ActivityFilter, ActivityTarget, Actor, ActorKind, AutoOrManual, CausedBy,
+    Outcome,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -109,6 +110,7 @@ pub async fn record_manual(
     auth: Option<&AuthContext>,
     action_type: &str,
     target: ActivityTarget,
+    outcome: Outcome,
     before: Option<Value>,
     after: Option<Value>,
 ) -> Option<String> {
@@ -122,6 +124,7 @@ pub async fn record_manual(
         auto_or_manual: AutoOrManual::Manual,
         action_type: action_type.to_string(),
         target,
+        outcome,
         client_ip,
         before,
         after,
@@ -179,6 +182,7 @@ pub async fn record_automatic(
     subsystem: &str,
     action_type: &str,
     target: ActivityTarget,
+    outcome: Outcome,
     caused_by: Option<CausedBy>,
 ) -> Option<String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -189,6 +193,7 @@ pub async fn record_automatic(
         auto_or_manual: AutoOrManual::Automatic,
         action_type: action_type.to_string(),
         target,
+        outcome,
         client_ip: None,
         before: None,
         after: None,
@@ -279,6 +284,9 @@ struct ListActivityParams {
     /// Comma-separated, same convention as `actor` above. See `ActivityFilter::action_types`'s
     /// own docs.
     action_type: Option<String>,
+    /// Comma-separated, same convention as `actor`/`action_type` above — in practice always
+    /// `"success"`, `"failure"`, or both. See `ActivityFilter::outcome_keys`'s own docs.
+    outcome: Option<String>,
 }
 
 /// Splits a comma-separated query param into its trimmed, non-empty parts — shared by `actor`/
@@ -316,6 +324,7 @@ async fn list_activity(
         end_ts: params.end_ts,
         actor_keys: split_csv_param(params.actor.as_deref()),
         action_types: split_csv_param(params.action_type.as_deref()),
+        outcome_keys: split_csv_param(params.outcome.as_deref()),
     };
     match state
         .activity
@@ -599,16 +608,35 @@ async fn put_retention(
                     label: Some("activity_retention".to_string()),
                     kind: Some("settings".to_string()),
                 },
+                Outcome::Success,
                 None,
                 Some(json!({ "retention_secs": body.retention_secs })),
             )
             .await;
             ok("put_activity_retention", [])
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "put_activity_retention",
-            e.to_string(),
-        ),
+        Err(e) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                lanrurugi_storage::activity::action_types::SETTINGS_UPDATE,
+                ActivityTarget {
+                    id: None,
+                    label: Some("activity_retention".to_string()),
+                    kind: Some("settings".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "put_activity_retention",
+                e.to_string(),
+            )
+        }
     }
 }
