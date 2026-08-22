@@ -254,7 +254,10 @@ impl RefreshTokenRepository {
                     marked_used.used = true;
                     let old_raw = serde_json::to_string(&marked_used)
                         .expect("RefreshTokenRecord always serializes");
-                    pipe.set(&old_key, old_raw)
+                    // `set_ex`, not `set` — a plain `SET` clears the key's existing TTL, which
+                    // would leave every rotated-out token permanently resident in Redis instead of
+                    // expiring alongside the session it belonged to.
+                    pipe.set_ex(&old_key, old_raw, remaining_ttl)
                         .ignore()
                         .set_ex(&new_key, &new_raw, remaining_ttl)
                         .ignore()
@@ -369,6 +372,32 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(second, RotateOutcome::Rotated { .. }));
+
+        repo.burn_family(&issued.record.family_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rotation_preserves_the_old_tokens_ttl_instead_of_making_it_permanent() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool.clone());
+        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+
+        repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+
+        // A plain `SET` (no `EX`) clears a key's existing TTL, leaving it resident in Redis
+        // forever — the bug this test guards against. The rotated-out old key must still carry a
+        // finite, positive TTL, not -1 ("no expiry").
+        let mut conn = pool.get().await.unwrap();
+        let ttl: i64 = conn.ttl(token_key(&issued.record.token_id)).await.unwrap();
+        assert!(
+            ttl > 0,
+            "expected a finite TTL on the rotated-out old token, got {ttl}"
+        );
 
         repo.burn_family(&issued.record.family_id).await.unwrap();
     }
