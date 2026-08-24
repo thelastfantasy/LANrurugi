@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod api_tokens;
+pub mod bookmarks;
 pub mod bootstrap;
 pub mod compare_cache;
 pub mod download_queue;

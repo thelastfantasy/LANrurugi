@@ -1,4 +1,11 @@
-import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { useEffect } from "react"
 
 import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
@@ -14,13 +21,16 @@ import type {
   ArchiveFilesResponse,
   ArchiveMetadata,
   BatchDeleteArchivesResponse,
-  BookmarkLinkResponse,
+  BookmarkedPageResponse,
+  BookmarkSort,
+  BookmarksPageResponse,
   CategoryMetadata,
   ComparisonResult,
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateGroup,
   ExportPatchInsertion,
+  HoverPageOrderResponse,
   JobRecord,
   JobsResponse,
   LoginStatus,
@@ -977,14 +987,54 @@ export async function fetchRandomArchiveId(): Promise<string | null> {
   return result.data[0]?.arcid ?? null
 }
 
-// --- Reader: bookmark link ---
-// `crates/lanrurugi-api/src/categories.rs` — the static category (if any) the reader's bookmark
-// icon (`B` key) toggles archive membership in, backed by `LRR_CONFIG`'s `bookmark_link` field.
+// --- Reader: page-level bookmarks ---
+// `crates/lanrurugi-api/src/bookmarks.rs` — a bookmark is `(archive_id, page)`, so a single
+// archive can carry any number of independent bookmarks. Every query key here is prefixed with
+// `"bookmarks"`, so `useAddBookmark`/`useRemoveBookmark`'s own `invalidateQueries({ queryKey:
+// ["bookmarks"] })` below invalidates all of them (React Query's own prefix-matching) without
+// needing to know each one's exact shape.
 
-export function useBookmarkLink() {
+/** This archive's own bookmarked pages (ascending, each with its resolved filename), unpaginated
+ * — `GET /archives/{archiveId}/bookmarks`. Used by the reader (is the current page bookmarked?)
+ * and `BookmarkHoverGrid` (needs the filename for its caption — bundled into this same response
+ * rather than a second `GET /archives/{id}/files` call, which would scan the entire archive just
+ * to look up two or three filenames out of it). */
+export function useBookmarksForArchive(archiveId: string | null) {
   return useQuery({
-    queryKey: ["bookmark-link"],
-    queryFn: () => fetchJson<BookmarkLinkResponse>("/categories/bookmark_link"),
+    queryKey: ["bookmarks", "archive", archiveId],
+    queryFn: () => fetchJson<BookmarkedPageResponse[]>(`/archives/${archiveId}/bookmarks`),
+    enabled: archiveId !== null,
+  })
+}
+
+/** The full paginated `/bookmarks` listing (`GET /bookmarks?sort=...&cursor=...`), one page per
+ * `fetchNextPage()` call. `sort` is part of the query key — switching it starts a fresh query
+ * from the first page rather than needing any manual reset. */
+export function useInfiniteBookmarks(sort: BookmarkSort) {
+  return useInfiniteQuery({
+    queryKey: ["bookmarks", "page", sort],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+      fetchJson<BookmarksPageResponse>(`/bookmarks?sort=${sort}${pageParam ? `&cursor=${pageParam}` : ""}`),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: BookmarksPageResponse) => last.next_cursor ?? undefined,
+  })
+}
+
+export function useAddBookmark() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ archiveId, page }: { archiveId: string; page: number }) =>
+      sendJson("POST", `/archives/${archiveId}/bookmarks/${page}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
+  })
+}
+
+export function useRemoveBookmark() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ archiveId, page }: { archiveId: string; page: number }) =>
+      sendJson("DELETE", `/archives/${archiveId}/bookmarks/${page}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
   })
 }
 
@@ -1457,5 +1507,20 @@ export function useUpdateActivityRetention() {
     mutationFn: (retentionSecs: number | null) =>
       sendJson("PUT", "/activity/retention", { retention_secs: retentionSecs }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["activity-retention"] }),
+  })
+}
+
+export function useHoverPageOrder() {
+  return useQuery({
+    queryKey: ["bookmark-hover-page-order"],
+    queryFn: () => fetchJson<HoverPageOrderResponse>("/bookmarks/hover-page-order"),
+  })
+}
+
+export function useSetHoverPageOrder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (order: string) => sendJson("PUT", "/bookmarks/hover-page-order", { order }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmark-hover-page-order"] }),
   })
 }

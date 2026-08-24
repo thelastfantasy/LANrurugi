@@ -6,7 +6,6 @@ import type { ArchiveMetadata } from "@/api/types"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
-import { BookmarkIcon } from "./BookmarkIcon"
 import { TagLine } from "./TagLine"
 
 /** Read-crown/new/tankoubon status badges — ports `buildStatusDiv` exactly, including its
@@ -56,9 +55,9 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
 
 /** Mirrors legacy's exact thumbnail card markup (`buildThumbnailDiv` in
  * `~/LANraragi/public/js/mod/common.js`) — `div.id1` > (`div.id2` status icons + title, `div.id3`
- * cover image + bookmark icon, `div.id4` page count + tags) — so the copied theme CSS
- * (`useApplyTheme`) styles it identically. Right-click opens `ArchiveContextMenu` (real functional
- * parity); multi-select mode overlays a checkbox instead of navigating on click. */
+ * cover image, `div.id4` page count + tags) — so the copied theme CSS (`useApplyTheme`) styles it
+ * identically. Right-click opens `ArchiveContextMenu` (real functional parity); multi-select mode
+ * overlays a checkbox instead of navigating on click. */
 export function ArchiveCard({
   archive,
   multiSelect,
@@ -137,7 +136,6 @@ export function ArchiveCard({
             onError={() => setThumbFailed(true)}
           />
         </a>
-        {!isTank && <BookmarkIcon archiveId={id} />}
       </div>
       <div className="id4">
         <PageCountBadge archive={archive} />

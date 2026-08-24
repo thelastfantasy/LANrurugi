@@ -303,6 +303,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let compare_cache = Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -409,6 +412,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         recommend_cache,
         ignored_group_suggestions,
         compare_cache,
+        bookmarks,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),

@@ -1,4 +1,4 @@
-type CarouselMode = "ondeck" | "random" | "inbox" | "untagged"
+type CarouselMode = "ondeck" | "random" | "inbox" | "untagged" | "bookmark"
 
 export const PAGE_SIZE = 100
 
@@ -15,4 +15,5 @@ export const CAROUSEL_ICON: Record<CarouselMode, string> = {
   random: "🎲",
   inbox: "📥",
   untagged: "🏷️",
+  bookmark: "🔖",
 }

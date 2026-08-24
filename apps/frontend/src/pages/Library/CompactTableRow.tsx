@@ -5,7 +5,6 @@ import { Tooltip } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
-import { BookmarkIcon } from "./BookmarkIcon"
 import { CustomColumnCell } from "./CustomColumnCell"
 import { TagLine } from "./TagLine"
 
@@ -43,7 +42,6 @@ export function CompactTableRow({
             style={{ marginRight: 6 }}
           />
         )}
-        <BookmarkIcon archiveId={archive.arcid} />{" "}
         <Tooltip
           label={
             <img

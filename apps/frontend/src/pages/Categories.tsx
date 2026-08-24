@@ -11,10 +11,9 @@ import { Tooltip } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import { sortCategories } from "@/lib/utils/sortCategories"
 import { FONT_SIZE_MD, FONT_SIZE_SM, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
-
-const BOOKMARK_CATEGORY_STORAGE_KEY = "bookmarkCategoryId"
 
 // Mirrors legacy's `~/LANraragi/templates/category.html.tt2` + `public/js/category.js` — a
 // select-then-edit-in-place form (not a create/delete-only list): picking a category from the
@@ -49,7 +48,6 @@ export function Categories() {
   const [name, setName] = useState("")
   const [search, setSearch] = useState("")
   const [pinned, setPinned] = useState(false)
-  const [bookmarkLinked, setBookmarkLinked] = useState(false)
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle")
 
   useApplyTheme()
@@ -57,6 +55,7 @@ export function Categories() {
 
   const selected = categories.data?.find((c) => c.id === selectedId)
   const isStatic = !!selected && !selected.search
+  const sortedCategoryOptions = sortCategories(categories.data ?? [])
 
   // Which Tankoubon(s) (if any) each archive is currently folded into — an archive shows here
   // fine even while it's "hidden" from the default grouped Library view for exactly that reason,
@@ -87,7 +86,6 @@ export function Categories() {
     setName(selected?.name ?? "")
     setSearch(selected?.search ?? "")
     setPinned(selected?.pinned === 1)
-    setBookmarkLinked(!!selected && localStorage.getItem(BOOKMARK_CATEGORY_STORAGE_KEY) === selected.id)
   }
 
   function refresh() {
@@ -140,25 +138,6 @@ export function Categories() {
       await refresh()
     } catch {
       toast({ heading: t("categories.errorDeletingCategory") ?? undefined, icon: "error" })
-    }
-  }
-
-  async function handleBookmarkLinkChange(checked: boolean) {
-    if (!selectedId) return
-    setBookmarkLinked(checked)
-    setStatus("saving")
-    try {
-      if (checked) {
-        await sendJson("PUT", `/categories/bookmark_link/${selectedId}`)
-        localStorage.setItem(BOOKMARK_CATEGORY_STORAGE_KEY, selectedId)
-      } else {
-        await sendJson("DELETE", "/categories/bookmark_link")
-        localStorage.removeItem(BOOKMARK_CATEGORY_STORAGE_KEY)
-      }
-      setStatus("saved")
-    } catch {
-      toast({ heading: t("categories.errorLinkingBookmarkButton") ?? undefined, icon: "error" })
-      setStatus("idle")
     }
   }
 
@@ -237,7 +216,7 @@ export function Categories() {
                     onChange={(e) => setSelectedId(e.target.value)}
                   >
                     <option value="">{t("common.NoCategory")}</option>
-                    {categories.data?.map((c) => (
+                    {sortedCategoryOptions.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
@@ -284,22 +263,6 @@ export function Categories() {
                       <label htmlFor="pinned">{t("categories.pinThisCategory")}</label>
                     </td>
                   </tr>
-                  {isStatic && (
-                    <tr id="bookmarklinkfield" className="tag-options">
-                      <td></td>
-                      <td>
-                        <input
-                          id="bookmark-link"
-                          name="bookmark-link"
-                          className="fa"
-                          type="checkbox"
-                          checked={bookmarkLinked}
-                          onChange={(e) => void handleBookmarkLinkChange(e.target.checked)}
-                        />
-                        <label htmlFor="bookmark-link">{t("categories.storeBookmarksInThisCategory")}</label>
-                      </td>
-                    </tr>
-                  )}
                   <tr className="tag-options">
                     <td></td>
                     <td>

@@ -90,6 +90,21 @@ impl Archive {
             .unwrap_or_default()
             .to_ascii_lowercase()
     }
+
+    /// The `date_added:<unix_seconds>` namespace's value out of `tags` — there's no dedicated
+    /// Redis hash field for this (unlike `pagecount`/`lastreadtime`), so it has to be scanned out
+    /// of the comma-separated tags string, same logic `lanrurugi_search::engine`'s own
+    /// `date_added:YYYY-MM-DD` range-query handling already does inline against a raw `tags`
+    /// string read straight from Redis (that call site keeps its own copy rather than adopting
+    /// this method — it never has a full `Archive` in hand, just the bare tags string). Tolerates
+    /// a malformed/missing value (`None`) rather than erroring.
+    pub fn date_added(&self) -> Option<u64> {
+        self.tags.split(',').find_map(|t| {
+            t.trim()
+                .strip_prefix("date_added:")
+                .and_then(|v| v.trim().parse().ok())
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

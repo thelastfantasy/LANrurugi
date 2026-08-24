@@ -652,3 +652,27 @@ input[type="checkbox"]:disabled {
     background-color: rgba(255, 221, 0, 0.35);
   }
 }
+
+/* `/bookmarks` page's own card grid — `div.id1`'s fixed width (`228px` desktop, `164px` below
+ * `lrr.css`'s own `560px` breakpoint) never scales with the container, so a viewport whose width
+ * isn't an exact multiple of `228px + gap` either wastes trailing space or (worse) needs a column
+ * count JS can't get right without knowing the card's true rendered width up front. Both rules
+ * below solve that the same way: `BookmarksPage.tsx` picks a fixed column count for the
+ * breakpoint (5 desktop, 2 mobile — see each rule's own comment) and computes that count's own
+ * share of the container as a `--bookmark-card-width` custom property (set inline on
+ * `.bookmarks-grid` itself, so it's already known by the time these rules read it — no chicken-
+ * and-egg with `auto-fill`, see `BookmarksPage.tsx`'s own docs on that dead end). `div.id3`'s
+ * height then switches from a fixed px value to `aspect-ratio`, so the cover scales
+ * proportionally with the card instead of cropping more or less of it as the width changes.
+ * Scoped to this page's own grid (not `lrr.css`'s global `div.id1`/`div.id3`) so Library's grid,
+ * the carousel, and every other `ArchiveCard` use site keep their original fixed sizing. */
+.bookmarks-grid div.id1 {
+  width: var(--bookmark-card-width);
+}
+.bookmarks-grid div.id1 div.id3 {
+  height: auto !important;
+  aspect-ratio: 228 / 275;
+}
+.bookmarks-grid div.id1 div.id3 img {
+  max-height: none;
+}

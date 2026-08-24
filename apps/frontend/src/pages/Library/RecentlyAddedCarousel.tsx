@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query"
 import Lenis from "lenis"
 import type { MouseEvent } from "react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { fetchJson } from "@/api/client"
+import { useInfiniteBookmarks } from "@/api/hooks"
 import type { ArchiveMetadata, SearchResponse } from "@/api/types"
 import { PopupMenu, PopupMenuItem, SortableList } from "@/components/Display"
 import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys"
+import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 
 import { CarouselCard } from "./CarouselCard"
@@ -69,6 +71,21 @@ export function RecentlyAddedCarousel({
     const firstChild = carouselRef.current?.firstElementChild as HTMLElement | null
     return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236 // 228 + 8 gap
   }, [])
+  // Drives the carousel's own Lenis instance from a wheel gesture `BookmarkHoverGrid` decided not
+  // to consume itself (see that component's `onWheelPassthrough` prop docs for the full three-way
+  // dispatch this feeds). Deliberately *replays* the original event onto `carouselRef.current`
+  // (a synthetic `WheelEvent` with the same deltas) rather than computing a `lenis.scrollTo(...)`
+  // offset by hand — Lenis owns its own `wheelMultiplier`/inertia/`lerp` pipeline internally
+  // (its `VirtualScroll` class listens for real `wheel` events on exactly this element), and a
+  // hand-rolled `scrollTo` call bypasses all of that, producing a scroll that's both slower and
+  // less smooth than scrolling the strip directly (confirmed live: passthrough scroll felt
+  // noticeably different from the carousel's own native wheel handling). Replaying the real event
+  // instead means Lenis processes it exactly as if the wheel had been over the strip itself.
+  const handleBookmarkWheelPassthrough = useCallback((deltaX: number, deltaY: number) => {
+    const el = carouselRef.current
+    if (!el) return
+    el.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaY, deltaMode: 0, bubbles: true, cancelable: true }))
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0")
@@ -107,6 +124,7 @@ export function RecentlyAddedCarousel({
   if (category === UNTAGGED_ONLY) params.set("untaggedonly", "true")
 
   const isRandom = mode === "random"
+  const isBookmarkMode = mode === "bookmark"
   const modeParams = new URLSearchParams(params)
   let path: string
   switch (mode) {
@@ -128,6 +146,12 @@ export function RecentlyAddedCarousel({
       modeParams.set("start", "-1")
       path = `/search?${modeParams.toString()}`
       break
+    case "bookmark":
+      // Unused — `carouselQuery` below is disabled in this mode (`useInfiniteBookmarks()`
+      // supplies `items` instead), but `path` still needs a value to satisfy the
+      // `let path: string` declaration below.
+      path = ""
+      break
     default:
       modeParams.set("sortby", "lastread")
       modeParams.set("hidecompleted", "true")
@@ -138,10 +162,22 @@ export function RecentlyAddedCarousel({
   const carouselQuery = useQuery({
     queryKey: isRandom ? ["search", "random", modeParams.toString()] : ["search", { filter, category, mode, hideCompleted, groupbyTanks }],
     queryFn: () => fetchJson<SearchResponse>(path),
-    enabled: isOpen && !multiSelect,
+    enabled: isOpen && !multiSelect && !isBookmarkMode,
   })
-  const items = carouselQuery.data?.data ?? []
-  const loading = carouselQuery.isLoading
+  // Only the first page — this is a horizontal-scroll strip, not a "scroll to load more" list
+  // (that's what the standalone `/bookmarks` page is for), so `fetchNextPage` is never called.
+  // Fixed to the default `bookmarked_at` sort — sort switching is only offered on the standalone
+  // page.
+  const bookmarksQuery = useInfiniteBookmarks("bookmarked_at")
+  const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? []
+  const items: ArchiveMetadata[] = useMemo(
+    () =>
+      isBookmarkMode
+        ? (bookmarksQuery.data?.pages[0]?.entries ?? []).map((entry) => entry.archive)
+        : (carouselQuery.data?.data ?? []),
+    [isBookmarkMode, bookmarksQuery.data, carouselQuery.data],
+  )
+  const loading = isBookmarkMode ? bookmarksQuery.isLoading : carouselQuery.isLoading
 
   // Lenis init with `items` guard — the carousel div only mounts when data arrives.
   useEffect(() => {
@@ -161,6 +197,7 @@ export function RecentlyAddedCarousel({
     random: t("library.random"),
     inbox: t("library.newArchives"),
     untagged: t("library.untaggedArchives"),
+    bookmark: t("library.bookmarked"),
   }
 
   return (
@@ -256,7 +293,8 @@ export function RecentlyAddedCarousel({
               title={t("library.refresh") ?? undefined}
               onClick={(e) => {
                 e.preventDefault()
-                void carouselQuery.refetch()
+                if (isBookmarkMode) void bookmarksQuery.refetch()
+                else void carouselQuery.refetch()
               }}
             ></a>
             <span style={{ position: "relative" }}>
@@ -278,7 +316,7 @@ export function RecentlyAddedCarousel({
                   portal={false}
                   style={{ position: "absolute", top: "100%", right: 0, zIndex: Z_OVERLAY_CONTENT }}
                 >
-                  {(["ondeck", "random", "inbox", "untagged"] as CarouselMode[]).map((m) => (
+                  {(["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[]).map((m) => (
                     <PopupMenuItem
                       key={m}
                       style={{ fontWeight: m === mode ? "bold" : undefined }}
@@ -389,17 +427,30 @@ export function RecentlyAddedCarousel({
                   className="hide-scrollbar"
                   style={{ display: "flex", gap: 8, overflowX: "auto", overflowY: "hidden", padding: "8px 0" }}
                 >
-                  {items.map((a) => (
-                    <div key={a.arcid} className="carousel-slide">
-                      <CarouselCard
-                        archive={a}
-                        cropThumbs={cropThumbs}
-                        onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
-                        onOpen={onOpen}
-                        onSearchTag={onSearchTag}
-                      />
-                    </div>
-                  ))}
+                  {isBookmarkMode
+                    ? bookmarkEntries.map((entry) => (
+                        <div key={entry.archive.arcid} className="carousel-slide">
+                          <BookmarkedArchiveHoverCard
+                            entry={entry}
+                            cropThumbs={cropThumbs}
+                            onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                            onOpen={onOpen}
+                            onSearchTag={onSearchTag}
+                            onWheelPassthrough={handleBookmarkWheelPassthrough}
+                          />
+                        </div>
+                      ))
+                    : items.map((a) => (
+                        <div key={a.arcid} className="carousel-slide">
+                          <CarouselCard
+                            archive={a}
+                            cropThumbs={cropThumbs}
+                            onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                            onOpen={onOpen}
+                            onSearchTag={onSearchTag}
+                          />
+                        </div>
+                      ))}
                 </div>
                 <a
                   href="#"

@@ -29,6 +29,14 @@ const NAMESPACE_COLORS: Record<string, ChipColor> = {
   scanner: { bg: "#64748b", text: "#ffffff" },
   metadata_plugin: { bg: "#0ea5e9", text: "#ffffff" },
   auto_download: { bg: "#84cc16", text: "#1f2937" },
+  // Deliberately *not* gray/slate — every gray-ish entry in this table (`scanner`, and
+  // `ACTOR_KIND_COLORS.system` below) is a system/automated actor, and `bookmark.*` was left
+  // unlisted here at first, silently falling through to `FALLBACK_NAMESPACE_COLOR` (also gray) —
+  // reading, confusingly, as if bookmarking were itself some kind of automated/bot action rather
+  // than the manual, human-initiated one it actually is. Rose, not yet used by any other
+  // namespace in this table (`tankoubon`'s pink is the closest neighbor but distinct enough at
+  // this chip's size).
+  bookmark: { bg: "#f43f5e", text: "#ffffff" },
 }
 
 const FALLBACK_NAMESPACE_COLOR: ChipColor = { bg: "#6b7280", text: "#ffffff" }

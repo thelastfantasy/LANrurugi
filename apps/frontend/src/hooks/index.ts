@@ -16,6 +16,8 @@ export * from "./useReaderSettings"
 
 export * from "./useSectionDeepLink"
 
+export * from "./useSupportsHover"
+
 export * from "./useTagCloudHighlight"
 
 export * from "./useTankoubonReading"

@@ -6,6 +6,7 @@ pub mod auth;
 pub mod auth_context;
 pub mod authz;
 pub mod bench;
+pub mod bookmarks;
 pub mod categories;
 pub mod common;
 pub mod cors;
@@ -52,6 +53,7 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(archives::router())
         .merge(bench::router())
+        .merge(bookmarks::router())
         .merge(categories::router())
         .merge(tankoubons::router())
         .merge(tankoubon_grouping::router())

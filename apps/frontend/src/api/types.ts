@@ -654,13 +654,31 @@ export interface RandomArchivesResponse {
   recordsTotal: number
 }
 
-// `GET/PUT/DELETE /categories/bookmark_link` — the single static category (if any) the reader's
-// bookmark icon toggles archive membership in. Empty `category_id` means unconfigured.
-export interface BookmarkLinkResponse {
-  operation: string
-  success: number
-  category_id: string
-  error?: string
+// `GET /bookmarks` — page-level reading bookmarks aggregated by archive. `pages` is ascending;
+// the first entry is what a hover preview treats as "the" cover-aligned thumbnail.
+export interface BookmarkedArchiveResponse {
+  archive: ArchiveMetadata
+  pages: number[]
+}
+
+export type BookmarkSort = "bookmarked_at" | "title" | "date_added"
+
+/** `GET /bookmarks?sort=...&cursor=...&limit=...`'s own paginated envelope — `next_cursor: null`
+ * means this was the last page. */
+export interface BookmarksPageResponse {
+  entries: BookmarkedArchiveResponse[]
+  next_cursor: string | null
+}
+
+/** `GET /archives/{id}/bookmarks` — one archive's own bookmarked pages, each with its resolved
+ * in-archive filename (`null` if the page no longer corresponds to a real entry, e.g. the archive
+ * was re-scanned with fewer pages since the bookmark was added). */
+export interface BookmarkedPageResponse {
+  page: number
+  filename: string | null
+  /** Unix seconds this specific page was bookmarked — for `BookmarkHoverGrid`'s own "sort by when
+   * bookmarked" option. Distinct from `BookmarkedArchiveResponse`'s archive-level sort key. */
+  bookmarked_at: number
 }
 
 // `/activity*` (issue #87) — structured, persisted operator activity records, distinct from the
@@ -751,4 +769,8 @@ export interface ActivityFilter {
 
 export interface ActivityRetention {
   retention_secs: number | null
+}
+
+export interface HoverPageOrderResponse {
+  order: string | null
 }

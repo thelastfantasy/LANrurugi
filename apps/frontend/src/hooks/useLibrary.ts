@@ -33,6 +33,7 @@ import {
 } from "@/lib/storageKeys"
 import { buildSearchToken, buildTagList, splitTagsByNamespace } from "@/lib/tagFormat"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+import { sortCategories } from "@/lib/utils/sortCategories"
 import { type ContextMenuState } from "@/pages/Library/types"
 import { recordSearchNavigation } from "@/pages/Reader/crossArchiveNav"
 import { toast } from "@/toast"
@@ -299,16 +300,9 @@ const pageCount = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE))
 const rangeStart = totalFiltered === 0 ? 0 : page * PAGE_SIZE + 1
 const rangeEnd = Math.min(totalFiltered, page * PAGE_SIZE + PAGE_SIZE)
 
-// Pinned-first, then alphabetical — matches `loadCategories`'s own sort
-// (`~/LANraragi/public/js/mod/index.js`). The first `CATEGORY_BUTTON_CAP` become buttons; the
-// rest spill into a "..." overflow dropdown.
-const sortedCategories = useMemo(() => {
-  const list = categories.data ?? []
-  return [...list].sort((a, b) => {
-    if (a.pinned !== b.pinned) return b.pinned - a.pinned
-    return a.name.localeCompare(b.name)
-  })
-}, [categories.data])
+// Pinned-first, then alphabetical (`sortCategories`). The first `CATEGORY_BUTTON_CAP` become
+// buttons; the rest spill into a "..." overflow dropdown.
+const sortedCategories = useMemo(() => sortCategories(categories.data ?? []), [categories.data])
 
 // Search-bar tag autocomplete — ports `loadTagSuggestions`'s filter/sort rule: match against
 // only the fragment after the last `,`/`-`/whitespace (so autocomplete works mid-multi-tag-

@@ -37,6 +37,9 @@ async fn test_app() -> Option<axum::Router> {
     let compare_cache = Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -79,6 +82,7 @@ async fn test_app() -> Option<axum::Router> {
         recommend_cache,
         ignored_group_suggestions,
         compare_cache,
+        bookmarks,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

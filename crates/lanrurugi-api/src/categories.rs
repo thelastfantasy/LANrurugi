@@ -8,7 +8,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::Router;
-use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::entities::Category;
 use lanrurugi_core::ids::{ArchiveId, CategoryId};
 use serde::Deserialize;
@@ -19,9 +18,6 @@ use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
-use lanrurugi_storage::keys::CONFIG_KEY;
-
-const BOOKMARK_LINK_FIELD: &str = "bookmark_link";
 
 fn category_json(c: &Category) -> serde_json::Value {
     json!({
@@ -36,11 +32,6 @@ fn category_json(c: &Category) -> serde_json::Value {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/categories", get(list_categories).put(create_category))
-        .route(
-            "/categories/bookmark_link",
-            get(get_bookmark_link).delete(remove_bookmark_link),
-        )
-        .route("/categories/bookmark_link/{id}", put(update_bookmark_link))
         .route(
             "/categories/{id}",
             get(get_category)
@@ -156,145 +147,6 @@ async fn create_category(
                 e.to_string(),
             )
         }
-    }
-}
-
-/// `GET /categories/bookmark_link` — the static category (if any) the reader's bookmark icon
-/// toggles archive membership in. Verified against `Model/Category.pm::get_bookmark_link`:
-/// `LRR_CONFIG` hash field `bookmark_link`, empty string when unconfigured.
-async fn get_bookmark_link(State(state): State<AppState>) -> Response {
-    let mut conn = match state.redis.config.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "get_bookmark_link",
-                e.to_string(),
-            )
-        }
-    };
-    let category_id: String = conn
-        .hget(CONFIG_KEY, BOOKMARK_LINK_FIELD)
-        .await
-        .unwrap_or_default();
-    axum::Json(json!({
-        "operation": "get_bookmark_link",
-        "success": 1,
-        "category_id": category_id,
-    }))
-    .into_response()
-}
-
-/// `DELETE /categories/bookmark_link` — unlinks the bookmark icon from whatever category it was
-/// pointed at, returning that category's id (legacy `Model::Category::remove_bookmark_link`).
-async fn remove_bookmark_link(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-) -> Response {
-    let mut conn = match state.redis.config.get().await {
-        Ok(c) => c,
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "remove_bookmark_link",
-                e.to_string(),
-            )
-        }
-    };
-    let category_id: String = conn
-        .hget(CONFIG_KEY, BOOKMARK_LINK_FIELD)
-        .await
-        .unwrap_or_default();
-    let _: Result<(), _> = conn.hdel(CONFIG_KEY, BOOKMARK_LINK_FIELD).await;
-    record_manual(
-        &state,
-        auth.as_ref().map(|e| &e.0),
-        action_types::CATEGORY_BOOKMARK_UPDATE,
-        ActivityTarget {
-            id: Some(category_id.clone()),
-            label: None,
-            kind: Some("category".to_string()),
-        },
-        Outcome::Success,
-        Some(json!({ "bookmark_link": category_id })),
-        Some(json!({ "bookmark_link": null })),
-    )
-    .await;
-    axum::Json(json!({
-        "operation": "remove_bookmark_link",
-        "success": 1,
-        "category_id": category_id,
-    }))
-    .into_response()
-}
-
-/// `PUT /categories/bookmark_link/{id}` — links the bookmark icon to a *static* category only
-/// (legacy rejects dynamic/search-predicate categories here: `Model::Category::update_bookmark_link`
-/// — a dynamic category has no fixed archive list to add/remove membership from).
-async fn update_bookmark_link(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-    Path(id): Path<CategoryId>,
-) -> Response {
-    match state.repos.categories.get(&id).await {
-        Ok(Some(c)) if c.search.is_some() => (
-            StatusCode::BAD_REQUEST,
-            axum::Json(json!({
-                "operation": "update_bookmark_link",
-                "error": "Cannot link bookmark to a dynamic category.",
-                "success": 0,
-            })),
-        )
-            .into_response(),
-        Ok(Some(c)) => {
-            let mut conn = match state.redis.config.get().await {
-                Ok(c) => c,
-                Err(e) => {
-                    return error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "update_bookmark_link",
-                        e.to_string(),
-                    )
-                }
-            };
-            let _: Result<(), _> = conn
-                .hset(CONFIG_KEY, BOOKMARK_LINK_FIELD, id.as_str())
-                .await;
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::CATEGORY_BOOKMARK_UPDATE,
-                ActivityTarget {
-                    id: Some(id.0.clone()),
-                    label: Some(c.name.clone()),
-                    kind: Some("category".to_string()),
-                },
-                Outcome::Success,
-                None,
-                Some(json!({ "bookmark_link": id.0 })),
-            )
-            .await;
-            axum::Json(json!({
-                "operation": "update_bookmark_link",
-                "success": 1,
-                "category_id": id,
-            }))
-            .into_response()
-        }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({
-                "operation": "update_bookmark_link",
-                "error": "Category does not exist!",
-                "success": 0,
-            })),
-        )
-            .into_response(),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "update_bookmark_link",
-            e.to_string(),
-        ),
     }
 }
 

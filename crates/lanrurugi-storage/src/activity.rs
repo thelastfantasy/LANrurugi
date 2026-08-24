@@ -61,7 +61,6 @@ pub mod action_types {
     pub const SETTINGS_PASSWORD_CHANGE: &str = "settings.password_change";
     pub const CATEGORY_CREATE: &str = "category.create";
     pub const CATEGORY_DELETE: &str = "category.delete";
-    pub const CATEGORY_BOOKMARK_UPDATE: &str = "category.bookmark_update";
     pub const TOKEN_CREATE: &str = "token.create";
     pub const TOKEN_REVOKE: &str = "token.revoke";
     pub const TOKEN_RENAME: &str = "token.rename";
@@ -112,6 +111,8 @@ pub mod action_types {
     /// constant exists now so that feature's own write site can reuse this module's structure
     /// unchanged.
     pub const AUTO_DOWNLOAD: &str = "auto_download.fetch";
+    pub const BOOKMARK_ADD: &str = "bookmark.add";
+    pub const BOOKMARK_REMOVE: &str = "bookmark.remove";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

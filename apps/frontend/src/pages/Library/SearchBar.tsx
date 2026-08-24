@@ -126,6 +126,19 @@ export function SearchBar({
                     `$` idiom would otherwise silently get three loosely-ANDed fuzzy tokens instead
                     of the one exact tag they meant. */}
                 <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxSpaceNeedsQuotes")}</li>
+                <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+                  {t("library.searchSyntaxQuoteExactCombo")} <SyntaxExample>&quot;tag with spaces&quot;$</SyntaxExample>
+                </li>
+                <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+                  {t("library.searchSyntaxMultiTagExample")}{" "}
+                  <SyntaxExample>
+                    female:&quot;huge breasts&quot; female:milf
+                  </SyntaxExample>
+                </li>
+                <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+                  {t("library.searchSyntaxEscapedQuote")}{" "}
+                  <SyntaxExample>artist:&quot;foo\&quot;bar&quot;</SyntaxExample>
+                </li>
                 <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxWildcard")}</li>
                 <li style={{ listStyleType: "disc", marginBottom: 6 }}>
                   {t("library.searchSyntaxDateAdded")} <SyntaxExample>date_added:2026-08-20</SyntaxExample>

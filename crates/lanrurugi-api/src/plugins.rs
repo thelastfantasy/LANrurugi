@@ -2839,6 +2839,9 @@ mod tests {
             compare_cache: Arc::new(lanrurugi_storage::compare_cache::CompareCacheRepository::new(
                 redis.config.clone(),
             )),
+            bookmarks: Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+                redis.config.clone(),
+            )),
             recommender: Arc::new(crate::recommend::RecommendService::new()),
             new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_cancellations: Default::default(),

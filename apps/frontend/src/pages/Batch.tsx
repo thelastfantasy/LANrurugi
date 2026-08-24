@@ -11,6 +11,7 @@ import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
+import { sortCategories } from "@/lib/utils/sortCategories"
 import { useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
@@ -315,7 +316,7 @@ export function Batch() {
               <div className="operation addcat-operation">
                 <select value={categoryTarget} onChange={(e) => setCategoryTarget(e.target.value)} className="favtag-btn">
                   <option value="">{t("common.NoCategory")}</option>
-                  {categories.data?.map((c) => (
+                  {sortCategories(categories.data ?? []).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>

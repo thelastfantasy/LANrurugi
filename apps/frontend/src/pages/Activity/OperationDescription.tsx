@@ -41,6 +41,20 @@ function readUrl(value: unknown): string | undefined {
 
 const DOWNLOAD_QUEUE_URL_ACTION_TYPES = new Set(["download_queue.add", "download_queue.start"])
 
+/** `bookmark.add`/`bookmark.remove`'s own `after.page` — the one piece of information a bare
+ * archive title/link doesn't carry: which specific page the bookmark was on
+ * (`bookmarks.rs::add_bookmark`/`remove_bookmark` both record it, per that module's own
+ * `record_manual` calls). */
+function readPage(value: unknown): number | undefined {
+  if (value && typeof value === "object" && "page" in value) {
+    const page = (value as { page: unknown }).page
+    return typeof page === "number" ? page : undefined
+  }
+  return undefined
+}
+
+const BOOKMARK_ACTION_TYPES = new Set(["bookmark.add", "bookmark.remove"])
+
 /** `archive.rating_update`'s own `before.rating`/`after.rating` — each is either a bare
  * `"rating:X"` tag string or `null` (rating cleared/absent), per
  * `archives.rs::update_archive_metadata`'s rating-only-change branch. */
@@ -251,6 +265,23 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
           <TargetTitle entry={entry} title={title} />
           {" — "}
           {summary}
+        </>
+      )
+    }
+  }
+
+  // `bookmark.add`/`bookmark.remove` get a "第 N 页" suffix — `TargetTitle` alone only ever shows
+  // the archive itself, which a page-level bookmark event needs one more piece of context beyond
+  // (an archive can carry any number of independent page bookmarks at once, so "已添加书签" on its
+  // own doesn't say which one this entry was actually about).
+  if (BOOKMARK_ACTION_TYPES.has(entry.action_type)) {
+    const page = readPage(entry.after)
+    if (page != null) {
+      return (
+        <>
+          <TargetTitle entry={entry} title={title} />
+          {" — "}
+          {t("bookmarks.pageLabel", { page })}
         </>
       )
     }

@@ -11,6 +11,7 @@ import { Tooltip } from "@/components/Display"
 import { newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import { sortCategories } from "@/lib/utils/sortCategories"
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
@@ -157,7 +158,7 @@ export function Upload() {
           {t("upload.addUploadedFilesToCategory")}
           <select id="category" className="favtag-btn" value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">{t("common.NoCategory")}</option>
-            {categories.data?.map((c) => (
+            {sortCategories(categories.data ?? []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>

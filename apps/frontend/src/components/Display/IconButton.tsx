@@ -70,7 +70,33 @@ export function IconButton({
     <button
       type="button"
       className={className}
-      style={{ width, height, minWidth: width, padding: 0, ...style }}
+      // `display: flex` + centered content — `.stdbtn` (and every other `className` passed here,
+      // e.g. `.modal-close-btn`) has no centering rule of its own, so the icon's default inline
+      // layout leaves it flush left/top inside the button's box instead of centered, most visible
+      // at this component's smaller sizes (`"small"`/a raw px value) where there's little
+      // padding/line-height slack to accidentally hide the offset (confirmed live: a 20px round
+      // delete button showed its `fa-trash` icon visibly off-center left without this).
+      //
+      // `margin: 0` — `.stdbtn` (`g.css` et al.) also carries `margin: 4px 1px 0`, which `padding:
+      // 0` above doesn't touch at all: a margin pushes the *whole button* down/right within
+      // whatever laid it out, not the icon within the button. A parent `display: flex` wrapper
+      // (e.g. `BookmarkHoverGrid.tsx`'s own per-thumbnail delete button) sizes itself around the
+      // button's margin box, not just its border box, so that unresolved 4px top margin was still
+      // pushing the whole 20px button visibly downward inside its own positioned wrapper —
+      // confirmed live: the wrapper measured 24px tall (20px button + 4px margin-top) even after
+      // `display: flex` centering was added, since centering only ever addressed the icon-within-
+      // button offset, not this separate button-within-wrapper one.
+      style={{
+        width,
+        height,
+        minWidth: width,
+        margin: 0,
+        padding: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        ...style,
+      }}
       disabled={disabled}
       onClick={onClick}
       title={title}

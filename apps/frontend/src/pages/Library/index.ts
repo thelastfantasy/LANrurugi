@@ -2,8 +2,6 @@ export * from "./ArchiveCard"
 
 export * from "./ArchiveContextMenu"
 
-export * from "./BookmarkIcon"
-
 export * from "./CarouselCard"
 
 export * from "./CategoryBar"

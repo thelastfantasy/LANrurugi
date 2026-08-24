@@ -6,6 +6,7 @@ import { DialogHost } from "./dialog"
 import { Layout } from "./Layout"
 import { ActivityPage } from "./pages/Activity"
 import { Batch } from "./pages/Batch"
+import { BookmarksPage } from "./pages/Bookmarks"
 import { Categories } from "./pages/Categories"
 import { Duplicates } from "./pages/Duplicates"
 import { Edit } from "./pages/Edit"
@@ -55,6 +56,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route path="/" element={<Library />} />
             <Route path="/activity" element={<ActivityPage />} />
+            <Route path="/bookmarks" element={<BookmarksPage />} />
             <Route path="/edit/:archiveId" element={<Edit />} />
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />

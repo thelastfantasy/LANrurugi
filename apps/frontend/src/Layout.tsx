@@ -40,6 +40,7 @@ export function Layout() {
         { to: "/stats", label: t("app.statistics") },
         { to: "/logs", label: t("app.logs") },
         { to: "/activity", label: t("app.activity") },
+        { to: "/bookmarks", label: t("app.bookmarks") },
       ]
     : [{ to: "/login", label: t("app.adminLogin") }]
 

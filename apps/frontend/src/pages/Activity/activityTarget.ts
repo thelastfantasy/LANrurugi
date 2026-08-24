@@ -25,6 +25,7 @@ export function splitActionTypeNamespace(actionType: string): { namespace: strin
  * themselves — new namespaces don't need an edit here to appear, just won't be front-and-center. */
 const ACTION_TYPE_NAMESPACE_ORDER = [
   "archive",
+  "bookmark",
   "settings",
   "category",
   "token",
@@ -165,6 +166,15 @@ export function targetLink(
   switch (kind) {
     case "archive":
       if (!id) return undefined
+      // `bookmark.add`/`bookmark.remove` link straight into the reader at the specific page the
+      // bookmark was on (`after.page`, per `bookmarks.rs`'s own `record_manual` calls) — a plain
+      // Edit-page link (this branch's own default, below) would land somewhere that says nothing
+      // about which of the archive's potentially many independent page bookmarks this entry was
+      // actually about.
+      if (actionType === "bookmark.add" || actionType === "bookmark.remove") {
+        const page = after && typeof after === "object" && "page" in after ? (after as { page: unknown }).page : undefined
+        return typeof page === "number" ? `${routes.reader(id)}?p=${page}` : routes.reader(id)
+      }
       // Only a real archive (36-char hash id) has a reader page at all — a Tankoubon's own member
       // archives never reach this branch (they're `kind: "tankoubon"`), but `target.id` itself
       // gives no other signal to check against here, so this stays a straight passthrough.

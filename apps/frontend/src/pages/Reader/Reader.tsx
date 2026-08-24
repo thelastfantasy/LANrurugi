@@ -6,9 +6,10 @@ import { useNavigate, useParams } from "react-router-dom"
 import { ApiError } from "@/api/client"
 import {
   fetchRandomArchiveId,
+  useAddBookmark,
   useArchiveMetadata,
   useArchivePages,
-  useBookmarkLink,
+  useBookmarksForArchive,
   useCategories,
   useClearArchiveNew,
   useDeleteTankoubon,
@@ -16,6 +17,7 @@ import {
   useGenerateThumbnailsForArchives,
   useLoginStatus,
   usePageDimensions,
+  useRemoveBookmark,
   useSettings,
   useUpdateProgress,
   useUpdateTankoubonProgress,
@@ -131,7 +133,9 @@ export function Reader() {
   const settings = useSettings()
   const loginStatus = useLoginStatus()
   const categories = useCategories()
-  const bookmarkLink = useBookmarkLink()
+  const bookmarks = useBookmarksForArchive(archiveId)
+  const addBookmark = useAddBookmark()
+  const removeBookmark = useRemoveBookmark()
   const updateProgress = useUpdateProgress(isTank ? null : archiveId)
   const updateTankoubonProgress = useUpdateTankoubonProgress(isTank ? archiveId : null)
   const deleteTankoubon = useDeleteTankoubon()
@@ -478,12 +482,13 @@ export function Reader() {
   }, [archiveTransition])
 
   const queryClient = useQueryClient()
-  // Prefetch the recommendation shortlist while the reader is still a couple pages from the
-  // boundary — the LLM rerank takes seconds, and this hides that latency behind normal
-  // page-turning so the boundary panel opens with cached data (stale for a minute).
+  // Prefetch the recommendation shortlist as soon as the reader opens, not just near the
+  // boundary — the LLM rerank takes seconds, and starting immediately hides that latency behind
+  // whatever time the reader spends on this archive at all (most sessions read for well past a
+  // few seconds), so the boundary panel opens with cached data far more often. Non-blocking, and
+  // `staleTime` means a user paging back and forth still only ever fires this once per archive.
   useEffect(() => {
-    if (!archiveId || totalPages === 0) return
-    if (currentPage < totalPages - 2) return
+    if (!archiveId) return
     void queryClient.prefetchQuery({
       queryKey: RECS_QUERY_KEY(archiveId),
       staleTime: 60_000,
@@ -492,7 +497,7 @@ export function Reader() {
           (r) => (r.ok ? r.json() : null),
         ),
     })
-  }, [archiveId, currentPage, totalPages, queryClient, isTank])
+  }, [archiveId, queryClient, isTank])
 
   function startArchiveTransition(direction: "prev" | "next") {
     // Cached (prefetched) shortlist opens instantly; otherwise show the skeleton while the
@@ -741,17 +746,9 @@ export function Reader() {
 
   useEffect(() => releaseWakeLock, [])
 
-  const bookmarkCategoryId = bookmarkLink.data?.category_id || null
-  const isBookmarked = Boolean(
-    bookmarkCategoryId &&
-      categories.data?.find((c) => c.id === bookmarkCategoryId)?.archives.includes(archiveId ?? ""),
-  )
+  const isPageBookmarked = (bookmarks.data ?? []).some((b) => b.page === currentPage)
 
   async function toggleBookmark() {
-    if (!bookmarkCategoryId) {
-      console.error("No bookmark category ID found!")
-      return
-    }
     if (!loggedIn) {
       const template = t("reader.aHrefUrlLogin") ?? ""
       toast({
@@ -763,9 +760,11 @@ export function Reader() {
       return
     }
     if (!archiveId) return
-    const method = isBookmarked ? "DELETE" : "PUT"
-    await fetch(`/api/categories/${bookmarkCategoryId}/${archiveId}`, { method })
-    await categories.refetch()
+    if (isPageBookmarked) {
+      await removeBookmark.mutateAsync({ archiveId, page: currentPage })
+    } else {
+      await addBookmark.mutateAsync({ archiveId, page: currentPage })
+    }
   }
 
   useEffect(() => {
@@ -874,8 +873,8 @@ export function Reader() {
     readerSettings.infiniteScroll,
     navState,
     autoNextActive,
-    isBookmarked,
-    bookmarkCategoryId,
+    isPageBookmarked,
+    archiveId,
     loggedIn,
     markerPlacementMode,
   ])
@@ -1120,8 +1119,6 @@ export function Reader() {
     ? { ...imageStyle, zIndex: 22, cursor: "cell" }
     : imageStyle
 
-  const bookmarkLinkConfigured = Boolean(bookmarkCategoryId)
-
   // Shared between the `?` icon's hover-tooltip preview and the same icon's click/`H`-key full
   // panel (`overlay === 'help'` below) — one piece of content, two presentations, rather than
   // duplicating (and inevitably drifting) the same shortcut list twice.
@@ -1153,7 +1150,7 @@ export function Reader() {
         <li>{t("reader.qBringUpTheThumbnail")}</li>
         <li>{t("reader.rOpenARandomArchive")}</li>
         <li>{t("reader.fToggleFullscreenMode")}</li>
-        <li>{t("reader.bToggleBookmark")}</li>
+        <li>{t("reader.bToggleBookmarkThisPage")}</li>
         <li>{t("reader.nToggleAutoNextPage")}</li>
         <li>{t("reader.shiftleftRightGoToFirst")}</li>
         <li>{t("reader.gGoToPageNumber")}</li>
@@ -1182,6 +1179,16 @@ export function Reader() {
             setOverlay((prev) => (prev === "settings" ? null : "settings"))
           }}
         />
+        <a
+          className={`${isPageBookmarked ? "fas" : "far"} fa-bookmark fa-2x toggle-bookmark${loggedIn ? "" : " disabled"}`}
+          href="#"
+          title={t("reader.toggleBookmark") ?? undefined}
+          style={loggedIn ? { marginRight: 3 } : { marginRight: 3, opacity: 0.5, cursor: "not-allowed" }}
+          onClick={(e) => {
+            e.preventDefault()
+            void toggleBookmark()
+          }}
+        />
         {/* Hover for a quick preview (`Tooltip`'s own `anchor="element"` default); click, or `H`,
             still opens the full `#reader-help` panel below — hovering to check one shortcut
             shouldn't require a full modal open/close round trip, but the complete list (including
@@ -1198,18 +1205,6 @@ export function Reader() {
             }}
           />
         </Tooltip>
-        {bookmarkLinkConfigured && (
-          <a
-            className={`${isBookmarked ? "fas" : "far"} fa-bookmark fa-2x toggle-bookmark${loggedIn ? "" : " disabled"}`}
-            href="#"
-            title={t("library.toggleBookmark") ?? undefined}
-            style={loggedIn ? { marginRight: 3 } : { marginRight: 3, opacity: 0.5, cursor: "not-allowed" }}
-            onClick={(e) => {
-              e.preventDefault()
-              void toggleBookmark()
-            }}
-          />
-        )}
       </div>
       <div className="absolute-options absolute-right">
         <a

@@ -42,6 +42,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = std::sync::Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -89,6 +92,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
+        bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -323,6 +327,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = std::sync::Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -370,6 +377,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
+        bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -472,6 +480,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = std::sync::Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -519,6 +530,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
+        bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
@@ -679,6 +691,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let compare_cache = std::sync::Arc::new(
         lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
+    let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
     let refresh_tokens = std::sync::Arc::new(
         lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
     );
@@ -758,6 +773,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
+        bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),

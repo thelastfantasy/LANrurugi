@@ -31,6 +31,7 @@ export const routes = {
   logs: () => "/logs",
   jobs: () => "/jobs",
   activity: () => "/activity",
+  bookmarks: () => "/bookmarks",
   batch: () => "/batch",
   // `section` deep-links to one of Settings' own accordions (`CollapsibleSection`'s own `id`
   // prop — "global"/"theme"/"security"/"api-tokens"/"archive-files"/"tags-thumbnails"/

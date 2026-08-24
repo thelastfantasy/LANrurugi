@@ -27,6 +27,7 @@ import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+import { sortCategories } from "@/lib/utils/sortCategories"
 import { displayTocName, isReservedTocIdentifier } from "@/lib/utils/tocValidation"
 import { toast } from "@/toast"
 
@@ -212,7 +213,7 @@ export function ArchiveOverviewOverlay({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const createCategory = useCreateCategory()
-  const staticCategories = (categories ?? []).filter((c) => !c.search)
+  const staticCategories = sortCategories((categories ?? []).filter((c) => !c.search))
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
   const isTank = isTankoubonId(archive.arcid)
 
