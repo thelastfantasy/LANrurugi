@@ -181,6 +181,15 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   — none of it disturbing the underlying overview modal's own scroll position or actual reading
   progress. Legacy's own thumbnail grid is too small to judge chapter start/end purely by content;
   legacy has no equivalent feature at all.
+- **Google Reader-style `j`/`k` keyboard shortcuts in the reader** — `j` scrolls down and advances
+  to the next page once it hits the bottom, `k` jumps to the previous page's top; the scroll
+  distance is configurable on the settings panel as either a percentage of viewport height or a
+  fixed pixel amount. Several mobile-reader fixes shipped alongside: a discarded-and-reloaded tab
+  (e.g. after a phone's screen lock) no longer has its real reading progress overridden by a stale
+  `?p=` deep-link page number; the floating icon toolbar picked up a background so it no longer
+  visually collides with the content scrolled underneath it; and tapping the help icon on touch no
+  longer opens both the hover-preview bubble and the full shortcuts panel at once (a synthesized
+  `mouseenter` before `click` firing both).
 - **Several real chapter (ToC) management improvements**: delete/edit now lists every chapter in
   the archive to pick from, instead of legacy's own real limitation of only ever operating on
   "whichever chapter the reader is currently scrolled into" (`getCurrentChapter()`, not a porting
