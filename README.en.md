@@ -199,9 +199,25 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
 - **A `rating` comparison search syntax** (`rating>=1`, `rating<4`, `rating=5` — the last
   equivalent to legacy's plain `rating:5`), supporting fractional values; legacy only ever
   supported an exact-match `rating:N` tag.
+- **Quoted search values support `\"`/`\\` escaping.** A tag value that itself contains a literal
+  `"` (a real, if rare, possibility in a scraped artist/circle name) previously had no way to be
+  searched at all — the first unescaped `"` inside the value was read as the closing quote,
+  silently truncating it and leaving the remainder parsed as an unrelated bare token.
 - **A "Mark as Read"/"Mark as Unread" context-menu item on Library grid cards**, setting reading
   progress directly to the last page or 0 — legacy has no way to manually toggle read status
   outside of actually paging through the archive.
+- **A page-level bookmark system, replacing legacy's category-linked bookmark toggle.** Legacy's
+  "bookmark" was really a single global switch that added the whole archive to one designated
+  category; every page can now be bookmarked independently. A standalone `/bookmarks` page sorts by
+  recently-bookmarked/title/date-added with cursor pagination, and hovering (tapping, on touch) a
+  card opens a thumbnail grid of that archive's own bookmarked pages with per-page delete and
+  corner-aware positioning that flips toward whichever side of the viewport actually has more room.
+  The homepage carousel gained a matching "Bookmarked" mode reusing the same preview, with the
+  mouse wheel smartly handed off between the preview grid and the carousel's own horizontal scroll
+  (scrolls the grid's content first if it has any, briefly absorbs further scrolling once it hits
+  either end to avoid an accidental hand-off, then forwards to the carousel; a mouse with its own
+  horizontal wheel skips the grid entirely). Bookmark add/remove now also shows up in the activity
+  log.
 - **AI-assisted Tankoubon editing**, suggesting a title, chapter names, and reading order from
   member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
   Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
