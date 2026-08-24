@@ -25,6 +25,11 @@
 //!   same token.
 //! - `?`/`_` become single-character glob wildcards; `*`/`%` become multi-character wildcards.
 //! - Tags are lowercased and trimmed.
+//! - Inside a quoted value, `\"` is a literal quote and `\\` a literal backslash — a tag value
+//!   that itself contains a `"` (a real, if rare, possibility in a scraped artist/circle name) has
+//!   no other way to be searched at all otherwise: unescaped, the first `"` inside the value would
+//!   be read as the *closing* quote, silently truncating the value and leaving the remainder to be
+//!   parsed as an unrelated bare token.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
@@ -57,13 +62,7 @@ pub fn compute_search_filter(filter: &str) -> Vec<Token> {
 
         let (raw, isexact) = if chars.peek() == Some(&'"') {
             chars.next();
-            let mut s = String::new();
-            for c in chars.by_ref() {
-                if c == '"' {
-                    break;
-                }
-                s.push(c);
-            }
+            let s = read_quoted_body(&mut chars);
             // Optional trailing `$` after the closing quote is accepted but redundant.
             if chars.peek() == Some(&'$') {
                 chars.next();
@@ -89,12 +88,7 @@ pub fn compute_search_filter(filter: &str) -> Vec<Token> {
                         chars.next();
                         if chars.peek() == Some(&'"') {
                             chars.next();
-                            for c in chars.by_ref() {
-                                if c == '"' {
-                                    break;
-                                }
-                                s.push(c);
-                            }
+                            s.push_str(&read_quoted_body(&mut chars));
                             isexact = true;
                             // Optional trailing `$` after the closing quote is accepted but
                             // redundant, same as the top-level quote branch above.
@@ -130,6 +124,26 @@ pub fn compute_search_filter(filter: &str) -> Vec<Token> {
     }
 
     tokens
+}
+
+/// Reads a quoted value's body from just after the opening `"` up to (and consuming) the closing
+/// `"`, honoring `\"` and `\\` as escapes — see this module's own docs for why. An unterminated
+/// quote (input ends before a closing `"` is found) yields whatever was read so far rather than
+/// erroring, matching every other malformed-input case in this parser (e.g. a trailing bare `-`),
+/// which all degrade gracefully instead of rejecting the whole query.
+fn read_quoted_body(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut s = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.peek() {
+                Some('"') | Some('\\') => s.push(chars.next().expect("peeked Some above")),
+                _ => s.push('\\'),
+            },
+            other => s.push(other),
+        }
+    }
+    s
 }
 
 fn normalize(raw: &str) -> String {
@@ -185,6 +199,39 @@ mod tests {
     fn exact_match_via_trailing_dollar() {
         let tokens = compute_search_filter("artist:jane$");
         assert_eq!(tokens, vec![tok("artist:jane", false, true)]);
+    }
+
+    #[test]
+    fn escaped_quote_survives_inside_a_whole_token_quote() {
+        // A literal `"` inside a tag value (e.g. a real artist name) — unescaped, the first `"`
+        // would be read as the closing quote, truncating the value and leaving `bar"` behind to be
+        // parsed as an unrelated bare token. `\"` protects it.
+        let tokens = compute_search_filter(r#""artist:foo\"bar""#);
+        assert_eq!(tokens, vec![tok(r#"artist:foo"bar"#, false, true)]);
+    }
+
+    #[test]
+    fn escaped_quote_survives_inside_a_namespace_value_quote() {
+        let tokens = compute_search_filter(r#"artist:"foo\"bar""#);
+        assert_eq!(tokens, vec![tok(r#"artist:foo"bar"#, false, true)]);
+    }
+
+    #[test]
+    fn escaped_backslash_stays_a_single_backslash() {
+        let tokens = compute_search_filter(r#"artist:"foo\\bar""#);
+        assert_eq!(tokens, vec![tok(r#"artist:foo\bar"#, false, true)]);
+    }
+
+    #[test]
+    fn without_escaping_an_embedded_quote_truncates_and_leaves_a_stray_bare_token() {
+        // Documents the pre-fix (still-current-if-unescaped) failure mode this fix addresses: a
+        // raw, unescaped `"` inside the value silently splits into two unrelated tokens instead of
+        // one — this is exactly why escaping exists, not a behavior to remove.
+        let tokens = compute_search_filter(r#"artist:"foo"bar""#);
+        assert_eq!(
+            tokens,
+            vec![tok("artist:foo", false, true), tok(r#"bar""#, false, false)]
+        );
     }
 
     #[test]
