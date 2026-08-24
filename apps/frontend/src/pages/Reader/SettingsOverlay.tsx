@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 
-import type { FitMode, ReaderSettings } from "@/hooks/useReaderSettings"
+import type { FitMode, JScrollUnit, ReaderSettings } from "@/hooks/useReaderSettings"
 import { ensureLink, FONT_SIZE_MD, FONT_SIZE_XS, removeLink } from "@/theme"
 
 const CONFIG_CSS_ID = "reader-config-css"
@@ -334,6 +334,51 @@ export function SettingsOverlay({
               onClick={(e) => {
                 const input = e.currentTarget.previousElementSibling as HTMLInputElement
                 update({ autoNextPageInterval: Number(input.value) || 10 })
+              }}
+            />
+          </SettingSection>
+
+          <SettingSection
+            title={t("reader.jScrollDistance") ?? ""}
+            description={t("reader.howFarJScrollsEachPress") ?? undefined}
+          >
+            {/* Unit switch applies immediately (a `<select>` is a discrete choice, not something
+                that benefits from an Apply round-trip) — the amount field next to it keeps its
+                own separate Apply button, same pattern as every other numeric setting on this
+                page (`autoNextPageInterval`, `preloadCount`), so a half-typed number doesn't take
+                effect on every keystroke. Switching units doesn't convert the existing number
+                (e.g. `80` stays `80` whether that now means "80%" or "80px") — the two units mean
+                different things and there's no single correct conversion to guess at; the user
+                types whatever the new unit calls for and hits Apply. */}
+            <select
+              className="favtag-btn"
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={settings.jScrollUnit}
+              onChange={(e) => update({ jScrollUnit: e.target.value as JScrollUnit })}
+            >
+              <option value="percent">{t("reader.percentOfViewportHeight")}</option>
+              <option value="px">{t("reader.pixels")}</option>
+            </select>
+            <input
+              id="j-scroll-amount-input"
+              className="stdinput"
+              type="number"
+              style={{ width: "6em", height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              defaultValue={settings.jScrollAmount}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  update({ jScrollAmount: Number(e.currentTarget.value) || settings.jScrollAmount })
+                }
+              }}
+            />
+            <input
+              className="favtag-btn"
+              type="button"
+              style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+              value={t("reader.apply") ?? undefined}
+              onClick={(e) => {
+                const input = e.currentTarget.previousElementSibling as HTMLInputElement
+                update({ jScrollAmount: Number(input.value) || settings.jScrollAmount })
               }}
             />
           </SettingSection>

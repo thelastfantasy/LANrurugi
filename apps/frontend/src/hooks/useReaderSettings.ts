@@ -8,6 +8,13 @@ import { useState } from "react"
 
 export type FitMode = "container" | "fit-width" | "fit-height"
 
+/** `"percent"` scales with the viewport (`vh` is exactly this, expressed as a CSS unit rather
+ * than a plain number — the two aren't different concepts, just different ways of writing the
+ * same relative-to-viewport-height fraction) so `j`'s scroll step stays proportionally the same
+ * whether it's a phone or an ultrawide monitor; `"px"` is a fixed distance regardless of viewport
+ * size, for a reader who wants the *exact same* jump every time. */
+export type JScrollUnit = "percent" | "px"
+
 export interface ReaderSettings {
   hideHeader: boolean
   mangaMode: boolean
@@ -20,6 +27,8 @@ export interface ReaderSettings {
   preloadCount: number
   autoNextPageInterval: number
   infiniteScroll: boolean
+  jScrollUnit: JScrollUnit
+  jScrollAmount: number
 }
 
 const DEFAULTS: ReaderSettings = {
@@ -36,6 +45,10 @@ const DEFAULTS: ReaderSettings = {
   preloadCount: 2,
   autoNextPageInterval: 10,
   infiniteScroll: false,
+  // Matches the `j`/`" "` scroll step's original hardcoded value (`window.innerHeight * 0.8`)
+  // exactly, so introducing this setting doesn't change anyone's existing scroll feel by default.
+  jScrollUnit: "percent",
+  jScrollAmount: 80,
 }
 
 function readBool(key: string, fallback: boolean): boolean {
@@ -61,6 +74,8 @@ function readFromLocalStorage(): ReaderSettings {
     autoNextPageInterval:
       Number(localStorage.getItem("AutoNextPageInterval")) || DEFAULTS.autoNextPageInterval,
     infiniteScroll: readBool("infiniteScroll", DEFAULTS.infiniteScroll),
+    jScrollUnit: localStorage.getItem("jScrollUnit") === "px" ? "px" : DEFAULTS.jScrollUnit,
+    jScrollAmount: Number(localStorage.getItem("jScrollAmount")) || DEFAULTS.jScrollAmount,
   }
 }
 
@@ -97,6 +112,12 @@ function writeToLocalStorage(partial: Partial<ReaderSettings>) {
   }
   if (partial.infiniteScroll !== undefined) {
     localStorage.setItem("infiniteScroll", String(partial.infiniteScroll))
+  }
+  if (partial.jScrollUnit !== undefined) {
+    localStorage.setItem("jScrollUnit", partial.jScrollUnit)
+  }
+  if (partial.jScrollAmount !== undefined) {
+    localStorage.setItem("jScrollAmount", String(partial.jScrollAmount))
   }
 }
 

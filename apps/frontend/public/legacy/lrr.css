@@ -1015,6 +1015,25 @@ body.infinite-scroll .fullscreen-infinite img {
   .absolute-options {
     position: fixed !important;
     z-index: 100;
+    /* Neutral functional scrim (not a theme accent — same reasoning as the touch-only backdrop
+       in BookmarkHoverGrid.tsx), not a per-theme color: this bar floats over the reader's own
+       page image, whose colors vary per-archive far more than any single theme's palette does, so
+       there's no "matches this theme" color to pick in the first place. Fixed-positioned and
+       transparent before this, it let whatever was scrolled underneath (the #i5 "back to
+       library" chevron, the #i7 text links) show straight through and visually collide with the
+       icons — reported live, screenshotted on mobile Firefox. Semi-transparent black + white
+       icons (below) gives reliable contrast against any page content, matching how #i5/#i7 area
+       looked "crowded" against this bar in the report. */
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 20px;
+    padding: 4px 10px;
+  }
+
+  /* Overrides each theme's own link color (which was never meant to be read against a dark
+     scrim) so the gear/bookmark/help/direction/timer/grid/fullscreen icons stay legible
+     regardless of theme or what's showing through behind the bar. */
+  .absolute-options a {
+    color: #fff;
   }
 
   .absolute-left {

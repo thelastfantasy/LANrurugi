@@ -188,6 +188,29 @@ export function Reader() {
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   )
+
+  // `?p=`/`?overview=1` are one-shot: they only ever seed `pageOverride`/`overlay`'s *initial*
+  // value above, at mount. Left in the address bar afterward, they go stale the moment the user
+  // pages past `p` or closes the overlay — real progress (tracked separately, in `pageOverride`
+  // itself plus the backend) has moved on, but the URL still claims otherwise. That staleness is
+  // silently harmless as long as this tab keeps running, but a discarded-and-reloaded tab (e.g.
+  // after a phone's screen lock — reported live: reopening the reader after the phone auto-locked
+  // landed back on the page a `?p=` deep link had originally pointed at, well behind where the
+  // user had actually read to) re-runs this component's initializers from scratch and reads the
+  // stale URL as if it were still a fresh, deliberate deep link. Stripping both right after they've
+  // done their one job means a reload from then on falls through to real tracked progress instead.
+  // `replaceState` (not `pushState`) so this doesn't add a spurious back-button entry, and doesn't
+  // re-run on every render (empty deps) — `routes.reader(id)` (the only in-app way this component
+  // ever navigates to a *different* archive without a full remount) never carries either param, so
+  // there's nothing to strip beyond this initial mount.
+  useEffect(() => {
+    if (!startPage && !startWithOverview) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete("p")
+    url.searchParams.delete("overview")
+    window.history.replaceState(null, "", url)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [widespreads, setWidespreads] = useState<Record<number, boolean>>({})
   const [pageDimensions, setPageDimensions] = useState<Record<number, { width: number; height: number }>>({})
@@ -799,6 +822,32 @@ export function Reader() {
         case " ":
           window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" })
           return
+        // Google Reader-style j/k: `j` scrolls like `" "` above until there's nothing further to
+        // scroll, then advances a page instead (so holding it down reads the whole page top to
+        // bottom before moving on, rather than requiring a separate page-turn key once scrolled
+        // content runs out); `k` always goes to the previous page — `goTo("prev")` already
+        // scrolls to that page's own top (see its own docs), matching Google Reader's `k` jumping
+        // straight to the previous item rather than scrolling upward incrementally.
+        case "j":
+          if (readerSettings.infiniteScroll) {
+            goToInfiniteScrollPage(currentPage, "next")
+          } else if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 1) {
+            goTo("next")
+          } else {
+            const step =
+              readerSettings.jScrollUnit === "px"
+                ? readerSettings.jScrollAmount
+                : window.innerHeight * (readerSettings.jScrollAmount / 100)
+            window.scrollBy({ top: step, behavior: "smooth" })
+          }
+          return
+        case "k":
+          if (readerSettings.infiniteScroll) {
+            goToInfiniteScrollPage(currentPage, "prev")
+          } else {
+            goTo("prev")
+          }
+          return
         case "ArrowLeft":
         case "a":
           if (readerSettings.infiniteScroll) {
@@ -871,6 +920,8 @@ export function Reader() {
     readerSettings.mangaMode,
     readerSettings.doublePageMode,
     readerSettings.infiniteScroll,
+    readerSettings.jScrollUnit,
+    readerSettings.jScrollAmount,
     navState,
     autoNextActive,
     isPageBookmarked,
@@ -1132,6 +1183,12 @@ export function Reader() {
         </li>
         <li>{t("reader.yourKeyboardArrowsAndThe")}</li>
         <li>{t("reader.touchingTheLeftRightSide")}</li>
+        <li>
+          <Key>J</Key> {t("reader.jScrollsDownThenAdvancesAtTheBottom")}
+        </li>
+        <li>
+          <Key>K</Key> {t("reader.kGoesToThePreviousPage")}
+        </li>
       </ul>
       <p style={{ margin: "0 0 4px" }}>
         {t("reader.whenReadingAnArchiveFrom")}
@@ -1144,17 +1201,39 @@ export function Reader() {
       </ul>
       <p style={{ margin: "0 0 4px" }}>{t("reader.otherKeyboardShortcuts")}</p>
       <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>{t("reader.mToggleMangaModeRighttoleft")}</li>
-        <li>{t("reader.oShowAdvancedReaderOptions")}</li>
-        <li>{t("reader.pToggleDoublePageMode")}</li>
-        <li>{t("reader.qBringUpTheThumbnail")}</li>
-        <li>{t("reader.rOpenARandomArchive")}</li>
-        <li>{t("reader.fToggleFullscreenMode")}</li>
-        <li>{t("reader.bToggleBookmarkThisPage")}</li>
-        <li>{t("reader.nToggleAutoNextPage")}</li>
-        <li>{t("reader.shiftleftRightGoToFirst")}</li>
-        <li>{t("reader.gGoToPageNumber")}</li>
-        <li>{t("reader.sSetAStamp")}</li>
+        <li>
+          <Key>M</Key> {t("reader.mToggleMangaModeRighttoleft")}
+        </li>
+        <li>
+          <Key>O</Key> {t("reader.oShowAdvancedReaderOptions")}
+        </li>
+        <li>
+          <Key>P</Key> {t("reader.pToggleDoublePageMode")}
+        </li>
+        <li>
+          <Key>Q</Key> {t("reader.qBringUpTheThumbnail")}
+        </li>
+        <li>
+          <Key>R</Key> {t("reader.rOpenARandomArchive")}
+        </li>
+        <li>
+          <Key>F</Key> {t("reader.fToggleFullscreenMode")}
+        </li>
+        <li>
+          <Key>B</Key> {t("reader.bToggleBookmarkThisPage")}
+        </li>
+        <li>
+          <Key>N</Key> {t("reader.nToggleAutoNextPage")}
+        </li>
+        <li>
+          <Key>Shift</Key>+<Key>←</Key>/<Key>→</Key> {t("reader.shiftleftRightGoToFirst")}
+        </li>
+        <li>
+          <Key>G</Key> {t("reader.gGoToPageNumber")}
+        </li>
+        <li>
+          <Key>S</Key> {t("reader.sSetAStamp")}
+        </li>
       </ul>
       <p style={{ margin: 0 }}>{t("reader.toReturnToTheArchive")}</p>
     </div>
@@ -1189,20 +1268,22 @@ export function Reader() {
             void toggleBookmark()
           }}
         />
-        {/* Hover for a quick preview (`Tooltip`'s own `anchor="element"` default); click, or `H`,
-            still opens the full `#reader-help` panel below — hovering to check one shortcut
-            shouldn't require a full modal open/close round trip, but the complete list (including
-            the ones easy to forget) stays reachable the same way it always was. */}
+        {/* Hover for a quick preview (`Tooltip`'s own `anchor="element"` default); `H` still opens
+            the full `#reader-help` panel below — the complete list (including the ones easy to
+            forget) stays reachable that way. No `onClick` here (previously also opened the same
+            panel) — on touch, a tap synthesizes a `mouseenter` before the `click` fires, so
+            `Tooltip`'s own hover-open and this icon's click-open both fired from the same tap,
+            opening the preview and the full panel simultaneously (reported live, screenshotted on
+            mobile Firefox). Dropping the click leaves the icon as a pure `Tooltip` trigger —
+            tapping shows the same hover preview desktop gets, `H` remains the only way to the full
+            panel on any device. */}
         <Tooltip label={helpContent} maxWidth={420}>
           <a
             className="fas fa-question-circle fa-2x"
             href="#"
             title={t("reader.help") ?? undefined}
             style={{ marginRight: 3 }}
-            onClick={(e) => {
-              e.preventDefault()
-              setOverlay((prev) => (prev === "help" ? null : "help"))
-            }}
+            onClick={(e) => e.preventDefault()}
           />
         </Tooltip>
       </div>
