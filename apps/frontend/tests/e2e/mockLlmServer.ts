@@ -1,27 +1,33 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import http from "node:http"
 
-/** A minimal local stand-in for DeepSeek's `/chat/completions` endpoint — `lanrurugi-llm`'s
- * `tool_chat_streaming` (`crates/lanrurugi-llm/src/lib.rs`) is pointed at this via
+/** A minimal local stand-in for DeepSeek's `/chat/completions` endpoint — pointed at via
  * `LANRURUGI_DEEPSEEK_BASE_URL` (set on the worker process's own env before `fixtures.ts`'s
  * backend spawn, which inherits `process.env` by default) so the wizard's E2E coverage
  * (T047/T048) never needs a live LLM key or hits the real API (`plan.md`'s Testing note).
  *
- * Every real call this server receives is a streaming one (`"stream": true` in the request body
- * — `generate.rs`'s own `/plugin-wizard/generate/start` always goes through `tool_chat_streaming`,
- * never the older non-streaming `tool_chat`), so responses are always framed as a real SSE byte
- * stream (`data: {...}\n\n`, terminated by `data: [DONE]\n\n`), not a single plain JSON body — a
- * plain-JSON response here previously left the streaming parser waiting on SSE frames that never
- * arrived until the caller's own timeout, with the request itself appearing to "hang" rather than
- * fail with any diagnosable error (confirmed live, 2026-08-26, tracing the cause of `plugin-
- * wizard.spec.ts`'s "Trial run" button never appearing after "Generate" was clicked).
+ * `lanrurugi-llm` has TWO real call shapes that both land here, and the response framing must
+ * match whichever the caller actually used:
+ * - `generate.rs`'s `/plugin-wizard/generate/start` always goes through `tool_chat_streaming`
+ *   (`"stream": true` in the request body) — its response must be a real SSE byte stream
+ *   (`data: {...}\n\n`, terminated by `data: [DONE]\n\n`).
+ * - `trial_run.rs`'s `classify_login_relevance` and `analyze_login.rs`'s own analysis call go
+ *   through the older non-streaming `chat`/`json_chat` (`post_chat_completion`), which does a
+ *   plain `resp.text()` + `serde_json::from_str` on the whole body — handing *that* caller an SSE
+ *   stream instead of a flat JSON object fails to parse (silently downgraded to `relevant: false`
+ *   by `classify_login_relevance`'s own `Err` branch, not a visible error), which is why "This
+ *   failure might be login-related" never appeared in `plugin-wizard-login-detection.spec.ts`
+ *   despite the queued classification response being consumed. This server distinguishes the two
+ *   by checking the request body's own `"stream"` field rather than assuming one shape for every
+ *   caller (confirmed live, 2026-08-26, after fixing the streaming case alone left this second,
+ *   independent bug in the same file).
  *
  * Behavior is driven by a queue of canned responses, `enqueue()`d by each test before triggering
  * the wizard action that will consume one — first-in-first-out per call, so a test that expects
  * two DeepSeek calls (a generate + an auto-fix, say) enqueues two responses in the order it
  * expects them consumed. `respondToolCalls`/`respondContent` build the two response shapes
- * `tool_chat_streaming`'s own parser distinguishes between; each is still a single logical
- * response, just replayed as one SSE delta frame internally rather than sent as a plain body. */
+ * either caller's own parser distinguishes between; each is still a single logical response, sent
+ * as a single content-only or tool_calls-only turn regardless of framing. */
 export class MockLlmServer {
   private server: http.Server
   private queue: object[] = []
@@ -54,11 +60,23 @@ export class MockLlmServer {
     const chunks: Buffer[] = []
     req.on("data", (c: Buffer) => chunks.push(c))
     req.on("end", () => {
-      this.receivedRequestBodies.push(Buffer.concat(chunks).toString("utf8"))
+      const rawBody = Buffer.concat(chunks).toString("utf8")
+      this.receivedRequestBodies.push(rawBody)
+      const isStreaming = (JSON.parse(rawBody || "{}") as { stream?: boolean }).stream === true
       const next = (this.queue.shift() ?? respondContent("")) as {
         choices: [{ message: { content: string | null; tool_calls?: unknown[] } }]
       }
       const message = next.choices[0].message
+
+      if (!isStreaming) {
+        // `chat`/`json_chat` (`post_chat_completion`) — a plain, non-streaming JSON body, read
+        // whole via `resp.text()` then `serde_json::from_str` — the exact same shape `next` itself
+        // already is, no SSE framing at all.
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(next))
+        return
+      }
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

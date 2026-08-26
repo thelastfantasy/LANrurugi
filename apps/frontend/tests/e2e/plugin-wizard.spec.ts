@@ -134,7 +134,10 @@ test.describe("plugin wizard", { tag: "@plugin-wizard" }, () => {
 
     // US6: confirm-save — filename defaults from the domain, save should succeed.
     await page.getByRole("button", { name: "Confirm and install" }).click()
-    await expect(page.getByText(/Installed as custom\/metadata\//)).toBeVisible({ timeout: 10_000 })
+    // `.first()` — the same "Installed as ..." text renders both in the page body (`TrialRunResult.
+    // tsx`'s own success line) and, independently, as a toast notification (the app's shared
+    // Notifications region) — a real strict-mode ambiguity, not a flaky duplicate.
+    await expect(page.getByText(/Installed as custom\/metadata\//).first()).toBeVisible({ timeout: 10_000 })
 
     // The saved plugin is immediately real and listable, same as any hand-written one.
     const listRes = await page.request.get("/api/plugins/metadata")
