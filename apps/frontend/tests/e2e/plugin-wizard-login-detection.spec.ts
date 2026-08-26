@@ -8,7 +8,24 @@ import { MockLlmServer, respondContent } from "./mockLlmServer"
 // adds and validates a login plugin from within the wizard without restarting it; accepting the
 // suggestion re-associates the originally-failing draft and a fresh generate + trial-run against
 // it (now carrying real cookies from a successful login) succeeds.
-const MOCK_LLM_PORT = 6430 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
+//
+// MOCK_LLM_PORT must resolve to the exact same value as plugin-wizard.spec.ts's own — both files'
+// top-level `process.env.LANRURUGI_DEEPSEEK_BASE_URL = ...` assignment runs once per worker
+// process the very first time either spec file is imported (Playwright can and does schedule
+// multiple spec files onto the same worker), and whichever import happens second silently
+// overwrites the first's env var for the rest of that worker's lifetime — the backend process
+// itself is spawned once per worker (`fixtures.ts`'s own worker-scoped fixture), long-lived across
+// every test that worker runs, so its `LANRURUGI_DEEPSEEK_BASE_URL` is fixed at spawn time and can
+// never differ from one test to the next within that worker. Two different port offsets here (this
+// file previously used 6430, `plugin-wizard.spec.ts` 6410) meant one of the two files' own
+// generate calls would connect to the *other* file's `MockLlmServer` port — where nothing was
+// listening — with a request that simply never arrived anywhere, indistinguishable from a hung
+// server until Playwright's own assertion timeout (confirmed live, 2026-08-26, by making the
+// backend process's stdio visible in CI and observing zero fetch_page/mock-server-received log
+// lines despite the backend confirmedly reaching `resolve_credentials`). Only `FIXTURE_SITE_PORT`
+// (this file's own fixture HTTP server, unrelated to the LLM mock, never touched by the shared env
+// var) is still safe to keep distinct per file.
+const MOCK_LLM_PORT = 6410 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 const FIXTURE_SITE_PORT = 6440 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 process.env.LANRURUGI_DEEPSEEK_BASE_URL = `http://127.0.0.1:${MOCK_LLM_PORT}`
 

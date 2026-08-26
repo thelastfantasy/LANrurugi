@@ -12,6 +12,13 @@ import { MockLlmServer, respondContent } from "./mockLlmServer"
 // `fixtures.ts` passes no explicit `env` override for the backend spawn) — top-level module code
 // in a Playwright spec file runs before any fixture is instantiated for that worker, so setting it
 // here at import time is early enough.
+//
+// MOCK_LLM_PORT's value must stay identical to plugin-wizard-login-detection.spec.ts's own — see
+// that file's own doc comment on why: the backend process is spawned once per worker and lives for
+// every test that worker runs, so whichever spec file's top-level assignment happens to execute
+// last inside a shared worker silently wins for the rest of that worker's lifetime; a mismatched
+// port here previously sent this file's own generate calls to the *other* file's mock server port,
+// where nothing was listening (confirmed live, 2026-08-26).
 const MOCK_LLM_PORT = 6410 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 const FIXTURE_SITE_PORT = 6420 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 process.env.LANRURUGI_DEEPSEEK_BASE_URL = `http://127.0.0.1:${MOCK_LLM_PORT}`
