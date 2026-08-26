@@ -260,7 +260,17 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
 /// (unknown key, wrong JSON type, invalid `theme` value) can be unit-tested directly rather than
 /// only reachable through a real HTTP request against a live Redis (issue #65).
 fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
-    let is_known_field = STRING_FIELDS.iter().any(|(k, _)| *k == key)
+    // `llm_api_key` is deliberately absent from `STRING_FIELDS` — that list doubles as
+    // `get_settings`'s own read-loop allowlist, and the real key must never be echoed back to the
+    // frontend (only the `llm_api_key_set` boolean is, computed separately above). It still needs
+    // its own write-side allowlist entry here, though — omitting it entirely meant every `PUT
+    // /settings` call carrying a real key was rejected outright with "Unknown settings field"
+    // (issue #65's allowlist rejected anything not in `STRING_FIELDS`/`NUMBER_FIELDS`/
+    // `BOOL_FIELDS`, and this field was never added to any of them) — the Settings page's own "保存
+    // Key" action has never actually persisted a key since that allowlist was introduced, confirmed
+    // live via a direct `PUT /settings` call, 2026-08-26.
+    let is_known_field = key == "llm_api_key"
+        || STRING_FIELDS.iter().any(|(k, _)| *k == key)
         || NUMBER_FIELDS.iter().any(|(k, _)| *k == key)
         || BOOL_FIELDS.iter().any(|(k, _)| *k == key);
     if !is_known_field {
@@ -674,6 +684,20 @@ mod validate_setting_field_tests {
     fn accepts_a_known_string_field() {
         let stored = validate_setting_field("motd", &json!("Hello")).unwrap();
         assert_eq!(stored, "Hello");
+    }
+
+    /// Regression test for a real bug: `llm_api_key` was never added to `STRING_FIELDS` (kept out
+    /// deliberately, since that list doubles as `get_settings`'s own read-loop allowlist and the
+    /// real key must never be echoed back to the frontend), but it also needs its own write-side
+    /// allowlist entry — omitting it entirely meant every `PUT /settings` call that tried to save a
+    /// real key was rejected outright with "Unknown settings field", so the Settings page's own
+    /// save-key action never actually persisted anything since issue #65's allowlist was introduced
+    /// (confirmed live via a direct `PUT /settings` call, 2026-08-26).
+    #[test]
+    fn accepts_llm_api_key_despite_it_not_being_in_string_fields() {
+        assert!(!STRING_FIELDS.iter().any(|(k, _)| *k == "llm_api_key"));
+        let stored = validate_setting_field("llm_api_key", &json!("sk-real-key")).unwrap();
+        assert_eq!(stored, "sk-real-key");
     }
 
     #[test]
