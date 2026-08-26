@@ -127,6 +127,11 @@ test.describe("plugin wizard login detection", { tag: "@plugin-wizard" }, () => 
 
   test.beforeEach(async ({ page }) => {
     await page.request.post("/api/login", { form: { password: "kamimamita" } })
+    // See plugin-wizard.spec.ts's own beforeEach for why this is required — `resolve_api_key`
+    // checks Redis-persisted `llm_api_key` before ever falling back to `DEEPSEEK_API_KEY`, so
+    // without this every generate call fails immediately with no HTTP request ever reaching the
+    // mock server at all.
+    await page.request.put("/api/settings", { data: { llm_api_key: "mock-test-key" } })
 
     mockLlm = new MockLlmServer()
     await mockLlm.listen(MOCK_LLM_PORT)

@@ -66,6 +66,14 @@ test.describe("plugin wizard", { tag: "@plugin-wizard" }, () => {
 
   test.beforeEach(async ({ page }) => {
     await page.request.post("/api/login", { form: { password: "kamimamita" } })
+    // `lanrurugi_llm::resolve_api_key` checks Redis-persisted `llm_api_key` *before* ever falling
+    // back to the `DEEPSEEK_API_KEY` env var this file points at the mock server — with neither
+    // set, generation fails immediately with "API key not configured" before any HTTP request is
+    // even attempted, which previously looked exactly like a hung/silent failure (no request ever
+    // reached `MockLlmServer`, confirmed live by inheriting the backend's own stdio during CI
+    // diagnosis, 2026-08-26). The mock server never validates the key's actual value, so any
+    // non-empty string satisfies this check.
+    await page.request.put("/api/settings", { data: { llm_api_key: "mock-test-key" } })
 
     mockLlm = new MockLlmServer()
     await mockLlm.listen(MOCK_LLM_PORT)
