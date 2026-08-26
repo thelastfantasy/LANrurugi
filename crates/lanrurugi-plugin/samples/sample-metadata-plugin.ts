@@ -13,6 +13,11 @@ interface PluginInfoResult {
   author: string;
   description: string;
   version: string;
+  // Precise trigger condition (real dispatch matches a full URL against this).
+  url_pattern?: string;
+  // Bare domain(s) this plugin owns, for domain-ownership lookups only — see
+  // `PluginInfoResult.domain_match`'s own docs in `plugin-sdk.ts`.
+  domain_match?: string[];
 }
 
 export function pluginInfo(): PluginInfoResult {
@@ -29,6 +34,8 @@ export function pluginInfo(): PluginInfoResult {
     author: "LANrurugi",
     description: "Demonstrates the Deno plugin protocol end to end (User Story 4).",
     version: "1.0.0",
+    url_pattern: "metadata\\.example\\.invalid",
+    domain_match: ["metadata.example.invalid"],
   };
 }
 

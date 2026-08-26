@@ -45,6 +45,7 @@ export function pluginInfo() {
     // it (a plugin with no pattern never matches) straight to `ehentai.ts` even when this plugin
     // was configured as the higher-priority match for the same URL.
     url_pattern: "e-?hentai\\.org|exhentai\\.org",
+    domain_match: ["e-hentai.org", "exhentai.org"],
   };
 }
 

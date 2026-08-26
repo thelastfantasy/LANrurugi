@@ -20,6 +20,7 @@ export function pluginInfo() {
     namespace: "fakkulogin",
     type: "login" as const,
     url_pattern: "fakku\\.net",
+    domain_match: ["fakku.net"],
     parameters: [
       { name: "param1", description: "fakku_sid cookie value", required: false, type: "string" },
       { name: "param2", description: "Useragent value", required: false, type: "string" },

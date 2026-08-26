@@ -23,6 +23,7 @@ export function pluginInfo() {
     version: "0.1",
     login_from: "pixivlogin",
     url_pattern: "pixiv\\.net",
+    domain_match: ["pixiv.net"],
   };
 }
 

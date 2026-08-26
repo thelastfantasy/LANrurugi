@@ -14,6 +14,7 @@ export function pluginInfo() {
     namespace: "nhapiauth",
     type: "login" as const,
     url_pattern: "nhentai\\.net",
+    domain_match: ["nhentai.net"],
     parameters: [
       { name: "param1", description: "API Key", required: false, type: "string" },
     ],

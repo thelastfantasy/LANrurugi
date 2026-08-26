@@ -34,6 +34,7 @@ export function pluginInfo() {
     oneshot_arg: "Pixiv artwork URL or illustration ID (e.g. pixiv.net/en/artworks/123456 or 123456.)",
     login_from: "pixivlogin",
     url_pattern: "pixiv\\.net",
+    domain_match: ["pixiv.net"],
   };
 }
 

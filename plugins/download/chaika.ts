@@ -14,6 +14,7 @@ export function pluginInfo() {
     description: "Downloads the given chaika.moe URL and adds it to LANraragi. No support for gallery links for now!",
     version: "0.1",
     url_pattern: "chaika\\.moe",
+    domain_match: ["chaika.moe"],
   };
 }
 

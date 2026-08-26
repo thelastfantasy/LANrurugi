@@ -85,33 +85,25 @@ test.describe("plugin wizard", { tag: "@plugin-wizard" }, () => {
 
     await page.goto("/config/plugins/wizard")
 
-    // US1: domain lookup for a domain with no existing coverage.
+    // Step 1 "查找域名": domain lookup for a domain with no existing coverage.
     await page.locator('input[type="text"]').first().fill("wizard-e2e-fixture.invalid")
     await page.getByRole("button", { name: "Look up" }).click()
     await expect(page.getByText("Select which plugin types to create")).toBeVisible()
 
-    // US1: select "metadata" as the target type — scoped to the checklist so this can't
-    // accidentally match "Metadata" text appearing anywhere else on the page.
-    await page.locator("ul.checklist").getByText("Metadata", { exact: true }).click()
+    // Step 2 "选择类型": select "metadata" as the target type via its checkbox (no `.checklist`
+    // class on this list — see `TypeSelectionStep.tsx`'s own doc comment on why it was dropped).
+    await page.getByRole("checkbox", { name: "Metadata" }).check()
+    await page.getByRole("button", { name: "Next", exact: true }).click()
 
-    // US1: per-type input collection — description + 3 test links (the fixture site's own pages).
-    // The description textarea has no explicit <label for>, just a wrapping <label> — Playwright's
-    // getByLabel handles that association form too.
-    await page.getByLabel("Page feature description").fill("Title is in an <h1 id=title> tag.")
+    // Step 3 "共享链接": one domain-level textarea, not one link input per type — every selected
+    // type's generate/trial-run reads from this same shared list (`SharedLinksForm.tsx`).
+    await page
+      .getByLabel(/^Links \(one per line/)
+      .fill([`${fixtureBase}/work/1`, `${fixtureBase}/work/2`, `${fixtureBase}/work/3`].join("\n"))
+    await page.getByRole("button", { name: "Next", exact: true }).click()
 
-    // The test-link inputs share no distinguishing attribute of their own — scope by the
-    // "Supply at least 3..." hint paragraph's own parent container (T012's own DOM structure:
-    // hint <p>, then one wrapper <div> per link input, then the "+ Add link" button, all direct
-    // siblings under one containing <div>) rather than a brittle global input index.
-    const linksSection = page.locator("div", { has: page.getByText("Supply at least 3 distinct target page links:") })
-    for (let i = 0; i < 3; i++) {
-      await linksSection.getByRole("button", { name: "+ Add link" }).click()
-    }
-    const testLinkInputs = linksSection.locator('input[type="text"]')
-    await testLinkInputs.nth(0).fill(`${fixtureBase}/work/1`)
-    await testLinkInputs.nth(1).fill(`${fixtureBase}/work/2`)
-    await testLinkInputs.nth(2).fill(`${fixtureBase}/work/3`)
-
+    // Step 4 "生成与保存": only "metadata" was selected, so its own `TypeWizardPanel` is the only
+    // one mounted — no tab-switch needed for a single-type run.
     // US2: generate — the mocked LLM returns the fixture plugin source above.
     await page.getByRole("button", { name: "Generate", exact: true }).click()
     // "Trial run" only renders once a DraftRevision exists — its appearance is itself evidence

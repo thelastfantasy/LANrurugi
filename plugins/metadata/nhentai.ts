@@ -18,6 +18,7 @@ export function pluginInfo() {
     namespace: "nhplugin",
     type: "metadata" as const,
     url_pattern: "nhentai\\.net",
+    domain_match: ["nhentai.net"],
     parameters: [
       { name: "param1", description: "Fetch date uploaded and set timestamp tag", required: false, type: "bool" },
       // Only `title` has a japanese variant on the real API response — tags/artists/groups are

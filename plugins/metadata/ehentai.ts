@@ -52,6 +52,7 @@ export function pluginInfo() {
     oneshot_arg: "E-H Gallery URL (Will attach tags matching this exact gallery to your archive)",
     login_from: "ehlogin",
     url_pattern: "e-?hentai\\.org|exhentai\\.org",
+    domain_match: ["e-hentai.org", "exhentai.org"],
   };
 }
 

@@ -20,6 +20,7 @@ export function pluginInfo() {
     namespace: "pixivlogin",
     type: "login" as const,
     url_pattern: "pixiv\\.net",
+    domain_match: ["pixiv.net"],
     parameters: [
       { name: "param1", description: "Browser UserAgent (Default is 'Mozilla/5.0')", required: false, type: "string" },
       { name: "param2", description: "Cookie (PHP session ID)", required: false, type: "string" },

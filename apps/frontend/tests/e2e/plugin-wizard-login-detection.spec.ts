@@ -91,7 +91,13 @@ export function pluginInfo() {
   return {
     namespace: "wizard-e2e-login-fixture-login",
     type: "login",
-    parameters: [],
+    // Order matters — execLogin below destructures customargs positionally, and
+    // trial_run.rs::customargs_for maps loginFieldValues onto these declared parameters in this
+    // same declared order (by name, not by the analyze-login response's own field order).
+    parameters: [
+      { name: "account", description: "Test account", required: true, type: "string" },
+      { name: "secret", description: "Test password", required: true, type: "string" },
+    ],
     declared_permissions: { net: ["${new URL(fixtureBase).hostname}"], read: false, write: false },
     generated_by_wizard: true,
     name: "Wizard E2E Login Fixture Plugin",
@@ -139,12 +145,22 @@ test.describe("plugin wizard login detection", { tag: "@plugin-wizard" }, () => 
     page,
   }) => {
     // Call order: (1) generate metadata draft, (2) classify-login-relevance after the failed
-    // trial run, (3) generate login draft. The 4th call (metadata regenerated with `login_from`)
-    // is enqueued later, once the login plugin's *real* saved namespace is known — the UI derives
-    // that namespace from the domain at save time, which this test can't predict ahead of a real
-    // save round-trip, so it can't be scripted upfront like the first three.
+    // trial run, (3) analyze-login (the credential-field form is AI-derived, not a hardcoded
+    // account/password pair — see `TypeDetailsForm.tsx`'s own doc comment), (4) generate login
+    // draft. The 5th call (metadata regenerated with `login_from`) is enqueued later, once the
+    // login plugin's *real* saved namespace is known — the UI derives that namespace from the
+    // domain at save time, which this test can't predict ahead of a real save round-trip, so it
+    // can't be scripted upfront like the first four.
     mockLlm.enqueue(respondContent(metadataPluginSource(fixtureBase)))
     mockLlm.enqueue(respondContent(JSON.stringify({ relevant: true, reasoning: "403 Forbidden looks login-gated." })))
+    mockLlm.enqueue(
+      respondContent(
+        JSON.stringify([
+          { name: "account", description: "Test account", required: true },
+          { name: "secret", description: "Test password", required: true },
+        ]),
+      ),
+    )
     mockLlm.enqueue(respondContent(loginPluginSource(fixtureBase)))
 
     await page.goto("/config/plugins/wizard")
@@ -155,18 +171,18 @@ test.describe("plugin wizard login detection", { tag: "@plugin-wizard" }, () => 
 
     // Only "metadata" selected up front — no login type this time, so the failure must be
     // discovered via the trial run itself, not declared ahead of time (US7's whole premise).
-    await page.locator("ul.checklist").getByText("Metadata", { exact: true }).click()
+    await page.getByRole("checkbox", { name: "Metadata" }).check()
+    await page.getByRole("button", { name: "Next", exact: true }).click()
 
-    await page.getByLabel("Page feature description").fill("Title is in an <h1 id=title> tag; page requires login.")
-    const linksSection = page.locator("div", { has: page.getByText("Supply at least 3 distinct target page links:") })
-    for (let i = 0; i < 3; i++) {
-      await linksSection.getByRole("button", { name: "+ Add link" }).click()
-    }
-    const testLinkInputs = linksSection.locator('input[type="text"]')
-    await testLinkInputs.nth(0).fill(`${fixtureBase}/work/1`)
-    await testLinkInputs.nth(1).fill(`${fixtureBase}/work/2`)
-    await testLinkInputs.nth(2).fill(`${fixtureBase}/work/3`)
+    // Shared-links step — one domain-level textarea, same three fixture pages as the "full
+    // journey" test.
+    await page
+      .getByLabel(/^Links \(one per line/)
+      .fill([`${fixtureBase}/work/1`, `${fixtureBase}/work/2`, `${fixtureBase}/work/3`].join("\n"))
+    await page.getByRole("button", { name: "Next", exact: true }).click()
 
+    // Generate & save step — only "metadata" selected so far, its own panel is the only one
+    // mounted.
     await page.getByRole("button", { name: "Generate", exact: true }).click()
     await expect(page.getByRole("button", { name: "Trial run" })).toBeEnabled({ timeout: 10_000 })
 
@@ -178,36 +194,46 @@ test.describe("plugin wizard login detection", { tag: "@plugin-wizard" }, () => 
     await expect(page.getByText("This failure might be login-related")).toBeVisible()
 
     // Accept the suggestion: no existing login plugin for this domain, so "Add a login plugin".
+    // This only adds "login" to `selectedTypes` — it does NOT switch the currently-shown panel
+    // (`useWizardSession.ts`'s own `typeSelected` reducer docs) — so a tab row now appears
+    // (>1 selected type) and must be clicked to actually see the new login `TypeWizardPanel`.
     await page.getByRole("button", { name: "Add a login plugin" }).click()
+    await page.getByRole("tab", { name: "Login" }).click()
 
-    // A fresh "login" TypeSession appears — fill in test credentials and generate/trial-run it.
-    await page.getByLabel("Test account").fill("test-user")
-    await page.getByLabel("Test password").fill("test-pass")
-    const loginGenerateButtons = page.getByRole("button", { name: "Generate", exact: true })
-    await loginGenerateButtons.nth(1).click()
+    // The login type's own per-type step: point login analysis at the fixture's `/login`
+    // endpoint, run it (mocked LLM call #3 above), then fill whatever credential fields AI
+    // decided this site needs — never a hardcoded "Test account"/"Test password" pair.
+    await page.getByLabel("Login page or API documentation URL").fill(`${fixtureBase}/login`)
+    await page.getByRole("button", { name: "Analyze login method" }).click()
+    // `required: true` above appends a literal " *" to the rendered label
+    // (`TypeDetailsForm.tsx`'s own `{param.required && " *"}`) — not an exact match.
+    await expect(page.getByLabel("Test account *")).toBeVisible({ timeout: 10_000 })
+    await page.getByLabel("Test account *").fill("test-user")
+    await page.getByLabel("Test password *").fill("test-pass")
 
-    const loginTrialRunButtons = page.getByRole("button", { name: "Trial run" })
-    await expect(loginTrialRunButtons.nth(1)).toBeEnabled({ timeout: 10_000 })
-    await loginTrialRunButtons.nth(1).click()
+    await page.getByRole("button", { name: "Generate", exact: true }).click()
+    await expect(page.getByRole("button", { name: "Trial run" })).toBeEnabled({ timeout: 10_000 })
+    await page.getByRole("button", { name: "Trial run" }).click()
     await expect(page.getByText("Success", { exact: true }).first()).toBeVisible({ timeout: 15_000 })
 
     // Save the login plugin — this is what makes its (self-declared) namespace real/resolvable
     // (spec FR-025's amended requirement: association needs a saved namespace, not merely a
     // passing trial run).
-    const confirmSaveButtons = page.getByRole("button", { name: "Confirm and install" })
-    await confirmSaveButtons.nth(1).click()
+    await page.getByRole("button", { name: "Confirm and install" }).click()
     await expect(page.getByText(/Installed as custom\/login\//)).toBeVisible({ timeout: 10_000 })
 
-    // The 4th mocked response (metadata regenerated with `login_from` pointing at the login
+    // The 5th mocked response (metadata regenerated with `login_from` pointing at the login
     // plugin's own self-declared namespace) — enqueued now, consumed by the "link and regenerate"
     // action's own `generate` call below.
     mockLlm.enqueue(respondContent(metadataPluginSource(fixtureBase, LOGIN_DECLARED_NAMESPACE)))
 
-    // The "link to <namespace> and regenerate" action is now available on the metadata type.
+    // Switch back to the metadata tab — the "link to <namespace> and regenerate" action is now
+    // available there.
+    await page.getByRole("tab", { name: "Metadata" }).click()
     await page.getByRole("button", { name: new RegExp(`Link to ${LOGIN_DECLARED_NAMESPACE}`) }).click()
-    await page.getByRole("button", { name: "Generate", exact: true }).first().click()
-    await expect(page.getByRole("button", { name: "Trial run" }).first()).toBeEnabled({ timeout: 10_000 })
-    await page.getByRole("button", { name: "Trial run" }).first().click()
+    await page.getByRole("button", { name: "Generate", exact: true }).click()
+    await expect(page.getByRole("button", { name: "Trial run" })).toBeEnabled({ timeout: 10_000 })
+    await page.getByRole("button", { name: "Trial run" }).click()
 
     const finalTrialRunBox = page.locator(".ptbox").filter({ hasText: "Success" }).last()
     await expect(finalTrialRunBox.getByText("Success", { exact: true })).toHaveCount(3, { timeout: 15_000 })

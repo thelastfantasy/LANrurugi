@@ -40,6 +40,7 @@ export function pluginInfo() {
     version: "0.1",
     login_from: "ehlogin",
     url_pattern: "e-?hentai\\.org|exhentai\\.org",
+    domain_match: ["e-hentai.org", "exhentai.org"],
   };
 }
 

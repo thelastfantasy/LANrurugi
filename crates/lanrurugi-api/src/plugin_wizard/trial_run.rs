@@ -507,9 +507,15 @@ mod tests {
             plugins: std::sync::Arc::new(lanrurugi_plugin::pool::PluginPool::new(
                 "deno",
                 dispatcher_path.clone(),
-                plugins_dir,
+                plugins_dir.clone(),
             )),
-            plugins_dir: dispatcher_path.parent().unwrap().to_path_buf(),
+            // Must be the real `plugins/` dir, not the dispatcher's own temp-file parent —
+            // `resolve_login_namespace` below calls `discover_namespaces(&state.plugins_dir)`
+            // to find which installed file declares `namespace: "nhapiauth"`, and scanning the
+            // wrong directory silently finds nothing (this test previously always short-circuited
+            // via the `deno`/Redis "skipping" early-returns above, so this bug went unnoticed
+            // until CI actually ran it for the first time, 2026-08-26).
+            plugins_dir,
             ..base_state
         };
 
