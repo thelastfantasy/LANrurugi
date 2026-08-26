@@ -43,7 +43,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   }
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  let [origin_title, additional_tags] = lrr_info.customargs;
+  const [origin_title, additional_tags] = lrr_info.customargs as [boolean, boolean];
   let logger = legacyCompat.getLogger("eze", "plugins");
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["info.json"];
   let [name, path, suffix] = legacyCompat.fileparse(lrr_info["file_path"]);

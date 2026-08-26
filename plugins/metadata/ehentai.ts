@@ -63,6 +63,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
+    const headers = (info.user_agent_headers ?? {}) as Record<string, string>;
+    if (Object.keys(headers).length > 0) {
+      info.user_agent.on("start", (_ua: any, tx: any) => {
+        for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);
+      });
+    }
   }
   interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "thumbnail_hash" | "customargs">> {
     user_agent: LegacyUserAgent;
@@ -72,8 +78,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
   let ua = lrr_info["user_agent"];
-  let [lang, usethumbs, search_gid, enablepanda, jpntitle, additionaltags, expunged] =
-    lrr_info.customargs;
+  const [lang, usethumbs, search_gid, enablepanda, jpntitle, additionaltags, expunged] =
+    lrr_info.customargs as [string, boolean, boolean, boolean, boolean, boolean, boolean];
   let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let gID = "";
   let gToken = "";
@@ -114,7 +120,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   return hashdata;
 }
 
-async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, domain: any, defaultlanguage: any, usethumbs: any, search_gid: any, expunged: any) {
+async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, domain: any, defaultlanguage: any, usethumbs: boolean, search_gid: boolean, expunged: boolean) {
   let match: RegExpMatchArray | null;
   let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let URL = "";
@@ -183,7 +189,7 @@ async function search_gallery(url: any, ua: any) {
   return res.dom;
 }
 
-async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, additionaltags: any) {
+async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: boolean, additionaltags: boolean) {
   let uri = 'https://api.e-hentai.org/api.php';
   let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let jsonresponse = await get_json_from_EH(ua, gID, gToken);

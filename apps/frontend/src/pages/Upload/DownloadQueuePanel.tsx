@@ -15,7 +15,7 @@ import { CollapsibleSection } from "@/components/Display"
 
 import { QueueItemRow } from "./QueueItemRow"
 import {
-  findMatchingPlugin,
+  findPluginByDomain,
   LOCAL_UPLOAD_NAMESPACE,
   TOOLBAR_BUTTON_STYLE,
 } from "./shared"
@@ -102,7 +102,7 @@ export function DownloadQueuePanel({
       const archiveIds = (job.result as { archive_ids?: string[] } | null)?.archive_ids
       const archiveId = archiveIds?.[0]
       if (!archiveId) continue
-      const metadataPlugin = findMatchingPlugin(metadataPlugins, item.url)
+      const metadataPlugin = findPluginByDomain(metadataPlugins, item.url)
       if (!metadataPlugin) continue
       triggeredRef.current.add(item.job_id)
       void (async () => {
@@ -267,7 +267,7 @@ export function DownloadQueuePanel({
                         return next
                       })
                     }}
-                    metadataPlugin={findMatchingPlugin(metadataPlugins, item.url)}
+                    metadataPlugin={findPluginByDomain(metadataPlugins, item.url)}
                   />
                 ))}
               </CollapsibleSection>

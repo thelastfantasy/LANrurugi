@@ -145,16 +145,15 @@ mod tests {
     use crate::build::{self, BackupArchive};
     use lanrurugi_core::entities::Archive;
 
-    fn test_pool() -> Option<deadpool_redis::Pool> {
+    async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        deadpool_redis::Config::from_url(format!("{}/0", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()
+        let url = format!("{}/0", base.trim_end_matches('/'));
+        lanrurugi_storage::test_support::test_pool_for_url(&url).await
     }
 
     #[tokio::test]
     async fn restore_reattaches_metadata_to_existing_archive_by_id_only() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -219,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn restore_skips_archives_not_present_on_this_instance() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

@@ -148,7 +148,7 @@ export function ActivityPage() {
   // instead of `1fr` stops them stretching to an equal share of the row's width on a wide
   // viewport, which left a lot of empty space inside each chip's own column; "操作内容" (the one
   // column with genuinely variable-length content) absorbs whatever's left over via its own `1fr`.
-  const gridColumns = canDelete ? "auto auto auto auto auto 1fr auto" : "auto auto auto auto 1fr"
+  const gridColumns = canDelete ? "auto auto auto auto 1fr auto auto" : "auto auto auto 1fr auto"
 
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12, boxSizing: "border-box", position: "relative" }}>

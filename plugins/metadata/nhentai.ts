@@ -13,22 +13,18 @@
 //     Perl returns every captured group across all matches; JS .match() with /g returns only 
 //     full-match strings, not captures. Verify this call site by hand.
 //
-// NOTE: this plugin makes HTTP calls but declared_permissions.net is still the
-// converter's placeholder — fill in the real host(s), verified against the URL
-// literals in the original Perl source, before this plugin can actually reach them
-// (Deno's --allow-net grant is scoped to exactly this list).
-
 export function pluginInfo() {
   return {
     namespace: "nhplugin",
     type: "metadata" as const,
+    url_pattern: "nhentai\\.net",
     parameters: [
       { name: "param1", description: "Fetch date uploaded and set timestamp tag", required: false, type: "bool" },
+      // Only `title` has a japanese variant on the real API response — tags/artists/groups are
+      // romanized-only, no japanese field exists for them.
+      { name: "param2", description: "Prefer the Japanese title over the romanized one, when available", required: false, type: "bool" },
     ],
-    // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
-    // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
-    // stays as narrow as possible (constitution Principle IV).
-    declared_permissions: { net: [/* TODO: host(s) */], read: false, write: false },
+    declared_permissions: { net: ["nhentai.net"], read: false, write: false },
     name: "nHentai",
     author: "thelastfantasy",
     description: "Searches nHentai for tags matching your archive.\n          <br>Supports reading the ID from files formatted as \"{Id} Title\" and if not, tries to search for a matching gallery.\n          <br><i class='fa fa-exclamation-circle'></i> This plugin will use the source: tag of the archive if it exists.",
@@ -47,8 +43,14 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
+    const headers = (info.user_agent_headers ?? {}) as Record<string, string>;
+    if (Object.keys(headers).length > 0) {
+      info.user_agent.on("start", (_ua: any, tx: any) => {
+        for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);
+      });
+    }
   }
-  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "file_path">> {
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "file_path" | "customargs">> {
     user_agent: LegacyUserAgent;
     user_agent_cookies?: LegacyCookie[];
   }
@@ -56,7 +58,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
   let ua = lrr_info["user_agent"];
-  let add_uploaded = hostArgs.arg as string;
+  // Was `hostArgs.arg` — that's the oneshot gallery URL, not param1's persisted value.
+  // customargs[0]/[1] are the real settings-page values for param1/param2.
+  let add_uploaded = (lrr_info.customargs?.[0] as boolean | undefined) ?? false;
+  let prefer_japanese_title = (lrr_info.customargs?.[1] as boolean | undefined) ?? false;
   let logger = legacyCompat.getLogger("nHentai", "plugins");
   let galleryID = "";
   if ((match = (lrr_info["arg"] ?? "").match(/.*\/g\/([0-9]+).*/))) {
@@ -76,7 +81,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     throw new PluginErrorException(message);
   }
   logger.debug(`Detected nHentai gallery ID is ${galleryID}`);
-  let hashdata = await get_tags_from_nh(galleryID, ua, add_uploaded);
+  let hashdata = await get_tags_from_nh(galleryID, ua, add_uploaded, prefer_japanese_title);
   logger.info("Sending the following tags to LRR: " + hashdata["tags"]);
   return hashdata;
 }
@@ -91,7 +96,9 @@ async function get_search_json(...args: any[]) {
     throw new PluginErrorException("Search gallery by title failed", { code });
   }
   logger.debug("Tentative JSON: " + res.body);
-  return JSON.parse(res).body;
+  // Was `JSON.parse(res).body` — `res` is the LegacyHttpResult object, not a string. `res.json`
+  // (same idiom as chaika.ts) is correct.
+  return res.json;
 }
 
 async function get_gallery_id_from_title(...args: any[]) {
@@ -121,7 +128,8 @@ async function get_json_from_nh(...args: any[]) {
     throw new PluginErrorException("Error retrieving gallery from nHentai", { code });
   }
   logger.debug("Tentative JSON: " + res.body);
-  return JSON.parse(res).body;
+  // Same fix as `get_search_json` above — see that function's own comment.
+  return res.json;
 }
 
 function get_tags_from_json(...args: any[]) {
@@ -141,8 +149,10 @@ function get_tags_from_json(...args: any[]) {
 }
 
 function get_title_from_json(...args: any[]) {
-  let [json] = args.slice(0);
-  return json["title"]["pretty"];
+  let [json, prefer_japanese] = args.slice(0);
+  let title = json["title"];
+  if (prefer_japanese && title["japanese"]) return title["japanese"];
+  return title["pretty"];
 }
 
 function get_upload_from_json(...args: any[]) {
@@ -151,18 +161,19 @@ function get_upload_from_json(...args: any[]) {
 }
 
 async function get_tags_from_nh(...args: any[]) {
-  let [gID, ua, add_uploaded] = args.slice(0);
+  let [gID, ua, add_uploaded, prefer_japanese_title] = args.slice(0);
   let hashdata: Record<string, any> = { tags: "" };
   let json = await get_json_from_nh(gID, ua);
   if (json) {
     let tags = get_tags_from_json(json);
     if (add_uploaded) {
+      // Was `upload.join(", ")` — `upload_date` is a single number on the real API, not an array.
       let upload = get_upload_from_json(json);
-      tags.push(`timestamp:${upload.join(", ")}`);
+      tags.push(`timestamp:${upload}`);
     }
-    if ((tags > 0)) { tags.push(`source:nhentai.net/g/${gID}`); }
+    if ((tags.length > 0)) { tags.push(`source:nhentai.net/g/${gID}`); }
     hashdata["tags"] = tags.join(', ');
-    hashdata["title"] = get_title_from_json(json);
+    hashdata["title"] = get_title_from_json(json, prefer_japanese_title);
   }
   return hashdata;
 }

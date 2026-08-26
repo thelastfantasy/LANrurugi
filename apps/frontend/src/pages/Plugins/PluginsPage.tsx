@@ -11,6 +11,7 @@ import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
 import { useApplyTheme, useLegacyConfigCss } from "@/theme"
 
+import { ExportWizardPluginModal } from "./ExportWizardPluginModal"
 import { SortablePluginGroup } from "./SortablePluginGroup"
 
 // Legacy's own left/right split (`~/LANraragi/templates/plugins.html.tt2`): left column is
@@ -43,6 +44,7 @@ export function Plugins() {
   const [running, setRunning] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   useApplyTheme()
   useLegacyConfigCss()
@@ -124,7 +126,12 @@ export function Plugins() {
         <a href="/docs/" target="_blank" rel="noopener noreferrer">
           <i className="fa fa-book"></i> {t("plugins.pluginSdkDocumentation")}
         </a>
+        {" · "}
+        <a href="#" onClick={(e) => { e.preventDefault(); setExportModalOpen(true) }}>
+          <i className="fa fa-download"></i> {t("plugins.exportAsZip")}
+        </a>
       </p>
+      {exportModalOpen && <ExportWizardPluginModal onClose={() => setExportModalOpen(false)} />}
 
       <div className="left-column" style={{ width: "49%" }}>
         <ul className="collapsible extensible with-right-caret">
@@ -201,6 +208,17 @@ export function Plugins() {
             }}
           />
         </span>
+        <input
+          type="button"
+          className="stdbtn"
+          value={t("pluginWizard.pageTitle") ?? undefined}
+          title={
+            settings.data && !settings.data.llm_api_key_set
+              ? (t("pluginWizard.llmKeyNotConfiguredButtonHint") ?? undefined)
+              : undefined
+          }
+          onClick={() => navigate(routes.pluginWizard())}
+        />
         <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
       </h1>
     </div>

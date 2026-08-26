@@ -54,6 +54,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
+    const headers = (info.user_agent_headers ?? {}) as Record<string, string>;
+    if (Object.keys(headers).length > 0) {
+      info.user_agent.on("start", (_ua: any, tx: any) => {
+        for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);
+      });
+    }
   }
   interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "customargs">> {
     user_agent: LegacyUserAgent;
@@ -61,7 +67,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
   const ua = lrr_info.user_agent;
-  const [add_source, safe_mode] = lrr_info.customargs;
+  const [add_source, safe_mode] = lrr_info.customargs as [boolean, boolean];
   const logger = legacyCompat.getLogger("FAKKU", "plugins");
 
   if (!fakku_cookie_exists(ua)) {
@@ -88,7 +94,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     throw new PluginErrorException(message);
   }
   logger.debug(`Detected FAKKU URL: ${fakku_URL}`);
-  const [newtags, newtitle, newSummary] = await get_tags_from_fakku(fakku_URL, ua, !!add_source);
+  const [newtags, newtitle, newSummary] = await get_tags_from_fakku(fakku_URL, ua, add_source);
   const current_title = lrr_info.archive_title;
   if (safe_mode && !URL_safe && newtitle !== current_title) {
     logger.info(`Found FAKKU Gallery '${newtitle}', but it does not match current title '${current_title}' exactly`);

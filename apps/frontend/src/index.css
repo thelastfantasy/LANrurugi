@@ -142,6 +142,13 @@ input[type="checkbox"]:disabled {
   100% { background-position: 0 50%; }
 }
 
+/* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
+ * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
+@keyframes lrr-indeterminate-bar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+
 /* Shared scale-up entrance animation for every popup/modal-style dialog in this app
  * (components/Display/Confirm.tsx, components/Display/Modal.tsx, and dialog.tsx's own
  * confirmDialog()/promptDialog() render) — matches real SweetAlert2's own default `swal2-show`

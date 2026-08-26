@@ -35,8 +35,7 @@ fn theme_field_lock() -> &'static tokio::sync::Mutex<()> {
 /// substitution logic without depending on a real frontend build being present in the test
 /// environment.
 async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile::TempDir)> {
-    let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-    let redis = RedisDbs::connect(&base).ok()?;
+    let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
     let repos = Repositories::new(&redis);
     let plugin_options = Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -101,6 +100,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,

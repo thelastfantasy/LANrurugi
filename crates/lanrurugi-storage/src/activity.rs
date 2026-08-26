@@ -100,6 +100,16 @@ pub mod action_types {
     pub const PLUGIN_UPLOAD: &str = "plugin.upload";
     pub const PLUGIN_PRIORITY_UPDATE: &str = "plugin.priority_update";
     pub const PLUGIN_URL_DOWNLOAD_TRIGGER: &str = "plugin.url_download_trigger";
+    /// `POST /plugin-wizard/save` (`plugin_wizard::save`) — the AI plugin wizard's own terminal
+    /// confirm-save, split out from `PLUGIN_UPLOAD` so it reads distinctly in the activity list
+    /// (real user feedback, 2026-08-26: asked whether AI-generated/installed/edited plugins leave
+    /// any activity trail at all — they did, but indistinguishably from a plain manual `.ts`
+    /// upload). Covers both a fresh generate-and-save and an edit-an-existing-AI-plugin overwrite
+    /// — `after.overwrite` (bool) tells the two apart; intermediate generate/regenerate/trial-run
+    /// rounds inside the wizard are deliberately NOT recorded here, only the final save (same
+    /// "only the real mutating action, not every intermediate step" convention as everywhere else
+    /// in this module).
+    pub const PLUGIN_WIZARD_SAVE: &str = "plugin_wizard.save";
     /// Automatic: the file watcher/scanner catalogued a new archive on its own.
     pub const SCANNER_INGEST: &str = "scanner.ingest";
     /// Automatic: metadata plugins ran without being tied to a manual upload/download that
@@ -733,9 +743,7 @@ mod tests {
     use super::*;
 
     async fn test_pool() -> Option<Pool> {
-        let url = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let cfg = deadpool_redis::Config::from_url(url);
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).ok()
+        crate::test_support::test_pool().await
     }
 
     fn sample_entry(id: &str, timestamp: i64, actor: Actor, action_type: &str) -> ActivityEntry {

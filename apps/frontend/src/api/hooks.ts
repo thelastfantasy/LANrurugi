@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useEffect, useSyncExternalStore } from "react"
 
 import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
 import type {
@@ -1176,6 +1176,46 @@ type DownloadQueueDelta =
   | ({ kind: "update" } & DownloadQueueItemPatch)
   | { kind: "add"; item: DownloadQueueItem }
   | { kind: "remove"; id: string }
+  | {
+      kind: "progress"
+      id: string
+      job_id: string
+      downloaded_bytes: number
+      total_bytes: number | null
+    }
+
+/** SSE-pushed byte progress, keyed by job ID — deliberately NOT folded into the `["jobs"]`
+ * React Query cache via `setQueryData`. TanStack Query v5's `refetchInterval` reschedules its
+ * next tick off `dataUpdatedAt`, which `setQueryData` bumps on every call — a real download
+ * streams a `progress` SSE event up to 5/sec (the backend's own 200ms throttle), so writing each
+ * one into the query cache continuously pushed the *next* real `/jobs` poll back, starving it for
+ * the download's entire duration (confirmed live, 2026-08-26: a 29s transfer produced zero
+ * intermediate `/jobs` responses — request timestamps jumped straight from the pre-transfer poll
+ * to one fired only after the SSE stream stopped at completion). A plain external store read via
+ * `useSyncExternalStore` sits completely outside React Query, so writing to it can never affect
+ * any query's own fetch scheduling. */
+const jobProgressOverrides = new Map<string, { downloaded_bytes: number; total_bytes?: number }>()
+const jobProgressListeners = new Set<() => void>()
+
+function setJobProgressOverride(jobId: string, downloaded_bytes: number, total_bytes?: number) {
+  jobProgressOverrides.set(jobId, { downloaded_bytes, total_bytes })
+  for (const listener of jobProgressListeners) listener()
+}
+
+/** Reads the latest SSE-pushed progress for one job, re-rendering only the component that calls
+ * this when that specific job's own entry changes (each `jobProgressOverrides.set` triggers every
+ * listener, but `useSyncExternalStore`'s own snapshot-equality check no-ops the re-render for any
+ * component whose `jobId` wasn't the one just updated). Merges on top of `useJobs()`'s own polled
+ * `downloaded_bytes`/`total_bytes` at the call site — see `JobProgressBar`'s caller. */
+export function useJobProgressOverride(jobId: string | undefined) {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      jobProgressListeners.add(onStoreChange)
+      return () => jobProgressListeners.delete(onStoreChange)
+    },
+    () => (jobId ? jobProgressOverrides.get(jobId) : undefined),
+  )
+}
 
 export function useDownloadQueue() {
   const queryClient = useQueryClient()
@@ -1206,6 +1246,14 @@ export function useDownloadQueue() {
         type: "delta"
       } & DownloadQueueDelta
       if (data.type !== "delta") return
+      // A byte-progress tick doesn't touch `DownloadQueueItem` at all (there's nowhere on that
+      // shape for it to go) — it feeds the standalone `jobProgressOverrides` store instead (see
+      // that store's own docs for why NOT `queryClient.setQueryData(["jobs"], ...)` — doing so
+      // previously starved the real `/jobs` poll for a download's entire duration).
+      if (data.kind === "progress") {
+        setJobProgressOverride(data.job_id, data.downloaded_bytes, data.total_bytes ?? undefined)
+        return
+      }
       queryClient.setQueryData(["download-queue"], (old: DownloadQueueListResponse | undefined) => {
         if (!old) return old
         let items = old.items
@@ -1386,6 +1434,14 @@ export function useExportComparePatch() {
   return useMutation({
     mutationFn: ({ id, insertions }: { id: string; insertions: ExportPatchInsertion[] }) =>
       sendJsonForBlob("POST", `/download_queue/${encodeURIComponent(id)}/compare/export-patch`, { insertions }),
+  })
+}
+
+/** Packs several installed plugins' own `.ts` files into one `.zip` (`POST /plugins/export-batch`)
+ * — `ExportWizardPluginModal`'s checkbox picker. */
+export function useExportPluginsBatch() {
+  return useMutation({
+    mutationFn: (namespaces: string[]) => sendJsonForBlob("POST", "/plugins/export-batch", { namespaces }),
   })
 }
 

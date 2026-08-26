@@ -785,21 +785,92 @@ async fn download_archive(
     // there's no patch, or a patch exists but failed to load/apply, in which case this falls
     // through to the same plain-file-read behavior as before patches existed.
     let archive_file = archive.file.clone();
+    let disposition = content_disposition_for(&archive);
     let merged = lanrurugi_core::concurrency::run_blocking(move || {
         lanrurugi_scanner::patch::build_merged_zip(std::path::Path::new(&archive_file))
     })
     .await;
     if let Ok(Ok(Some(bytes))) = merged {
-        return ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response();
+        return (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_DISPOSITION, disposition),
+            ],
+            bytes,
+        )
+            .into_response();
     }
     match tokio::fs::read(&archive.file).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_DISPOSITION, disposition),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "download_archive",
             e.to_string(),
         ),
     }
+}
+
+/// Builds a real `Content-Disposition: attachment` header from the archive's own `name` — without
+/// this, `/archives/{id}/download`'s opaque ID-keyed URL gives the browser nothing to derive a
+/// filename from, so it falls back to a generic name of its own choosing (confirmed live,
+/// 2026-08-26: Chrome saved a real download as bare `download.zip`, discarding the actual title
+/// entirely). Dual-form per RFC 6266 §5: a plain ASCII `filename="..."` for clients that don't
+/// understand the extended form (non-ASCII/reserved characters replaced with `_`, matching
+/// `upload.rs::sanitize_filename`'s own fallback convention) *and* `filename*=UTF-8''<percent-
+/// encoded>` (RFC 5987) carrying the real title byte-for-byte — every modern browser prefers the
+/// `filename*` form when both are present, so a title like this nHentai archive's own Japanese
+/// name still round-trips correctly instead of being discarded down to the ASCII fallback.
+fn content_disposition_for(archive: &Archive) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
+    // RFC 5987's own `attr-char` grammar excludes everything not explicitly listed as safe —
+    // simplest to encode via its complement (this set) rather than enumerate the safe list.
+    const RFC5987_UNSAFE: &AsciiSet = &CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'%')
+        .add(b'\'')
+        .add(b'(')
+        .add(b')')
+        .add(b'*')
+        .add(b',')
+        .add(b'/')
+        .add(b':')
+        .add(b';')
+        .add(b'<')
+        .add(b'=')
+        .add(b'>')
+        .add(b'?')
+        .add(b'[')
+        .add(b'\\')
+        .add(b']')
+        .add(b'{')
+        .add(b'}');
+
+    let extension = std::path::Path::new(&archive.file)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("zip");
+    let real_name = format!("{}.{extension}", archive.name);
+    let ascii_fallback: String = real_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let encoded = utf8_percent_encode(&real_name, RFC5987_UNSAFE);
+    format!("attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 /// `DELETE /archives/{id}/patch` — deletes the sidecar `.patch.zip` (if any) and clears the

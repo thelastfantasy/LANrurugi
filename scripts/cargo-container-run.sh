@@ -201,12 +201,44 @@ ENV_FILE_ARGS=()
 [ -f "$REPO_ROOT/.env.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.local")
 [ -f "$REPO_ROOT/.env.test.local" ] && ENV_FILE_ARGS+=(--env-file "$REPO_ROOT/.env.test.local")
 
+# A large fraction of this workspace's own unit tests (`lanrurugi-storage`/`lanrurugi-search`/
+# `lanrurugi-backup`/`lanrurugi-api`/... — any test hitting a real `RedisDbs::connect`) need a real
+# Redis reachable at `redis://127.0.0.1:6379`, the same hardcoded default `crates/lanrurugi-storage/
+# src/redis.rs` itself uses. This container runs with `--network host`, so "reachable at 6379" just
+# means *something* is listening on the host's own loopback at that port — nothing here requires
+# it to be this specific container. Confirmed live (2026-08-24): before this existed, `mise run
+# test` had been silently reporting only its first-encountered failures for a long time — cargo's
+# default fail-fast behavior stopped the whole `--workspace` run at the very first failing test
+# binary, and since `lanrurugi-api` (which has a couple of Redis-dependent tests) sorts before
+# most other Redis-dependent crates in the workspace member list, dozens to low hundreds of
+# further Redis-dependent failures across other crates had never actually been seen, only ever
+# assumed to be "the same known two" — `--no-fail-fast` (`.mise.toml`'s own `[tasks.test]`) is what
+# surfaced the real scope of this for the first time.
+REDIS_TEST_CONTAINER=""
+if ! (exec 3<>"/dev/tcp/127.0.0.1/6379") 2>/dev/null; then
+  echo "note: no Redis reachable at 127.0.0.1:6379 — starting a temporary one for this test run" >&2
+  REDIS_TEST_CONTAINER="$("$CMD" run -d --rm --network host \
+    "docker.io/library/redis:7.4.9-bookworm" redis-server --save "" --appendonly no)"
+  # Give it a moment to actually start accepting connections — a fixed short sleep is fine here
+  # (not the PSI-style polling loop used elsewhere in this script): redis-server binds its listen
+  # socket within milliseconds of starting, this isn't waiting on anything resource-dependent.
+  for _ in $(seq 1 20); do
+    (exec 3<>"/dev/tcp/127.0.0.1/6379") 2>/dev/null && break
+    sleep 0.5
+  done
+else
+  echo "note: reusing an already-listening Redis at 127.0.0.1:6379 for this test run" >&2
+fi
+
 # Stamped on exit regardless of success/failure (`trap ... EXIT`, not just appended after the run
 # below) — the cooldown at the top of this script must see "a container just ran" even when that
 # run failed or was interrupted, otherwise a failing command retried immediately (a very real
 # pattern: fix a compile error, rerun right away) would skip the cooldown entirely on exactly the
-# retry that matters most.
-trap 'date +%s > "$COOLDOWN_STAMP"' EXIT
+# retry that matters most. Combined with the temporary Redis container's own teardown (only ever
+# torn down here if *this* script started it — an already-running Redis found above is left alone,
+# since this script didn't start it and has no business stopping someone else's service) in the
+# same trap, since bash only honors the most recently registered handler for a given signal.
+trap '[ -n "$REDIS_TEST_CONTAINER" ] && "$CMD" stop -t 5 "$REDIS_TEST_CONTAINER" >/dev/null 2>&1; date +%s > "$COOLDOWN_STAMP"' EXIT
 
 "$CMD" run --rm --network host --cpus="$cpus" \
   -v "$REPO_ROOT":/workspace \

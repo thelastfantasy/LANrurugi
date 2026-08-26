@@ -553,7 +553,7 @@ mod tests {
     // execution let one test's `hset`/`hdel` interleave with another's read, a real (if rare)
     // source of CI flakiness. This module's two tests use offsets disjoint from full_scan.rs's
     // three (which claim 0-8), so no two tests across either module ever share a Redis DB.
-    fn test_pools(
+    async fn test_pools(
         db_offset: u8,
     ) -> Option<(
         deadpool_redis::Pool,
@@ -561,15 +561,13 @@ mod tests {
         deadpool_redis::Pool,
     )> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let mk = |db: u8| {
-            deadpool_redis::Config::from_url(format!("{}/{db}", base.trim_end_matches('/')))
-                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-        };
-        Some((
-            mk(db_offset).ok()?,
-            mk(db_offset + 1).ok()?,
-            mk(db_offset + 2).ok()?,
-        ))
+        let url = |db: u8| format!("{}/{db}", base.trim_end_matches('/'));
+        let archive = lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset)).await?;
+        let config =
+            lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 1)).await?;
+        let search =
+            lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 2)).await?;
+        Some((archive, config, search))
     }
 
     fn make_zip_with_pages(dir: &Path, name: &str, n_pages: usize) -> PathBuf {
@@ -588,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_file_is_catalogued_and_filemap_updated() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(9) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(9).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -641,7 +639,7 @@ mod tests {
         // ingesting, and — before `title_filename` existed — `catalogue_new_archive` always
         // derived `title`/`name` from *that* staging path's own basename, so every uploaded or
         // downloaded archive ended up titled after a meaningless UUID instead of its real name.
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(24) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(24).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -690,7 +688,7 @@ mod tests {
 
     #[tokio::test]
     async fn changed_file_content_rekeys_existing_archive() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(12) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(12).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -744,7 +742,7 @@ mod tests {
 
     #[tokio::test]
     async fn overwrite_policy_still_rejects_a_content_hash_collision() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(15) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(15).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -814,7 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn overwrite_policy_deletes_old_archive_on_filename_collision() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(18) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(18).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -910,7 +908,7 @@ mod tests {
 
     #[tokio::test]
     async fn reject_policy_reports_rejected_on_content_hash_collision() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(21) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(21).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -985,7 +983,7 @@ mod tests {
     /// sends one path through a plain channel to simulate the event.
     #[tokio::test]
     async fn run_blocks_on_a_filename_lock_already_held_by_another_caller() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(27) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(27).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

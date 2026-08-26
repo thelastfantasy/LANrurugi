@@ -159,6 +159,54 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   just that plugin's own worker (respawned lazily on next use); every other plugin's pool is
   unaffected.
 
+### AI / LLM features
+
+Every AI/LLM feature below (except the plugin wizard itself) is optional and degrades gracefully
+without a configured DeepSeek key — either a local-embedding-only fallback or the feature simply
+staying unavailable, never a hard dependency.
+
+- **AI-assisted Tankoubon editing**, suggesting a title, chapter names, and reading order from
+  member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
+  Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
+  likely belong to the same series (local embedding model only, no LLM key required).
+
+#### AI plugin creation wizard
+
+- **Generates login/metadata/download plugins from a natural-language description — legacy has no
+  such tool at all.** Enter a target domain and the system first reports which of the three plugin
+  types are already covered; for each missing type (up to three per run) the user supplies a page
+  feature description plus either test links (metadata/download) or test credentials (login), and
+  AI (via a DeepSeek tool-calling loop) generates the corresponding `.ts` draft — the system
+  performs every real network access (fetching a page, running a trial call) the AI requests and
+  hands back raw results; all semantic judgment stays with AI, never the reverse. The step-by-step
+  wizard shows one step at a time; an already-covered type can be either overridden with a fresh
+  generation or, if it was itself wizard-generated earlier, opened for editing — both actions stay
+  independently available per type.
+- **Every draft is trial-run for real before it can be saved.** Generated code reuses the existing
+  Deno sandbox's two-phase permission model, executed once per supplied test link (or the one
+  login attempt) — a trial run never installs anything; only an explicit confirm-save does. Manual
+  code edits or an AI auto-fix (capped at 3 consecutive attempts, history never cleared) both
+  re-trigger a fresh trial run. Test credentials are never sent to the LLM — the login call itself
+  runs entirely locally, with only a sanitized outcome surfaced to AI.
+- **AI-sourced login-relationship suggestions.** If a metadata/download trial run fails, AI judges
+  whether the failure looks login-related and, if so, offers to generate or associate a login
+  plugin in place — once validated and saved, the originally-failing draft is automatically
+  regenerated with the association, no restart of the wizard needed.
+- **AI-generated plugins carry a visible marker and can always be exported.** The installed-plugins
+  list badges any plugin the wizard generated, and every plugin (wizard-made or hand-written) can
+  be exported as a `.zip` with one click — a deployment whose plugin directory isn't host-mounted
+  only keeps a saved plugin inside that container's writable layer, so a reminder to export a copy
+  appears right after a successful save.
+- **A new `domain_match` field separates "does a domain belong to this plugin" from "does this
+  exact URL trigger it."** Both used to share `url_pattern`, so a narrowly-written trigger regex
+  could make the wizard's own domain lookup (or the Upload page's "fetch metadata" button) miss a
+  plugin that actually covers the domain. `domain_match` is a plain array of bare domains used only
+  for ownership checks; `url_pattern` keeps its original job of gating real dispatch. Falls back to
+  treating `url_pattern` as a loose domain regex when unset, so every built-in plugin is unaffected.
+- **AI plugin wizard saves — both successes and failures — are recorded in the activity log**,
+  under their own action type distinct from a plain manual plugin upload, filterable on
+  `/activity`.
+
 ### Frontend
 
 - **Centralized route management** (`apps/frontend/src/routes.ts`) replacing previously scattered,
@@ -227,10 +275,6 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   either end to avoid an accidental hand-off, then forwards to the carousel; a mouse with its own
   horizontal wheel skips the grid entirely). Bookmark add/remove now also shows up in the activity
   log.
-- **AI-assisted Tankoubon editing**, suggesting a title, chapter names, and reading order from
-  member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
-  Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
-  likely belong to the same series (local embedding model only, no LLM key required).
 - **Bulk delete on the Batch Operations page**, backed by a dedicated `DELETE /api/archives`
   endpoint restricted to real Session logins (API tokens are rejected outright). Requires typing
   "delete"/`DELETE` to confirm; partial failures surface a toast listing each failed archive's own

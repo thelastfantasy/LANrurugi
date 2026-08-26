@@ -297,9 +297,7 @@ mod tests {
     }
 
     async fn test_pool() -> Option<Pool> {
-        let url = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let cfg = deadpool_redis::Config::from_url(url);
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).ok()
+        crate::test_support::test_pool().await
     }
 
     #[tokio::test]

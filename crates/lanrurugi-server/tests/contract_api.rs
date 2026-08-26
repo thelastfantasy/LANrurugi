@@ -22,8 +22,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
-    let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-    let redis = RedisDbs::connect(&base).ok()?;
+    let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -96,6 +95,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -304,11 +304,10 @@ async fn delete_archive_matches_recorded_response_shape() {
 /// pattern), and `/api/*` is never shadowed by the static fallback.
 #[tokio::test]
 async fn static_frontend_is_served_with_spa_fallback() {
-    let Some(base) = std::env::var("LANRURUGI_TEST_REDIS_URL").ok() else {
-        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+    let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
-    let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -381,6 +380,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -457,11 +457,10 @@ async fn static_frontend_is_served_with_spa_fallback() {
 /// see `build_app`'s own docs for why ordering matters here).
 #[tokio::test]
 async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
-    let Some(base) = std::env::var("LANRURUGI_TEST_REDIS_URL").ok() else {
-        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+    let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
-    let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -534,6 +533,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -668,11 +668,10 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
 /// that lists categories. This exercises the real discovery path, not just direct lookup.
 #[tokio::test]
 async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
-    let Some(base) = std::env::var("LANRURUGI_TEST_REDIS_URL").ok() else {
-        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+    let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
-    let redis = RedisDbs::connect(&base).unwrap();
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -777,6 +776,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,

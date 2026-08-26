@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
-Five feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda to
+Six feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda to
 Phase 1) are also fully implemented (verified via each spec's own `tasks.md` — all checkboxes
-complete, no outstanding items). Only Phase 2 (004) remains planned but not yet implemented.
+complete, no outstanding items). Phase 2 (004) and 006 remain planned but not yet implemented.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -57,6 +57,26 @@ hand-written plugins (`chaika.ts`, `ehentai.ts`, `pixiv.ts`) are migrated to the
 part of this feature. Design artifacts:
 `specs/005-download-plugin-progress/{research.md,data-model.md,contracts/,quickstart.md}` (no
 `tasks.md` yet).
+
+**Phase 1 addendum — `006-ai-plugin-wizard`** (additive to Phase 1, planned but not yet
+implemented): plan at `specs/006-ai-plugin-wizard/plan.md`. A wizard that generates login/metadata/
+download plugins from a natural-language description of a target site, gated by an up-front domain
+lookup (reusing `find_matching_plugin`'s `url_pattern` matching) so a user only ever fills in the
+types genuinely missing for that domain. Generation runs through a new `lanrurugi-llm::tool_chat()`
+(DeepSeek tool-calling, model `deepseek-v4-pro` — `deepseek-chat`/`-reasoner` were announced
+discontinued 2026-07-24 and are deliberately not used for this feature's new call sites, see
+research.md §1) that lets AI request the system fetch a real page or a same-domain reference sample
+mid-generation rather than guessing from text alone; the system executes every access itself and
+forwards raw results — AI does all semantic judgment (what to generate, why a trial run failed,
+whether a failure is login-related), never the reverse. Draft trial runs stage to
+`plugins/custom/_wizard/` and reuse `PluginPool`'s existing two-phase-permission execution
+unmodified, always discarded afterward (never promoted without an explicit confirm-save, which
+reuses `upload_plugin`'s own validate/move/rollback path). Login test credentials are never sent to
+the LLM under any circumstance (FR-012) — only a sanitized outcome is. All wizard session/draft-
+history state is frontend-only (no new Redis schema, no server-held session) per the spec's own
+assumption that history need not survive a page refresh. Design artifacts:
+`specs/006-ai-plugin-wizard/{research.md,data-model.md,contracts/,quickstart.md}` (no `tasks.md`
+yet).
 
 Stack: Rust (Tokio/Axum/Rayon) backend as a Cargo workspace under `crates/` producing one binary
 (`lanrurugi-server`, with `serve`/`rebuild-index`/`bench` subcommands), Redis reused as-is from
@@ -152,6 +172,34 @@ half of the server-side anti-flash-of-default-theme mechanism — see that file'
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
 any other Vite-served frontend file; no build step of its own to go stale.
 
+**Exception: adding a new frontend dependency DOES need a rebuild, plus one extra step beyond
+the usual `dev-rebuild && dev-down && dev-up`.** `apps/frontend/node_modules` is a **named volume**
+(`lrr-dev-frontend-node-modules`, `compose.dev.yaml`'s own comment on that line explains the
+"poke a hole back through the bind mount" reasoning), not part of the `apps/frontend` bind mount
+itself. Podman/Docker only ever seed a named volume from the image's contents at that path *once*
+— the first time the volume is created. On every later `dev-rebuild`, the freshly-built image *does*
+contain the new dependency (a real `pnpm install` ran during the image build), but the running
+container keeps using the **old, already-existing volume**, which still only has whatever was
+installed the last time that volume was actually seeded — the new dependency is silently missing
+from what `vite dev` actually sees, surfacing as a browser/devtools module-resolution error that
+looks like nothing was rebuilt at all. This has recurred every time a new frontend dependency was
+added (e.g. `@uiw/react-codemirror`/`@codemirror/lang-javascript`/`codemirror` for
+`006-ai-plugin-wizard`'s `CodeEditor.tsx`) — the actual fix is deleting the stale volume so a
+rebuild re-seeds it from scratch, not just rebuilding the image again:
+
+```sh
+mise run dev-down
+docker volume rm lanrurugi_lrr-dev-frontend-node-modules   # or: podman volume rm ...
+mise run dev-rebuild
+mise run dev-up
+```
+
+Also remember to regenerate the root `pnpm-lock.yaml` (`pnpm install` from repo root) *before*
+`dev-rebuild` whenever `apps/frontend/package.json` gains a new dependency — `Dockerfile.dev`'s
+`pnpm install --frozen-lockfile` step fails outright (not silently) if the lockfile doesn't already
+list the new package, which is a separate, earlier failure mode than the stale-volume one above but
+easy to conflate with it since both surface around the same "I just added a dependency" moment.
+
 ## Rust edits — check before rebuild, and always through the resource-capped script
 
 After editing any Rust code under `crates/`, run `cargo check` (from the workspace root) BEFORE
@@ -178,6 +226,33 @@ process during a workspace build (2026-08-13), and two more `systemd-oomd` kills
 window itself on 2026-08-14 (the second confirmed caused by several of these invocations
 overlapping — each individually passing its own point-in-time PSI check — before the cooldown/mutex
 above existed to prevent it).
+
+## `mise run test`/`dev-rebuild` must run detached from the agent/VSCode process tree
+
+A `cargo test --workspace`/`dev-rebuild` invocation launched as a normal foreground or
+backgrounded-in-the-same-shell child of the coding agent's own process is still a descendant of
+the VSCode/agent process tree — when `systemd-oomd` picks a victim under real memory pressure, it
+can (and, confirmed live, did) kill the *agent's own shell* or a `conmon`/container-monitor process
+in that same tree even though the actual heavy work is properly cgroup-capped inside its own
+container. **Why:** two real incidents on 2026-08-25 during one session — a `mise run test`
+launched via the agent's own backgrounding wrapper got silently killed with "no completion record
+found... may have been stopped" and its containers' `conmon` processes were later found already
+killed when cleanup was attempted, and a second, independent `mise run test` invocation was killed
+the same way moments later. Both happened *after* the guardrails in the section above (PSI check,
+cooldown, flock mutex, cgroup caps) were already in place and functioning correctly — those
+guardrails cap what the *test workload itself* can consume, they do nothing to protect the
+*launching shell/process* from `systemd-oomd` picking it as a victim by different criteria (process
+tree membership, OOM score) when overall host pressure is high for any reason, including reasons
+unrelated to this specific invocation. **How to apply:** when a Rust build/test needs to actually
+run (not just `cargo check`), launch it as a real detached top-level process — outside the agent's
+own process tree entirely — rather than as a background job of the current session, e.g. `setsid
+nohup mise run test > /tmp/test-output.log 2>&1 < /dev/null &` followed by `disown`, or hand the
+command to the user to run themselves in their own terminal, and read the resulting log file
+afterward rather than waiting on the process directly. Do not use the agent harness's own
+background-task mechanism for this — that still parents the process under the agent's own tree.
+This is stricter than "just run it through `mise run`" above: that rule is about which *script*
+runs the workload (the resource-capped one, not bare `cargo`); this rule is about which *process
+tree* launches that script in the first place.
 
 ## CPU-bound parallel work must cap its own resource usage
 

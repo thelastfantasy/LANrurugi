@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
+import { useJobProgressOverride } from "@/api/hooks"
 import type { JobRecord, JobRecordState } from "@/api/types"
 import { Tooltip } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
@@ -82,11 +83,19 @@ function computeSpeed(jobId: string, bytes: number): number | null {
   }
   const elapsedMs = now - previous.at
   if (elapsedMs < MIN_INTERVAL_FOR_SPEED_MS) {
-    // Too soon since the last *real* reading for a meaningful rate — record the new byte count
-    // (so the next call's delta is measured from here, not the older, still-too-close reading)
-    // but don't publish a speed yet.
-    lastReadings.set(jobId, { bytes, at: now, speed: null })
-    return null
+    // Too soon since the last *real* reading for a meaningful rate — update the byte count in
+    // place but deliberately keep `at` (and thus `speed`) pinned to the last real reading,
+    // NOT reset to `now`. SSE-pushed progress (`useJobProgressOverride`) can tick every ~200ms,
+    // well under this threshold — bumping `at` on every one of those ticks would restart the
+    // "time since last real reading" clock each time and it would never actually reach 500ms,
+    // permanently starving the speed calculation for any job receiving faster-than-threshold
+    // updates (confirmed live, 2026-08-26: speed stopped appearing entirely once progress moved
+    // from the 1s `/jobs` poll, which always cleared this threshold between ticks, to SSE).
+    // Keeping the *previous* `bytes` too (not the new one) means the eventual real-reading delta
+    // is still measured from the last point speed was actually computed, not from this
+    // in-between sample.
+    lastReadings.set(jobId, { ...previous, speed: previous.speed })
+    return previous.speed
   }
   const deltaBytes = bytes - previous.bytes
   if (deltaBytes < 0) {
@@ -114,6 +123,17 @@ export function JobProgressBar({
 }) {
   const { t } = useTranslation()
   const barColor = color ?? STATE_COLOR.active
+  // SSE-pushed byte progress, merged on top of `job`'s own polled `downloaded_bytes`/`total_bytes`
+  // — `useJobs()`'s 1s poll alone can miss a download's entire duration if it finishes (or the
+  // relevant polling tick happens to land) awkwardly, and the poll itself was observed starving
+  // for a download's whole runtime in an earlier version of this SSE wiring that wrote progress
+  // straight into the `["jobs"]` query cache (see `useJobProgressOverride`'s own docs for why that
+  // approach was wrong). Prefers the override's own value once *any* progress event has arrived
+  // for this job — a real streamed update is always at least as fresh as the last poll.
+  const override = useJobProgressOverride(job.id)
+  if (override) {
+    job = { ...job, downloaded_bytes: override.downloaded_bytes, total_bytes: override.total_bytes ?? job.total_bytes }
+  }
   // Computed unconditionally (not just in the branches that render it) so every render feeds a
   // fresh reading into `lastReadings`, keeping the next render's delta accurate regardless of
   // which branch actually ends up displaying a speed.
@@ -165,9 +185,31 @@ export function JobProgressBar({
   }
 
   if (job.downloaded_bytes != null) {
+    // `total_bytes` unknown (e.g. a chunked-encoding response with no `Content-Length`) — same
+    // bar/text layout as the determinate case above, but the fill can't be sized by a real ratio,
+    // so it's a fixed-width block animated back and forth (an indeterminate/"activity" bar) instead
+    // of a spinner icon sitting off to the side of the text.
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP, justifyContent: "center" }}>
-        <i className="fa fa-circle-notch fa-spin" aria-hidden="true"></i>
+      <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP }}>
+        <div
+          style={{
+            flex: 1,
+            height: BAR_HEIGHT,
+            background: BAR_BACKGROUND,
+            borderRadius: 4,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: "30%",
+              height: "100%",
+              background: barColor,
+              borderRadius: 4,
+              animation: "lrr-indeterminate-bar 1.2s ease-in-out infinite",
+            }}
+          />
+        </div>
         <span style={{ fontSize: FONT_SIZE_SM, whiteSpace: "nowrap" }}>
           {t("components.display.downloaded", { size: formatBytes(job.downloaded_bytes) })}
           {speedLabel && (

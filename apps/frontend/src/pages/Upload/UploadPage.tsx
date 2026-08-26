@@ -16,7 +16,7 @@ import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
-import { findMatchingPlugin } from "./shared"
+import { findMatchingPlugin, findPluginByDomain } from "./shared"
 
 // "Add from URL" stages matched URLs into a persistent, server-side queue (`useDownloadQueue`),
 // grouped by which download plugin's `url_pattern` matched, so the queue survives a page refresh
@@ -84,7 +84,7 @@ export function Upload() {
       url,
       plugin_namespace: plugin.namespace,
       category: category || undefined,
-      metadataNamespace: findMatchingPlugin(metadataPlugins.data, url)?.namespace,
+      metadataNamespace: findPluginByDomain(metadataPlugins.data, url)?.namespace,
     }))
     await resolveDefaultsAndAdd(items)
     setUrls("")

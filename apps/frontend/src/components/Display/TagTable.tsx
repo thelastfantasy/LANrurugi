@@ -1,6 +1,13 @@
 import { useSettings } from "@/api/hooks"
 import { StarRatingDisplay } from "@/components/Form"
-import { displayNamespace, formatTagValue, getTagSearchURL, splitTagsByNamespace, tagValueForSearch } from "@/lib/tagFormat"
+import {
+  BARE_TAG_NAMESPACE,
+  displayNamespace,
+  formatTagValue,
+  getTagSearchURL,
+  splitTagsByNamespace,
+  tagValueForSearch,
+} from "@/lib/tagFormat"
 import { parseRating } from "@/lib/utils/rating"
 
 /** Per-namespace tag table — the *content* legacy's own `buildTagsDiv`
@@ -34,13 +41,23 @@ export function TagTable({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {namespaces.map((namespace) => (
+      {namespaces.map((namespace) => {
+        // A bare (non-namespaced) tag collects under the internal `BARE_TAG_NAMESPACE` sentinel
+        // (see that constant's own docs) — remapped to the literal `"other"` label here, same as
+        // `colorCodeTags` already does, matching legacy's own real `splitTagsByNamespace`/
+        // `buildTagsDiv` behavior (`~/LANraragi/public/js/mod/common.js`: an untagged tag is
+        // literally bucketed as `"other"` and rendered with an ordinary `"Other:"` row, no special
+        // casing). Used for BOTH the CSS class and the visible label below — the class needs it
+        // too, or the sentinel's own raw bytes still leak into the `className` string even once
+        // the visible text is fixed.
+        const displayKey = namespace === BARE_TAG_NAMESPACE ? "other" : namespace
+        return (
         <div key={namespace} style={{ display: "flex", gap: 6, alignItems: "flex-start", minWidth: 0 }}>
           <div
-            className={`caption-namespace ${namespace.toLowerCase()}-tag`}
+            className={`caption-namespace ${displayKey.toLowerCase()}-tag`}
             style={{ fontWeight: "bold", flex: "0 0 auto", whiteSpace: "nowrap", padding: 0 }}
           >
-            {displayNamespace(namespace)}:
+            {displayNamespace(displayKey)}:
           </div>
           {/* `minWidth: 0` — a flex item's implicit `min-width: auto` default sizes it to its
               content's intrinsic width regardless of the row's own constraint, so a long unbroken
@@ -49,19 +66,19 @@ export function TagTable({
               own `max-width` instead of wrapping within it — confirmed live via the homepage's
               hover tooltip on a chaika.moe `download:` tag. */}
           <div style={{ display: "flex", flexWrap: "wrap", minWidth: 0 }}>
-            {namespace.toLowerCase() === "rating" ? (
+            {displayKey.toLowerCase() === "rating" ? (
               // Still a real, working search-link chip (legacy's own real rating chip *is*
               // clickable — see `TagsTable`'s own docs in `ArchiveOverviewOverlay.tsx` for the
               // live-verified detail) — just no underline on it specifically, which reads like a
               // broken/dead link at a glance and the star icons alone don't need to invite.
               <div className="gt">
                 <a
-                  href={getTagSearchURL(namespace, byNamespace[namespace][0] ?? "", timezone)}
+                  href={getTagSearchURL(displayKey, byNamespace[namespace][0] ?? "", timezone)}
                   onClick={(e) => {
                     if (!onSearchTag) return
                     e.preventDefault()
                     e.stopPropagation()
-                    onSearchTag(namespace, byNamespace[namespace][0] ?? "")
+                    onSearchTag(displayKey, byNamespace[namespace][0] ?? "")
                   }}
                   style={{ textDecoration: "none", cursor: onSearchTag ? "pointer" : undefined }}
                 >
@@ -85,7 +102,7 @@ export function TagTable({
                   className="gt"
                   style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
                 >
-                  {namespace === "source" ? (
+                  {displayKey === "source" ? (
                     <a
                       href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
                       target="_blank"
@@ -97,7 +114,7 @@ export function TagTable({
                     </a>
                   ) : (
                     <a
-                      href={getTagSearchURL(namespace, value, timezone)}
+                      href={getTagSearchURL(displayKey, value, timezone)}
                       onClick={(e) => {
                         // A real `href` (rather than legacy's placeholder `href="#"`) so
                         // middle-click/right-click/hover-preview all resolve to the actual search
@@ -117,11 +134,11 @@ export function TagTable({
                         if (!onSearchTag) return
                         e.preventDefault()
                         e.stopPropagation()
-                        onSearchTag(namespace, tagValueForSearch(namespace, value, timezone))
+                        onSearchTag(displayKey, tagValueForSearch(displayKey, value, timezone))
                       }}
                       style={{ wordBreak: "break-all", cursor: onSearchTag ? "pointer" : undefined }}
                     >
-                      {formatTagValue(namespace, value, timezone)}
+                      {formatTagValue(displayKey, value, timezone)}
                     </a>
                   )}
                 </div>
@@ -129,7 +146,8 @@ export function TagTable({
             )}
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

@@ -371,7 +371,7 @@ mod tests {
     // `hkeys` read it back. `db_offset` gives each of this module's 3 tests (and, by a
     // pre-arranged split with pipeline.rs's 2 tests, that module's own tests) a disjoint slice of
     // Redis's 16 logical databases, so no two tests ever share a `LRR_FILEMAP` key at all.
-    fn test_pools(
+    async fn test_pools(
         db_offset: u8,
     ) -> Option<(
         deadpool_redis::Pool,
@@ -379,15 +379,13 @@ mod tests {
         deadpool_redis::Pool,
     )> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let mk = |db: u8| {
-            deadpool_redis::Config::from_url(format!("{}/{db}", base.trim_end_matches('/')))
-                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-        };
-        Some((
-            mk(db_offset).ok()?,
-            mk(db_offset + 1).ok()?,
-            mk(db_offset + 2).ok()?,
-        ))
+        let url = |db: u8| format!("{}/{db}", base.trim_end_matches('/'));
+        let archive = lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset)).await?;
+        let config =
+            lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 1)).await?;
+        let search =
+            lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 2)).await?;
+        Some((archive, config, search))
     }
 
     /// End-to-end demonstration of User Story 6: a historically false-merged pair (both files
@@ -398,7 +396,7 @@ mod tests {
     /// Clarifications rule for the previously-untracked file.
     #[tokio::test]
     async fn rebuild_then_scan_splits_a_historically_merged_pair() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(0) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(0).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -529,7 +527,7 @@ mod tests {
     /// already a filemap-known path.
     #[tokio::test]
     async fn already_tracked_paths_are_skipped_without_rehashing() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(3) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(3).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -599,7 +597,7 @@ mod tests {
     /// disk is pruned, matching legacy's own `@deletedfiles` cleanup.
     #[tokio::test]
     async fn stale_filemap_entries_for_deleted_files_are_pruned() {
-        let Some((archive_pool, config_pool, search_pool)) = test_pools(6) else {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(6).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -681,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn heal_pagecounts_recomputes_pagecount_and_arcsize_for_a_readable_archive() {
-        let Some((archive_pool, _, _)) = test_pools(30) else {
+        let Some((archive_pool, _, _)) = test_pools(30).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -722,7 +720,7 @@ mod tests {
 
     #[tokio::test]
     async fn heal_pagecounts_marks_an_unreadable_archive_failed_and_never_retries_it() {
-        let Some((archive_pool, _, _)) = test_pools(33) else {
+        let Some((archive_pool, _, _)) = test_pools(33).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

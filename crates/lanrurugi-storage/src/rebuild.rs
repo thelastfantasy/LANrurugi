@@ -150,16 +150,15 @@ mod tests {
     use super::*;
     use lanrurugi_core::entities::{Archive, Category, Grouping};
 
-    fn test_pool() -> Option<deadpool_redis::Pool> {
+    async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        deadpool_redis::Config::from_url(format!("{}/0", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()
+        let url = format!("{}/0", base.trim_end_matches('/'));
+        crate::test_support::test_pool_for_url(&url).await
     }
 
     #[tokio::test]
     async fn rekeys_a_legacy_id_and_updates_category_and_grouping_references() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -256,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn category_save_keeps_the_archive_reverse_index_in_sync() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -311,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn backfill_reverse_indexes_recovers_membership_saved_before_the_index_existed() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

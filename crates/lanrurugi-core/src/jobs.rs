@@ -22,7 +22,7 @@ pub enum JobState {
 impl JobState {
     /// Terminal states are ones a job never leaves again (`Finished`/`Failed`); `Queued`/`Active`
     /// are still in flight and must not be cleared or evicted (FR-004, research.md §2).
-    fn is_terminal(self) -> bool {
+    pub fn is_terminal(self) -> bool {
         matches!(self, JobState::Finished | JobState::Failed)
     }
 }

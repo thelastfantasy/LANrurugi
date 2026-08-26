@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
-import type { PluginSettings } from "@/api/types"
+import type { CustomArgValue, PluginSettings } from "@/api/types"
 
 // Per-plugin custom-parameter settings (e.g. E-Hentai login's cookie fields) — one text input per
 // `PluginInfo.parameters` entry, dynamically rendered from the plugin's own declared metadata,
@@ -58,11 +58,15 @@ function PluginParametersFormBody({
 }) {
   const { t } = useTranslation()
   const update = useUpdatePluginSettings(namespace)
-  const [values, setValues] = useState<string[]>(() =>
-    parameters.map((_, i) => initial.customargs[i] ?? ""),
+  const [values, setValues] = useState<CustomArgValue[]>(() =>
+    parameters.map((param, i) => {
+      const saved = initial.customargs[i]
+      if (param.type === "bool") return saved === true
+      return saved ?? ""
+    }),
   )
 
-  function setValue(index: number, value: string) {
+  function setValue(index: number, value: CustomArgValue) {
     setValues((v) => v.map((existing, i) => (i === index ? value : existing)))
   }
 
@@ -72,11 +76,10 @@ function PluginParametersFormBody({
         {parameters.map((param, i) =>
           param.type === "bool" ? (
             // Real legacy markup (`~/LANraragi/templates/plugins.html.tt2`): `type="checkbox"
-            // value="1" class="fa"`, `checked` iff the saved value is truthy — the literal string
-            // `"1"` is legacy's own real "checked" storage value (matching what an HTML form
-            // naturally submits), not a JSON boolean; `class="fa"` supplies the Font Awesome
-            // font-family `config.css`'s `::before`/`::after` glyph content needs to actually
-            // render as the ON/OFF switch look, not a bare native checkbox.
+            // class="fa"` — `class="fa"` supplies the Font Awesome font-family `config.css`'s
+            // `::before`/`::after` glyph content needs to actually render as the ON/OFF switch
+            // look, not a bare native checkbox. `checked`/`onChange` carry a real `boolean`
+            // end to end now, not the legacy `"1"`/`""` string encoding.
             <tr key={param.name}>
               <td style={{ verticalAlign: "middle" }}>
                 <b>{t(param.desc)} :</b>
@@ -85,8 +88,8 @@ function PluginParametersFormBody({
                 <input
                   type="checkbox"
                   className="fa"
-                  checked={values[i] === "1"}
-                  onChange={(e) => setValue(i, e.target.checked ? "1" : "")}
+                  checked={values[i] === true}
+                  onChange={(e) => setValue(i, e.target.checked)}
                 />
               </td>
             </tr>
@@ -100,7 +103,7 @@ function PluginParametersFormBody({
                   style={{ maxWidth: 200 }}
                   size={20}
                   className="stdinput"
-                  value={values[i]}
+                  value={String(values[i])}
                   onChange={(e) => setValue(i, e.target.value)}
                 />
               </td>

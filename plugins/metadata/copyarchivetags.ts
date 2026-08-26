@@ -56,7 +56,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   logger.info(`Copying tags from archive "${lrr_gid}"`);
   let tags = lrr_info.other_archive_tags ?? "";
 
-  const copy_date_added = lrr_info.customargs?.[0];
+  const copy_date_added = lrr_info.customargs?.[0] as boolean | undefined;
   if (!copy_date_added) {
     const tagArray = split_tags_to_array(tags);
     tags = join_tags_to_string(tagArray.filter((tag) => !DATE_ADDED_NAMESPACE_PATTERN.test(tag)));

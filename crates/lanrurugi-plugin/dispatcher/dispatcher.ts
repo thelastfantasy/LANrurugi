@@ -496,6 +496,7 @@ globalThis.legacyCompat = {
         captureSetCookies(url, res);
         return { result: makeHttpResult(await res.text(), res.status, res.headers) };
       },
+      headers: defaultHeaders,
     };
     return ua;
   },

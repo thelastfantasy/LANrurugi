@@ -70,6 +70,12 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
+    const headers = (info.user_agent_headers ?? {}) as Record<string, string>;
+    if (Object.keys(headers).length > 0) {
+      info.user_agent.on("start", (_ua: any, tx: any) => {
+        for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);
+      });
+    }
   }
   interface ExecDownloadInfo extends Required<Pick<DownloadHostArgs, "url" | "customargs">> {
     user_agent: LegacyUserAgent;
@@ -78,7 +84,7 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecDownloadInfo;
-  let params = { forceresampled: lrr_info.customargs[0] };
+  let params = { forceresampled: lrr_info.customargs[0] as boolean };
   let logger = legacyCompat.getLogger("EH Downloader", "plugins");
   let url = lrr_info["url"];
   let gID = "";

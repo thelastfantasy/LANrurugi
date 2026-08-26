@@ -393,6 +393,11 @@ async fn download_one_inner(
         ResumeState::Resumable { existing_len, .. } if resumed => *existing_len,
         _ => 0,
     };
+    // `None` here is a normal, expected outcome (not logged — confirmed live 2026-08-25 against a
+    // real nHentai download: the server sends `Transfer-Encoding: chunked` with no `Content-Length`
+    // at all, its own choice, not something this code failed to read) — spec 005's own documented
+    // fallback (data-model.md) already covers it: the queue UI shows downloaded-bytes-only with no
+    // total/percentage rather than treating `None` as zero.
     let total_bytes = response.content_length().map(|n| n + existing_len);
 
     // A resumed `206` isn't guaranteed to repeat `Content-Disposition` (some servers only send it

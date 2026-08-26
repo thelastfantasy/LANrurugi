@@ -93,11 +93,26 @@ pub struct PluginInfo {
     #[serde(default)]
     pub oneshot_arg: Option<String>,
     /// A regex (source only, no delimiters) matched case-insensitively against a full candidate
-    /// URL to decide whether this plugin should handle it — display-only on the host side
-    /// (`lanrurugi-api::plugins::list_plugins` just echoes it back); the actual matching happens
-    /// entirely client-side (Upload page URL-queue grouping, metadata-preview-by-URL routing).
+    /// URL to decide whether this plugin should handle it — the precise trigger condition for a
+    /// real download/metadata fetch (`lanrurugi-api::plugins::find_matching_plugin`, the Upload
+    /// page's own URL-queue grouping). NOT what a domain-ownership lookup should match against —
+    /// see `domain_match` below for that.
     #[serde(default)]
     pub url_pattern: Option<String>,
+    /// Bare domains (no scheme, no path, e.g. `["e-hentai.org", "exhentai.org"]`) this plugin
+    /// considers itself the owner of — used only for "does this domain belong to this plugin"
+    /// lookups (Upload page's metadata-button enablement, the AI wizard's domain-coverage check),
+    /// never for real download/metadata-fetch dispatch (still `url_pattern`'s job, unchanged).
+    /// Empty when undeclared — the host then falls back to treating `url_pattern` itself as a
+    /// loose domain regex (see `plugins.rs::domain_covers`), so a plugin that never declares this
+    /// keeps working exactly as before.
+    #[serde(default)]
+    pub domain_match: Vec<String>,
+    /// `true` only for a plugin the AI plugin creation wizard generated (`specs/
+    /// 006-ai-plugin-wizard` FR-026/FR-027) — declared by the plugin's own `pluginInfo()`, never
+    /// inferred by the host. Display-only, same category as the other fields below `login_from`.
+    #[serde(default)]
+    pub generated_by_wizard: bool,
     /// Sidecar metadata filenames (basename suffixes, e.g. `"api.json"`, `"ComicInfo.xml"`) this
     /// plugin wants read out of the archive it's currently processing — `lanrurugi-plugin-converter`
     /// populates this automatically from every `is_file_in_archive(...)` call it finds in a
@@ -189,11 +204,18 @@ pub struct MetadataResult {
 }
 
 /// `execLogin`'s return shape — mirrors `plugin-sdk.ts`'s `LoginResult` field-for-field. Only
-/// `cookies` is ever read by the host (`lanrurugi-api::plugins::with_login_cookies`).
+/// `cookies`/`headers` are ever read by the host (`lanrurugi-api::plugins::with_login_cookies`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoginResult {
     #[serde(default)]
     pub cookies: Option<Vec<PluginCookie>>,
+    /// Header/token-based credentials (e.g. `Authorization`) — the only way a login plugin that
+    /// authenticates via a header rather than a cookie can pass that credential to a downstream
+    /// metadata/download call at all (issue #78/#93: `plugins/login/nhentai.ts`'s API-Key
+    /// `Authorization` header used to have no way to cross this boundary before this field
+    /// existed).
+    #[serde(default)]
+    pub headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     pub error: Option<PluginError>,
 }

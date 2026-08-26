@@ -15,6 +15,7 @@ import { Library } from "./pages/Library"
 import { Login } from "./pages/Login"
 import { Logs } from "./pages/Logs"
 import { Plugins } from "./pages/Plugins"
+import { PluginWizard } from "./pages/PluginWizard"
 import { Reader } from "./pages/Reader/Reader"
 import { Settings } from "./pages/Settings"
 import { Backup } from "./pages/Settings/Backup"
@@ -63,6 +64,7 @@ export function App() {
             <Route path="/batch" element={<Batch />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/config/plugins" element={<Plugins />} />
+            <Route path="/config/plugins/wizard" element={<PluginWizard />} />
             <Route path="/duplicates" element={<Duplicates />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/backup" element={<Backup />} />

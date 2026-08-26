@@ -150,6 +150,16 @@ interface LegacyUserAgent {
    * `render_user_agent_hydration_preamble`) — a live object with closures can't itself cross that
    * same JSON boundary, so this plain-array snapshot is what actually gets to do the traveling. */
   cookies: LegacyCookie[];
+  /** A plain, JSON-serializable snapshot of every default header set on this instance via
+   * {@linkcode transactor}/{@linkcode on} so far — same "only plain data survives `JSON.stringify`"
+   * reasoning as {@linkcode cookies}, just for header/token-based auth (e.g. `Authorization: Key
+   * <api_key>`) instead of cookie-based auth. The host reads this off `exec_login`'s result and
+   * threads it back as `hostArgs.user_agent_headers`, rehydrated the same way `user_agent_cookies`
+   * is (issue #78/#93 — before this field existed, a login plugin authenticating via a header
+   * rather than a cookie had no way to pass that credential to a downstream metadata/download call
+   * at all: `nhapiauth`'s `Authorization` header was silently dropped crossing this exact
+   * boundary). */
+  headers: Record<string, string>;
 }
 
 /** `get_logger($name, $category)`/`get_plugin_logger()`'s return shape. The legacy versions write
@@ -270,6 +280,13 @@ declare var PluginErrorException: {
 // context alongside `PluginInfoResult`/the four `*Result` return shapes they pair with — only the
 // two files' `deno doc`/`deno check` visibility differs, not which one is "more real."
 
+/** One `customargs` element's real type — `PluginParameter.type` (`plugin-sdk.ts`) decides which:
+ * `"bool"` is a real `boolean`, `"int"` a real `number`, `"string"` (or absent) a `string`. The
+ * whole chain (settings-page form → `PUT /plugins/settings` → Redis → `exec_*` call) carries the
+ * real type end to end — never a stringly-typed `"1"`/`"true"` a plugin has to parse back out
+ * itself, a real, repeatedly-observed source of bugs when left to each plugin's own judgment. */
+type CustomArgValue = string | boolean | number;
+
 /** `hostArgs` for `execMetadata`. In practice a converted plugin's generated entry point binds
  * the *whole* object to one variable (`let lrr_info = hostArgs as Record<string, any>;`) and reads
  * individual fields off it by name — this interface exists so a hand-written plugin (or
@@ -312,7 +329,7 @@ interface MetadataHostArgs {
   /** This plugin's own persisted per-parameter values, positionally matching `PluginInfoResult.
    * parameters` in `plugin-sdk.ts` (`customargs[0]` is `parameters[0]`'s saved value, etc.) —
    * always present, one entry per declared parameter, `""` for any never configured. */
-  customargs: string[];
+  customargs: CustomArgValue[];
   /** The archive's on-disk path — fetched by the host once per call
    * (`lanrurugi-api::plugins::use_plugin_sync`) so a filename-deriving plugin (e.g. "Filename
    * Parsing") doesn't need its own round trip back into the API just to resolve an ID to a path. */
@@ -343,6 +360,13 @@ interface MetadataHostArgs {
    * converted plugin's entry point rehydrates this into a real `legacyCompat.userAgent()` instance
    * before its body runs (`render.rs`'s `render_user_agent_hydration_preamble`). */
   user_agent_cookies?: LegacyCookie[];
+  /** Same origin/lifecycle as {@linkcode user_agent_cookies} (from the declared `login_from`
+   * plugin's own `LoginResult.headers`), but for header/token-based auth instead of cookie-based
+   * auth — e.g. an `Authorization: Key <api_key>` header a site expects on every request rather
+   * than a session cookie. A hand-written plugin reads this directly (`hostArgs.user_agent_headers
+   * ?.Authorization`); a converted plugin's rehydration preamble folds it into the same
+   * `legacyCompat.userAgent()` instance `user_agent_cookies` rehydrates into (issue #78/#93). */
+  user_agent_headers?: Record<string, string>;
 }
 
 /** `hostArgs` for `execLogin` — the plugin's own persisted parameter values (credentials,
@@ -351,7 +375,7 @@ interface MetadataHostArgs {
  * *every* call to whatever declares this plugin as its `login_from`, never a cached session, so
  * credentials always reflect the current saved settings. */
 interface LoginHostArgs {
-  customargs: string[];
+  customargs: CustomArgValue[];
 }
 
 /** One archive as passed into a `"script"`-type plugin that needs to inspect/rewrite tags across
@@ -380,7 +404,7 @@ interface ScriptHostArgs {
   oneshot_param?: string;
   /** This plugin's own persisted per-parameter values — same meaning as {@linkcode
    * MetadataHostArgs.customargs}. */
-  customargs: string[];
+  customargs: CustomArgValue[];
   /** Every archive's `id`/`tags`, host-fetched once before the call — present (possibly empty)
    * only for a script plugin whose namespace the host recognizes as needing it (currently just
    * `script/nhentaisourceconverter`); `undefined` for every other script plugin, including a
@@ -420,11 +444,14 @@ interface DownloadHostArgs {
   url: string;
   category?: string;
   user_agent_cookies?: LegacyCookie[];
+  /** See {@linkcode MetadataHostArgs.user_agent_headers}'s own docs — same origin/lifecycle, just
+   * for `execDownload` instead of `execMetadata`. */
+  user_agent_headers?: Record<string, string>;
   /** This plugin's own persisted per-parameter values — same meaning as {@linkcode
    * MetadataHostArgs.customargs}. Legacy passes the equivalent (`%settings`, converted from its
    * own persisted array into a keyed hash) as a *separate* positional argument to
    * `provide_url($lrr_info, %params)` (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:163-179`)
    * rather than folding it into the info hash the way this repo does — e.g. `ehentai.ts`'s own
    * `forceresampled` toggle reads `hostArgs.customargs[0]` exactly like a metadata plugin would. */
-  customargs: string[];
+  customargs: CustomArgValue[];
 }

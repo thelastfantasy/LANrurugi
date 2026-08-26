@@ -89,9 +89,21 @@ function shouldInvalidateLoginStatus(outcome: RefreshOutcome): boolean {
 
 /** Tries to read a JSON error body (`{error: "..."}`) from the response;
  * falls back to a status-only message if the body isn't valid JSON or lacks `error`. */
+/** Most error responses in this codebase are the simple legacy `{error: "human-readable text"}`
+ * shape, but a growing set of newer endpoints (`plugin-wizard/*`) instead use `error` as a short
+ * machine-readable type code (`"ai_output_not_code"`, `"llm_unavailable"`, ...) with the actual
+ * diagnostic content in a sibling `detail` or `raw_output` field — reading only `error` for those
+ * surfaces just the type code itself as the entire error message, which tells the user nothing
+ * (e.g. a bare "ai_output_not_code" toast with no indication of what AI actually returned).
+ * Appends whichever of `detail`/`raw_output` is present, so every caller gets the full diagnostic
+ * text without each one needing its own special-cased error parsing. */
 async function readErrorBody(response: Response, path: string): Promise<string> {
-  const body = await response.json().catch(() => null) as { error?: string } | null
-  return body?.error ?? `Request to ${path} failed with ${response.status}`
+  const body = (await response.json().catch(() => null)) as
+    | { error?: string; detail?: string; raw_output?: string }
+    | null
+  if (!body?.error) return `Request to ${path} failed with ${response.status}`
+  const extra = body.detail ?? body.raw_output
+  return extra ? `${body.error}: ${extra}` : body.error
 }
 
 export async function fetchJson<T>(path: string, retried = false): Promise<T> {

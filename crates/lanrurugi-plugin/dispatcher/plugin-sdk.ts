@@ -92,12 +92,12 @@ export type PluginKind = "metadata" | "login" | "download" | "script";
 /** One entry in {@linkcode PluginInfoResult.parameters} — a user-configurable setting shown in
  * the plugin's settings UI. The host persists one value per declared parameter (`GET`/
  * `PUT /plugins/settings?namespace=...`, `lanrurugi-api::plugins::plugin_settings_key`, Redis
- * field `customargs` — matches legacy's own `LRR_PLUGIN_<NS>` hash and JSON-array encoding
- * exactly) and passes the whole array back on every call, positionally matching this array
- * (`parameters[0]`'s saved value is `hostArgs.customargs[0]`, etc. — see
- * {@linkcode MetadataHostArgs.customargs}). Distinct from {@linkcode
- * PluginInfoResult.oneshot_arg}, which is a single value typed fresh into a "run once" dialog each
- * time, not persisted here. */
+ * field `customargs`) and passes the whole array back on every call, positionally matching this
+ * array (`parameters[0]`'s saved value is `hostArgs.customargs[0]`, etc. — see
+ * {@linkcode MetadataHostArgs.customargs}), each element already in its own declared {@linkcode
+ * type} — a `bool` parameter's value arrives as a real `boolean`, never a string a plugin has to
+ * parse back out itself. Distinct from {@linkcode PluginInfoResult.oneshot_arg}, which is a single
+ * value typed fresh into a "run once" dialog each time, not persisted here. */
 export interface PluginParameter {
   name: string;
   description: string;
@@ -165,13 +165,21 @@ export interface PluginInfoResult {
    * no such one-shot action. */
   oneshot_arg?: string;
   /** A regex (JS `RegExp` source, no delimiters, e.g. `"pixiv\\.net"`) matched case-insensitively
-   * against a full candidate URL to decide whether this plugin should handle it — used by the
-   * Upload page's URL queue to group pasted URLs by download plugin, and, for a metadata plugin,
-   * to find the one matching plugin for a "fetch metadata preview" action against a bare URL
-   * (before any archive exists). Evaluated entirely client-side; the host never matches against
-   * this itself. Omit if this plugin has no meaningful URL-based routing (e.g. a script/login
-   * plugin, or a metadata/download plugin with no single well-known source domain). */
+   * against a full candidate URL to decide whether this plugin should handle it — the precise
+   * trigger condition for a real download/metadata fetch (the Upload page's own URL-queue
+   * grouping, the host's own `find_matching_plugin`). NOT what a domain-ownership lookup should
+   * match against — see {@linkcode PluginInfoResult.domain_match} for that. Omit if this plugin
+   * has no meaningful URL-based routing (e.g. a script/login plugin, or a metadata/download
+   * plugin with no single well-known source domain). */
   url_pattern?: string;
+  /** Bare domains (no scheme, no path, e.g. `["e-hentai.org", "exhentai.org"]`) this plugin
+   * considers itself the owner of — only for domain-ownership lookups (Upload page's "fetch
+   * metadata" button, the AI wizard's coverage check), never for real dispatch (still
+   * {@linkcode PluginInfoResult.url_pattern}'s job — keep declaring that too, it should stay a
+   * precise trigger condition). Omit only when `url_pattern` is already a bare domain-level
+   * pattern; declare this explicitly whenever `url_pattern` is narrower than the domain itself
+   * (e.g. requires a specific path segment). */
+  domain_match?: string[];
   /** Sidecar metadata filenames this plugin wants read out of the archive it's currently
    * processing (basename suffixes, e.g. `"ComicInfo.xml"`, `"info.json"`) — `lanrurugi-
    * plugin-converter` populates this automatically from every `is_file_in_archive(...)` call it
@@ -180,6 +188,13 @@ export interface PluginInfoResult {
    * MetadataHostArgs.sidecar_files}: file *content*, never a path — this plugin itself never gets
    * real filesystem access for this (constitution Principle IV). */
   sidecar_files?: string[];
+  /** `true` only for a plugin whose source was produced by the AI plugin creation wizard
+   * (`specs/006-ai-plugin-wizard`, FR-026) — a wizard-generated draft always sets this literally
+   * in its own `pluginInfo()` return value (the wizard's generation prompt instructs the model to
+   * include it), so it survives independently of any wizard session once the file is saved to
+   * disk. Omit entirely for a hand-written/manually-uploaded plugin; the host never infers this
+   * from anything other than the plugin's own declared value. */
+  generated_by_wizard?: boolean;
 }
 
 /** A plugin-authored error — `error_code` doubles as an i18n lookup key (the frontend's
@@ -236,15 +251,28 @@ export interface MetadataResult {
   error?: PluginError;
 }
 
-/** `execLogin`'s return shape. Only `cookies` is ever read by the host
- * (`lanrurugi-api::plugins::with_login_cookies`), which folds it into the *next*
- * metadata/download call's {@linkcode MetadataHostArgs.user_agent_cookies} — every other property
- * a real `legacyCompat.userAgent()` instance exposes is a function, which `JSON.stringify` silently
- * drops crossing the dispatcher's newline-delimited-JSON boundary (see `dispatcher.ts`'s own
- * `LegacyUserAgent.cookies` docs), so returning the whole `ua` object works, but only this field
- * survives. */
+/** `execLogin`'s return shape. Only `cookies`/`headers` are ever read by the host
+ * (`lanrurugi-api::plugins::with_login_cookies`), which folds them into the *next*
+ * metadata/download call's {@linkcode MetadataHostArgs.user_agent_cookies}/
+ * `user_agent_headers` — every other property a real `legacyCompat.userAgent()` instance exposes
+ * is a function, which `JSON.stringify` silently drops crossing the dispatcher's
+ * newline-delimited-JSON boundary (see `dispatcher.ts`'s own `LegacyUserAgent.cookies` docs), so
+ * returning the whole `ua` object works, but only these two plain-data fields survive. */
 export interface LoginResult {
   cookies?: LegacyCookie[];
+  /** Any header/token-based credential this login plugin wants a downstream metadata/download
+   * call to send (e.g. `{ "Authorization": "Key <api_key>" }`, a bearer token, a custom
+   * signed-request header — whatever the target site's own auth scheme needs). Independent of
+   * `cookies` and of {@linkcode LegacyUserAgent} entirely: a plugin using
+   * `legacyCompat.userAgent()` can hand back its own `ua.headers` snapshot here (see that
+   * property's own docs), but nothing requires going through `userAgent()` at all — a plugin that
+   * authenticates with a plain `fetch()` call and holds the resulting token in a local variable
+   * can just `return { headers: { Authorization: `Bearer ${token}` } }` directly. For a site
+   * authenticating via a header/token rather than a cookie, this is the *only* way that credential
+   * actually reaches a downstream call; `cookies` alone is empty for such a login plugin (issue
+   * #78/#93: `nhapiauth`'s `Authorization` header used to have no way to cross this boundary at
+   * all before this field existed). */
+  headers?: Record<string, string>;
   error?: PluginError;
 }
 

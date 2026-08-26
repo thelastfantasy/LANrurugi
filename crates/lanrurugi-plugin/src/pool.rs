@@ -69,10 +69,20 @@ fn is_safe_namespace(namespace: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// A plugin `.ts` file's current `mtime` — used both to stamp a freshly spawned [`Worker`] and,
+/// on every later [`PluginPool::execute`] call, to detect whether the file has changed since that
+/// worker's own `import()` last read it.
+fn plugin_mtime(plugin_module: &Path) -> Result<std::time::SystemTime> {
+    Ok(std::fs::metadata(plugin_module)?.modified()?)
+}
+
 struct Worker {
     stdin: ChildStdin,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
     _child: Child,
+    /// The plugin file's `mtime` when this worker last `import()`ed it — `execute` respawns if
+    /// the file has since changed, since a running worker never reloads on its own.
+    mtime: std::time::SystemTime,
 }
 
 impl Worker {
@@ -85,6 +95,8 @@ impl Worker {
         declared_read: bool,
     ) -> Result<Self> {
         let plugin_module = plugins_dir.join(format!("{namespace}.ts"));
+        // Read before spawning: worst case is one extra harmless respawn later, never a missed edit.
+        let mtime = plugin_mtime(&plugin_module)?;
         // `plugin-sdk.ts` is written out as `dispatcher_path`'s own sibling (every
         // `lanrurugi_plugin::DISPATCHER_SCRIPT` write site has a matching
         // `lanrurugi_plugin::PLUGIN_SDK_SCRIPT` write right next to it — see those sites' own
@@ -150,6 +162,7 @@ impl Worker {
             stdin,
             pending,
             _child: child,
+            mtime,
         })
     }
 
@@ -204,6 +217,15 @@ impl PluginPool {
             plugins_dir,
             workers: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The configured `deno` binary path/name (whatever was passed to `new` — a bare `"deno"`
+    /// resolved via `PATH` in most deployments, but always the *same* one this pool spawns every
+    /// worker with). Exposed so a caller can shell out to a plain `deno fmt`/`deno check`
+    /// subprocess against the exact same binary, without duplicating the "how do we find deno"
+    /// logic or risking a different (possibly absent/mismatched-version) `deno` on `PATH`.
+    pub fn deno_binary(&self) -> &str {
+        &self.deno_binary
     }
 
     /// Queries a plugin's declared metadata/permissions via a throwaway, zero-permission
@@ -265,7 +287,8 @@ impl PluginPool {
     }
 
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
-    /// declared permissions) on first use.
+    /// declared permissions) on first use, and respawning it if the plugin file's `mtime` has
+    /// advanced since (a running worker never reloads its module on its own).
     pub async fn execute(
         &self,
         namespace: &str,
@@ -276,6 +299,18 @@ impl PluginPool {
             return Err(PoolError::NotFound(namespace.to_string()));
         }
         let mut workers = self.workers.lock().await;
+
+        // A stat failure here just means the freshness check is skipped this time — the real
+        // request below will surface whatever's actually wrong.
+        let current_mtime = plugin_mtime(&self.plugins_dir.join(format!("{namespace}.ts"))).ok();
+        let stale = match (workers.get(namespace), current_mtime) {
+            (Some(worker), Some(current)) => current > worker.mtime,
+            _ => false,
+        };
+        if stale {
+            workers.remove(namespace);
+        }
+
         if !workers.contains_key(namespace) {
             let info = self.plugin_info(namespace).await?;
             let flags = build_flags(&info.declared_permissions);

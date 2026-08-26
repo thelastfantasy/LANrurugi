@@ -40,7 +40,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   }
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  let [addextra, addother, addsource] = lrr_info.customargs;
+  const [addextra, addother, addsource] = lrr_info.customargs as [boolean, boolean, string];
   let logger = legacyCompat.getLogger("Chaika.moe api.json", "plugins");
   let newtags = "";
   let newtitle = "";

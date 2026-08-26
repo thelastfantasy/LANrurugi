@@ -77,7 +77,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let match: RegExpMatchArray | null;
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  let [addextra, addother, addsource, jpntitle] = lrr_info.customargs;
+  const [addextra, addother, addsource, jpntitle] = lrr_info.customargs as [
+    boolean,
+    boolean,
+    string,
+    boolean,
+  ];
   let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let newtags = "";
   let newtitle = "";
@@ -125,10 +130,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 async function search_for_archive(
   title: string,
   tags: string,
-  addextra: string,
-  addother: string,
+  addextra: boolean,
+  addother: boolean,
   addsource: string,
-  jpntitle: string,
+  jpntitle: boolean,
 ): Promise<[string, string] | ""> {
   let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   // Auto-lowercase the title for better results, and strip hyphens/apostrophes (they apparently
@@ -153,10 +158,10 @@ async function search_for_archive(
 async function tags_from_chaika_id(
   type: string,
   ID: string,
-  addextra: string,
-  addother: string,
+  addextra: boolean,
+  addother: boolean,
   addsource: string,
-  jpntitle: string,
+  jpntitle: boolean,
 ): Promise<[string, string] | ""> {
   let json = await get_json_from_chaika(type, ID);
   if (!json) return "";
@@ -167,10 +172,10 @@ async function tags_from_chaika_id(
  * returns a JSON array containing multiple archive objects; only the first one is used. */
 async function tags_from_sha1(
   sha1: string,
-  addextra: string,
-  addother: string,
+  addextra: boolean,
+  addother: boolean,
   addsource: string,
-  jpntitle: string,
+  jpntitle: boolean,
 ): Promise<[string, string] | ""> {
   let json_by_sha1 = await get_json_from_chaika('sha1', sha1) as ChaikaGallery[] | undefined;
   if (!json_by_sha1 || json_by_sha1.length === 0) return "";
@@ -201,10 +206,10 @@ async function get_json_from_chaika(type: string, value: string): Promise<unknow
  * present (nothing usable to attach to the archive). */
 function parse_chaika_json(
   json: ChaikaGallery,
-  addextra: string,
-  addother: string,
+  addextra: boolean,
+  addother: boolean,
   addsource: string,
-  jpntitle: string,
+  jpntitle: boolean,
 ): [string, string] | "" {
   let tags = json.tags ?? [];
   tags = tags.map((tag) => {

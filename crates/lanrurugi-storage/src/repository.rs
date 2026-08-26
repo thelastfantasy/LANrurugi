@@ -852,12 +852,10 @@ mod tests {
     use lanrurugi_core::entities::TocEntry;
 
     /// These tests exercise real Redis I/O and are skipped (with a message, not a failure) unless
-    /// `LANRURUGI_TEST_REDIS_URL` is set — CI wires that up via a Redis service container (T007);
-    /// locally, point it at a throwaway container.
+    /// `LANRURUGI_TEST_REDIS_URL` is set and reachable — CI wires that up via a Redis service
+    /// container (T007); locally, point it at a throwaway container.
     async fn test_pool() -> Option<Pool> {
-        let url = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let cfg = deadpool_redis::Config::from_url(url);
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1)).ok()
+        crate::test_support::test_pool().await
     }
 
     #[tokio::test]

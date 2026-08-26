@@ -5,22 +5,20 @@
 // Known limitations (from the converter's own warnings — review, don't blindly trust):
 //   - external Perl module reference has no JS equivalent: Mojo::UserAgent
 //
-// NOTE: this plugin makes HTTP calls but declared_permissions.net is still the
-// converter's placeholder — fill in the real host(s), verified against the URL
-// literals in the original Perl source, before this plugin can actually reach them
-// (Deno's --allow-net grant is scoped to exactly this list).
-
+// Hand-fixed: the converter bound the parameter to `hostArgs.arg`, which doesn't exist on
+// `LoginHostArgs` (only `customargs` does) — `key` was always falsy. Now reads
+// `hostArgs.customargs[0]` (see `plugins/login/pixiv.ts`'s identical fix).
+//
 export function pluginInfo() {
   return {
     namespace: "nhapiauth",
     type: "login" as const,
+    url_pattern: "nhentai\\.net",
     parameters: [
       { name: "param1", description: "API Key", required: false, type: "string" },
     ],
-    // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
-    // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
-    // stays as narrow as possible (constitution Principle IV).
-    declared_permissions: { net: [/* TODO: host(s) */], read: false, write: false },
+    // execLogin makes no HTTP calls of its own — it just echoes the key into headers.
+    declared_permissions: { net: [], read: false, write: false },
     name: "nHentai",
     author: "thelastfantasy",
     description: "Authenticates the nHentai API using an API Key. You can generate one in your profile's settings.",
@@ -29,20 +27,15 @@ export function pluginInfo() {
 }
 
 
-export async function execLogin(hostArgs: Record<string, unknown>) {
-  // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
-  let key = hostArgs.arg as string;
+export async function execLogin(hostArgs: { customargs: string[] }) {
+  let key = hostArgs.customargs[0];
   let logger = legacyCompat.getLogger("nHentai API Auth", "plugins");
-  let ua = legacyCompat.userAgent();
-  let version_info = legacyCompat.getVersion();
-  let version = version_info["version"];
-  let homepage = version_info["homepage"];
-  ua.transactor.name(`LANraragi/${version} (+${homepage})`);
-  if (key) {
-    logger.info(`API Key provided (${key})!`);
-    ua.on("start", (ua: any, tx: any) => {tx.req.headers.header("Authorization", `Key ${key}`);});
-  } else {
+  if (!key) {
     logger.info("No API Key provided");
+    return {};
   }
-  return ua;
+  logger.info(`API Key provided (${key})!`);
+  // Header-based auth — a returned `ua` object's `on("start", ...)` closure doesn't survive
+  // JSON.stringify, so this must go through LoginResult.headers instead.
+  return { headers: { Authorization: `Key ${key}` } };
 }

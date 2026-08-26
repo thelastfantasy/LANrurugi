@@ -729,6 +729,12 @@ impl Renderer {
          info.user_agent = legacyCompat.userAgent();\n    \
          for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {\n      \
          info.user_agent.cookie_jar.add(c);\n    \
+         }\n    \
+         const headers = (info.user_agent_headers ?? {}) as Record<string, string>;\n    \
+         if (Object.keys(headers).length > 0) {\n      \
+         info.user_agent.on(\"start\", (_ua: any, tx: any) => {\n        \
+         for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);\n      \
+         });\n    \
          }\n  \
          }\n"
             .to_string()

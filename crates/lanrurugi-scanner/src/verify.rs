@@ -115,16 +115,15 @@ fn files_all_identical(members: &[(String, PathBuf)]) -> bool {
 mod tests {
     use super::*;
 
-    fn test_pool() -> Option<deadpool_redis::Pool> {
+    async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        deadpool_redis::Config::from_url(format!("{}/0", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()
+        let url = format!("{}/0", base.trim_end_matches('/'));
+        lanrurugi_storage::test_support::test_pool_for_url(&url).await
     }
 
     #[tokio::test]
     async fn flags_shared_prefix_files_as_distinct_not_identical() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

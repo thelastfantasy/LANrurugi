@@ -56,6 +56,12 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     for (const c of (info.user_agent_cookies ?? []) as { name: string; value: string; domain: string; path: string }[]) {
       info.user_agent.cookie_jar.add(c);
     }
+    const headers = (info.user_agent_headers ?? {}) as Record<string, string>;
+    if (Object.keys(headers).length > 0) {
+      info.user_agent.on("start", (_ua: any, tx: any) => {
+        for (const [name, value] of Object.entries(headers)) tx.req.headers.header(name, value);
+      });
+    }
   }
   interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "existing_tags" | "archive_title" | "customargs">> {
     user_agent: LegacyUserAgent;
@@ -68,7 +74,11 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let gallery_id = '';
   let gallery_token = '';
-  let [save_jpn_title, save_additional_metadata, use_exhentai] = lrr_info.customargs;
+  const [save_jpn_title, save_additional_metadata, use_exhentai] = lrr_info.customargs as [
+    boolean,
+    boolean,
+    boolean,
+  ];
   if ((match = (lrr_info["arg"] ?? "").match(/e(?:x|-)hentai\.org\/g\/(\d+)\/([0-9a-z]+)/i))) {
     gallery_id = match[1];
     gallery_token = match[2];
@@ -108,7 +118,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
 // point with no shared module graph between them (constitution Principle IV), so this plugin
 // carries its own copy rather than attempting a cross-plugin import that the runtime has no
 // mechanism for.
-async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: any, additionaltags: any) {
+async function get_tags_from_EH(ua: any, gID: any, gToken: any, jpntitle: boolean, additionaltags: boolean) {
   let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let jsonresponse = await get_json_from_EH(ua, gID, gToken);
   let data = jsonresponse["gmetadata"];

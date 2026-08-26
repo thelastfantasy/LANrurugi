@@ -59,10 +59,6 @@ export function Edit() {
 function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveMetadata }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
-  // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
-  // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
-  useDocumentTitle(t("edit.editing1").replace("%1", archive.title))
   const plugins = usePlugins("metadata")
   const settings = useSettings()
   const stats = useStats(2)
@@ -70,6 +66,10 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const deleteArchive = useDeleteArchive()
   const renameArchive = useRenameArchive(archiveId)
 
+  // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
+  // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
+  // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
+  useDocumentTitle(t("edit.editing1").replace("%1", archive.title))
   const [title, setTitle] = useState(archive.title)
   const [summary, setSummary] = useState(archive.summary ?? "")
   const [tags, setTags] = useState(archive.tags)
@@ -158,6 +158,15 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
       }
       if (data.success && data.data) {
         const result = data.data
+        // Computed locally (not read back off `title`/`summary`/`tags` state, which wouldn't yet
+        // reflect this same render's `setTitle`/etc. calls below) so the save call after this
+        // block always persists exactly what the toasts below claim was just applied — a real,
+        // reported gap: the plugin's result only ever updated these form fields' on-screen values,
+        // never actually saved back to the archive, silently discarded on navigating away unless
+        // the user remembered to separately click "Save Metadata" themselves.
+        let nextTitle = title
+        let nextSummary = summary
+        let nextTags = tags
         // Mirrors legacy's own `Edit.getTags` exactly (`edit.js:293-337`): a toast per changed
         // field, plus always one tags-outcome toast (added vs. none) whether or not new tags
         // came back.
@@ -166,11 +175,13 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         // `Model::Plugins::exec_metadata_plugin` gate exactly (tags/summary are never gated,
         // only title).
         if (result.title && (settings.data?.replacetitles ?? true)) {
-          setTitle(result.title)
+          nextTitle = result.title
+          setTitle(nextTitle)
           toast({ heading: t("edit.archiveTitleChangedTo") ?? undefined, text: result.title, icon: "info" })
         }
         if (result.summary) {
-          setSummary(result.summary)
+          nextSummary = result.summary
+          setSummary(nextSummary)
           toast({ heading: t("edit.archiveSummaryUpdated") ?? undefined, icon: "info" })
         }
         if (result.tags) {
@@ -192,7 +203,8 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
               actuallyNew.push(trimmed)
             }
           }
-          setTags(merged.join(", "))
+          nextTags = merged.join(", ")
+          setTags(nextTags)
           // Reflects what was actually merged in, not the plugin's raw (possibly-already-present)
           // return value — a re-run that comes back with tags the archive already has should say
           // so via the "No new tags added!" branch below, not claim tags were added that weren't.
@@ -208,6 +220,9 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           }
         } else {
           toast({ heading: t("edit.noNewTagsAdded") ?? undefined, icon: "info" })
+        }
+        if (nextTitle !== title || nextSummary !== summary || nextTags !== tags) {
+          await updateMetadata.mutateAsync({ title: nextTitle, summary: nextSummary, tags: nextTags })
         }
       } else {
         toast({ text: data.error ?? t("edit.unknownError") ?? undefined, icon: "error" })

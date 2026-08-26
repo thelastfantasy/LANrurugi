@@ -36,14 +36,14 @@ use crate::AppState;
 /// subdirectories under `plugins_dir` that ship in the repo (`plugins/metadata/`, `plugins/login/`,
 /// `plugins/download/`, `plugins/script/`). `install_plugin` trusts *only* this list (not
 /// user input) to pick the destination subdirectory for an uploaded plugin.
-const PLUGIN_CATEGORIES: &[&str] = &["metadata", "login", "download", "script"];
+pub(crate) const PLUGIN_CATEGORIES: &[&str] = &["metadata", "login", "download", "script"];
 
 /// Where every uploaded plugin lands, regardless of its declared category — mirrors legacy's own
 /// `lib/LANraragi/Plugin/Sideloaded/` (verified: `Controller/Plugins.pm::process_upload`), which
 /// also keeps user-supplied plugins physically separate from ones shipped in the repo, but nested
 /// one level deeper by category (`custom/metadata/`, `custom/login/`, …) since namespaces here can
 /// contain subdirectories (unlike legacy's flat `Sideloaded/`).
-const CUSTOM_PLUGIN_DIR: &str = "custom";
+pub(crate) const CUSTOM_PLUGIN_DIR: &str = "custom";
 
 /// How long a cached `metadata_preview` stays fresh before `ensure_metadata_cached` re-runs the
 /// plugin — long enough to cover a batch of downloads landing within minutes of each other, short
@@ -69,21 +69,49 @@ fn plugin_settings_key(namespace: &str) -> String {
 }
 
 /// A plugin's persisted custom-parameter values, JSON-encoded as a single array under the
-/// `customargs` field — matches legacy's own `LRR_PLUGIN_<NS>` field name and encoding exactly
-/// (`Controller/Plugins.pm::save_config`'s `encode_json(\@customargs)` / `Utils/Plugins.pm::
-/// get_plugin_parameters`'s `decode_json($saved_config)`), positionally matching `info.parameters`
-/// (`parameters[0]`'s value is `customargs[0]`, etc.) — not legacy's newer per-key HASH-style
-/// storage (`to_named_params`), which no plugin in this corpus declares.
+/// `customargs` field, positionally matching `info.parameters` (`parameters[0]`'s value is
+/// `customargs[0]`, etc.) — each element its own declared type (`bool`/`int`/`string`), carried
+/// as a real JSON value end to end rather than a uniform string a plugin has to parse back out
+/// itself (issue #78/#93's own follow-on: `"1"`/`""` vs `"true"`/`"false"` vs bare truthiness were
+/// each independently reinvented by different plugins in this corpus, one of them just wrong).
 ///
-/// Missing/malformed stored data (nothing saved yet, or a legacy instance's differently-shaped
-/// value) is treated as "no overrides" — `param_count` empty strings — rather than an error, since
-/// every value here is optional free text a user may simply not have configured yet.
-async fn get_plugin_customargs(
+/// Writes real `customargs` for a plugin directly — the same `LRR_PLUGIN_<NS>` Redis write
+/// `put_plugin_settings` (the real `/plugins/settings` HTTP endpoint) does, extracted into a plain
+/// async fn so a caller that isn't itself an HTTP handler (`plugin_wizard::save`, saving whatever
+/// values the user already filled into the wizard's own trial-run parameter inputs) can reuse the
+/// identical write path rather than requiring the user to visit the plugin's settings page a
+/// second time to enter the same values again post-install.
+pub(crate) async fn set_plugin_customargs(
     state: &AppState,
     namespace: &str,
-    param_count: usize,
-) -> Vec<String> {
-    let mut args = vec![String::new(); param_count];
+    customargs: &[Value],
+) -> Result<(), String> {
+    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
+    let encoded = serde_json::to_string(customargs).map_err(|e| e.to_string())?;
+    conn.hset::<_, _, _, ()>(plugin_settings_key(namespace), "customargs", encoded)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Reads a plugin's persisted `customargs` back, coercing each element to its own declared
+/// `parameters[i].param_type` — `"bool"` becomes a real `Value::Bool`, `"int"` a real
+/// `Value::Number`, anything else stays a string. Handles both a value already stored in its real
+/// type (written by the current `set_plugin_customargs`) and legacy's own `"1"`/`""` string
+/// encoding still sitting in Redis from before this existed — `"1"` (and, defensively, `"true"`)
+/// coerce to `true`, everything else to `false`, so an old saved value doesn't silently read back
+/// as "off" forever just because it predates this change. Missing/malformed stored data (nothing
+/// saved yet, or a legacy instance's differently-shaped value) is treated as "no overrides" — one
+/// type-appropriate default per declared parameter — rather than an error, since every value here
+/// is optional and a user may simply not have configured it yet.
+pub(crate) async fn get_plugin_customargs(
+    state: &AppState,
+    namespace: &str,
+    parameters: &[lanrurugi_plugin::protocol::PluginParameter],
+) -> Vec<Value> {
+    let mut args: Vec<Value> = parameters
+        .iter()
+        .map(|p| default_customarg(p.param_type.as_deref()))
+        .collect();
     let Ok(mut conn) = state.redis.config.get().await else {
         return args;
     };
@@ -92,13 +120,45 @@ async fn get_plugin_customargs(
         .await
         .unwrap_or_default();
     if let Some(raw) = raw {
-        if let Ok(saved) = serde_json::from_str::<Vec<String>>(&raw) {
-            for (slot, value) in args.iter_mut().zip(saved) {
-                *slot = value;
+        if let Ok(saved) = serde_json::from_str::<Vec<Value>>(&raw) {
+            for ((slot, param), value) in args.iter_mut().zip(parameters).zip(saved) {
+                *slot = coerce_customarg(param.param_type.as_deref(), value);
             }
         }
     }
     args
+}
+
+fn default_customarg(param_type: Option<&str>) -> Value {
+    match param_type {
+        Some("bool") => Value::Bool(false),
+        Some("int") => Value::Number(0.into()),
+        _ => Value::String(String::new()),
+    }
+}
+
+/// See [`get_plugin_customargs`]'s own docs — `value` is whatever was actually stored, which may
+/// already be the real type (nothing to do) or legacy's own string encoding (needs converting).
+fn coerce_customarg(param_type: Option<&str>, value: Value) -> Value {
+    match param_type {
+        Some("bool") => match &value {
+            Value::Bool(_) => value,
+            Value::String(s) => Value::Bool(s == "1" || s == "true"),
+            _ => Value::Bool(false),
+        },
+        Some("int") => match &value {
+            Value::Number(_) => value,
+            Value::String(s) => s
+                .parse::<i64>()
+                .map(|n| Value::Number(n.into()))
+                .unwrap_or(Value::Number(0.into())),
+            _ => Value::Number(0.into()),
+        },
+        _ => match value {
+            Value::String(_) => value,
+            other => Value::String(other.to_string()),
+        },
+    }
 }
 
 /// A plugin's persisted display-order priority within its own `type` group — lower sorts first,
@@ -118,16 +178,45 @@ async fn get_plugin_priority(state: &AppState, namespace: &str) -> Option<i64> {
     raw?.parse().ok()
 }
 
-/// Runs `info`'s declared `login_from` plugin (if any) fresh and folds the resulting cookies into
-/// `args["user_agent_cookies"]` — mirrors legacy's `exec_login_plugin`
-/// (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:107-135`), which re-logs-in before *every*
-/// metadata/download/script call rather than caching a session (there's no session-lifetime
-/// concept to reuse here either, so neither host nor plugin needs to invalidate anything later).
-/// `login`-type plugins are never login'd into themselves (`info.kind == "login"` short-circuits
-/// immediately) and a login failure only logs a warning — the main plugin call still goes ahead,
-/// just without any cookies, the same as legacy falling back to a blank `Mojo::UserAgent->new`
-/// when its own login attempt didn't return a real user agent.
-async fn with_login_cookies(state: &AppState, info: &PluginInfo, mut args: Value) -> Value {
+/// Orders `namespaces` by the same (explicit `priority`, discovery-order fallback) rule
+/// `list_plugins` already sorts its own response by — used by `find_matching_plugin`/
+/// `resolve_declared_namespace` so "first match wins" actually respects a user's Plugins-page
+/// drag-to-reorder, instead of `discover_namespaces`'s own unspecified `read_dir` order (confirmed
+/// live, 2026-08-26: a wizard-generated `custom/` plugin meant to override a built-in one for the
+/// same domain had no reliable effect on which one actually got used for downloads/metadata,
+/// since neither of those call sites sorted their candidate list at all before this).
+pub(crate) async fn sort_namespaces_by_priority(
+    state: &AppState,
+    namespaces: &[String],
+) -> Vec<String> {
+    let mut indexed: Vec<(usize, String, Option<i64>)> = Vec::with_capacity(namespaces.len());
+    for (i, ns) in namespaces.iter().enumerate() {
+        let priority = get_plugin_priority(state, ns).await;
+        indexed.push((i, ns.clone(), priority));
+    }
+    indexed.sort_by_key(|(i, _, priority)| priority.unwrap_or(i64::MAX / 2 + *i as i64));
+    indexed.into_iter().map(|(_, ns, _)| ns).collect()
+}
+
+/// Runs `info`'s declared `login_from` plugin (if any) fresh and folds the resulting cookies/
+/// headers into `args["user_agent_cookies"]`/`args["user_agent_headers"]` — mirrors legacy's
+/// `exec_login_plugin` (`~/LANraragi/lib/LANraragi/Model/Plugins.pm:107-135`), which re-logs-in
+/// before *every* metadata/download/script call rather than caching a session (there's no
+/// session-lifetime concept to reuse here either, so neither host nor plugin needs to invalidate
+/// anything later). `login`-type plugins are never login'd into themselves (`info.kind == "login"`
+/// short-circuits immediately) and a login failure only logs a warning — the main plugin call
+/// still goes ahead, just without any cookies/headers, the same as legacy falling back to a blank
+/// `Mojo::UserAgent->new` when its own login attempt didn't return a real user agent.
+///
+/// `headers` (issue #78/#93) exists alongside `cookies` because not every site authenticates via
+/// a cookie — a login plugin authenticating via a header/token (e.g. `nhapiauth`'s
+/// `Authorization: Key <api_key>`) has no cookie to hand back at all, and before this field
+/// existed had no way to pass that credential to a downstream metadata/download call either.
+pub(crate) async fn with_login_cookies(
+    state: &AppState,
+    info: &PluginInfo,
+    mut args: Value,
+) -> Value {
     if info.kind == "login" {
         return args;
     }
@@ -141,7 +230,7 @@ async fn with_login_cookies(state: &AppState, info: &PluginInfo, mut args: Value
         );
         return args;
     };
-    let customargs = get_plugin_customargs(state, &login_ns, login_info.parameters.len()).await;
+    let customargs = get_plugin_customargs(state, &login_ns, &login_info.parameters).await;
     let login_args = json!({ "customargs": customargs });
     match state
         .plugins
@@ -151,6 +240,9 @@ async fn with_login_cookies(state: &AppState, info: &PluginInfo, mut args: Value
         Ok(result) => {
             if let Some(cookies) = result.get("cookies") {
                 args["user_agent_cookies"] = cookies.clone();
+            }
+            if let Some(headers) = result.get("headers") {
+                args["user_agent_headers"] = headers.clone();
             }
         }
         Err(e) => {
@@ -226,6 +318,8 @@ pub fn router() -> Router<AppState> {
         .route("/plugins/priority", post(put_plugin_priority))
         .route("/download_url", post(download_url))
         .route("/plugins/upload", post(upload_plugin))
+        .route("/plugins/export", get(export_plugin))
+        .route("/plugins/export-batch", post(export_plugins_batch))
         .route(
             // `namespace` as a query parameter, not a `{namespace}/options` path segment, for the
             // same reason `/plugins/settings` above is: a namespace may itself contain `/`
@@ -254,13 +348,13 @@ async fn get_plugin_settings(
     State(state): State<AppState>,
     Query(query): Query<PluginSettingsQuery>,
 ) -> Response {
-    let param_count = match state.plugins.plugin_info(&query.namespace).await {
-        Ok(info) => info.parameters.len(),
+    let parameters = match state.plugins.plugin_info(&query.namespace).await {
+        Ok(info) => info.parameters,
         Err(e) => {
             return error(StatusCode::NOT_FOUND, "get_plugin_settings", e.to_string());
         }
     };
-    let customargs = get_plugin_customargs(&state, &query.namespace, param_count).await;
+    let customargs = get_plugin_customargs(&state, &query.namespace, &parameters).await;
     let enabled = get_plugin_enabled(&state, &query.namespace).await;
     axum::Json(json!({ "customargs": customargs, "enabled": enabled })).into_response()
 }
@@ -282,7 +376,7 @@ pub struct PutPluginSettingsBody {
     /// own single-form-submits-everything page, this app saves the "Run Automatically" toggle and
     /// the parameter form independently, so a toggle flip must not require resending the other's
     /// current value just to avoid clobbering it).
-    customargs: Option<Vec<String>>,
+    customargs: Option<Vec<Value>>,
     enabled: Option<bool>,
 }
 
@@ -594,16 +688,21 @@ async fn delete_plugin_options(
 /// (`PluginPool::plugin_info`/`execute`) needs — same root cause `list_plugins` works around for
 /// its own `namespace` response field, but `login_from` bakes the declared value directly into
 /// plugin source, so it must be resolved fresh at call time instead. Scans every installed plugin
-/// for one whose own `plugin_info().namespace` matches; `None` if none does (a plugin points at a
-/// `login_from` that isn't actually installed).
-async fn resolve_declared_namespace(
+/// for one whose own `plugin_info().namespace` matches, in priority order
+/// (`sort_namespaces_by_priority` — same reasoning as `find_matching_plugin`'s own docs: two
+/// installed plugins sharing a declared namespace must resolve deterministically to the
+/// higher-priority one, not whichever `discover_namespaces`'s scan happened to visit first).
+/// `None` if none does (a plugin points at a `login_from` that isn't actually installed).
+pub(crate) async fn resolve_declared_namespace(
     state: &AppState,
     declared_namespace: &str,
 ) -> Option<(String, PluginInfo)> {
-    for ns in discover_namespaces(&state.plugins_dir).await {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
+    let all = discover_namespaces(&state.plugins_dir).await;
+    let ordered = sort_namespaces_by_priority(state, &all).await;
+    for ns in &ordered {
+        if let Ok(info) = state.plugins.plugin_info(ns).await {
             if info.namespace == declared_namespace {
-                return Some((ns, info));
+                return Some((ns.clone(), info));
             }
         }
     }
@@ -616,7 +715,7 @@ async fn resolve_declared_namespace(
 /// string is the namespace (`metadata/ehentai.ts` → `"metadata/ehentai"`, and a plugin still
 /// directly under `plugins_dir` with no category subfolder is just `"foo"`, unchanged from
 /// before). Depth is unbounded: `custom/` (uploaded plugins) may itself have subdirectories.
-async fn discover_namespaces(plugins_dir: &std::path::Path) -> Vec<String> {
+pub(crate) async fn discover_namespaces(plugins_dir: &std::path::Path) -> Vec<String> {
     let mut namespaces = Vec::new();
     let mut dirs_to_visit = vec![plugins_dir.to_path_buf()];
 
@@ -650,6 +749,169 @@ async fn discover_namespaces(plugins_dir: &std::path::Path) -> Vec<String> {
         }
     }
     namespaces
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportPluginQuery {
+    namespace: String,
+}
+
+/// `GET /plugins/export?namespace=...` (`specs/006-ai-plugin-wizard` FR-028) — downloads an
+/// installed plugin (wizard-created or not) as a `.zip` containing its own `.ts` file, named
+/// after the namespace's own last path component (e.g. `custom/metadata/foo` → `foo.zip`
+/// containing `foo.ts`) rather than the full namespace, since the namespace's `/`-separated
+/// category prefix isn't meaningful once extracted standalone.
+async fn export_plugin(
+    State(state): State<AppState>,
+    Query(q): Query<ExportPluginQuery>,
+) -> Response {
+    if !is_safe_export_namespace(&q.namespace) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "export_plugin",
+            "Invalid namespace.",
+        );
+    }
+    let source_path = state.plugins_dir.join(format!("{}.ts", q.namespace));
+    let code = match tokio::fs::read(&source_path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return error(StatusCode::NOT_FOUND, "export_plugin", "Plugin not found."),
+    };
+
+    let file_stem = q
+        .namespace
+        .rsplit('/')
+        .next()
+        .unwrap_or(&q.namespace)
+        .to_string();
+    let ts_name = format!("{file_stem}.ts");
+    let zip_name = format!("{file_stem}.zip");
+
+    let zip_bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut buf);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        writer.start_file(ts_name, options)?;
+        std::io::Write::write_all(&mut writer, &code)?;
+        writer.finish()?;
+        Ok(buf.into_inner())
+    })
+    .await;
+
+    let Ok(Ok(zip_bytes)) = zip_bytes else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "export_plugin",
+            "Failed to build zip archive.",
+        );
+    };
+
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{zip_name}\""),
+            ),
+        ],
+        zip_bytes,
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportPluginsBatchRequest {
+    namespaces: Vec<String>,
+}
+
+/// `POST /plugins/export-batch` — like [`export_plugin`] but for several namespaces at once,
+/// packed into a single `.zip`. Each entry is stored under its full namespace path (`custom/
+/// download/foo.ts`, not just `foo.ts`) since two different namespaces can share the same file
+/// stem (`custom/download/foo` vs `custom/metadata/foo`) — collapsing both to `foo.ts` would
+/// silently drop one on zip write.
+async fn export_plugins_batch(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<ExportPluginsBatchRequest>,
+) -> Response {
+    if req.namespaces.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "export_plugins_batch",
+            "No namespaces given.",
+        );
+    }
+    if !req.namespaces.iter().all(|ns| is_safe_export_namespace(ns)) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "export_plugins_batch",
+            "Invalid namespace.",
+        );
+    }
+
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(req.namespaces.len());
+    for namespace in &req.namespaces {
+        let source_path = state.plugins_dir.join(format!("{namespace}.ts"));
+        match tokio::fs::read(&source_path).await {
+            Ok(bytes) => entries.push((namespace.clone(), bytes)),
+            Err(_) => {
+                return error(
+                    StatusCode::NOT_FOUND,
+                    "export_plugins_batch",
+                    format!("Plugin {namespace:?} not found."),
+                )
+            }
+        }
+    }
+
+    let zip_bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut buf);
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        for (namespace, code) in entries {
+            writer.start_file(format!("{namespace}.ts"), options)?;
+            std::io::Write::write_all(&mut writer, &code)?;
+        }
+        writer.finish()?;
+        Ok(buf.into_inner())
+    })
+    .await;
+
+    let Ok(Ok(zip_bytes)) = zip_bytes else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "export_plugins_batch",
+            "Failed to build zip archive.",
+        );
+    };
+
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"plugins.zip\"".to_string(),
+            ),
+        ],
+        zip_bytes,
+    )
+        .into_response()
+}
+
+/// A namespace safe to read directly off disk for export — same shape `is_safe_namespace`
+/// (`lanrurugi-plugin::pool`) enforces for the sandbox itself (no absolute paths, no `..`
+/// traversal, every component a plain name), re-checked here since this endpoint reads the file
+/// straight from `plugins_dir` rather than going through `PluginPool`.
+fn is_safe_export_namespace(namespace: &str) -> bool {
+    !namespace.is_empty()
+        && std::path::Path::new(namespace)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -> Response {
@@ -696,6 +958,8 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
                     // file-path namespace happens in `resolve_declared_namespace`, not here.
                     "login_from": info.login_from,
                     "url_pattern": info.url_pattern,
+                    "domain_match": info.domain_match,
+                    "generated_by_wizard": info.generated_by_wizard,
                     "priority": priority,
                     "parameters": info.parameters.iter().map(|p| json!({
                         "name": p.name,
@@ -1088,7 +1352,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
         });
-        let customargs = get_plugin_customargs(state, &ns, info.parameters.len()).await;
+        let customargs = get_plugin_customargs(state, &ns, &info.parameters).await;
         let args = json!({
             "archive_id": archive_id,
             "arg": null,
@@ -1310,7 +1574,7 @@ async fn use_plugin_sync(
             .map(|d| d.as_secs())
     });
 
-    let customargs = get_plugin_customargs(&state, &plugin, info.parameters.len()).await;
+    let customargs = get_plugin_customargs(&state, &plugin, &info.parameters).await;
     let other_archive_tags = get_other_archive_tags(&state, &plugin, params.arg.as_deref()).await;
     let existing_archive_id =
         get_existing_archive_id_for_url(&state, &plugin, params.arg.as_deref()).await;
@@ -1442,8 +1706,7 @@ async fn use_plugin_async(
             None => None,
         };
         let method = plugin_method(&info.kind);
-        let customargs =
-            get_plugin_customargs(&state_for_task, &plugin, info.parameters.len()).await;
+        let customargs = get_plugin_customargs(&state_for_task, &plugin, &info.parameters).await;
         let existing_archive_id =
             get_existing_archive_id_for_url(&state_for_task, &plugin, arg.as_deref()).await;
         let archives_for_script = get_all_archive_tags_for_script(&state_for_task, &plugin).await;
@@ -1676,7 +1939,7 @@ pub(crate) async fn start_download(
             let customargs = get_plugin_customargs(
                 &state_for_task,
                 &plugin_namespace_for_task,
-                info.parameters.len(),
+                &info.parameters,
             )
             .await;
             // Kept alive past `args`'s own move of `url` below — needed later for the real
@@ -2067,14 +2330,18 @@ pub(crate) async fn update_queue_item_state(
 /// lands while this download is already in flight only ever governs a *later* `download_url` call,
 /// never this one (verified: `download_manager::acquire`'s own capacity-change handling replaces
 /// the stale semaphore for future acquires without disturbing a permit already held by this call).
-/// Plugins listed in `namespaces` in the order the caller wants to try them; the first whose
-/// `url_pattern` regex matches `url` wins. `None` if no installed plugin of this kind matches.
-async fn find_matching_plugin(
+/// Candidates are sorted by `sort_namespaces_by_priority` before matching — the first whose
+/// `url_pattern` regex matches `url` wins, but "first" now means priority order (a user's
+/// Plugins-page drag-to-reorder, or a wizard-generated `custom/` override placed ahead of the
+/// built-in it's meant to replace), not `namespaces`'s own incoming order. `None` if no installed
+/// plugin of this kind matches.
+pub(crate) async fn find_matching_plugin(
     state: &AppState,
     namespaces: &[String],
     url: &str,
 ) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
-    for ns in namespaces {
+    let ordered = sort_namespaces_by_priority(state, namespaces).await;
+    for ns in &ordered {
         if let Ok(info) = state.plugins.plugin_info(ns).await {
             if let Some(ref pattern) = info.url_pattern {
                 if let Ok(re) = regex::Regex::new(pattern) {
@@ -2082,6 +2349,62 @@ async fn find_matching_plugin(
                         return Some((ns.clone(), info));
                     }
                 }
+            }
+        }
+    }
+    None
+}
+
+/// Case-insensitive, `www.`-insensitive containment check — does `info.domain_match` (or, when
+/// empty, a loose regex-as-domain-containment fallback derived from `info.url_pattern`) consider
+/// `domain` covered? `domain` is a bare hostname (no scheme/path) — NOT the precise-trigger check
+/// `find_matching_plugin` does against a full URL; use that one for real dispatch, this one only
+/// for "does some installed plugin already own this domain" questions (Upload page's metadata-
+/// button enablement, the AI wizard's domain-coverage lookup).
+fn domain_covers(info: &lanrurugi_plugin::protocol::PluginInfo, domain: &str) -> bool {
+    let needle = normalize_domain(domain);
+    if !info.domain_match.is_empty() {
+        return info
+            .domain_match
+            .iter()
+            .any(|d| normalize_domain(d) == needle);
+    }
+    info.url_pattern
+        .as_deref()
+        .and_then(|p| regex::Regex::new(p).ok())
+        .is_some_and(|re| re.is_match(&needle))
+}
+
+/// Lowercases and strips a leading `www.` — the only two normalizations any real plugin
+/// declaration or user-typed domain actually needs.
+fn normalize_domain(d: &str) -> String {
+    let lower = d.trim().trim_end_matches('/').to_ascii_lowercase();
+    lower
+        .strip_prefix("www.")
+        .map(str::to_string)
+        .unwrap_or(lower)
+}
+
+/// Domain-ownership lookup (AI wizard coverage check, Upload page button enablement) —
+/// priority-ordered like `find_matching_plugin`, but matches via `domain_covers`
+/// (`domain_match`-first) instead of a `url_pattern` regex against a full URL. `domain` is
+/// expected to be a bare hostname, not a full URL — see `domain_covers`'s own docs on why this is
+/// a genuinely separate function rather than a `find_matching_plugin` parameter: the two have
+/// different input contracts (full URL vs. bare domain) and conflating them is exactly what
+/// caused a real bug (confirmed live, 2026-08-26 — a wizard-generated `custom/download/
+/// nhentai_net.ts` plugin declaring the precise `url_pattern: "nhentai\\.net/g/"` silently failed
+/// to match a bare `"nhentai.net"` domain lookup, making the wizard think that domain's download
+/// type was still uncovered even though a real AI-generated plugin for it already existed).
+pub(crate) async fn find_plugin_by_domain(
+    state: &AppState,
+    namespaces: &[String],
+    domain: &str,
+) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
+    let ordered = sort_namespaces_by_priority(state, namespaces).await;
+    for ns in &ordered {
+        if let Ok(info) = state.plugins.plugin_info(ns).await {
+            if domain_covers(&info, domain) {
+                return Some((ns.clone(), info));
             }
         }
     }
@@ -2130,7 +2453,7 @@ pub(crate) async fn ensure_metadata_cached(
     // plugin's own URL-vs-ID parsing (e.g. chaika.ts's oneshot-arg regex) actually run instead of
     // falling through to a lookup path that also expects fields this pre-archive stage can't
     // supply.
-    let customargs = get_plugin_customargs(state, &plugin_ns, info.parameters.len()).await;
+    let customargs = get_plugin_customargs(state, &plugin_ns, &info.parameters).await;
     let args = serde_json::json!({
         "url": item.url,
         "arg": item.url,
@@ -2159,20 +2482,39 @@ pub(crate) async fn ensure_metadata_cached(
     if let Some(ref t) = title {
         item.title = Some(t.clone());
     }
-    if let Err(e) = state.download_queue.update(item).await {
+    // Re-fetch the item fresh and apply only the metadata fields onto *that* copy before writing
+    // — NOT `state.download_queue.update(item)` with the caller's own possibly-stale `item`
+    // (`update` is a full-record overwrite, `DownloadQueueRepository::update` → `save`). A caller
+    // that cloned `item` before some other concurrent write (e.g. `start_one`'s own fire-and-forget
+    // metadata-fetch spawn, which clones `item` before `plugins::start_download` has even generated
+    // a real `job_id`) would otherwise silently stomp that other write's fields back to their
+    // stale pre-clone values the instant this call's own write lands after it — confirmed live,
+    // 2026-08-26: a real, in-progress download's `job_id` got clobbered back to `null` by exactly
+    // this race, permanently disconnecting the queue row from its own job and leaving the progress
+    // bar with no `JobRecord` to render at all for the rest of that download.
+    let mut persisted = item.clone();
+    if let Ok(Some(fresh)) = state.download_queue.get(&item.id).await {
+        persisted = fresh;
+        persisted.metadata_preview = item.metadata_preview.clone();
+        persisted.metadata_preview_at = item.metadata_preview_at;
+        if let Some(ref t) = title {
+            persisted.title = Some(t.clone());
+        }
+    }
+    if let Err(e) = state.download_queue.update(&persisted).await {
         tracing::warn!(item_id = %item.id, error = %e, "failed to persist metadata cache");
     } else if let Some(tx) = &state.download_queue_tx {
         // Push the fresh preview/title out to SSE subscribers (the Upload page's tooltip
         // reads `metadata_preview` from the queue list, which only updates via these deltas).
         let _ = tx.send(serde_json::json!({
             "kind": "update",
-            "id": &item.id,
-            "state": &item.state,
-            "job_id": &item.job_id,
-            "archive_ids": &item.archive_ids,
-            "title": &item.title,
-            "metadata_preview": &item.metadata_preview,
-            "error": &item.error,
+            "id": &persisted.id,
+            "state": &persisted.state,
+            "job_id": &persisted.job_id,
+            "archive_ids": &persisted.archive_ids,
+            "title": &persisted.title,
+            "metadata_preview": &persisted.metadata_preview,
+            "error": &persisted.error,
         }));
     }
 
@@ -2369,6 +2711,18 @@ async fn run_managed_downloads(
         // `download_one` finishes and drops its sender (closing the channel, ending this loop).
         let jobs = state.jobs.clone();
         let job_id_for_drain = job_id.clone();
+        // Also broadcast over the download-queue's existing SSE channel, not just written into
+        // `JobRegistry` for the frontend's own 1s `/jobs` poll to eventually pick up — a small/fast
+        // download can finish well within that poll gap, so the progress bar never renders at all
+        // (reported live, 2026-08-25: a 112MB nHentai download went straight from "starting" to its
+        // final duplicate-conflict result with no visible progress in between). Reuses the same
+        // `download_one`-throttled progress channel (≤1 update/200ms), so this doesn't broadcast
+        // any more often than the byte-stream layer already reports — no separate throttling needed
+        // here. Not persisted to Redis or retried on send failure: this is transient, ephemeral
+        // progress, not queue-item state, and a dropped tick is superseded by the next one moments
+        // later regardless.
+        let queue_tx = state.download_queue_tx.clone();
+        let queue_item_id_for_drain = queue_item_id.map(str::to_string);
         let drain_task = tokio::spawn(async move {
             let mut known_totals = known_totals;
             while let Some((downloaded, total)) = progress_rx.recv().await {
@@ -2377,8 +2731,18 @@ async fn run_managed_downloads(
                     .iter()
                     .all(Option::is_some)
                     .then(|| known_totals.iter().flatten().sum());
-                jobs.set_download_progress(&job_id_for_drain, base + downloaded, combined_total)
+                let combined_downloaded = base + downloaded;
+                jobs.set_download_progress(&job_id_for_drain, combined_downloaded, combined_total)
                     .await;
+                if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
+                    let _ = tx.send(serde_json::json!({
+                        "kind": "progress",
+                        "id": item_id,
+                        "job_id": &job_id_for_drain,
+                        "downloaded_bytes": combined_downloaded,
+                        "total_bytes": combined_total,
+                    }));
+                }
             }
             known_totals
         });
@@ -2547,6 +2911,61 @@ fn sanitize_plugin_filename(name: &str) -> String {
 /// On any validation failure the just-written file is removed, so a bad upload never leaves a
 /// half-installed plugin sitting in `plugins_dir` (mirrors legacy's own `unlink($output_file)`
 /// cleanup in `process_upload`'s error branch).
+///
+/// Moves an already-staged `.ts` file into `staging_dir/<kind>/<file_name>` (FR-021's
+/// namespace-conflict check + FR-022's rollback-on-failure), returning the resulting namespace.
+/// Shared by `upload_plugin` and `plugin_wizard::save` — the only difference between their two
+/// callers is what happens *before* this point (from-scratch upload validation vs. a draft that
+/// already passed a real trial run), not this move step itself.
+///
+/// `allow_overwrite`: `upload_plugin` always passes `false` (a fresh upload colliding with an
+/// existing plugin is unambiguously an error, no session-scoped "this is mine to overwrite"
+/// concept exists there). `plugin_wizard::save` passes `true` only for a wizard session editing
+/// its own previously-saved draft back into the very same file — validated by that caller (not
+/// here) against the specific namespace the session actually loaded from, so this flag alone never
+/// grants blanket permission to overwrite an arbitrary same-named file. `rename` over an existing
+/// file is an atomic replace on the same filesystem, so no separate remove-then-rename step is
+/// needed for the `true` case.
+pub(crate) async fn move_into_category(
+    staging_dir: &std::path::Path,
+    staged_path: &std::path::Path,
+    file_name: &str,
+    kind: &str,
+    operation: &str,
+    allow_overwrite: bool,
+) -> Result<String, Response> {
+    let final_dir = staging_dir.join(kind);
+    if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
+        let _ = tokio::fs::remove_file(staged_path).await;
+        return Err(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            operation,
+            e.to_string(),
+        ));
+    }
+    let final_path = final_dir.join(file_name);
+    if final_path.exists() && !allow_overwrite {
+        let _ = tokio::fs::remove_file(staged_path).await;
+        return Err(error(
+            StatusCode::CONFLICT,
+            operation,
+            format!("A {kind} plugin named {file_name:?} is already installed."),
+        ));
+    }
+    if let Err(e) = tokio::fs::rename(staged_path, &final_path).await {
+        let _ = tokio::fs::remove_file(staged_path).await;
+        return Err(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            operation,
+            e.to_string(),
+        ));
+    }
+
+    Ok(format!(
+        "{CUSTOM_PLUGIN_DIR}/{kind}/{}",
+        file_name.trim_end_matches(".ts")
+    ))
+}
 async fn upload_plugin(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
@@ -2655,41 +3074,19 @@ async fn upload_plugin(
         );
     }
 
-    let final_dir = staging_dir.join(&info.kind);
-    if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
-        let _ = tokio::fs::remove_file(&staged_path).await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "upload_plugin",
-            e.to_string(),
-        );
-    }
-    let final_path = final_dir.join(&file_name);
-    if final_path.exists() {
-        let _ = tokio::fs::remove_file(&staged_path).await;
-        return error(
-            StatusCode::CONFLICT,
-            "upload_plugin",
-            format!(
-                "A {} plugin named {file_name:?} is already installed.",
-                info.kind
-            ),
-        );
-    }
-    if let Err(e) = tokio::fs::rename(&staged_path, &final_path).await {
-        let _ = tokio::fs::remove_file(&staged_path).await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "upload_plugin",
-            e.to_string(),
-        );
-    }
-
-    let final_namespace = format!(
-        "{CUSTOM_PLUGIN_DIR}/{}/{}",
-        info.kind,
-        file_name.trim_end_matches(".ts")
-    );
+    let final_namespace = match move_into_category(
+        &staging_dir,
+        &staged_path,
+        &file_name,
+        &info.kind,
+        "upload_plugin",
+        false,
+    )
+    .await
+    {
+        Ok(ns) => ns,
+        Err(resp) => return resp,
+    };
     crate::activity::record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -2715,7 +3112,7 @@ async fn upload_plugin(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
 
@@ -2793,9 +3190,8 @@ mod tests {
     /// this test never touches a real plugin subprocess — it drives `run_managed_downloads`
     /// directly with an already-parsed `downloads[]`, the same way `start_download` would after a
     /// real plugin's `exec_download` call returns).
-    async fn test_state() -> Option<AppState> {
-        let redis_url = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let redis = lanrurugi_storage::redis::RedisDbs::connect(&redis_url).ok()?;
+    pub(crate) async fn test_state() -> Option<AppState> {
+        let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
         let repos = crate::Repositories::new(&redis);
         Some(AppState {
             redis: redis.clone(),
@@ -2845,6 +3241,7 @@ mod tests {
             recommender: Arc::new(crate::recommend::RecommendService::new()),
             new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_cancellations: Default::default(),
+            pending_generate_requests: Default::default(),
             filename_locks: Default::default(),
             download_queue_tx: None,
             refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
@@ -3370,6 +3767,62 @@ mod tests {
             updates[0]["tags"],
             "source:nhentai.net/g/123456, artist:someone, source:nhentai.net/g/1, source:1234567"
         );
+
+        tokio::fs::remove_file(&dispatcher_path).await.ok();
+    }
+
+    /// Regression test for issue #78/#93: `login/nhentai` (namespace `nhapiauth`) authenticates
+    /// via an `Authorization` header, not a cookie — before `LoginResult.headers` existed, this
+    /// credential had no way to cross the dispatcher's JSON boundary at all (a header set via
+    /// `ua.on("start", ...)` is a closure, silently dropped by `JSON.stringify`). This test proves
+    /// the fixed plumbing works end-to-end through the real Deno dispatcher, without needing a
+    /// real API key or any network access: `exec_login` with a fake key must return that key
+    /// inside `headers.Authorization` (not silently drop it), and a metadata plugin using the same
+    /// hydration pattern as `plugins/metadata/nhentai.ts` must actually apply a header it receives
+    /// via `hostArgs.user_agent_headers` to its outgoing request (verified against a local
+    /// `httpbin`-style echo endpoint bundled inline as a throwaway fixture plugin, so this test
+    /// doesn't depend on nhentai.net's real API or a real key at all).
+    #[tokio::test]
+    async fn login_plugin_header_credential_reaches_a_downstream_plugin() {
+        let deno_on_path = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join("deno").is_file())
+        });
+        if !deno_on_path {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        }
+
+        let plugins_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins")
+            .canonicalize()
+            .expect("repo's real plugins/ dir must exist");
+        let dispatcher_path =
+            std::env::temp_dir().join("lrr-login-headers-integration-test-dispatcher.ts");
+        std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
+            .expect("failed to write out the real dispatcher script");
+        std::fs::write(
+            std::env::temp_dir().join("plugin-sdk.ts"),
+            lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+        )
+        .expect("failed to write out the real plugin SDK script");
+        let pool =
+            lanrurugi_plugin::pool::PluginPool::new("deno", dispatcher_path.clone(), plugins_dir);
+
+        // Step 1: the real login plugin, with a fake key — exec_login does no network I/O of its
+        // own, it just echoes the key back into `headers`.
+        let login_result = pool
+            .execute(
+                "login/nhentai",
+                "exec_login",
+                json!({ "customargs": ["fake-test-key"] }),
+            )
+            .await
+            .expect("real login/nhentai exec_login call failed");
+        let headers = login_result
+            .get("headers")
+            .cloned()
+            .expect("LoginResult.headers must be present for a header-authenticated login plugin");
+        assert_eq!(headers["Authorization"], "Key fake-test-key");
 
         tokio::fs::remove_file(&dispatcher_path).await.ok();
     }

@@ -148,6 +148,14 @@ export function PluginCard({
           {" "}
           by {plugin.author}{" "}
         </h1>
+        {plugin.generated_by_wizard && (
+          <i
+            className="fa fa-magic"
+            aria-hidden="true"
+            title={t("plugins.generatedByWizard") ?? undefined}
+            style={{ marginLeft: 4, opacity: 0.7 }}
+          ></i>
+        )}
 
         <div style={{ float: "right", textAlign: "right" }}>
           {plugin.type === "metadata" && settings.data && (

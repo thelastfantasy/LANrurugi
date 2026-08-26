@@ -209,6 +209,16 @@ pub struct AppState {
     /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
     /// docs for the full data model/retention/query design.
     pub activity: Arc<ActivityRepository>,
+    /// Short-lived, single-use registry for `POST /plugin-wizard/generate/start`'s raw request
+    /// body, handed off to `GET /plugin-wizard/generate/stream/{id}` — the two-step pattern real
+    /// SSE streaming needs since `EventSource` is GET-only and can't carry a request body (unlike
+    /// `compare_queue_item_stream`'s simpler `Path(id)`-only case, which reads its inputs from an
+    /// already-persisted queue item rather than the request itself). Keyed by a fresh UUID minted
+    /// per `/start` call; removed the instant `/stream/{id}` picks it up, so a replayed/stale id
+    /// after that always 404s rather than silently re-running an old request. Stored as a raw
+    /// `serde_json::Value` (not `plugin_wizard::generate::GenerateRequest` directly) so this field
+    /// doesn't need that submodule-private type to become crate-visible just for this.
+    pub pending_generate_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl AppState {

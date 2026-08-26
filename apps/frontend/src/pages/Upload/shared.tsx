@@ -117,9 +117,53 @@ export function matchesPattern(plugin: PluginInfo, url: string): boolean {
 
 /** First match wins when multiple plugins' `url_pattern` match the same URL. Relies on
  * `usePlugins(...)`'s list already being sorted by priority server-side
- * (`lanrurugi_api::plugins::list_plugins`), reflecting the Plugins page's drag-to-reorder. */
+ * (`lanrurugi_api::plugins::list_plugins`), reflecting the Plugins page's drag-to-reorder.
+ *
+ * This is the *precise trigger* check — real dispatch (which download plugin actually fetches
+ * this URL). For "is there a plugin that could handle this domain at all" questions (the
+ * "fetch metadata" button's enablement), use `findPluginByDomain` below instead — using this one
+ * for that purpose was a real, confirmed bug (2026-08-26): a plugin's `url_pattern` can be
+ * intentionally narrower than its domain (e.g. requiring a specific path), which is correct for
+ * deciding when to actually fire a fetch but wrong for "does a plugin exist for this domain". */
 export function findMatchingPlugin(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
   return plugins?.find((p) => matchesPattern(p, url)) ?? null
+}
+
+/** Lowercases and strips a leading `www.` — mirrors the backend's own `normalize_domain`
+ * (`plugins.rs`), the only two normalizations any real plugin declaration or user-typed domain
+ * actually needs. */
+function normalizeDomain(d: string): string {
+  const lower = d.trim().replace(/\/+$/, "").toLowerCase()
+  return lower.startsWith("www.") ? lower.slice(4) : lower
+}
+
+/** Extracts a bare hostname out of a full URL for domain-ownership comparisons; falls back to the
+ * input unchanged if it doesn't parse as an absolute URL (already a bare domain). */
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+/** Domain-ownership check — does `plugin.domain_match` (or, when empty, a loose `url_pattern`-as-
+ * domain-containment fallback) consider `url`'s domain covered? Use this for "is there a plugin
+ * that could handle this domain at all" questions (the Upload page's "fetch metadata" button
+ * enablement) — `matchesPattern`/`findMatchingPlugin` above stay the precise trigger check for an
+ * actual fetch/download call; do not replace those call sites with this. */
+export function matchesDomain(plugin: PluginInfo, url: string): boolean {
+  const needle = normalizeDomain(hostnameOf(url))
+  if (plugin.domain_match.length > 0) {
+    return plugin.domain_match.some((d) => normalizeDomain(d) === needle)
+  }
+  return matchesPattern(plugin, url)
+}
+
+/** Domain-ownership counterpart to `findMatchingPlugin` — see `matchesDomain`'s own docs on when
+ * to use which. */
+export function findPluginByDomain(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
+  return plugins?.find((p) => matchesDomain(p, url)) ?? null
 }
 
 /** A square, icon-only `.stdbtn` — overrides its default padding/width so the icon is centered in

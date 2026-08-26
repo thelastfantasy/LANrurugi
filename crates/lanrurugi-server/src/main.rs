@@ -416,6 +416,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
         refresh_tokens,
@@ -806,18 +807,28 @@ async fn sweep_stale_queue_items(state: &AppState) {
         ) {
             continue;
         }
-        // If the job still exists and is active, the download is genuinely in progress — leave
-        // it alone. Only mark as stale when the job is already gone (failed/finished/lost).
-        let still_active = match &item.job_id {
+        // Only mark as stale when the job is genuinely gone: no `job_id` at all, or a tracked job
+        // that's already reached a terminal state (`Finished`/`Failed` — `is_terminal()`). NOT
+        // simply "isn't `Active` yet" — a freshly-`start_one`'d item is written to Redis as
+        // `Starting` synchronously, *before* `plugins::start_download`'s spawned task has gotten
+        // around to calling `jobs.mark_active()`, so a real, normal new download sits at
+        // `JobState::Queued` (not yet `Active`) for a brief window. The previous "not Active"
+        // check treated that completely normal window as orphaned — this sweep runs every 10
+        // minutes on a fixed schedule (including once immediately at startup), so on the rare
+        // tick that happens to land in that window, a real, healthy, just-started download got
+        // killed before it ever got to transfer a single byte, with no progress bar ever having a
+        // chance to render and the Stop button already 409-ing since the item was no longer in a
+        // stoppable state — confirmed live, 2026-08-25.
+        let genuinely_gone = match &item.job_id {
             Some(jid) => state
                 .jobs
                 .get(jid)
                 .await
-                .map(|j| j.state == lanrurugi_core::jobs::JobState::Active)
-                .unwrap_or(false),
-            None => false,
+                .map(|j| j.state.is_terminal())
+                .unwrap_or(true),
+            None => true,
         };
-        if still_active {
+        if !genuinely_gone {
             continue;
         }
         tracing::info!(

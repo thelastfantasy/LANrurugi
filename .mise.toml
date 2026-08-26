@@ -53,8 +53,16 @@ run = "podman build -f Dockerfile.build -t lanrurugi-dev ."
 # so a foreground game keeps priority under contention instead of the build starving it.
 
 [tasks.test]
-description = "cargo test --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
-run = "scripts/cargo-container-run.sh cargo test --workspace"
+description = "cargo test --workspace --no-fail-fast inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+# `--no-fail-fast`: without it, cargo stops running further crates' test binaries the moment one
+# fails — `lanrurugi-api` (which has two known Redis-dependent tests that fail without a real
+# Redis instance) sorts before `lanrurugi-llm` in the workspace member list, so those two
+# pre-existing failures were silently preventing every crate after it (lanrurugi-llm included) from
+# ever actually running its own tests, even though `cargo test --workspace` "succeeded" up to that
+# point — confirmed live: new lanrurugi-llm unit tests added across several sessions had only ever
+# been compile-checked, never executed, because this exact task never got past lanrurugi-api's
+# test binary.
+run = "scripts/cargo-container-run.sh cargo test --workspace --no-fail-fast"
 
 [tasks.clippy]
 description = "cargo clippy --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"

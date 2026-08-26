@@ -134,16 +134,15 @@ mod tests {
     use super::*;
     use lanrurugi_core::entities::Archive;
 
-    fn test_pool() -> Option<deadpool_redis::Pool> {
+    async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        deadpool_redis::Config::from_url(format!("{}/0", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()
+        let url = format!("{}/0", base.trim_end_matches('/'));
+        lanrurugi_storage::test_support::test_pool_for_url(&url).await
     }
 
     #[tokio::test]
     async fn builds_a_consistent_snapshot_matching_legacy_shape() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

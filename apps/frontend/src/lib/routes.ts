@@ -50,4 +50,5 @@ export const routes = {
   // a plugin `type` value "login"/"download"/"script"/"metadata", or "maintenance-scripts") — same
   // `useSectionDeepLink` mechanism as `settings` above, for `plugin.*` activity entries.
   pluginSection: (section: string) => `/config/plugins?section=${encodeURIComponent(section)}`,
+  pluginWizard: () => "/config/plugins/wizard",
 } as const

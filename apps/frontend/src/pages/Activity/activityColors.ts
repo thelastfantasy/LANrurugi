@@ -26,6 +26,11 @@ const NAMESPACE_COLORS: Record<string, ChipColor> = {
   tankoubon: { bg: "#ec4899", text: "#ffffff" },
   database: { bg: "#dc2626", text: "#ffffff" },
   plugin: { bg: "#6366f1", text: "#ffffff" },
+  // Distinct from `plugin` (a plain manual `.ts` upload) — real user feedback, 2026-08-26: asked
+  // whether AI-generated/installed/edited plugins leave any trail at all, distinguishably from a
+  // manual upload. Same indigo family as `plugin` (still "a plugin got installed") but a visibly
+  // different shade so the two read as related-but-distinct in a mixed activity feed.
+  plugin_wizard: { bg: "#818cf8", text: "#1f2937" },
   scanner: { bg: "#64748b", text: "#ffffff" },
   metadata_plugin: { bg: "#0ea5e9", text: "#ffffff" },
   auto_download: { bg: "#84cc16", text: "#1f2937" },

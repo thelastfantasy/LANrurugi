@@ -183,23 +183,37 @@ export interface PluginInfo {
   oneshot_arg: string | null
   login_from: string | null
   // Case-insensitive regex (source only, no delimiters) matched against a full candidate URL —
-  // used by the Upload page's URL queue to group pasted URLs by download plugin, and (for a
-  // metadata plugin) to find the one applicable plugin for a metadata-preview-by-URL action.
-  // `null` when this plugin has no meaningful URL-based routing.
+  // the precise trigger condition for a real download/metadata fetch (the Upload page's own
+  // URL-queue grouping). NOT what a domain-ownership lookup should match against — see
+  // `domain_match` below for that. `null` when this plugin has no meaningful URL-based routing.
   url_pattern: string | null
+  // Bare domains (no scheme, no path, e.g. ["e-hentai.org", "exhentai.org"]) this plugin
+  // considers itself the owner of — only for domain-ownership lookups (`findPluginByDomain` in
+  // `pages/Upload/shared.tsx`), never for real dispatch (still `url_pattern`'s job). Empty when
+  // undeclared, matching the backend's own `Vec<String>` (never `null`).
+  domain_match: string[]
   // Persisted display-order position within its own `type` group — `null` when never explicitly
   // set. `GET /plugins/{type}` already returns the list pre-sorted by this, so a caller only needs
   // this field to render a drag handle's current position, not to re-derive the sort.
   priority: number | null
   parameters: Array<{ name: string; desc: string; type?: string }>
+  // `specs/006-ai-plugin-wizard` FR-026/FR-027 — self-declared by a wizard-generated plugin's own
+  // `pluginInfo()`, never inferred by the host. Absent/false for a hand-written plugin.
+  generated_by_wizard?: boolean
 }
+
+// One `customargs` element's real type — `PluginInfo.parameters[i].type` decides which: `"bool"`
+// is a real `boolean`, `"int"` a real `number`, `"string"` (or absent) a `string`. Carried as its
+// real type end to end (settings form → PUT → Redis → plugin's own `exec_*` call) rather than a
+// uniform `string[]` a plugin has to parse back out itself.
+export type CustomArgValue = string | boolean | number
 
 // `GET/PUT /api/plugins/settings?namespace=...` — a plugin's own persisted custom-parameter
 // values (e.g. E-Hentai login's cookie fields), positionally matching `PluginInfo.parameters`,
 // plus (metadata plugins only) legacy's "Run Automatically" toggle. Distinct from the
 // download-specific `PluginOptions` below (concurrency/rate-limit/bundling).
 export interface PluginSettings {
-  customargs: string[]
+  customargs: CustomArgValue[]
   enabled: boolean
 }
 
@@ -207,7 +221,7 @@ export interface PluginSettings {
 // untouched, so toggling "Run Automatically" doesn't require resending the current parameter
 // values just to avoid clobbering them (and vice versa).
 export interface PluginSettingsUpdate {
-  customargs?: string[]
+  customargs?: CustomArgValue[]
   enabled?: boolean
 }
 

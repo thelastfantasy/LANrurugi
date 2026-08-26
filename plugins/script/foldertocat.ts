@@ -75,9 +75,9 @@ export async function runScript(hostArgs: Record<string, unknown>) {
   const logger = legacyCompat.getLogger("Subfolders to Categories (TS)", "plugins");
   const libraryPath = hostArgs["library_path"] as string | undefined;
   const archiveIdByPath = (hostArgs["archive_id_by_path"] as Record<string, string> | undefined) ?? {};
-  const customargs = (hostArgs["customargs"] as string[] | undefined) ?? [];
-  const deleteOldCategories = customargs[0] === "1" || customargs[0] === "true";
-  const byTopFolder = customargs[1] === "1" || customargs[1] === "true";
+  const customargs = (hostArgs["customargs"] as boolean[] | undefined) ?? [];
+  const deleteOldCategories = customargs[0] ?? false;
+  const byTopFolder = customargs[1] ?? false;
 
   if (!libraryPath) {
     return { error: { error_code: "No library path provided by host." } };

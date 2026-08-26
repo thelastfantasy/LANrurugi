@@ -234,16 +234,15 @@ pub async fn remove_tank_from_index(search_pool: &Pool, tank_id: &str) -> Result
 mod tests {
     use super::*;
 
-    fn test_pool() -> Option<Pool> {
+    async fn test_pool() -> Option<Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        deadpool_redis::Config::from_url(format!("{}/3", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()
+        let url = format!("{}/3", base.trim_end_matches('/'));
+        lanrurugi_storage::test_support::test_pool_for_url(&url).await
     }
 
     #[tokio::test]
     async fn new_archive_lands_in_untagged_new_and_ungrouped_sets() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -269,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_archive_index_strips_every_set_and_tag_index() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -304,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn tag_update_moves_id_between_index_and_untagged_sets() {
-        let Some(pool) = test_pool() else {
+        let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

@@ -19,6 +19,7 @@ export function pluginInfo() {
   return {
     namespace: "ehlogin",
     type: "login" as const,
+    url_pattern: "e-?hentai\\.org|exhentai\\.org",
     parameters: [
       { name: "param1", description: "ipb_member_id cookie", required: false, type: "int" },
       { name: "param2", description: "ipb_pass_hash cookie", required: false, type: "string" },

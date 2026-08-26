@@ -71,11 +71,11 @@ interface EhdInfoParams {
 
 export async function execMetadata(hostArgs: Record<string, unknown>) {
   const logger = legacyCompat.getLogger("EHDL info.txt", "plugins");
-  const customargs = (hostArgs.customargs as string[] | undefined) ?? [];
+  const customargs = (hostArgs.customargs as boolean[] | undefined) ?? [];
   const params: EhdInfoParams = {
-    replace_title: !!customargs[0],
-    japanese_title: !!customargs[1],
-    save_summary: !!customargs[2],
+    replace_title: customargs[0] ?? false,
+    japanese_title: customargs[1] ?? false,
+    save_summary: customargs[2] ?? false,
   };
 
   const sidecarFiles = hostArgs.sidecar_files as Record<string, string> | undefined;

@@ -111,15 +111,19 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     user_agent_cookies?: LegacyCookie[];
   }
   const lrr_info = hostArgs as unknown as ExecMetadataInfo;
-  const [check_trailing_tags, keep_all_captures, regex_string] = lrr_info.customargs;
+  const [check_trailing_tags, keep_all_captures, regex_string] = lrr_info.customargs as [
+    boolean,
+    boolean,
+    string,
+  ];
 
   // lrr_info's file_path is taken straight from the filesystem, which might not be proper UTF-8.
   // Run a decode to make sure we can derive tags with the proper encoding.
   const decoded_path = legacyCompat.redis_decode(lrr_info.file_path);
   const filename = get_filename_without_extension(decoded_path);
   const [tags, title] = parse_filename(filename, {
-    check_trailing_tags: !!check_trailing_tags,
-    keep_all_captures: !!keep_all_captures,
+    check_trailing_tags,
+    keep_all_captures,
     regex_string: regex_string ?? "",
   });
   const logger = legacyCompat.getLogger("Filename Parsing", "plugins");

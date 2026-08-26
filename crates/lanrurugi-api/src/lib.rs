@@ -20,6 +20,7 @@ pub mod logs;
 pub mod misc;
 pub mod opds;
 pub mod opensearch;
+pub mod plugin_wizard;
 pub mod plugins;
 pub mod procedure;
 pub mod recommend;
@@ -64,6 +65,7 @@ pub fn router() -> Router<AppState> {
         .merge(search::router())
         .merge(opds::router())
         .merge(plugins::router())
+        .merge(plugin_wizard::router())
         .merge(database::router())
         .merge(download_queue::router())
         .merge(duplicates::router())

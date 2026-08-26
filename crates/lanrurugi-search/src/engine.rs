@@ -715,14 +715,12 @@ async fn tank_date_sort_value(
 mod tests {
     use super::*;
 
-    fn test_pools() -> Option<(Pool, Pool)> {
+    async fn test_pools() -> Option<(Pool, Pool)> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let archive = deadpool_redis::Config::from_url(format!("{}/0", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()?;
-        let search = deadpool_redis::Config::from_url(format!("{}/3", base.trim_end_matches('/')))
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .ok()?;
+        let archive_url = format!("{}/0", base.trim_end_matches('/'));
+        let search_url = format!("{}/3", base.trim_end_matches('/'));
+        let archive = lanrurugi_storage::test_support::test_pool_for_url(&archive_url).await?;
+        let search = lanrurugi_storage::test_support::test_pool_for_url(&search_url).await?;
         Some((archive, search))
     }
 
@@ -733,7 +731,7 @@ mod tests {
     /// the back regardless of direction.
     #[tokio::test]
     async fn date_added_descending_keeps_unkeyed_tankoubons_at_the_back() {
-        let Some((archive_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -800,7 +798,7 @@ mod tests {
     /// tank participates in keyed ordering instead of always trailing as unkeyed.
     #[tokio::test]
     async fn date_added_sort_imputes_tank_value_from_member_archives() {
-        let Some((archive_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -858,7 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn finds_archive_by_tag_and_respects_negation() {
-        let Some((archive_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -955,7 +953,7 @@ mod tests {
     // Redis indexes, the same way a live request does.
     #[tokio::test]
     async fn multi_word_tag_value_is_findable_both_quoted_forms_and_ands_with_a_second_term() {
-        let Some((archive_pool, search_pool)) = test_pools() else {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };

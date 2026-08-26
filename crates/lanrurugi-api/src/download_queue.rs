@@ -787,6 +787,12 @@ async fn start_one(
         item.title = None;
         item.metadata_preview = None;
         item.metadata_preview_at = None;
+        // A retry after a filename-conflict `Error` must also drop the stale conflict record —
+        // otherwise `QueueItemRow.tsx`'s right-side button rendering (`item.pending_filename_
+        // conflict ? <ConflictMenu> : ...`) keeps showing the old resolve-conflict button through
+        // the entire new attempt instead of the expected Stop button, even once this fresh run is
+        // genuinely back in flight (reported live, 2026-08-25).
+        item.pending_filename_conflict = None;
     }
 
     item.state = DownloadQueueState::Starting;
@@ -795,6 +801,21 @@ async fn start_one(
         .update(&item)
         .await
         .map_err(|e| StartError::Storage(e.to_string()))?;
+
+    // Fire-and-forget: populate the title/tooltip while the item is still in flight, not only
+    // once it reaches `Done` — regressed when metadata caching moved server-side (2cbe2ce), whose
+    // own commit message notes "前端不再依赖 fetchMetadataOnStart 的运行时调用" without adding an
+    // equivalent start-time call here, so the title stayed blank for the whole download instead of
+    // appearing the moment it began (reported live, 2026-08-25). `ensure_metadata_cached` already
+    // persists + broadcasts its own result over SSE, so nothing here needs to await or use it.
+    if item.title.is_none() {
+        let state_for_metadata = state.clone();
+        let mut item_for_metadata = item.clone();
+        tokio::spawn(async move {
+            crate::plugins::ensure_metadata_cached(&state_for_metadata, &mut item_for_metadata)
+                .await;
+        });
+    }
 
     let job_id = crate::plugins::start_download(
         state.clone(),

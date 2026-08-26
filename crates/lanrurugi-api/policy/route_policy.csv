@@ -39,6 +39,12 @@ p, token_admin, /api/tokens, GET, deny
 p, token_admin, /api/tokens, POST, deny
 p, token_admin, /api/tokens/:id, PATCH, deny
 p, token_admin, /api/tokens/:id, DELETE, deny
+p, token_admin, /api/plugin-wizard/lookup, POST, deny
+p, token_admin, /api/plugin-wizard/analyze-login, POST, deny
+p, token_admin, /api/plugin-wizard/generate/start, POST, deny
+p, token_admin, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_admin, /api/plugin-wizard/trial-run, POST, deny
+p, token_admin, /api/plugin-wizard/save, POST, deny
 
 p, token_guest, /api/activity, DELETE, deny
 p, token_guest, /api/activity/:id, DELETE, deny
@@ -50,6 +56,12 @@ p, token_guest, /api/tokens, GET, deny
 p, token_guest, /api/tokens, POST, deny
 p, token_guest, /api/tokens/:id, PATCH, deny
 p, token_guest, /api/tokens/:id, DELETE, deny
+p, token_guest, /api/plugin-wizard/lookup, POST, deny
+p, token_guest, /api/plugin-wizard/analyze-login, POST, deny
+p, token_guest, /api/plugin-wizard/generate/start, POST, deny
+p, token_guest, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_guest, /api/plugin-wizard/trial-run, POST, deny
+p, token_guest, /api/plugin-wizard/save, POST, deny
 
 p, anonymous, /api/activity, DELETE, deny
 p, anonymous, /api/activity/:id, DELETE, deny
@@ -61,3 +73,9 @@ p, anonymous, /api/tokens, GET, deny
 p, anonymous, /api/tokens, POST, deny
 p, anonymous, /api/tokens/:id, PATCH, deny
 p, anonymous, /api/tokens/:id, DELETE, deny
+p, anonymous, /api/plugin-wizard/lookup, POST, deny
+p, anonymous, /api/plugin-wizard/analyze-login, POST, deny
+p, anonymous, /api/plugin-wizard/generate/start, POST, deny
+p, anonymous, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, anonymous, /api/plugin-wizard/trial-run, POST, deny
+p, anonymous, /api/plugin-wizard/save, POST, deny

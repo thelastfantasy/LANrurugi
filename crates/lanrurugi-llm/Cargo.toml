@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 deadpool-redis.workspace = true
+futures-util.workspace = true
 lanrurugi-storage.workspace = true
 reqwest.workspace = true
 serde.workspace = true
