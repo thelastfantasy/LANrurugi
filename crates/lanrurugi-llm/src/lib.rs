@@ -52,9 +52,9 @@ async fn post_chat_completion(
         .await
         .ok_or_else(|| "DeepSeek API key not configured".to_string())?;
 
-    // Overridable for Playwright E2E (T047/T048, `plan.md`'s Testing note — no live external LLM
-    // dependency in CI) to point at a local mock responder instead of the real DeepSeek API;
-    // unset in every real deployment, where it's always the real endpoint.
+    // Overridable to point at a local mock responder instead of the real DeepSeek API (e.g. for
+    // manual testing without a live LLM key); unset in every real deployment, where it's always
+    // the real endpoint.
     let base_url = std::env::var("LANRURUGI_DEEPSEEK_BASE_URL")
         .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
 

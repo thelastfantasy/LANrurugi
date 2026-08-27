@@ -398,12 +398,6 @@ results in a working association and a passing re-run.
 - [X] T046 [P] `cargo test` unit tests for `fetch_with_redirect_trail`
       (`crates/lanrurugi-api/src/plugin_wizard/fetch.rs`) covering a normal redirect chain, a
       no-redirect direct hit, and the cap-exceeded path, against a local test HTTP server
-- [X] T047 [P] Playwright E2E (003's established layer) for the full wizard journey (lookup → select
-      → generate → trial-run → save) against a local fixture site with a stable, known page
-      structure and a mocked LLM backend (per plan.md's Testing note — no live external site or real
-      LLM key dependency for CI)
-- [X] T048 [P] Playwright E2E for the US7 login-detection journey, using an additional fixture page
-      that 401s/403s or redirects to a login page without a session cookie
 - [X] T049 Run `mise run check` (rust-check + frontend-lint) and fix any failure before considering
       this feature complete
 - [X] T050 Update `README.md`/`README.en.md`/`README.ja.md` (three-language sync, per this
@@ -454,7 +448,7 @@ results in a working association and a passing re-run.
 - Within US3, T023/T024 (metadata/download vs. login trial-run branches) touch the same file
   (`trial_run.rs`) so are not marked `[P]` despite being logically independent — sequential edits to
   one file, not a real parallelization opportunity.
-- T045-T048 (Polish tests) in parallel — four independent test files/suites.
+- T045-T046 (Polish tests) in parallel — two independent test files.
 
 ---
 

@@ -50,14 +50,15 @@ only persisted artifact is the final `.ts` file once the user confirm-saves, wri
 existing `plugins/<category>/` layout `discover_namespaces` already scans — no new Redis key
 namespace introduced.
 
-**Testing**: `cargo test` (new unit tests for the LLM tool-calling message-loop plumbing against a
+**Testing**: `cargo test` (unit tests for the LLM tool-calling message-loop plumbing against a
 mocked HTTP responder, the redirect-trail-capturing fetch helper, and the stage/trial-run/discard
 draft-execution path); Deno's own `deno check` is not applicable here (drafts are user/AI-authored
-arbitrary `.ts`, not shipped plugin source under version control); Playwright (003's established E2E
-layer) for the wizard's own multi-step UI journey (lookup → select types → generate → trial-run →
-save), using a fixture site (a local static HTTP server serving pages with a stable, known structure)
-rather than a real external site, so the E2E suite doesn't depend on live third-party pages or a real
-LLM API key (mocked LLM responses for the E2E layer — see research.md for the mocking approach).
+arbitrary `.ts`, not shipped plugin source under version control). A Playwright E2E layer (003's
+established pattern) for the wizard's own multi-step UI journey was attempted but removed
+(2026-08-27, explicit user decision) after surfacing real bugs elsewhere (a `PUT /settings`
+allowlist rejecting `llm_api_key` outright, a mock-LLM-server port collision) without reaching a
+stable pass — the manual verification steps in `quickstart.md` are this feature's test coverage for
+now.
 
 **Target Platform**: Linux server (unchanged from 001 — adds to the existing single binary).
 
