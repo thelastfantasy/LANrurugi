@@ -289,7 +289,7 @@ async fn guest_mode_and_category_visibility_matrix() {
     // `create_category`'s own field wiring, which `categories.rs`'s own unit-level coverage (T030)
     // already exercises.
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_matrix_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010001".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: Vec::new(),
@@ -353,7 +353,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_search_scope_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010002".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: vec![lanrurugi_core::ids::ArchiveId(in_scope_id.clone())],
@@ -425,7 +425,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
     // eligibility branch itself is satisfied (at least one guest-visible category exists), the
     // per-archive scope check is what must deny this specific request.
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_metadata_scope_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010003".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: Vec::new(),
@@ -502,7 +502,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_write_deny_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010004".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: vec![lanrurugi_core::ids::ArchiveId(archive_id.clone())],
@@ -576,7 +576,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
     let repos = Repositories::new(&redis);
 
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_admin_deny_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010005".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: Vec::new(),
@@ -615,7 +615,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     let repos = Repositories::new(&redis);
 
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_live_toggle_test".to_string()),
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010006".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: Vec::new(),

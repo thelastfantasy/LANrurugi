@@ -599,7 +599,13 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     .unwrap();
 
     let category = lanrurugi_core::entities::Category {
-        catid: lanrurugi_core::ids::CategoryId("SET_guest_auth_flow_test".to_string()),
+        // `CategoryRepository::list_all()` matches only `SET_??????????` (exactly 10 chars after
+        // the prefix, real categories are `SET_<10-digit-unix-timestamp>` — see repository.rs's
+        // own doc comment) — a non-conforming id here is silently invisible to `list_all()`,
+        // which is exactly what made `require_api_key`'s own `categories.list_all()` guest-
+        // eligibility check see zero categories and 401 an otherwise-eligible guest (found via
+        // real CI log inspection, 2026-08-28, not a lock/timing issue as previously suspected).
+        catid: lanrurugi_core::ids::CategoryId("SET_9992010001".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
         archives: Vec::new(),
