@@ -132,6 +132,10 @@ pub struct Category {
     /// not the type confusion that principle guards against.
     pub archives: Vec<ArchiveId>,
     pub pinned: bool,
+    /// Whether an unauthenticated guest visitor (007-guest-restricted-access) can see archives
+    /// belonging to this category. Absent on any category record predating that feature —
+    /// defaults to `false` (see `CategoryRepository::get`'s own read-side handling).
+    pub visible_to_guest: bool,
 }
 
 impl Category {

@@ -209,6 +209,7 @@ mod tests {
                 search: None,
                 archives: vec![legacy_id.clone()],
                 pinned: false,
+                visible_to_guest: false,
             })
             .await
             .unwrap();
@@ -271,6 +272,7 @@ mod tests {
                 search: None,
                 archives: vec![archive_a.clone()],
                 pinned: false,
+                visible_to_guest: false,
             })
             .await
             .unwrap();
@@ -290,6 +292,7 @@ mod tests {
                 search: None,
                 archives: vec![archive_b.clone()],
                 pinned: false,
+                visible_to_guest: false,
             })
             .await
             .unwrap();
@@ -326,6 +329,7 @@ mod tests {
                 search: None,
                 archives: vec![archive.clone()],
                 pinned: false,
+                visible_to_guest: false,
             })
             .await
             .unwrap();

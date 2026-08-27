@@ -153,6 +153,39 @@ pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     }
 }
 
+/// issue #97: whether placing a stamp on a not-yet-bookmarked page should also bookmark it —
+/// read by `stamps.rs::add_stamp`. Same shape as [`read_new_badge_mode`] above.
+pub(crate) async fn read_stamp_autobookmark(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "stampautobookmark")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+/// issue #97: whether removing the last stamp on a page should also remove that page's bookmark
+/// — read by `stamps.rs::delete_stamp`. Only meaningful when [`read_stamp_autobookmark`] is also
+/// true, but kept as an independent field/read rather than nested inside it, matching how the
+/// frontend also treats them as two independently-toggleable settings (the sub-option is just
+/// disabled, not hidden, when the parent is off).
+pub(crate) async fn read_stamp_autounbookmark(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "stampautounbookmark")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
 /// `(field, default)` pairs for every `LRR_CONFIG` value the Settings page's Global/Security/
 /// Files/Tags sections read or write, verified against `Model/Config.pm`'s `get_redis_conf`
 /// calls. Excludes `password` (see module docs) and `theme` (already had its own default before
@@ -220,17 +253,14 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
-    ("enablepass", true),
-    // `Model/Config.pm::enable_devmode` — legacy's Global-section "Debug Mode" checkbox. Consumed
-    // client-side by `/api/info`'s `debug_mode` field (`misc.rs`), which
-    // `apps/frontend/src/api/hooks.ts::useUpdateCheck` already reads to skip the GitHub-releases
-    // update check while developing (`enabled: !debugMode`) — that consumer existed before this
-    // field had any UI to set it from (issue #85's own follow-up survey). No server-side
-    // `development`/`production` log-verbosity switch like legacy's `LANraragi.pm` — this port's
-    // logging is already structured `tracing` output regardless of this flag, so only the
-    // update-check suppression applies here.
-    ("devmode", false),
-    ("nofunmode", false),
+    // 007-guest-restricted-access: the site-wide guest-mode master switch. On its own it grants
+    // nothing — `procedure::require_api_key`'s guest-eligibility branch also requires at least one
+    // `Category.visible_to_guest` before treating an unauthenticated request as
+    // `AuthMethod::GuestVisitor` (spec FR-005/FR-006). Replaces the removed `enablepass`/
+    // `nofunmode` (password login is now unconditional, with no setting able to disable it) and
+    // `devmode` (had zero server-side behavior of its own — see `main.rs`'s
+    // `--disable-update-check` flag, which replaces the one real thing it controlled).
+    ("guestmode", false),
     ("enablecors", false),
     ("localprogress", false),
     ("authprogress", false),
@@ -245,6 +275,11 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // same tag as a manual, per-archive re-run.
     ("usedateadded", true),
     ("usedatemodified", false),
+    // issue #97: placing a stamp on a page auto-bookmarks it; removing a page's last remaining
+    // stamp auto-removes that page's bookmark (only when both this and `stampautounbookmark` are
+    // on — see `stamps.rs::add_stamp`/`delete_stamp`). Both default to `true`.
+    ("stampautobookmark", true),
+    ("stampautounbookmark", true),
     // `Model/Config.pm::can_replacetitles` — gates whether a metadata plugin's returned `title`
     // is actually applied to an archive (vs. only its tags/summary). Rendered on the Plugins page
     // itself (`~/LANraragi/templates/plugins.html.tt2:84-91`), not the Settings page, even though
@@ -355,16 +390,16 @@ async fn get_settings(State(state): State<AppState>) -> Response {
 }
 
 /// Fields `PUT /settings` refuses to accept from an API-token-authenticated request (any role) —
-/// "账号安全类" danger: toggling password protection off, toggling No-Fun mode, or widening the
-/// login-session lifetimes are all things that let whoever holds a token entrench or extend its
-/// own access, exactly what a stolen-but-scoped token must not be able to do. A narrower,
-/// per-field check rather than a whole-route `require_session` (unlike `/settings/password` or
-/// `/database/drop`) because this one endpoint also carries many harmless fields
-/// (`theme`/`motd`/`pagesize`/...) an otherwise-trusted admin-role token should still be able to
-/// update.
+/// "账号安全类" danger: widening the login-session lifetimes, or (007-guest-restricted-access)
+/// turning on site-wide guest mode, are things that let whoever holds a token entrench its own
+/// access or expose content to unauthenticated visitors — exactly what a stolen-but-scoped token
+/// must not be able to do. A narrower, per-field check rather than a whole-route `require_session`
+/// (unlike `/settings/password` or `/database/drop`) because this one endpoint also carries many
+/// harmless fields (`theme`/`motd`/`pagesize`/...) an otherwise-trusted admin-role token should
+/// still be able to update. `enablepass`/`nofunmode` are gone from this list along with the
+/// settings themselves — password login can no longer be disabled by anyone, token or not.
 const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
-    "enablepass",
-    "nofunmode",
+    "guestmode",
     "access_token_lifetime_secs",
     "refresh_token_lifetime_secs",
 ];
@@ -709,11 +744,11 @@ mod validate_setting_field_tests {
     #[test]
     fn accepts_a_known_bool_field_and_normalizes_to_1_or_0() {
         assert_eq!(
-            validate_setting_field("devmode", &json!(true)).unwrap(),
+            validate_setting_field("enablecors", &json!(true)).unwrap(),
             "1"
         );
         assert_eq!(
-            validate_setting_field("devmode", &json!(false)).unwrap(),
+            validate_setting_field("enablecors", &json!(false)).unwrap(),
             "0"
         );
     }

@@ -304,6 +304,34 @@ fn has_meaningful_tags(tags: &str) -> bool {
     })
 }
 
+/// 007-guest-restricted-access: `true` when `auth` is a `GuestVisitor` whose scope excludes `id` —
+/// i.e. this single-resource request should be denied. Uses the same
+/// `search::guest_visible_archive_ids` union T043 computes for search results (both static
+/// `archives` membership and dynamic `search`-predicate membership), not
+/// `CategoryRepository::for_archive` alone — an archive belonging only to a *dynamic*
+/// `visible_to_guest` category would otherwise surface in guest search results (T043) but 404 the
+/// moment it's actually opened, a real, user-visible inconsistency between the two code paths that
+/// this shared helper avoids by construction. A non-`GuestVisitor` caller (or no auth at all —
+/// `require_api_key` never actually calls a handler with `auth: None` today, but this stays
+/// permissive rather than assuming that invariant) is never denied here.
+async fn guest_scope_denies(
+    state: &AppState,
+    auth: Option<&crate::auth_context::AuthContext>,
+    id: &lanrurugi_core::ids::ArchiveId,
+) -> bool {
+    if !matches!(
+        auth.map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        return false;
+    }
+    match crate::search::guest_visible_archive_ids(state).await {
+        Ok(ids) => !ids.contains(id),
+        // Fails closed: a Redis hiccup computing guest scope must not silently grant access.
+        Err(_) => true,
+    }
+}
+
 /// Same `TANK_`-prefix resolution as `search::resolve_search_entry` — before this, a `TANK_` id
 /// here always hit `state.repos.archives.get`, which never has a matching key, so a single
 /// Tankoubon's own metadata could never be fetched by ID at all (only ever seen indirectly via a
@@ -311,8 +339,12 @@ fn has_meaningful_tags(tags: &str) -> bool {
 /// just on a different endpoint.
 async fn get_archive_metadata(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
+    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+        return not_found("get_archive_metadata", format!("{id} does not exist."));
+    }
     match crate::search::resolve_search_entry(&state, id.as_str()).await {
         Some(json) => axum::Json(json).into_response(),
         None => not_found("get_archive_metadata", format!("{id} does not exist.")),
@@ -323,9 +355,10 @@ async fn get_archive_metadata(
 /// `api-archive#serve_metadata` in the legacy router).
 async fn get_archive_deprecated(
     state: State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     path: Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    get_archive_metadata(state, path).await
+    get_archive_metadata(state, auth, path).await
 }
 
 /// Outcome of deleting one archive's DB record + best-effort on-disk/index/cache cleanup — shared
@@ -1972,9 +2005,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// *different* pages at once would launch unbounded concurrent rescans of the same archive file.
 async fn get_page(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageParams>,
 ) -> Response {
+    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+        return not_found("serve_page", format!("{id} does not exist."));
+    }
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("serve_page", format!("{id} does not exist.")),
@@ -2310,8 +2347,12 @@ pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
 /// patches are a reader-facing-only concept, not part of the archive's own catalogued state).
 async fn get_files(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
+    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+        return not_found("get_file_list", format!("{id} does not exist."));
+    }
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("get_file_list", format!("{id} does not exist.")),
@@ -2373,9 +2414,13 @@ pub struct PageDimensionsParams {
 /// endpoint at all.
 async fn get_page_dimensions(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageDimensionsParams>,
 ) -> Response {
+    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+        return not_found("get_page_dimensions", format!("{id} does not exist."));
+    }
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("get_page_dimensions", format!("{id} does not exist.")),

@@ -1262,6 +1262,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
                 .map(|s| lanrurugi_core::ids::ArchiveId(s.to_string()))
                 .collect(),
             pinned: false,
+            visible_to_guest: false,
         };
         let _ = state.repos.categories.save(&category).await;
     }
@@ -3198,9 +3199,9 @@ pub(crate) mod tests {
             repos,
             jobs: lanrurugi_core::jobs::JobRegistry::new(),
             auth: crate::AuthConfig {
-                enable_pass: false,
                 force_secure_cookies: false,
             },
+            disable_update_check: true,
             library: crate::LibraryPaths {
                 archive_dir: std::env::temp_dir(),
                 thumb_dir: std::env::temp_dir(),

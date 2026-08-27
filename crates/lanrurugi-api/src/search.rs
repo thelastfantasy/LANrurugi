@@ -125,6 +125,42 @@ pub struct SearchQuery {
     tankonly: Option<bool>,
 }
 
+/// 007-guest-restricted-access: the union of archive ids across every `visible_to_guest: true`
+/// category — a static category's own `archives` list contributes directly; a dynamic category
+/// (has a `search` predicate instead) is resolved by actually running that predicate through the
+/// search engine itself (`groupby_tanks: false`, since guest scoping must operate on real archive
+/// ids, not `TANK_`-grouped aggregates a caller elsewhere ungroups again) and unioning in whatever
+/// ids it matches — computed fresh per call, never cached, matching `procedure.rs`'s own
+/// eligibility check (spec FR-015: a config change must take effect on the very next request).
+pub(crate) async fn guest_visible_archive_ids(
+    state: &AppState,
+) -> Result<
+    std::collections::HashSet<lanrurugi_core::ids::ArchiveId>,
+    lanrurugi_storage::repository::RepositoryError,
+> {
+    let categories = state.repos.categories.list_all().await?;
+    let mut ids = std::collections::HashSet::new();
+    for category in categories.iter().filter(|c| c.visible_to_guest) {
+        match &category.search {
+            Some(predicate) if !predicate.is_empty() => {
+                let params = SearchParams {
+                    filter: predicate.clone(),
+                    groupby_tanks: false,
+                    ..SearchParams::default()
+                };
+                if let Ok(result) = search(&state.redis.archive, &state.redis.search, &params).await
+                {
+                    ids.extend(result.ids.into_iter().map(lanrurugi_core::ids::ArchiveId));
+                }
+            }
+            _ => {
+                ids.extend(category.archives.iter().cloned());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 async fn build_params(
     state: &AppState,
     q: &SearchQuery,
@@ -164,6 +200,11 @@ async fn build_params(
         tankonly: q.tankonly.unwrap_or(false),
         timezone,
         new_badge_mode: crate::settings::read_new_badge_mode(state).await,
+        // 007-guest-restricted-access: populated by the caller (search_archives/
+        // search_archive_ids) when the request is from a guest_visitor, not computed here —
+        // build_params has no access to the request's AuthContext. See those two handlers' own
+        // call sites.
+        restrict_to_archive_ids: None,
     })
 }
 
@@ -181,8 +222,12 @@ fn paginate(ids: &[String], start: Option<i64>) -> Vec<String> {
     }
 }
 
-async fn search_archives(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Response {
-    let params = match build_params(&state, &q).await {
+async fn search_archives(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
+    let mut params = match build_params(&state, &q).await {
         Ok(p) => p,
         Err(e) => {
             return error(
@@ -192,6 +237,21 @@ async fn search_archives(State(state): State<AppState>, Query(q): Query<SearchQu
             )
         }
     };
+    if matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        params.restrict_to_archive_ids = match guest_visible_archive_ids(&state).await {
+            Ok(ids) => Some(ids),
+            Err(e) => {
+                return error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "search",
+                    e.to_string(),
+                )
+            }
+        };
+    }
     match search(&state.redis.archive, &state.redis.search, &params).await {
         Ok(result) => {
             let page = paginate(&result.ids, q.start);
@@ -218,9 +278,10 @@ async fn search_archives(State(state): State<AppState>, Query(q): Query<SearchQu
 
 async fn search_archive_ids(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(q): Query<SearchQuery>,
 ) -> Response {
-    let params = match build_params(&state, &q).await {
+    let mut params = match build_params(&state, &q).await {
         Ok(p) => p,
         Err(e) => {
             return error(
@@ -230,6 +291,21 @@ async fn search_archive_ids(
             )
         }
     };
+    if matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        params.restrict_to_archive_ids = match guest_visible_archive_ids(&state).await {
+            Ok(ids) => Some(ids),
+            Err(e) => {
+                return error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "search_ids",
+                    e.to_string(),
+                )
+            }
+        };
+    }
     match search(&state.redis.archive, &state.redis.search, &params).await {
         Ok(result) => {
             let page = paginate(&result.ids, q.start);
@@ -260,7 +336,11 @@ pub struct RandomQuery {
     tankonly: Option<bool>,
 }
 
-async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuery>) -> Response {
+async fn search_random(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(q): Query<RandomQuery>,
+) -> Response {
     let search_q = SearchQuery {
         category: q.category,
         filter: q.filter,
@@ -273,7 +353,7 @@ async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuer
         groupby_tanks: q.groupby_tanks,
         tankonly: q.tankonly,
     };
-    let params = match build_params(&state, &search_q).await {
+    let mut params = match build_params(&state, &search_q).await {
         Ok(p) => p,
         Err(e) => {
             return error(
@@ -283,6 +363,26 @@ async fn search_random(State(state): State<AppState>, Query(q): Query<RandomQuer
             )
         }
     };
+    // 007-guest-restricted-access: not part of T043's own explicit scope (that task names only
+    // search_archives/search_archive_ids), but left unguarded this endpoint would otherwise be a
+    // real, live way for a guest_visitor to surface out-of-scope archive ids/titles — the same
+    // information leakage FR-012 exists to prevent, just via a different endpoint than the two
+    // T043 called out by name. Tracked as a spec/tasks.md gap, not a scope-creep addition.
+    if matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        params.restrict_to_archive_ids = match guest_visible_archive_ids(&state).await {
+            Ok(ids) => Some(ids),
+            Err(e) => {
+                return error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "get_random_archives",
+                    e.to_string(),
+                )
+            }
+        };
+    }
     match search(&state.redis.archive, &state.redis.search, &params).await {
         Ok(result) => {
             use rand::seq::SliceRandom;

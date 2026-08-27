@@ -267,14 +267,23 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
             )
         }
     };
-    let logged_in = !auth.enable_pass || crate::auth::session_is_valid(&auth, &headers);
+    // Password login is unconditional as of 007-guest-restricted-access — `logged_in` now means
+    // exactly "a valid administrator session exists", not "the whole instance happens to require
+    // no credentials".
+    let logged_in = crate::auth::session_is_valid(&auth, &headers);
     // Drives the homepage's "you're using the default password" warning toast (legacy's own
     // `[% IF usingdefpass %]`, `Controller/Index.pm`) — never itself a security boundary (nothing
     // here decides whether a login succeeds), just a UI nudge, so it's safe to expose to anyone.
     let using_default_password = auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
+    // `guest_mode_enabled` here reports the site-wide switch only, not "is a category actually
+    // visible" (spec FR-003 keeps those two conditions distinct) — the frontend combines this with
+    // its own knowledge of whether the request that landed on a page succeeded to infer the full
+    // FR-005/FR-006 branch; this field alone answers "will an unauthenticated visitor see anything
+    // other than the login page at all", which is what `RouteGuards.tsx`'s `AllowGuest` needs.
     axum::Json(serde_json::json!({
         "logged_in": logged_in,
         "using_default_password": using_default_password,
+        "guest_mode_enabled": auth.guest_mode_enabled,
     }))
     .into_response()
 }

@@ -229,6 +229,11 @@ struct BookmarkedPageJson {
     /// `GET /bookmarks`' own `sort=bookmarked_at` uses, which only tracks the archive's single
     /// most-recent bookmark event, not each individual page's own timestamp.
     bookmarked_at: u64,
+    /// issue #97: how many stamps currently sit on this page — `0` when the page has none.
+    /// Computed from the same archive fetch this response already does for `filename` resolution
+    /// (`archive.stamp_ids`, grouped by page via `stamps::page_of`), not a second query.
+    /// `BookmarkHoverGrid` uses this to render a stamp-count badge on bookmarked pages.
+    stamp_count: u32,
 }
 
 /// `GET /archives/{id}/bookmarks` — unpaginated, just this one archive's bookmarked pages
@@ -257,8 +262,10 @@ async fn list_bookmarks_for_archive(
     // Filenames come from the archive itself (there's no dedicated Redis field for them, same
     // reasoning `archives.rs::get_files` documents), so this needs one archive lookup plus one
     // archive-directory scan — but only one of each per request, not one per bookmarked page.
-    let filenames: HashMap<u32, String> = match state.repos.archives.get(&archive_id).await {
-        Ok(Some(archive)) => {
+    // The same fetch also derives `stamp_counts` (issue #97) — no second archive lookup.
+    let archive = state.repos.archives.get(&archive_id).await.ok().flatten();
+    let filenames: HashMap<u32, String> = match &archive {
+        Some(archive) => {
             let archive_path = std::path::Path::new(&archive.file);
             match lanrurugi_scanner::archive_format::list_pages(archive_path) {
                 Ok(names) => {
@@ -275,7 +282,19 @@ async fn list_bookmarks_for_archive(
         // Nonexistent archive or a storage error reading it — no filenames to resolve, but the
         // page numbers themselves are still real (they came from Redis, not from this lookup), so
         // this still returns them rather than failing the whole request.
-        Ok(None) | Err(_) => HashMap::new(),
+        None => HashMap::new(),
+    };
+    let stamp_counts: HashMap<u32, u32> = match &archive {
+        Some(archive) => {
+            let mut counts = HashMap::new();
+            for stamp_id in &archive.stamp_ids {
+                if let Some(page) = crate::stamps::page_of(stamp_id.as_str()) {
+                    *counts.entry(page).or_insert(0) += 1;
+                }
+            }
+            counts
+        }
+        None => HashMap::new(),
     };
 
     let result: Vec<BookmarkedPageJson> = bookmarks
@@ -284,6 +303,7 @@ async fn list_bookmarks_for_archive(
             page: b.page,
             filename: filenames.get(&b.page).cloned(),
             bookmarked_at: b.bookmarked_at,
+            stamp_count: stamp_counts.get(&b.page).copied().unwrap_or(0),
         })
         .collect();
     axum::Json(result).into_response()

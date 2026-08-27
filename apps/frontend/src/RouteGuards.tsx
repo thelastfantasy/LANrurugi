@@ -52,3 +52,28 @@ export function RequireAuth({ children }: { children?: ReactElement }) {
   // that second case, since there's no single `children` to pass.
   return children ?? <Outlet />
 }
+
+/** 007-guest-restricted-access: wraps the handful of routes an eligible unauthenticated guest may
+ * also reach (Library, Reader) — unlike `RequireAuth`, `logged_in` alone isn't the gate;
+ * `guest_mode_enabled` (the site-wide switch, `login/status`'s own field — true only when the
+ * switch is on AND at least one category is `visible_to_guest`, see `procedure.rs`'s own
+ * eligibility check this mirrors) is an equally valid reason to let the request through. An
+ * authenticated session always passes too, same as `RequireAuth` — this widens who's let in, it
+ * doesn't narrow it. Redirects to `/login` only when neither condition holds, matching
+ * `RequireAuth`'s own redirect target and optimistic-render behavior (see that component's own
+ * docs for why rendering the real page while `/login/status` is still resolving is the right
+ * default here too). */
+export function AllowGuest({ children }: { children?: ReactElement }) {
+  const loginStatus = useLoginStatus()
+  const location = useLocation()
+
+  if (
+    loginStatus.isSuccess &&
+    !loginStatus.data.logged_in &&
+    !loginStatus.data.guest_mode_enabled
+  ) {
+    return <Navigate to={routes.login()} state={{ from: location }} replace />
+  }
+
+  return children ?? <Outlet />
+}

@@ -123,6 +123,12 @@ pub mod action_types {
     pub const AUTO_DOWNLOAD: &str = "auto_download.fetch";
     pub const BOOKMARK_ADD: &str = "bookmark.add";
     pub const BOOKMARK_REMOVE: &str = "bookmark.remove";
+    /// issue #97: a stamp add/delete that also added/removed a page's bookmark — one merged
+    /// record for both halves of the linked action (not a separate stamp record plus a separate
+    /// bookmark record), direction distinguished by `after.bookmark.action` (`"add"`/`"remove"`).
+    /// Never written when the linkage didn't actually fire (setting off, page already in the
+    /// target state, or other stamps remain on the page).
+    pub const STAMP_BOOKMARK_SYNC: &str = "stamp.bookmark_sync";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,9 +139,13 @@ pub enum ActorKind {
     /// scanner ingest / metadata-plugin autorun / (future) auto-download — the system itself,
     /// not any human-initiated request.
     System,
-    /// `require_api_key` short-circuited (open instance, `enable_pass=false`) and never inserted
-    /// an `AuthContext` at all — distinct from `Session`/`Token` so the activity feed doesn't
-    /// misrepresent an anonymous open-instance action as an authenticated one.
+    /// No persistent identity behind this action — either `require_api_key` never inserted an
+    /// `AuthContext` at all, or it inserted `AuthMethod::GuestVisitor`
+    /// (007-guest-restricted-access), which carries no identity of its own either. Distinct from
+    /// `Session`/`Token` so the activity feed doesn't misrepresent a no-identity action as an
+    /// authenticated one — in practice this action still shouldn't be reachable at all (every
+    /// route either of those two callers can reach is GET-only/read-only), but this variant exists
+    /// so recording one is a defensive no-op, not a panic.
     Anonymous,
 }
 

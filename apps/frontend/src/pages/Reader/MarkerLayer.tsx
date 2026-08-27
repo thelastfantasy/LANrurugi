@@ -3,8 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from "@/api/hooks"
 import type { StampJson } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
-import { Tooltip } from "@/components/common-ui/Display"
+import { PopupMenu, PopupMenuItem, StaticTooltip, Tooltip, type TooltipAlign, type TooltipSide } from "@/components/common-ui/Display"
 import {
   anchorPercent,
   formatStampRect,
@@ -15,6 +14,7 @@ import {
   stampEditorDialog,
   type StampRect,
 } from "@/dialog"
+import { useSupportsHover } from "@/hooks/useSupportsHover"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 // Mirrors legacy's stamp/marker feature (`~/LANraragi/public/js/reader.js`'s `addStamp`/
@@ -62,6 +62,7 @@ export function MarkerLayer({
   visible,
   placementMode,
   onPlaced,
+  loggedIn,
 }: {
   archiveId: string
   page: number
@@ -71,12 +72,27 @@ export function MarkerLayer({
    * `markerMode` (`addStamp()` in reader.js arms it, the next click on the image consumes it). */
   placementMode: boolean
   onPlaced: () => void
+  /** 007-guest-restricted-access: gates every stamp *write* path (create/edit/delete/drag/resize/
+   * reorder) — an unauthenticated guest's Casbin policy already denies all of these server-side
+   * (every stamp mutation is a non-GET request), but nothing in this component itself checked
+   * that before this, so a guest saw fully live-looking drag handles/context menus/keyboard
+   * shortcuts that would just 403 on submit. `placementMode` itself is already gated at the
+   * source (`Reader.tsx`'s own `S`-key handler only arms it when `loggedIn`), so this only needs
+   * to cover the *other* write paths that operate on an already-existing stamp. Read-only
+   * interactions (hover preview, `visible`-gated display) are unaffected. */
+  loggedIn: boolean
 }) {
   const { t } = useTranslation()
   const stamps = useStampsForPage(archiveId, page)
   const addStamp = useAddStamp(archiveId)
   const updateStamp = useUpdateStamp()
   const deleteStamp = useDeleteStamp()
+  // On a hover-less device there's no `mouseenter` to ever open `Tooltip.tsx`'s hover-triggered
+  // bubble — the stamp's content would simply never be visible at all without this. Every stamp
+  // on the current page gets its own always-visible `StaticTooltip` instead (not gated on
+  // selection/hover state) — see `stampTooltipPlacement`'s own docs for where each one gets
+  // placed relative to its marker.
+  const supportsHover = useSupportsHover()
   // `.marker`'s CSS positioning (`left`/`top` as a plain `%`) resolves against its *own* nearest
   // positioned ancestor via the normal CSS cascade — which, since this component renders as a
   // sibling of `#imgLink` (`Reader.tsx`), not a child of it, is `#i1.sni` (the whole reader page's
@@ -332,8 +348,11 @@ export function MarkerLayer({
     // re-binding further down — needed by the nested `onUp` closure below.
     const img: HTMLImageElement = imgOrNull
 
-    function onMouseDown(e: MouseEvent) {
-      if (e.button !== 0) return
+    function onPointerDown(e: PointerEvent) {
+      // `button !== 0` only means anything for mouse-family pointers — touch/pen report `0` for
+      // their one real contact regardless, so this still correctly accepts every touch/pen press
+      // while still rejecting a mouse right/middle click the same as before.
+      if (e.pointerType === "mouse" && e.button !== 0) return
       // See the click-handler docs above for why both of these are needed: `stopPropagation()`
       // keeps `#imgLink`'s own page-turn handler from firing, and since that's exactly the
       // handler that would have called `preventDefault()` to stop the anchor's native navigation,
@@ -348,21 +367,32 @@ export function MarkerLayer({
       const start: { x: number; y: number } = startPoint
       const startClientX = e.clientX
       const startClientY = e.clientY
+      const pointerId = e.pointerId
+      // Routes every subsequent `pointermove`/`pointerup` for this exact contact straight to
+      // `img` regardless of which element the finger/cursor is actually over — without this, a
+      // touch drag that wanders off `img`'s own box mid-gesture (trivially easy on a small phone
+      // screen) silently stops delivering `pointermove` altogether, since touch (unlike mouse)
+      // has no implicit whole-window capture of its own the way the old `window.addEventListener`
+      // approach relied on.
+      img.setPointerCapture(pointerId)
       setPlacementDrag({ startX: start.x, startY: start.y, curX: start.x, curY: start.y })
 
-      function onMove(moveEvent: MouseEvent) {
+      function onMove(moveEvent: PointerEvent) {
+        if (moveEvent.pointerId !== pointerId) return
         const cur = percentFromEvent(moveEvent.clientX, moveEvent.clientY)
         if (!cur) return
         setPlacementDrag({ startX: start.x, startY: start.y, curX: cur.x, curY: cur.y })
       }
 
-      function onUp(upEvent: MouseEvent) {
-        window.removeEventListener("mousemove", onMove)
-        window.removeEventListener("mouseup", onUp)
-        // `mousedown`'s own `preventDefault()`/`stopPropagation()` above only ever applied to
+      function onUp(upEvent: PointerEvent) {
+        if (upEvent.pointerId !== pointerId) return
+        img.removeEventListener("pointermove", onMove)
+        img.removeEventListener("pointerup", onUp)
+        img.removeEventListener("pointercancel", onUp)
+        // `pointerdown`'s own `preventDefault()`/`stopPropagation()` above only ever applied to
         // that one event — completing a press-release sequence over the anchor makes the browser
         // fire a separate, later `click` event of its own, which is exactly what `#imgLink`'s own
-        // React `onClick` (page-turn) listens for; suppressing `mousedown` does nothing to stop
+        // React `onClick` (page-turn) listens for; suppressing `pointerdown` does nothing to stop
         // it. A capturing, run-once `click` listener on `img` intercepts that one event
         // specifically (capture phase — fires before the click can bubble anywhere, including to
         // this same `img`'s own placement-click listener above, which is fine here since a drag
@@ -395,12 +425,13 @@ export function MarkerLayer({
         )
       }
 
-      window.addEventListener("mousemove", onMove)
-      window.addEventListener("mouseup", onUp)
+      img.addEventListener("pointermove", onMove)
+      img.addEventListener("pointerup", onUp)
+      img.addEventListener("pointercancel", onUp)
     }
 
-    img.addEventListener("mousedown", onMouseDown)
-    return () => img.removeEventListener("mousedown", onMouseDown)
+    img.addEventListener("pointerdown", onPointerDown)
+    return () => img.removeEventListener("pointerdown", onPointerDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placementMode])
 
@@ -413,16 +444,23 @@ export function MarkerLayer({
   // the cursor's position at pointer-down instead (added to the marker's own starting position on
   // every move) keeps the marker under the cursor at whatever point it was actually grabbed,
   // moving smoothly from there with no snap.
-  function handleMarkerPointerDown(e: React.MouseEvent<HTMLDivElement>, stampId: string, x: number, y: number) {
-    if (e.button !== 0) return
+  function handleMarkerPointerDown(e: React.PointerEvent<HTMLDivElement>, stampId: string, x: number, y: number) {
+    if (e.pointerType === "mouse" && e.button !== 0) return
     e.stopPropagation()
     draggedRef.current = false
     setActiveDragStampId(stampId)
     setDrag({ stampId, x, y })
     const startClientX = e.clientX
     const startClientY = e.clientY
+    const pointerId = e.pointerId
+    // Captured on the marker itself (the element the gesture actually started on) — a touch drag
+    // that wanders off this small ~24px hit target mid-gesture (easy on a phone screen) would
+    // otherwise silently stop delivering `pointermove` partway through, same reasoning as the
+    // placement-mode handler's own `setPointerCapture` call above.
+    e.currentTarget.setPointerCapture(pointerId)
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return
       const img = imageRef.current
       if (!img) return
       draggedRef.current = true
@@ -434,9 +472,11 @@ export function MarkerLayer({
       setDrag({ stampId, x: nx, y: ny })
     }
 
-    function onUp() {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
       setActiveDragStampId(null)
       if (draggedRef.current) {
         setDrag((current) => {
@@ -452,8 +492,9 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   /** Commits a rect edit's final `x,y,width,height` (the anchor/color segments are left as they
@@ -482,8 +523,8 @@ export function MarkerLayer({
    * 一个非编辑状态选框在原地的）." Keeping the original's own `rectEdit` completely untouched
    * during a copy-drag, and tracking the live "ghost" preview in `copyDragPreview` instead, is
    * what actually leaves the original's outline exactly where it started for the whole gesture. */
-  function handleRectMovePointerDown(e: React.MouseEvent, stamp: StampJson, rect: StampRect) {
-    if (e.button !== 0) return
+  function handleRectMovePointerDown(e: React.PointerEvent, stamp: StampJson, rect: StampRect) {
+    if (e.pointerType === "mouse" && e.button !== 0) return
     e.stopPropagation()
     if (e.ctrlKey) {
       handleRectCopyDragPointerDown(e, stamp, rect)
@@ -495,8 +536,11 @@ export function MarkerLayer({
     setActiveRectEditStampId(stampId)
     const startClientX = e.clientX
     const startClientY = e.clientY
+    const pointerId = e.pointerId
+    e.currentTarget.setPointerCapture(pointerId)
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return
       const img = imageRef.current
       if (!img) return
       rectEditedRef.current = true
@@ -508,9 +552,11 @@ export function MarkerLayer({
       setRectEdit({ stampId, rect: { ...rect, x, y }, handle: null })
     }
 
-    function onUp() {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
       setActiveRectEditStampId(null)
       if (!rectEditedRef.current) {
         setRectEdit((current) => (current && current.stampId === stampId ? null : current))
@@ -522,8 +568,9 @@ export function MarkerLayer({
       })
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   /** The Ctrl-held branch of `handleRectMovePointerDown` above — tracks the about-to-be-created
@@ -535,7 +582,7 @@ export function MarkerLayer({
    * dragged copy's geometry is always "the original's own width/height, positioned wherever the
    * cursor ends up," not something that should shift if the original itself were somehow edited
    * mid-drag by another path. */
-  function handleRectCopyDragPointerDown(e: React.MouseEvent, stamp: StampJson, rect: StampRect) {
+  function handleRectCopyDragPointerDown(e: React.PointerEvent, stamp: StampJson, rect: StampRect) {
     const draggedRef = { current: false }
     setCopyDragPreview({ stampId: stamp.id, rect })
     // Captured immediately at mousedown (matching `handleRectMovePointerDown`'s own
@@ -548,8 +595,10 @@ export function MarkerLayer({
     // copy's own dashed preview never actually moved from the original's position while dragging.
     const startClientX = e.clientX
     const startClientY = e.clientY
+    const pointerId = e.pointerId
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return
       const img = imageRef.current
       if (!img) return
       draggedRef.current = true
@@ -561,9 +610,11 @@ export function MarkerLayer({
       setCopyDragPreview({ stampId: stamp.id, rect: { ...rect, x, y } })
     }
 
-    function onUp() {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
       if (!draggedRef.current) {
         setCopyDragPreview(null)
         return
@@ -603,24 +654,28 @@ export function MarkerLayer({
       })
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   /** Dragging the icon itself (only possible once a rect stamp is selected — see the icon's own
-   * `onMouseDown` below) moves it to whichever of the 8 anchor points is currently nearest the
+   * `onPointerDown` below) moves it to whichever of the 8 anchor points is currently nearest the
    * cursor, snapping rather than following the cursor freely: the icon's position is *defined* as
    * one of those 8 points (`anchorOnRect`), so there's no other coordinate space for it to
    * meaningfully occupy. Nearest-anchor is picked by straight-line distance in on-screen pixels
    * (not percent) so the snap feels consistent regardless of the rect's own aspect ratio. */
-  function handleIconAnchorDragPointerDown(e: React.MouseEvent, stampId: string, rect: StampRect) {
-    if (e.button !== 0) return
+  function handleIconAnchorDragPointerDown(e: React.PointerEvent, stampId: string, rect: StampRect) {
+    if (e.pointerType === "mouse" && e.button !== 0) return
     e.stopPropagation()
     rectEditedRef.current = false
     setRectEdit({ stampId, rect, handle: null })
     setActiveRectEditStampId(stampId)
+    const pointerId = e.pointerId
+    e.currentTarget.setPointerCapture(pointerId)
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return
       const img = imageRef.current
       if (!img) return
       rectEditedRef.current = true
@@ -648,9 +703,11 @@ export function MarkerLayer({
       setRectEdit({ stampId, rect: { ...rect, anchor: nearest }, handle: null })
     }
 
-    function onUp() {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
       setActiveRectEditStampId(null)
       if (rectEditedRef.current) {
         setRectEdit((current) => {
@@ -660,8 +717,9 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   /** Minimum rect size (percent of the page image) a resize can shrink to — prevents a handle
@@ -680,14 +738,16 @@ export function MarkerLayer({
    * percent fields directly — those are percentages of the image's own width and height
    * separately, which aren't the same physical scale unless the image happens to be square, so
    * naively keeping `width% === height% * ratio` would visibly distort on any non-square page. */
-  function handleResizeHandlePointerDown(e: React.MouseEvent, stampId: string, rect: StampRect, handle: StampAnchor) {
-    if (e.button !== 0) return
+  function handleResizeHandlePointerDown(e: React.PointerEvent, stampId: string, rect: StampRect, handle: StampAnchor) {
+    if (e.pointerType === "mouse" && e.button !== 0) return
     e.stopPropagation()
     rectEditedRef.current = false
     setRectEdit({ stampId, rect, handle })
     setActiveRectEditStampId(stampId)
     const startClientX = e.clientX
     const startClientY = e.clientY
+    const pointerId = e.pointerId
+    e.currentTarget.setPointerCapture(pointerId)
     const right = rect.x + rect.width
     const bottom = rect.y + rect.height
     const affectsLeft = handle === "tl" || handle === "l" || handle === "bl"
@@ -695,7 +755,8 @@ export function MarkerLayer({
     const affectsTop = handle === "tl" || handle === "t" || handle === "tr"
     const affectsBottom = handle === "bl" || handle === "b" || handle === "br"
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return
       const img = imageRef.current
       if (!img) return
       rectEditedRef.current = true
@@ -772,9 +833,11 @@ export function MarkerLayer({
       setRectEdit({ stampId, rect: { ...rect, x, y, width, height }, handle })
     }
 
-    function onUp() {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+    function onUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
       setActiveRectEditStampId(null)
       if (rectEditedRef.current) {
         setRectEdit((current) => {
@@ -784,8 +847,9 @@ export function MarkerLayer({
       }
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   // Keyboard shortcuts for whichever stamp is currently selected (edit mode — see the effect's
@@ -806,7 +870,7 @@ export function MarkerLayer({
   // geometry over the (possibly not-yet-refetched) server value, which only actually works if the
   // closure is rebuilt every time `rectEdit` itself changes, i.e. after every single nudge.
   useEffect(() => {
-    if (!selectedStampId) return
+    if (!selectedStampId || !loggedIn) return
     function onKeyDown(e: KeyboardEvent) {
       // Bails out of every branch below while focus is inside a real text input/textarea
       // elsewhere on the page (e.g. typing "delete" or "t" into the stamp name field of the very
@@ -934,7 +998,7 @@ export function MarkerLayer({
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStampId, stamps.data, rectEdit])
+  }, [selectedStampId, stamps.data, rectEdit, loggedIn])
 
   // Cancels a still-pending debounced arrow-nudge commit (see `arrowNudgeCommitTimeout`'s own
   // docs above) on unmount only — deliberately its own effect with an empty dependency array
@@ -971,7 +1035,7 @@ export function MarkerLayer({
       {selectedStampId && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 20, cursor: "default" }}
-          onMouseDown={(e) => e.preventDefault()}
+          onPointerDown={(e) => e.preventDefault()}
           onClick={() => setSelectedStampId(null)}
         />
       )}
@@ -1060,7 +1124,7 @@ export function MarkerLayer({
                     on top. */}
                 {rect && (rect.display === "always" || isHovered || isSelected) && (
                   <div
-                    onMouseDown={(e) => {
+                    onPointerDown={(e) => {
                       // Reset unconditionally, not only inside `handleRectMovePointerDown` (which
                       // only ever runs once already selected) — otherwise a `true` left over from
                       // an earlier *actual* drag would permanently block every future plain click
@@ -1069,11 +1133,11 @@ export function MarkerLayer({
                       // Verified live: after one rect-body drag, clicking to re-select the same
                       // stamp (having deselected it since) silently did nothing from then on.
                       rectEditedRef.current = false
-                      if (!isSelected) return
+                      if (!isSelected || !loggedIn) return
                       handleRectMovePointerDown(e, stamp, rect)
                     }}
                     onClick={(e) => {
-                      if (rectEditedRef.current) {
+                      if (rectEditedRef.current || !loggedIn) {
                         e.preventDefault()
                         return
                       }
@@ -1092,6 +1156,9 @@ export function MarkerLayer({
                       boxSizing: "border-box",
                       cursor: isSelected ? "move" : "pointer",
                       pointerEvents: "auto",
+                      // See `.marker`'s own identical `touchAction: "none"` docs — same
+                      // scroll/zoom-race reasoning applies to dragging the rect body itself.
+                      touchAction: "none",
                       ...rectFillStyle(rect),
                     }}
                   >
@@ -1101,12 +1168,13 @@ export function MarkerLayer({
                         return (
                           <div
                             key={h}
-                            onMouseDown={(e) => handleResizeHandlePointerDown(e, stamp.id, rect, h)}
+                            onPointerDown={(e) => loggedIn && handleResizeHandlePointerDown(e, stamp.id, rect, h)}
                             style={{
                               position: "absolute",
                               left: `${p.x}%`,
                               top: `${p.y}%`,
                               transform: "translate(-50%, -50%)",
+                              touchAction: "none",
                               width: 10,
                               height: 10,
                               boxSizing: "border-box",
@@ -1134,7 +1202,11 @@ export function MarkerLayer({
                     `absolute` of its own, that `static` wrapper's bounding box also collapses
                     around nothing once `.marker` escapes into absolute layout, so the default
                     `anchor="element"` mode would place the bubble at the wrong spot too —
-                    `anchor="cursor"` sidesteps needing a meaningful wrapper box at all. */}
+                    `anchor="cursor"` sidesteps needing a meaningful wrapper box at all. This
+                    `Tooltip` still wraps the marker unconditionally even on a hover-less device
+                    (where nothing can ever open it) — it costs nothing sitting permanently
+                    closed; `StaticTooltip` below is the actual hover-less-device answer,
+                    `supportsHover`-gated and rendered as a sibling, not nested inside this one. */}
                 <Tooltip label={stamp.content} wrapperStyle={{ position: "static" }} anchor="cursor">
                   <div
                     className="marker"
@@ -1143,6 +1215,14 @@ export function MarkerLayer({
                       top: `${iconPos.y}%`,
                       cursor: rect ? (isSelected ? "grab" : "pointer") : isDragging ? "grabbing" : "grab",
                       pointerEvents: "auto",
+                      // Without this, a touch-drag on this marker races the browser's own default
+                      // touch handling (page scroll/pinch-zoom) — the browser can decide the
+                      // gesture is a scroll and start consuming the touch itself before this
+                      // component's own `pointermove` listener ever sees it, or fire
+                      // `pointercancel` partway through an already-started drag. `touch-action:
+                      // none` tells the browser this element owns all touch gestures itself, no
+                      // implicit scroll/zoom interpretation to race against.
+                      touchAction: "none",
                       // A custom icon replaces `.marker`'s own CSS `background-image` (the default
                       // favicon pin) entirely, rather than rendering on top of it — showing both at
                       // once would just look like visual noise, not a real combined icon.
@@ -1154,10 +1234,11 @@ export function MarkerLayer({
                     // click on it should just select (not immediately start a drag on the same
                     // press). `draggedRef.current` is still reset here unconditionally for the
                     // point-stamp branch, for the reason its own docs below explain.
-                    onMouseDown={(e) => {
+                    onPointerDown={(e) => {
+                      if (!loggedIn) return
                       if (rect) {
                         // Reset unconditionally, same reasoning as the rect body's own
-                        // `onMouseDown` above — `rectEditedRef` left `true` by an earlier *actual*
+                        // `onPointerDown` above — `rectEditedRef` left `true` by an earlier *actual*
                         // rect-body/handle/icon drag anywhere would otherwise permanently block
                         // `onClick`'s own guard below from ever selecting this icon again.
                         rectEditedRef.current = false
@@ -1178,21 +1259,34 @@ export function MarkerLayer({
                       // A drag that actually moved the pin/rect shouldn't also re-trigger selection
                       // or open the rename prompt via a trailing click — mouseup after dragging
                       // still fires a click event.
-                      if (draggedRef.current || rectEditedRef.current) {
+                      if (draggedRef.current || rectEditedRef.current || !loggedIn) {
                         e.preventDefault()
                         return
                       }
-                      if (rect) setSelectedStampId(stamp.id)
+                      // Selecting a plain point stamp (no `rect`) too, not only a rect stamp — a
+                      // `rect &&` guard here used to leave `selectedStampId` permanently unset for
+                      // any point stamp, silently disabling every keyboard shortcut that depends on
+                      // it (Delete/Backspace, T/B reorder, Enter) for that whole category of stamp.
+                      // Right-click delete never depended on `selectedStampId` so it kept working,
+                      // masking this — confirmed live, 2026-08-27: a point stamp couldn't be
+                      // deleted via Delete/Backspace at all, only via its context menu. Point
+                      // stamps have no rect-outline selection indicator to show either way (that's
+                      // this file's own existing, unrelated design — only rect stamps render a
+                      // selection outline), so this only restores the keyboard-shortcut behavior,
+                      // it doesn't add new visual chrome.
+                      setSelectedStampId(stamp.id)
                     }}
                     // Only a double-click opens the full editor dialog — a single click is instead
                     // "select for adjustment" (handled by `onClick` above), matching the requested
                     // three-tier interaction (hover preview / single-click adjust / double-click
                     // edit) rather than single-click doing both at once.
                     onDoubleClick={() => {
+                      if (!loggedIn) return
                       void openEditorForExisting(stamp.id)
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault()
+                      if (!loggedIn) return
                       setMenu({ stampId: stamp.id, x: e.clientX, y: e.clientY })
                     }}
                   >
@@ -1219,6 +1313,19 @@ export function MarkerLayer({
                     )}
                   </div>
                 </Tooltip>
+                {/* Every stamp on the page gets its own always-visible tooltip here on a
+                    hover-less device (not gated on `isSelected`/`isHovered` at all) — there's no
+                    hover to preview one with in the first place, so "always show" is this app's
+                    own closest equivalent, matching the user's own explicit request that the
+                    label be visible without any extra tap. */}
+                {!supportsHover && (
+                  <StaticTooltip
+                    xPercent={iconPos.x}
+                    yPercent={iconPos.y}
+                    {...stampTooltipPlacement(rect?.anchor ?? null)}
+                    label={stamp.content}
+                  />
+                )}
               </div>
             )
           })}
@@ -1328,6 +1435,39 @@ function anchorOnRect(rect: StampRect): { x: number; y: number } {
   return {
     x: rect.x + (rect.width * p.x) / 100,
     y: rect.y + (rect.height * p.y) / 100,
+  }
+}
+
+/** Where a hover-less-device stamp tooltip (`StaticTooltip`, always visible — no `mouseenter` to
+ * ever trigger a hover one) should sit relative to the marker icon. A plain point stamp (no
+ * `rect`) always goes below the icon — nothing else to stay clear of. A rect stamp's icon sits at
+ * one of 8 border anchor points, with the rect itself occupying the *opposite* direction from the
+ * icon relative to the rect's own center (e.g. icon at `"br"` → rect body extends up-left from
+ * it) — confirmed with the user (2026-08-27) that the tooltip should extend the rect-center→icon
+ * vector *outward* past the icon, i.e. the same direction the icon already sits outside the rect's
+ * center, not mirrored across the icon or the rect. That keeps the tooltip on the side already
+ * clear of the rect body/outline, satisfying "tooltip and the selection rect must never overlap"
+ * without needing to measure either box's real screen position. */
+function stampTooltipPlacement(anchor: StampAnchor | null): { side: TooltipSide; align: TooltipAlign } {
+  switch (anchor) {
+    case "tl":
+      return { side: "top", align: "start" }
+    case "t":
+      return { side: "top", align: "center" }
+    case "tr":
+      return { side: "top", align: "end" }
+    case "r":
+      return { side: "right", align: "center" }
+    case "br":
+      return { side: "bottom", align: "end" }
+    case "b":
+      return { side: "bottom", align: "center" }
+    case "bl":
+      return { side: "bottom", align: "start" }
+    case "l":
+      return { side: "left", align: "center" }
+    case null:
+      return { side: "bottom", align: "center" }
   }
 }
 

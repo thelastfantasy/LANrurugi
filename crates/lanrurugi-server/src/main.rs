@@ -81,9 +81,13 @@ struct ServeArgs {
     #[arg(long, env = "LANRURUGI_BIND", default_value = "0.0.0.0:3000")]
     bind: String,
 
-    /// Disables password/token protection entirely (matches legacy `enable_pass = 0`).
-    #[arg(long, env = "LANRURUGI_NO_PASS", default_value_t = false)]
-    no_pass: bool,
+    /// Suppresses the frontend's GitHub-releases update check (007-guest-restricted-access —
+    /// replaces the removed `devmode` Settings-page toggle, which had zero server-side behavior of
+    /// its own; this is the one real effect it controlled). A deploy-time flag rather than a
+    /// runtime setting since it's an operational concern, not something a guest/security-adjacent
+    /// setting should expose to whoever can reach the Settings page.
+    #[arg(long, env = "LANRURUGI_DISABLE_UPDATE_CHECK", default_value_t = false)]
+    disable_update_check: bool,
 
     /// Appends `; Secure` to both auth cookies (JWT access token + refresh token) — only enable
     /// this once actually deployed behind HTTPS (a browser silently drops a `Secure` cookie over
@@ -383,9 +387,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         repos: repos.clone(),
         jobs: jobs.clone(),
         auth: AuthConfig {
-            enable_pass: !args.no_pass,
             force_secure_cookies: args.force_secure_cookies,
         },
+        disable_update_check: args.disable_update_check,
         library: LibraryPaths {
             archive_dir: args.library_path.clone(),
             thumb_dir: args.thumb_dir.clone(),

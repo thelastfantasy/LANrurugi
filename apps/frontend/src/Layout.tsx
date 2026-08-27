@@ -31,6 +31,13 @@ export function Layout() {
   // `undefined` only during that brief window, never once a result (true or false) has landed.
   const loggedIn = loginStatus.data?.logged_in ?? true
 
+  // 007-guest-restricted-access: a guest eligible for scoped access (`!logged_in &&
+  // guest_mode_enabled`) and a plain unauthenticated visitor both land on the same single-link
+  // nav — a discoverable way to reach the real login form, no management links either way. The
+  // two cases genuinely differ elsewhere (`AllowGuest` lets the guest browse Library/Reader
+  // in place instead of redirecting to `/login`), just not in what this nav shows, so there's no
+  // third link set to add here — `loggedIn`'s existing two-way branch already covers all three
+  // states described in this feature's own task list.
   const links: Array<{ to: string; label: string; end?: boolean }> = loggedIn
     ? [
         { to: "/upload", label: t("app.addArchives") },

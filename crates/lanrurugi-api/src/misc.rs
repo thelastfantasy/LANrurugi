@@ -79,9 +79,16 @@ async fn server_info(State(state): State<AppState>) -> Response {
         // own `footer.html.tt2` does with its `descstr`. Purely cosmetic (no version semantics),
         // so reused as-is rather than invented fresh for this rewrite.
         "version_desc": "I'm under Japanese influence and my honor's at stake!",
-        "has_password": flag("enablepass", "1"),
-        "debug_mode": flag("devmode", "0"),
-        "nofun_mode": flag("nofunmode", "0"),
+        // Password protection can no longer be disabled (007-guest-restricted-access) — always
+        // `true`, not a Redis-configurable value anymore. `nofun_mode` is removed entirely (its
+        // own concept, forcing login even when password protection was otherwise off, no longer
+        // applies once password protection can't be off in the first place) — a documented,
+        // spec-mandated Constitution Principle II exception (research.md §5), not an oversight.
+        "has_password": true,
+        // Reflects the deploy-time --disable-update-check / LANRURUGI_DISABLE_UPDATE_CHECK flag
+        // (AppState::disable_update_check) instead of the removed `devmode` Settings-page toggle,
+        // which had zero server-side behavior of its own — see that field's own docs.
+        "debug_mode": state.disable_update_check,
         "archives_per_page": field("pagesize", "100").parse::<u32>().unwrap_or(100),
         "server_resizes_images": flag("enableresize", "0"),
         // Legacy inverts this one: `server_tracks_progress => enable_localprogress ? \0 : \1`.

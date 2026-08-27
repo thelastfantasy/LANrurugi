@@ -31,6 +31,16 @@ pub enum RepositoryError {
     NotFound(&'static str, String),
     #[error("parallel hashing task failed: {0}")]
     Concurrency(#[from] lanrurugi_core::concurrency::BlockingTaskError),
+    /// A field this codebase now requires on every record (added by a schema change) is absent —
+    /// deliberately a hard error, not a silent default: pre-existing Redis data must be migrated
+    /// once via the dedicated migration tool before this code path is ever exercised again, rather
+    /// than every future reader carrying a permanent "what if this field is missing" fallback.
+    #[error("required field {field:?} missing on {kind} {key:?} — run the migration tool")]
+    MissingField {
+        kind: &'static str,
+        key: String,
+        field: &'static str,
+    },
 }
 
 type Result<T> = std::result::Result<T, RepositoryError>;
@@ -307,12 +317,21 @@ impl CategoryRepository {
         } else {
             Vec::new()
         };
+        let visible_to_guest = fields
+            .get("visible_to_guest")
+            .map(|v| v == "1")
+            .ok_or_else(|| RepositoryError::MissingField {
+                kind: "category",
+                key: catid.as_str().to_string(),
+                field: "visible_to_guest",
+            })?;
         Ok(Some(Category {
             catid: catid.clone(),
             name: fields.get("name").cloned().unwrap_or_default(),
             search,
             archives,
             pinned: fields.get("pinned").map(|p| p == "1").unwrap_or(false),
+            visible_to_guest,
         }))
     }
 
@@ -401,6 +420,10 @@ impl CategoryRepository {
             ),
             ("archives", archives_json.into()),
             ("pinned", if category.pinned { "1" } else { "0" }.into()),
+            (
+                "visible_to_guest",
+                if category.visible_to_guest { "1" } else { "0" }.into(),
+            ),
         ];
 
         let previous = self.get(&category.catid).await?;
@@ -946,6 +969,7 @@ mod tests {
             search: None,
             archives: vec![ArchiveId("e".repeat(40))],
             pinned: true,
+            visible_to_guest: true,
         };
         repo.save(&category).await.unwrap();
         assert_eq!(repo.get(&catid).await.unwrap().unwrap(), category);
@@ -957,6 +981,7 @@ mod tests {
             search: Some("date_added:*".to_string()),
             archives: vec![],
             pinned: false,
+            visible_to_guest: false,
         };
         repo.save(&dynamic).await.unwrap();
         let fetched = repo.get(&dyn_catid).await.unwrap().unwrap();

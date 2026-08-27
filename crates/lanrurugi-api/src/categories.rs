@@ -24,6 +24,7 @@ fn category_json(c: &Category) -> serde_json::Value {
         "id": c.catid,
         "name": c.name,
         "pinned": if c.pinned { 1 } else { 0 },
+        "visible_to_guest": if c.visible_to_guest { 1 } else { 0 },
         "search": c.search,
         "archives": c.archives,
     })
@@ -64,6 +65,8 @@ pub struct CreateCategoryParams {
     search: Option<String>,
     #[serde(default)]
     pinned: bool,
+    #[serde(default)]
+    visible_to_guest: bool,
 }
 
 async fn create_category(
@@ -97,6 +100,7 @@ async fn create_category(
         search: params.search.filter(|s| !s.is_empty()),
         archives: Vec::new(),
         pinned: params.pinned,
+        visible_to_guest: params.visible_to_guest,
     };
     match state.repos.categories.save(&category).await {
         Ok(()) => {
@@ -171,6 +175,8 @@ pub struct UpdateCategoryParams {
     search: Option<String>,
     #[serde(default)]
     pinned: bool,
+    #[serde(default)]
+    visible_to_guest: bool,
 }
 
 async fn update_category(
@@ -201,6 +207,7 @@ async fn update_category(
         category.search = Some(search).filter(|s| !s.is_empty());
     }
     category.pinned = params.pinned;
+    category.visible_to_guest = params.visible_to_guest;
     match state.repos.categories.save(&category).await {
         Ok(()) => axum::Json(json!({
             "operation": "update_category",

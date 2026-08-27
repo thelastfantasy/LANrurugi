@@ -20,6 +20,8 @@ export * from "./JobProgress"
 
 export * from "./NotFoundPage"
 
+export * from "./SearchSyntaxHelp"
+
 export * from "./ShortId"
 
 export * from "./TagCloud"

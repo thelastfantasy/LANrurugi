@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::Category;
+use lanrurugi_core::ids::ArchiveId;
 use thiserror::Error;
 
 use crate::grammar::{compute_search_filter, Token};
@@ -47,6 +48,12 @@ pub struct SearchParams {
     /// filter so the "New Archives" button and the badges never disagree (see
     /// `lanrurugi_api::archives::effective_isnew` for the identical display-side logic).
     pub new_badge_mode: String,
+    /// 007-guest-restricted-access: when `Some`, narrows the candidate set to exactly these
+    /// archive ids before any other filter runs — the union of archive ids across every
+    /// `visible_to_guest` category, computed once per request by the caller. `None` means no
+    /// caller-imposed scope restriction (the normal, non-guest case); `Some(empty set)` means
+    /// "nothing is in scope" and correctly excludes everything, it is never conflated with `None`.
+    pub restrict_to_archive_ids: Option<HashSet<ArchiveId>>,
 }
 
 impl Default for SearchParams {
@@ -63,6 +70,7 @@ impl Default for SearchParams {
             groupby_tanks: true,
             timezone: "UTC".to_string(),
             new_badge_mode: "until_opened".to_string(),
+            restrict_to_archive_ids: None,
         }
     }
 }
@@ -112,6 +120,11 @@ pub async fn search(
                 category.archives.iter().map(|a| a.to_string()).collect();
             filtered.retain(|id| cat_set.contains(id));
         }
+    }
+
+    if let Some(allowed) = &params.restrict_to_archive_ids {
+        let allowed_set: HashSet<&str> = allowed.iter().map(ArchiveId::as_str).collect();
+        filtered.retain(|id| allowed_set.contains(id.as_str()));
     }
 
     if params.untaggedonly {
@@ -930,6 +943,84 @@ mod tests {
         // tests, same DB3), and `cargo test` runs `#[tokio::test]`s concurrently by default. A
         // wholesale `del` here could wipe another concurrently-running test's just-written
         // membership out from under it — a real, observed flake (issue #86), not hypothetical.
+        for id in [&id_a, &id_b] {
+            let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
+            let _: () = sconn.srem(NEW_KEY, id).await.unwrap();
+            let _: () = sconn.srem(TANKGROUPED_KEY, id).await.unwrap();
+        }
+        let _: () = sconn
+            .zrem(
+                TITLES_KEY,
+                vec![
+                    "book a\0".to_string() + &id_a,
+                    "book b\0".to_string() + &id_b,
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// 007-guest-restricted-access: `restrict_to_archive_ids` narrows the candidate set exactly
+    /// like `category`/`untaggedonly`/`tankonly` already do — `None` is a no-op, an empty `Some`
+    /// set excludes everything (never conflated with `None`, per the field's own doc comment), and
+    /// a non-empty set narrows correctly alongside an active keyword filter.
+    #[tokio::test]
+    async fn restrict_to_archive_ids_narrows_the_candidate_set() {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let id_a = "3".repeat(40);
+        let id_b = "4".repeat(40);
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        for (id, title) in [(&id_a, "Book A"), (&id_b, "Book B")] {
+            let _: () = aconn
+                .hset_multiple(id, &[("tags", ""), ("pagecount", "10"), ("progress", "0")])
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, id, title)
+                .await
+                .unwrap();
+        }
+
+        // `None` — no restriction — both archives are candidates.
+        let unrestricted = SearchParams {
+            groupby_tanks: true,
+            ..Default::default()
+        };
+        let result = search(&archive_pool, &search_pool, &unrestricted)
+            .await
+            .unwrap();
+        assert!(result.ids.contains(&id_a));
+        assert!(result.ids.contains(&id_b));
+
+        // `Some({id_a})` — only id_a is in scope, even though id_b would otherwise match too.
+        let scoped = SearchParams {
+            groupby_tanks: true,
+            restrict_to_archive_ids: Some([ArchiveId(id_a.clone())].into_iter().collect()),
+            ..Default::default()
+        };
+        let scoped_result = search(&archive_pool, &search_pool, &scoped).await.unwrap();
+        assert!(scoped_result.ids.contains(&id_a));
+        assert!(!scoped_result.ids.contains(&id_b));
+
+        // `Some({})` — an empty scope excludes everything, not treated the same as `None`.
+        let empty_scope = SearchParams {
+            groupby_tanks: true,
+            restrict_to_archive_ids: Some(HashSet::new()),
+            ..Default::default()
+        };
+        let empty_result = search(&archive_pool, &search_pool, &empty_scope)
+            .await
+            .unwrap();
+        assert!(!empty_result.ids.contains(&id_a));
+        assert!(!empty_result.ids.contains(&id_b));
+
+        for id in [&id_a, &id_b] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+        let mut sconn = search_pool.get().await.unwrap();
         for id in [&id_a, &id_b] {
             let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
             let _: () = sconn.srem(NEW_KEY, id).await.unwrap();

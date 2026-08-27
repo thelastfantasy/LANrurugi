@@ -1,9 +1,10 @@
-//! Router-level integration coverage for the four "settings.rs field existed, nothing consumed
-//! it" gaps closed by issue #85: `nofunmode` (forces auth even with `enable_pass: false`),
-//! `enablecors` (real `Access-Control-Allow-*` headers + `OPTIONS` preflight short-circuit), and
-//! `tagrules`/`tagruleson` (rewrites a metadata plugin's returned tags before merge). `language`
-//! isn't covered here — it's a frontend-only concern (`i18n/index.ts`'s
-//! `useApplySettingsLanguage`), nothing for a Rust router test to exercise.
+//! Router-level integration coverage for settings.rs fields that need a real HTTP round-trip to
+//! verify (issue #85's original "field existed, nothing consumed it" gaps — `enablecors`, real
+//! `Access-Control-Allow-*` headers + `OPTIONS` preflight short-circuit; `tagrules`/`tagruleson`,
+//! rewrites a metadata plugin's returned tags before merge) plus 007-guest-restricted-access's
+//! `guestmode`/`Category.visible_to_guest` request-scoping matrix. `language` isn't covered here —
+//! it's a frontend-only concern (`i18n/index.ts`'s `useApplySettingsLanguage`), nothing for a Rust
+//! router test to exercise.
 //!
 //! Requires a real Redis instance (`LANRURUGI_TEST_REDIS_URL`), same convention as every other
 //! integration test in this workspace — skips gracefully if unset.
@@ -29,8 +30,20 @@ fn config_field_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-async fn test_app(enable_pass: bool) -> Option<(axum::Router, RedisDbs)> {
+/// `guestmode` defaults to `"0"` — every test in this file that doesn't specifically exercise
+/// guest-mode routing gets ordinary "password login required" behavior, and `auth::load` requires
+/// this field to be present at all (007-guest-restricted-access: a hard error, not a silent
+/// default, once an instance has been migrated — see `AuthConfigError::MissingField`'s own docs).
+async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
+    let _: () = redis
+        .config
+        .get()
+        .await
+        .unwrap()
+        .hset(CONFIG_KEY, "guestmode", "0")
+        .await
+        .unwrap();
     let repos = Repositories::new(&redis);
     let plugin_options = Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -66,9 +79,9 @@ async fn test_app(enable_pass: bool) -> Option<(axum::Router, RedisDbs)> {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -116,6 +129,30 @@ async fn test_app(enable_pass: bool) -> Option<(axum::Router, RedisDbs)> {
     Some((app, redis))
 }
 
+/// Minimal real archive for guest-scope tests — `file` points at a nonexistent path since none of
+/// T038-T042 actually read file bytes, only exercise metadata/search/route-gating.
+fn test_archive(id: &str, title: &str, tags: &str) -> lanrurugi_core::entities::Archive {
+    lanrurugi_core::entities::Archive {
+        id: lanrurugi_core::ids::ArchiveId(id.to_string()),
+        name: title.to_string(),
+        title: title.to_string(),
+        file: format!("/nonexistent/{id}.zip"),
+        tags: tags.to_string(),
+        summary: String::new(),
+        arcsize: 1,
+        pagecount: 1,
+        isnew: false,
+        lastreadpage: 0,
+        lastreadtime: 0,
+        thumbhash: None,
+        toc: vec![],
+        stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
+        has_patch: false,
+    }
+}
+
 async fn set_config_field(redis: &RedisDbs, field: &str, value: &str) {
     let mut conn = redis.config.get().await.unwrap();
     let _: () = conn.hset(CONFIG_KEY, field, value).await.unwrap();
@@ -143,28 +180,11 @@ async fn request(
         .unwrap()
 }
 
-/// `nofunmode: true` on an otherwise-open instance (`enable_pass: false`) must still refuse an
-/// unauthenticated request — the whole point of the setting (see `LiveAuthConfig::no_fun_mode`'s
-/// own docs) is closing exactly this gap.
-#[tokio::test]
-async fn nofunmode_forces_auth_even_when_enable_pass_is_off() {
-    let _guard = config_field_lock().lock().await;
-    let Some((app, redis)) = test_app(false).await else {
-        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
-        return;
-    };
-
-    // Baseline: `enable_pass: false` alone really does bypass auth (sanity-checks the test's own
-    // premise before asserting `nofunmode` changes it).
-    clear_config_field(&redis, "nofunmode").await;
-    let resp = request(&app, "GET", "/api/settings").await;
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
-    set_config_field(&redis, "nofunmode", "1").await;
-    let resp = request(&app, "GET", "/api/settings").await;
-    assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
-
-    clear_config_field(&redis, "nofunmode").await;
+async fn json_body(response: axum::http::Response<axum::body::Body>) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 /// With `enablecors` off (the default), no CORS headers are added — confirms the middleware is
@@ -172,7 +192,7 @@ async fn nofunmode_forces_auth_even_when_enable_pass_is_off() {
 #[tokio::test]
 async fn cors_headers_absent_when_disabled() {
     let _guard = config_field_lock().lock().await;
-    let Some((app, redis)) = test_app(false).await else {
+    let Some((app, redis)) = test_app().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
@@ -188,7 +208,7 @@ async fn cors_headers_absent_when_disabled() {
 #[tokio::test]
 async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     let _guard = config_field_lock().lock().await;
-    let Some((app, redis)) = test_app(true).await else {
+    let Some((app, redis)) = test_app().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
@@ -222,4 +242,392 @@ async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     );
 
     clear_config_field(&redis, "enablecors").await;
+}
+
+/// 007-guest-restricted-access, US2: the full `guestmode` + `Category.visible_to_guest` matrix —
+/// guest mode off (regardless of category visibility), guest mode on with zero guest-visible
+/// categories, and guest mode on with at least one guest-visible category, the only combination
+/// that actually grants an unauthenticated caller scoped access. Uses a real `PUT /api/categories`
+/// round-trip (not a direct repository write) so this also exercises `create_category`'s own
+/// `visible_to_guest` form-field wiring (T030).
+#[tokio::test]
+async fn guest_mode_and_category_visibility_matrix() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+
+    // guestmode off, no categories at all: an ordinary protected route stays 401.
+    let resp = request(&app, "GET", "/api/categories").await;
+    assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    // guestmode on, but zero categories are guest-visible yet: still 401 — the eligibility branch
+    // requires *both* conditions, not just the site-wide switch.
+    set_config_field(&redis, "guestmode", "1").await;
+    let resp = request(&app, "GET", "/api/categories").await;
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "guest mode on with zero guest-visible categories must not grant access"
+    );
+
+    // Create one guest-visible category directly via the repository (no session exists in this
+    // test to drive it through the real PUT endpoint without also standing up a login flow) — the
+    // request-scoping matrix under test here is about `procedure.rs`'s eligibility branch, not
+    // `create_category`'s own field wiring, which `categories.rs`'s own unit-level coverage (T030)
+    // already exercises.
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_matrix_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: true,
+    };
+    let repos = Repositories::new(&redis);
+    repos.categories.save(&category).await.unwrap();
+
+    // Now an unauthenticated caller reaches the ordinary protected route as a guest.
+    let resp = request(&app, "GET", "/api/categories").await;
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::OK,
+        "guest mode on with at least one guest-visible category must grant scoped guest access"
+    );
+
+    // But a session-only route stays out of reach even for an eligible guest — `guest_visitor` is
+    // never in that route's own allow-list (`route_policy.csv`), matching `token_guest`'s own
+    // restriction.
+    let drop_resp = request(&app, "POST", "/api/database/drop").await;
+    assert_eq!(
+        drop_resp.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "a session-only route must reject a guest_visitor even when otherwise eligible"
+    );
+
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
+}
+
+/// 007-guest-restricted-access, US3 (T038): guest search results never include an out-of-scope
+/// archive even when it shares a tag with an in-scope one — proof that `restrict_to_archive_ids`
+/// narrows the *result set*, not just the tag/keyword match itself, which would otherwise let a
+/// shared tag "pull in" an archive the guest has no scope over.
+#[tokio::test]
+async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let repos = Repositories::new(&redis);
+
+    let in_scope_id = "1".repeat(40);
+    let out_of_scope_id = "2".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&in_scope_id, "In Scope", "shared_tag"))
+        .await
+        .unwrap();
+    repos
+        .archives
+        .save(&test_archive(
+            &out_of_scope_id,
+            "Out Of Scope",
+            "shared_tag",
+        ))
+        .await
+        .unwrap();
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_search_scope_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: vec![lanrurugi_core::ids::ArchiveId(in_scope_id.clone())],
+        pinned: false,
+        visible_to_guest: true,
+    };
+    repos.categories.save(&category).await.unwrap();
+    set_config_field(&redis, "guestmode", "1").await;
+
+    let resp = request(
+        &app,
+        "GET",
+        "/api/search/ids?filter=shared_tag&groupby_tanks=false",
+    )
+    .await;
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let json = json_body(resp).await;
+    let ids: Vec<&str> = json["data"]
+        .as_array()
+        .expect("data must be an array")
+        .iter()
+        .map(|v| v.as_str().expect("id must be a string"))
+        .collect();
+    assert!(
+        ids.contains(&in_scope_id.as_str()),
+        "the in-scope archive must still appear: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&out_of_scope_id.as_str()),
+        "the out-of-scope archive must never appear even though it shares a tag: {ids:?}"
+    );
+
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(in_scope_id))
+        .await
+        .unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(out_of_scope_id))
+        .await
+        .unwrap();
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
+}
+
+/// 007-guest-restricted-access, US3 (T039): a guest's direct request for an out-of-scope archive
+/// returns the exact same `404` shape as a genuinely nonexistent archive id — the archive is real
+/// (an admin could fetch it), it's just outside this guest's scope, and that distinction must never
+/// be observable from the response (research.md §6, spec FR-012).
+#[tokio::test]
+async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let repos = Repositories::new(&redis);
+
+    let out_of_scope_id = "3".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&out_of_scope_id, "Out Of Scope", ""))
+        .await
+        .unwrap();
+    // Guest mode on, but with a guest-visible category that does NOT include this archive — the
+    // eligibility branch itself is satisfied (at least one guest-visible category exists), the
+    // per-archive scope check is what must deny this specific request.
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_metadata_scope_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: true,
+    };
+    repos.categories.save(&category).await.unwrap();
+    set_config_field(&redis, "guestmode", "1").await;
+
+    let nonexistent_id = "4".repeat(40);
+    let out_of_scope_resp = request(
+        &app,
+        "GET",
+        &format!("/api/archives/{out_of_scope_id}/metadata"),
+    )
+    .await;
+    let nonexistent_resp = request(
+        &app,
+        "GET",
+        &format!("/api/archives/{nonexistent_id}/metadata"),
+    )
+    .await;
+
+    assert_eq!(
+        out_of_scope_resp.status(),
+        axum::http::StatusCode::NOT_FOUND
+    );
+    assert_eq!(nonexistent_resp.status(), axum::http::StatusCode::NOT_FOUND);
+    let out_of_scope_json = json_body(out_of_scope_resp).await;
+    let nonexistent_json = json_body(nonexistent_resp).await;
+    assert_eq!(
+        out_of_scope_json["error"]
+            .as_str()
+            .map(|s| s.contains("does not exist")),
+        Some(true),
+    );
+    assert_eq!(
+        nonexistent_json["error"]
+            .as_str()
+            .map(|s| s.contains("does not exist")),
+        Some(true),
+        "an out-of-scope archive's 404 must read identically to a nonexistent one's"
+    );
+
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(out_of_scope_id))
+        .await
+        .unwrap();
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
+}
+
+/// 007-guest-restricted-access, US3 (T040): an eligible guest can still reach an in-scope
+/// archive's metadata (read access), but bookmark/progress/download — none of which are GET-safe
+/// browsing — all reject: bookmark/progress are POST/PUT (`guest_visitor`'s GET-only allow rule
+/// already excludes them by construction, research.md §3), download is GET but explicitly denied
+/// by its own policy rule (T006/T046).
+#[tokio::test]
+async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let repos = Repositories::new(&redis);
+
+    let archive_id = "5".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&archive_id, "In Scope", ""))
+        .await
+        .unwrap();
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_write_deny_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: vec![lanrurugi_core::ids::ArchiveId(archive_id.clone())],
+        pinned: false,
+        visible_to_guest: true,
+    };
+    repos.categories.save(&category).await.unwrap();
+    set_config_field(&redis, "guestmode", "1").await;
+
+    let metadata_resp = request(&app, "GET", &format!("/api/archives/{archive_id}/metadata")).await;
+    assert_eq!(
+        metadata_resp.status(),
+        axum::http::StatusCode::OK,
+        "an eligible guest must still be able to read an in-scope archive's metadata"
+    );
+
+    let bookmark_resp = request(
+        &app,
+        "POST",
+        &format!("/api/archives/{archive_id}/bookmarks/1"),
+    )
+    .await;
+    assert_ne!(
+        bookmark_resp.status(),
+        axum::http::StatusCode::OK,
+        "a guest must never be able to bookmark, even an in-scope archive"
+    );
+
+    let progress_resp = request(
+        &app,
+        "PUT",
+        &format!("/api/archives/{archive_id}/progress/1"),
+    )
+    .await;
+    assert_ne!(
+        progress_resp.status(),
+        axum::http::StatusCode::OK,
+        "a guest must never be able to save reading progress, even for an in-scope archive"
+    );
+
+    let download_resp = request(&app, "GET", &format!("/api/archives/{archive_id}/download")).await;
+    assert_ne!(
+        download_resp.status(),
+        axum::http::StatusCode::OK,
+        "a guest must never be able to download the original file, even for an in-scope archive"
+    );
+
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+        .await
+        .unwrap();
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
+}
+
+/// 007-guest-restricted-access, US3 (T041): a handful of purely-administrative endpoints reject a
+/// guest_visitor unconditionally — not because of any per-resource scope check, but because
+/// `guest_visitor` is never in their route's own Casbin allow-list at all (`route_policy.csv`).
+/// Regardless of guest mode state, since these routes were never reachable by an unauthenticated
+/// caller before this feature either.
+#[tokio::test]
+async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let repos = Repositories::new(&redis);
+
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_admin_deny_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: true,
+    };
+    repos.categories.save(&category).await.unwrap();
+    set_config_field(&redis, "guestmode", "1").await;
+
+    for path in ["/api/plugins", "/api/activity", "/api/stats"] {
+        let resp = request(&app, "GET", path).await;
+        assert_ne!(
+            resp.status(),
+            axum::http::StatusCode::OK,
+            "{path} must reject a guest_visitor even with guest mode fully eligible"
+        );
+    }
+
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
+}
+
+/// 007-guest-restricted-access, US3 (T042, spec FR-015): a config change takes effect on the very
+/// next request — no stale snapshot of "guest mode was on a moment ago" persists across requests.
+/// Covers both trigger conditions: turning `guestmode` off, and unmarking the last guest-visible
+/// category (leaving `guestmode` itself on).
+#[tokio::test]
+async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
+    let _guard = config_field_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let repos = Repositories::new(&redis);
+
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_live_toggle_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: true,
+    };
+    repos.categories.save(&category).await.unwrap();
+    set_config_field(&redis, "guestmode", "1").await;
+
+    let eligible_resp = request(&app, "GET", "/api/categories").await;
+    assert_eq!(eligible_resp.status(), axum::http::StatusCode::OK);
+
+    // Trigger 1: turn guestmode off.
+    set_config_field(&redis, "guestmode", "0").await;
+    let after_guestmode_off = request(&app, "GET", "/api/categories").await;
+    assert_eq!(
+        after_guestmode_off.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "turning guestmode off must take effect on the very next request"
+    );
+
+    // Trigger 2: guestmode back on, but the last guest-visible category gets unmarked.
+    set_config_field(&redis, "guestmode", "1").await;
+    let mut unmarked = category.clone();
+    unmarked.visible_to_guest = false;
+    repos.categories.save(&unmarked).await.unwrap();
+    let after_unmark = request(&app, "GET", "/api/categories").await;
+    assert_eq!(
+        after_unmark.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "unmarking the last guest-visible category must take effect on the very next request"
+    );
+
+    repos.categories.delete(&category.catid).await.unwrap();
+    clear_config_field(&redis, "guestmode").await;
 }

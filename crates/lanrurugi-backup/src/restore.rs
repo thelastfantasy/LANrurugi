@@ -62,6 +62,7 @@ pub async fn restore(
                     .map(ArchiveId)
                     .collect(),
                 pinned: false,
+                visible_to_guest: false,
             })
             .await?;
         summary.categories_restored += 1;

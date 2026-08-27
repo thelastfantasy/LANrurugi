@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
+import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
 import { useMenuPalette } from "./hooks/useMenuPalette"
@@ -1246,13 +1247,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
         <div style={{ textAlign: "left", marginBottom: 12 }}>
           <label htmlFor="new-category-search" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, marginBottom: 4 }}>
             {t("app.searchPredicate")}
-            <Tooltip
-              label={
-                t(
-                  "app.sameSyntaxAsTheMain",
-                ) ?? undefined
-              }
-            >
+            <Tooltip label={<SearchSyntaxHelp />}>
               <i className="fas fa-question-circle" style={{ fontSize: 14, cursor: "help" }} aria-hidden="true"></i>
             </Tooltip>
           </label>

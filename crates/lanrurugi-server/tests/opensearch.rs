@@ -51,13 +51,13 @@ async fn test_app() -> Option<axum::Router> {
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
-        // `enable_pass: true` — the whole point of this suite is confirming `/opensearch.xml`
-        // stays reachable *without* auth even when the rest of the API requires it; `false` would
-        // make every route open regardless and prove nothing.
+        // The whole point of this suite is confirming `/opensearch.xml` stays reachable *without*
+        // auth even though the rest of the API always requires it now (password login has no way
+        // to be disabled — 007-guest-restricted-access).
         auth: AuthConfig {
-            enable_pass: true,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),

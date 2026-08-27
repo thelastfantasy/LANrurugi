@@ -30,8 +30,12 @@ export function GlobalSection({
   setLocalprogress,
   authprogress,
   setAuthprogress,
-  devmode,
-  setDevmode,
+  stampautobookmark,
+  setStampautobookmark,
+  stampautounbookmark,
+  setStampautounbookmark,
+  guestmode,
+  setGuestmode,
   newbadgemode,
   setNewbadgemode,
   llmApiKeySet,
@@ -59,8 +63,12 @@ export function GlobalSection({
   setLocalprogress: (v: boolean) => void
   authprogress: boolean
   setAuthprogress: (v: boolean) => void
-  devmode: boolean
-  setDevmode: (v: boolean) => void
+  stampautobookmark: boolean
+  setStampautobookmark: (v: boolean) => void
+  stampautounbookmark: boolean
+  setStampautounbookmark: (v: boolean) => void
+  guestmode: boolean
+  setGuestmode: (v: boolean) => void
   newbadgemode: string
   setNewbadgemode: (v: string) => void
   llmApiKeySet: boolean
@@ -240,13 +248,38 @@ export function GlobalSection({
             <br />
             {t("settings.fullyEffectiveAfterRestartingLanraragi")}
           </CheckboxRow>
+          {/* issue #97: placing a stamp auto-bookmarks its page; the sub-option below stays
+              visible (not hidden) but disabled while this is off, per the confirmed "always show,
+              grey out" UX — not the enableresize-style conditional-render pattern above. */}
           <CheckboxRow
-            id="devmode"
-            checked={devmode}
-            onChange={setDevmode}
-            label={t("settings.debugMode")}
+            id="stampautobookmark"
+            checked={stampautobookmark}
+            onChange={setStampautobookmark}
+            label={t("settings.autoBookmarkOnStamp")}
           >
-            {t("settings.enablingDebugModeWillShow")}
+            {t("settings.autoBookmarkOnStampDescription")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="stampautounbookmark"
+            checked={stampautounbookmark}
+            onChange={setStampautounbookmark}
+            disabled={!stampautobookmark}
+            indent
+            label={t("settings.autoUnbookmarkOnLastStampRemoved")}
+          >
+            {t("settings.autoUnbookmarkOnLastStampRemovedDescription")}
+          </CheckboxRow>
+          {/* 007-guest-restricted-access: site-wide guest-mode master switch (spec FR-003) — on
+              its own it grants nothing, an administrator also needs to mark at least one category
+              visible to guests (Categories.tsx) before an unauthenticated visitor is routed into
+              scoped browsing instead of the login page (spec FR-005/FR-006). */}
+          <CheckboxRow
+            id="guestmode"
+            checked={guestmode}
+            onChange={setGuestmode}
+            label={t("settings.guestMode")}
+          >
+            {t("settings.evenWithThePasswordProtection")}
           </CheckboxRow>
           <ActionRow
             id="clean-db"

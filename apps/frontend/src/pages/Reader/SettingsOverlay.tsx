@@ -1,6 +1,8 @@
 import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 
+import type { Settings } from "@/api/types"
+import { Switch } from "@/components/common-ui/Form/Switch"
 import type { FitMode, JScrollUnit, ReaderSettings } from "@/hooks/useReaderSettings"
 import { ensureLink, FONT_SIZE_MD, FONT_SIZE_XS, removeLink } from "@/theme"
 
@@ -16,15 +18,40 @@ const CONFIG_CSS_ID = "reader-config-css"
 function SettingSection({
   title,
   description,
+  cloudSynced,
+  indent,
   children,
 }: {
   title: string
   description?: string
+  /** issue #97: marks this section's control(s) as server-backed (`LRR_CONFIG`, not this
+   * component's own `localStorage`-only `ReaderSettings`) — every other section in this overlay
+   * is purely local, so a small cloud icon next to the title is the one visual cue distinguishing
+   * this section's setting from the rest. */
+  cloudSynced?: boolean
+  /** issue #97: left-indents the *entire section* (title included, not just its control) so a
+   * sub-option section visually reads as "belongs to the section above" — same `24px` amount
+   * `Settings` page's own `CheckboxRow` `indent` prop uses, for the same parent/child pairing.
+   * Without indenting the title itself too, only the control row shifted, leaving the two
+   * section titles looking like unrelated siblings rather than parent/child (confirmed live,
+   * 2026-08-27, against a real screenshot). */
+  indent?: boolean
   children: React.ReactNode
 }) {
+  const { t } = useTranslation()
   return (
-    <div style={{ textAlign: "left", marginBottom: 20 }}>
-      <h2 style={{ margin: "0 0 4px", fontSize: FONT_SIZE_MD, fontWeight: "bold" }}>{title}</h2>
+    <div style={{ textAlign: "left", marginBottom: 20, ...(indent ? { paddingLeft: 24 } : {}) }}>
+      <h2 style={{ margin: "0 0 4px", fontSize: FONT_SIZE_MD, fontWeight: "bold", display: "flex", alignItems: "center", gap: 6 }}>
+        {title}
+        {cloudSynced && (
+          <i
+            className="fas fa-cloud"
+            title={t("reader.savedToServerNotThisDevice") ?? undefined}
+            style={{ opacity: 0.6, fontSize: FONT_SIZE_XS }}
+            aria-hidden="true"
+          />
+        )}
+      </h2>
       {description && <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.6, marginBottom: 6 }}>{description}</div>}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>{children}</div>
     </div>
@@ -42,16 +69,26 @@ const CONTROL_HEIGHT = 25
 // same order, but laid out with `SettingSection` above instead of legacy's own float-based
 // `.config-panel`/`.config-btn`. Both rules have been deleted outright from `/legacy/config.css`
 // (confirmed no other component referenced them) rather than just left unused — this page still
-// scopes that file in (same pattern as `Settings.tsx`), but only for its real, unrelated
-// `input[type=checkbox]` custom-checkbox rules (`Toggle Stamps` below).
+// scopes that file in (same pattern as `Settings.tsx`), though every toggle in this overlay
+// (including `Toggle Stamps`) now renders via the shared `common-ui` `Switch` rather than a
+// native `<input type=checkbox>`, so nothing here actually reads config.css's own checkbox rules
+// anymore as of issue #97.
 export function SettingsOverlay({
   settings,
   update,
   onClose,
+  stampAutoBookmark,
+  stampAutoUnbookmark,
+  onUpdateServerSetting,
 }: {
   settings: ReaderSettings
   update: (partial: Partial<ReaderSettings>) => void
   onClose: () => void
+  /** issue #97: the two server-backed (`LRR_CONFIG`) settings this overlay also surfaces —
+   * distinct from every other field here, which lives in `ReaderSettings`'s own `localStorage`. */
+  stampAutoBookmark: boolean
+  stampAutoUnbookmark: boolean
+  onUpdateServerSetting: (partial: Partial<Settings>) => Promise<unknown>
 }) {
   const { t } = useTranslation()
 
@@ -385,14 +422,34 @@ export function SettingsOverlay({
 
           {!settings.infiniteScroll && (
             <SettingSection title={t("reader.toggleStamps") ?? ""}>
-              <input
-                className="fa"
-                type="checkbox"
+              <Switch
                 checked={settings.markersVisible}
-                onChange={(e) => update({ markersVisible: e.target.checked })}
+                onCheckedChange={(v) => update({ markersVisible: v })}
               />
             </SettingSection>
           )}
+
+          {/* issue #97: the only server-backed settings in this otherwise all-local overlay —
+              `cloudSynced` marks that distinction visually. Sub-option stays visible (not
+              conditionally rendered) but disabled while the main switch is off, matching the
+              Settings page's own identical parent/child treatment (`GlobalSection.tsx`). */}
+          <SettingSection title={t("reader.autoBookmarkOnStamp") ?? ""} cloudSynced>
+            <Switch
+              checked={stampAutoBookmark}
+              onCheckedChange={(v) => void onUpdateServerSetting({ stampautobookmark: v })}
+            />
+          </SettingSection>
+          <SettingSection
+            title={t("settings.autoUnbookmarkOnLastStampRemoved") ?? ""}
+            cloudSynced
+            indent
+          >
+            <Switch
+              checked={stampAutoUnbookmark}
+              disabled={!stampAutoBookmark}
+              onCheckedChange={(v) => void onUpdateServerSetting({ stampautounbookmark: v })}
+            />
+          </SettingSection>
         </div>
       </div>
     </>

@@ -54,6 +54,10 @@ export interface CategoryMetadata {
   id: string
   name: string
   pinned: number
+  /** 007-guest-restricted-access: whether an unauthenticated guest visitor (when the site-wide
+   *  `guestmode` setting is on) can see archives belonging to this category — `0`/`1`, matching
+   *  `pinned`'s own integer-boolean convention. */
+  visible_to_guest: number
   search: string | null
   archives: string[]
 }
@@ -122,12 +126,17 @@ export interface Settings {
   sizethreshold: number
   readerquality: number
   webpquality: number
-  enablepass: boolean
-  nofunmode: boolean
   enablecors: boolean
   localprogress: boolean
   authprogress: boolean
-  devmode: boolean
+  /** issue #97: placing a stamp on a not-yet-bookmarked page also bookmarks it. */
+  stampautobookmark: boolean
+  /** issue #97: removing a page's last remaining stamp also removes that page's bookmark — only
+   *  meaningful while `stampautobookmark` is also on. */
+  stampautounbookmark: boolean
+  /** 007-guest-restricted-access: site-wide guest-mode master switch — see `Category.
+   *  visible_to_guest` for the per-category half of this two-layer setting. */
+  guestmode: boolean
   enableresize: boolean
   hqthumbpages: boolean
   enablewebp: boolean
@@ -144,9 +153,12 @@ export interface ServerInfo {
   version: string
   version_name: string
   version_desc: string
+  /** Always `true` as of 007-guest-restricted-access — password protection can no longer be
+   *  disabled. Kept present (not removed) since third-party clients read this field. */
   has_password: boolean
+  /** Now reflects a deploy-time flag, not a Settings-page toggle (`devmode` — which had zero
+   *  server-side behavior of its own — is removed entirely). */
   debug_mode: boolean
-  nofun_mode: boolean
   archives_per_page: number
   server_resizes_images: boolean
   server_tracks_progress: boolean
@@ -605,10 +617,18 @@ export interface SearchResponse {
 // `/info` mirrors legacy's third-party `ServerInfo` OpenAPI schema field-for-field, and
 // "am I logged in right now" has no place in that contract, only in our own SPA session.
 export interface LoginStatus {
+  /** As of 007-guest-restricted-access, means exactly "a valid administrator session exists" —
+   *  password login can no longer be disabled, so this no longer conflates "authenticated" with
+   *  "the whole instance happens to require no credentials". */
   logged_in: boolean
   /** Drives the homepage's "you're using the default password" warning toast — legacy's own
    * `[% IF usingdefpass %]` (`Controller/Index.pm`). */
   using_default_password: boolean
+  /** Whether the site-wide guest-mode switch is on (007-guest-restricted-access) — on its own
+   *  doesn't guarantee an unauthenticated visitor sees anything (at least one category also needs
+   *  to be `visible_to_guest`), but tells `RouteGuards.tsx`'s `AllowGuest` guard and `Layout.tsx`'s
+   *  nav links whether to attempt scoped guest rendering at all instead of redirecting to /login. */
+  guest_mode_enabled: boolean
 }
 
 // `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` (issue #54) — first-party API token
@@ -693,6 +713,8 @@ export interface BookmarkedPageResponse {
   /** Unix seconds this specific page was bookmarked — for `BookmarkHoverGrid`'s own "sort by when
    * bookmarked" option. Distinct from `BookmarkedArchiveResponse`'s archive-level sort key. */
   bookmarked_at: number
+  /** issue #97: how many stamps currently sit on this page — `0` when none. */
+  stamp_count: number
 }
 
 // `/activity*` (issue #87) — structured, persisted operator activity records, distinct from the

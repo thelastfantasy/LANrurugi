@@ -7,7 +7,8 @@ import { sendForm, sendJson } from "@/api/client"
 import { useArchives, useCategories, useCreateCategory, useTankoubons } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { ArchiveChecklistItem } from "@/components/Display"
+import { Checkbox } from "@/components/common-ui/Form"
+import { ArchiveChecklistItem, SearchSyntaxHelp } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -48,6 +49,7 @@ export function Categories() {
   const [name, setName] = useState("")
   const [search, setSearch] = useState("")
   const [pinned, setPinned] = useState(false)
+  const [visibleToGuest, setVisibleToGuest] = useState(false)
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle")
 
   useApplyTheme()
@@ -86,28 +88,30 @@ export function Categories() {
     setName(selected?.name ?? "")
     setSearch(selected?.search ?? "")
     setPinned(selected?.pinned === 1)
+    setVisibleToGuest(selected?.visible_to_guest === 1)
   }
 
   function refresh() {
     return queryClient.invalidateQueries({ queryKey: ["categories"] })
   }
 
-  // Always sends the *full* current name/search/pinned triple, not just the one field that
-  // changed — `update_category`'s `pinned` has no "leave as-is" sentinel server-side (a bare
-  // `#[serde(default)]` bool, not an `Option`), so omitting it on a plain name edit would
-  // silently un-pin an already-pinned category.
-  async function saveDetails(next: { name?: string; search?: string; pinned?: boolean }) {
+  // Always sends the *full* current name/search/pinned/visible_to_guest quadruple, not just the
+  // one field that changed — neither `pinned` nor `visible_to_guest` has a "leave as-is" sentinel
+  // server-side (both bare `#[serde(default)]` bools, not `Option`s), so omitting either on a
+  // plain name edit would silently reset it to false.
+  async function saveDetails(next: { name?: string; search?: string; pinned?: boolean; visibleToGuest?: boolean }) {
     if (!selectedId) return
     setStatus("saving")
     try {
       await sendForm("PUT", `/categories/${selectedId}`, {
         name: next.name ?? name,
         search: next.search ?? search,
-        // `pinned` deserializes as a plain Rust `bool` on the backend
+        // `pinned`/`visible_to_guest` deserialize as plain Rust `bool`s on the backend
         // (`crates/lanrurugi-api/src/categories.rs::UpdateCategoryParams`) via axum's Form
         // extractor (serde_urlencoded), which only accepts the literal strings "true"/"false" —
         // "1"/"0" fail deserialization with a 422.
         pinned: (next.pinned ?? pinned) ? "true" : "false",
+        visible_to_guest: (next.visibleToGuest ?? visibleToGuest) ? "true" : "false",
       })
       setStatus("saved")
       await refresh()
@@ -152,19 +156,6 @@ export function Categories() {
       toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" })
       setStatus("idle")
     }
-  }
-
-  function predicateHelp() {
-    toast({
-      toastId: "predicateHelp",
-      heading: t("categories.writingAPredicate") ?? undefined,
-      text:
-        t(
-          "categories.predicatesFollowTheSameSyntax",
-        ) ?? undefined,
-      icon: "info",
-      hideAfter: 20000,
-    })
   }
 
   return (
@@ -237,30 +228,52 @@ export function Categories() {
                       <td style={{ textAlign: "right" }}>{t("categories.predicate")}</td>
                       <td>
                         <input value={search} onChange={(e) => setSearch(e.target.value)} onBlur={() => void saveDetails({ search })} />{" "}
-                        <i
-                          id="predicate-help"
-                          style={{ cursor: "pointer" }}
-                          className="fas fa-question-circle"
-                          onClick={predicateHelp}
-                        ></i>
+                        {/* Same rich React-node syntax reference `dialog.tsx`'s own new-category
+                            dialog and the Library page's top search bar both use (`SearchSyntaxHelp`)
+                            — this used to be a plain-text `toast()` call with much thinner content
+                            (a stale, pre-existing `categories.predicatesFollowTheSameSyntax` key),
+                            confirmed live, 2026-08-27, to read as noticeably less helpful side by
+                            side with the other two. `Tooltip` (hover, not click-to-toggle) matches
+                            this icon's existing `cursor: help`-style affordance better than
+                            `ClickPopover` would. */}
+                        <Tooltip label={<SearchSyntaxHelp />}>
+                          <i
+                            id="predicate-help"
+                            style={{ cursor: "pointer" }}
+                            className="fas fa-question-circle"
+                          ></i>
+                        </Tooltip>
                       </td>
                     </tr>
                   )}
                   <tr className="tag-options">
                     <td></td>
                     <td>
-                      <input
+                      <Checkbox
                         id="pinned"
                         name="pinned"
-                        className="fa"
-                        type="checkbox"
                         checked={pinned}
-                        onChange={(e) => {
-                          setPinned(e.target.checked)
-                          void saveDetails({ pinned: e.target.checked })
+                        onCheckedChange={(checked) => {
+                          setPinned(checked)
+                          void saveDetails({ pinned: checked })
                         }}
-                      />
+                      />{" "}
                       <label htmlFor="pinned">{t("categories.pinThisCategory")}</label>
+                    </td>
+                  </tr>
+                  <tr className="tag-options">
+                    <td></td>
+                    <td>
+                      <Checkbox
+                        id="visible-to-guest"
+                        name="visible_to_guest"
+                        checked={visibleToGuest}
+                        onCheckedChange={(checked) => {
+                          setVisibleToGuest(checked)
+                          void saveDetails({ visibleToGuest: checked })
+                        }}
+                      />{" "}
+                      <label htmlFor="visible-to-guest">{t("categories.visibleToGuest")}</label>
                     </td>
                   </tr>
                   <tr className="tag-options">

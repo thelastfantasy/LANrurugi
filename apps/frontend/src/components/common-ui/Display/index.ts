@@ -8,4 +8,6 @@ export * from "./PopupMenu"
 
 export * from "./SortableList"
 
+export * from "./StaticTooltip"
+
 export * from "./Tooltip"

@@ -60,39 +60,39 @@ fn system_actor(subsystem: &str) -> Actor {
 
 /// Resolves `auth` into an [`Actor`] — the one place a `Token`'s current human-readable name is
 /// looked up (`state.api_tokens.get(id)`) and snapshotted into the record, so a since-revoked
-/// token's own history stays legible (see [`Actor::display_name`]'s own docs). `auth: None`
-/// happens on an open instance (`enable_pass=false`), where `require_api_key` never inserts an
-/// `AuthContext` at all — mapped to [`ActorKind::Anonymous`], never silently dropped or panicked
-/// on, mirroring `settings::put_settings`'s own `Option<Extension<AuthContext>>` handling of the
-/// exact same case.
+/// token's own history stays legible (see [`Actor::display_name`]'s own docs). `auth: None` (no
+/// `AuthContext` extracted at all) and `AuthMethod::GuestVisitor` (007-guest-restricted-access)
+/// both map to [`ActorKind::Anonymous`] — neither carries a persistent identity, and in practice
+/// neither should ever reach a write endpoint this function's caller is recording an action for
+/// (every route a guest visitor can reach is GET-only per `route_policy.csv`), but this stays
+/// defensive rather than panicking on either case, mirroring `settings::put_settings`'s own
+/// `Option<Extension<AuthContext>>` handling of the same "no real identity" shape.
 async fn resolve_actor(state: &AppState, auth: Option<&AuthContext>) -> Actor {
-    match auth {
-        None => Actor {
+    match auth.map(|a| &a.method) {
+        None | Some(AuthMethod::GuestVisitor) => Actor {
             kind: ActorKind::Anonymous,
             id: None,
             display_name: None,
         },
-        Some(a) => match &a.method {
-            AuthMethod::Session => Actor {
-                kind: ActorKind::Session,
-                id: None,
-                display_name: None,
-            },
-            AuthMethod::Token { id, .. } => {
-                let display_name = state
-                    .api_tokens
-                    .get(id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|record| record.name);
-                Actor {
-                    kind: ActorKind::Token,
-                    id: Some(id.clone()),
-                    display_name,
-                }
-            }
+        Some(AuthMethod::Session) => Actor {
+            kind: ActorKind::Session,
+            id: None,
+            display_name: None,
         },
+        Some(AuthMethod::Token { id, .. }) => {
+            let display_name = state
+                .api_tokens
+                .get(id)
+                .await
+                .ok()
+                .flatten()
+                .map(|record| record.name);
+            Actor {
+                kind: ActorKind::Token,
+                id: Some(id.clone()),
+                display_name,
+            }
+        }
     }
 }
 

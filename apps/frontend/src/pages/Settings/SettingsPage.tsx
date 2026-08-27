@@ -61,13 +61,31 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [htmltitle, setHtmltitle] = useState(settings.htmltitle)
   const [motd, setMotd] = useState(settings.motd)
   const [language, setLanguage] = useState(settings.language)
+  // The sidebar's own `LanguageSelector` (rendered lower on this same page) writes
+  // `settings.language` directly and expects the Global section's "Language" dropdown to reflect
+  // that pick immediately, not just after a reload — every other field here is fine staying a
+  // one-time snapshot (`useState(settings.x)`) because nothing *else* on this page writes to
+  // `settings` mid-render, but `language` is the one exception now that a second control writes
+  // it. React's own recommended "adjusting state when a prop changes" pattern (setState directly
+  // during render when a tracked value changes, not inside a `useEffect` — same convention
+  // `Categories.tsx`'s own `syncedId` already establishes in this codebase) rather than an effect,
+  // which this project's lint rules flag as cascading-render-prone. The tradeoff (an in-progress,
+  // unsaved edit to *this* dropdown specifically could be clobbered by a concurrent sidebar pick)
+  // is accepted as the much less likely case to actually happen in practice.
+  const [syncedLanguage, setSyncedLanguage] = useState(settings.language)
+  if (syncedLanguage !== settings.language) {
+    setSyncedLanguage(settings.language)
+    setLanguage(settings.language)
+  }
   const [pagesize, setPagesize] = useState(settings.pagesize)
   const [enableresize, setEnableresize] = useState(settings.enableresize)
   const [sizethreshold, setSizethreshold] = useState(settings.sizethreshold)
   const [readerquality, setReaderquality] = useState(settings.readerquality)
   const [localprogress, setLocalprogress] = useState(settings.localprogress)
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
-  const [devmode, setDevmode] = useState(settings.devmode)
+  const [stampautobookmark, setStampautobookmark] = useState(settings.stampautobookmark)
+  const [stampautounbookmark, setStampautounbookmark] = useState(settings.stampautounbookmark)
+  const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
   // Incremented after each save to remount GlobalSection (resets editingKey).
@@ -76,10 +94,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   // `keyInput` holds whatever the user types when they actively choose to set/change it.
   const [keyInput, setKeyInput] = useState("")
 
-  const [enablepass, setEnablepass] = useState(settings.enablepass)
   const [newPassword, setNewPassword] = useState("")
   const [newPassword2, setNewPassword2] = useState("")
-  const [nofunmode, setNofunmode] = useState(settings.nofunmode)
   const [accessTokenLifetimeSecs, setAccessTokenLifetimeSecs] = useState(settings.access_token_lifetime_secs)
   const [refreshTokenLifetimeSecs, setRefreshTokenLifetimeSecs] = useState(settings.refresh_token_lifetime_secs)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
@@ -113,9 +129,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       readerquality !== settings.readerquality ||
       localprogress !== settings.localprogress ||
       authprogress !== settings.authprogress ||
-      devmode !== settings.devmode ||
-      enablepass !== settings.enablepass ||
-      nofunmode !== settings.nofunmode ||
+      stampautobookmark !== settings.stampautobookmark ||
+      stampautounbookmark !== settings.stampautounbookmark ||
+      guestmode !== settings.guestmode ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
       refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
       enablecors !== settings.enablecors ||
@@ -134,7 +150,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recommendprecision !== settings.recommendprecision,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
-      localprogress, authprogress, devmode, enablepass, nofunmode, accessTokenLifetimeSecs,
+      localprogress, authprogress, stampautobookmark, stampautounbookmark, guestmode, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
@@ -143,7 +159,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   )
 
   async function handleSave() {
-    if (enablepass && newPassword) {
+    // Password login can no longer be disabled (007-guest-restricted-access) — a new-password
+    // submission is no longer gated on an `enablepass` toggle, only on the field being filled in.
+    if (newPassword) {
       if (newPassword !== newPassword2) {
         setStatus(t("settings.passwordsDonTMatch") ?? "")
         return
@@ -162,9 +180,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       readerquality,
       localprogress,
       authprogress,
-      devmode,
-      enablepass,
-      nofunmode,
+      stampautobookmark,
+      stampautounbookmark,
+      guestmode,
       access_token_lifetime_secs: accessTokenLifetimeSecs,
       refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
       enablecors,
@@ -272,8 +290,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setLocalprogress={setLocalprogress}
             authprogress={authprogress}
             setAuthprogress={setAuthprogress}
-            devmode={devmode}
-            setDevmode={setDevmode}
+            stampautobookmark={stampautobookmark}
+            setStampautobookmark={setStampautobookmark}
+            stampautounbookmark={stampautounbookmark}
+            setStampautounbookmark={setStampautounbookmark}
+            guestmode={guestmode}
+            setGuestmode={setGuestmode}
             newbadgemode={newbadgemode}
             setNewbadgemode={setNewbadgemode}
             llmApiKeySet={settings.llm_api_key_set}
@@ -336,14 +358,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </CollapsibleSection>
 
           <SecuritySection
-            enablepass={enablepass}
-            setEnablepass={setEnablepass}
             newPassword={newPassword}
             setNewPassword={setNewPassword}
             newPassword2={newPassword2}
             setNewPassword2={setNewPassword2}
-            nofunmode={nofunmode}
-            setNofunmode={setNofunmode}
             accessTokenLifetimeSecs={accessTokenLifetimeSecs}
             setAccessTokenLifetimeSecs={setAccessTokenLifetimeSecs}
             refreshTokenLifetimeSecs={refreshTokenLifetimeSecs}

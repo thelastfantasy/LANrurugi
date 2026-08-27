@@ -31,6 +31,12 @@ pub enum AuthConfigError {
     Pool(#[from] deadpool_redis::PoolError),
     #[error("redis error: {0}")]
     Redis(#[from] deadpool_redis::redis::RedisError),
+    /// `guestmode` is a required `LRR_CONFIG` field as of 007-guest-restricted-access —
+    /// deliberately a hard error rather than a silent default: an instance predating this feature
+    /// must be migrated once via the dedicated migration tool, not carry a permanent runtime
+    /// fallback for a field every real deployment is expected to have going forward.
+    #[error("required LRR_CONFIG field {0:?} missing — run the migration tool")]
+    MissingField(&'static str),
 }
 
 const SESSION_SECRET_FIELD: &str = "session_secret";
@@ -41,15 +47,13 @@ pub const DEFAULT_PASSWORD_HASH: &str =
     "{CRYPT}$2a$08$4AcMwwkGXnWtFTOLuw/hduQlRdqWQIBzX3UuKn.M1qTFX5R4CALxy";
 
 pub struct LiveAuthConfig {
-    pub enable_pass: bool,
-    /// `nofunmode` (`Model/Config.pm::enable_nofun`) — legacy's real effect is forcing every
-    /// request through the login check *even when `enable_pass` is off*, so an admin can't
-    /// accidentally leave the whole library open by disabling password protection while still
-    /// believing No-Fun Mode is hiding it from anonymous visitors (`Utils/Routing.pm`'s
-    /// `logged_in_api`, applied unconditionally once `enable_nofun` is set, independent of
-    /// `enable_pass`'s own gate). Consumed by `procedure::require_api_key`'s `!enable_pass`
-    /// short-circuit, which this field disables.
-    pub no_fun_mode: bool,
+    /// 007-guest-restricted-access: the site-wide guest-mode master switch (`guestmode` setting) —
+    /// on its own it grants nothing; `procedure::require_api_key`'s guest-eligibility branch also
+    /// requires at least one `Category::visible_to_guest` before treating an unauthenticated
+    /// request as `AuthMethod::GuestVisitor` (spec FR-005/FR-006). Replaces the removed
+    /// `enable_pass`/`no_fun_mode` — password login is unconditional now, so there is no longer an
+    /// "open instance" concept for this struct to represent.
+    pub guest_mode_enabled: bool,
     pub password_hash: String,
     pub session_secret: Vec<u8>,
     /// Overridable via the `access_token_lifetime_secs` setting (`settings.rs::NUMBER_FIELDS`) —
@@ -69,11 +73,10 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
     let mut conn = state.redis.config.get().await?;
     let fields: HashMap<String, String> = conn.hgetall(CONFIG_KEY).await?;
 
-    let enable_pass = fields
-        .get("enablepass")
+    let guest_mode_enabled = fields
+        .get("guestmode")
         .map(|v| v != "0")
-        .unwrap_or(state.auth.enable_pass);
-    let no_fun_mode = fields.get("nofunmode").map(|v| v != "0").unwrap_or(false);
+        .ok_or(AuthConfigError::MissingField("guestmode"))?;
     let password_hash = fields
         .get("password")
         .cloned()
@@ -99,8 +102,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
     };
 
     Ok(LiveAuthConfig {
-        enable_pass,
-        no_fun_mode,
+        guest_mode_enabled,
         password_hash,
         session_secret,
         access_token_lifetime_secs,

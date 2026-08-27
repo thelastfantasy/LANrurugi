@@ -24,6 +24,7 @@ export function RecentlyAddedCarousel({
   hideCompleted,
   groupbyTanks,
   cropThumbs,
+  loggedIn,
   onContextMenu,
   onOpen,
   multiSelect,
@@ -42,6 +43,12 @@ export function RecentlyAddedCarousel({
   hideCompleted: boolean
   groupbyTanks: boolean
   cropThumbs: boolean
+  /** 007-guest-restricted-access: gates the "Bookmarked" carousel mode — an unauthenticated guest
+   * has no personal bookmarks (bookmarking itself is a write action guest_visitor's Casbin policy
+   * already denies), so offering a mode whose own `GET /bookmarks` call would just come back
+   * empty is a confusing dead end rather than a real feature, even though that GET itself is
+   * technically reachable by a guest. */
+  loggedIn: boolean
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata, source: "carousel") => void
   onOpen: (id: string) => void
   multiSelect: boolean
@@ -61,9 +68,14 @@ export function RecentlyAddedCarousel({
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(() => localStorage.getItem(CAROUSEL_OPEN_KEY) === "1")
-  const [mode, setMode] = useState<CarouselMode>(
+  const [storedMode, setMode] = useState<CarouselMode>(
     () => (localStorage.getItem(CAROUSEL_TYPE_KEY) as CarouselMode | null) ?? "ondeck",
   )
+  // A logged-out guest previously left in "Bookmarked" mode (the localStorage value from a
+  // prior, authenticated session) falls back to "On Deck" rather than rendering an empty
+  // "Bookmarked" carousel with no way to explain why — the persisted preference itself is left
+  // alone so it resumes once the same browser logs back in.
+  const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode
   const [menuOpen, setMenuOpen] = useState(false)
   const carouselRef = useRef<HTMLDivElement>(null)
   const lenisRef = useRef<Lenis | null>(null)
@@ -103,8 +115,11 @@ export function RecentlyAddedCarousel({
     return () => document.removeEventListener("keydown", onKeyDown)
   }, [menuOpen])
   useEffect(() => {
-    localStorage.setItem(CAROUSEL_TYPE_KEY, mode)
-  }, [mode])
+    // Persists `storedMode` (the real, user-chosen preference), not `mode` (its guest-aware
+    // fallback) — a logged-out guest's "Bookmarked" preference from a prior session must survive
+    // this render's fallback-to-"On Deck" and still be there once the same browser logs back in.
+    localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode)
+  }, [storedMode])
 
   // Legacy's own `enterSelectionCarouselMode` (`index.js`) force-expands the carousel — entering
   // MSM with it collapsed would otherwise hide the very selection list the mode exists to show.
@@ -316,7 +331,11 @@ export function RecentlyAddedCarousel({
                   portal={false}
                   style={{ position: "absolute", top: "100%", right: 0, zIndex: Z_OVERLAY_CONTENT }}
                 >
-                  {(["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[]).map((m) => (
+                  {(
+                    loggedIn
+                      ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
+                      : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
+                  ).map((m) => (
                     <PopupMenuItem
                       key={m}
                       style={{ fontWeight: m === mode ? "bold" : undefined }}

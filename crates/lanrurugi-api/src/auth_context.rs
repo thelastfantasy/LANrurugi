@@ -16,6 +16,11 @@ pub enum AuthMethod {
     /// secret, which is never retained past issuance) — carried through for tracing/audit
     /// ("which token did this").
     Token { id: String, role: TokenRole },
+    /// 007-guest-restricted-access: an unauthenticated caller granted scoped access because guest
+    /// mode is on and at least one category is `visible_to_guest` — carries no persistent
+    /// identity (no id, no role), unlike `Token`, since a guest visitor is re-evaluated fresh on
+    /// every single request against current config rather than representing a stored credential.
+    GuestVisitor,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +57,7 @@ impl AuthContext {
         match &self.method {
             AuthMethod::Session => "session".to_string(),
             AuthMethod::Token { id, .. } => format!("token:{id}"),
+            AuthMethod::GuestVisitor => "guest_visitor".to_string(),
         }
     }
 }

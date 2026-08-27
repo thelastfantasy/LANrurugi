@@ -154,7 +154,14 @@ export function ArchiveContextMenu({
             not the 85%-complete threshold `hidecompleted`/On Deck use elsewhere — those answer a
             different question ("is this basically finished, worth hiding from an in-progress
             list") than this menu item's own binary read/unread state. */}
-        {!isTank && archive.pagecount > 0 && (
+        {/* 007-guest-restricted-access: neither "mark as read/unread" (progress) nor "download"
+            was actually gated on `loggedIn` before this — both are real write/raw-file actions a
+            guest_visitor's Casbin policy already denies server-side (progress is PUT, download has
+            its own explicit deny rule), but the menu item itself stayed visible and clickable,
+            surfacing a confusing failed-request error instead of just not offering the action at
+            all — the same UI-affordance-matches-real-permission gap Edit/Delete/Rating/Category
+            below already avoid. */}
+        {loggedIn && !isTank && archive.pagecount > 0 && (
           <PopupMenuItem
             onClick={() => {
               onClose()
@@ -165,7 +172,7 @@ export function ArchiveContextMenu({
             {archive.progress > 0 ? t("library.markAsUnread") : t("library.markAsRead")}
           </PopupMenuItem>
         )}
-        {!isTank && (
+        {loggedIn && !isTank && (
           <PopupMenuItem
             onClick={() => {
               onClose()

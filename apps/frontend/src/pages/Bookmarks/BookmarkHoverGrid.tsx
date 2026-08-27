@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
-import { FaTrashCan } from "react-icons/fa6"
+import { FaStamp, FaTrashCan } from "react-icons/fa6"
 import { useNavigate } from "react-router-dom"
 
 import { useBookmarksForArchive, useRemoveBookmark } from "@/api/hooks"
@@ -171,7 +171,7 @@ export function BookmarkHoverGrid({
   // until the query's real data replaces it a render or two later; `pageAsc`'s own tie-break
   // (`page` itself) keeps that brief window looking identical to the pre-this-setting behavior.
   const sortedPages = sortPagesByOrder(
-    bookmarkedPages.data ?? pages.map((page) => ({ page, filename: null, bookmarked_at: 0 })),
+    bookmarkedPages.data ?? pages.map((page) => ({ page, filename: null, bookmarked_at: 0, stamp_count: 0 })),
     pageOrder,
   )
   const livePages = sortedPages.map((b) => b.page)
@@ -511,6 +511,7 @@ export function BookmarkHoverGrid({
         >
           {orderedPages.map((page) => {
             const filename = bookmarkedPages.data?.find((b) => b.page === page)?.filename ?? null
+            const stampCount = bookmarkedPages.data?.find((b) => b.page === page)?.stamp_count ?? 0
             return (
               <a
                 key={page}
@@ -534,6 +535,35 @@ export function BookmarkHoverGrid({
                     display: "block",
                   }}
                 />
+                {/* issue #97: a stamp-count badge, top-left — mirrors the delete button's own
+                    top-right `position: absolute` placement below. `FaStamp` (react-icons/fa6's
+                    real ink-stamp SVG, matching the Font Awesome `fa-stamp` glyph the reader
+                    toolbar's own stamp-placement button uses) reads as "the stamp feature itself"
+                    — confirmed against a user's own screenshot as the expected icon here, same
+                    correction applied to that toolbar button (2026-08-27); `dialog.tsx`'s own
+                    `fa-thumbtack` default is a *per-stamp* fallback icon (used when an individual
+                    stamp has no custom icon set), a narrower, different role than this badge's
+                    "does this page have any stamps at all." */}
+                {stampCount > 0 && (
+                  <div style={{ position: "absolute", top: 2, left: 2, display: "flex" }}>
+                    <span
+                      title={t("bookmarks.pageHasStamps", { count: stampCount }) ?? undefined}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 3,
+                        background: "rgba(0,0,0,0.55)",
+                        color: "#fff",
+                        borderRadius: 10,
+                        fontSize: FONT_SIZE_SM,
+                        padding: "1px 6px",
+                      }}
+                    >
+                      <FaStamp size={9} aria-hidden="true" />
+                      {stampCount}
+                    </span>
+                  </div>
+                )}
                 {/* Wrapped in its own `onClick` (bubble phase) — this button is nested inside the
                     cell's `<a>` (needed so the delete affordance sits visually inside each
                     thumbnail, top-right), so a click here bubbles up through the `<a>` unless

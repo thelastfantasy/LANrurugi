@@ -30,7 +30,7 @@ export function Switch({
     <BaseSwitch.Root
       checked={checked}
       onCheckedChange={onCheckedChange}
-      className="lrr-switch inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-bold outline-none"
+      className="lrr-switch inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 font-bold outline-none data-disabled:cursor-not-allowed data-disabled:opacity-50"
       {...rootProps}
     >
       {checked ? <FaToggleOn size={20} aria-hidden="true" /> : <FaToggleOff size={20} aria-hidden="true" />}

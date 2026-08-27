@@ -43,12 +43,22 @@ const ROUTE_POLICY: &str = include_str!("../policy/route_policy.csv");
 const ACTIVITY_MODEL: &str = include_str!("../policy/activity_model.conf");
 const ACTIVITY_POLICY: &str = include_str!("../policy/activity_policy.csv");
 
-/// The three fixed roles [`AuthContext`] ever resolves to — a `&'static str` (not a `TokenRole`
-/// re-export) since Casbin's `enforce` takes plain strings and `Session`/`Anonymous` have no
-/// `TokenRole` counterpart to reuse in the first place.
+/// The fixed roles [`AuthContext`] ever resolves to — a `&'static str` (not a `TokenRole`
+/// re-export) since Casbin's `enforce` takes plain strings and `Session`/`GuestVisitor` have no
+/// `TokenRole` counterpart to reuse in the first place. `None` (no `AuthContext` at all) can no
+/// longer occur as of 007-guest-restricted-access — password login is unconditional, and an
+/// unauthenticated-but-guest-eligible request is now `AuthMethod::GuestVisitor`, a real
+/// `AuthContext`, not the absence of one; `require_api_key` never reaches `check_route` at all for
+/// a request that is neither authenticated nor guest-eligible (it rejects with `401` first). The
+/// `"anonymous"` Casbin subject this function used to be able to produce is removed from
+/// `route_policy.csv` for the same reason — nothing constructs it anymore.
 fn subject_role(auth: Option<&AuthContext>) -> &'static str {
     match auth.map(|a| &a.method) {
-        None => "anonymous",
+        None => unreachable!(
+            "require_api_key never calls check_route with auth: None as of \
+             007-guest-restricted-access — an eligible unauthenticated request is \
+             AuthMethod::GuestVisitor, and an ineligible one is rejected before check_route runs"
+        ),
         Some(AuthMethod::Session) => "session",
         Some(AuthMethod::Token {
             role: TokenRole::Admin,
@@ -58,6 +68,7 @@ fn subject_role(auth: Option<&AuthContext>) -> &'static str {
             role: TokenRole::Guest,
             ..
         }) => "token_guest",
+        Some(AuthMethod::GuestVisitor) => "guest_visitor",
     }
 }
 
@@ -357,15 +368,37 @@ mod tests {
         assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
     }
 
+    /// 007-guest-restricted-access: `guest_visitor` gets the same GET-only shape `token_guest`
+    /// already has, plus one deny neither `token_guest` nor `token_admin` need —
+    /// `/archives/:id/download` — since downloading a raw archive file is a bulk-export capability
+    /// spec FR-009 explicitly excludes for an unauthenticated guest, while the reader's own
+    /// per-page image fetch (`/archives/:id/page`, also GET) must stay allowed (spec FR-008).
     #[tokio::test]
-    async fn anonymous_open_instance_may_call_ordinary_routes_but_not_session_only_ones() {
-        // `require_api_key` only ever short-circuits (no `AuthContext` inserted at all) when
-        // `enable_pass=false` — the four session-only routes still individually go through
-        // `check_route` in that case, `auth: None`.
+    async fn guest_visitor_is_read_only_and_cannot_download_raw_archives() {
         let e = route_enforcer().await;
-        assert!(check_route(&e, None, "/api/archives", "GET"));
-        assert!(!check_route(&e, None, "/api/database/drop", "POST"));
-        assert!(!check_route(&e, None, "/api/tokens", "GET"));
+        let guest = guest_visitor_auth();
+        assert!(check_route(&e, Some(&guest), "/api/archives", "GET"));
+        assert!(check_route(
+            &e,
+            Some(&guest),
+            "/api/archives/abc/page",
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&guest),
+            "/api/archives/abc/download",
+            "GET"
+        ));
+        assert!(!check_route(&e, Some(&guest), "/api/archives/abc", "PUT"));
+        assert!(!check_route(
+            &e,
+            Some(&guest),
+            "/api/archives/abc",
+            "DELETE"
+        ));
+        assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
+        assert!(!check_route(&e, Some(&guest), "/api/database/drop", "POST"));
     }
 
     fn session_auth() -> AuthContext {
@@ -381,6 +414,13 @@ mod tests {
                 id: "tok1".to_string(),
                 role,
             },
+            client_ip: None,
+        }
+    }
+
+    fn guest_visitor_auth() -> AuthContext {
+        AuthContext {
+            method: AuthMethod::GuestVisitor,
             client_ip: None,
         }
     }

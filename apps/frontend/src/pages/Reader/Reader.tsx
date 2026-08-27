@@ -20,6 +20,7 @@ import {
   useRemoveBookmark,
   useSettings,
   useUpdateProgress,
+  useUpdateSettings,
   useUpdateTankoubonProgress,
 } from "@/api/hooks"
 import { Tooltip } from "@/components/common-ui/Display"
@@ -29,6 +30,7 @@ import { confirmDialog, promptDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { clamp, computeNextPage, computeSpread } from "@/hooks/useReaderNavigation"
 import { useReaderSettings } from "@/hooks/useReaderSettings"
+import { useSupportsHover } from "@/hooks/useSupportsHover"
 import { useTankoubonReading } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
 import { getTagSearchURL } from "@/lib/tagFormat"
@@ -132,6 +134,7 @@ export function Reader() {
   // `htmltitle`, matching the pre-load state) while still loading.
   useDocumentTitle(metadata.data?.title)
   const settings = useSettings()
+  const updateSettings = useUpdateSettings()
   const loginStatus = useLoginStatus()
   const categories = useCategories()
   const bookmarks = useBookmarksForArchive(archiveId)
@@ -219,6 +222,12 @@ export function Reader() {
   // `null` = checked, not converted; `undefined` = not checked yet (see `onImageLoad`).
   const [resizedPageInfo, setResizedPageInfo] = useState<Record<number, ResizedPageInfo | null>>({})
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false)
+  // Gates the mobile-only stamp-placement toolbar icon below (`S` has no equivalent on a device
+  // with no physical keyboard) — `!supportsHover` is this app's own established "is this a
+  // touch-only device" proxy (`useSupportsHover`'s own docs, already used the same way by
+  // `BookmarkedArchiveHoverCard`'s tap-to-expand fallback), not a raw viewport-width check, since
+  // a touch laptop with a keyboard still has `S` available and shouldn't show a redundant icon.
+  const supportsHover = useSupportsHover()
   const [navState, setNavState] = useState<ArchiveNavState>({ ids: [], index: -1 })
   // Resuming a slideshow across an archive boundary (legacy stashes this in `sessionStorage`
   // before navigating away — see `readAdjacentArchive` below) is a pure read of already-set-
@@ -1167,8 +1176,13 @@ export function Reader() {
   // `MarkerLayer`'s own `imageRef` only ever pointing at this one. `zIndex: 22` beats the
   // overlay's own 21 (`.focus-overlay` in `/legacy/lrr.css`) so the image stays fully visible and
   // clickable above the dimmed backdrop instead of getting dimmed along with everything else.
+  // `touchAction: "none"` (only while actually in placement mode — normal reading still needs the
+  // image to allow whatever native scroll/zoom gestures it otherwise supports) — without it, a
+  // touch-drag to place a rectangle stamp races the browser's own default scroll/pinch-zoom
+  // handling for this element, same reasoning `MarkerLayer.tsx`'s own per-marker `touchAction:
+  // "none"` docs explain for the markers themselves.
   const placementImageStyle: React.CSSProperties = markerPlacementMode
-    ? { ...imageStyle, zIndex: 22, cursor: "cell" }
+    ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
     : imageStyle
 
   // Shared between the `?` icon's hover-tooltip preview and the same icon's click/`H`-key full
@@ -1259,6 +1273,42 @@ export function Reader() {
             setOverlay((prev) => (prev === "settings" ? null : "settings"))
           }}
         />
+        {/* Mobile-only equivalent of the `S` keyboard shortcut (`Reader.tsx`'s own `onKeyDown`
+            handler above) — a touch device has no physical keyboard to press `S` on at all, so
+            without this the stamp feature (otherwise fully touch-usable — `MarkerLayer.tsx`'s own
+            Pointer Events rework) had no way to actually *enter* placement mode on mobile in the
+            first place. Same two gates the keyboard shortcut itself already applies
+            (`!readerSettings.infiniteScroll && loggedIn`) plus `!supportsHover` to hide it on a
+            device that already has `S` available — a mouse/trackpad user seeing a redundant icon
+            next to a shortcut they already know isn't the goal here. */}
+        {!supportsHover && !readerSettings.infiniteScroll && loggedIn && (
+          <a
+            // `fa-stamp` (not `fa-thumbtack`, this button's own first pick) — this toolbar button
+            // triggers *placement mode* for the stamp feature as a whole, not one specific stamp;
+            // `fa-thumbtack` is `dialog.tsx`'s own default *per-stamp* icon (used when a stamp has
+            // no custom icon set, `renderStampIcon`'s own fallback) and one of its selectable
+            // icons, a different, narrower role than "this button turns on stamp-placement mode."
+            // `fa-stamp`'s real ink-stamp glyph reads as the feature itself, matching a user's own
+            // screenshot of the icon they expected here, 2026-08-27 — `fa-thumbtack` reading as
+            // "pin a note" was a mismatch for that role even though it's a legitimate stamp icon
+            // in its own, narrower context.
+            className="fas fa-stamp fa-2x"
+            href="#"
+            title={t("reader.placeStamp") ?? undefined}
+            // Same "filled vs. outline reads as the on/off state" language the bookmark icon
+            // right next to it already uses (`isPageBookmarked ? "fas" : "far"`) would need a
+            // `far` (outline) variant of this specific glyph, which Font Awesome's free tier
+            // doesn't ship for `fa-stamp` either — an opacity dim is the next-closest "this is
+            // currently active" cue without introducing a mismatched visual language of its own
+            // (e.g. a background pill `.toggled` wasn't designed for, and visibly looks like a
+            // pressed button rather than a plain toolbar icon here).
+            style={{ marginRight: 3, opacity: markerPlacementMode ? 1 : 0.55 }}
+            onClick={(e) => {
+              e.preventDefault()
+              setMarkerPlacementMode((prev) => !prev)
+            }}
+          />
+        )}
         <a
           className={`${isPageBookmarked ? "fas" : "far"} fa-bookmark fa-2x toggle-bookmark${loggedIn ? "" : " disabled"}`}
           href="#"
@@ -1613,6 +1663,7 @@ export function Reader() {
                 visible={readerSettings.markersVisible}
                 placementMode={markerPlacementMode}
                 onPlaced={() => setMarkerPlacementMode(false)}
+                loggedIn={loggedIn}
               />
             )}
           </div>
@@ -1677,6 +1728,9 @@ export function Reader() {
           settings={readerSettings}
           update={updateReaderSettings}
           onClose={() => setOverlay(null)}
+          stampAutoBookmark={settings.data?.stampautobookmark ?? true}
+          stampAutoUnbookmark={settings.data?.stampautounbookmark ?? true}
+          onUpdateServerSetting={(partial) => updateSettings.mutateAsync(partial)}
         />
       )}
 

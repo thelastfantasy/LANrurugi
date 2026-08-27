@@ -7,17 +7,17 @@ p, token_admin, /api/*, DELETE, allow
 
 p, token_guest, /api/*, GET, allow
 
-# `enable_pass=false` (an intentionally open instance) never inserts an `AuthContext` at all —
-# `require_api_key` short-circuits straight past every check *except* still running `check_route`
-# with `auth: None` for the four session-only routes below (see `procedure.rs`'s own docs: the
-# no_fun_mode carve-out is a separate, narrower concern). `anonymous` therefore needs the same
-# "everything except session-only routes" shape `token_admin` has, not `token_guest`'s stricter
-# GET-only shape — the pre-Casbin behavior being replicated here never limited an open instance's
-# anonymous callers to read-only.
-p, anonymous, /api/*, GET, allow
-p, anonymous, /api/*, POST, allow
-p, anonymous, /api/*, PUT, allow
-p, anonymous, /api/*, DELETE, allow
+# 007-guest-restricted-access: an unauthenticated caller `require_api_key` has determined is
+# eligible for scoped guest access (site-wide `guestmode` switch on, at least one
+# `Category.visible_to_guest`). Same GET-only shape as `token_guest` — never `anonymous`'s old
+# unrestricted-read-write shape (that role and the `enable_pass=false` open-instance concept it
+# represented are both removed entirely; password login can no longer be disabled, so there is no
+# longer any caller with `token_admin`-equivalent access and no credentials). Category-level
+# content scoping (which archives a guest_visitor may actually see within an allowed route) is a
+# resource-level concern this route-level policy has no mechanism for — enforced in application
+# code instead (`SearchParams.restrict_to_archive_ids`, `archives.rs`'s own guest-scope membership
+# checks), same architectural split this file's own two-Enforcer design already documents.
+p, guest_visitor, /api/*, GET, allow
 
 # `MatchedPath` (read by `require_api_key`, which is `.layer()`-ed on the router *before* it's
 # `.nest("/api", ...)`-ed into the top-level app — see `app.rs::build_app`) reflects the full
@@ -63,19 +63,29 @@ p, token_guest, /api/plugin-wizard/generate/stream/:id, GET, deny
 p, token_guest, /api/plugin-wizard/trial-run, POST, deny
 p, token_guest, /api/plugin-wizard/save, POST, deny
 
-p, anonymous, /api/activity, DELETE, deny
-p, anonymous, /api/activity/:id, DELETE, deny
-p, anonymous, /api/activity/retention, PUT, deny
-p, anonymous, /api/archives, DELETE, deny
-p, anonymous, /api/database/drop, POST, deny
-p, anonymous, /api/settings/password, POST, deny
-p, anonymous, /api/tokens, GET, deny
-p, anonymous, /api/tokens, POST, deny
-p, anonymous, /api/tokens/:id, PATCH, deny
-p, anonymous, /api/tokens/:id, DELETE, deny
-p, anonymous, /api/plugin-wizard/lookup, POST, deny
-p, anonymous, /api/plugin-wizard/analyze-login, POST, deny
-p, anonymous, /api/plugin-wizard/generate/start, POST, deny
-p, anonymous, /api/plugin-wizard/generate/stream/:id, GET, deny
-p, anonymous, /api/plugin-wizard/trial-run, POST, deny
-p, anonymous, /api/plugin-wizard/save, POST, deny
+# Same session-only deny list as token_guest's own above (verbatim — kept in sync deliberately,
+# not derived, so a future addition to one doesn't silently drift from the other).
+p, guest_visitor, /api/activity, DELETE, deny
+p, guest_visitor, /api/activity/:id, DELETE, deny
+p, guest_visitor, /api/activity/retention, PUT, deny
+p, guest_visitor, /api/archives, DELETE, deny
+p, guest_visitor, /api/database/drop, POST, deny
+p, guest_visitor, /api/settings/password, POST, deny
+p, guest_visitor, /api/tokens, GET, deny
+p, guest_visitor, /api/tokens, POST, deny
+p, guest_visitor, /api/tokens/:id, PATCH, deny
+p, guest_visitor, /api/tokens/:id, DELETE, deny
+p, guest_visitor, /api/plugin-wizard/lookup, POST, deny
+p, guest_visitor, /api/plugin-wizard/analyze-login, POST, deny
+p, guest_visitor, /api/plugin-wizard/generate/start, POST, deny
+p, guest_visitor, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, guest_visitor, /api/plugin-wizard/trial-run, POST, deny
+p, guest_visitor, /api/plugin-wizard/save, POST, deny
+
+# guest_visitor-only: unlike token_admin/token_guest (both real authenticated identities the
+# download endpoint was always meant to serve), downloading a raw archive file is a bulk-export
+# capability spec FR-009 explicitly excludes from what an unauthenticated guest may do — the one
+# GET route that must NOT inherit the blanket GET-allow above. `GET /archives/:id/page` (the
+# reader's own per-page image fetch, spec FR-008 explicitly requires) is deliberately NOT denied
+# here — same HTTP method, different route, different spec requirement.
+p, guest_visitor, /api/archives/:id/download, GET, deny

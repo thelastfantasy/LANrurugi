@@ -3,9 +3,11 @@
 //! those three concerns across separate files.
 //!
 //! [`require_api_key`] is the single gate, `.layer()`-ed on the whole protected router
-//! (`lanrurugi-server`'s `app.rs`). Resolves *who* is making this request (a real session, or a
-//! first-party API token with a role), rejects outright if that's nobody, records one structured
-//! trace event (`operator`, `client_ip`), inserts [`crate::auth_context::AuthContext`] into the
+//! (`lanrurugi-server`'s `app.rs`). Resolves *who* is making this request (a real session, a
+//! first-party API token with a role, or — 007-guest-restricted-access — an unauthenticated
+//! caller eligible for scoped guest access), rejects outright if none of those apply, records one
+//! structured trace event (`operator`, `client_ip`), inserts [`crate::auth_context::AuthContext`]
+//! into the
 //! request's extensions, and — via [`crate::authz::check_route`] against `policy/route_policy.csv`
 //! — rejects any request the resolved role isn't allowed to make against the actual matched route
 //! (`axum::extract::MatchedPath`) and method, covering both a `Guest`-role token's blanket
@@ -59,23 +61,6 @@ pub async fn require_api_key(
         }
     };
 
-    // `no_fun_mode` deliberately overrides this bypass — see that field's own docs
-    // (`LiveAuthConfig::no_fun_mode`) for why `enable_pass: false` must not mean "wide open" once
-    // No-Fun Mode is on. No `AuthContext` is ever inserted here (there's no identity to attach —
-    // this is the literal "anyone at all" case), but the Session-only routes must still be
-    // unreachable even on an open instance (`route_policy.csv`'s own `anonymous` deny rules for
-    // `/tokens*`/`/database/drop`/`/settings/password` exist specifically for this — an open
-    // instance was never meant to let a random caller drop the whole database), so this still
-    // routes through `check_route` with `auth: None` rather than skipping straight to `next`.
-    if !cfg.enable_pass && !cfg.no_fun_mode {
-        let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
-        let authz = crate::authz::Authz::get().await;
-        if !crate::authz::check_route(&authz.route, None, &obj, request.method().as_str()) {
-            return route_forbidden_response();
-        }
-        return next.run(request).await;
-    }
-
     let client_ip = client_ip(request.headers(), peer_addr);
 
     if let Some(bearer_token) = bearer_token(request.headers()) {
@@ -125,6 +110,35 @@ pub async fn require_api_key(
         trace_request(&request, &auth, true);
         request.extensions_mut().insert(auth);
         return next.run(request).await;
+    }
+
+    // 007-guest-restricted-access, FR-005/FR-006: neither a valid token nor a valid session was
+    // presented — the request is unauthenticated. It's still eligible for scoped guest access if
+    // the site-wide switch is on AND at least one category is guest-visible; otherwise this falls
+    // through to the same 401 the rest of this function has always returned for "nobody at all".
+    // Re-checked on every single request (never cached) — spec FR-015 requires a config change to
+    // take effect immediately, not only for new requests started after some cache window expires.
+    if cfg.guest_mode_enabled {
+        match state.repos.categories.list_all().await {
+            Ok(categories) if categories.iter().any(|c| c.visible_to_guest) => {
+                let auth = AuthContext {
+                    method: AuthMethod::GuestVisitor,
+                    client_ip,
+                };
+                if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
+                    trace_request(&request, &auth, false);
+                    return route_forbidden_response();
+                }
+                trace_request(&request, &auth, true);
+                request.extensions_mut().insert(auth);
+                return next.run(request).await;
+            }
+            Ok(_) => {} // guest mode on, but zero categories visible — fall through to 401
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to check guest-visible categories");
+                // Fails closed: a Redis hiccup here must not silently grant guest access.
+            }
+        }
     }
 
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
@@ -249,10 +263,9 @@ mod tests {
     use super::*;
     use crate::auth::LiveAuthConfig;
 
-    fn cfg(enable_pass: bool) -> LiveAuthConfig {
+    fn cfg() -> LiveAuthConfig {
         LiveAuthConfig {
-            enable_pass,
-            no_fun_mode: false,
+            guest_mode_enabled: false,
             password_hash: String::new(),
             session_secret: Vec::new(),
             access_token_lifetime_secs: 3_600,
@@ -268,25 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn open_instance_bypasses_session_check() {
-        // `enable_pass: false` is checked directly in `require_api_key` before either credential
-        // path runs — no cookie/token needed to be "authorized" on an open instance. Exercised
-        // here at the `LiveAuthConfig` level since `require_api_key` itself needs a live
-        // `AppState`/Redis to run end-to-end (see `lanrurugi-server`'s `tests/auth_flow.rs`).
-        assert!(!cfg(false).enable_pass);
-    }
-
-    #[test]
-    fn no_fun_mode_overrides_the_open_instance_bypass() {
-        // The actual condition `require_api_key` checks (`!enable_pass && !no_fun_mode`) — with
-        // `no_fun_mode: true`, an open instance (`enable_pass: false`) must NOT bypass auth,
-        // matching legacy's own `enable_nofun` forcing `logged_in_api` regardless of `enable_pass`.
-        let mut auth = cfg(false);
-        auth.no_fun_mode = true;
-        assert!(!(!auth.enable_pass && !auth.no_fun_mode));
-    }
-
-    #[test]
     fn valid_session_cookie_is_recognized() {
         use lanrurugi_core::session;
         let secret = b"test-secret";
@@ -295,7 +289,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let token = session::issue_access_token(secret, now, 3_600, "family-1");
-        let mut auth = cfg(true);
+        let mut auth = cfg();
         auth.session_secret = secret.to_vec();
         assert!(crate::auth::session_is_valid(
             &auth,
@@ -305,7 +299,7 @@ mod tests {
 
     #[test]
     fn expired_or_forged_session_cookie_is_rejected() {
-        let auth = cfg(true);
+        let auth = cfg();
         assert!(!crate::auth::session_is_valid(
             &auth,
             &headers_with_cookie(&format!("{}=garbage", lanrurugi_core::session::COOKIE_NAME)),

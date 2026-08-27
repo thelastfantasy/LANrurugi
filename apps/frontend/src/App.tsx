@@ -22,7 +22,7 @@ import { Backup } from "./pages/Settings/Backup"
 import { Stats } from "./pages/Stats"
 import { TankoubonEdit } from "./pages/TankoubonEdit"
 import { Upload } from "./pages/Upload"
-import { RequireAuth, RequireGuest } from "./RouteGuards"
+import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
 
 export function App() {
   return (
@@ -43,9 +43,9 @@ export function App() {
         <Route
           path="/reader/:archiveId"
           element={
-            <RequireAuth>
+            <AllowGuest>
               <Reader />
-            </RequireAuth>
+            </AllowGuest>
           }
         />
         <Route element={<Layout />}>
@@ -54,8 +54,13 @@ export function App() {
               itself triggers a login redirect) regardless of session state, while still getting
               the same nav/theme/i18n/Footer shell every other in-`Layout` page has. */}
           <Route path="*" element={<NotFoundPage />} />
-          <Route element={<RequireAuth />}>
+          {/* 007-guest-restricted-access: Library is the one `Layout`-wrapped page an eligible
+              guest may also reach (a scoped view, not a redirect to `/login`) — every other
+              management/admin page below stays strictly `RequireAuth`-only. */}
+          <Route element={<AllowGuest />}>
             <Route path="/" element={<Library />} />
+          </Route>
+          <Route element={<RequireAuth />}>
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/bookmarks" element={<BookmarksPage />} />
             <Route path="/edit/:archiveId" element={<Edit />} />

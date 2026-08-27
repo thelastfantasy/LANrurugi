@@ -1,5 +1,6 @@
 import { Select as BaseSelect } from "@base-ui/react/select"
 import type { ComponentProps, ReactNode } from "react"
+import { FaCaretDown, FaCheck } from "react-icons/fa6"
 
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, Z_OVERLAY_CONTENT } from "@/theme"
@@ -61,7 +62,7 @@ export function Select<Value extends string>({
       >
         <BaseSelect.Value />
         <BaseSelect.Icon>
-          <i className="fa fa-caret-down" aria-hidden="true"></i>
+          <FaCaretDown aria-hidden="true" />
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
@@ -118,7 +119,15 @@ function SelectItem({ value, showIndicator, children }: { value: string; showInd
       // unintentional-looking jump confirmed live from a real screenshot, 2026-08-27. (Text
       // alignment itself is reset once on `Select.Popup` above, not repeated per item — see that
       // element's own `text-left` docs.)
-      className={`select-item-highlighted relative box-content w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap py-[.3em] pe-4 outline-none ${
+      // `box-border` (not `box-content`, this file's own earlier choice) — `w-full` resolves to
+      // the popup's own 100% width, but `content-box` sizing then adds this item's own
+      // padding/border *on top of* that instead of inside it, pushing the item's real rendered
+      // width (and its `data-highlighted`/`data-selected` background) past the popup's right edge
+      // — confirmed live on a narrow (375px) mobile viewport, 2026-08-27: the selected item's
+      // highlight visibly overflowed the popup box by exactly its own horizontal padding.
+      // `border-box` makes `w-full` actually mean "100% including padding," matching every other
+      // `w-full` element in this codebase's own implicit assumption.
+      className={`select-item-highlighted relative box-border w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap py-[.3em] pe-4 outline-none ${
         showIndicator ? "grid grid-cols-[1em_1fr] ps-2" : "flex ps-4"
       }`}
     >
@@ -129,8 +138,11 @@ function SelectItem({ value, showIndicator, children }: { value: string; showInd
         // `fa-check` glyph does at its default (inherited, ~text-sm) size; both together (no
         // centering + a smaller glyph) is what actually closes the gap against the official
         // example's tighter look (real user feedback comparing screenshots, 2026-08-27).
+        // `FaCheck` (react-icons/fa6, a real SVG) rather than the CSS-class `<i>` version — same
+        // icon-font-vs-SVG centering/crispness reasoning as `Switch.tsx`'s own
+        // `FaToggleOn`/`FaToggleOff` and `BookmarkHoverGrid.tsx`'s `FaTrashCan`.
         <BaseSelect.ItemIndicator className="col-start-1 flex text-xs">
-          <i className="fa fa-check" aria-hidden="true"></i>
+          <FaCheck aria-hidden="true" />
         </BaseSelect.ItemIndicator>
       )}
       <BaseSelect.ItemText className={showIndicator ? "col-start-2" : undefined}>{children}</BaseSelect.ItemText>

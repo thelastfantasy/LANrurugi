@@ -71,9 +71,9 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),

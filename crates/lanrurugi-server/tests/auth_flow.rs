@@ -27,9 +27,6 @@ fn redis_state_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-/// `enable_pass: true` — unlike every other integration test in this workspace (which run with
-/// auth disabled to focus on the endpoint under test), this suite exists specifically to exercise
-/// the auth flow itself.
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
     let repos = Repositories::new(&redis);
@@ -67,9 +64,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: true,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -512,5 +509,96 @@ async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_sessio
          protected router's own Casbin check"
     );
 
+    purge_all_refresh_and_api_tokens(&redis).await;
+}
+
+/// 007-guest-restricted-access, US1: with guest mode off (the default — no `guestmode` field ever
+/// set on this fresh test Redis instance), an unauthenticated caller must still be rejected from
+/// both an ordinary protected endpoint and a session-only one — password login has no way to be
+/// disabled, and guest mode being off means there's no eligibility branch for this request to fall
+/// into either.
+#[tokio::test]
+async fn unauthenticated_request_is_rejected_when_guest_mode_is_off() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+
+    let settings_resp = request(&app, "GET", "/api/settings", None, None).await;
+    assert_eq!(
+        settings_resp.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "an ordinary protected endpoint must reject an unauthenticated caller when guest mode is off"
+    );
+
+    let drop_resp = request(&app, "POST", "/api/database/drop", None, None).await;
+    assert_eq!(
+        drop_resp.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "a session-only endpoint must also reject an unauthenticated caller when guest mode is off"
+    );
+}
+
+/// 007-guest-restricted-access, US2: once guest mode is genuinely on (a real `guestmode=1` config
+/// field plus a real guest-visible category, not a unit-level `AuthContext` built by hand — see
+/// `authz::tests::guest_visitor_is_read_only_and_cannot_download_raw_archives` for that narrower
+/// coverage), an eligible unauthenticated caller reaches an ordinary read route but is still
+/// rejected — `403`, not `401` — from a Session-only route, the same restriction `token_guest`
+/// already has. Exercises the real end-to-end router (`procedure.rs`'s guest-eligibility branch +
+/// `route_policy.csv`'s `guest_visitor` deny rules together), not just one half in isolation.
+#[tokio::test]
+async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+
+    let mut conn = redis.config.get().await.unwrap();
+    let _: () = deadpool_redis::redis::AsyncCommands::hset(
+        &mut conn,
+        lanrurugi_storage::keys::CONFIG_KEY,
+        "guestmode",
+        "1",
+    )
+    .await
+    .unwrap();
+
+    let category = lanrurugi_core::entities::Category {
+        catid: lanrurugi_core::ids::CategoryId("SET_guest_auth_flow_test".to_string()),
+        name: "Guest Visible".to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: true,
+    };
+    let repos = lanrurugi_api::Repositories::new(&redis);
+    repos.categories.save(&category).await.unwrap();
+
+    let categories_resp = request(&app, "GET", "/api/categories", None, None).await;
+    assert_eq!(
+        categories_resp.status(),
+        axum::http::StatusCode::OK,
+        "an eligible guest_visitor must reach an ordinary read route"
+    );
+
+    let drop_resp = request(&app, "POST", "/api/database/drop", None, None).await;
+    assert_eq!(
+        drop_resp.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "a guest_visitor must never reach a Session-only route, even while otherwise eligible"
+    );
+
+    repos.categories.delete(&category.catid).await.unwrap();
+    let _: () = deadpool_redis::redis::AsyncCommands::hdel(
+        &mut conn,
+        lanrurugi_storage::keys::CONFIG_KEY,
+        "guestmode",
+    )
+    .await
+    .unwrap();
     purge_all_refresh_and_api_tokens(&redis).await;
 }

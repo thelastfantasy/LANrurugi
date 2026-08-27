@@ -58,9 +58,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -227,7 +227,6 @@ async fn get_info_matches_recorded_serverinfo_shape() {
         "motd",
         "has_password",
         "debug_mode",
-        "nofun_mode",
         "archives_per_page",
         "server_resizes_images",
         "server_tracks_progress",
@@ -343,9 +342,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -496,9 +495,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -739,9 +738,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: library_dir.path().to_path_buf(),
             thumb_dir: PathBuf::from("/tmp"),

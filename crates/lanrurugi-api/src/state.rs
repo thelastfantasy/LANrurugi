@@ -23,17 +23,15 @@ use tokio::sync::Mutex;
 
 use crate::download_manager::DownloadManager;
 
-/// Auth configuration not read live from Redis (unlike `enablepass`/token lifetimes, which
+/// Auth configuration not read live from Redis (unlike `guestmode`/token lifetimes, which
 /// `lanrurugi_api::auth::LiveAuthConfig` re-reads on every request) — set once at startup from
 /// CLI args/env and never changed after. No more `api_key` here (issue #54 replaced the legacy
 /// single-fixed-key mechanism with `lanrurugi_storage::api_tokens`'s real multi-token system —
 /// see `.specify/memory/constitution.md` Principle II's own annotation on this deliberate break).
+/// No more `enable_pass` either (007-guest-restricted-access) — password login is unconditional
+/// now, so there is nothing left for this struct to represent about it.
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
-    /// Legacy "password protection" toggle. When `false`, every request is authorized
-    /// regardless of credentials (an intentionally open instance) — matches
-    /// `$c->LRR_CONF->enable_pass == 0` short-circuiting the legacy check.
-    pub enable_pass: bool,
     /// Appends `; Secure` to both auth cookies when set — never inferred from a spoofable
     /// `X-Forwarded-Proto` header (this app has no trusted-proxy allowlist to validate one
     /// against); the operator opts in explicitly via `--force-secure-cookies` /
@@ -84,6 +82,13 @@ pub struct AppState {
     pub repos: Repositories,
     pub jobs: JobRegistry,
     pub auth: AuthConfig,
+    /// 007-guest-restricted-access: replaces the removed `devmode` Settings-page toggle (which had
+    /// zero server-side behavior of its own) — set once at startup from `--disable-update-check` /
+    /// `LANRURUGI_DISABLE_UPDATE_CHECK`, following the same CLI-flag-not-Redis-setting pattern
+    /// `force_secure_cookies` already established, since suppressing the update check is a
+    /// deployment-time operational concern, not a runtime-toggleable user setting. Read by
+    /// `misc::server_info`'s `debug_mode` field.
+    pub disable_update_check: bool,
     pub library: LibraryPaths,
     pub scanner: ScannerHandle,
     pub plugins: Arc<PluginPool>,

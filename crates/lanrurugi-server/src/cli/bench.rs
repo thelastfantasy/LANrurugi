@@ -116,9 +116,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         repos,
         jobs: JobRegistry::new(),
         auth: AuthConfig {
-            enable_pass: false,
             force_secure_cookies: false,
         },
+        disable_update_check: true,
         library: LibraryPaths {
             archive_dir: args.library_dir.clone(),
             thumb_dir,

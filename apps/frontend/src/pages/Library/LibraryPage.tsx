@@ -90,6 +90,7 @@ export function Library() {
           hideCompleted={lib.hideCompleted}
           groupbyTanks={lib.groupbyTanks}
           cropThumbs={lib.cropThumbs}
+          loggedIn={lib.loggedIn}
           onContextMenu={lib.handleContextMenu}
           onOpen={lib.handleOpenArchive}
           multiSelect={lib.multiSelect}

@@ -450,6 +450,41 @@ input[type="checkbox"]:disabled {
   }
 }
 
+/* Settings page (`config.html`-derived): `.option-td`/`.config-td` (`shared.tsx`'s `Row`/
+   `CheckboxRow`/`ActionRow`, plus `WorkersSection.tsx`'s own identical table) are legacy's own
+   real classes — a plain two-column `<table>` row, label left (`.option-td`, `lrr.css`'s own
+   `width: 200px`, narrowed to `150px !important` under legacy's own `max-width: 540px` query) /
+   control-or-description right (`.config-td`, `config.css`'s own `width: 30vw`). Legacy itself
+   never goes further than that width squeeze — confirmed live on a 390px viewport, 2026-08-27:
+   the label column alone still eats ~150px of a ~350px content area, leaving the value column
+   (an already-`30vw`-capped input, a `<select>`, or wrapped description prose) a cramped ~200px
+   to work with, ".左右结构有点不太合适" (real user report, phone width). This isn't a regression
+   from anything this port changed — legacy's own `config.css` carries zero media queries of its
+   own for this table at all — but it's a confirmed usability break worth fixing outright rather
+   than preserving, same reasoning as `.category-panel`'s own docs above. Below `600px`, every
+   `.option-td`/`.config-td` pair switches from side-by-side table cells to a stacked block
+   layout (label row, then its control/description row) — the standard "responsive table"
+   technique of overriding `display` on `<tr>`/`<td>` without touching the HTML's real `<table>`
+   structure (`shared.tsx` itself is untouched). `!important` is required on every `display`
+   override here: `lrr.css`'s own `.option-td`/`.config-td` rules don't set `display` themselves,
+   but legacy's UA-stylesheet-equivalent table display (`table-cell`) still has to be beaten, and
+   Tailwind's own reset layer already applies its own display values earlier in the cascade. */
+@media (max-width: 600px) {
+  .right-column table tr:has(> .option-td, > .config-td) {
+    display: block !important;
+  }
+  .right-column .option-td,
+  .right-column .config-td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-right: 0 !important;
+  }
+  .right-column .option-td {
+    padding-bottom: 4px !important;
+  }
+}
+
 /* Boundary-overlay scroll container: scrollable but with the scrollbar hidden (the desktop
    panel fits without scrolling; small viewports still scroll internally, just without a bar). */
 .rec-overlay {

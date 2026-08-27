@@ -167,6 +167,7 @@ async fn subfolders_to_categories(
             search: None,
             archives: archive_ids,
             pinned: false,
+            visible_to_guest: false,
         };
         if state.repos.categories.save(&category).await.is_ok() {
             created_categories.push(catid.into_string());

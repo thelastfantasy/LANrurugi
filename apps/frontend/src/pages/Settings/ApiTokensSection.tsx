@@ -265,15 +265,27 @@ export function ApiTokensSection() {
       )}
 
       {tokens.data && tokens.data.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: TOKEN_GRID_COLUMNS,
-            columnGap: 16,
-            fontSize: FONT_SIZE_SM,
-            padding: "0 12px 12px",
-          }}
-        >
+        // `TOKEN_GRID_COLUMNS`' fixed-width/`whiteSpace: nowrap` columns (each `DateTimeStack`
+        // alone needs room for a full date + time) add up to well past a phone's own viewport
+        // width — confirmed live, 2026-08-27, on a 390px-wide screen: the Revoke/rename button
+        // column ran off the right edge entirely, with no way to reach it. Rather than
+        // restructuring this into a second, narrow-viewport-only card layout (real effort for a
+        // table an operator only occasionally needs on mobile), this wraps the grid in its own
+        // horizontally-scrollable container — the grid keeps its real, readable column widths
+        // unconditionally (`minWidth: "max-content"` stops it from ever being squeezed narrower
+        // than that), and a viewport too narrow for all seven columns just scrolls sideways to
+        // reach the rest, the same escape hatch a plain HTML `<table>` would fall back on.
+        <div style={{ overflowX: "auto" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: TOKEN_GRID_COLUMNS,
+              columnGap: 16,
+              fontSize: FONT_SIZE_SM,
+              padding: "0 12px 12px",
+              minWidth: "max-content",
+            }}
+          >
           {/* Header row: lighter (opacity, not a new theme color — see this file's own precedent
               at `IconButtonWithTooltip`'s description text) and not bold, so it reads as a
               secondary label rather than competing with the actual row data for attention. No
@@ -325,6 +337,7 @@ export function ApiTokensSection() {
               </div>
             </div>
           ))}
+          </div>
         </div>
       )}
 

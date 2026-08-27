@@ -914,6 +914,10 @@ export function useAddStamp(id: string) {
     onSuccess: (_data, { page }) => {
       queryClient.invalidateQueries({ queryKey: ["stamps", id, page] })
       queryClient.invalidateQueries({ queryKey: ["stamped-pages", id] })
+      // issue #97: a stamp add can silently auto-bookmark its page server-side — keep the
+      // reader's bookmark icon and BookmarkHoverGrid in sync without a manual refresh, same
+      // query key useAddBookmark/useRemoveBookmark already invalidate.
+      queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
     },
   })
 }
@@ -952,6 +956,9 @@ export function useDeleteStamp() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stamps"] })
       queryClient.invalidateQueries({ queryKey: ["stamped-pages"] })
+      // issue #97: deleting a page's last stamp can silently auto-remove its bookmark — see
+      // useAddStamp's own identical invalidation above for why.
+      queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
     },
   })
 }
