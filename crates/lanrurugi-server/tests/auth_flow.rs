@@ -29,6 +29,21 @@ fn redis_state_lock() -> &'static tokio::sync::Mutex<()> {
 
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
+    // `auth::load` hard-errors (`AuthConfigError::MissingField`) when `guestmode` is entirely
+    // absent from `LRR_CONFIG` (007-guest-restricted-access: a migrated-instance assumption, not
+    // a silent default) — every test in this file needs *some* value present even if it isn't
+    // specifically exercising guest-mode behavior, matching `settings_toggles.rs::test_app`'s own
+    // identical seeding. The two tests below that actually test guest mode (`unauthenticated_
+    // request_is_rejected_when_guest_mode_is_off`/`guest_visitor_reaches_ordinary_routes_but_not_
+    // session_only_ones`) overwrite this with their own value under `redis_state_lock` first.
+    let _: () = deadpool_redis::redis::AsyncCommands::hset(
+        &mut redis.config.get().await.unwrap(),
+        lanrurugi_storage::keys::CONFIG_KEY,
+        "guestmode",
+        "0",
+    )
+    .await
+    .unwrap();
     let repos = Repositories::new(&redis);
     let plugin_options = Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
