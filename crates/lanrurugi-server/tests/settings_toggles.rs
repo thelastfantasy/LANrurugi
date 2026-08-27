@@ -34,14 +34,20 @@ fn config_field_lock() -> &'static tokio::sync::Mutex<()> {
 /// guest-mode routing gets ordinary "password login required" behavior, and `auth::load` requires
 /// this field to be present at all (007-guest-restricted-access: a hard error, not a silent
 /// default, once an instance has been migrated — see `AuthConfigError::MissingField`'s own docs).
+/// `HSETNX`, not `HSET` — see `auth_flow.rs::test_app`'s own identical fix for why: an
+/// unconditional overwrite here races every other in-flight test across `cargo test
+/// --workspace`'s separate `tests/*.rs` OS processes (including `auth_flow.rs`'s own, which shares
+/// this exact same real Redis field), silently stomping a value a concurrently-running,
+/// `RedisTestLock`-holding test deliberately set to `"1"` — confirmed live, 2026-08-27, as the
+/// actual root cause of an intermittent "guest_visitor gets 401 instead of 200" CI failure.
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
-    let _: () = redis
+    let _: bool = redis
         .config
         .get()
         .await
         .unwrap()
-        .hset(CONFIG_KEY, "guestmode", "0")
+        .hset_nx(CONFIG_KEY, "guestmode", "0")
         .await
         .unwrap();
     let repos = Repositories::new(&redis);
@@ -312,7 +318,7 @@ async fn guest_mode_and_category_visibility_matrix() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }
 
 /// 007-guest-restricted-access, US3 (T038): guest search results never include an out-of-scope
@@ -391,7 +397,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         .await
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }
 
 /// 007-guest-restricted-access, US3 (T039): a guest's direct request for an out-of-scope archive
@@ -470,7 +476,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         .await
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }
 
 /// 007-guest-restricted-access, US3 (T040): an eligible guest can still reach an in-scope
@@ -550,7 +556,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         .await
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }
 
 /// 007-guest-restricted-access, US3 (T041): a handful of purely-administrative endpoints reject a
@@ -590,7 +596,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
     }
 
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }
 
 /// 007-guest-restricted-access, US3 (T042, spec FR-015): a config change takes effect on the very
@@ -644,5 +650,5 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
-    clear_config_field(&redis, "guestmode").await;
+    set_config_field(&redis, "guestmode", "0").await;
 }

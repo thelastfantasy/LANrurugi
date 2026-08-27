@@ -33,10 +33,19 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     // absent from `LRR_CONFIG` (007-guest-restricted-access: a migrated-instance assumption, not
     // a silent default) — every test in this file needs *some* value present even if it isn't
     // specifically exercising guest-mode behavior, matching `settings_toggles.rs::test_app`'s own
-    // identical seeding. The two tests below that actually test guest mode (`unauthenticated_
-    // request_is_rejected_when_guest_mode_is_off`/`guest_visitor_reaches_ordinary_routes_but_not_
-    // session_only_ones`) overwrite this with their own value under `redis_state_lock` first.
-    let _: () = deadpool_redis::redis::AsyncCommands::hset(
+    // identical seeding. `HSETNX`, not `HSET` — `test_app()` is called by *every* test in this
+    // file (including ones with no `RedisTestLock` of their own, since they never write this field
+    // themselves), racing across `cargo test --workspace`'s separate OS processes for
+    // `tests/*.rs`. An unconditional `HSET` here would silently stomp a concurrently-running
+    // `guest_visitor_reaches_ordinary_routes_but_not_session_only_ones` in *this same file* (or
+    // `settings_toggles.rs`'s own guest-mode tests) that's mid-`RedisTestLock` with `guestmode`
+    // deliberately set to `"1"` — confirmed live, 2026-08-27, as the actual root cause of a
+    // "guest_visitor gets 401 instead of 200" CI failure that survived adding the lock alone:
+    // the lock protected the *write*, but not this unconditional default-seed happening
+    // concurrently in a completely different, unlocked test run. `HSETNX` only writes when the
+    // field doesn't exist yet, so it can never clobber a value some other in-flight test (locked
+    // or not) is actively relying on.
+    let _: bool = deadpool_redis::redis::AsyncCommands::hset_nx(
         &mut redis.config.get().await.unwrap(),
         lanrurugi_storage::keys::CONFIG_KEY,
         "guestmode",
@@ -615,10 +624,17 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
-    let _: () = deadpool_redis::redis::AsyncCommands::hdel(
+    // Reset to `"0"`, not `HDEL` — this still runs under `_guest_lock` above, but the field
+    // becoming entirely absent (even briefly) risks a concurrently-running, *unlocked* test's own
+    // `app` (a different `axum::Router` sharing this same real Redis) hitting `auth::load`'s hard
+    // `MissingField` error via an unrelated request mid-flight. Restoring the same `"0"` default
+    // `test_app()`'s own `HSETNX` would otherwise seed is a strictly safer no-op for every other
+    // test than a window where the field doesn't exist at all.
+    let _: () = deadpool_redis::redis::AsyncCommands::hset(
         &mut conn,
         lanrurugi_storage::keys::CONFIG_KEY,
         "guestmode",
+        "0",
     )
     .await
     .unwrap();
