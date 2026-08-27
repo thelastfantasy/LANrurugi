@@ -970,13 +970,21 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
-        // `f`/`g` — not `3`, which collides with `multi_word_tag_value_is_findable_...`'s own
-        // `"3".repeat(40)` elsewhere in this same module — confirmed live via a real CI failure
-        // (2026-08-27): Rust tests run in parallel by default, and two tests racing to
-        // `HSET`/index/delete the exact same Redis key produced a transient duplicate ID in one
-        // test's own result set while the other was mid-write.
-        let id_a = "f".repeat(40);
-        let id_b = "g".repeat(40);
+        // NOT a single-character-repeated id (`"3".repeat(40)`, `"f".repeat(40)`, ...) — this
+        // whole module (and `indexer.rs` in the same crate, sharing the same CI Redis instance/DB
+        // via `test_pools()`'s fixed `LANRURUGI_TEST_REDIS_URL`) already has a same-shaped test for
+        // nearly every single character 0-9/a-g, and CI runs tests in parallel against one shared
+        // Redis unlike the local dev container's own per-invocation instance. Confirmed live
+        // twice, 2026-08-27: first `"3".repeat(40)` collided with
+        // `multi_word_tag_value_is_findable_...` elsewhere in this file, then `"f".repeat(40)`
+        // (picked specifically to dodge that) turned out to *also* collide with
+        // `indexer.rs::new_archive_lands_in_untagged_new_and_ungrouped_sets`'s own `"f".repeat(40)`
+        // — that test `srem`s `TANKGROUPED_KEY` for its id right as this test's own `groupby_tanks`
+        // read raced it, intermittently removing `id_a` from the candidate set between this test's
+        // two assertions. A real (non-repeated) hex string exhausts the "single digit repeated"
+        // collision space this module and its sibling have been drawing from entirely.
+        let id_a = "f00dfeed".repeat(5);
+        let id_b = "deadbeef".repeat(5);
 
         let mut aconn = archive_pool.get().await.unwrap();
         for (id, title) in [(&id_a, "Book A"), (&id_b, "Book B")] {
