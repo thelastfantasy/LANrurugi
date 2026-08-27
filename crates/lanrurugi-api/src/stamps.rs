@@ -394,6 +394,19 @@ mod tests {
         }
     }
 
+    /// All five tests below read/write the same real `LRR_CONFIG` `stampautobookmark`/
+    /// `stampautounbookmark` fields on a shared Redis instance (`cargo test` runs tests in one
+    /// crate concurrently by default) — without this, they race: one test's `set_config_bool`
+    /// can flip the field a *different*, concurrently-running test is mid-assertion against,
+    /// exactly the failure mode `settings_toggles.rs`'s own `config_field_lock` docs describe (and
+    /// hit live here too, confirmed by a real CI failure, 2026-08-27, before this lock existed —
+    /// same pattern, independently duplicated rather than shared since this crate can't depend on
+    /// `lanrurugi-server`'s own test-only module).
+    fn config_field_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
     async fn set_config_bool(state: &AppState, field: &str, value: bool) {
         let mut conn = state.redis.config.get().await.unwrap();
         let _: () = conn
@@ -416,6 +429,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = config_field_lock().lock().await;
         set_config_bool(&state, "stampautobookmark", true).await;
         let archive_id = format!("stamp-add-{}", uuid::Uuid::new_v4());
         state
@@ -454,6 +468,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = config_field_lock().lock().await;
         set_config_bool(&state, "stampautobookmark", false).await; // isolate delete-path behavior
         set_config_bool(&state, "stampautounbookmark", true).await;
         let archive_id = format!("stamp-del-only-{}", uuid::Uuid::new_v4());
@@ -502,6 +517,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = config_field_lock().lock().await;
         set_config_bool(&state, "stampautobookmark", false).await;
         set_config_bool(&state, "stampautounbookmark", true).await;
         let archive_id = format!("stamp-del-one-of-two-{}", uuid::Uuid::new_v4());
@@ -555,6 +571,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = config_field_lock().lock().await;
         set_config_bool(&state, "stampautobookmark", false).await;
         set_config_bool(&state, "stampautounbookmark", false).await;
         let archive_id = format!("stamp-del-suboff-{}", uuid::Uuid::new_v4());
@@ -602,6 +619,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = config_field_lock().lock().await;
         set_config_bool(&state, "stampautobookmark", true).await;
         let archive_id = format!("stamp-add-already-{}", uuid::Uuid::new_v4());
         state
