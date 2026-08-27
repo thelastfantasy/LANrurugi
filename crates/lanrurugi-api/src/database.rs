@@ -48,8 +48,12 @@ pub struct StatsParams {
 /// maintained incrementally in Phase 1 — see `lanrurugi-search::indexer` module docs) — correct,
 /// just not index-accelerated; acceptable at the target library scale for an operator-facing
 /// stats page rather than a hot request path.
-async fn stats(State(state): State<AppState>, Query(params): Query<StatsParams>) -> Response {
-    let archives = match state.repos.archives.list_all().await {
+async fn stats(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Query(params): Query<StatsParams>,
+) -> Response {
+    let mut archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
         Err(e) => {
             return error(
@@ -59,6 +63,29 @@ async fn stats(State(state): State<AppState>, Query(params): Query<StatsParams>)
             )
         }
     };
+    // 007-guest-restricted-access: this endpoint has no `route_policy.csv` deny rule for
+    // `guest_visitor` (a guest genuinely benefits from a tag cloud to browse with), but without
+    // this scope filter it aggregated tags off *every* archive regardless of visibility — leaking
+    // both the existence of out-of-scope archives (via their tags/weights) and producing a tag
+    // cloud whose entries then 404/empty the moment a guest actually searches by one, since
+    // `search_archives`'s own `restrict_to_archive_ids` correctly excludes them there. Confirmed
+    // live, 2026-08-27: a guest saw out-of-scope tags (e.g. from test-only archives never marked
+    // visible) rendered in the tag cloud, each returning zero search results when clicked.
+    if matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        match crate::search::guest_visible_archive_ids(&state).await {
+            Ok(allowed) => archives.retain(|a| allowed.contains(&a.id)),
+            Err(e) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "serve_tag_stats",
+                    e.to_string(),
+                )
+            }
+        }
+    }
 
     let excluded_namespaces: Vec<String> = if params.hide_excluded_namespaces {
         let mut conn = match state.redis.config.get().await {

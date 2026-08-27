@@ -45,10 +45,27 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn list_categories(State(state): State<AppState>) -> Response {
+/// 007-guest-restricted-access: an unauthenticated `guest_visitor` must only ever see categories
+/// an administrator has explicitly marked `visible_to_guest` — the Library page's own category
+/// bar reads this endpoint directly, so without this filter a guest would see every category name
+/// (including ones whose *contents* stay correctly scoped elsewhere, e.g. `search.rs`'s own
+/// `guest_visible_archive_ids`), which both leaks category names outside the guest's actual scope
+/// and offers a clickable filter into a category that then 404s/empties for every archive in it.
+async fn list_categories(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+) -> Response {
     match state.repos.categories.list_all().await {
         Ok(categories) => {
-            let json: Vec<_> = categories.iter().map(category_json).collect();
+            let is_guest = matches!(
+                auth.as_deref().map(|a| &a.method),
+                Some(crate::auth_context::AuthMethod::GuestVisitor)
+            );
+            let json: Vec<_> = categories
+                .iter()
+                .filter(|c| !is_guest || c.visible_to_guest)
+                .map(category_json)
+                .collect();
             axum::Json(json).into_response()
         }
         Err(e) => error(

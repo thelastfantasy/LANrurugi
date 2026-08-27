@@ -905,6 +905,26 @@ async fn update_tankoubon(
             {
                 tracing::warn!(%id, error = %e, "failed to sync tank search index");
             }
+            // A Tankoubon's own `tags` (a real, independent field — either auto-filled from common
+            // member tags at creation or explicitly set/appended here) were never written into
+            // `INDEX_<tag>` under the tank's own id — only member archives' individual `tags` are.
+            // Confirmed live, 2026-08-27: a tag genuinely visible on the Tankoubon itself (e.g.
+            // `female:high heels`, shown in its own metadata) returned zero search results for that
+            // tag, the Tankoubon never among them — "what you see is what you can find" broke
+            // silently. This makes tag search actually reach what the tank's own metadata already
+            // displays, independent of whether any individual member also happens to carry it.
+            if old_tags != grouping.tags {
+                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+                    &state.redis.search,
+                    id.as_str(),
+                    &old_tags,
+                    &grouping.tags,
+                )
+                .await
+                {
+                    tracing::warn!(%id, error = %e, "failed to update tank tag search index");
+                }
+            }
             if old_name != grouping.name {
                 if let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,
