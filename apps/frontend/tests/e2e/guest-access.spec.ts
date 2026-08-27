@@ -49,8 +49,11 @@ test.describe("guest access", { tag: "@guest-access" }, () => {
     await page.goto(`/reader/${archiveId}`)
     await expect(page).toHaveURL(`/reader/${archiveId}`)
     // The bookmark toggle (Reader.tsx's own `toggle-bookmark` icon) must render in its
-    // logged-out `disabled` state, not the interactive one a real session gets.
-    await expect(page.locator(".toggle-bookmark")).toHaveClass(/disabled/)
+    // logged-out `disabled` state, not the interactive one a real session gets. `.first()` —
+    // `Reader.tsx`'s own `pagesel` toolbar (which this icon lives in) renders twice unconditionally
+    // (`#i2`'s header copy and `#i4`'s footer copy), same as legacy's own reader layout; both
+    // instances always carry the same class, so asserting on either is equivalent.
+    await expect(page.locator(".toggle-bookmark").first()).toHaveClass(/disabled/)
     // No download link/button anywhere on the reader page for a guest.
     await expect(page.locator(`a[href="/api/archives/${archiveId}/download"]`)).toHaveCount(0)
   })
