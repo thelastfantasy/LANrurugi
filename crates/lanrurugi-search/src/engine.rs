@@ -123,6 +123,21 @@ pub async fn search(
     }
 
     if let Some(allowed) = &params.restrict_to_archive_ids {
+        // Union in *before* the `retain` below, `groupby_tanks: true` only: `filtered`'s own
+        // initial candidate set there is `TANKGROUPED_KEY` — Tankoubon ids plus whichever
+        // standalone archives were never folded into one — and a raw archive id that *has* been
+        // folded into some Tankoubon is `srem`d out of it at fold time (`indexer::
+        // sync_tank_membership`), so it was never a candidate in the first place. If that same
+        // raw id is guest-visible (e.g. it belongs to a `visible_to_guest` category directly, but
+        // the Tankoubon it's actually folded into does not), it would otherwise be silently
+        // unreachable — allowed by the caller's own scope computation, yet never appearing in any
+        // result, because the whole grouped-candidate mechanism the `retain` below narrows never
+        // included it to begin with. This surfaces it as its own standalone result, same as it
+        // would appear searched by an admin with `groupby_tanks: false`, rather than trying to
+        // fold it into a Tankoubon result the caller has already decided is out of scope.
+        if params.groupby_tanks {
+            filtered.extend(allowed.iter().map(|id| id.as_str().to_string()));
+        }
         let allowed_set: HashSet<&str> = allowed.iter().map(ArchiveId::as_str).collect();
         filtered.retain(|id| allowed_set.contains(id.as_str()));
     }

@@ -257,6 +257,11 @@ async fn guest_mode_and_category_visibility_matrix() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    // Cross-*process* lock, not just this file's own in-process `config_field_lock` above — see
+    // `RedisTestLock`'s own docs (`auth_flow.rs` also writes this same shared `guestmode` field,
+    // as a genuinely separate `cargo test --workspace` process against the same real Redis).
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
 
     // guestmode off, no categories at all: an ordinary protected route stays 401.
     let resp = request(&app, "GET", "/api/categories").await;
@@ -321,6 +326,8 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
 
     let in_scope_id = "1".repeat(40);
@@ -398,6 +405,8 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
 
     let out_of_scope_id = "3".repeat(40);
@@ -476,6 +485,8 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
 
     let archive_id = "5".repeat(40);
@@ -554,6 +565,8 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
 
     let category = lanrurugi_core::entities::Category {
@@ -591,6 +604,8 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
 
     let category = lanrurugi_core::entities::Category {

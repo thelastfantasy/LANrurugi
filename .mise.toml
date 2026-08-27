@@ -176,5 +176,5 @@ description = "Build the local act-runner image (adds cmake/libclang-dev act's o
 run = "podman build -f Dockerfile.act-runner -t lanrurugi-act-runner ."
 
 [tasks.test-ci-local]
-description = "Run a CI job locally via act — usage: mise run test-ci-local -- -j <job-id> (job ids: rust, frontend, e2e; see .github/workflows/ci.yml)"
+description = "Run a CI job locally via act — usage: mise run test-ci-local -- -j <job-id> (job ids: rust, frontend; see .github/workflows/ci.yml — no e2e job, removed 2026-08-27: real GitHub-hosted runners repeatedly OOM-killed the Playwright job outright, and act itself was even less resourced for it)"
 run = "act"

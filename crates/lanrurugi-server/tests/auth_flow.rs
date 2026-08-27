@@ -570,6 +570,13 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    // Cross-*process* lock, not just this file's own in-process `redis_state_lock` above — see
+    // `RedisTestLock`'s own docs. `cargo test --workspace` runs `settings_toggles.rs` (which also
+    // writes the shared `guestmode` field) as a genuinely separate OS process against the exact
+    // same real Redis instance; an in-process `Mutex` here is invisible to that other process,
+    // confirmed live as a real intermittent CI failure, 2026-08-27.
+    let _guest_lock =
+        lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     purge_all_refresh_and_api_tokens(&redis).await;
 
     let mut conn = redis.config.get().await.unwrap();
