@@ -22,16 +22,34 @@ const REPO_ROOT = path.resolve(FRONTEND_ROOT, "../..")
 //
 // Keyed by `testInfo.parallelIndex` (stable, bounded 0..workers-1) — NOT `workerIndex` (unbounded,
 // changes across worker-process restarts within a run).
-async function waitForHealthy(url: string, timeoutMs = 30_000) {
+// `proc`/`logPath` (both optional — only the backend process passes them) let this fail fast and
+// specific instead of always burning the full timeout: previously, a backend that crashed/panicked
+// immediately on startup (e.g. a malformed policy file, a `.expect()` firing) surfaced only as a
+// generic "did not become healthy within 30000ms" with zero indication *why* — confirmed live,
+// 2026-08-27, when a real CI run's every single E2E test failed this way and the actual cause
+// (a `cargo test`-only Redis-key collision unrelated to `serve` itself, as it turned out) took
+// significant investigation to rule in/out purely because this fixture gave no diagnostic signal
+// of its own. If the process has already exited by the time this notices, this reads the process's
+// own stdout/stderr (redirected to `logPath` by the caller, since `spawnTracked`'s default
+// `stdio: 'ignore'` swallows it) and throws immediately with that content inlined, rather than
+// polling `fetch` uselessly against a process that's already gone.
+async function waitForHealthy(url: string, timeoutMs = 30_000, proc?: ChildProcess, logPath?: string) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
+    if (proc && proc.exitCode !== null) {
+      const log = logPath && fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "(no log captured)"
+      throw new Error(`process for ${url} exited early with code ${proc.exitCode}:\n${log}`)
+    }
     try {
       const res = await fetch(url)
       if (res.ok) return
     } catch {
       // not up yet
     }
-    if (Date.now() > deadline) throw new Error(`${url} did not become healthy within ${timeoutMs}ms`)
+    if (Date.now() > deadline) {
+      const log = logPath && fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "(no log captured)"
+      throw new Error(`${url} did not become healthy within ${timeoutMs}ms; process output so far:\n${log}`)
+    }
     await new Promise((r) => setTimeout(r, 200))
   }
 }
@@ -61,8 +79,15 @@ process.on("SIGTERM", () => {
   process.exit(143)
 })
 
-function spawnTracked(command: string, args: string[], opts: Parameters<typeof spawn>[2]): ChildProcess {
-  const proc = spawn(command, args, { ...opts, stdio: "ignore" })
+// `logPath`, when given, redirects stdout+stderr into that file (append mode — `logPath` itself is
+// truncated by the caller first, e.g. `fs.rmSync` on a stale one) instead of the default
+// `stdio: 'ignore'` — see `waitForHealthy`'s own docs for why: a process that panics/exits
+// immediately on startup otherwise leaves zero trace of *why* anywhere in CI output.
+function spawnTracked(command: string, args: string[], opts: Parameters<typeof spawn>[2], logPath?: string): ChildProcess {
+  const stdio = logPath
+    ? (["ignore", fs.openSync(logPath, "a"), fs.openSync(logPath, "a")] as const)
+    : ("ignore" as const)
+  const proc = spawn(command, args, { ...opts, stdio })
   spawnedChildren.add(proc)
   proc.once("exit", () => spawnedChildren.delete(proc))
   // `spawn` failing outright (command not found, exec permission denied, etc.) fires an 'error'
@@ -187,6 +212,8 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       }
       execSync(`redis-cli -p ${redisPort} FLUSHALL`, { stdio: "ignore" })
 
+      fs.mkdirSync(libraryDir, { recursive: true })
+      const backendLogPath = path.join(libraryDir, "backend.log")
       const backend = spawnTracked(
         path.join(REPO_ROOT, "target/debug/lanrurugi-server"),
         [
@@ -203,10 +230,11 @@ export const test = base.extend<object, { workerBaseURL: string }>({
           `127.0.0.1:${backendPort}`,
         ],
         { cwd: REPO_ROOT },
+        backendLogPath,
       )
       // /api/login/status is merged in before the auth middleware (crates/lanrurugi-server/src/
       // app.rs), so it's reachable without a session — unlike /api/info, which is auth-protected.
-      await waitForHealthy(`http://127.0.0.1:${backendPort}/api/login/status`)
+      await waitForHealthy(`http://127.0.0.1:${backendPort}/api/login/status`, 30_000, backend, backendLogPath)
 
       // `pnpm exec vite preview` directly, not `pnpm run preview -- ...` — the latter's argument
       // passthrough silently dropped `--strictPort` (confirmed by direct comparison: `pnpm run

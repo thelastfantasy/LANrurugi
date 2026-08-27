@@ -91,12 +91,17 @@ export function useCategories() {
 export function useCreateCategory() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (params: { name: string; isDynamic: boolean; search?: string }) =>
+    mutationFn: (params: { name: string; isDynamic: boolean; search?: string; visibleToGuest?: boolean }) =>
       sendForm<{ category_id: string }>("PUT", "/categories", {
         name: params.name,
         // Falls back to legacy's own "bogus search" placeholder (`category.js`'s
         // `addNewCategory`) when the caller doesn't supply a real predicate up front.
         search: params.isDynamic ? (params.search?.trim() || "language:english") : "",
+        // 007-guest-restricted-access: `CreateCategoryParams::visible_to_guest` deserializes as a
+        // plain Rust `bool` via axum's Form extractor (serde_urlencoded), same as `pinned`
+        // elsewhere in this file — only the literal strings "true"/"false" are accepted, "1"/"0"
+        // fail deserialization with a 422.
+        visible_to_guest: (params.visibleToGuest ?? false) ? "true" : "false",
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["categories"] }),
   })

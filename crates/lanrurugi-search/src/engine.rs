@@ -970,8 +970,13 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
-        let id_a = "3".repeat(40);
-        let id_b = "4".repeat(40);
+        // `f`/`g` — not `3`, which collides with `multi_word_tag_value_is_findable_...`'s own
+        // `"3".repeat(40)` elsewhere in this same module — confirmed live via a real CI failure
+        // (2026-08-27): Rust tests run in parallel by default, and two tests racing to
+        // `HSET`/index/delete the exact same Redis key produced a transient duplicate ID in one
+        // test's own result set while the other was mid-write.
+        let id_a = "f".repeat(40);
+        let id_b = "g".repeat(40);
 
         let mut aconn = archive_pool.get().await.unwrap();
         for (id, title) in [(&id_a, "Book A"), (&id_b, "Book B")] {

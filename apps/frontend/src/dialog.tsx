@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
+import { Checkbox } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
@@ -34,7 +35,7 @@ import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
 // call sites need this to work from plain event handlers exactly like `window.prompt` did, not
 // only from inside a component's own render.
 
-export type NewCategoryResult = { name: string; isDynamic: boolean; search: string }
+export type NewCategoryResult = { name: string; isDynamic: boolean; search: string; visibleToGuest: boolean }
 
 /** One of the 8 points along a stamp's own selection-rectangle border (4 corners + 4 edge
  * midpoints) the icon can be anchored to — matches `Stamp::rect`'s own `anchor` segment on the
@@ -1183,6 +1184,12 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   const [name, setName] = useState("")
   const [isDynamic, setIsDynamic] = useState(false)
   const [search, setSearch] = useState("")
+  // 007-guest-restricted-access: was only ever settable from `Categories.tsx`'s own longer-lived
+  // edit form (once a category already existed) — this quick-create dialog had no equivalent
+  // field at all, so a category created here could only be marked guest-visible by immediately
+  // reopening it in the edit form afterward. Defaults to `false` (not guest-visible), matching
+  // `CreateCategoryParams`'s own `#[serde(default)]` on the backend.
+  const [visibleToGuest, setVisibleToGuest] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1191,7 +1198,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
 
   function submit() {
     if (!name.trim()) return
-    onSubmit({ name: name.trim(), isDynamic, search: isDynamic ? search : "" })
+    onSubmit({ name: name.trim(), isDynamic, search: isDynamic ? search : "", visibleToGuest })
   }
 
   return (
@@ -1242,6 +1249,15 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
             if (e.key === "Enter" && !isDynamic) submit()
           }}
         />
+      </div>
+      <div style={{ textAlign: "left", marginBottom: 12 }}>
+        <Checkbox
+          id="new-category-visible-to-guest"
+          name="visible_to_guest"
+          checked={visibleToGuest}
+          onCheckedChange={setVisibleToGuest}
+        />{" "}
+        <label htmlFor="new-category-visible-to-guest">{t("categories.visibleToGuest")}</label>
       </div>
       {isDynamic && (
         <div style={{ textAlign: "left", marginBottom: 12 }}>
