@@ -400,3 +400,19 @@ source and already pushed to two prior commits; both were moved to
 structured series/volume annotations no set of individual env vars could practically hold) and
 `LANRURUGI_TEST_TITLE_SAME_SERIES_A`/`_B`/`LANRURUGI_TEST_TITLE_CROSS_SERIES` respectively, and the
 already-pushed history was rewritten to scrub the real strings out of every prior commit too.
+
+## Commit as one batch — never split a pending changeset into multiple commits by feature
+
+When asked to commit, stage and commit every pending file in one commit (minus anything that
+should genuinely be gitignored) — do not attempt to split a batch of changes into several commits
+grouped by feature/concern, even when the changeset spans multiple unrelated features. Confirmed
+live, 2026-08-27: asked to commit+push a large pending changeset (007-guest-restricted-access +
+issue #97 + several unrelated mobile/UX fixes), spent significant time trying to hand-split it into
+per-feature commits by reverting/reapplying hunks in files where two features' changes landed
+adjacent to each other in the same function (`settings.rs`'s `BOOL_FIELDS`, `types.ts`'s `Settings`
+interface, `SettingsPage.tsx`'s state block) — high risk of mis-splitting, and the user explicitly
+cut this off ("别整你那些花活了" / "1个commit赶紧完事") after watching the back-and-forth. If a
+changeset is large enough to make per-feature attribution valuable, that's a signal to commit more
+often *during* the work (right after each feature lands, before the next one starts touching the
+same files) — not a reason to reverse-engineer feature boundaries out of an already-tangled
+worktree after the fact.

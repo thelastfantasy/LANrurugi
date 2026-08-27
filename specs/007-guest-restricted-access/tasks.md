@@ -352,9 +352,13 @@ Satisfies SC-002 in full.
   automated test (`settings_toggles.rs`/`auth_flow.rs`, see T052's own list); §1, §2, §11 do not
   and still need a real running instance. Still needs a real rebuild + manual/curl pass through all
   11 before this feature is considered release-ready.
-- [ ] T054 [P] Update `README.md` (`en`/`ja`/`zh`) "Improvements over LANraragi" section to mention
+- [x] T054 [P] Update `README.md` (`en`/`ja`/`zh`) "Improvements over LANraragi" section to mention
   restricted guest access mode, per this repo's own "before pushing, check whether README needs
   updating" convention — only if this feature is being pushed/merged as user-facing-complete
+  Done (2026-08-27): all three README files' status paragraph, "Improvements" list, and
+  "Documentation" section updated to mention 007 (noting T053's own still-pending live-instance
+  validation). Also added issue #97's stamp/bookmark linking as its own bullet in the same pass
+  since it landed in the same commit and had no README mention yet either.
 
 ---
 

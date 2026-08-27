@@ -11,12 +11,16 @@ defect and adding genuine multi-core concurrency where the legacy Perl implement
 (library continuity, non-merging ingestion, third-party API compatibility, plugin metadata
 enrichment, backup/export, duplicate repair, UI localization, and a concurrency benchmark against
 the legacy system) are done; see `specs/001-lanrurugi-full-rewrite/tasks.md` for the full
-breakdown. Three additive-to-Phase-1 addenda are also fully implemented: `specs/002-job-console/`
+breakdown. Four additive-to-Phase-1 addenda are also fully implemented: `specs/002-job-console/`
 (background job management UI), `specs/003-ui-test-automation/` (Vitest + Playwright frontend test
-coverage), and `specs/005-download-plugin-progress/` (real byte-level download progress,
-per-domain concurrency/rate limiting). Only Phase 2 (`specs/004-ocr-manga-translation/`, on-page
-manga translation) remains a plan with no implementation yet, deliberately kept independent per
-constitution Principle VI so it never blocks or is blocked by Phase 1.
+coverage), `specs/005-download-plugin-progress/` (real byte-level download progress, per-domain
+concurrency/rate limiting), and `specs/007-guest-restricted-access/` (restricted guest access mode,
+replacing the legacy all-open/all-locked password toggle) — the latter's own
+`specs/007-guest-restricted-access/quickstart.md` full 11-scenario live-instance validation
+(`tasks.md` T053) still needs a run; the code itself is complete and passes all automated tests.
+Only Phase 2 (`specs/004-ocr-manga-translation/`, on-page manga translation) remains a plan with no
+implementation yet, deliberately kept independent per constitution Principle VI so it never blocks
+or is blocked by Phase 1.
 
 ## Stack
 
@@ -275,6 +279,11 @@ staying unavailable, never a hard dependency.
   either end to avoid an accidental hand-off, then forwards to the carousel; a mouse with its own
   horizontal wheel skips the grid entirely). Bookmark add/remove now also shows up in the activity
   log.
+- **Stamps and bookmarks are linked.** Placing a stamp on a page that isn't bookmarked yet also
+  bookmarks it; removing a page's last remaining stamp also removes that bookmark — both
+  independently toggleable on the Settings page. The linked action is recorded as a single,
+  consolidated activity-log entry rather than being conflated with a manual stamp edit, and the
+  bookmark hover-preview grid overlays a per-page stamp-count badge.
 - **Bulk delete on the Batch Operations page**, backed by a dedicated `DELETE /api/archives`
   endpoint restricted to real Session logins (API tokens are rejected outright). Requires typing
   "delete"/`DELETE` to confirm; partial failures surface a toast listing each failed archive's own
@@ -296,6 +305,16 @@ staying unavailable, never a hard dependency.
   This is a deliberate pre-release breaking change: third-party clients relying on legacy's
   `Bearer base64(apikey)` / `?key=` mechanism are no longer guaranteed to work without modification
   (see the API-contract-fidelity note below).
+- **Restricted guest access, replacing legacy's binary all-open/all-locked password toggle.**
+  Legacy's `enablepass`/`nofunmode` could only ever produce "fully open" or "fully locked", with no
+  middle ground; password protection is now unconditional (can no longer be disabled by anyone),
+  and in its place there's an optional site-wide guest-mode switch paired with a per-category
+  "visible to guests" flag — an administrator opts specific categories into guest visibility, and an
+  unauthenticated visitor is then routed into a scoped, read-only browsing experience (list, read,
+  search/tag-filter, confined to guest-visible categories) instead of being redirected to the login
+  page; bookmarking, progress-saving, raw-file download, and every admin function stay unavailable
+  to a guest. An out-of-scope archive returns 404, indistinguishable from a nonexistent one, rather
+  than a 403 that would leak "this ID exists, you just can't see it."
 
 ### Testing infrastructure
 
@@ -410,6 +429,10 @@ that single run. See `specs/003-ui-test-automation/quickstart.md` for the full v
 - [`specs/005-download-plugin-progress/`](./specs/005-download-plugin-progress/) — Phase 1
   addendum (additive, implemented): real byte-level download progress, per-domain concurrency
   limits, and rate limiting for the download-plugin pipeline.
+- [`specs/007-guest-restricted-access/`](./specs/007-guest-restricted-access/) — Phase 1 addendum
+  (additive, code implemented, full live-instance validation of its own 11 quickstart scenarios
+  still pending): restricted guest access mode, replacing legacy's all-open/all-locked password
+  toggle.
 - [`specs/004-ocr-manga-translation/`](./specs/004-ocr-manga-translation/) — Phase 2 (depends on
   Phase 1, does not block it, not yet implemented): optional on-page manga translation via OCR
   detection/recognition, a user-selectable translation backend (cloud or locally-hosted), and
