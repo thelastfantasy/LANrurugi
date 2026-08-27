@@ -211,6 +211,15 @@ export const test = base.extend<object, { workerBaseURL: string }>({
         }
       }
       execSync(`redis-cli -p ${redisPort} FLUSHALL`, { stdio: "ignore" })
+      // `auth::load` hard-errors (`AuthConfigError::MissingField`) when `guestmode` is entirely
+      // absent from `LRR_CONFIG` (007-guest-restricted-access: a migrated-instance assumption,
+      // not a silent default) — every request through the auth middleware (which is almost all of
+      // them, including `/api/login/status` itself) 500s without this. `RedisDbs::connect`'s own
+      // `DB_CONFIG = 2` (crates/lanrurugi-storage/src/redis.rs) is the logical database `LRR_CONFIG`
+      // lives on. Confirmed live, 2026-08-27: every single E2E test failed with the backend
+      // genuinely up and logging `lanrurugi serve listening` but every request 500ing — this
+      // fixture's own `FLUSHALL` above wiped a field the backend now assumes is always present.
+      execSync(`redis-cli -p ${redisPort} -n 2 HSET LRR_CONFIG guestmode 0`, { stdio: "ignore" })
 
       fs.mkdirSync(libraryDir, { recursive: true })
       const backendLogPath = path.join(libraryDir, "backend.log")
