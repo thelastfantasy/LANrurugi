@@ -16,6 +16,7 @@ export function Select<Value extends string>({
   items,
   ariaLabel,
   variant = "favtag-btn",
+  showItemIndicator = true,
   style,
 }: {
   value: Value
@@ -27,6 +28,12 @@ export function Select<Value extends string>({
    * and `.stdbtn` are different real sizes in every theme, e.g. 25px vs 21px tall in `g.css` —
    * not a bug introduced here, just two classes legacy itself never intended side by side). */
   variant?: "stdbtn" | "favtag-btn"
+  /** Whether each popup item reserves a leading column for a checkmark on the selected item.
+   * Defaults on (Base UI's own recommended anatomy includes `Select.ItemIndicator`) — set `false`
+   * for a list where `data-highlighted`'s hover color already reads as "this one" clearly enough
+   * on its own (e.g. legacy's own `.context-menu-item` popups never had a persistent checkmark
+   * either) and the extra indented column would just be visual noise. */
+  showItemIndicator?: boolean
   style?: React.CSSProperties
 }) {
   const palette = useMenuPalette()
@@ -50,7 +57,15 @@ export function Select<Value extends string>({
       <BaseSelect.Portal>
         <BaseSelect.Positioner sideOffset={4} className="outline-none" style={{ zIndex: Z_OVERLAY_CONTENT }}>
           <BaseSelect.Popup
-            className={`thin-scrollbar rounded-[.2em] py-[.25em] ${FLOATING_POPUP_TRANSITION_CLASSES}`}
+            // `text-left` here (not on each `SelectItem`) is load-bearing, not decorative —
+            // legacy's own `body { text-align: center }` (`lrr.css`) is inherited all the way
+            // down through `Select.Portal`'s `document.body` mount point, so anything rendered
+            // inside this popup renders centered instead of left-aligned without a reset
+            // somewhere in the chain — confirmed live, 2026-08-27, by walking the actual computed
+            // `text-align` from a popup item up to `<body>`. Set once here so every current and
+            // future child (`SelectItem`, a future `Select.GroupLabel`, etc.) inherits the correct
+            // value instead of each one needing to remember this trap independently.
+            className={`thin-scrollbar rounded-[.2em] py-[.25em] text-left ${FLOATING_POPUP_TRANSITION_CLASSES}`}
             style={{
               background: palette.bg,
               border: `1px solid ${palette.border}`,
@@ -61,7 +76,7 @@ export function Select<Value extends string>({
           >
             <BaseSelect.List>
               {items.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
+                <SelectItem key={item.value} value={item.value} showIndicator={showItemIndicator}>
                   {item.label}
                 </SelectItem>
               ))}
@@ -73,22 +88,42 @@ export function Select<Value extends string>({
   )
 }
 
-function SelectItem({ value, children }: { value: string; children: ReactNode }) {
-  const palette = useMenuPalette()
+function SelectItem({ value, showIndicator, children }: { value: string; showIndicator: boolean; children: ReactNode }) {
   return (
     <BaseSelect.Item
       value={value}
-      className="relative box-content cursor-pointer select-none whitespace-nowrap px-4 py-[.3em] outline-none"
-      // `highlighted` is Base UI's own keyboard/pointer-hover state (its `data-highlighted`
-      // attribute, surfaced here through `style`-as-a-function-of-state instead) — the hover color
-      // itself is per-theme data (`palette.hoverBg`/`hoverText`), not a static Tailwind value, so
-      // it can't be a Tailwind arbitrary-variant class the way `PopupMenuItem`'s onMouseEnter/Leave
-      // pair achieves the same effect for its own hand-rolled (non-Base-UI) menu.
-      style={(state) =>
-        state.highlighted ? { background: palette.hoverBg, color: palette.hoverText } : { background: "transparent", color: palette.text }
-      }
+      // `.select-item-highlighted[data-highlighted]` (one real rule per theme file, see
+      // `public/legacy/themes/*.css`) drives the hover color directly off Base UI's own
+      // `data-highlighted` state attribute — the base-ui.com styling handbook's own recommended
+      // pattern (a static `data-[attr]:class` selector reading the library's state attributes
+      // directly), preferred here over a `style`-as-a-function-of-state prop (this file's own
+      // earlier approach) now that the color has a real theme-CSS home to live in, same as
+      // `ActivityCombobox.tsx`'s own `.activity-combobox-item-highlighted[data-highlighted]`.
+      //
+      // `grid grid-cols-[1em_1fr]` (base-ui.com's own recommended pattern for this) reserves the
+      // indicator's column width on every item, not just the selected one — `ItemIndicator` only
+      // actually renders an element for the selected item (it isn't `keepMounted`), so without a
+      // column reserved up front, every *unselected* item's text started flush left while the
+      // selected item's text alone got pushed right by the indicator + gap, an obviously
+      // unintentional-looking jump confirmed live from a real screenshot, 2026-08-27. (Text
+      // alignment itself is reset once on `Select.Popup` above, not repeated per item — see that
+      // element's own `text-left` docs.)
+      className={`select-item-highlighted relative box-content w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap py-[.3em] pe-4 outline-none ${
+        showIndicator ? "grid grid-cols-[1em_1fr] ps-2" : "flex ps-4"
+      }`}
     >
-      <BaseSelect.ItemText>{children}</BaseSelect.ItemText>
+      {showIndicator && (
+        // Left-aligned within its own column (no `justify-content: center`) and sized down to
+        // `text-xs` — base-ui.com's own official example pairs `ItemIndicator` with a thin SVG
+        // `CheckIcon` that reads visually smaller/tighter against the text than Font Awesome's
+        // `fa-check` glyph does at its default (inherited, ~text-sm) size; both together (no
+        // centering + a smaller glyph) is what actually closes the gap against the official
+        // example's tighter look (real user feedback comparing screenshots, 2026-08-27).
+        <BaseSelect.ItemIndicator className="col-start-1 flex text-xs">
+          <i className="fa fa-check" aria-hidden="true"></i>
+        </BaseSelect.ItemIndicator>
+      )}
+      <BaseSelect.ItemText className={showIndicator ? "col-start-2" : undefined}>{children}</BaseSelect.ItemText>
     </BaseSelect.Item>
   )
 }

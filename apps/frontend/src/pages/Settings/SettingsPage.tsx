@@ -211,24 +211,20 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <br />
         <h2>{t("settings.selectACategoryToShow")}</h2>
         <br />
-        <input
-          id="plugin-config"
-          className="stdbtn"
-          type="button"
-          value={t("common.pluginConfiguration") ?? undefined}
-          onClick={() => navigate(routes.pluginSettings())}
-        />{" "}
-        <input
-          id="backup"
-          className="stdbtn"
-          type="button"
-          value={t("settings.databaseBackupRestore") ?? undefined}
-          onClick={() => navigate(routes.backup())}
-        />{" "}
-        <input id="batch" className="stdbtn" type="button" value={t("batch.batchOperations") ?? undefined} onClick={() => navigate(routes.batch())} />
+        <Button id="plugin-config" onClick={() => navigate(routes.pluginSettings())}>
+          {t("common.pluginConfiguration")}
+        </Button>{" "}
+        <Button id="backup" onClick={() => navigate(routes.backup())}>
+          {t("settings.databaseBackupRestore")}
+        </Button>{" "}
+        <Button id="batch" onClick={() => navigate(routes.batch())}>
+          {t("batch.batchOperations")}
+        </Button>
         <br />
         <br />
-        <input id="return" className="stdbtn" type="button" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
+        <Button id="return" onClick={() => navigate(routes.library())}>
+          {t("common.returnToLibrary")}
+        </Button>
 
         {status && <p style={{ fontSize: FONT_SIZE_SM }}>{status}</p>}
 

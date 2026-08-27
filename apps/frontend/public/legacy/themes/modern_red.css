@@ -976,3 +976,16 @@ div.id4 a:hover {
   font-weight: bold;
 }
 
+
+
+/* Additive — no legacy equivalent (legacy has no Select-style dropdown of its own to derive from).
+   Reuses `MENU_PALETTE["modern_red.css"]`'s own hoverBg/hoverText (`useMenuPalette.ts`) — the same
+   source `common-ui/Display/PopupMenu.tsx` already draws its own hover colors from, for visual
+   consistency across every floating menu/select popup in this theme. Base UI's own
+   `data-highlighted` attribute (keyboard/pointer-highlighted item state) drives this directly via
+   CSS rather than a JS-computed inline style — same convention as this same file's own
+   `.activity-combobox-item-highlighted[data-highlighted]` rule above. */
+.select-item-highlighted[data-highlighted] {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}

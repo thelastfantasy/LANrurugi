@@ -313,6 +313,18 @@ themes, not just whichever one happens to be active during development. Concrete
   `.msm-selected` accent color, after an initial attempt hardcoded a single `rgba(...)` value that
   only looked right on the one theme it was eyeballed against.
 
+## Base UI reference docs
+
+When building or reviewing a `@base-ui/react`-based component (e.g.
+`apps/frontend/src/components/common-ui/`), check https://base-ui.com/llms.txt first — it indexes
+the per-component doc pages (anatomy/recommended composition) and the styling/composition/
+customization handbook pages. The official-recommended state-styling pattern is Tailwind
+`data-[attr]:class` variants (e.g. `data-highlighted:bg-neutral-950`) reading Base UI's own
+`data-*` state attributes directly in CSS — reach for that first. A `style`-as-a-function-of-state
+prop (what `common-ui/Form/Select.tsx`'s `SelectItem` uses) is only justified when the value itself
+is runtime/per-theme data (`useMenuPalette()`'s colors) that a static Tailwind class can't express,
+not as a default habit.
+
 ## Pre-push checks required
 
 After completing each batch of edits, run `mise run check` and confirm all checks
