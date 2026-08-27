@@ -272,7 +272,18 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       backend.kill("SIGKILL")
       redis.kill("SIGKILL")
     },
-    { scope: "worker", auto: true },
+    // Default Playwright fixture-setup timeout is 30s, shared by this fixture's own three
+    // sequential startups (Redis, backend, frontend preview) plus each one's own health-check
+    // polling loop — confirmed live, 2026-08-27: a real CI run failed every single test with a
+    // generic "timeout of 30000ms exceeded" and zero indication of which of the three steps was
+    // slow, even after `waitForHealthy` was taught to capture and report the backend's own
+    // stdout/stderr on failure — the *outer* Playwright fixture timeout fired before that inner
+    // diagnostic code ever got a chance to run, meaning the 30s budget itself, not a specific bug
+    // in any one step, was the actual constraint (CI runs 4 workers × 2 browser projects in
+    // parallel, all three per-worker processes competing for the same CPU/disk). 90s gives real
+    // headroom without masking a genuine hang — a healthy worker should reach `use(baseURL)` in a
+    // few seconds under normal load.
+    { scope: "worker", auto: true, timeout: 90_000 },
   ],
 
   baseURL: async ({ workerBaseURL }, use) => {
