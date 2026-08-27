@@ -11,6 +11,38 @@
 @import "@fortawesome/fontawesome-free/css/all.min.css";
 @import "react-toastify/dist/ReactToastify.css";
 
+/* Base UI's `Select`/`Combobox`/`Popover`/... all lock `<body>` scroll (`overflow: hidden`) while
+   open by default (`modal: true`) — on a browser with classic, layout-occupying scrollbars (most
+   Windows/Linux setups; macOS with "always show scrollbars" also counts), the vertical scrollbar
+   disappearing mid-interaction widens the whole page's available content width, visibly shifting
+   every fixed-width/centered layout on the page for as long as the popup stays open (real user
+   feedback, 2026-08-27: opening the Settings page's language `Select` "大幅度影响整个页面的排版").
+   `scrollbar-gutter: stable` permanently reserves the scrollbar's track space whether or not a
+   scrollbar is actually being drawn there, so toggling `overflow: hidden` on/off never changes the
+   viewport's available width in the first place — the standard fix for this exact class of
+   problem, not something specific to Base UI or this app's own scroll-locking components.
+
+   The width values below intentionally match `.thin-scrollbar` below (same 4px width/track/thumb
+   styling) — a real user request to make the page's own main scrollbar as narrow as the one
+   already used inside small popups (`Tooltip`/`Select`), not a separate design decision. Written
+   as plain `html`/`html::-webkit-scrollbar` element selectors rather than reusing the
+   `.thin-scrollbar` class itself, since `<html>` isn't a React-rendered element any component here
+   can attach a className to. */
+html {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+html::-webkit-scrollbar {
+  width: 4px;
+}
+html::-webkit-scrollbar-track {
+  background: transparent;
+}
+html::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.5);
+  border-radius: 3px;
+}
+
 /* Legacy's own structural stylesheet (`~/LANraragi/public/css/lrr.css`, copied verbatim to
    `public/legacy/lrr.css`) and each theme's own colour stylesheet (`public/legacy/themes/*.css`,
    also copied verbatim) are linked in at runtime by `theme.ts`'s `useApplyTheme` — components
@@ -271,7 +303,9 @@ input[type="checkbox"]:disabled {
  * floating element, where the browser's default ~15-17px scrollbar track reads oversized and
  * clutters a compact popup. Same "can't be done inline" reasoning as `.hide-scrollbar` —
  * `scrollbar-width` isn't a valid React inline-style property and `::-webkit-scrollbar` is a
- * pseudo-element inline styles can never reach at all. */
+ * pseudo-element inline styles can never reach at all. The page's own main scrollbar (the real
+ * `<html>` one, not a popup's) uses this exact same width — see the `html`/`html::-webkit-
+ * scrollbar` rules near the top of this file. */
 .thin-scrollbar {
   scrollbar-width: thin;
 }

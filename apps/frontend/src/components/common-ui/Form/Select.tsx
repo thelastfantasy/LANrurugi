@@ -1,5 +1,5 @@
 import { Select as BaseSelect } from "@base-ui/react/select"
-import type { ReactNode } from "react"
+import type { ComponentProps, ReactNode } from "react"
 
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, Z_OVERLAY_CONTENT } from "@/theme"
@@ -9,7 +9,16 @@ import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, Z_OVERLAY_CON
  * matters for visual parity with `.stdbtn` buttons placed next to it), and the popup list is
  * styled to match legacy's own real `.context-menu-list`/`.context-menu-item`/`.context-menu-
  * item.context-menu-hover` classes via `useMenuPalette()` (the same source `PopupMenu.tsx` already
- * uses for the right-click/gear menus) rather than introducing new colors. */
+ * uses for the right-click/gear menus) rather than introducing new colors.
+ *
+ * `...rootProps` forwards the rest of `Select.Root`'s own real props (`disabled`, `name`,
+ * `required`, `readOnly`, `form`, `modal`, ...) straight through — same "wrap, don't narrow" shape
+ * as `Button.tsx`'s own `Omit<ComponentProps<typeof BaseButton>, "className">`, so a caller never
+ * hits a missing prop this wrapper didn't happen to anticipate. Only the handful this component
+ * gives its own opinionated name/behavior to (`value`/`onValueChange`/`items`, all still real
+ * `Select.Root` props under the hood — `onValueChange`'s own `(value, eventDetails)` signature is
+ * narrowed to `(value)` since no call site here has needed `eventDetails` yet) are pulled out of
+ * that union explicitly. */
 export function Select<Value extends string>({
   value,
   onValueChange,
@@ -18,6 +27,7 @@ export function Select<Value extends string>({
   variant = "favtag-btn",
   showItemIndicator = true,
   style,
+  ...rootProps
 }: {
   value: Value
   onValueChange: (value: Value) => void
@@ -35,10 +45,10 @@ export function Select<Value extends string>({
    * either) and the extra indented column would just be visual noise. */
   showItemIndicator?: boolean
   style?: React.CSSProperties
-}) {
+} & Omit<ComponentProps<typeof BaseSelect.Root>, "value" | "onValueChange" | "items" | "children">) {
   const palette = useMenuPalette()
   return (
-    <BaseSelect.Root items={items} value={value} onValueChange={(v) => onValueChange(v as Value)}>
+    <BaseSelect.Root items={items} value={value} onValueChange={(v) => onValueChange(v as Value)} {...rootProps}>
       {/* Base UI's `Select.Trigger` is unstyled — it has no built-in "value on the left, arrow
           pinned to the far right" slot layout the way a native `<select>`'s own platform chrome
           does, so that has to be built by hand: `justifyContent: "space-between"` pushes

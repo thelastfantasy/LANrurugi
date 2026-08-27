@@ -989,3 +989,17 @@ div.id4 a:hover {
   background-color: #E9A53A;
   color: #F1F1F1;
 }
+
+/* Additive — no legacy equivalent as a real component (legacy's own "switch" look is a CSS hack
+   turning a native <input type="checkbox"> into an icon-swap via ::before/::after content, not a
+   real element this rule can target the same way). Reused colors, not new ones: unchecked matches
+   this theme's own base body text color (config.css's real `input[type='checkbox']` rule sets
+   `color: inherit`, so this is just that inherited value made explicit), checked matches this
+   theme's own `input[type='checkbox']:checked::after`/`::before` accent color. */
+.lrr-switch {
+  color: #EFEAEA;
+}
+
+.lrr-switch[data-checked] {
+  color: #BE234B;
+}

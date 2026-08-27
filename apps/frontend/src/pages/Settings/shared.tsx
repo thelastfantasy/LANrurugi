@@ -1,5 +1,7 @@
 import type { ReactNode } from "react"
 
+import { Switch } from "@/components/common-ui/Form/Switch"
+
 export function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <tr>
@@ -32,7 +34,7 @@ export function CheckboxRow({
         <h2 className="ih"> {label} </h2>
       </td>
       <td className="config-td">
-        <input id={id} name={id} className="fa" type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        <Switch id={id} checked={checked} onCheckedChange={onChange} />
         <label htmlFor={id}>
           <br /> {children}
         </label>
