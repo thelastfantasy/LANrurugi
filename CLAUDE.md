@@ -1,7 +1,8 @@
 <!-- SPECKIT START -->
-Six feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda to
-Phase 1) are also fully implemented (verified via each spec's own `tasks.md` — all checkboxes
-complete, no outstanding items). Phase 2 (004) and 006 remain planned but not yet implemented.
+Seven feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda
+to Phase 1) are also fully implemented (verified via each spec's own `tasks.md` — all checkboxes
+complete, no outstanding items). Phase 2 (004), 006, and 007 remain planned but not yet
+implemented.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -77,6 +78,34 @@ history state is frontend-only (no new Redis schema, no server-held session) per
 assumption that history need not survive a page refresh. Design artifacts:
 `specs/006-ai-plugin-wizard/{research.md,data-model.md,contracts/,quickstart.md}` (no `tasks.md`
 yet).
+
+**Phase 1 addendum — `007-guest-restricted-access`** (additive to Phase 1, planned but not yet
+implemented): plan at `specs/007-guest-restricted-access/plan.md`. Replaces the legacy
+`enablepass`/`nofunmode` on/off password toggles (which only ever produced "fully open" or "fully
+locked", with no in-between) with a strict, non-configurable password requirement for every
+administrative function, paired with a new opt-in **restricted guest access** mode: a site-wide
+"guest mode" switch plus per-`Category` `visible_to_guest` marking together determine whether an
+unauthenticated visitor is routed into a scoped, read-only browsing experience (list, read,
+search/tag-filter — confined to guest-visible categories; no bookmarking, no progress-saving, no
+raw-file download, no admin functions) instead of being redirected to `/login`. The new
+`guest_visitor` Casbin subject is governed entirely through `route_policy.csv` (route-level
+allow/deny, reusing `token_guest`'s existing GET-only-plus-deny-list shape verbatim, plus one
+`guest_visitor`-only deny for the raw-download endpoint); category-level content scoping — which
+Casbin's RBAC model has no mechanism for — is enforced via a new
+`SearchParams.restrict_to_archive_ids` field that reuses the search engine's existing
+retain-a-candidate-set filtering pattern rather than a Casbin ABAC rule or a post-pagination
+result filter (the latter was considered and rejected — it would desync
+`recordsFiltered`/`recordsTotal` from the actually-returned result count, itself a form of the
+information leakage this feature is designed to prevent). Out-of-scope archive access returns 404
+(indistinguishable from nonexistent), never 403. `devmode` (confirmed to have zero server-side
+behavior — only suppressed the frontend's GitHub-releases update check) is removed from the
+Settings page entirely and replaced by a deploy-time `--disable-update-check` CLI flag /
+`LANRURUGI_DISABLE_UPDATE_CHECK` env var, following the exact `--no-pass`/`LANRURUGI_NO_PASS`
+pattern already established in this codebase. `/api/info`'s `has_password` field stays present
+(now hardcoded `true`) and `nofun_mode` is removed entirely — a documented, spec-mandated
+constitution Principle II exception (research.md §5), not an oversight. Design artifacts:
+`specs/007-guest-restricted-access/{research.md,data-model.md,contracts/,quickstart.md}` (no
+`tasks.md` yet).
 
 Stack: Rust (Tokio/Axum/Rayon) backend as a Cargo workspace under `crates/` producing one binary
 (`lanrurugi-server`, with `serve`/`rebuild-index`/`bench` subcommands), Redis reused as-is from
