@@ -16,8 +16,9 @@ import type {
   JobRecord,
   PluginInfo,
 } from "@/api/types";
+import { Tooltip } from "@/components/common-ui/Display"
+;
 import { formatBytes, JobProgressBar, STATE_COLOR } from "@/components/Display";
-import { Tooltip } from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
 import { routes } from "@/lib/routes";
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP } from "@/theme";

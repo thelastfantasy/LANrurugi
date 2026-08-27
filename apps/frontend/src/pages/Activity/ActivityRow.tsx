@@ -2,7 +2,8 @@ import { useTranslation } from "react-i18next"
 
 import { useApiTokens } from "@/api/hooks"
 import type { ActivityEntry } from "@/api/types"
-import { DateTimeStack, IconButton, Tooltip } from "@/components/Display"
+import { IconButton, Tooltip } from "@/components/common-ui/Display"
+import { DateTimeStack } from "@/components/Display"
 
 import { actorChipParts } from "./activityActor"
 import { ActivityChip } from "./ActivityChip"

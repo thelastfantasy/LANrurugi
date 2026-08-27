@@ -13,7 +13,7 @@ import {
   useUpdateArchiveMetadata,
 } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
-import { Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import { TagInput } from "@/components/Form"
 import { confirmDialog, renameArchiveDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"

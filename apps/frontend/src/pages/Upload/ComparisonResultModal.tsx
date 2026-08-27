@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 
 import { useKeepSideB, useOverwriteQueueItem } from "@/api/hooks";
 import type { ExportPatchInsertion } from "@/api/types";
-import { formatBytes, IconButton } from "@/components/Display";
+import { IconButton } from "@/components/common-ui/Display"
+;
+import { formatBytes } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks";
 import { createTouchMagnifyStore, TouchMagnifyStoreContext, useTouchMagnifyStore } from "@/store";
 import { FONT_SIZE_MD, FONT_SIZE_SM } from "@/theme";

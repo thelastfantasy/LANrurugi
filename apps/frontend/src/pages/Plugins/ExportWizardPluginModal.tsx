@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useExportPluginsBatch, usePlugins } from "@/api/hooks"
-import { Modal } from "@/components/Display"
+import { Modal } from "@/components/common-ui/Display"
 
 /** Checkbox picker for exporting several AI-wizard-generated plugins as one `.zip` — only plugins
  * with `generated_by_wizard: true` are listed, since a hand-written/converted plugin already lives

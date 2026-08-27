@@ -1,7 +1,7 @@
 import { Combobox } from "@base-ui/react/combobox"
 import type { ReactNode } from "react"
 
-import { Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import { useIsNarrowViewport } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"

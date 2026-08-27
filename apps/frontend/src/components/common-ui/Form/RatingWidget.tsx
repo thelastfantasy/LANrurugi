@@ -3,7 +3,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useUpdateArchiveMetadata } from "@/api/hooks"
-import { Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import { formatRating, parseRating } from "@/lib/utils/rating"
 
 import { StarSprite } from "./StarRating"

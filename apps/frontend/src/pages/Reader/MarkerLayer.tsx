@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next"
 
 import { useAddStamp, useDeleteStamp, useStampsForPage, useUpdateStamp } from "@/api/hooks"
 import type { StampJson } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
-import { Tooltip } from "@/components/Display"
+import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import {
   anchorPercent,
   formatStampRect,

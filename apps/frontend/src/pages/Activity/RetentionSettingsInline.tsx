@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useActivityRetention, useUpdateActivityRetention } from "@/api/hooks"
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
+import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 import { toast } from "@/toast"
 

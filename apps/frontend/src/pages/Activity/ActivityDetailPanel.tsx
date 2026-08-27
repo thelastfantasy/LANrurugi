@@ -2,7 +2,8 @@ import { useTranslation } from "react-i18next"
 
 import { useApiTokens } from "@/api/hooks"
 import type { ActivityEntry } from "@/api/types"
-import { CodeBlock, IpGeoLink, Modal, Tooltip } from "@/components/Display"
+import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { CodeBlock, IpGeoLink } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { actorChipParts } from "./activityActor"

@@ -20,8 +20,8 @@ import {
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { ArchiveMetadata, ArchivePage, CategoryMetadata } from "@/api/types"
-import { Tooltip } from "@/components/Display"
-import { RatingWidget } from "@/components/Form"
+import { Tooltip } from "@/components/common-ui/Display"
+import { RatingWidget } from "@/components/common-ui/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { IconButton, PopupMenu, PopupMenuItem } from "@/components/Display"
+import { IconButton, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 
 import { type HoverGridPageOrder, useHoverGridPageOrder } from "./useHoverGridPageOrder"

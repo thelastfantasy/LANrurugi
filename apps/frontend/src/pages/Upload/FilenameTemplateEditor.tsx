@@ -3,7 +3,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { useTranslation } from "react-i18next"
 
 import type { PendingFilenameConflict } from "@/api/types"
-import { PopupMenu, PopupMenuItem } from "@/components/Display"
+import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 

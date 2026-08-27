@@ -1,7 +1,7 @@
 import { useSettings } from "@/api/hooks"
+import { Tooltip } from "@/components/common-ui/Display"
+import { StarRatingDisplay } from "@/components/common-ui/Form"
 import { TagTable } from "@/components/Display"
-import { Tooltip } from "@/components/Display"
-import { StarRatingDisplay } from "@/components/Form"
 import { buildSearchToken, colorCodeTags, TIMESTAMP_NAMESPACE } from "@/lib/tagFormat"
 import { parseRating } from "@/lib/utils/rating"
 

@@ -3,7 +3,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useSettings } from "@/api/hooks"
-import { Modal } from "@/components/Display"
+import { Modal } from "@/components/common-ui/Display"
 import { presetTimeRange, type TimeRangePreset } from "@/lib/timeRange"
 
 import { ActivityComboboxItem, ActivitySingleSelectShell } from "./ActivityCombobox"

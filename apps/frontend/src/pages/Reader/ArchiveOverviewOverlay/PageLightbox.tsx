@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { useArchivePages } from "@/api/hooks"
 import type { ArchivePage } from "@/api/types"
-import { Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import { useHorizontalScroll } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { fetchContentLengthKb } from "@/lib/utils/imageMeta"

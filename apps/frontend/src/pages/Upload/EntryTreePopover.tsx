@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ArchiveEntryInfo } from "@/api/types";
-import { PopupMenu, Tooltip } from "@/components/Display";
+import { PopupMenu, Tooltip } from "@/components/common-ui/Display"
+;
 import { useMenuPalette } from "@/hooks/useMenuPalette";
 import { FONT_SIZE_SM, FONT_SIZE_XS } from "@/theme";
 

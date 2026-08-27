@@ -2,7 +2,9 @@ import type { ReactNode } from "react"
 import type { RefObject } from "react"
 import { useTranslation } from "react-i18next"
 
-import { ClickPopover, IconButtonWithTooltip, PopupMenu, PopupMenuItem } from "@/components/Display"
+import { IconButtonWithTooltip } from "@/components/common-ui/Display"
+import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { ClickPopover } from "@/components/Display"
 
 interface TagSuggestion { label: string; insertValue: string }
 import { FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"

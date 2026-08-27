@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { useJobProgressOverride } from "@/api/hooks"
 import type { JobRecord, JobRecordState } from "@/api/types"
-import { Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
 /** State → color, shared between the Jobs page's own badges/borders and this component's default

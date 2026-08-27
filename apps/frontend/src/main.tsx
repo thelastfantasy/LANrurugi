@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client"
 
 import { queryClient } from "./api/queryClient"
 import { App } from "./App"
-import { ErrorBoundary } from "./components/Display/ErrorBoundary"
+import { ErrorBoundary } from "./components/common-ui/Display/ErrorBoundary"
 
 const root = document.getElementById("root")
 if (!root) throw new Error("missing #root element")

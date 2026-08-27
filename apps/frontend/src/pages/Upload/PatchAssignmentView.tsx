@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next"
 
 import { useComparePages } from "@/api/hooks"
 import type { ExportPatchInsertion, UnmatchedPage } from "@/api/types"
-import { IconButton, Tooltip } from "@/components/Display"
+import { IconButton, Tooltip } from "@/components/common-ui/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { ScrollRow, THUMB_ASPECT_RATIO } from "./shared"

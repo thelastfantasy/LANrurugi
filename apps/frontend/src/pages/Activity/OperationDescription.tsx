@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 
 import type { ActivityEntry } from "@/api/types"
-import { StarRatingDisplay } from "@/components/Form"
+import { StarRatingDisplay } from "@/components/common-ui/Form"
 import { parseRating } from "@/lib/utils/rating"
 
 import { actionTypeLabel, hasNoTarget, isDeletionActionType, PLUGIN_TYPE_LABEL_KEYS, targetLink } from "./activityTarget"

@@ -22,7 +22,8 @@ import {
   useUpdateProgress,
   useUpdateTankoubonProgress,
 } from "@/api/hooks"
-import { ForbiddenPage, NotFoundPage, Tooltip } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display"
+import { ForbiddenPage, NotFoundPage } from "@/components/Display"
 import { Footer } from "@/components/Layout"
 import { confirmDialog, promptDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"

@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { ApiError } from "@/api/client"
 import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from "@/api/hooks"
 import type { Settings as SettingsType } from "@/api/types"
+import { Button } from "@/components/common-ui/Form/Button"
 import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -235,8 +236,17 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             session just expires — and only one site-wide language, set below in Global
             Settings). Kept minimal and visually separate since this SPA needs both. */}
         <hr style={{ margin: "12px 0" }} />
-        <LanguageSelector />{" "}
-        <input id="logout" className="stdbtn" type="button" value={t("settings.logout") ?? undefined} onClick={() => void handleLogout()} />
+        {/* Both `LanguageSelector` (a `common-ui/Select`) and the logout button (a `common-ui/
+            Button`) render a real `<button>` as their outer box — this is what actually fixes the
+            vertical-alignment mismatch a plain `<select className="favtag-btn">` next to a
+            `<input className="stdbtn">` had (real user feedback, 2026-08-27): no amount of forcing
+            height/font-size/vertical-align to match closed the gap, because a native `<select>`
+            reserves its own internal layout space for the platform's dropdown arrow that isn't
+            reflected in any of those CSS properties at all. */}
+        <LanguageSelector variant="stdbtn" />{" "}
+        <Button id="logout" onClick={() => void handleLogout()}>
+          {t("settings.logout")}
+        </Button>
       </div>
 
       <form

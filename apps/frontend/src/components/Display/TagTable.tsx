@@ -1,5 +1,5 @@
 import { useSettings } from "@/api/hooks"
-import { StarRatingDisplay } from "@/components/Form"
+import { StarRatingDisplay } from "@/components/common-ui/Form"
 import {
   BARE_TAG_NAMESPACE,
   displayNamespace,

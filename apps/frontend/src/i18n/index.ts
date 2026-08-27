@@ -106,7 +106,22 @@ export function useApplySettingsLanguage() {
   const publicSettings = usePublicSettings({ enabled: settings.data === undefined })
   const language = settings.data?.language ?? publicSettings.data?.language
   useEffect(() => {
-    if (!language || language === "auto") return
+    if (!language) return
+    if (language === "auto") {
+      // Switching back to "auto" after a specific language was picked previously must actually
+      // undo that pick, not just stop re-applying it — `i18next-browser-languagedetector`'s own
+      // `caches: ["localStorage"]` (below) wrote the previous explicit selection into
+      // `lanrurugi_language`, which its own `detection.order` (`["localStorage", "navigator"]`)
+      // then keeps preferring over real browser-language detection forever, since nothing was
+      // ever clearing it — a real bug (confirmed live, 2026-08-27): setting the dropdown back to
+      // "Automatic" left the UI stuck on whatever language had been explicitly chosen before,
+      // with no way back to following the browser's own language short of manually clearing
+      // localStorage. `i18n.changeLanguage()` with no argument re-runs the detector's own
+      // `order` from scratch and re-caches whatever it lands on.
+      localStorage.removeItem("lanrurugi_language")
+      void i18n.changeLanguage()
+      return
+    }
     if (i18n.language === language) return
     void i18n.changeLanguage(language)
   }, [language])

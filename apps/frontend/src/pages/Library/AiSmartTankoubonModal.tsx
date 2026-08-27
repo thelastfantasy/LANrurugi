@@ -15,7 +15,8 @@ import {
   useTankoubons,
   useUnignoreGroupSuggestion,
 } from "@/api/hooks"
-import { AiSkeleton, ArchiveChecklistItem, Modal, Tooltip } from "@/components/Display"
+import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
 
