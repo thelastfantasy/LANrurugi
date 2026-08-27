@@ -23,6 +23,7 @@ use tower::ServiceExt;
 
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
+    seed_guestmode(&redis).await;
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -118,15 +119,64 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     Some((app, redis))
 }
 
-async fn get_json(app: &axum::Router, uri: &str) -> (axum::http::StatusCode, Value) {
+/// 007-guest-restricted-access made password login unconditional (no more `enable_pass: false`
+/// open-instance mode these tests originally relied on), so every request asserting a `200` from
+/// a protected route needs a real session — log in with the default password and return the
+/// session-cookie header value to attach.
+async fn login_cookie(app: &axum::Router) -> String {
     let response = app
         .clone()
         .oneshot(
             axum::http::Request::builder()
-                .uri(uri)
-                .body(axum::body::Body::empty())
+                .method("POST")
+                .uri("/api/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(axum::body::Body::from("password=kamimamita"))
                 .unwrap(),
         )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "contract tests must be able to log in with the default password"
+    );
+    let set_cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .map(|v| v.split(';').next().unwrap_or(v))
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(!set_cookie.is_empty(), "login must set a session cookie");
+    set_cookie
+}
+
+/// `auth::load` hard-errors when `guestmode` is absent from `LRR_CONFIG` — seed the shared
+/// default the same way `auth_flow.rs`/`settings_toggles.rs` do, so this file's requests never
+/// 500 just because it happened to be the first test binary to run against a fresh Redis.
+async fn seed_guestmode(redis: &RedisDbs) {
+    use deadpool_redis::redis::AsyncCommands;
+    let mut conn = redis.config.get().await.unwrap();
+    let _: bool = conn
+        .hset_nx(lanrurugi_storage::keys::CONFIG_KEY, "guestmode", "0")
+        .await
+        .unwrap();
+}
+
+async fn get_json(
+    app: &axum::Router,
+    uri: &str,
+    cookie: Option<&str>,
+) -> (axum::http::StatusCode, Value) {
+    let mut builder = axum::http::Request::builder().uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    let response = app
+        .clone()
+        .oneshot(builder.body(axum::body::Body::empty()).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -184,7 +234,8 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
     .await
     .unwrap();
 
-    let (status, json) = get_json(&app, "/api/archives").await;
+    let cookie = login_cookie(&app).await;
+    let (status, json) = get_json(&app, "/api/archives", Some(&cookie)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     let arr = json.as_array().expect("recorded contract: array response");
     let entry = arr
@@ -218,7 +269,7 @@ async fn get_info_matches_recorded_serverinfo_shape() {
         return;
     };
 
-    let (status, json) = get_json(&app, "/api/info").await;
+    let (status, json) = get_json(&app, "/api/info", None).await;
     assert_eq!(status, axum::http::StatusCode::OK);
 
     // Every field from the recorded ServerInfo example in openapi.yaml must be present.
@@ -273,11 +324,13 @@ async fn delete_archive_matches_recorded_response_shape() {
     .await
     .unwrap();
 
+    let cookie = login_cookie(&app).await;
     let response = app
         .oneshot(
             axum::http::Request::builder()
                 .method("DELETE")
                 .uri(format!("/api/archives/{id}"))
+                .header("cookie", &cookie)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -307,6 +360,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
+    seed_guestmode(&redis).await;
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -442,7 +496,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(body.contains("console.log"));
 
-    let (status, _) = get_json(&app, "/api/info").await;
+    let (status, _) = get_json(&app, "/api/info", None).await;
     assert_eq!(
         status,
         axum::http::StatusCode::OK,
@@ -460,6 +514,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
+    seed_guestmode(&redis).await;
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -616,7 +671,8 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
         let _: () = conn.hdel("LRR_CONFIG", "theme").await.unwrap();
     }
 
-    let (status, json) = get_json(&app, "/api/settings").await;
+    let cookie = login_cookie(&app).await;
+    let (status, json) = get_json(&app, "/api/settings", Some(&cookie)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(
         json["theme"], "modern.css",
@@ -629,6 +685,7 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
             axum::http::Request::builder()
                 .method("PUT")
                 .uri("/api/settings")
+                .header("cookie", &cookie)
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(r#"{"theme":"modern_red.css"}"#))
                 .unwrap(),
@@ -637,7 +694,7 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-    let (status, json) = get_json(&app, "/api/settings").await;
+    let (status, json) = get_json(&app, "/api/settings", Some(&cookie)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(json["theme"], "modern_red.css");
 
@@ -671,6 +728,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
     };
+    seed_guestmode(&redis).await;
     let repos = Repositories::new(&redis);
     let plugin_options = std::sync::Arc::new(
         lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
@@ -790,12 +848,14 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         ))),
     );
 
+    let cookie = login_cookie(&app).await;
     let response = app
         .clone()
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
                 .uri("/api/database/scripts/subfolders-to-categories")
+                .header("cookie", &cookie)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -803,7 +863,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-    let (status, categories) = get_json(&app, "/api/categories").await;
+    let (status, categories) = get_json(&app, "/api/categories", Some(&cookie)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     let categories = categories.as_array().unwrap();
     let created = categories
