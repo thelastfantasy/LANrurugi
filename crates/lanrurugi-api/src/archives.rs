@@ -325,7 +325,7 @@ async fn guest_scope_denies(
     ) {
         return false;
     }
-    match crate::search::guest_visible_archive_ids(state).await {
+    match crate::search::guest_readable_archive_ids(state).await {
         Ok(ids) => !ids.contains(id),
         // Fails closed: a Redis hiccup computing guest scope must not silently grant access.
         Err(_) => true,

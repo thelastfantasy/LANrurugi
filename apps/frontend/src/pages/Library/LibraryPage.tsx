@@ -1,25 +1,25 @@
-import { useState } from "react"
+import { useState } from "react";
 
-import { ApiError } from "@/api/client"
-import { useLibrary } from "@/hooks/useLibrary"
-import { routes } from "@/lib/routes"
+import { ApiError } from "@/api/client";
+import { useLibrary } from "@/hooks/useLibrary";
+import { routes } from "@/lib/routes";
 
-import { AiSmartTankoubonModal } from "./AiSmartTankoubonModal"
-import { ArchiveCard } from "./ArchiveCard"
-import { ArchiveContextMenu } from "./ArchiveContextMenu"
-import { CategoryBar } from "./CategoryBar"
-import { CompactTable } from "./CompactTable"
-import { DeleteConfirmDialog } from "./DeleteConfirmDialog"
-import { RecentlyAddedCarousel } from "./RecentlyAddedCarousel"
-import { ResultInfoAndPager } from "./ResultInfoAndPager"
-import { SearchBar } from "./SearchBar"
-import { SettingsMenu } from "./SettingsMenu"
-import { SortBySelector } from "./SortBySelector"
+import { AiSmartTankoubonModal } from "./AiSmartTankoubonModal";
+import { ArchiveCard } from "./ArchiveCard";
+import { ArchiveContextMenu } from "./ArchiveContextMenu";
+import { CategoryBar } from "./CategoryBar";
+import { CompactTable } from "./CompactTable";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { RecentlyAddedCarousel } from "./RecentlyAddedCarousel";
+import { ResultInfoAndPager } from "./ResultInfoAndPager";
+import { SearchBar } from "./SearchBar";
+import { SettingsMenu } from "./SettingsMenu";
+import { SortBySelector } from "./SortBySelector";
 
 export function Library() {
-  const lib = useLibrary()
-  const deleteTarget = lib.deleteTarget
-  const [aiTankoubonModalOpen, setAiTankoubonModalOpen] = useState(false)
+  const lib = useLibrary();
+  const deleteTarget = lib.deleteTarget;
+  const [aiTankoubonModalOpen, setAiTankoubonModalOpen] = useState(false);
 
   if (lib.search.isError) {
     // A 401 means the session just expired mid-view — `RequireAuth` (`RouteGuards.tsx`) is
@@ -27,20 +27,27 @@ export function Library() {
     // `/login`; rendering nothing here for that one render avoids a "database corrupted" flash
     // for what's actually just a routine session expiry (the bug this branch used to have before
     // `client.ts` stopped force-navigating on 401 itself).
-    if (lib.search.error instanceof ApiError && lib.search.error.status === 401) return null
+    if (lib.search.error instanceof ApiError && lib.search.error.status === 401)
+      return null;
 
     return (
       <div className="ido" style={{ textAlign: "center", padding: 40 }}>
         <div id="json-error">
           <h1 style={{ color: "red" }}>
             <i className="fas fa-bomb" aria-hidden="true"></i>{" "}
-            {lib.t("I don't know everything, but I sure as hell know this database's busted lads")}{" "}
+            {lib.t(
+              "I don't know everything, but I sure as hell know this database's busted lads",
+            )}{" "}
             <i className="fas fa-bomb" aria-hidden="true"></i>
           </h1>
-          <h2>{lib.t("The database cache is corrupt, and as such LANrarugi is unable to display your archive list.")}</h2>
+          <h2>
+            {lib.t(
+              "The database cache is corrupt, and as such LANrarugi is unable to display your archive list.",
+            )}
+          </h2>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -62,25 +69,26 @@ export function Library() {
             multiSelect={lib.multiSelect}
             searchInputRef={lib.searchInputRef}
             onFilterInputChange={(value, open) => {
-              lib.setFilterInputOverride(value)
-              if (open) lib.setAutocompleteOpen(true)
+              lib.setFilterInputOverride(value);
+              if (open) lib.setAutocompleteOpen(true);
             }}
             onAutocompleteOpenChange={lib.setAutocompleteOpen}
             onApplyFilter={() => {
-              lib.setFilterInputOverride(null)
-              lib.navigateSearch({ appliedFilter: lib.filterInput, page: 0 })
+              lib.setFilterInputOverride(null);
+              lib.navigateSearch({ appliedFilter: lib.filterInput, page: 0 });
             }}
             onClearFilter={() => {
-              lib.setFilterInputOverride(null)
-              lib.navigateSearch({ appliedFilter: "", page: 0 })
+              lib.setFilterInputOverride(null);
+              lib.navigateSearch({ appliedFilter: "", page: 0 });
             }}
             onSuggestionSelect={(insertValue) => {
-              const upToCursor = lib.filterInput.replace(/[^,\s-]*$/, "")
-              lib.setFilterInputOverride(`${upToCursor}${insertValue}`)
-              lib.searchInputRef.current?.focus()
+              const upToCursor = lib.filterInput.replace(/[^,\s-]*$/, "");
+              lib.setFilterInputOverride(`${upToCursor}${insertValue}`);
+              lib.searchInputRef.current?.focus();
             }}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
             onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
+            loggedIn={lib.loggedIn}
           />
         </div>
 
@@ -111,17 +119,29 @@ export function Library() {
           <span style={{ marginRight: 12 }}>
             {lib.t("{{n}} selected", { n: lib.selectedIds.length })}
           </span>
-          <button type="button" className="stdbtn" onClick={() => lib.selectAllOnPage()}>
+          <button
+            type="button"
+            className="stdbtn"
+            onClick={() => lib.selectAllOnPage()}
+          >
             {lib.t("Select All on Page")}
           </button>
           <button type="button" className="stdbtn" onClick={lib.clearSelection}>
             {lib.t("Clear Selection")}
           </button>
-          <button type="button" className="stdbtn" onClick={lib.runBatchOnSelection}>
+          <button
+            type="button"
+            className="stdbtn"
+            onClick={lib.runBatchOnSelection}
+          >
             {lib.t("Batch Operations")}
           </button>
           {lib.canMerge && (
-            <button type="button" className="stdbtn" onClick={() => void lib.mergeSelectionIntoTankoubon()}>
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={() => void lib.mergeSelectionIntoTankoubon()}
+            >
               {lib.t("Merge into Tankoubon")}
             </button>
           )}
@@ -135,15 +155,25 @@ export function Library() {
             order={lib.order}
             stats={lib.stats.data}
             onSortBy={(key) => lib.navigateSearch({ sortby: key, page: 0 })}
-            onToggleOrder={() => lib.navigateSearch({ order: lib.order === "asc" ? "desc" : "asc" })}
+            onToggleOrder={() =>
+              lib.navigateSearch({
+                order: lib.order === "asc" ? "desc" : "asc",
+              })
+            }
           />
         )}
         {lib.viewMode === "compact" && (
           <div className="compact-options">
             {lib.t("Columns:")}{" "}
-            <select className="favtag-btn" value={lib.columns} onChange={(e) => lib.setColumns(Number(e.target.value))}>
+            <select
+              className="favtag-btn"
+              value={lib.columns}
+              onChange={(e) => lib.setColumns(Number(e.target.value))}
+            >
               {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
-                <option key={n} value={n}>{n}</option>
+                <option key={n} value={n}>
+                  {n}
+                </option>
               ))}
             </select>
           </div>
@@ -165,9 +195,18 @@ export function Library() {
         <div className="table-options-goto">
           <div style={{ display: "flex", alignItems: "center" }}>
             {lib.t("Go to Page:")}{" "}
-            <select className="favtag-btn table-options-goto-select" style={{ marginTop: 6, marginBottom: 6 }} value={lib.page} onChange={(e) => lib.navigateSearch({ page: Number(e.target.value) })}>
+            <select
+              className="favtag-btn table-options-goto-select"
+              style={{ marginTop: 6, marginBottom: 6 }}
+              value={lib.page}
+              onChange={(e) =>
+                lib.navigateSearch({ page: Number(e.target.value) })
+              }
+            >
               {Array.from({ length: lib.pageCount }, (_, i) => i).map((p) => (
-                <option key={p} value={p}>{p + 1}</option>
+                <option key={p} value={p}>
+                  {p + 1}
+                </option>
               ))}
             </select>
           </div>
@@ -193,7 +232,13 @@ export function Library() {
           <i className="fas fa-sad-cry fa-4x" aria-hidden="true"></i>
           <h1>
             {lib.t("No archives to show you! Try")}{" "}
-            <a href={routes.upload()} onClick={(e) => { e.preventDefault(); lib.navigate(routes.upload()) }}>
+            <a
+              href={routes.upload()}
+              onClick={(e) => {
+                e.preventDefault();
+                lib.navigate(routes.upload());
+              }}
+            >
               {lib.t("uploading some")}
             </a>
             ?
@@ -239,13 +284,18 @@ export function Library() {
           liveArchives={lib.shown}
           onClose={() => lib.setContextMenu(null)}
           onToggleCategory={(categoryId, archiveId, currentlyIn) =>
-            void lib.toggleArchiveCategory(categoryId, archiveId, currentlyIn)}
-          onDelete={(archiveId, isTank) => lib.setDeleteTarget({ id: archiveId, isTank })}
+            void lib.toggleArchiveCategory(categoryId, archiveId, currentlyIn)
+          }
+          onDelete={(archiveId, isTank) =>
+            lib.setDeleteTarget({ id: archiveId, isTank })
+          }
           onOpen={lib.handleOpenArchive}
-          onRatingChange={(archiveId, isTank, rating) => void lib.updateRating(archiveId, isTank, rating)}
+          onRatingChange={(archiveId, isTank, rating) =>
+            void lib.updateRating(archiveId, isTank, rating)
+          }
           onToggleSelection={(id) => {
-            if (!lib.multiSelect) lib.handleToggleMultiSelect()
-            lib.toggleSelected(id)
+            if (!lib.multiSelect) lib.handleToggleMultiSelect();
+            lib.toggleSelected(id);
           }}
           isSelected={lib.selectedIds.includes(lib.contextMenu.archive.arcid)}
           onSetProgress={lib.handleSetProgress}
@@ -257,13 +307,15 @@ export function Library() {
           isTank={deleteTarget.isTank}
           onCancel={() => lib.setDeleteTarget(null)}
           onConfirm={() => {
-            void lib.deleteArchive(deleteTarget.id, deleteTarget.isTank)
-            lib.setDeleteTarget(null)
+            void lib.deleteArchive(deleteTarget.id, deleteTarget.isTank);
+            lib.setDeleteTarget(null);
           }}
         />
       )}
 
-      {aiTankoubonModalOpen && <AiSmartTankoubonModal onClose={() => setAiTankoubonModalOpen(false)} />}
+      {aiTankoubonModalOpen && (
+        <AiSmartTankoubonModal onClose={() => setAiTankoubonModalOpen(false)} />
+      )}
     </div>
-  )
+  );
 }

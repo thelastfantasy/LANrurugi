@@ -89,3 +89,19 @@ p, guest_visitor, /api/plugin-wizard/save, POST, deny
 # reader's own per-page image fetch, spec FR-008 explicitly requires) is deliberately NOT denied
 # here — same HTTP method, different route, different spec requirement.
 p, guest_visitor, /api/archives/:id/download, GET, deny
+
+# guest_visitor-only, FR-010 (quickstart §9): administrative *read* routes must not inherit the
+# blanket GET-allow above either — plugin management, the audit/activity log, and /api/stats are
+# admin surfaces a guest never gets scoped access to, they're denied outright. Missed in the
+# initial 007 policy pass because the guest tests' category IDs didn't match `list_all()`'s glob
+# (see auth_flow.rs's own note), so guest eligibility never actually held in tests and every
+# guest request 401'd before reaching these rules — the gap only surfaced once that was fixed.
+p, guest_visitor, /api/plugins, GET, deny
+p, guest_visitor, /api/plugins/:type, GET, deny
+p, guest_visitor, /api/plugins/settings, GET, deny
+p, guest_visitor, /api/plugins/export, GET, deny
+p, guest_visitor, /api/plugins/options, GET, deny
+p, guest_visitor, /api/activity, GET, deny
+p, guest_visitor, /api/activity/facets, GET, deny
+p, guest_visitor, /api/activity/retention, GET, deny
+p, guest_visitor, /api/stats, GET, deny

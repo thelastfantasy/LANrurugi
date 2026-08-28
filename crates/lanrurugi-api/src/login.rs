@@ -272,9 +272,15 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // no credentials".
     let logged_in = crate::auth::session_is_valid(&auth, &headers);
     // Drives the homepage's "you're using the default password" warning toast (legacy's own
-    // `[% IF usingdefpass %]`, `Controller/Index.pm`) — never itself a security boundary (nothing
-    // here decides whether a login succeeds), just a UI nudge, so it's safe to expose to anyone.
-    let using_default_password = auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
+    // `[% IF usingdefpass %]`, `Controller/Index.pm`). Legacy could expose this unconditionally
+    // because `enablepass` being off already meant "no real login exists to guess" — once
+    // password login became unconditional (007-guest-restricted-access), a `true` here is a live
+    // credential hint ("try kamimamita"), not a harmless nudge, so it must only ever reach a
+    // caller who has already proven they hold that password: `false` for anyone not currently
+    // `logged_in`, including an otherwise-eligible guest_visitor (found live, 2026-08-28 — a
+    // guest session was shown the exact default-password toast an admin should see).
+    let using_default_password =
+        logged_in && auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
     // `guest_mode_enabled` here reports the site-wide switch only, not "is a category actually
     // visible" (spec FR-003 keeps those two conditions distinct) — the frontend combines this with
     // its own knowledge of whether the request that landed on a page succeeded to infer the full

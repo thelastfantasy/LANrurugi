@@ -161,6 +161,39 @@ pub(crate) async fn guest_visible_archive_ids(
     Ok(ids)
 }
 
+/// 007: the *read* scope — `guest_visible_archive_ids` plus every member archive of a visible
+/// Tankoubon. A `TANK_` id in a guest-visible category marks the whole tank visible, and the
+/// reader fetches each member's `/files`/`/page` when reading the tank as one concatenated
+/// book — without expanding members here, the tank lists and opens fine but every member-level
+/// request 404s ("不存在"), a real mid-read dead end found live in the dev guest session.
+/// Deliberately separate from `guest_visible_archive_ids` itself: that narrower set is also the
+/// search engine's `restrict_to_archive_ids`, and letting members in there would surface them
+/// standalone in the library list next to the tank that already represents them.
+pub(crate) async fn guest_readable_archive_ids(
+    state: &AppState,
+) -> Result<
+    std::collections::HashSet<lanrurugi_core::ids::ArchiveId>,
+    lanrurugi_storage::repository::RepositoryError,
+> {
+    let mut ids = guest_visible_archive_ids(state).await?;
+    let tank_ids: Vec<String> = ids
+        .iter()
+        .filter(|id| id.as_str().starts_with("TANK_"))
+        .map(|id| id.as_str().to_string())
+        .collect();
+    for tank in tank_ids {
+        if let Ok(Some(grouping)) = state
+            .repos
+            .groupings
+            .get(&lanrurugi_core::ids::TankId(tank))
+            .await
+        {
+            ids.extend(grouping.archives);
+        }
+    }
+    Ok(ids)
+}
+
 async fn build_params(
     state: &AppState,
     q: &SearchQuery,

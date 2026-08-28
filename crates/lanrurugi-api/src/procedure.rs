@@ -155,6 +155,18 @@ pub async fn require_api_key(
 async fn authorize_route(matched_path: &MatchedPath, method: &str, auth: &AuthContext) -> bool {
     let obj = crate::authz::axum_path_to_casbin(matched_path.as_str());
     let authz = crate::authz::Authz::get().await;
+    // `route_policy.csv` only ever spells out `GET` for a read route, never `HEAD` — axum doesn't
+    // synthesize a `HEAD` fallback until *after* this middleware runs (`MethodRouter::head`'s own
+    // auto-`GET`-delegation happens at the handler layer), so a raw `HEAD` request reaches Casbin
+    // with its real method and fails `r.act == p.act` even though it's exactly as safe as the
+    // `GET` twin every such route already allows — confirmed live, 2026-08-28: a guest_visitor's
+    // reader issuing `HEAD .../page` (image-metadata prefetch) got a real 403 despite the
+    // identical `GET` succeeding immediately before it.
+    let method = if method.eq_ignore_ascii_case("HEAD") {
+        "GET"
+    } else {
+        method
+    };
     crate::authz::check_route(&authz.route, Some(auth), &obj, method)
 }
 

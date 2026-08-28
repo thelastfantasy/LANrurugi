@@ -250,6 +250,28 @@ async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     clear_config_field(&redis, "enablecors").await;
 }
 
+/// Delete every guest-test category ID this file (and `auth_flow.rs`) uses — a prior test that
+/// panicked mid-body never runs its own trailing cleanup, and a leftover `visible_to_guest`
+/// category in the shared Redis silently grants guest eligibility to every later test that
+/// asserts 401 (the exact cascade behind the 2026-08-27 CI run's five-failure chain). Safe to
+/// call only while holding the `guestmode` `RedisTestLock`, which every caller does — that lock
+/// serializes these tests against `auth_flow.rs`'s own guest test across processes too.
+async fn purge_guest_test_categories(repos: &Repositories) {
+    for id in [
+        "SET_9992010001",
+        "SET_9992010002",
+        "SET_9992010003",
+        "SET_9992010004",
+        "SET_9992010005",
+        "SET_9992010006",
+    ] {
+        let _ = repos
+            .categories
+            .delete(&lanrurugi_core::ids::CategoryId(id.to_string()))
+            .await;
+    }
+}
+
 /// 007-guest-restricted-access, US2: the full `guestmode` + `Category.visible_to_guest` matrix —
 /// guest mode off (regardless of category visibility), guest mode on with zero guest-visible
 /// categories, and guest mode on with at least one guest-visible category, the only combination
@@ -268,6 +290,7 @@ async fn guest_mode_and_category_visibility_matrix() {
     // as a genuinely separate `cargo test --workspace` process against the same real Redis).
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
+    purge_guest_test_categories(&Repositories::new(&redis)).await;
 
     // guestmode off, no categories at all: an ordinary protected route stays 401.
     let resp = request(&app, "GET", "/api/categories").await;
@@ -335,6 +358,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
+    purge_guest_test_categories(&repos).await;
 
     let in_scope_id = "1".repeat(40);
     let out_of_scope_id = "2".repeat(40);
@@ -414,6 +438,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
+    purge_guest_test_categories(&repos).await;
 
     let out_of_scope_id = "3".repeat(40);
     repos
@@ -494,6 +519,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
+    purge_guest_test_categories(&repos).await;
 
     let archive_id = "5".repeat(40);
     repos
@@ -574,6 +600,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
+    purge_guest_test_categories(&repos).await;
 
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010005".to_string()),
@@ -613,6 +640,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     let _guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
+    purge_guest_test_categories(&repos).await;
 
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010006".to_string()),

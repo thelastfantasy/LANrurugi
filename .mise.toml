@@ -158,7 +158,20 @@ description = "Rebuild the dev image after a *backend* source change (frontend c
 # that broken indirection; must stay in sync with `compose.dev.yaml`'s own `build:` section
 # (context `.`, `dockerfile: Dockerfile.dev`, image tag `localhost/lanrurugi-dev-full:latest`) if
 # that ever changes.
-run = "podman build -f Dockerfile.dev -t localhost/lanrurugi-dev-full:latest ."
+run = """
+podman build -f Dockerfile.dev -t localhost/lanrurugi-dev-full:latest .
+# Re-tagging `latest` above orphans the previous image under this tag as a dangling `<none>`
+# layer — with no automatic GC, these silently accumulate one per rebuild (confirmed live,
+# 2026-08-28: 733 images / 41.77GB before a first manual `podman image prune` cut it to 52 / 9.8GB).
+# Prune right after a successful rebuild, not in `dev-down` — `dev-down` is a routine
+# start/stop toggle run far more often than a rebuild, and paying the prune cost there would
+# slow down the common case for no benefit; a fresh dangling image only ever exists *because*
+# a rebuild just ran, so cleaning up immediately after is both sufficient and the cheapest
+# point to do it. `-f` skips the interactive confirmation (this is scripted, non-interactive
+# use); scoped to dangling images only, never a `system prune` here — that would also sweep
+# named volumes / build cache this and other tasks still rely on.
+podman image prune -f
+"""
 
 [tasks.dev-logs]
 description = "Follow the local dev container's logs"
