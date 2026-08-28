@@ -311,15 +311,26 @@ async fn guest_mode_and_category_visibility_matrix() {
     // request-scoping matrix under test here is about `procedure.rs`'s eligibility branch, not
     // `create_category`'s own field wiring, which `categories.rs`'s own unit-level coverage (T030)
     // already exercises.
+    //
+    // `guest_has_any_visible_archive` (c89ec44) requires the category to actually contain a real
+    // archive, not just carry `visible_to_guest` — an empty `archives: Vec::new()` category (this
+    // test's own original shape) makes that check return `false` and keeps an otherwise-eligible
+    // guest at 401, confirmed live via real CI failure, 2026-08-28.
+    let repos = Repositories::new(&redis);
+    let archive_id = "6".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&archive_id, "Guest Visible Archive", ""))
+        .await
+        .unwrap();
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010001".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
-        archives: Vec::new(),
+        archives: vec![lanrurugi_core::ids::ArchiveId(archive_id.clone())],
         pinned: false,
         visible_to_guest: true,
     };
-    let repos = Repositories::new(&redis);
     repos.categories.save(&category).await.unwrap();
 
     // Now an unauthenticated caller reaches the ordinary protected route as a guest.
@@ -341,6 +352,11 @@ async fn guest_mode_and_category_visibility_matrix() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+        .await
+        .unwrap();
     set_config_field(&redis, "guestmode", "0").await;
 }
 
@@ -461,12 +477,21 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         .unwrap();
     // Guest mode on, but with a guest-visible category that does NOT include this archive — the
     // eligibility branch itself is satisfied (at least one guest-visible category exists), the
-    // per-archive scope check is what must deny this specific request.
+    // per-archive scope check is what must deny this specific request. The category still needs a
+    // *different* real archive in it, not zero — `guest_has_any_visible_archive` (c89ec44) treats
+    // an empty static category as ineligible, which would 401 before ever reaching the per-archive
+    // scope check this test is actually about, confirmed live via real CI failure, 2026-08-28.
+    let in_scope_id = "7".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&in_scope_id, "In Scope", ""))
+        .await
+        .unwrap();
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010003".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
-        archives: Vec::new(),
+        archives: vec![lanrurugi_core::ids::ArchiveId(in_scope_id.clone())],
         pinned: false,
         visible_to_guest: true,
     };
@@ -511,6 +536,11 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
     repos
         .archives
         .delete(&lanrurugi_core::ids::ArchiveId(out_of_scope_id))
+        .await
+        .unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(in_scope_id))
         .await
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
@@ -655,11 +685,22 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
 
+    // `guest_has_any_visible_archive` (c89ec44) requires the category to actually contain a real
+    // archive, not just carry `visible_to_guest` — an empty `archives: Vec::new()` category (this
+    // test's own original shape) makes that check return `false` and keeps the guest at 401
+    // instead of the eligible 200 this test's first assertion expects, confirmed live via real CI
+    // failure, 2026-08-28.
+    let archive_id = "8".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&archive_id, "Guest Visible Archive", ""))
+        .await
+        .unwrap();
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010006".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
-        archives: Vec::new(),
+        archives: vec![lanrurugi_core::ids::ArchiveId(archive_id.clone())],
         pinned: false,
         visible_to_guest: true,
     };
@@ -691,5 +732,10 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+        .await
+        .unwrap();
     set_config_field(&redis, "guestmode", "0").await;
 }

@@ -27,6 +27,32 @@ fn redis_state_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Minimal real archive for guest-scope tests — same shape as `settings_toggles.rs::test_archive`
+/// (no shared crate home for it, each integration-test binary is its own compilation unit). `file`
+/// points at a nonexistent path since this file's own guest tests never read file bytes, only
+/// exercise route-gating.
+fn test_archive(id: &str, title: &str) -> lanrurugi_core::entities::Archive {
+    lanrurugi_core::entities::Archive {
+        id: lanrurugi_core::ids::ArchiveId(id.to_string()),
+        name: title.to_string(),
+        title: title.to_string(),
+        file: format!("/nonexistent/{id}.zip"),
+        tags: String::new(),
+        summary: String::new(),
+        arcsize: 1,
+        pagecount: 1,
+        isnew: false,
+        lastreadpage: 0,
+        lastreadtime: 0,
+        thumbhash: None,
+        toc: vec![],
+        stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
+        has_patch: false,
+    }
+}
+
 async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
     // `auth::load` hard-errors (`AuthConfigError::MissingField`) when `guestmode` is entirely
@@ -598,6 +624,18 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     .await
     .unwrap();
 
+    // `guest_has_any_visible_archive` (`lanrurugi-api::search`, c89ec44) requires a guest-visible
+    // *static* category to actually contain a real archive, not just carry the flag — an empty
+    // `archives: Vec::new()` category (this test's own original shape) makes that check return
+    // `false` and 401 an otherwise-eligible guest, confirmed live via real CI failure, 2026-08-28.
+    let archive_id = "1".repeat(40);
+    let repos = lanrurugi_api::Repositories::new(&redis);
+    repos
+        .archives
+        .save(&test_archive(&archive_id, "Guest Visible Archive"))
+        .await
+        .unwrap();
+
     let category = lanrurugi_core::entities::Category {
         // `CategoryRepository::list_all()` matches only `SET_??????????` (exactly 10 chars after
         // the prefix, real categories are `SET_<10-digit-unix-timestamp>` — see repository.rs's
@@ -608,11 +646,10 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010001".to_string()),
         name: "Guest Visible".to_string(),
         search: None,
-        archives: Vec::new(),
+        archives: vec![lanrurugi_core::ids::ArchiveId(archive_id.clone())],
         pinned: false,
         visible_to_guest: true,
     };
-    let repos = lanrurugi_api::Repositories::new(&redis);
     repos.categories.save(&category).await.unwrap();
 
     let categories_resp = request(&app, "GET", "/api/categories", None, None).await;
@@ -630,6 +667,11 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+        .await
+        .unwrap();
     // Reset to `"0"`, not `HDEL` — this still runs under `_guest_lock` above, but the field
     // becoming entirely absent (even briefly) risks a concurrently-running, *unlocked* test's own
     // `app` (a different `axum::Router` sharing this same real Redis) hitting `auth::load`'s hard
