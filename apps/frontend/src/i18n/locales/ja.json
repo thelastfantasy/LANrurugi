@@ -1071,7 +1071,7 @@
   "duplicates.threshold": "しきい値 :",
   "edit.renaming": "名前を変更しています…",
   "edit.thisMayTakeAMoment": "同じファイル名を使用する別の操作が実行中の場合、しばらく時間がかかることがあります——このページから移動しても、処理はバックグラウンドで完了します。",
-  "hooks.loginWithPasswordKamimamitaAnd": "パスワード「kamimamita」でログインし、今すぐ変更してください。……あるいは無効化してしまいましょう！ついでに設定オプションも確認してみてはいかがですか？",
+  "hooks.loginWithPasswordKamimamitaAnd": "パスワード「kamimamita」でログインし、今すぐそのパスワードを変更してください。ついでに設定オプションも確認してみてはいかがですか？",
   "library.new": "新着！",
   "library.suggestAddingTo": "追加先の候補",
   "logs.noLogsToBeFound": "ログが見つかりません！",

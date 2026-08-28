@@ -1082,7 +1082,7 @@
   "duplicates.threshold": "Threshold:",
   "edit.renaming": "Renaming…",
   "edit.thisMayTakeAMoment": "This may take a moment if another operation is using the same filename — it will finish in the background even if you navigate away.",
-  "hooks.loginWithPasswordKamimamitaAnd": "Login with password \"kamimamita\" and change that shit on the double. ...Or just disable it! Why not check the configuration options afterwards, while you're at it?",
+  "hooks.loginWithPasswordKamimamitaAnd": "Login with password \"kamimamita\" and change that password on the double. Why not check the configuration options afterwards, while you're at it?",
   "library.new": "New!",
   "library.suggestAddingTo": "Suggest adding to",
   "logs.noLogsToBeFound": "No logs to be found here!",

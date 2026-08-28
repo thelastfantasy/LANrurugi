@@ -1142,7 +1142,7 @@
   "duplicates.thisFeatureLooksAtArchives": "此功能通过比对封面缩略图哈希值，在您的数据库中查找重复档案。",
   "edit.renaming": "重命名中…",
   "edit.thisMayTakeAMoment": "如果有其他操作正在使用相同的文件名，这可能需要一点时间——即使您离开此页面，操作也会在后台完成。",
-  "hooks.loginWithPasswordKamimamitaAnd": "用密码「kamimamita」登录，然后赶紧把它改掉。……或者干脆禁用密码保护！顺便看看其他设置选项怎么样？",
+  "hooks.loginWithPasswordKamimamitaAnd": "用密码「kamimamita」登录，然后赶紧改掉密码。顺便看看其他设置选项怎么样？",
   "library.suggestAddingTo": "建议加入",
   "plugins.pluginUploadedName": "插件已上传：{{name}}",
   "settings.backupFailedError": "备份失败：{{error}}",
