@@ -393,15 +393,27 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         ))
         .await
         .unwrap();
-    // `ArchiveRepository::save` itself never touches the tag search index — only the real
+    // `ArchiveRepository::save` itself never touches any search index — only the real
     // `PUT /archives/{id}/metadata` handler does (`archives.rs::update_archive_metadata`'s own
-    // `indexer::update_tag_indexes` call). A test that writes archives straight through the
-    // repository (as this one does, to control both ids precisely) must index them the same way
-    // by hand, or `filter=shared_tag` below has nothing to ever match — found live via a CI-only
-    // failure, 2026-08-28 (this test's `INDEX_shared_tag` set was never created at all; it had
-    // only ever passed locally by accident, riding on another test's leftover index in the same
-    // shared dev-container Redis).
-    for id in [&in_scope_id, &out_of_scope_id] {
+    // `indexer::index_new_archive`/`update_tag_indexes` calls). A test that writes archives
+    // straight through the repository (as this one does, to control both ids precisely) must
+    // index them the same way by hand: `update_tag_indexes` alone populates `INDEX_shared_tag`
+    // (found live via a CI-only failure, 2026-08-28 — this test's `INDEX_shared_tag` set was
+    // never created at all; it had only ever passed locally by accident, riding on another test's
+    // leftover index in the same shared dev-container Redis) but `search()`'s default sort is by
+    // title (`engine.rs::sort_ids`'s `"title"` branch), which walks `LRR_TITLES` and *silently
+    // drops any candidate id absent from it* rather than falling back to some other order — an
+    // archive present in `INDEX_shared_tag` but never `index_new_archive`d never had a
+    // `LRR_TITLES` entry to begin with, so it vanished from every default-sorted result even
+    // though it matched the filter, a second CI-only failure found live, 2026-08-28, after the
+    // first was already fixed.
+    for (id, title) in [
+        (&in_scope_id, "In Scope"),
+        (&out_of_scope_id, "Out Of Scope"),
+    ] {
+        lanrurugi_search::indexer::index_new_archive(&redis.search, id, title)
+            .await
+            .unwrap();
         lanrurugi_search::indexer::update_tag_indexes(&redis.search, id, "", "shared_tag")
             .await
             .unwrap();
