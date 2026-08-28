@@ -1,4 +1,4 @@
 p, session, all, allow
 p, token_admin, self, allow
-p, token_admin, guest, allow
+p, token_admin, token_guest, allow
 p, token_guest, self, allow
