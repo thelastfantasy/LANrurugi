@@ -65,33 +65,39 @@ async fn ping(pool: &Pool) -> bool {
 ///
 /// `key` should name the specific shared resource (e.g. `"guestmode"`), not be a single
 /// global lock for everything — two unrelated fields being tested by two different process pairs
-/// should still run concurrently. Returns an RAII guard; drop it (or let it fall out of scope) to
-/// release. Polls with a short sleep rather than blocking on a Redis primitive (`BLPOP` et al.)
-/// since the critical section here is a handful of fast Redis round-trips, not something worth a
-/// dedicated blocking connection for.
+/// should still run concurrently.
+///
+/// **Call [`Self::release`] explicitly before the end of every test** — do not rely on `Drop`
+/// alone for the normal-completion path. `Drop::drop` here can only `tokio::spawn` a detached
+/// `DEL` task (no `.await` available in a sync `drop`), and `#[tokio::test]`'s default
+/// current-thread runtime tears down as soon as the test's `async fn` body returns `Ready` —
+/// often *before* that spawned task ever gets polled far enough to run its own `.await` points,
+/// so the `DEL` silently never executes. Confirmed live via CI log inspection, 2026-08-28: six
+/// consecutive `guestmode`-family tests each completed at *exactly* 30-second intervals despite
+/// each one's own HTTP round-trips taking milliseconds — the lock was never actually being
+/// released between them, only ever expiring on its own `EX` TTL, forcing every single test to
+/// wait out the full TTL before it could even start. `Drop` still exists as a last-resort
+/// self-heal for a genuinely panicked/killed process (where nothing downstream of the panic point
+/// ever runs, `release()` included), not as the primary release path.
 pub struct RedisTestLock {
     pool: Pool,
     key: String,
+    released: bool,
 }
 
-/// Lock TTL / wait-timeout — both `LOCK_TTL_SECS` (the Redis key's own expiry) and
-/// `WAIT_TIMEOUT_SECS` (how long a blocked acquirer waits before panicking) were originally 30s,
-/// which turned out to be shorter than a real held critical section can run on CI: a
-/// `guestmode`-family test doing several real HTTP round-trips against a real Redis reported
-/// `finished in 179.86s` in a real CI run, 2026-08-28 — the lock had already self-expired more
-/// than 4 minutes before that test's own critical section released it, letting a second,
-/// *concurrently running* OS process (`cargo test --workspace` runs each `tests/*.rs` file as its
-/// own binary) acquire the "same" lock and mutate the same shared `guestmode`/`SET_*`
-/// category/archive fixtures mid-flight, causing `settings_toggles.rs::
-/// guest_search_excludes_out_of_scope_archive_sharing_a_tag` to intermittently see an empty
-/// search result (this test's own in-scope archive briefly vanishing from candidacy while another
-/// process's unrelated fixture churn raced it) — confirmed root cause via CI log inspection after
-/// two prior, incorrect fixes (an archive-id collision, then a `FLUSHDB`-triggering assertion)
-/// each only removed one contributing factor without addressing the lock's own expiry being
-/// shorter than real contention. 300s keeps the same "self-heals if a prior process panicked/was
-/// killed" property (still bounded, not indefinite) while giving a slow CI runner real headroom.
-const LOCK_TTL_SECS: usize = 300;
-const WAIT_TIMEOUT_SECS: u64 = 300;
+/// How long an unreleased lock self-heals after — deliberately short. With `release()` now the
+/// real release path for every normal test completion, this TTL is purely a dead-process safety
+/// net (a panicked/killed test that never reaches its own `release()` call), not something a
+/// well-behaved test should ever actually wait out — keeping it short (rather than the 300s an
+/// earlier, incorrect fix tried) means a genuinely abandoned lock recovers quickly instead of
+/// stalling every other process for 5 minutes.
+const LOCK_TTL_SECS: usize = 30;
+/// How long a blocked acquirer waits before panicking — independent of `LOCK_TTL_SECS` now that
+/// release is explicit: ordinary contention resolves as soon as the holder calls `release()`
+/// (typically well under a second), so this is purely the "something is genuinely deadlocked"
+/// backstop, generous enough to also cover the TTL self-heal path if a prior process really did
+/// die mid-critical-section.
+const WAIT_TIMEOUT_SECS: u64 = 60;
 
 impl RedisTestLock {
     /// Blocks (async) until the named lock is acquired, waiting up to `WAIT_TIMEOUT_SECS` total
@@ -123,6 +129,7 @@ impl RedisTestLock {
                 return Self {
                     pool: pool.clone(),
                     key: redis_key,
+                    released: false,
                 };
             }
             if std::time::Instant::now() >= deadline {
@@ -133,13 +140,33 @@ impl RedisTestLock {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
+
+    /// Explicitly, synchronously (from the caller's perspective — this `.await`s a real `DEL`
+    /// round-trip) releases the lock. Call this before a test's own `async fn` body returns,
+    /// rather than relying on `Drop` — see this struct's own docs for why `Drop` alone is
+    /// unreliable under `#[tokio::test]`'s current-thread runtime.
+    pub async fn release(mut self) {
+        if let Ok(mut conn) = self.pool.get().await {
+            let _: Result<i64, _> = deadpool_redis::redis::cmd("DEL")
+                .arg(&self.key)
+                .query_async(&mut conn)
+                .await;
+        }
+        self.released = true;
+    }
 }
 
 impl Drop for RedisTestLock {
     fn drop(&mut self) {
-        // Fire-and-forget from a sync `Drop` — spawns a detached task rather than blocking (no
-        // `.await` available here). A held-past-expiry lock still self-heals via the `EX 30`
-        // above, so a lost release racing process shutdown is a non-issue, not silently unsafe.
+        // Last-resort self-heal only — see this struct's own docs. A test that already called
+        // `release()` sets `released = true`, so this is a no-op double-release guard, not the
+        // primary release mechanism. For a test that panics before reaching `release()`, this
+        // fire-and-forget spawn is strictly best-effort (may not run at all, per the same
+        // current-thread-runtime-teardown reasoning) — the short `LOCK_TTL_SECS` above is what
+        // actually guarantees recovery in that case, not this `Drop` impl.
+        if self.released {
+            return;
+        }
         let pool = self.pool.clone();
         let key = self.key.clone();
         tokio::spawn(async move {

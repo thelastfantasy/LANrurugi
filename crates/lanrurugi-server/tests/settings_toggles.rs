@@ -288,7 +288,7 @@ async fn guest_mode_and_category_visibility_matrix() {
     // Cross-*process* lock, not just this file's own in-process `config_field_lock` above — see
     // `RedisTestLock`'s own docs (`auth_flow.rs` also writes this same shared `guestmode` field,
     // as a genuinely separate `cargo test --workspace` process against the same real Redis).
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     purge_guest_test_categories(&Repositories::new(&redis)).await;
 
@@ -358,6 +358,7 @@ async fn guest_mode_and_category_visibility_matrix() {
         .await
         .unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }
 
 /// 007-guest-restricted-access, US3 (T038): guest search results never include an out-of-scope
@@ -371,7 +372,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
@@ -451,6 +452,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }
 
 /// 007-guest-restricted-access, US3 (T039): a guest's direct request for an out-of-scope archive
@@ -464,7 +466,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
@@ -545,6 +547,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }
 
 /// 007-guest-restricted-access, US3 (T040): an eligible guest can still reach an in-scope
@@ -559,7 +562,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
@@ -626,6 +629,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         .unwrap();
     repos.categories.delete(&category.catid).await.unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }
 
 /// 007-guest-restricted-access, US3 (T041): a handful of purely-administrative endpoints reject a
@@ -640,7 +644,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
@@ -667,6 +671,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
 
     repos.categories.delete(&category.catid).await.unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }
 
 /// 007-guest-restricted-access, US3 (T042, spec FR-015): a config change takes effect on the very
@@ -680,7 +685,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     let repos = Repositories::new(&redis);
     purge_guest_test_categories(&repos).await;
@@ -738,4 +743,5 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
         .await
         .unwrap();
     set_config_field(&redis, "guestmode", "0").await;
+    guest_lock.release().await;
 }

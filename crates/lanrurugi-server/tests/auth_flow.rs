@@ -604,7 +604,7 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     // writes the shared `guestmode` field) as a genuinely separate OS process against the exact
     // same real Redis instance; an in-process `Mutex` here is invisible to that other process,
     // confirmed live as a real intermittent CI failure, 2026-08-27.
-    let _guest_lock =
+    let guest_lock =
         lanrurugi_storage::test_support::RedisTestLock::acquire(&redis.config, "guestmode").await;
     purge_all_refresh_and_api_tokens(&redis).await;
 
@@ -671,7 +671,7 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
         .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
         .await
         .unwrap();
-    // Reset to `"0"`, not `HDEL` — this still runs under `_guest_lock` above, but the field
+    // Reset to `"0"`, not `HDEL` — this still runs under `guest_lock` above, but the field
     // becoming entirely absent (even briefly) risks a concurrently-running, *unlocked* test's own
     // `app` (a different `axum::Router` sharing this same real Redis) hitting `auth::load`'s hard
     // `MissingField` error via an unrelated request mid-flight. Restoring the same `"0"` default
@@ -686,4 +686,5 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     .await
     .unwrap();
     purge_all_refresh_and_api_tokens(&redis).await;
+    guest_lock.release().await;
 }
