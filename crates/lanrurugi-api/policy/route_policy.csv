@@ -9,7 +9,7 @@ p, token_guest, /api/*, GET, allow
 
 # 007-guest-restricted-access: an unauthenticated caller `require_api_key` has determined is
 # eligible for scoped guest access (site-wide `guestmode` switch on, at least one
-# `Category.visible_to_guest`). Same GET-only shape as `token_guest` — never `anonymous`'s old
+# `Category.visible_to_guest`). Read-only, GET-only — never `anonymous`'s old
 # unrestricted-read-write shape (that role and the `enable_pass=false` open-instance concept it
 # represented are both removed entirely; password login can no longer be disabled, so there is no
 # longer any caller with `token_admin`-equivalent access and no credentials). Category-level
@@ -17,7 +17,46 @@ p, token_guest, /api/*, GET, allow
 # resource-level concern this route-level policy has no mechanism for — enforced in application
 # code instead (`SearchParams.restrict_to_archive_ids`, `archives.rs`'s own guest-scope membership
 # checks), same architectural split this file's own two-Enforcer design already documents.
-p, guest_visitor, /api/*, GET, allow
+#
+# Explicit whitelist, not `/api/*` GET-allow + deny-list — the previous blanket-allow shape
+# (`token_guest`'s own, copied verbatim for the initial 007 pass) meant every *new* admin-only GET
+# endpoint added anywhere in the app was silently guest-reachable by default unless someone
+# remembered to add a matching deny line here; that gap was real, not hypothetical (FR-010's own
+# `/api/plugins`/`/api/activity`/`/api/stats` denies below were only discovered and added after
+# guest eligibility started actually working in tests, per that block's own doc). A whitelist
+# means a newly added GET endpoint is guest-*unreachable* by default, matching FR-010's own
+# "guest must never reach an administrative function unless explicitly scoped to" framing more
+# directly than a denylist that must be kept in sync by hand.
+#
+# Full route inventory verified against `apps/frontend/src/**` (every GET request an eligible
+# guest's two reachable frontend routes — `/` `Library` and `/reader/:archiveId` `Reader`, per
+# `RouteGuards.tsx`'s `AllowGuest` — can actually issue) and cross-checked against every
+# `.route(...)` declaration under `crates/lanrurugi-api/src/*.rs`, 2026-08-28. Two easy-to-miss
+# entries worth calling out explicitly: `/api/archives/:id/page` is never spelled out as a literal
+# string anywhere in the frontend — it's only reached indirectly via the URLs `GET
+# /archives/:id/files` returns — and `/api/database/stats` (not `/api/stats`, which doesn't exist
+# as a route at all; the old `/api/stats` deny line below was a dead rule that never matched
+# anything) backs the tag-autocomplete suggestions FR-012 requires.
+p, guest_visitor, /api/categories, GET, allow
+p, guest_visitor, /api/tankoubons, GET, allow
+p, guest_visitor, /api/tankoubons/:id/full, GET, allow
+p, guest_visitor, /api/tankoubons/:id/thumbnail, GET, allow
+p, guest_visitor, /api/settings, GET, allow
+p, guest_visitor, /api/database/stats, GET, allow
+p, guest_visitor, /api/search, GET, allow
+p, guest_visitor, /api/search/ids, GET, allow
+p, guest_visitor, /api/search/random, GET, allow
+p, guest_visitor, /api/bookmarks, GET, allow
+p, guest_visitor, /api/archives/:id/metadata, GET, allow
+p, guest_visitor, /api/archives/:id/files, GET, allow
+p, guest_visitor, /api/archives/:id/page, GET, allow
+p, guest_visitor, /api/archives/:id/page-dimensions, GET, allow
+p, guest_visitor, /api/archives/:id/thumbnail, GET, allow
+p, guest_visitor, /api/archives/:id/thumbnails, GET, allow
+p, guest_visitor, /api/archives/:id/stamps, GET, allow
+p, guest_visitor, /api/archives/:id/stamps/:index, GET, allow
+p, guest_visitor, /api/archives/:id/bookmarks, GET, allow
+p, guest_visitor, /api/reader/recommendations/:id, GET, allow
 
 # `MatchedPath` (read by `require_api_key`, which is `.layer()`-ed on the router *before* it's
 # `.nest("/api", ...)`-ed into the top-level app — see `app.rs::build_app`) reflects the full
@@ -63,45 +102,11 @@ p, token_guest, /api/plugin-wizard/generate/stream/:id, GET, deny
 p, token_guest, /api/plugin-wizard/trial-run, POST, deny
 p, token_guest, /api/plugin-wizard/save, POST, deny
 
-# Same session-only deny list as token_guest's own above (verbatim — kept in sync deliberately,
-# not derived, so a future addition to one doesn't silently drift from the other).
-p, guest_visitor, /api/activity, DELETE, deny
-p, guest_visitor, /api/activity/:id, DELETE, deny
-p, guest_visitor, /api/activity/retention, PUT, deny
-p, guest_visitor, /api/archives, DELETE, deny
-p, guest_visitor, /api/database/drop, POST, deny
-p, guest_visitor, /api/settings/password, POST, deny
-p, guest_visitor, /api/tokens, GET, deny
-p, guest_visitor, /api/tokens, POST, deny
-p, guest_visitor, /api/tokens/:id, PATCH, deny
-p, guest_visitor, /api/tokens/:id, DELETE, deny
-p, guest_visitor, /api/plugin-wizard/lookup, POST, deny
-p, guest_visitor, /api/plugin-wizard/analyze-login, POST, deny
-p, guest_visitor, /api/plugin-wizard/generate/start, POST, deny
-p, guest_visitor, /api/plugin-wizard/generate/stream/:id, GET, deny
-p, guest_visitor, /api/plugin-wizard/trial-run, POST, deny
-p, guest_visitor, /api/plugin-wizard/save, POST, deny
-
-# guest_visitor-only: unlike token_admin/token_guest (both real authenticated identities the
-# download endpoint was always meant to serve), downloading a raw archive file is a bulk-export
-# capability spec FR-009 explicitly excludes from what an unauthenticated guest may do — the one
-# GET route that must NOT inherit the blanket GET-allow above. `GET /archives/:id/page` (the
-# reader's own per-page image fetch, spec FR-008 explicitly requires) is deliberately NOT denied
-# here — same HTTP method, different route, different spec requirement.
-p, guest_visitor, /api/archives/:id/download, GET, deny
-
-# guest_visitor-only, FR-010 (quickstart §9): administrative *read* routes must not inherit the
-# blanket GET-allow above either — plugin management, the audit/activity log, and /api/stats are
-# admin surfaces a guest never gets scoped access to, they're denied outright. Missed in the
-# initial 007 policy pass because the guest tests' category IDs didn't match `list_all()`'s glob
-# (see auth_flow.rs's own note), so guest eligibility never actually held in tests and every
-# guest request 401'd before reaching these rules — the gap only surfaced once that was fixed.
-p, guest_visitor, /api/plugins, GET, deny
-p, guest_visitor, /api/plugins/:type, GET, deny
-p, guest_visitor, /api/plugins/settings, GET, deny
-p, guest_visitor, /api/plugins/export, GET, deny
-p, guest_visitor, /api/plugins/options, GET, deny
-p, guest_visitor, /api/activity, GET, deny
-p, guest_visitor, /api/activity/facets, GET, deny
-p, guest_visitor, /api/activity/retention, GET, deny
-p, guest_visitor, /api/stats, GET, deny
+# No `guest_visitor` deny rules below `token_guest`'s own — the whitelist above (this file's own
+# earlier `guest_visitor` block) is the only `allow` this role gets at all, on any method; a
+# denylist entry for something never allowed in the first place would be dead weight, not defense
+# in depth. `/api/archives/:id/download` (FR-009's bulk-export exclusion) and every admin *read*
+# surface (`/api/plugins*`, `/api/activity*`, `/api/stats` — note `/api/database/stats` is a
+# different, whitelisted route, see the whitelist block's own note) are simply absent from the
+# whitelist, which is exactly what makes them unreachable by construction rather than by
+# remembering to list them here too.

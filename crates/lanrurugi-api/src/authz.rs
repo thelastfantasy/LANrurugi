@@ -368,22 +368,34 @@ mod tests {
         assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
     }
 
-    /// 007-guest-restricted-access: `guest_visitor` gets the same GET-only shape `token_guest`
-    /// already has, plus one deny neither `token_guest` nor `token_admin` need —
-    /// `/archives/:id/download` — since downloading a raw archive file is a bulk-export capability
-    /// spec FR-009 explicitly excludes for an unauthenticated guest, while the reader's own
-    /// per-page image fetch (`/archives/:id/page`, also GET) must stay allowed (spec FR-008).
+    /// 007-guest-restricted-access: `guest_visitor` gets an explicit whitelist (route_policy.csv's
+    /// own docs on why this replaced the earlier `token_guest`-copied blanket-GET-allow shape),
+    /// not a denylist — this test exercises both directions: routes actually on the whitelist
+    /// (`/archives/:id/metadata`/`/archives/:id/page`/`/search`, all real requests the frontend's
+    /// two guest-reachable routes, Library and Reader, issue) stay reachable, while
+    /// `/archives/:id/download` (FR-009's bulk-export exclusion, also absent from the whitelist)
+    /// and `/archives` (the bare list-all endpoint — real, but only ever called from
+    /// admin-only-gated UI no guest can reach, so deliberately left off the whitelist too) both
+    /// stay unreachable, same as every method/route this role was never given an `allow` for at
+    /// all.
     #[tokio::test]
     async fn guest_visitor_is_read_only_and_cannot_download_raw_archives() {
         let e = route_enforcer().await;
         let guest = guest_visitor_auth();
-        assert!(check_route(&e, Some(&guest), "/api/archives", "GET"));
+        assert!(check_route(
+            &e,
+            Some(&guest),
+            "/api/archives/abc/metadata",
+            "GET"
+        ));
         assert!(check_route(
             &e,
             Some(&guest),
             "/api/archives/abc/page",
             "GET"
         ));
+        assert!(check_route(&e, Some(&guest), "/api/search", "GET"));
+        assert!(!check_route(&e, Some(&guest), "/api/archives", "GET"));
         assert!(!check_route(
             &e,
             Some(&guest),
