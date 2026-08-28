@@ -3,7 +3,22 @@ import type { ComponentProps, ReactNode } from "react"
 import { FaCaretDown, FaCheck } from "react-icons/fa6"
 
 import { useMenuPalette } from "@/hooks/useMenuPalette"
-import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, Z_OVERLAY_CONTENT } from "@/theme"
+import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_MD, FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"
+
+/** Chakra-UI-style size presets — `sm`/`md` reuse this codebase's own existing
+ * `FONT_SIZE_SM`/`FONT_SIZE_MD` constants (`theme.ts`) rather than inventing new values, `lg` is
+ * new (no existing `FONT_SIZE_LG` constant — `theme.ts`'s own three sizes are all legacy-`pt`-
+ * derived small sizes, none in this larger range) sized for a select that's meant to stand out as
+ * a page's primary control (e.g. Categories.tsx's own category picker) rather than sit inline with
+ * body text. A fixed `height` per size (not just `fontSize`) keeps the trigger's own box from
+ * reflowing to whatever height that font size happens to need on its own — every call site that
+ * picks a size gets both dimensions handled together instead of needing a separate `style.height`
+ * the way Categories.tsx's original hand-rolled `style={{ fontSize: 20, height: 30 }}` did. */
+const SELECT_SIZES = {
+  sm: { fontSize: FONT_SIZE_SM, height: 21 },
+  md: { fontSize: FONT_SIZE_MD, height: 25 },
+  lg: { fontSize: "1.25rem", height: 30 },
+} as const
 
 /** Site-wide `.favtag-btn`-styled select, built on Base UI's `Select` rather than a native
  * `<select>` — the trigger renders as a real `<button>` (see `Button.tsx`'s own docs for why that
@@ -28,11 +43,22 @@ export function Select<Value extends string>({
   variant = "favtag-btn",
   showItemIndicator = true,
   style,
+  size,
   ...rootProps
 }: {
   value: Value
   onValueChange: (value: Value) => void
-  items: { value: Value; label: ReactNode }[]
+  /** `itemClassName`/`itemStyle` (optional, per-item) merge onto that one popup item's own
+   * `className`/inline `style` — e.g. Categories.tsx passes `itemClassName:
+   * "select-item-guest-visible"` (one real per-theme class, see `public/legacy/themes/*.css`,
+   * reusing `.tankoubon-member-row`'s own color) for guest-visible categories and `itemStyle: {
+   * fontWeight: "bold" }` for dynamic ones, without every caller of `Select` needing its own
+   * bespoke item component just to express "this particular option looks different." Left off
+   * entirely for items that don't need it (every call site before these fields existed).
+   * `itemClassName` (a real theme-CSS class) is preferred over `itemStyle.backgroundColor` for
+   * colors specifically — see `SelectItem`'s own docs on why a raw inline background can't
+   * coexist with this popup's hover/keyboard-highlight state. */
+  items: { value: Value; label: ReactNode; itemClassName?: string; itemStyle?: React.CSSProperties }[]
   ariaLabel?: string
   /** Matches `Button`'s own `variant` — pick `"stdbtn"` when this select sits next to a `.stdbtn`
    * button and needs to match its height/vertical position exactly (legacy's own `.favtag-btn`
@@ -46,8 +72,17 @@ export function Select<Value extends string>({
    * either) and the extra indented column would just be visual noise. */
   showItemIndicator?: boolean
   style?: React.CSSProperties
+  /** Chakra-UI-style size preset (see `SELECT_SIZES` above) applied to the trigger *and* every
+   * popup item's text together — a caller bumping only the trigger's own `fontSize` via `style`
+   * (Categories.tsx's original approach) resized just the closed trigger, since `Select.Popup`/
+   * `SelectItem` are a portal-mounted sibling tree, not a descendant of the trigger, and never
+   * inherited that `style`; reported live, 2026-08-28, as "trigger got bigger, options inside are
+   * still tiny." Omit for the default browser/CSS-inherited size (every existing call site before
+   * this prop existed) — this is opt-in, not a forced resize of every `Select` in the app. */
+  size?: keyof typeof SELECT_SIZES
 } & Omit<ComponentProps<typeof BaseSelect.Root>, "value" | "onValueChange" | "items" | "children">) {
   const palette = useMenuPalette()
+  const sizeStyle = size ? SELECT_SIZES[size] : undefined
   return (
     <BaseSelect.Root items={items} value={value} onValueChange={(v) => onValueChange(v as Value)} {...rootProps}>
       {/* Base UI's `Select.Trigger` is unstyled — it has no built-in "value on the left, arrow
@@ -58,7 +93,7 @@ export function Select<Value extends string>({
       <BaseSelect.Trigger
         className={variant}
         aria-label={ariaLabel}
-        style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 4, ...style }}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 4, ...sizeStyle, ...style }}
       >
         <BaseSelect.Value />
         <BaseSelect.Icon>
@@ -66,7 +101,24 @@ export function Select<Value extends string>({
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner sideOffset={4} className="outline-none" style={{ zIndex: Z_OVERLAY_CONTENT }}>
+        {/* `alignItemWithTrigger={false}` — Base UI's own default (`true`) mimics a native
+            `<select>`'s "selected item lands exactly under the cursor/trigger" placement, which
+            computes the popup's available height from *that* anchor point rather than the
+            trigger's own top/bottom edge. With a selected item partway down a long list this
+            leaves little room above it, so the popup gets clipped to a `max-height` (real
+            scrollbar) even though the full list would fit the viewport just fine as an ordinary
+            below-the-trigger dropdown — reported live, 2026-08-28, as "why is there always a
+            scrollbar, and it changes if I scroll first?" (the anchor point shifting per the
+            highlighted item as arrow keys move through it). Disabling reverts to the ordinary
+            "open below (or above, on collision) the trigger" placement every other popup in this
+            app already uses, so the list only scrolls when it genuinely doesn't fit the
+            viewport. */}
+        <BaseSelect.Positioner
+          sideOffset={4}
+          alignItemWithTrigger={false}
+          className="outline-none"
+          style={{ zIndex: Z_OVERLAY_CONTENT }}
+        >
           <BaseSelect.Popup
             // `text-left` here (not on each `SelectItem`) is load-bearing, not decorative —
             // legacy's own `body { text-align: center }` (`lrr.css`) is inherited all the way
@@ -83,11 +135,18 @@ export function Select<Value extends string>({
               boxShadow: FLOATING_POPUP_SHADOW,
               color: palette.text,
               transformOrigin: "var(--transform-origin)",
+              fontSize: sizeStyle?.fontSize,
             }}
           >
             <BaseSelect.List>
               {items.map((item) => (
-                <SelectItem key={item.value} value={item.value} showIndicator={showItemIndicator}>
+                <SelectItem
+                  key={item.value}
+                  value={item.value}
+                  showIndicator={showItemIndicator}
+                  className={item.itemClassName}
+                  style={item.itemStyle}
+                >
                   {item.label}
                 </SelectItem>
               ))}
@@ -99,10 +158,33 @@ export function Select<Value extends string>({
   )
 }
 
-function SelectItem({ value, showIndicator, children }: { value: string; showIndicator: boolean; children: ReactNode }) {
+function SelectItem({
+  value,
+  showIndicator,
+  className,
+  style,
+  children,
+}: {
+  value: string
+  showIndicator: boolean
+  className?: string
+  style?: React.CSSProperties
+  children: ReactNode
+}) {
+  // `backgroundColor` is split out of `style` and re-applied as a CSS custom property instead of
+  // a plain inline `background`/`backgroundColor` — an inline style always wins over
+  // `.select-item-highlighted[data-highlighted]`'s own class-selector `background-color` rule
+  // below regardless of specificity math, so an item-level background set the ordinary way would
+  // permanently block that item from ever showing its hover/keyboard-highlight color at all. The
+  // custom property is read back by this same class's own base (non-`[data-highlighted]`) rule in
+  // each theme file, which the highlighted-state rule's higher specificity (class + attribute
+  // selector vs. class alone) still legitimately overrides on hover/highlight, restoring normal
+  // highlight behavior for these items too.
+  const { backgroundColor, ...restStyle } = style ?? {}
   return (
     <BaseSelect.Item
       value={value}
+      style={{ ...restStyle, ...(backgroundColor ? { "--select-item-bg": backgroundColor } : {}) } as React.CSSProperties}
       // `.select-item-highlighted[data-highlighted]` (one real rule per theme file, see
       // `public/legacy/themes/*.css`) drives the hover color directly off Base UI's own
       // `data-highlighted` state attribute — the base-ui.com styling handbook's own recommended
@@ -127,9 +209,12 @@ function SelectItem({ value, showIndicator, children }: { value: string; showInd
       // highlight visibly overflowed the popup box by exactly its own horizontal padding.
       // `border-box` makes `w-full` actually mean "100% including padding," matching every other
       // `w-full` element in this codebase's own implicit assumption.
-      className={`select-item-highlighted relative box-border w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap py-[.3em] pe-4 outline-none ${
+      // `bg-[var(--select-item-bg,transparent)]` reads the custom property set above — a plain
+      // class-selector rule, so `.select-item-highlighted[data-highlighted]`'s own higher-
+      // specificity class+attribute selector still overrides it on hover/keyboard-highlight.
+      className={`select-item-highlighted relative box-border w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap bg-[var(--select-item-bg,transparent)] py-[.3em] pe-4 outline-none ${
         showIndicator ? "grid grid-cols-[1em_1fr] ps-2" : "flex ps-4"
-      }`}
+      } ${className ?? ""}`}
     >
       {showIndicator && (
         // Left-aligned within its own column (no `justify-content: center`) and sized down to

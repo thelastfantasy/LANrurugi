@@ -66,6 +66,7 @@ export function App() {
             <Route path="/edit/:archiveId" element={<Edit />} />
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />
+            <Route path="/config/categories/:categoryId" element={<Categories />} />
             <Route path="/batch" element={<Batch />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/config/plugins" element={<Plugins />} />

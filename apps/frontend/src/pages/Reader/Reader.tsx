@@ -33,7 +33,12 @@ import {
   computeNextPage,
   computeSpread,
 } from "@/hooks/useReaderNavigation";
-import { useReaderSettings } from "@/hooks/useReaderSettings";
+import {
+  FIT_MODE,
+  J_SCROLL_UNIT,
+  K_BEHAVIOR,
+  useReaderSettings,
+} from "@/hooks/useReaderSettings";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
 import { useTankoubonReading } from "@/hooks/useTankoubonReading";
 import { routes } from "@/lib/routes";
@@ -530,8 +535,57 @@ export function Reader() {
     // mode is excluded, matching legacy's own `if (infiniteScroll) { ... }` branch — there every
     // page shares one continuously-scrolling document, and `selectPage`'s own `scrollIntoView`
     // (not this) is what "jump to page N" means there.
+    //
+    // `target === "prev"` (i.e. `k`, or `a`/`ArrowLeft` without shift) is the only direction
+    // `kBehavior` configures — every other target (`next`/`first`/`last`) always lands at the top,
+    // this function's original unconditional behavior. `"bottom"` scrolls to this *document's*
+    // full scroll height (there's no infinite-scroll-style `[data-page]` element to `scrollIntoView`
+    // in non-scroll mode — a single page's own image is the entire scrollable content here); "back"
+    // skips the `scrollTo` call entirely, leaving whatever scroll position the browser already had.
     if (!readerSettings.infiniteScroll) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (
+        target === "prev" &&
+        readerSettings.kBehavior === K_BEHAVIOR.BACK_BOTTOM
+      ) {
+        // A single `requestAnimationFrame` (an earlier version of this) only waits for the next
+        // *paint*, not for the new `<img>`'s own bytes to have actually finished downloading and
+        // laid out — a single `img.complete` poll (an earlier version of this) still wasn't
+        // enough on its own: `complete` flips true the instant the browser finishes *decoding*
+        // the image, which can itself land a frame or two before the browser has finished
+        // reflowing this element's real box into `document.documentElement.scrollHeight`, so a
+        // `scrollTo` fired immediately on `complete` could still read a stale, too-short height —
+        // reported live, 2026-08-08 (repeatedly `k`-ing down to the same page's bottom landed at
+        // visibly different scroll positions run to run, sometimes over 100px short). Waits for
+        // `scrollHeight` to actually stop changing between consecutive animation frames (checked
+        // only once `complete` is true, so this isn't just re-measuring a still-loading image) —
+        // two matching reads in a row is the real signal layout has settled, not a fixed delay
+        // that would either be too short on a slow load or wastefully long on a fast one. Capped
+        // at 40 frames (~0.7s @ 60fps, comfortably past any real image decode+layout on a
+        // reasonable connection) so a genuinely failed/broken image doesn't leave this polling
+        // silently forever — it still scrolls once, to whatever `scrollHeight` is at that point,
+        // rather than doing nothing at all.
+        let attempts = 0;
+        let lastHeight = -1;
+        const scrollWhenSettled = () => {
+          attempts += 1;
+          const img = leftImgRef.current;
+          const height = document.documentElement.scrollHeight;
+          const loaded = img && img.complete;
+          const settled = loaded && height === lastHeight;
+          lastHeight = height;
+          if (settled || attempts >= 40) {
+            window.scrollTo({ top: height, behavior: "smooth" });
+          } else {
+            requestAnimationFrame(scrollWhenSettled);
+          }
+        };
+        requestAnimationFrame(scrollWhenSettled);
+      } else if (
+        target !== "prev" ||
+        readerSettings.kBehavior !== K_BEHAVIOR.BACK
+      ) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     }
   }
 
@@ -552,9 +606,23 @@ export function Reader() {
       startArchiveTransition(offset > 0 ? "next" : "prev");
       return;
     }
+    // `target === "prev"` (i.e. `k`) is the only direction `kBehavior` configures — `next` (`j`/
+    // `ArrowRight`/`d`) always lands at the top of the following page regardless of that setting,
+    // matching this function's original, unconditional `block: "start"` for every other caller.
+    // `K_BEHAVIOR.BACK` omits `block` entirely (the browser's own `"nearest"`);
+    // `BACK_BOTTOM`/`BACK_TOP` map straight to `block: "end"`/`"start"` — see `KBehavior`'s own
+    // docs for the reasoning behind each option.
+    const block: ScrollIntoViewOptions["block"] =
+      target === "prev"
+        ? readerSettings.kBehavior === K_BEHAVIOR.BACK_BOTTOM
+          ? "end"
+          : readerSettings.kBehavior === K_BEHAVIOR.BACK_TOP
+            ? "start"
+            : undefined
+        : "start";
     document
       .querySelector(`[data-page="${nextPage}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      ?.scrollIntoView({ behavior: "smooth", block });
   }
 
   // Shows the boundary overlay (recommendations only — no auto-jump; the user picks a card or
@@ -883,6 +951,22 @@ export function Reader() {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
 
+      // The boundary/recommendations overlay (`archiveTransition`) is a lightbox the reader
+      // pauses on at an archive's first/last page — every navigation/scroll shortcut below
+      // (`j`/`k`/space/arrows/`,`/`.`/`b`/etc.) operating on the reader page underneath it while
+      // this is open was confirmed live, 2026-08-28, to still fire: pressing `j` scrolled the
+      // (locked, per the `overflow: hidden` effect above) page behind the overlay, and `,`/`.`
+      // could silently swap which archive the overlay was even recommending for. `Escape` is the
+      // one exception — it's this overlay's own documented way to cancel and return to reading,
+      // matching the shade's own `onClick={() => setArchiveTransition(null)}`, not a page-turn/
+      // scroll shortcut that would be confusing to still act on while a recommendation is up.
+      if (archiveTransition) {
+        if (e.key === "Escape") {
+          setArchiveTransition(null);
+        }
+        return;
+      }
+
       if (e.key === ",") {
         void readAdjacentArchive("prev");
         return;
@@ -917,9 +1001,20 @@ export function Reader() {
         // Google Reader-style j/k: `j` scrolls like `" "` above until there's nothing further to
         // scroll, then advances a page instead (so holding it down reads the whole page top to
         // bottom before moving on, rather than requiring a separate page-turn key once scrolled
-        // content runs out); `k` always goes to the previous page — `goTo("prev")` already
-        // scrolls to that page's own top (see its own docs), matching Google Reader's `k` jumping
-        // straight to the previous item rather than scrolling upward incrementally.
+        // content runs out). `k` mirrors that in the other direction *when* `kBehavior` is
+        // `"top"`/`"bottom"` — scroll *up* by the same `jScrollUnit`/`jScrollAmount` step until
+        // there's nothing further up to scroll, only then turn back a page. `kBehavior ===
+        // "default"` opts out of that mirroring entirely and always jumps straight to the previous
+        // page with no incremental scroll step at all (see that `case` arm's own docs) — the
+        // reader's original `k` behavior, matching Google Reader's own `k`, which also jumps
+        // directly rather than scrolling incrementally; `"top"`/`"bottom"` are this reader's own
+        // deliberate deviation from that (requested live, 2026-08-28) for a reader who wants `k` to
+        // read a page bottom-to-top symmetrically with how `j` reads it top-to-bottom. Both
+        // directions skip straight to the page turn in infinite-scroll mode regardless of
+        // `kBehavior` — there every page already shares one continuously-scrolling document a
+        // plain wheel/trackpad scroll already reads top-to-bottom or back; `j`/`k` there exist to
+        // jump a whole page at a time, not to replicate incremental scrolling a mouse already does
+        // natively.
         case "j":
           if (readerSettings.infiniteScroll) {
             goToInfiniteScrollPage(currentPage, "next");
@@ -930,7 +1025,7 @@ export function Reader() {
             goTo("next");
           } else {
             const step =
-              readerSettings.jScrollUnit === "px"
+              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
                 ? readerSettings.jScrollAmount
                 : window.innerHeight * (readerSettings.jScrollAmount / 100);
             window.scrollBy({ top: step, behavior: "smooth" });
@@ -939,8 +1034,28 @@ export function Reader() {
         case "k":
           if (readerSettings.infiniteScroll) {
             goToInfiniteScrollPage(currentPage, "prev");
-          } else {
+          } else if (readerSettings.kBehavior === K_BEHAVIOR.BACK) {
+            // `K_BEHAVIOR.BACK` opts *out* of the incremental-scroll-then-turn behavior entirely
+            // — a plain, immediate page turn with no scrolling step at all, the reader's original
+            // `k` behavior before this setting existed. Only `BACK_TOP`/`BACK_BOTTOM` (below) get
+            // the `j`-mirroring incremental scroll; `BACK` intentionally skips straight to
+            // `goTo("prev")` regardless of the current scroll position, corrected live,
+            // 2026-08-28, after an earlier version of this case applied the incremental-scroll
+            // step unconditionally, effectively ignoring what this option was supposed to mean.
             goTo("prev");
+          } else if (window.scrollY <= 0) {
+            // No `- 1` fudge factor here the way `j`'s own boundary check has — that one exists
+            // because `document.documentElement.scrollHeight` is itself a rounded/derived value
+            // that can sit a fractional pixel short of where the *true* bottom is, so `>=` alone
+            // occasionally missed it by that much; `scrollY` at the *top* has no equivalent
+            // derived-value slop (`0` is exact), so a plain `<= 0` is already exact here.
+            goTo("prev");
+          } else {
+            const step =
+              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
+                ? readerSettings.jScrollAmount
+                : window.innerHeight * (readerSettings.jScrollAmount / 100);
+            window.scrollBy({ top: -step, behavior: "smooth" });
           }
           return;
         case "ArrowLeft":
@@ -1020,12 +1135,14 @@ export function Reader() {
     readerSettings.infiniteScroll,
     readerSettings.jScrollUnit,
     readerSettings.jScrollAmount,
+    readerSettings.kBehavior,
     navState,
     autoNextActive,
     isPageBookmarked,
     archiveId,
     loggedIn,
     markerPlacementMode,
+    archiveTransition,
   ]);
 
   // Infinite scroll: tracks which mounted page is nearest the viewport center and treats that as
@@ -1268,12 +1385,12 @@ export function Reader() {
   // `if (fscreen.inFullscreen()) return`) — the browser's native fullscreen presentation should
   // decide sizing there, not these fit-mode rules.
   if (!isFullscreen) {
-    if (readerSettings.fitMode === "fit-height") {
+    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       const heightVh =
         readerSettings.hideHeader || readerSettings.infiniteScroll ? 98 : 90;
       imageStyle.maxHeight = `${heightVh}vh`;
       outerStyle.width = "fit-content";
-    } else if (readerSettings.fitMode === "fit-width") {
+    } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
       imageStyle.width = "100%";
       outerStyle.maxWidth = "98%";
     } else if (readerSettings.containerWidth) {
@@ -1806,6 +1923,18 @@ export function Reader() {
                   const x = e.clientX;
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();
+                  // A real `<a href>` becomes the focused element on click (standard browser
+                  // behavior for any focusable/clickable anchor) — left alone, that focus stuck
+                  // around after the click itself finished, so the very next keyboard shortcut
+                  // (`B` to toggle a bookmark, any other single-letter hotkey) made the browser's
+                  // own focus-ring heuristic treat this as "focus via keyboard interaction" and
+                  // paint a visible outline around the whole image, even though the user's actual
+                  // intent was just "press B", not "navigate to this link" — reported live,
+                  // 2026-08-28 (mouse-click a page to turn it, then press B on the next page).
+                  // `preventDefault()` above already stops the anchor's own navigation; `blur()`
+                  // here stops the *focus* from lingering afterward, matching what a plain
+                  // non-anchor click target would have done all along.
+                  e.currentTarget.blur();
                   goTo(isLeftHalf ? "prev" : "next");
                 }}
                 style={{ position: "relative", display: "inline-flex" }}

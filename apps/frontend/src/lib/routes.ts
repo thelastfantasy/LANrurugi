@@ -40,7 +40,10 @@ export const routes = {
   // jump straight to "which settings section changed" for a `settings.update`/`token.*`/etc.
   // entry instead of just the bare settings landing page.
   settings: (section?: string) => (section ? `/config?section=${encodeURIComponent(section)}` : "/config"),
-  categories: () => "/config/categories",
+  // `categoryId` deep-links straight into a specific category, matching `edit`/`tankoubonEdit`'s
+  // own `/thing/:id` shape — omit for the plain "no category selected" landing.
+  categories: (categoryId?: string) =>
+    categoryId ? `/config/categories/${categoryId}` : "/config/categories",
   // `focus` deep-links to a specific plugin's download/rate-limit settings section (issue #2):
   // Plugins.tsx reads `?focus=<namespace>` and scrolls that section into view + briefly highlights
   // it. Omit for the plain plugin-list landing.

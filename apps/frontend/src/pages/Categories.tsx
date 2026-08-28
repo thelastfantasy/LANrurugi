@@ -1,13 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { FaBolt } from "react-icons/fa6"
+import { useNavigate, useParams } from "react-router-dom"
 
 import { sendForm, sendJson } from "@/api/client"
 import { useArchives, useCategories, useCreateCategory, useTankoubons } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { Checkbox } from "@/components/common-ui/Form"
+import { Button, Checkbox, Select } from "@/components/common-ui/Form"
 import { ArchiveChecklistItem, SearchSyntaxHelp } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -39,13 +40,21 @@ import { toast } from "@/toast"
 export function Categories() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // The URL is the source of truth for which category is selected (`/config/categories/:categoryId`)
+  // — `setSelectedId` further down is a thin wrapper that navigates instead of touching local state
+  // directly, so a direct link/bookmark/browser-back to a specific category's URL opens straight
+  // into it instead of always landing on "no category selected".
+  const { categoryId } = useParams<{ categoryId?: string }>()
+  const selectedId = categoryId ?? ""
+  function setSelectedId(id: string) {
+    navigate(routes.categories(id || undefined))
+  }
   const categories = useCategories()
   const archives = useArchives()
   const tankoubons = useTankoubons()
   const queryClient = useQueryClient()
   const createCategory = useCreateCategory()
 
-  const [selectedId, setSelectedId] = useState("")
   const [name, setName] = useState("")
   const [search, setSearch] = useState("")
   const [pinned, setPinned] = useState(false)
@@ -80,11 +89,16 @@ export function Categories() {
 
   // Re-syncs the editable fields whenever the *selection itself* changes — the React-recommended
   // "adjusting state when a prop changes" pattern (calling setState directly during render, not
-  // inside a `useEffect`, which the project's lint rules flag as cascading-render-prone). Not
-  // re-run on every keystroke since `syncedId` only changes when `selectedId` does.
-  const [syncedId, setSyncedId] = useState(selectedId)
-  if (syncedId !== selectedId) {
-    setSyncedId(selectedId)
+  // inside a `useEffect`, which the project's lint rules flag as cascading-render-prone). Keyed on
+  // `selectedId` plus whether `selected` has actually resolved yet (not just `selectedId` alone) —
+  // opening a `/config/categories/:categoryId` URL directly starts with `selectedId` already set
+  // from the URL param while `categories.data` is still loading, so `selected` is `undefined` on
+  // that first render; without also re-checking once the query resolves, `syncedId` matches
+  // `selectedId` from the very first render and the fields never populate at all.
+  const syncKey = `${selectedId}:${selected ? "loaded" : "pending"}`
+  const [syncedKey, setSyncedKey] = useState(syncKey)
+  if (syncedKey !== syncKey) {
+    setSyncedKey(syncKey)
     setName(selected?.name ?? "")
     setSearch(selected?.search ?? "")
     setPinned(selected?.pinned === 1)
@@ -184,7 +198,9 @@ export function Categories() {
           <br />
           <br />
           <div style={{ textAlign: "center" }}>
-            <input type="button" id="new-category" className="stdbtn" value={t("common.newCategory") ?? undefined} onClick={() => void handleNewCategory()} />
+            <Button id="new-category" onClick={() => void handleNewCategory()}>
+              {t("common.newCategory")}
+            </Button>
           </div>
           <br />
           {t("categories.selectACategoryInThe")}
@@ -200,19 +216,40 @@ export function Categories() {
                   <h2>{t("categories.category")}</h2>
                 </td>
                 <td>
-                  <select
-                    className="favtag-btn"
-                    style={{ fontSize: 20, height: 30 }}
+                  <Select
+                    size="lg"
                     value={selectedId}
-                    onChange={(e) => setSelectedId(e.target.value)}
-                  >
-                    <option value="">{t("common.NoCategory")}</option>
-                    {sortedCategoryOptions.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+                    onValueChange={setSelectedId}
+                    items={[
+                      { value: "", label: t("common.NoCategory") },
+                      ...sortedCategoryOptions.map((c) => ({
+                        value: c.id,
+                        // Dynamic categories (search-defined, real `c.search`) get the same
+                        // lightning-bolt icon this page's own icon legend above already uses to
+                        // mark them — a real SVG glyph reads unambiguously at this small size,
+                        // unlike bold text (tried first, dropped: barely legible weight
+                        // difference at this font size, easy to miss entirely) or an emoji (no
+                        // real "bold" rendering to fall back on either). Guest-visibility below
+                        // is an independent axis (a category can be dynamic *and* guest-visible
+                        // at once) so it still owns the background-color channel separately.
+                        label: c.search ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {/* `-translate-y-px` — same real-browser "SVG glyph's own visual
+                                center sits slightly above adjacent text's x-height even inside a
+                                `align-items: center` flex row" gap `Checkbox.tsx`'s own docs
+                                cover in more detail; a plain flex `align-items: center` centers
+                                the SVG's *box*, not its visually-perceived ink, so a small nudge
+                                is still needed on top of that. */}
+                            <FaBolt aria-hidden="true" className="relative top-px" />
+                            {c.name}
+                          </span>
+                        ) : (
+                          c.name
+                        ),
+                        itemClassName: c.visible_to_guest === 1 ? "select-item-guest-visible" : undefined,
+                      })),
+                    ]}
+                  />
                 </td>
               </tr>
               {selected && (
@@ -279,13 +316,9 @@ export function Categories() {
                   <tr className="tag-options">
                     <td></td>
                     <td>
-                      <input
-                        id="delete"
-                        type="button"
-                        value={t("categories.deleteCategory") ?? undefined}
-                        className="stdbtn"
-                        onClick={() => void handleDelete()}
-                      />
+                      <Button id="delete" onClick={() => void handleDelete()}>
+                        {t("categories.deleteCategory")}
+                      </Button>
                     </td>
                   </tr>
                   <tr className="tag-options">
@@ -410,7 +443,9 @@ export function Categories() {
         <br />
       </div>
 
-      <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
+      <Button id="return" onClick={() => navigate(routes.library())}>
+        {t("common.returnToLibrary")}
+      </Button>
     </div>
   )
 }

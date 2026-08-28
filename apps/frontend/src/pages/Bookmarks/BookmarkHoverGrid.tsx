@@ -1,32 +1,35 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { createPortal } from "react-dom"
-import { useTranslation } from "react-i18next"
-import { FaStamp, FaTrashCan } from "react-icons/fa6"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { FaStamp, FaTrashCan } from "react-icons/fa6";
+import { useNavigate } from "react-router-dom";
 
-import { useBookmarksForArchive, useRemoveBookmark } from "@/api/hooks"
-import { IconButton } from "@/components/common-ui/Display"
-import { Confirm } from "@/components/Display"
-import { useSupportsHover } from "@/hooks/useSupportsHover"
-import { routes } from "@/lib/routes"
-import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme"
-import { toast } from "@/toast"
+import { useBookmarksForArchive, useRemoveBookmark } from "@/api/hooks";
+import { IconButton } from "@/components/common-ui/Display";
+import { Confirm } from "@/components/Display";
+import { useSupportsHover } from "@/hooks/useSupportsHover";
+import { routes } from "@/lib/routes";
+import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
+import { toast } from "@/toast";
 
-import { sortPagesByOrder, useHoverGridPageOrder } from "./useHoverGridPageOrder"
+import {
+  sortPagesByOrder,
+  useHoverGridPageOrder,
+} from "./useHoverGridPageOrder";
 
 /** Every cell (including the first) is this size — matches the cover's own on-screen box
  * (`anchorRect`), so the grid reads as one uniform set of thumbnails rather than a giant first
  * cell next to tiny ones. */
 function cellSize(anchorRect: DOMRect) {
-  return { width: anchorRect.width, height: anchorRect.height }
+  return { width: anchorRect.width, height: anchorRect.height };
 }
 
-const BORDER_WIDTH = 1
+const BORDER_WIDTH = 1;
 /** How far outside `anchorRect` the bordered frame extends — kept off the grid's own box-model
  * (see `outer` below) so the first cell's image still lines up pixel-for-pixel with the card's
  * real cover instead of being squeezed smaller by the frame's own padding. */
-const FRAME_PADDING = 6
-const GRID_GAP = 6
+const FRAME_PADDING = 6;
+const GRID_GAP = 6;
 /** Caps the grid at 3×3 regardless of viewport space or page count — an unbounded `maxWidth`
  * (an earlier version used `window.innerWidth - anchorRect.left`) let the frame stretch across
  * nearly the entire remaining screen width even for just two bookmarked pages, since a CSS Grid
@@ -34,8 +37,8 @@ const GRID_GAP = 6
  * than a raw pixel size) keeps the frame's own width/height genuinely elastic — 1–2 pages produce
  * a small frame, 4–9 wrap across up to 3 rows, and beyond 9 the grid scrolls vertically inside a
  * fixed 3-row-tall viewport instead of the frame ever growing past 3×3. */
-const MAX_COLUMNS = 3
-const MAX_ROWS = 3
+const MAX_COLUMNS = 3;
+const MAX_ROWS = 3;
 /** How long a wheel gesture has to keep scrolling in the same direction past this grid's own
  * vertical scroll boundary before `handleWheel` actually hands it off to `onWheelPassthrough` —
  * see that prop's own docs for why a hand-off exists at all. Long enough that the tail end of a
@@ -43,7 +46,7 @@ const MAX_ROWS = 3
  * finishes *before* this elapses, so it doesn't accidentally count as "the user scrolled again on
  * purpose"; short enough that a genuinely new, deliberate scroll input still reads as responsive
  * rather than laggy. */
-const EDGE_HANDOFF_DELAY_MS = 500
+const EDGE_HANDOFF_DELAY_MS = 500;
 /** How much extra width the grid's own CSS `width` reserves (via `scrollbarGutter: "stable"`
  * below) so a vertical scrollbar's appearance never squeezes the grid's explicit column tracks —
  * live-measured against this repo's actual dev environment (Chromium/Linux) at ~10px; a couple px
@@ -53,11 +56,11 @@ const EDGE_HANDOFF_DELAY_MS = 500
  * off by `overflowX: "hidden"` once enough bookmarks triggered a vertical scrollbar). Real
  * scrollbar width does vary by OS/browser (macOS overlay scrollbars can render at ~0px), but this
  * only ever needs to be *at least as wide* as whatever the current browser actually reserves. */
-const SCROLLBAR_WIDTH_ESTIMATE = 12
+const SCROLLBAR_WIDTH_ESTIMATE = 12;
 /** Caption line's own footprint below each thumbnail — `FONT_SIZE_SM`'s line-height plus the
  * `marginTop` below, measured against this component's own rendered caption (`Math.ceil` so a
  * sub-pixel line-height never gets rounded down into visually clipping the caption's last row). */
-const CAPTION_HEIGHT = 20
+const CAPTION_HEIGHT = 20;
 
 /** How many `cellWidth`/`cellHeight`-sized tracks (plus `GRID_GAP` between them) fit in
  * `availablePx` — same "how much room is actually there" question `Tooltip.tsx`'s own
@@ -67,7 +70,49 @@ const CAPTION_HEIGHT = 20
  * this is also what keeps a narrow (e.g. mobile-width) viewport at a real, usable single column
  * instead of forcing the `MAX_COLUMNS` cap regardless of available space. */
 function tracksThatFit(availablePx: number, trackPx: number): number {
-  return Math.max(1, Math.floor((availablePx + GRID_GAP) / (trackPx + GRID_GAP)))
+  return Math.max(
+    1,
+    Math.floor((availablePx + GRID_GAP) / (trackPx + GRID_GAP)),
+  );
+}
+
+/** Picks a column count no larger than `maxColumns` (the viewport-driven ceiling this receives),
+ * biased toward `maxColumns` itself and only narrowing when a smaller count leaves *strictly*
+ * fewer empty trailing cells in the grid's last row. `maxColumns` is the starting/default
+ * candidate, not one option among equals — a plain "whichever count has the fewest empty cells,
+ * full stop" picks 1 column for count 11 at `maxColumns: 3` (11 pages in a single column has 0
+ * empty cells; 3 columns has 1 empty cell in the last row), which "wins" on raw remainder count
+ * alone but is a strictly *worse* layout in every practical sense — a single 11-cell-tall column
+ * instead of the obviously-preferable 4-row-tall 3-column grid (reported live, 2026-08-28,
+ * alongside a screenshot of exactly this degenerate single-column case). Narrowing below
+ * `maxColumns` is still worth doing when it actually helps: 4 bookmarked pages at `maxColumns: 3`
+ * degrades to a lopsided 3-then-1 layout (2 empty cells) versus the 2×2 this function picks
+ * instead (0 empty cells) — a real, strict improvement, not merely a tie.
+ *
+ * The search floor is 2, not 1 — collapsing to a single column is never actually an improvement
+ * worth making on a screen with room for more (every remainder-based comparison alone would
+ * eventually recommend it for *some* count, same underlying flaw as the "full stop" version
+ * above just at a different count), so 1 column is only ever used when there's truly only one
+ * page to show (`count === 1`), not picked by the remainder search at all. `count === 0` (nothing
+ * bookmarked, shouldn't actually reach this component but guarded for safety) also falls back to
+ * `maxColumns` — no rows to have a remainder over. */
+function columnsWithFewestEmptyCells(
+  count: number,
+  maxColumns: number,
+): number {
+  if (count <= 1) return maxColumns;
+  const remainderAt = (columns: number) =>
+    columns * Math.ceil(count / columns) - count;
+  let best = maxColumns;
+  let bestRemainder = remainderAt(maxColumns);
+  for (let columns = maxColumns - 1; columns >= 2; columns--) {
+    const remainder = remainderAt(columns);
+    if (remainder < bestRemainder) {
+      best = columns;
+      bestRemainder = remainder;
+    }
+  }
+  return best;
 }
 
 /** Hover preview for a bookmarked archive — expands into a grid of that archive's bookmarked-page
@@ -97,18 +142,18 @@ export function BookmarkHoverGrid({
   onClose,
   onWheelPassthrough,
 }: {
-  anchorRect: DOMRect
-  archiveId: string
+  anchorRect: DOMRect;
+  archiveId: string;
   /** For the delete-confirm dialog's own message — naming which archive a bookmark belongs to
    * matters here specifically because this grid can show pages from any bookmarked archive
    * (unlike, say, the reader's own single-archive bookmark toggle, which never needs to say which
    * archive it's talking about). */
-  archiveTitle: string
+  archiveTitle: string;
   /** Ascending — `pages[0]` is the *archive's* first bookmarked page, i.e. `livePages[0]`, the
    * page `reorderForCorner` anchors to `anchorRect` regardless of which corner it ends up
    * rendered in. */
-  pages: number[]
-  onClose: () => void
+  pages: number[];
+  onClose: () => void;
   /** Forwards a wheel gesture the grid itself doesn't consume — only ever passed by
    * `RecentlyAddedCarousel`'s own bookmark-mode call site (via `BookmarkedArchiveHoverCard`), so
    * it can keep driving its horizontal Lenis scroll while the pointer happens to be sitting over
@@ -123,15 +168,29 @@ export function BookmarkHoverGrid({
    * Takes both deltas (not just `deltaY`) so the call site can replay a faithful synthetic
    * `WheelEvent` onto its own Lenis-driven element — see `RecentlyAddedCarousel`'s own
    * `handleBookmarkWheelPassthrough` for why a hand-computed scroll offset isn't good enough. */
-  onWheelPassthrough?: (deltaX: number, deltaY: number) => void
+  onWheelPassthrough?: (deltaX: number, deltaY: number) => void;
 }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const supportsHover = useSupportsHover()
-  const rootRef = useRef<HTMLDivElement>(null)
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const supportsHover = useSupportsHover();
+  const rootRef = useRef<HTMLDivElement>(null);
   // The grid's own internal scroll container — read by both the `opensUp`-and-`willScroll`
   // scroll-to-bottom `useLayoutEffect` below and the wheel-passthrough listener further down.
-  const scrollElRef = useRef<HTMLDivElement>(null)
+  const scrollElRef = useRef<HTMLDivElement>(null);
+
+  // Enter animation: starts scaled down (from the anchored cover thumbnail's own size, roughly —
+  // see `transformOrigin` below for *where* it grows from) and expands to full size on mount,
+  // rather than the grid just appearing at full size instantly — reported as visually jarring
+  // live, 2026-08-28. `useState(false)` + a `useEffect` that flips it true on the next tick (not
+  // starting `true` directly) is the standard "force one render at the initial/collapsed state
+  // before transitioning" pattern: a CSS `transition` only animates a property *change*, so the
+  // very first render has to actually commit the collapsed state to the DOM before the second
+  // render's flip to expanded has anything to transition *from*.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setExpanded(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Touch-only (see the backdrop below, gated the same way): locks `body`'s own scroll for as
   // long as this grid is open. Fixes a real reported bug — mobile Chrome/Firefox auto-hide their
@@ -143,23 +202,23 @@ export function BookmarkHoverGrid({
   // `overflow`/`overscrollBehavior` pattern as `Reader.tsx`'s boundary-overlay lock and
   // `ComparisonResultModal.tsx`'s own modal lock.
   useEffect(() => {
-    if (supportsHover) return
-    const prevOverflow = document.body.style.overflow
-    const prevOverscroll = document.body.style.overscrollBehavior
-    document.body.style.overflow = "hidden"
-    document.body.style.overscrollBehavior = "none"
+    if (supportsHover) return;
+    const prevOverflow = document.body.style.overflow;
+    const prevOverscroll = document.body.style.overscrollBehavior;
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
     return () => {
-      document.body.style.overflow = prevOverflow
-      document.body.style.overscrollBehavior = prevOverscroll
-    }
-  }, [supportsHover])
+      document.body.style.overflow = prevOverflow;
+      document.body.style.overscrollBehavior = prevOverscroll;
+    };
+  }, [supportsHover]);
   // Filenames come bundled in the same response as the page numbers themselves (`GET
   // /archives/{id}/bookmarks`) — no separate `GET /archives/{id}/files` call (which would scan
   // the archive's entire page list just to resolve two or three filenames out of it).
-  const bookmarkedPages = useBookmarksForArchive(archiveId)
-  const removeBookmark = useRemoveBookmark()
-  const [pendingDelete, setPendingDelete] = useState<number | null>(null)
-  const [pageOrder] = useHoverGridPageOrder()
+  const bookmarkedPages = useBookmarksForArchive(archiveId);
+  const removeBookmark = useRemoveBookmark();
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  const [pageOrder] = useHoverGridPageOrder();
   // The actual render source is this query's own live data, not the `pages` prop — the prop is
   // just a one-time snapshot taken when the hover/tap first opened (`BookmarkedArchiveHoverCard`),
   // so it wouldn't reflect a page removed via the delete button below without a full close/reopen.
@@ -171,34 +230,42 @@ export function BookmarkHoverGrid({
   // until the query's real data replaces it a render or two later; `pageAsc`'s own tie-break
   // (`page` itself) keeps that brief window looking identical to the pre-this-setting behavior.
   const sortedPages = sortPagesByOrder(
-    bookmarkedPages.data ?? pages.map((page) => ({ page, filename: null, bookmarked_at: 0, stamp_count: 0 })),
+    bookmarkedPages.data ??
+      pages.map((page) => ({
+        page,
+        filename: null,
+        bookmarked_at: 0,
+        stamp_count: 0,
+      })),
     pageOrder,
-  )
-  const livePages = sortedPages.map((b) => b.page)
-  const { width: cellWidth, height: cellHeight } = cellSize(anchorRect)
-  const rowHeight = cellHeight + CAPTION_HEIGHT
-
+  );
+  const livePages = sortedPages.map((b) => b.page);
+  const { width: cellWidth, height: cellHeight } = cellSize(anchorRect);
+  const rowHeight = cellHeight + CAPTION_HEIGHT;
 
   // Viewport space actually available to the right/below `anchorRect` — same question
   // `Tooltip.tsx`'s own `recompute()` asks (there, of `spaceBelow`/`spaceAbove`) before deciding
   // how much room a popup really has, not just how much content it *wants* to show. Recomputed on
   // resize; `useState`'s initializer covers the very first render before any resize fires.
-  const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   useLayoutEffect(() => {
     function recompute() {
-      setViewport({ width: window.innerWidth, height: window.innerHeight })
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
     }
-    window.addEventListener("resize", recompute)
-    return () => window.removeEventListener("resize", recompute)
-  }, [])
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
+  }, []);
 
-  const frameOverhead = (FRAME_PADDING + BORDER_WIDTH) * 2
+  const frameOverhead = (FRAME_PADDING + BORDER_WIDTH) * 2;
   // Space on *each* side of `anchorRect` — not just right/below, now that the grid can open
   // toward whichever side actually has room (see `opensLeft`/`opensUp` below).
-  const spaceRight = viewport.width - anchorRect.left - frameOverhead
-  const spaceLeft = anchorRect.right - frameOverhead
-  const spaceBelow = viewport.height - anchorRect.top - frameOverhead
-  const spaceAbove = anchorRect.bottom - frameOverhead
+  const spaceRight = viewport.width - anchorRect.left - frameOverhead;
+  const spaceLeft = anchorRect.right - frameOverhead;
+  const spaceBelow = viewport.height - anchorRect.top - frameOverhead;
+  const spaceAbove = anchorRect.bottom - frameOverhead;
 
   // Viewport space wins over the 3×3 cap, and both lose to how many pages there actually are —
   // never show more empty tracks than content, and never claim more space than the screen has,
@@ -213,8 +280,23 @@ export function BookmarkHoverGrid({
   // whichever side was picked to open toward) means a cell count that's consistent regardless of
   // which corner ends up anchored — the grid's own size doesn't visibly jump depending on which
   // side of the viewport the card happens to be on.
-  const columns = Math.min(MAX_COLUMNS, tracksThatFit(Math.max(spaceLeft, spaceRight), cellWidth), livePages.length || 1)
-  const rows = Math.min(MAX_ROWS, tracksThatFit(Math.max(spaceAbove, spaceBelow), rowHeight), Math.ceil(livePages.length / columns))
+  const maxColumnsThatFit = Math.min(
+    MAX_COLUMNS,
+    tracksThatFit(Math.max(spaceLeft, spaceRight), cellWidth),
+    livePages.length || 1,
+  );
+  // Within that viewport-driven ceiling, pick whichever column count actually minimizes empty
+  // trailing cells (see that function's own docs) rather than always maxing out width — a plain
+  // `maxColumnsThatFit` here is what produced the reported 4-pages-as-3-then-1 layout.
+  const columns = columnsWithFewestEmptyCells(
+    livePages.length,
+    maxColumnsThatFit,
+  );
+  const rows = Math.min(
+    MAX_ROWS,
+    tracksThatFit(Math.max(spaceAbove, spaceBelow), rowHeight),
+    Math.ceil(livePages.length / columns),
+  );
   // Whether `overflowY: "auto"` below will actually show a scrollbar — true whenever the real row
   // count `livePages` needs exceeds what `rows` displays at once. Gates the `SCROLLBAR_WIDTH_
   // ESTIMATE` allowance in `gridWidth` just below (only reserve the space when a scrollbar can
@@ -222,7 +304,7 @@ export function BookmarkHoverGrid({
   // visible, unexplained gap of blank space past the last column on every short list that never
   // scrolls at all, worse than the layout shift it was trying to prevent) and the scroll-to-bottom
   // `useLayoutEffect` further down (only needed when there's actually something to scroll).
-  const willScroll = Math.ceil(livePages.length / columns) > rows
+  const willScroll = Math.ceil(livePages.length / columns) > rows;
   // What `gridTemplateColumns`' own tracks add up to, plus `SCROLLBAR_WIDTH_ESTIMATE` — but only
   // when `willScroll` is true. The grid element's CSS `width` below reserves that extra allowance
   // via `scrollbarGutter: "stable"`, gated the same way (only `scrollbarGutter: "stable"` when
@@ -239,8 +321,18 @@ export function BookmarkHoverGrid({
   // threshold (e.g. via the delete button) — accepted deliberately: keeping short, non-scrolling
   // lists visually tight (no unexplained blank space past the last column) matters more here than
   // avoiding that shift.
-  const gridWidth = columns * cellWidth + (columns - 1) * GRID_GAP + (willScroll ? SCROLLBAR_WIDTH_ESTIMATE : 0)
-  const gridHeight = rows * rowHeight + (rows - 1) * GRID_GAP
+  const gridWidth =
+    columns * cellWidth +
+    (columns - 1) * GRID_GAP +
+    (willScroll ? SCROLLBAR_WIDTH_ESTIMATE : 0);
+  const gridHeight = rows * rowHeight + (rows - 1) * GRID_GAP;
+  // The `.swal2-popup` frame's own full outer footprint — `gridWidth`/`gridHeight` plus the
+  // padding and border every side adds (matching the `top`/`left` positioning math below, which
+  // offsets by this same `FRAME_PADDING + BORDER_WIDTH` amount). Used only by the enter-animation's
+  // initial `scale()` below, to start from the real ratio between the anchored cover's on-screen
+  // size and this frame's full size rather than an arbitrary constant.
+  const frameWidth = gridWidth + 2 * (FRAME_PADDING + BORDER_WIDTH);
+  const frameHeight = gridHeight + 2 * (FRAME_PADDING + BORDER_WIDTH);
 
   // Which corner of the grid lands on `anchorRect` — always the corner closest to whichever side
   // actually has *more* room, full stop (no "prefer the default corner unless the preferred side
@@ -249,8 +341,8 @@ export function BookmarkHoverGrid({
   // picking "opens down" regardless, running the grid's bottom edge off the bottom of the screen
   // even though the top had more headroom; confirmed live on an actual phone). Ties (equal space
   // on both sides) keep the original down-right default.
-  const opensLeft = spaceLeft > spaceRight
-  const opensUp = spaceAbove > spaceBelow
+  const opensLeft = spaceLeft > spaceRight;
+  const opensUp = spaceAbove > spaceBelow;
 
   // Rearranges `livePages` so the anchored page (`livePages[0]`) lands in whichever grid corner
   // `opensLeft`/`opensUp` put it in, without ever needing an explicit per-cell `gridColumn`/
@@ -270,15 +362,15 @@ export function BookmarkHoverGrid({
   // `opensUp && willScroll`, so the last (anchor) row is the one actually visible rather than the
   // scroll-clipped first one.
   function reorderForCorner(pagesToOrder: number[]): number[] {
-    const rows: number[][] = []
+    const rows: number[][] = [];
     for (let i = 0; i < pagesToOrder.length; i += columns) {
-      rows.push(pagesToOrder.slice(i, i + columns))
+      rows.push(pagesToOrder.slice(i, i + columns));
     }
-    if (opensLeft) rows.forEach((row) => row.reverse())
-    if (opensUp) rows.reverse()
-    return rows.flat()
+    if (opensLeft) rows.forEach((row) => row.reverse());
+    if (opensUp) rows.reverse();
+    return rows.flat();
   }
-  const orderedPages = reorderForCorner(livePages)
+  const orderedPages = reorderForCorner(livePages);
 
   // See `reorderForCorner`'s own docs for why this is needed at all: `opensUp` puts the anchor's
   // row last in the array, but a scrolling grid only shows its *first* `rows` rows by default —
@@ -287,14 +379,14 @@ export function BookmarkHoverGrid({
   // mount) so deleting a bookmark — which can shrink `orderedPages.length` and thus
   // `scrollHeight` — keeps the grid pinned to its new bottom rather than leaving a gap.
   useLayoutEffect(() => {
-    if (!opensUp || !willScroll) return
-    const el = scrollElRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight - el.clientHeight
-  }, [opensUp, willScroll, orderedPages.length])
+    if (!opensUp || !willScroll) return;
+    const el = scrollElRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight - el.clientHeight;
+  }, [opensUp, willScroll, orderedPages.length]);
 
   function openPage(page: number) {
-    navigate(`${routes.reader(archiveId)}?p=${page}`)
+    navigate(`${routes.reader(archiveId)}?p=${page}`);
   }
 
   // When (and only when) the grid can't itself scroll vertically, or the wheel gesture is
@@ -335,58 +427,67 @@ export function BookmarkHoverGrid({
   // forwards every tick unthrottled). Reset back to `null` whenever the gesture leaves the edge
   // (scrolls back away from the boundary) or reverses direction — either means the user is no
   // longer in the "kept scrolling past an edge" gesture this state exists to track.
-  const edgeState = useRef<{ direction: "up" | "down"; firstHitTime: number; forwarding: boolean } | null>(null)
+  const edgeState = useRef<{
+    direction: "up" | "down";
+    firstHitTime: number;
+    forwarding: boolean;
+  } | null>(null);
   useEffect(() => {
-    const el = scrollElRef.current
-    if (!el || !onWheelPassthrough) return
+    const el = scrollElRef.current;
+    if (!el || !onWheelPassthrough) return;
     function handleWheel(e: WheelEvent) {
-      if (!onWheelPassthrough) return
+      if (!onWheelPassthrough) return;
       if (!willScroll || e.deltaX !== 0) {
-        e.preventDefault()
-        onWheelPassthrough(e.deltaX, e.deltaY)
-        return
+        e.preventDefault();
+        onWheelPassthrough(e.deltaX, e.deltaY);
+        return;
       }
-      const el = e.currentTarget as HTMLDivElement
-      const direction = e.deltaY > 0 ? "down" : "up"
-      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
-      const atTop = el.scrollTop <= 0
-      const atEdgeForDirection = (direction === "down" && atBottom) || (direction === "up" && atTop)
+      const el = e.currentTarget as HTMLDivElement;
+      const direction = e.deltaY > 0 ? "down" : "up";
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      const atTop = el.scrollTop <= 0;
+      const atEdgeForDirection =
+        (direction === "down" && atBottom) || (direction === "up" && atTop);
       if (!atEdgeForDirection) {
-        edgeState.current = null
-        return // Let the browser scroll the grid's own content normally.
+        edgeState.current = null;
+        return; // Let the browser scroll the grid's own content normally.
       }
-      const state = edgeState.current
+      const state = edgeState.current;
       if (state && state.direction === direction && state.forwarding) {
         // Already past the pause window and forwarding — keep forwarding every tick, unthrottled,
         // so Lenis sees the same continuous run of events it would from scrolling it directly.
-        e.preventDefault()
-        onWheelPassthrough(0, e.deltaY)
-        return
+        e.preventDefault();
+        onWheelPassthrough(0, e.deltaY);
+        return;
       }
       if (!state || state.direction !== direction) {
         // The first tick to hit this edge in this direction (or a direction reversal) — starts
         // the pause window rather than forwarding immediately, so a single scroll gesture that
         // merely *reaches* the edge doesn't also immediately bleed into the carousel.
-        edgeState.current = { direction, firstHitTime: performance.now(), forwarding: false }
-        e.preventDefault()
-        return
+        edgeState.current = {
+          direction,
+          firstHitTime: performance.now(),
+          forwarding: false,
+        };
+        e.preventDefault();
+        return;
       }
       if (performance.now() - state.firstHitTime < EDGE_HANDOFF_DELAY_MS) {
         // Still inside the pause window from the first tick that hit this edge — absorb this one
         // too (neither scrolls the grid further, since it's already at the boundary, nor forwards
         // it to the carousel yet).
-        e.preventDefault()
-        return
+        e.preventDefault();
+        return;
       }
       // The pause window has elapsed and the user kept scrolling in the same direction — genuinely
       // hands off now, and every further same-direction tick until the next edge/direction change.
-      edgeState.current = { ...state, forwarding: true }
-      e.preventDefault()
-      onWheelPassthrough(0, e.deltaY)
+      edgeState.current = { ...state, forwarding: true };
+      e.preventDefault();
+      onWheelPassthrough(0, e.deltaY);
     }
-    el.addEventListener("wheel", handleWheel, { passive: false })
-    return () => el.removeEventListener("wheel", handleWheel)
-  }, [onWheelPassthrough, willScroll])
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [onWheelPassthrough, willScroll]);
 
   // Guards `onMouseLeave` below — the confirm dialog (`pendingDelete !== null`) renders through
   // its own nested portal straight onto `document.body`, genuinely outside `rootRef`'s DOM
@@ -397,8 +498,8 @@ export function BookmarkHoverGrid({
   // `onClose()` before the dialog click ever lands, closing the whole preview (and, with it, the
   // dialog) out from under the user.
   function handleMouseLeave() {
-    if (pendingDelete !== null) return
-    onClose()
+    if (pendingDelete !== null) return;
+    onClose();
   }
 
   return createPortal(
@@ -420,10 +521,15 @@ export function BookmarkHoverGrid({
           change to established desktop behavior. */}
       {!supportsHover && (
         <div
-          style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: Z_OVERLAY_BACKDROP,
+            background: "rgba(0,0,0,0.4)",
+          }}
           onClick={() => {
-            if (pendingDelete !== null) return
-            onClose()
+            if (pendingDelete !== null) return;
+            onClose();
           }}
         />
       )}
@@ -431,111 +537,148 @@ export function BookmarkHoverGrid({
         ref={rootRef}
         onMouseLeave={handleMouseLeave}
         style={{
-        // `"absolute"` (document-relative), not `"fixed"` (viewport-relative) — same fix
-        // `ArchiveContextMenu.tsx` already applies to the right-click menu (see that component's
-        // own docs): a `"fixed"` popup stays pinned to the same screen position while the page
-        // scrolls underneath it, drifting away from the cover it's supposed to be anchored to.
-        // `anchorRect` itself stays viewport-relative (`getBoundingClientRect()`, used as-is for
-        // the `availableWidth`/`availableHeight` viewport-space math below, which legitimately
-        // cares about the *screen*, not the document) — only the final `top`/`left` add
-        // `window.scrollY`/`scrollX` to convert into document coordinates for this element's own
-        // `position: absolute` to use.
-        position: "absolute",
-        // Offsets by the frame's *own* box-model footprint (padding + its 1px border) so the
-        // anchored cell's image still lands exactly on `anchorRect` — the border itself also
-        // takes up space in standard box-sizing, not just the padding, and was left out of an
-        // earlier version of this offset (confirmed live: without `+ BORDER_WIDTH`, the first
-        // cell landed 1px off from the real cover underneath it).
-        //
-        // Which corner of the grid the anchored cell sits in flips with `opensLeft`/`opensUp`, so
-        // which of `anchorRect`'s edges the frame is positioned *from* flips too:
-        // - Default (opens down-right): anchored cell is the grid's top-left, so `anchorRect`'s
-        //   own top-left corner is what the frame offsets from (same as the original formula).
-        // - `opensLeft`: anchored cell is the grid's top-*right* — its right edge, not left, sits
-        //   at `anchorRect.right`, so `left` is derived by subtracting the frame's full width
-        //   (`gridWidth + 2 * frameOverhead-per-side`) back from `anchorRect.right` instead of
-        //   adding the padding/border offset to `anchorRect.left`.
-        // - `opensUp`: same idea vertically — the anchored cell is the grid's *bottom* row, so
-        //   `top` is derived by walking back up from `anchorRect.top` by every row above it
-        //   (`gridHeight - rowHeight`, i.e. all rows except the anchored one, plus their gaps).
-        top: opensUp
-          ? anchorRect.top - (gridHeight - rowHeight) - FRAME_PADDING - BORDER_WIDTH + window.scrollY
-          : anchorRect.top - FRAME_PADDING - BORDER_WIDTH + window.scrollY,
-        left: opensLeft
-          ? anchorRect.right - gridWidth - FRAME_PADDING - BORDER_WIDTH + window.scrollX
-          : anchorRect.left - FRAME_PADDING - BORDER_WIDTH + window.scrollX,
-        zIndex: Z_OVERLAY_TOOLTIP,
-      }}
-    >
-      <div
-        className="swal2-popup"
-        style={{
-          display: "block",
-          padding: FRAME_PADDING,
-          borderWidth: BORDER_WIDTH,
-          borderRadius: 4,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          // `"absolute"` (document-relative), not `"fixed"` (viewport-relative) — same fix
+          // `ArchiveContextMenu.tsx` already applies to the right-click menu (see that component's
+          // own docs): a `"fixed"` popup stays pinned to the same screen position while the page
+          // scrolls underneath it, drifting away from the cover it's supposed to be anchored to.
+          // `anchorRect` itself stays viewport-relative (`getBoundingClientRect()`, used as-is for
+          // the `availableWidth`/`availableHeight` viewport-space math below, which legitimately
+          // cares about the *screen*, not the document) — only the final `top`/`left` add
+          // `window.scrollY`/`scrollX` to convert into document coordinates for this element's own
+          // `position: absolute` to use.
+          position: "absolute",
+          // Offsets by the frame's *own* box-model footprint (padding + its 1px border) so the
+          // anchored cell's image still lands exactly on `anchorRect` — the border itself also
+          // takes up space in standard box-sizing, not just the padding, and was left out of an
+          // earlier version of this offset (confirmed live: without `+ BORDER_WIDTH`, the first
+          // cell landed 1px off from the real cover underneath it).
+          //
+          // Which corner of the grid the anchored cell sits in flips with `opensLeft`/`opensUp`, so
+          // which of `anchorRect`'s edges the frame is positioned *from* flips too:
+          // - Default (opens down-right): anchored cell is the grid's top-left, so `anchorRect`'s
+          //   own top-left corner is what the frame offsets from (same as the original formula).
+          // - `opensLeft`: anchored cell is the grid's top-*right* — its right edge, not left, sits
+          //   at `anchorRect.right`, so `left` is derived by subtracting the frame's full width
+          //   (`gridWidth + 2 * frameOverhead-per-side`) back from `anchorRect.right` instead of
+          //   adding the padding/border offset to `anchorRect.left`.
+          // - `opensUp`: same idea vertically — the anchored cell is the grid's *bottom* row, so
+          //   `top` is derived by walking back up from `anchorRect.top` by every row above it
+          //   (`gridHeight - rowHeight`, i.e. all rows except the anchored one, plus their gaps).
+          top: opensUp
+            ? anchorRect.top -
+              (gridHeight - rowHeight) -
+              FRAME_PADDING -
+              BORDER_WIDTH +
+              window.scrollY
+            : anchorRect.top - FRAME_PADDING - BORDER_WIDTH + window.scrollY,
+          left: opensLeft
+            ? anchorRect.right -
+              gridWidth -
+              FRAME_PADDING -
+              BORDER_WIDTH +
+              window.scrollX
+            : anchorRect.left - FRAME_PADDING - BORDER_WIDTH + window.scrollX,
+          zIndex: Z_OVERLAY_TOOLTIP,
         }}
       >
-        {/* Scrolls internally past 9 cells — nested one level inside the padded/rounded
-            `.swal2-popup` box above (same reasoning as `Tooltip.tsx`'s own nested scroll div: a
-            scrollbar directly on the rounded/bordered element clips against its own corners). */}
         <div
-          ref={scrollElRef}
-          className="thin-scrollbar"
+          className="swal2-popup"
           style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${columns}, ${cellWidth}px)`,
-            gap: GRID_GAP,
-            width: gridWidth,
-            maxHeight: gridHeight,
-            overflowY: "auto",
-            // Explicit `"hidden"`, not the default `"visible"` — `columns` is already derived from
-            // `tracksThatFit` to stay within the viewport's real available width, so this never
-            // needs to actually clip anything in practice, but it's cheap insurance against a
-            // horizontal scrollbar ever appearing at all (an explicit product requirement — this
-            // grid must never scroll sideways) rather than relying on the width math always being
-            // exactly right on every device/zoom level.
-            overflowX: "hidden",
-            // Reserves `SCROLLBAR_WIDTH_ESTIMATE` worth of extra space (folded into `gridWidth`
-            // above, same `willScroll` gate) so a vertical scrollbar's own appearance doesn't
-            // squeeze the explicit `columns`-track grid — see `SCROLLBAR_WIDTH_ESTIMATE`'s own
-            // docs for the real bug this fixes (the last column's delete button getting clipped by
-            // `overflowX: "hidden"` above once scrolling kicked in). Gated on `willScroll` (not
-            // unconditional) so a short list that never scrolls at all doesn't carry an
-            // unexplained gap of blank space past its last column — `gridWidth`'s own docs cover
-            // why that tradeoff (accepting a possible one-time sideways shift on crossing the
-            // scrolling threshold) was chosen deliberately.
-            ...(willScroll ? { scrollbarGutter: "stable" } : {}),
+            display: "block",
+            padding: FRAME_PADDING,
+            borderWidth: BORDER_WIDTH,
+            borderRadius: 4,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+            // Grows outward from whichever corner the anchored cell (the real cover thumbnail
+            // underneath) sits in — matching `top`/`left` above, which position the frame *from*
+            // that same corner. A fixed `"top left"` origin would look correct by coincidence in the
+            // default (opens down-right) case but visibly grow from the wrong corner whenever
+            // `opensLeft`/`opensUp` flip which corner is actually anchored.
+            transformOrigin: `${opensUp ? "bottom" : "top"} ${opensLeft ? "right" : "left"}`,
+            // Starts at the *real* ratio between the anchored cover's own on-screen size
+            // (`cellWidth`/`cellHeight`, i.e. `anchorRect`) and this frame's full outer size
+            // (`gridWidth`/`gridHeight` plus the padding/border every side adds) — not an arbitrary
+            // small constant. An arbitrary `scale(0.15)` (tried first) looked like the grid was
+            // expanding from a single point rather than from the cover thumbnail it's actually
+            // anchored to, especially for a 1–2 page grid whose full size isn't much bigger than
+            // one cell to begin with — reported live, 2026-08-28. Per-axis (`scaleX`/`scaleY`, not
+            // one uniform `scale`) since a wide grid (many columns, one row) and the cover itself
+            // aren't necessarily the same aspect ratio.
+            transform: expanded
+              ? "scale(1)"
+              : `scale(${cellWidth / frameWidth}, ${cellHeight / frameHeight})`,
+            opacity: expanded ? 1 : 0,
+            transition: "transform 180ms ease-out, opacity 120ms ease-out",
           }}
         >
-          {orderedPages.map((page) => {
-            const filename = bookmarkedPages.data?.find((b) => b.page === page)?.filename ?? null
-            const stampCount = bookmarkedPages.data?.find((b) => b.page === page)?.stamp_count ?? 0
-            return (
-              <a
-                key={page}
-                href={`${routes.reader(archiveId)}?p=${page}`}
-                onClick={(e) => {
-                  e.preventDefault()
-                  openPage(page)
-                }}
-                style={{ display: "block", position: "relative", color: "inherit", textDecoration: "none" }}
-              >
-                <img
-                  src={`/api/archives/${archiveId}/thumbnail?page=${page}`}
-                  alt=""
-                  style={{
-                    width: cellWidth,
-                    height: cellHeight,
-                    // Matches `lrr.css`'s own `div.id3:not(.nocrop) img` default cover cropping,
-                    // so the first cell doesn't visually jump when it swaps in over the real cover
-                    // thumbnail.
-                    objectFit: "cover",
-                    display: "block",
+          {/* Scrolls internally past 9 cells — nested one level inside the padded/rounded
+            `.swal2-popup` box above (same reasoning as `Tooltip.tsx`'s own nested scroll div: a
+            scrollbar directly on the rounded/bordered element clips against its own corners). */}
+          <div
+            ref={scrollElRef}
+            className="thin-scrollbar"
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${columns}, ${cellWidth}px)`,
+              gap: GRID_GAP,
+              width: gridWidth,
+              maxHeight: gridHeight,
+              overflowY: "auto",
+              // Explicit `"hidden"`, not the default `"visible"` — `columns` is already derived from
+              // `tracksThatFit` to stay within the viewport's real available width, so this never
+              // needs to actually clip anything in practice, but it's cheap insurance against a
+              // horizontal scrollbar ever appearing at all (an explicit product requirement — this
+              // grid must never scroll sideways) rather than relying on the width math always being
+              // exactly right on every device/zoom level.
+              overflowX: "hidden",
+              // Reserves `SCROLLBAR_WIDTH_ESTIMATE` worth of extra space (folded into `gridWidth`
+              // above, same `willScroll` gate) so a vertical scrollbar's own appearance doesn't
+              // squeeze the explicit `columns`-track grid — see `SCROLLBAR_WIDTH_ESTIMATE`'s own
+              // docs for the real bug this fixes (the last column's delete button getting clipped by
+              // `overflowX: "hidden"` above once scrolling kicked in). Gated on `willScroll` (not
+              // unconditional) so a short list that never scrolls at all doesn't carry an
+              // unexplained gap of blank space past its last column — `gridWidth`'s own docs cover
+              // why that tradeoff (accepting a possible one-time sideways shift on crossing the
+              // scrolling threshold) was chosen deliberately.
+              ...(willScroll ? { scrollbarGutter: "stable" } : {}),
+            }}
+          >
+            {orderedPages.map((page) => {
+              const filename =
+                bookmarkedPages.data?.find((b) => b.page === page)?.filename ??
+                null;
+              const stampCount =
+                bookmarkedPages.data?.find((b) => b.page === page)
+                  ?.stamp_count ?? 0;
+              return (
+                <a
+                  key={page}
+                  href={`${routes.reader(archiveId)}?p=${page}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    openPage(page);
                   }}
-                />
-                {/* issue #97: a stamp-count badge, top-left — mirrors the delete button's own
+                  style={{
+                    display: "block",
+                    position: "relative",
+                    color: "inherit",
+                    textDecoration: "none",
+                  }}
+                >
+                  <img
+                    src={`/api/archives/${archiveId}/thumbnail?page=${page}`}
+                    alt=""
+                    style={{
+                      width: cellWidth,
+                      height: cellHeight,
+                      // Matches `lrr.css`'s own `div.id3:not(.nocrop) img` default cover cropping,
+                      // so the first cell doesn't visually jump when it swaps in over the real cover
+                      // thumbnail.
+                      objectFit: "cover",
+                      display: "block",
+                    }}
+                  />
+                  {/* issue #97: a stamp-count badge, top-left — mirrors the delete button's own
                     top-right `position: absolute` placement below. `FaStamp` (react-icons/fa6's
                     real ink-stamp SVG, matching the Font Awesome `fa-stamp` glyph the reader
                     toolbar's own stamp-placement button uses) reads as "the stamp feature itself"
@@ -544,27 +687,37 @@ export function BookmarkHoverGrid({
                     `fa-thumbtack` default is a *per-stamp* fallback icon (used when an individual
                     stamp has no custom icon set), a narrower, different role than this badge's
                     "does this page have any stamps at all." */}
-                {stampCount > 0 && (
-                  <div style={{ position: "absolute", top: 2, left: 2, display: "flex" }}>
-                    <span
-                      title={t("bookmarks.pageHasStamps", { count: stampCount }) ?? undefined}
+                  {stampCount > 0 && (
+                    <div
                       style={{
+                        position: "absolute",
+                        top: 2,
+                        left: 2,
                         display: "flex",
-                        alignItems: "center",
-                        gap: 3,
-                        background: "rgba(0,0,0,0.55)",
-                        color: "#fff",
-                        borderRadius: 10,
-                        fontSize: FONT_SIZE_SM,
-                        padding: "1px 6px",
                       }}
                     >
-                      <FaStamp size={9} aria-hidden="true" />
-                      {stampCount}
-                    </span>
-                  </div>
-                )}
-                {/* Wrapped in its own `onClick` (bubble phase) — this button is nested inside the
+                      <span
+                        title={
+                          t("bookmarks.pageHasStamps", { count: stampCount }) ??
+                          undefined
+                        }
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          background: "rgba(0,0,0,0.55)",
+                          color: "#fff",
+                          borderRadius: 10,
+                          fontSize: FONT_SIZE_SM,
+                          padding: "1px 6px",
+                        }}
+                      >
+                        <FaStamp size={9} aria-hidden="true" />
+                        {stampCount}
+                      </span>
+                    </div>
+                  )}
+                  {/* Wrapped in its own `onClick` (bubble phase) — this button is nested inside the
                     cell's `<a>` (needed so the delete affordance sits visually inside each
                     thumbnail, top-right), so a click here bubbles up through the `<a>` unless
                     stopped first. `IconButton` itself only exposes a plain `() => void` `onClick`
@@ -572,138 +725,153 @@ export function BookmarkHoverGrid({
                     this wrapping `div` instead — it catches the bubble before it ever reaches the
                     `<a>`'s own `onClick`, which would otherwise navigate to the reader in the same
                     gesture as opening the confirm dialog. */}
-                <div
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                  }}
-                  // `display: "flex"` — without it, this plain block div gives its `<button>`
-                  // child (an inline-level element by default) the usual inline-layout descender
-                  // gap below the line box, adding a few px of unwanted height that pushed the
-                  // button visibly downward inside this `top: 2`-positioned wrapper (confirmed
-                  // live: the wrapper measured 24px tall against the button's own 20px, and the
-                  // button's real top landed 4px below where `top: 2` alone would place it).
-                  style={{ position: "absolute", top: 2, right: 2, display: "flex" }}
-                >
-                  <IconButton
-                    // `react-icons/fa6`'s `FaTrashCan` — a real SVG rendering of the same Font
-                    // Awesome 6 "trash can" glyph the rest of the app uses via the `fa`/`fas` CSS
-                    // classes (this project's own `@fortawesome/fontawesome-free` is v6.2.1, so
-                    // this is the matching icon set, keeping the visual language consistent), not
-                    // the CSS-class `<i>` version. Two separate problems ruled that CSS-class
-                    // version out here: (1) `fa-trash` at this button's 20px size renders at a
-                    // ~10.7px font size where its fine detail (lid, body grating lines) blurs
-                    // together under anti-aliasing into a solid colored block rather than a
-                    // recognizable shape (confirmed live: an isolated 40px test render of the same
-                    // glyph looked correct, so this was a too-small-for-the-icon's-detail problem,
-                    // not a broken font); (2) even the simpler `fa-times` glyph still rendered
-                    // visibly off-center toward the top-left despite `getBoundingClientRect`
-                    // reporting the `<i>` element's own box as centered — Font Awesome (like most
-                    // icon fonts) positions glyphs relative to the font's em-box/baseline, not
-                    // relative to the glyph's own visible ink, so a geometrically-centered box can
-                    // still look visually uncentered. `react-icons`' SVG has neither problem: its
-                    // `viewBox` is defined directly against the visible shape (so centering the
-                    // element centers what's actually drawn), and being a real vector shape rather
-                    // than a font glyph, its fine detail stays crisp at small sizes instead of
-                    // anti-aliasing into mush.
-                    // Bigger on touch (no `:hover` to reveal it gradually there, and a real
-                    // finger needs a bigger target than a mouse cursor does) — direct feedback:
-                    // 20px was too small to reliably tap on mobile Firefox.
-                    icon={<FaTrashCan size={supportsHover ? 11 : 16} />}
-                    size={supportsHover ? 20 : 30}
-                    title={t("common.delete") ?? undefined}
-                    onClick={() => setPendingDelete(page)}
-                    style={{
-                      borderRadius: "50%",
-                      background: "rgba(0,0,0,0.55)",
-                      color: "#e74c3c",
-                      border: "none",
-                      padding: "0.5px 0 0 1px",
+                  <div
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
                     }}
-                  />
-                </div>
-                <div
-                  style={{
-                    fontSize: FONT_SIZE_SM,
-                    marginTop: 2,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                  title={filename ?? undefined}
-                >
-                  {t("bookmarks.pageLabel", { page })}
-                  {filename ? ` · ${filename}` : ""}
-                </div>
-              </a>
-            )
-          })}
+                    // `display: "flex"` — without it, this plain block div gives its `<button>`
+                    // child (an inline-level element by default) the usual inline-layout descender
+                    // gap below the line box, adding a few px of unwanted height that pushed the
+                    // button visibly downward inside this `top: 2`-positioned wrapper (confirmed
+                    // live: the wrapper measured 24px tall against the button's own 20px, and the
+                    // button's real top landed 4px below where `top: 2` alone would place it).
+                    style={{
+                      position: "absolute",
+                      top: 2,
+                      right: 2,
+                      display: "flex",
+                    }}
+                  >
+                    <IconButton
+                      // `react-icons/fa6`'s `FaTrashCan` — a real SVG rendering of the same Font
+                      // Awesome 6 "trash can" glyph the rest of the app uses via the `fa`/`fas` CSS
+                      // classes (this project's own `@fortawesome/fontawesome-free` is v6.2.1, so
+                      // this is the matching icon set, keeping the visual language consistent), not
+                      // the CSS-class `<i>` version. Two separate problems ruled that CSS-class
+                      // version out here: (1) `fa-trash` at this button's 20px size renders at a
+                      // ~10.7px font size where its fine detail (lid, body grating lines) blurs
+                      // together under anti-aliasing into a solid colored block rather than a
+                      // recognizable shape (confirmed live: an isolated 40px test render of the same
+                      // glyph looked correct, so this was a too-small-for-the-icon's-detail problem,
+                      // not a broken font); (2) even the simpler `fa-times` glyph still rendered
+                      // visibly off-center toward the top-left despite `getBoundingClientRect`
+                      // reporting the `<i>` element's own box as centered — Font Awesome (like most
+                      // icon fonts) positions glyphs relative to the font's em-box/baseline, not
+                      // relative to the glyph's own visible ink, so a geometrically-centered box can
+                      // still look visually uncentered. `react-icons`' SVG has neither problem: its
+                      // `viewBox` is defined directly against the visible shape (so centering the
+                      // element centers what's actually drawn), and being a real vector shape rather
+                      // than a font glyph, its fine detail stays crisp at small sizes instead of
+                      // anti-aliasing into mush.
+                      // Bigger on touch (no `:hover` to reveal it gradually there, and a real
+                      // finger needs a bigger target than a mouse cursor does) — direct feedback:
+                      // 20px was too small to reliably tap on mobile Firefox.
+                      icon={<FaTrashCan size={supportsHover ? 11 : 16} />}
+                      size={supportsHover ? 20 : 30}
+                      title={t("common.delete") ?? undefined}
+                      onClick={() => setPendingDelete(page)}
+                      style={{
+                        borderRadius: "50%",
+                        background: "rgba(0,0,0,0.55)",
+                        color: "#e74c3c",
+                        border: "none",
+                        padding: "0.5px 0 0 1px",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      fontSize: FONT_SIZE_SM,
+                      marginTop: 2,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={filename ?? undefined}
+                  >
+                    {t("bookmarks.pageLabel", { page })}
+                    {filename ? ` · ${filename}` : ""}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
         </div>
-      </div>
-      {pendingDelete !== null &&
-        createPortal(
-          // `Confirm` itself hardcodes `Z_OVERLAY_BACKDROP`/`Z_OVERLAY_CONTENT` (1000/1001) — well
-          // below this grid's own `Z_OVERLAY_TOOLTIP` (1100), since `Confirm` is a general-purpose
-          // component with no idea it might ever need to out-rank a tooltip-layer popup it's
-          // opened from. `zIndex` only wins a stacking fight within the same stacking context, so
-          // a plain wrapper div `position: relative` + a `zIndex` above `Z_OVERLAY_TOOLTIP`
-          // establishes a new one that contains `Confirm`'s own fixed-positioned children,
-          // lifting the whole dialog (backdrop included) above the grid without needing to change
-          // `Confirm` itself (which stays correct for its other, non-tooltip callers).
-          <div style={{ position: "relative", zIndex: Z_OVERLAY_TOOLTIP + 1 }}>
-            <Confirm
-              danger
-              message={t("bookmarks.confirmRemoveBookmark", { page: pendingDelete, title: archiveTitle })}
-              confirmLabel={t("common.delete") ?? undefined}
-              onCancel={() => setPendingDelete(null)}
-              onConfirm={() => {
-                // `onClose()` fires from `mutate`'s own `onSuccess`, not right here — closing the
-                // grid unmounts this whole component tree (including `removeBookmark` itself), so
-                // firing that unmount in the same tick as `mutate()` risks racing the actual
-                // network request on a slow enough device. Waiting for `onSuccess` guarantees the
-                // request actually completed first. (This was a real hypothesis for a reported
-                // mobile-Firefox failure, not a confirmed root cause — the server access log
-                // showed zero DELETE requests ever arriving from that device at all, which this
-                // fix alone doesn't explain; see the investigation for what's still open.)
-                removeBookmark.mutate(
-                  { archiveId, page: pendingDelete },
-                  {
-                    onSuccess: () => {
-                      toast({
-                        heading: t("bookmarks.bookmarkRemoved", { page: pendingDelete, title: archiveTitle }) ?? undefined,
-                        icon: "success",
-                      })
-                      // Closes the whole preview, not just the confirm dialog — deleting a
-                      // bookmark invalidates the `["bookmarks"]` query, which on `/bookmarks`
-                      // itself re-sorts the archive list, very possibly moving this very card to a
-                      // different position. `anchorRect` is a one-time snapshot of where the cover
-                      // *was* when this grid first opened, so it doesn't track the card's new
-                      // position — leaving the grid open would keep it floating disconnected from
-                      // anything once the list re-renders around it.
-                      onClose()
+        {pendingDelete !== null &&
+          createPortal(
+            // `Confirm` itself hardcodes `Z_OVERLAY_BACKDROP`/`Z_OVERLAY_CONTENT` (1000/1001) — well
+            // below this grid's own `Z_OVERLAY_TOOLTIP` (1100), since `Confirm` is a general-purpose
+            // component with no idea it might ever need to out-rank a tooltip-layer popup it's
+            // opened from. `zIndex` only wins a stacking fight within the same stacking context, so
+            // a plain wrapper div `position: relative` + a `zIndex` above `Z_OVERLAY_TOOLTIP`
+            // establishes a new one that contains `Confirm`'s own fixed-positioned children,
+            // lifting the whole dialog (backdrop included) above the grid without needing to change
+            // `Confirm` itself (which stays correct for its other, non-tooltip callers).
+            <div
+              style={{ position: "relative", zIndex: Z_OVERLAY_TOOLTIP + 1 }}
+            >
+              <Confirm
+                danger
+                message={t("bookmarks.confirmRemoveBookmark", {
+                  page: pendingDelete,
+                  title: archiveTitle,
+                })}
+                confirmLabel={t("common.delete") ?? undefined}
+                onCancel={() => setPendingDelete(null)}
+                onConfirm={() => {
+                  // `onClose()` fires from `mutate`'s own `onSuccess`, not right here — closing the
+                  // grid unmounts this whole component tree (including `removeBookmark` itself), so
+                  // firing that unmount in the same tick as `mutate()` risks racing the actual
+                  // network request on a slow enough device. Waiting for `onSuccess` guarantees the
+                  // request actually completed first. (This was a real hypothesis for a reported
+                  // mobile-Firefox failure, not a confirmed root cause — the server access log
+                  // showed zero DELETE requests ever arriving from that device at all, which this
+                  // fix alone doesn't explain; see the investigation for what's still open.)
+                  removeBookmark.mutate(
+                    { archiveId, page: pendingDelete },
+                    {
+                      onSuccess: () => {
+                        toast({
+                          heading:
+                            t("bookmarks.bookmarkRemoved", {
+                              page: pendingDelete,
+                              title: archiveTitle,
+                            }) ?? undefined,
+                          icon: "success",
+                        });
+                        // Closes the whole preview, not just the confirm dialog — deleting a
+                        // bookmark invalidates the `["bookmarks"]` query, which on `/bookmarks`
+                        // itself re-sorts the archive list, very possibly moving this very card to a
+                        // different position. `anchorRect` is a one-time snapshot of where the cover
+                        // *was* when this grid first opened, so it doesn't track the card's new
+                        // position — leaving the grid open would keep it floating disconnected from
+                        // anything once the list re-renders around it.
+                        onClose();
+                      },
+                      // `text: String(err)` — same "surface the real server-reported reason, not
+                      // just a generic failure label" pattern `AiSmartTankoubonModal.tsx`'s own
+                      // `catch` blocks use. `ApiError`'s own `message` is the response body's error
+                      // text (`readErrorBody`, `api/client.ts`), so `String(err)` on it reads as
+                      // that real reason rather than `"[object Object]"` or similar.
+                      onError: (err) => {
+                        toast({
+                          heading:
+                            t("bookmarks.errorRemovingBookmark") ?? undefined,
+                          text: String(err),
+                          icon: "error",
+                        });
+                      },
                     },
-                    // `text: String(err)` — same "surface the real server-reported reason, not
-                    // just a generic failure label" pattern `AiSmartTankoubonModal.tsx`'s own
-                    // `catch` blocks use. `ApiError`'s own `message` is the response body's error
-                    // text (`readErrorBody`, `api/client.ts`), so `String(err)` on it reads as
-                    // that real reason rather than `"[object Object]"` or similar.
-                    onError: (err) => {
-                      toast({
-                        heading: t("bookmarks.errorRemovingBookmark") ?? undefined,
-                        text: String(err),
-                        icon: "error",
-                      })
-                    },
-                  },
-                )
-                setPendingDelete(null)
-              }}
-            />
-          </div>,
-          document.body,
-        )}
+                  );
+                  setPendingDelete(null);
+                }}
+              />
+            </div>,
+            document.body,
+          )}
       </div>
     </>,
     document.body,
-  )
+  );
 }

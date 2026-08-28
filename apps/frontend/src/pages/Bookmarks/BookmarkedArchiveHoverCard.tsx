@@ -1,12 +1,12 @@
-import type { MouseEvent } from "react"
-import { useRef, useState } from "react"
+import type { MouseEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { ArchiveMetadata, BookmarkedArchiveResponse } from "@/api/types"
-import { useBookmarkHoverStore } from "@/bookmarkHoverStore"
-import { useSupportsHover } from "@/hooks/useSupportsHover"
-import { CarouselCard } from "@/pages/Library/CarouselCard"
+import type { ArchiveMetadata, BookmarkedArchiveResponse } from "@/api/types";
+import { useBookmarkHoverStore } from "@/bookmarkHoverStore";
+import { useSupportsHover } from "@/hooks/useSupportsHover";
+import { CarouselCard } from "@/pages/Library/CarouselCard";
 
-import { BookmarkHoverGrid } from "./BookmarkHoverGrid"
+import { BookmarkHoverGrid } from "./BookmarkHoverGrid";
 
 /** Wraps `CarouselCard` with the bookmark hover-grid preview — kept out of `CarouselCard`/
  * `ArchiveCard` themselves (both reused everywhere across the app: Library grid, compact table,
@@ -35,9 +35,23 @@ import { BookmarkHoverGrid } from "./BookmarkHoverGrid"
  * equivalent on touch to close a previously-opened preview, so tapping a second card's cover
  * without a shared mutex would leave the first card's `BookmarkHoverGrid` open forever, stacking
  * multiple overlays. `open`ing this archive implicitly closes whichever one was open before (the
- * store only ever tracks one at a time). On a hover-capable device none of this global-store logic
- * runs at all — `hoverRect`/`onMouseEnter`/`onMouseLeave` are unchanged from before this store
- * existed. */
+ * store only ever tracks one at a time).
+ *
+ * On a hover-capable device, `hoverRect`/`onMouseEnter`/`onMouseLeave` decide visibility the same
+ * as before, plus a scroll-driven re-anchor/close: `RecentlyAddedCarousel`'s horizontal strip can
+ * scroll (Lenis) while the cursor stays put, which real `mouseleave` doesn't fire for (the DOM
+ * element under a stationary cursor doesn't change just because it moved via `scrollLeft`), so a
+ * `hoverRect` captured once at `mouseenter` used to keep the preview floating in its original
+ * screen position long after the actual thumbnail had scrolled out from underneath it — reported
+ * live, 2026-08-28. Fixed by listening for the nearest `[data-scroll-container]` ancestor's own
+ * native `scroll` event (Lenis drives real `scrollLeft` on that element, so it fires normally) and,
+ * on each tick, re-measuring the anchor (`.id3`) against the last-known cursor position
+ * (`lastMouseRef`, updated on every `mouseenter`/`mousemove` over this card, deliberately a plain
+ * ref rather than state so mouse movement alone never triggers a render): still under the cursor →
+ * re-anchor the preview to the thumbnail's new position; no longer under it → close. This
+ * intentionally does *not* close unconditionally on every scroll tick — only once the cursor is
+ * actually no longer over the thumbnail, matching what a real `mouseleave` would do if the browser
+ * fired one for a scroll-driven move (the feature's own stated requirement). */
 export function BookmarkedArchiveHoverCard({
   entry,
   cropThumbs,
@@ -46,55 +60,94 @@ export function BookmarkedArchiveHoverCard({
   onSearchTag,
   onWheelPassthrough,
 }: {
-  entry: BookmarkedArchiveResponse
-  cropThumbs: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
-  onOpen: (id: string) => void
-  onSearchTag?: (namespacedTag: string) => void
+  entry: BookmarkedArchiveResponse;
+  cropThumbs: boolean;
+  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void;
+  onOpen: (id: string) => void;
+  onSearchTag?: (namespacedTag: string) => void;
   /** Passed straight through to `BookmarkHoverGrid`'s own prop of the same name — see its docs
    * there. Only `RecentlyAddedCarousel`'s bookmark-mode call site provides this. */
-  onWheelPassthrough?: (deltaX: number, deltaY: number) => void
+  onWheelPassthrough?: (deltaX: number, deltaY: number) => void;
 }) {
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  const [hoverRect, setHoverRect] = useState<DOMRect | null>(null)
-  const supportsHover = useSupportsHover()
-  const openArchiveId = useBookmarkHoverStore((s) => s.openArchiveId)
-  const openInStore = useBookmarkHoverStore((s) => s.open)
-  const closeInStore = useBookmarkHoverStore((s) => s.close)
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [hoverRect, setHoverRect] = useState<DOMRect | null>(null);
+  const supportsHover = useSupportsHover();
+  const openArchiveId = useBookmarkHoverStore((s) => s.openArchiveId);
+  const openInStore = useBookmarkHoverStore((s) => s.open);
+  const closeInStore = useBookmarkHoverStore((s) => s.close);
+  // Last-known cursor position while hovering this card, refreshed on every `mouseenter`/
+  // `mousemove` — read (not subscribed to) by the scroll-driven re-anchor/close check below, so
+  // moving the mouse itself never triggers a re-render on its own (a plain ref, not state).
+  const lastMouseRef = useRef<{ x: number; y: number } | null>(null);
 
-  function handleMouseEnter() {
-    if (!supportsHover) return
-    const cover = wrapperRef.current?.querySelector<HTMLElement>(".id3")
-    if (cover) setHoverRect(cover.getBoundingClientRect())
+  function handleMouseEnter(e: MouseEvent) {
+    if (!supportsHover) return;
+    lastMouseRef.current = { x: e.clientX, y: e.clientY };
+    const cover = wrapperRef.current?.querySelector<HTMLElement>(".id3");
+    if (cover) setHoverRect(cover.getBoundingClientRect());
   }
 
   function handleClickCapture(e: MouseEvent) {
-    if (supportsHover) return
-    if (!(e.target as HTMLElement).closest(".id3")) return
-    e.preventDefault()
-    e.stopPropagation()
-    const cover = wrapperRef.current?.querySelector<HTMLElement>(".id3")
+    if (supportsHover) return;
+    if (!(e.target as HTMLElement).closest(".id3")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cover = wrapperRef.current?.querySelector<HTMLElement>(".id3");
     if (openArchiveId === entry.archive.arcid) {
-      closeInStore()
+      closeInStore();
     } else if (cover) {
-      setHoverRect(cover.getBoundingClientRect())
-      openInStore(entry.archive.arcid)
+      setHoverRect(cover.getBoundingClientRect());
+      openInStore(entry.archive.arcid);
     }
   }
 
-  // On a hover-capable device, `hoverRect` alone decides visibility (original behavior,
-  // untouched). On touch, the global store's `openArchiveId` is the actual source of truth — a
-  // tap elsewhere closing this card's preview (via `closeInStore()`, e.g. from
-  // `BookmarkHoverGrid`'s own outside-click handler) needs to hide it even though this
-  // component's own `hoverRect` state hasn't been cleared.
-  const visible = hoverRect !== null && (supportsHover || openArchiveId === entry.archive.arcid)
+  // Re-anchors (still under the cursor) or closes (cursor no longer over the thumbnail) whenever
+  // the nearest scrollable ancestor actually scrolls — see this component's own top-level docs for
+  // why `mouseleave` alone can't catch a scroll-driven move. Only wired up on a hover-capable
+  // device with a currently-open preview; a `{ passive: true }` listener on the scroll container
+  // itself, not `window` — cheaper (only fires for scrolls that could plausibly affect this card)
+  // and correct even if this card is nested inside more than one scrollable ancestor (`closest`
+  // finds the nearest one, which is what's actually moving the thumbnail).
+  useEffect(() => {
+    if (!supportsHover || hoverRect === null) return;
+    const scrollParent = wrapperRef.current?.closest<HTMLElement>(
+      "[data-scroll-container]",
+    );
+    const cover = wrapperRef.current?.querySelector<HTMLElement>(".id3");
+    if (!scrollParent || !cover) return;
+    function handleScroll() {
+      const mouse = lastMouseRef.current;
+      if (!mouse || !cover) return;
+      const rect = cover.getBoundingClientRect();
+      const stillOver =
+        mouse.x >= rect.left &&
+        mouse.x <= rect.right &&
+        mouse.y >= rect.top &&
+        mouse.y <= rect.bottom;
+      if (stillOver) {
+        setHoverRect(rect);
+      } else {
+        setHoverRect(null);
+      }
+    }
+    scrollParent.addEventListener("scroll", handleScroll, { passive: true });
+    return () => scrollParent.removeEventListener("scroll", handleScroll);
+  }, [supportsHover, hoverRect]);
+
+  const visible =
+    hoverRect !== null &&
+    (supportsHover || openArchiveId === entry.archive.arcid);
 
   return (
     <div
       ref={wrapperRef}
       onMouseEnter={handleMouseEnter}
+      onMouseMove={(e) => {
+        if (supportsHover)
+          lastMouseRef.current = { x: e.clientX, y: e.clientY };
+      }}
       onMouseLeave={() => {
-        if (supportsHover) setHoverRect(null)
+        if (supportsHover) setHoverRect(null);
       }}
       onClickCapture={handleClickCapture}
     >
@@ -112,12 +165,12 @@ export function BookmarkedArchiveHoverCard({
           archiveTitle={entry.archive.title}
           pages={entry.pages}
           onClose={() => {
-            setHoverRect(null)
-            if (!supportsHover) closeInStore()
+            setHoverRect(null);
+            if (!supportsHover) closeInStore();
           }}
           onWheelPassthrough={onWheelPassthrough}
         />
       )}
     </div>
-  )
+  );
 }

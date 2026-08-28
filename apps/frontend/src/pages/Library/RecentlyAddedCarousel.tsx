@@ -1,22 +1,25 @@
-import { useQuery } from "@tanstack/react-query"
-import Lenis from "lenis"
-import type { MouseEvent } from "react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useTranslation } from "react-i18next"
+import { useQuery } from "@tanstack/react-query";
+import Lenis from "lenis";
+import type { MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import { fetchJson } from "@/api/client"
-import { useInfiniteBookmarks } from "@/api/hooks"
-import type { ArchiveMetadata, SearchResponse } from "@/api/types"
-import { PopupMenu, PopupMenuItem, SortableList } from "@/components/common-ui/Display"
-import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
-import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys"
-import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard"
-import { Z_OVERLAY_CONTENT } from "@/theme"
+import { fetchJson } from "@/api/client";
+import { useInfiniteBookmarks } from "@/api/hooks";
+import type { ArchiveMetadata, SearchResponse } from "@/api/types";
+import {
+  PopupMenu,
+  PopupMenuItem,
+  SortableList,
+} from "@/components/common-ui/Display";
+import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants";
+import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys";
+import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard";
+import { Z_OVERLAY_CONTENT } from "@/theme";
 
-import { CarouselCard } from "./CarouselCard"
-import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent"
-import { type CarouselMode } from "./types"
-
+import { CarouselCard } from "./CarouselCard";
+import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
+import { type CarouselMode } from "./types";
 
 export function RecentlyAddedCarousel({
   filter,
@@ -38,51 +41,60 @@ export function RecentlyAddedCarousel({
   canMerge,
   onSearchTag,
 }: {
-  filter: string
-  category: string
-  hideCompleted: boolean
-  groupbyTanks: boolean
-  cropThumbs: boolean
+  filter: string;
+  category: string;
+  hideCompleted: boolean;
+  groupbyTanks: boolean;
+  cropThumbs: boolean;
   /** 007-guest-restricted-access: gates the "Bookmarked" carousel mode — an unauthenticated guest
    * has no personal bookmarks (bookmarking itself is a write action guest_visitor's Casbin policy
    * already denies), so offering a mode whose own `GET /bookmarks` call would just come back
    * empty is a confusing dead end rather than a real feature, even though that GET itself is
    * technically reachable by a guest. */
-  loggedIn: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata, source: "carousel") => void
-  onOpen: (id: string) => void
-  multiSelect: boolean
-  selectedIds: string[]
-  onToggleSelected: (id: string) => void
+  loggedIn: boolean;
+  onContextMenu: (
+    e: MouseEvent,
+    archive: ArchiveMetadata,
+    source: "carousel",
+  ) => void;
+  onOpen: (id: string) => void;
+  multiSelect: boolean;
+  selectedIds: string[];
+  onToggleSelected: (id: string) => void;
   /** Drag-to-reorder in the selection list below — additive (legacy has no such capability at
    * all, its own selection list is a plain unordered `Set`). The new order becomes the merged
    * Tankoubon's own volume order (`archives`, itself order-significant) when `onMerge` folds the
    * selection into one, rather than whatever arbitrary order clicking each archive happened in. */
-  onReorderSelection: (newOrder: string[]) => void
-  onSelectPage: () => void
-  onClearSelection: () => void
-  onRunBatch: () => void
-  onMerge: () => void
-  canMerge: boolean
-  onSearchTag: (namespacedTag: string) => void
+  onReorderSelection: (newOrder: string[]) => void;
+  onSelectPage: () => void;
+  onClearSelection: () => void;
+  onRunBatch: () => void;
+  onMerge: () => void;
+  canMerge: boolean;
+  onSearchTag: (namespacedTag: string) => void;
 }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(() => localStorage.getItem(CAROUSEL_OPEN_KEY) === "1")
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(
+    () => localStorage.getItem(CAROUSEL_OPEN_KEY) === "1",
+  );
   const [storedMode, setMode] = useState<CarouselMode>(
-    () => (localStorage.getItem(CAROUSEL_TYPE_KEY) as CarouselMode | null) ?? "ondeck",
-  )
+    () =>
+      (localStorage.getItem(CAROUSEL_TYPE_KEY) as CarouselMode | null) ??
+      "ondeck",
+  );
   // A logged-out guest previously left in "Bookmarked" mode (the localStorage value from a
   // prior, authenticated session) falls back to "On Deck" rather than rendering an empty
   // "Bookmarked" carousel with no way to explain why — the persisted preference itself is left
   // alone so it resumes once the same browser logs back in.
-  const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode
-  const [menuOpen, setMenuOpen] = useState(false)
-  const carouselRef = useRef<HTMLDivElement>(null)
-  const lenisRef = useRef<Lenis | null>(null)
+  const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const lenisRef = useRef<Lenis | null>(null);
   const stepSlide = useCallback(() => {
-    const firstChild = carouselRef.current?.firstElementChild as HTMLElement | null
-    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236 // 228 + 8 gap
-  }, [])
+    const firstChild = carouselRef.current
+      ?.firstElementChild as HTMLElement | null;
+    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236; // 228 + 8 gap
+  }, []);
   // Drives the carousel's own Lenis instance from a wheel gesture `BookmarkHoverGrid` decided not
   // to consume itself (see that component's `onWheelPassthrough` prop docs for the full three-way
   // dispatch this feeds). Deliberately *replays* the original event onto `carouselRef.current`
@@ -93,33 +105,44 @@ export function RecentlyAddedCarousel({
   // less smooth than scrolling the strip directly (confirmed live: passthrough scroll felt
   // noticeably different from the carousel's own native wheel handling). Replaying the real event
   // instead means Lenis processes it exactly as if the wheel had been over the strip itself.
-  const handleBookmarkWheelPassthrough = useCallback((deltaX: number, deltaY: number) => {
-    const el = carouselRef.current
-    if (!el) return
-    el.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaY, deltaMode: 0, bubbles: true, cancelable: true }))
-  }, [])
+  const handleBookmarkWheelPassthrough = useCallback(
+    (deltaX: number, deltaY: number) => {
+      const el = carouselRef.current;
+      if (!el) return;
+      el.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX,
+          deltaY,
+          deltaMode: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
-    localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0")
-  }, [open])
+    localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0");
+  }, [open]);
 
   // The mode-switch "..." dropdown is its own local overlay (not the page-level
   // `contextMenu`/`categoryOverflowOpen` state Escape already clears in the parent), so it needs
   // its own listener to close on Escape too.
   useEffect(() => {
-    if (!menuOpen) return
+    if (!menuOpen) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuOpen(false)
+      if (e.key === "Escape") setMenuOpen(false);
     }
-    document.addEventListener("keydown", onKeyDown)
-    return () => document.removeEventListener("keydown", onKeyDown)
-  }, [menuOpen])
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [menuOpen]);
   useEffect(() => {
     // Persists `storedMode` (the real, user-chosen preference), not `mode` (its guest-aware
     // fallback) — a logged-out guest's "Bookmarked" preference from a prior session must survive
     // this render's fallback-to-"On Deck" and still be there once the same browser logs back in.
-    localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode)
-  }, [storedMode])
+    localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode);
+  }, [storedMode]);
 
   // Legacy's own `enterSelectionCarouselMode` (`index.js`) force-expands the carousel — entering
   // MSM with it collapsed would otherwise hide the very selection list the mode exists to show.
@@ -127,85 +150,103 @@ export function RecentlyAddedCarousel({
   // logic, not a sync-with-an-external-system concern — `open` itself still holds only the user's
   // own manually-toggled preference (that's what's persisted to `localStorage` above), unaffected
   // by MSM's temporary forced-expand.
-  const isOpen = open || multiSelect
+  const isOpen = open || multiSelect;
 
-  const params = new URLSearchParams()
-  if (filter) params.set("filter", filter)
-  const isBuiltinSelector = category === NEW_ONLY || category === UNTAGGED_ONLY
-  if (category && !isBuiltinSelector) params.set("category", category)
-  if (!groupbyTanks) params.set("groupby_tanks", "false")
-  if (hideCompleted) params.set("hidecompleted", "true")
-  if (category === NEW_ONLY) params.set("newonly", "true")
-  if (category === UNTAGGED_ONLY) params.set("untaggedonly", "true")
+  const params = new URLSearchParams();
+  if (filter) params.set("filter", filter);
+  const isBuiltinSelector = category === NEW_ONLY || category === UNTAGGED_ONLY;
+  if (category && !isBuiltinSelector) params.set("category", category);
+  if (!groupbyTanks) params.set("groupby_tanks", "false");
+  if (hideCompleted) params.set("hidecompleted", "true");
+  if (category === NEW_ONLY) params.set("newonly", "true");
+  if (category === UNTAGGED_ONLY) params.set("untaggedonly", "true");
 
-  const isRandom = mode === "random"
-  const isBookmarkMode = mode === "bookmark"
-  const modeParams = new URLSearchParams(params)
-  let path: string
+  const isRandom = mode === "random";
+  const isBookmarkMode = mode === "bookmark";
+  const modeParams = new URLSearchParams(params);
+  let path: string;
   switch (mode) {
     case "random":
-      modeParams.set("count", "15")
-      path = `/search/random?${modeParams.toString()}`
-      break
+      modeParams.set("count", "15");
+      path = `/search/random?${modeParams.toString()}`;
+      break;
     case "inbox":
-      modeParams.set("newonly", "true")
-      modeParams.set("sortby", "date_added")
-      modeParams.set("order", "desc")
-      modeParams.set("start", "-1")
-      path = `/search?${modeParams.toString()}`
-      break
+      modeParams.set("newonly", "true");
+      modeParams.set("sortby", "date_added");
+      modeParams.set("order", "desc");
+      modeParams.set("start", "-1");
+      path = `/search?${modeParams.toString()}`;
+      break;
     case "untagged":
-      modeParams.set("untaggedonly", "true")
-      modeParams.set("sortby", "date_added")
-      modeParams.set("order", "desc")
-      modeParams.set("start", "-1")
-      path = `/search?${modeParams.toString()}`
-      break
+      modeParams.set("untaggedonly", "true");
+      modeParams.set("sortby", "date_added");
+      modeParams.set("order", "desc");
+      modeParams.set("start", "-1");
+      path = `/search?${modeParams.toString()}`;
+      break;
     case "bookmark":
       // Unused — `carouselQuery` below is disabled in this mode (`useInfiniteBookmarks()`
       // supplies `items` instead), but `path` still needs a value to satisfy the
       // `let path: string` declaration below.
-      path = ""
-      break
+      path = "";
+      break;
     default:
-      modeParams.set("sortby", "lastread")
-      modeParams.set("hidecompleted", "true")
-      path = `/search?${modeParams.toString()}`
-      break
+      modeParams.set("sortby", "lastread");
+      modeParams.set("hidecompleted", "true");
+      path = `/search?${modeParams.toString()}`;
+      break;
   }
 
   const carouselQuery = useQuery({
-    queryKey: isRandom ? ["search", "random", modeParams.toString()] : ["search", { filter, category, mode, hideCompleted, groupbyTanks }],
+    queryKey: isRandom
+      ? ["search", "random", modeParams.toString()]
+      : ["search", { filter, category, mode, hideCompleted, groupbyTanks }],
     queryFn: () => fetchJson<SearchResponse>(path),
     enabled: isOpen && !multiSelect && !isBookmarkMode,
-  })
+  });
   // Only the first page — this is a horizontal-scroll strip, not a "scroll to load more" list
   // (that's what the standalone `/bookmarks` page is for), so `fetchNextPage` is never called.
   // Fixed to the default `bookmarked_at` sort — sort switching is only offered on the standalone
   // page.
-  const bookmarksQuery = useInfiniteBookmarks("bookmarked_at")
-  const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? []
+  const bookmarksQuery = useInfiniteBookmarks("bookmarked_at");
+  const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? [];
   const items: ArchiveMetadata[] = useMemo(
     () =>
       isBookmarkMode
-        ? (bookmarksQuery.data?.pages[0]?.entries ?? []).map((entry) => entry.archive)
+        ? (bookmarksQuery.data?.pages[0]?.entries ?? []).map(
+            (entry) => entry.archive,
+          )
         : (carouselQuery.data?.data ?? []),
     [isBookmarkMode, bookmarksQuery.data, carouselQuery.data],
-  )
-  const loading = isBookmarkMode ? bookmarksQuery.isLoading : carouselQuery.isLoading
+  );
+  const loading = isBookmarkMode
+    ? bookmarksQuery.isLoading
+    : carouselQuery.isLoading;
 
-  // Lenis init with `items` guard — the carousel div only mounts when data arrives.
+  // Lenis init with `items` guard — the carousel div only mounts when data arrives. Lenis drives
+  // real `scrollLeft` on `el` (not a `transform`), so `el`'s own native `scroll` event still
+  // fires during a Lenis-driven scroll — `BookmarkedArchiveHoverCard`'s own `[data-scroll-container]`
+  // listener (see that component's docs) relies on exactly this to keep an open bookmark-hover
+  // preview correctly anchored/closed as the strip scrolls underneath a stationary cursor, with no
+  // Lenis-specific wiring needed here beyond the `data-scroll-container` attribute below.
   useEffect(() => {
-    const el = carouselRef.current
-    if (!el || lenisRef.current) return
+    const el = carouselRef.current;
+    if (!el || lenisRef.current) return;
     const lenis = new Lenis({
-      wrapper: el, content: el,
-      orientation: "horizontal", gestureOrientation: "both",
-      wheelMultiplier: 4.5, lerp: 0.1, autoRaf: true,
-    })
-    lenisRef.current = lenis
-    return () => { lenis.destroy(); lenisRef.current = null }
-  }, [items])
+      wrapper: el,
+      content: el,
+      orientation: "horizontal",
+      gestureOrientation: "both",
+      wheelMultiplier: 4.5,
+      lerp: 0.1,
+      autoRaf: true,
+    });
+    lenisRef.current = lenis;
+    return () => {
+      lenis.destroy();
+      lenisRef.current = null;
+    };
+  }, [items]);
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t("library.onDeck"),
@@ -213,7 +254,7 @@ export function RecentlyAddedCarousel({
     inbox: t("library.newArchives"),
     untagged: t("library.untaggedArchives"),
     bookmark: t("library.bookmarked"),
-  }
+  };
 
   return (
     <ul className="collapsible index-carousel with-right-caret">
@@ -224,7 +265,11 @@ export function RecentlyAddedCarousel({
           (no wrapper div) or that styling silently drops. */}
       <li
         className="option-flyout"
-        style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between" }}
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "space-between",
+        }}
       >
         {/* Matches legacy's real two-sibling split — `caret-right`'s CSS `::after` glyph paints
             at the end of whichever element carries the class, so keeping the refresh/more-options
@@ -233,16 +278,31 @@ export function RecentlyAddedCarousel({
         <div
           className={`collapsible-title caret-right${isOpen ? " active" : ""}`}
           onClick={() => setOpen((o) => !o)}
-          style={{ display: "flex", alignItems: "center", flex: "1 1 0", overflow: "hidden" }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flex: "1 1 0",
+            overflow: "hidden",
+          }}
         >
           {/* Legacy's `enterSelectionCarouselMode`/`exitSelectionCarouselMode` (`index.js`) swap
               this same header's icon/text in place rather than showing a second header — MSM is a
               *mode the carousel itself enters*, not a separate panel underneath it. */}
-          <i className={multiSelect ? "fas fa-check-square" : `fa ${CAROUSEL_ICON[mode]}`} aria-hidden="true"></i>
-          <div style={{ marginLeft: 8 }}>{multiSelect ? t("app.selection") : modeLabel[mode]}</div>
+          <i
+            className={
+              multiSelect ? "fas fa-check-square" : `fa ${CAROUSEL_ICON[mode]}`
+            }
+            aria-hidden="true"
+          ></i>
+          <div style={{ marginLeft: 8 }}>
+            {multiSelect ? t("app.selection") : modeLabel[mode]}
+          </div>
         </div>
         {isOpen && multiSelect && (
-          <div className="collapsible-right" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="collapsible-right"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Legacy's real 4-button MSM toolbar lives in this exact `.collapsible-right`
                 slot, replacing the refresh/more-options icons. `updateSelectionCount` hides
                 batch-ops/merge/clear at zero selected — only select-page stays visible. */}
@@ -258,8 +318,8 @@ export function RecentlyAddedCarousel({
                 style={{ marginLeft: 12 }}
                 title={t("library.runBatchOperationsOnSelection") ?? undefined}
                 onClick={(e) => {
-                  e.preventDefault()
-                  onRunBatch()
+                  e.preventDefault();
+                  onRunBatch();
                 }}
               ></a>
             )}
@@ -270,8 +330,8 @@ export function RecentlyAddedCarousel({
                 style={{ marginLeft: 12 }}
                 title={t("library.mergeArchivesIntoTankoubon") ?? undefined}
                 onClick={(e) => {
-                  e.preventDefault()
-                  onMerge()
+                  e.preventDefault();
+                  onMerge();
                 }}
               ></a>
             )}
@@ -282,8 +342,8 @@ export function RecentlyAddedCarousel({
                 style={{ marginLeft: 12 }}
                 title={t("library.clearSelection") ?? undefined}
                 onClick={(e) => {
-                  e.preventDefault()
-                  onClearSelection()
+                  e.preventDefault();
+                  onClearSelection();
                 }}
               ></a>
             )}
@@ -293,23 +353,26 @@ export function RecentlyAddedCarousel({
               style={{ marginLeft: 12 }}
               title={t("library.selectAllInPage") ?? undefined}
               onClick={(e) => {
-                e.preventDefault()
-                onSelectPage()
+                e.preventDefault();
+                onSelectPage();
               }}
             ></a>
           </div>
         )}
         {isOpen && !multiSelect && (
-          <div className="collapsible-right" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="collapsible-right"
+            onClick={(e) => e.stopPropagation()}
+          >
             <a
               href="#"
               className={`fa fa-2x fa-sync${loading ? " fa-spin" : ""}`}
               style={{ marginBottom: -4 }}
               title={t("library.refresh") ?? undefined}
               onClick={(e) => {
-                e.preventDefault()
-                if (isBookmarkMode) void bookmarksQuery.refetch()
-                else void carouselQuery.refetch()
+                e.preventDefault();
+                if (isBookmarkMode) void bookmarksQuery.refetch();
+                else void carouselQuery.refetch();
               }}
             ></a>
             <span style={{ position: "relative" }}>
@@ -319,8 +382,8 @@ export function RecentlyAddedCarousel({
                 style={{ marginBottom: -4, marginLeft: 12 }}
                 title={t("library.carouselMode") ?? undefined}
                 onClick={(e) => {
-                  e.preventDefault()
-                  setMenuOpen((m) => !m)
+                  e.preventDefault();
+                  setMenuOpen((m) => !m);
                 }}
               ></a>
               {menuOpen && (
@@ -329,22 +392,41 @@ export function RecentlyAddedCarousel({
                 // `document.body` would detach it from.
                 <PopupMenu
                   portal={false}
-                  style={{ position: "absolute", top: "100%", right: 0, zIndex: Z_OVERLAY_CONTENT }}
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    right: 0,
+                    zIndex: Z_OVERLAY_CONTENT,
+                  }}
                 >
-                  {(
-                    loggedIn
-                      ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
-                      : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
+                  {(loggedIn
+                    ? ([
+                        "ondeck",
+                        "random",
+                        "inbox",
+                        "untagged",
+                        "bookmark",
+                      ] as CarouselMode[])
+                    : ([
+                        "ondeck",
+                        "random",
+                        "inbox",
+                        "untagged",
+                      ] as CarouselMode[])
                   ).map((m) => (
                     <PopupMenuItem
                       key={m}
                       style={{ fontWeight: m === mode ? "bold" : undefined }}
                       onClick={() => {
-                        setMode(m)
-                        setMenuOpen(false)
+                        setMode(m);
+                        setMenuOpen(false);
                       }}
                     >
-                      <i className={`fa ${CAROUSEL_ICON[m]}`} aria-hidden="true"></i> {modeLabel[m]}
+                      <i
+                        className={`fa ${CAROUSEL_ICON[m]}`}
+                        aria-hidden="true"
+                      ></i>{" "}
+                      {modeLabel[m]}
                     </PopupMenuItem>
                   ))}
                 </PopupMenu>
@@ -359,7 +441,10 @@ export function RecentlyAddedCarousel({
           // `boxSizing: 'border-box'` matters here: `.option-flyout>.collapsible-body`'s real CSS
           // gives it `padding: 10px !important`, which under content-box sizing would add on top
           // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
-          <div className="collapsible-body" style={{ width: "100%", boxSizing: "border-box" }}>
+          <div
+            className="collapsible-body"
+            style={{ width: "100%", boxSizing: "border-box" }}
+          >
             {selectedIds.length === 0 ? (
               /* The empty state reuses the grid card's own DOM skeleton (`div.id1` > `id2` +
                  `id3` + `id4`, exactly `ArchiveCard`'s structure) instead of a hardcoded height —
@@ -372,11 +457,19 @@ export function RecentlyAddedCarousel({
                  live-confirmed panel-height jump on selecting the first archive. The hint text
                  sits centered inside the `id3` cover slot. */
               <div style={{ padding: "8px 0" }}>
-                <div className="id1" style={{ width: "100%", boxSizing: "border-box" }}>
+                <div
+                  className="id1"
+                  style={{ width: "100%", boxSizing: "border-box" }}
+                >
                   <div className="id2"></div>
                   <div
                     className="id3"
-                    style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
                   >
                     <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
                     <span style={{ marginTop: 12 }}>
@@ -411,13 +504,17 @@ export function RecentlyAddedCarousel({
                       className="carousel-slide"
                       style={{
                         marginRight: 8,
-                        cursor: dragHandleProps.isDragging ? "grabbing" : "grab",
+                        cursor: dragHandleProps.isDragging
+                          ? "grabbing"
+                          : "grab",
                       }}
                     >
                       <SelectedArchiveSlideContent
                         id={id}
                         cropThumbs={cropThumbs}
-                        onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                        onContextMenu={(e, archive) =>
+                          onContextMenu(e, archive, "carousel")
+                        }
                         onRemove={onToggleSelected}
                       />
                     </div>
@@ -429,30 +526,69 @@ export function RecentlyAddedCarousel({
         )}
         {isOpen && !multiSelect && (
           // Same `boxSizing: 'border-box'` reasoning as the MSM branch above.
-          <div className="collapsible-body" style={{ width: "100%", boxSizing: "border-box" }}>
+          <div
+            className="collapsible-body"
+            style={{ width: "100%", boxSizing: "border-box" }}
+          >
             {loading && items.length === 0 ? (
-              <div style={{ height: 344, display: "flex", justifyContent: "center", alignItems: "center" }}>
-                <i className="fa fa-stroopwafel fa-spin fa-4x" aria-hidden="true"></i>
+              <div
+                style={{
+                  height: 344,
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <i
+                  className="fa fa-stroopwafel fa-spin fa-4x"
+                  aria-hidden="true"
+                ></i>
               </div>
             ) : items.length === 0 ? (
-              <div style={{ height: 344, display: "flex", justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
+              <div
+                style={{
+                  height: 344,
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  flexDirection: "column",
+                }}
+              >
                 <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
-                <span style={{ marginTop: 12 }}>{t("library.noResultsHere")}</span>
+                <span style={{ marginTop: 12 }}>
+                  {t("library.noResultsHere")}
+                </span>
               </div>
             ) : (
               <div style={{ position: "relative" }}>
                 <div
                   ref={carouselRef}
                   className="hide-scrollbar"
-                  style={{ display: "flex", gap: 8, overflowX: "auto", overflowY: "hidden", padding: "8px 0" }}
+                  // `data-scroll-container` — a stable, purpose-declared hook `BookmarkedArchiveHoverCard`'s
+                  // own `closest()` scroll-re-anchor listener looks for (see that component's docs),
+                  // instead of coupling to `hide-scrollbar`/a specific className that's free to change
+                  // for purely visual reasons unrelated to "this is the element that actually scrolls."
+                  data-scroll-container
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    overflowX: "auto",
+                    overflowY: "hidden",
+                    padding: "8px 0",
+                  }}
                 >
                   {isBookmarkMode
                     ? bookmarkEntries.map((entry) => (
-                        <div key={entry.archive.arcid} className="carousel-slide">
+                        <div
+                          key={entry.archive.arcid}
+                          className="carousel-slide"
+                        >
                           <BookmarkedArchiveHoverCard
                             entry={entry}
                             cropThumbs={cropThumbs}
-                            onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                            onContextMenu={(e, archive) =>
+                              onContextMenu(e, archive, "carousel")
+                            }
                             onOpen={onOpen}
                             onSearchTag={onSearchTag}
                             onWheelPassthrough={handleBookmarkWheelPassthrough}
@@ -464,7 +600,9 @@ export function RecentlyAddedCarousel({
                           <CarouselCard
                             archive={a}
                             cropThumbs={cropThumbs}
-                            onContextMenu={(e, archive) => onContextMenu(e, archive, "carousel")}
+                            onContextMenu={(e, archive) =>
+                              onContextMenu(e, archive, "carousel")
+                            }
                             onOpen={onOpen}
                             onSearchTag={onSearchTag}
                           />
@@ -474,21 +612,33 @@ export function RecentlyAddedCarousel({
                 <a
                   href="#"
                   className="fa fa-3x fa-chevron-left carousel-prev"
-                  style={{ position: "absolute", left: 0, top: 136, cursor: "pointer", zIndex: 20 }}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 136,
+                    cursor: "pointer",
+                    zIndex: 20,
+                  }}
                   onClick={(e) => {
-                    e.preventDefault()
-                    const lenis = lenisRef.current
-                    if (lenis) lenis.scrollTo(lenis.targetScroll - stepSlide())
+                    e.preventDefault();
+                    const lenis = lenisRef.current;
+                    if (lenis) lenis.scrollTo(lenis.targetScroll - stepSlide());
                   }}
                 ></a>
                 <a
                   href="#"
                   className="fa fa-3x fa-chevron-right carousel-next"
-                  style={{ position: "absolute", right: 0, top: 136, cursor: "pointer", zIndex: 20 }}
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: 136,
+                    cursor: "pointer",
+                    zIndex: 20,
+                  }}
                   onClick={(e) => {
-                    e.preventDefault()
-                    const lenis = lenisRef.current
-                    if (lenis) lenis.scrollTo(lenis.targetScroll + stepSlide())
+                    e.preventDefault();
+                    const lenis = lenisRef.current;
+                    if (lenis) lenis.scrollTo(lenis.targetScroll + stepSlide());
                   }}
                 ></a>
               </div>
@@ -497,5 +647,5 @@ export function RecentlyAddedCarousel({
         )}
       </li>
     </ul>
-  )
+  );
 }

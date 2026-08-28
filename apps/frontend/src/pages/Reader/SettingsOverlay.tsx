@@ -2,11 +2,16 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Settings } from "@/api/types";
+import { RadioGroup, RadioItem } from "@/components/common-ui/Form/Radio";
 import { Switch } from "@/components/common-ui/Form/Switch";
-import type {
-  FitMode,
-  JScrollUnit,
-  ReaderSettings,
+import {
+  FIT_MODE,
+  type FitMode,
+  J_SCROLL_UNIT,
+  type JScrollUnit,
+  K_BEHAVIOR,
+  type KBehavior,
+  type ReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { ensureLink, FONT_SIZE_MD, FONT_SIZE_XS, removeLink } from "@/theme";
 
@@ -207,9 +212,9 @@ export function SettingsOverlay({
           <SettingSection title={t("reader.fitDisplayTo") ?? ""}>
             {(
               [
-                ["container", t("reader.container")],
-                ["fit-width", t("reader.width")],
-                ["fit-height", t("reader.height")],
+                [FIT_MODE.CONTAINER, t("reader.container")],
+                [FIT_MODE.FIT_WIDTH, t("reader.width")],
+                [FIT_MODE.FIT_HEIGHT, t("reader.height")],
               ] as [FitMode, string][]
             ).map(([mode, label]) => (
               <input
@@ -228,7 +233,7 @@ export function SettingsOverlay({
               (`isFitContainerMode`/`notInfiniteScroll` `computed()` signals, verified via
               `git show` against `Difegue/LANraragi@a373e339`, the current tip for that file) —
               this component previously rendered all of them unconditionally. */}
-          {settings.fitMode === "container" && (
+          {settings.fitMode === FIT_MODE.CONTAINER && (
             <SettingSection
               title={t("reader.containerWidthInPixelsOr") ?? ""}
               description={t("reader.theDefaultValueIs1200px") ?? undefined}
@@ -471,10 +476,10 @@ export function SettingsOverlay({
                 update({ jScrollUnit: e.target.value as JScrollUnit })
               }
             >
-              <option value="percent">
+              <option value={J_SCROLL_UNIT.PERCENT}>
                 {t("reader.percentOfViewportHeight")}
               </option>
-              <option value="px">{t("reader.pixels")}</option>
+              <option value={J_SCROLL_UNIT.PX}>{t("reader.pixels")}</option>
             </select>
             <input
               id="j-scroll-amount-input"
@@ -508,6 +513,57 @@ export function SettingsOverlay({
                 });
               }}
             />
+          </SettingSection>
+
+          {/* Applies to `k` in both infinite-scroll mode (`goToInfiniteScrollPage`'s own
+              `scrollIntoView` target) and ordinary paged mode (`goTo`'s own `window.scrollTo` —
+              see that function's own docs for the non-scroll-mode "bottom" interpretation:
+              scrolls to the newly-turned-to page's own full document height). Not conditional on
+              `infiniteScroll` — both modes have a real "where did k land me" answer this setting
+              configures, confirmed live 2026-08-28 after this section was found hidden while
+              testing it in ordinary mode. */}
+          <SettingSection title={t("reader.kKeyBehavior") ?? ""}>
+            {/* `fontSize: FONT_SIZE_MD` — this overlay's `<body>`-inherited default (~10.7px, this
+                page's real legacy base font size) read visibly smaller/blurrier next to every
+                other control's own text here (`.favtag-btn`/section titles both real-render at
+                ~13.3px) — confirmed live via `getComputedStyle`, 2026-08-28. `RadioItem` itself
+                intentionally has no opinion on font size (matching `Checkbox`/`Switch`'s own
+                context-inherits-from-caller design), so this is set at the call site, not baked
+                into the shared component. */}
+            <RadioGroup<KBehavior>
+              value={settings.kBehavior}
+              onValueChange={(v) => update({ kBehavior: v })}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                fontSize: FONT_SIZE_MD,
+              }}
+            >
+              {/* `dangerouslySetInnerHTML`, not plain `{t(...)}` — these two translation strings
+                  embed a real `<b>` around "top"/"bottom" (same pattern as
+                  `TagsThumbnailsSection.tsx`'s own `<span dangerouslySetInnerHTML={{ __html:
+                  t("settings.btagTagB") }} />`), so the option a reader is actually choosing
+                  between reads distinctly at a glance rather than blending into the rest of each
+                  option's own explanatory text — requested live, 2026-08-28. Safe here the same
+                  way it's safe there: the string is a fixed translation-file literal, never
+                  interpolated with anything user-supplied. */}
+              <RadioItem value={K_BEHAVIOR.BACK_TOP}>
+                <span
+                  dangerouslySetInnerHTML={{ __html: t("reader.kBehaviorTop") }}
+                />
+              </RadioItem>
+              <RadioItem value={K_BEHAVIOR.BACK_BOTTOM}>
+                <span
+                  dangerouslySetInnerHTML={{
+                    __html: t("reader.kBehaviorBottom"),
+                  }}
+                />
+              </RadioItem>
+              <RadioItem value={K_BEHAVIOR.BACK}>
+                {t("reader.kBehaviorDefault")}
+              </RadioItem>
+            </RadioGroup>
           </SettingSection>
 
           {loggedIn && !settings.infiniteScroll && (

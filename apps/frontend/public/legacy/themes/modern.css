@@ -943,3 +943,39 @@ div.id4 {
 .lrr-switch[data-checked] {
   color: #3b97ea;
 }
+
+/* Additive — no legacy equivalent (legacy has no reusable "form control background" concept of
+   its own to stay diffable against; this is a new class for a concept legacy doesn't have,
+   appended rather than modifying anything legacy actually wrote). Backs `common-ui/Form/
+   Checkbox.tsx`/`Radio.tsx`, both previously fully transparent (`bg-transparent`) — reported live,
+   2026-08-28, as blending into the page background on some themes. Neutral mid-gray, not an
+   accent color — the accent-color and white/near-white attempts before it both failed live
+   verification because this class's border/checkmark stay `currentColor` (this theme's own body
+   text color, #DDDDDD, a light gray), and a white/near-white background would put that light
+   currentColor right back on top of a background of nearly the same lightness. A fixed neutral
+   gray, tuned per-theme to sit roughly opposite this theme's own body text lightness, guarantees
+   contrast against currentColor regardless of whether that text color is itself light or dark. */
+.common-form-control-bg {
+  background: #55585F;
+}
+
+/* Checked-state override — plain class-selector specificity ties with Tailwind's own
+   `data-checked:bg-[...]` utility (both are one class-level selector), and this theme file's
+   `<link>` loads after the bundled Tailwind stylesheet, so without this the theme rule above always
+   won on source order alone regardless of `data-checked`. `[data-checked]` attribute selector adds
+   real specificity so this rule wins unconditionally. */
+.common-form-control-bg[data-checked] {
+  background: #1a73e8;
+  color: #fff;
+}
+
+/* Additive — no legacy equivalent. Sets `Select.tsx`'s own `--select-item-bg` custom property
+   (see that file's own docs on why a background can't just be a plain inline style there) so a
+   `common-ui/Form/Select` popup item can be marked "this option is special" the same way
+   `.tankoubon-member-row` already marks a checklist row — reuses that exact same color rather
+   than inventing a new one, for visual consistency between the two "this thing is guest-visible /
+   a tankoubon member" highlight concepts. First use: Categories.tsx's category picker marking
+   guest-visible categories. */
+.select-item-guest-visible {
+  --select-item-bg: rgba(59, 151, 234, 0.2);
+}

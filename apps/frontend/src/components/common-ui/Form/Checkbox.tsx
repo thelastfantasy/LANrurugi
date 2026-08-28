@@ -1,6 +1,6 @@
-import { Checkbox as BaseCheckbox } from "@base-ui/react/checkbox"
-import type { ComponentProps } from "react"
-import { FaCheck } from "react-icons/fa6"
+import { Checkbox as BaseCheckbox } from "@base-ui/react/checkbox";
+import type { ComponentProps } from "react";
+import { FaCheck } from "react-icons/fa6";
 
 /** Site-wide checkbox, built on Base UI's `Checkbox` rather than a native `<input
  * type="checkbox">` — legacy's own real checkboxes (e.g. Categories.tsx's `pinned` field, `<input
@@ -17,7 +17,13 @@ import { FaCheck } from "react-icons/fa6"
  *
  * `...rootProps` forwards the rest of `Checkbox.Root`'s own real props (`disabled`, `name`,
  * `required`, `readOnly`, `form`, `value`/`uncheckedValue`, `inputRef`, ...) straight through —
- * same "wrap, don't narrow" shape as this directory's other components. */
+ * same "wrap, don't narrow" shape as this directory's other components.
+ *
+ * `common-form-control-bg` (one rule per theme file, see `public/legacy/themes/*.css`, each
+ * reusing that theme's own `.stdinput` background color) is a deliberate deviation from the
+ * `bg-transparent` an earlier version of this component matched legacy's real unstyled checkbox
+ * with — a fully transparent box blended into the page background on some themes, reported live,
+ * 2026-08-28. Same class shared with `Radio.tsx`'s own indicator for the same reason. */
 export function Checkbox({
   checked,
   onCheckedChange,
@@ -30,12 +36,15 @@ export function Checkbox({
     <BaseCheckbox.Root
       checked={checked}
       onCheckedChange={onCheckedChange}
-      className="inline-flex size-[13px] shrink-0 cursor-pointer items-center justify-center border border-solid border-current bg-transparent p-0 align-middle outline-none"
+      className="common-form-control-bg relative inline-flex size-[13px] shrink-0 -translate-y-[2px] cursor-pointer items-center justify-center border border-solid border-current p-0 align-middle outline-none data-checked:border-[#1a73e8] data-checked:bg-[#1a73e8] data-checked:text-white"
       {...rootProps}
     >
-      <BaseCheckbox.Indicator className="flex items-center justify-center text-[11px] leading-none" keepMounted={false}>
+      <BaseCheckbox.Indicator
+        className="flex items-center justify-center text-[11px] leading-none"
+        keepMounted={false}
+      >
         <FaCheck aria-hidden="true" />
       </BaseCheckbox.Indicator>
     </BaseCheckbox.Root>
-  )
+  );
 }
