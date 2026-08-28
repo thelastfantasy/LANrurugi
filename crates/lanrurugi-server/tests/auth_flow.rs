@@ -628,7 +628,12 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     // *static* category to actually contain a real archive, not just carry the flag — an empty
     // `archives: Vec::new()` category (this test's own original shape) makes that check return
     // `false` and 401 an otherwise-eligible guest, confirmed live via real CI failure, 2026-08-28.
-    let archive_id = "1".repeat(40);
+    // `"9"` specifically — `settings_toggles.rs` (a separate OS process against the same real
+    // Redis under `cargo test --workspace`) already claims `"1"`-`"8"` for its own archive-id
+    // fixtures; reusing `"1"` here collided with its `in_scope_id` and caused a real, intermittent
+    // CI-only failure (this test's own `archives.delete` racing that other file's still-in-flight
+    // assertion against the same id), confirmed live via CI log inspection, 2026-08-28.
+    let archive_id = "9".repeat(40);
     let repos = lanrurugi_api::Repositories::new(&redis);
     repos
         .archives
