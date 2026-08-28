@@ -97,7 +97,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        # `--no-fail-fast` — without it, `cargo test --workspace` aborts the moment any single
+        # test binary reports a failure, silently skipping every crate still queued behind it
+        # (workspace members run in dependency order, not all at once). Confirmed live, 2026-08-28:
+        # a `lanrurugi-server` test failure cut a CI run off before `lanrurugi-storage`'s own tests
+        # ever ran at all, hiding whatever those results would have been. `mise run test`
+        # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
+        # documented there — this step had drifted out of sync with it.
+        run: cargo test --workspace --no-fail-fast
 
       - name: sccache stats
         if: always()

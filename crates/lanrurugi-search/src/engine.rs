@@ -88,6 +88,74 @@ const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 /// `Model/Search.pm::search_uncached` (`$progress / $pagecount > 0.85`), not a Phase-1 invention.
 const HIDE_COMPLETED_THRESHOLD: f64 = 0.85;
 
+/// A from-scratch existence check — "does at least one archive match this filter", not "give me
+/// the results" — for callers like `lanrurugi_api::search::guest_has_any_visible_archive` that
+/// only ever need a yes/no answer. Deliberately not built on top of [`search`] itself: `search`
+/// always pays for sorting (`sort_ids`) and the `total`/`filtered_count` bookkeeping regardless
+/// of how many results actually matter to the caller, none of which this function needs.
+///
+/// Still bound by the same AND-of-tokens semantics every multi-token query has — a query can only
+/// be confirmed non-empty once every token has been checked (or one token *empties* the candidate
+/// set early, the one real short-circuit an AND query admits). What this function *does* still
+/// save over `search`: it stops re-checking further tokens the instant the running candidate set
+/// empties out (same as `search`'s own `if filtered.is_empty() { break }`), and for the very last
+/// token it can stop as soon as a single match is found rather than collecting every match
+/// `token_matches` would otherwise return only to `retain`/discard the rest immediately after.
+/// Scoped to what guest eligibility actually needs — no `groupby_tanks`, `newonly`,
+/// `hidecompleted`, or `restrict_to_archive_ids`, all of which `search` supports but this
+/// deliberately doesn't (adding a filter kind here that never gets exercised is dead complexity,
+/// not future-proofing).
+pub async fn search_exists(
+    archive_pool: &Pool,
+    search_pool: &Pool,
+    filter: &str,
+    timezone: &str,
+) -> Result<bool> {
+    let mut archive_conn = archive_pool.get().await?;
+    let mut search_conn = search_pool.get().await?;
+
+    let tokens = compute_search_filter(filter);
+    if tokens.is_empty() {
+        // An empty filter matches everything — "does anything exist" reduces to "is the library
+        // non-empty at all", the one case this function doesn't otherwise have a fast path for.
+        let any: Vec<String> = archive_conn.keys(ARCHIVE_KEY_GLOB).await?;
+        return Ok(!any.is_empty());
+    }
+
+    let mut candidates: HashSet<String> = archive_conn
+        .keys::<_, Vec<String>>(ARCHIVE_KEY_GLOB)
+        .await?
+        .into_iter()
+        .collect();
+
+    for (i, token) in tokens.iter().enumerate() {
+        if candidates.is_empty() {
+            return Ok(false);
+        }
+        let ids = token_matches(
+            &mut archive_conn,
+            &mut search_conn,
+            token,
+            &candidates,
+            timezone,
+        )
+        .await?;
+        if token.isneg {
+            candidates.retain(|id| !ids.contains(id));
+        } else {
+            candidates.retain(|id| ids.contains(id));
+        }
+        // Last token — no further AND-narrowing left to apply, so a non-empty candidate set here
+        // is already the final answer. Earlier tokens can't take this shortcut: their own
+        // `ids`/negated-`ids` match set narrowing `candidates` down to non-empty doesn't yet prove
+        // the *remaining* tokens won't narrow it to nothing.
+        if i == tokens.len() - 1 {
+            return Ok(!candidates.is_empty());
+        }
+    }
+    Ok(!candidates.is_empty())
+}
+
 pub async fn search(
     archive_pool: &Pool,
     search_pool: &Pool,

@@ -376,6 +376,19 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         ))
         .await
         .unwrap();
+    // `ArchiveRepository::save` itself never touches the tag search index — only the real
+    // `PUT /archives/{id}/metadata` handler does (`archives.rs::update_archive_metadata`'s own
+    // `indexer::update_tag_indexes` call). A test that writes archives straight through the
+    // repository (as this one does, to control both ids precisely) must index them the same way
+    // by hand, or `filter=shared_tag` below has nothing to ever match — found live via a CI-only
+    // failure, 2026-08-28 (this test's `INDEX_shared_tag` set was never created at all; it had
+    // only ever passed locally by accident, riding on another test's leftover index in the same
+    // shared dev-container Redis).
+    for id in [&in_scope_id, &out_of_scope_id] {
+        lanrurugi_search::indexer::update_tag_indexes(&redis.search, id, "", "shared_tag")
+            .await
+            .unwrap();
+    }
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010002".to_string()),
         name: "Guest Visible".to_string(),

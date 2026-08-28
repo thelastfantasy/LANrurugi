@@ -1334,5 +1334,5 @@
   "pluginWizard.originLoadedFromExisting": "Existing plugin code",
   "pluginWizard.overrideSelected": "Override selected",
   "settings.guestMode": "Guest Mode",
-  "settings.evenWithThePasswordProtection": "Lets unauthenticated visitors browse categories you've marked as visible to guests, instead of requiring login for everything. Mark which categories are guest-visible on the Categories page."
+  "settings.evenWithThePasswordProtection": "Lets unauthenticated visitors browse categories you've marked as visible to guests, instead of requiring login for everything. Mark which categories are guest-visible on the Categories page. Even with this switch on, guest mode has no real effect until at least one category is marked guest-visible (zero accessible archives otherwise)."
 }

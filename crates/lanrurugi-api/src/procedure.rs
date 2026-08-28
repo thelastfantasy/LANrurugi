@@ -114,13 +114,19 @@ pub async fn require_api_key(
 
     // 007-guest-restricted-access, FR-005/FR-006: neither a valid token nor a valid session was
     // presented — the request is unauthenticated. It's still eligible for scoped guest access if
-    // the site-wide switch is on AND at least one category is guest-visible; otherwise this falls
-    // through to the same 401 the rest of this function has always returned for "nobody at all".
-    // Re-checked on every single request (never cached) — spec FR-015 requires a config change to
-    // take effect immediately, not only for new requests started after some cache window expires.
+    // the site-wide switch is on AND at least one archive is actually guest-visible; otherwise
+    // this falls through to the same 401 the rest of this function has always returned for
+    // "nobody at all". Checks real archive membership (`guest_has_any_visible_archive`), not
+    // merely "does some category carry the `visible_to_guest` flag" — an admin marking an empty
+    // (or, for a dynamic category, zero-match) category guest-visible grants nothing a real
+    // visitor could ever see, so treating that as "eligible" would let them past this gate only
+    // to find an entirely empty library, indistinguishable in effect from guest mode being off
+    // (found live, 2026-08-28). Re-checked on every single request (never cached) — spec FR-015
+    // requires a config change to take effect immediately, not only for new requests started
+    // after some cache window expires.
     if cfg.guest_mode_enabled {
-        match state.repos.categories.list_all().await {
-            Ok(categories) if categories.iter().any(|c| c.visible_to_guest) => {
+        match crate::search::guest_has_any_visible_archive(&state).await {
+            Ok(true) => {
                 let auth = AuthContext {
                     method: AuthMethod::GuestVisitor,
                     client_ip,
@@ -133,9 +139,9 @@ pub async fn require_api_key(
                 request.extensions_mut().insert(auth);
                 return next.run(request).await;
             }
-            Ok(_) => {} // guest mode on, but zero categories visible — fall through to 401
+            Ok(false) => {} // guest mode on, but zero archives actually visible — fall through to 401
             Err(e) => {
-                tracing::warn!(error = %e, "failed to check guest-visible categories");
+                tracing::warn!(error = %e, "failed to check guest-visible archives");
                 // Fails closed: a Redis hiccup here must not silently grant guest access.
             }
         }

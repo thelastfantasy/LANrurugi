@@ -125,6 +125,42 @@ pub struct SearchQuery {
     tankonly: Option<bool>,
 }
 
+/// 007-guest-restricted-access: whether *any* archive is actually reachable through the guest
+/// scope — used by `procedure.rs`'s eligibility gate, which only needs a yes/no answer, not the
+/// full id set `guest_visible_archive_ids` below builds for the search-scoping path. A static
+/// category's non-empty `archives` list answers immediately with no Redis round trip beyond the
+/// initial `list_all()`; a dynamic category defers to `lanrurugi_search::engine::search_exists`
+/// (an existence check written from scratch for exactly this "yes/no, not results" shape — see
+/// its own docs for why it isn't just `search()` with the result discarded), and this loop itself
+/// still stops at the first category proven non-empty rather than checking every remaining one.
+pub(crate) async fn guest_has_any_visible_archive(
+    state: &AppState,
+) -> Result<bool, lanrurugi_storage::repository::RepositoryError> {
+    let categories = state.repos.categories.list_all().await?;
+    for category in categories.iter().filter(|c| c.visible_to_guest) {
+        match &category.search {
+            Some(predicate) if !predicate.is_empty() => {
+                if let Ok(true) = lanrurugi_search::engine::search_exists(
+                    &state.redis.archive,
+                    &state.redis.search,
+                    predicate,
+                    "UTC",
+                )
+                .await
+                {
+                    return Ok(true);
+                }
+            }
+            _ => {
+                if !category.archives.is_empty() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// 007-guest-restricted-access: the union of archive ids across every `visible_to_guest: true`
 /// category — a static category's own `archives` list contributes directly; a dynamic category
 /// (has a `search` predicate instead) is resolved by actually running that predicate through the

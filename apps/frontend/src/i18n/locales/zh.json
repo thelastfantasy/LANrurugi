@@ -1391,5 +1391,5 @@
   "pluginWizard.originLoadedFromExisting": "已有插件代码",
   "pluginWizard.overrideSelected": "已选择生成覆盖",
   "settings.guestMode": "访客模式",
-  "settings.evenWithThePasswordProtection": "允许未登录访客浏览你标记为对访客可见的分类，而不是要求所有内容都必须登录才能访问。在分类编辑页面标记哪些分类对访客可见。"
+  "settings.evenWithThePasswordProtection": "允许未登录访客浏览你标记为对访客可见的分类，而不是要求所有内容都必须登录才能访问。在分类编辑页面标记哪些分类对访客可见。即使此开关已开启，如果没有任何分类被标记为对访客可见（可访问档案数量为零），访客模式依然等同于未生效。"
 }
