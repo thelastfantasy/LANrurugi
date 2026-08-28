@@ -466,12 +466,20 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
 
 /// Issue #91's own consolidation of `require_api_key` + `require_session` into one Casbin-backed
 /// check — end-to-end coverage that a real Session can reach a Session-only route
-/// (`POST /database/drop`, chosen since it needs no request body to reach the auth check) while a
-/// real Admin-role API token (created through the live `POST /tokens` endpoint, not hand-built)
-/// gets `403 Forbidden`, mirroring `authz::tests::admin_token_may_not_call_any_session_only_route`'s
-/// own unit-level coverage but through the actual HTTP router this time — the exact case that
-/// regressed once already this session (`require_api_key`'s `enable_pass: false` short-circuit
-/// briefly stopped routing through `check_route` at all before this test existed).
+/// (`GET /api/tokens`, chosen since it's Session-only, needs no request body to reach the auth
+/// check, *and* has no side effect once reached — `POST /database/drop`, this test's original
+/// choice, actually ran a real `FLUSHDB` against every logical DB once the session's request got
+/// past the auth check, since the point of this test is proving the request *reaches the
+/// handler*, not stopping short of it. Under `cargo test --workspace`, that wiped
+/// `settings_toggles.rs`'s own in-flight archive/tag-index fixtures in a separate OS process
+/// against the same real Redis, causing its `guest_search_excludes_out_of_scope_archive_sharing_a_tag`
+/// to intermittently see an empty search result — confirmed live via CI log inspection,
+/// 2026-08-28) while a real Admin-role API token (created through the live `POST /tokens`
+/// endpoint, not hand-built) gets `403 Forbidden`, mirroring
+/// `authz::tests::admin_token_may_not_call_any_session_only_route`'s own unit-level coverage but
+/// through the actual HTTP router this time — the exact case that regressed once already this
+/// session (`require_api_key`'s `enable_pass: false` short-circuit briefly stopped routing
+/// through `check_route` at all before this test existed).
 #[tokio::test]
 async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_session() {
     let _guard = redis_state_lock().lock().await;
@@ -514,37 +522,23 @@ async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_sessio
         .expect("create_token must return the raw token value")
         .to_string();
 
-    // The Admin token must be rejected — `/database/drop` is Session-only regardless of role.
-    let drop_via_token = request_json(
-        &app,
-        "POST",
-        "/api/database/drop",
-        None,
-        Some(&raw_token),
-        None,
-    )
-    .await;
+    // The Admin token must be rejected — `GET /api/tokens` is Session-only regardless of role.
+    let tokens_via_token =
+        request_json(&app, "GET", "/api/tokens", None, Some(&raw_token), None).await;
     assert_eq!(
-        drop_via_token.status(),
+        tokens_via_token.status(),
         axum::http::StatusCode::FORBIDDEN,
         "an Admin-role API token must never reach a Session-only route"
     );
 
     // The real Session, by contrast, must be let through to the handler itself — asserting
-    // anything other than 403 here (a `200`, or a `500` from the handler's own logic) is enough
-    // to prove `check_route` didn't block it; this test isn't about `drop_database`'s own
-    // behavior once reached.
-    let drop_via_session = request_json(
-        &app,
-        "POST",
-        "/api/database/drop",
-        Some(&cookie),
-        None,
-        None,
-    )
-    .await;
+    // anything other than 403 here (a real `200` from `list_tokens`, or even a `500` from the
+    // handler's own logic) is enough to prove `check_route` didn't block it; this test isn't
+    // about `list_tokens`'s own behavior once reached.
+    let tokens_via_session =
+        request_json(&app, "GET", "/api/tokens", Some(&cookie), None, None).await;
     assert_ne!(
-        drop_via_session.status(),
+        tokens_via_session.status(),
         axum::http::StatusCode::FORBIDDEN,
         "a real Session must not be blocked from a route it's explicitly allowed to reach"
     );
