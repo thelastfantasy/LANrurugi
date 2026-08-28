@@ -74,27 +74,47 @@ pub struct RedisTestLock {
     key: String,
 }
 
+/// Lock TTL / wait-timeout — both `LOCK_TTL_SECS` (the Redis key's own expiry) and
+/// `WAIT_TIMEOUT_SECS` (how long a blocked acquirer waits before panicking) were originally 30s,
+/// which turned out to be shorter than a real held critical section can run on CI: a
+/// `guestmode`-family test doing several real HTTP round-trips against a real Redis reported
+/// `finished in 179.86s` in a real CI run, 2026-08-28 — the lock had already self-expired more
+/// than 4 minutes before that test's own critical section released it, letting a second,
+/// *concurrently running* OS process (`cargo test --workspace` runs each `tests/*.rs` file as its
+/// own binary) acquire the "same" lock and mutate the same shared `guestmode`/`SET_*`
+/// category/archive fixtures mid-flight, causing `settings_toggles.rs::
+/// guest_search_excludes_out_of_scope_archive_sharing_a_tag` to intermittently see an empty
+/// search result (this test's own in-scope archive briefly vanishing from candidacy while another
+/// process's unrelated fixture churn raced it) — confirmed root cause via CI log inspection after
+/// two prior, incorrect fixes (an archive-id collision, then a `FLUSHDB`-triggering assertion)
+/// each only removed one contributing factor without addressing the lock's own expiry being
+/// shorter than real contention. 300s keeps the same "self-heals if a prior process panicked/was
+/// killed" property (still bounded, not indefinite) while giving a slow CI runner real headroom.
+const LOCK_TTL_SECS: usize = 300;
+const WAIT_TIMEOUT_SECS: u64 = 300;
+
 impl RedisTestLock {
-    /// Blocks (async) until the named lock is acquired, waiting up to 30s total before panicking
-    /// — a real deadlock (vs. ordinary contention) should fail the test loudly, not hang CI until
-    /// its own job-level timeout.
+    /// Blocks (async) until the named lock is acquired, waiting up to `WAIT_TIMEOUT_SECS` total
+    /// before panicking — a real deadlock (vs. ordinary contention) should fail the test loudly,
+    /// not hang CI until its own job-level timeout.
     pub async fn acquire(pool: &Pool, key: &str) -> Self {
         let redis_key = format!("LANRURUGI_TEST_LOCK_{key}");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(WAIT_TIMEOUT_SECS);
         loop {
             let mut conn = pool
                 .get()
                 .await
                 .expect("test lock: could not get a Redis connection");
-            // NX + a 30s expiry (self-healing if a prior test process panicked/was killed while
+            // NX + an expiry (self-healing if a prior test process panicked/was killed while
             // holding the lock, rather than deadlocking every subsequent CI run against a
-            // never-released key) — `SET key 1 NX EX 30`.
+            // never-released key) — `SET key 1 NX EX <LOCK_TTL_SECS>`.
             let acquired: bool = deadpool_redis::redis::cmd("SET")
                 .arg(&redis_key)
                 .arg(1)
                 .arg("NX")
                 .arg("EX")
-                .arg(30)
+                .arg(LOCK_TTL_SECS)
                 .query_async::<Option<String>>(&mut conn)
                 .await
                 .expect("test lock: SET NX failed")
@@ -106,7 +126,9 @@ impl RedisTestLock {
                 };
             }
             if std::time::Instant::now() >= deadline {
-                panic!("test lock \"{key}\" not acquired within 30s — real deadlock, not just contention");
+                panic!(
+                    "test lock \"{key}\" not acquired within {WAIT_TIMEOUT_SECS}s — real deadlock, not just contention"
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
