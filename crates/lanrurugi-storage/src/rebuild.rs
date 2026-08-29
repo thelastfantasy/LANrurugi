@@ -20,7 +20,7 @@ use lanrurugi_core::jobs::JobRegistry;
 
 use crate::id::size_aware_id;
 use crate::repository::{
-    ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError,
+    ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError, StampRepository,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -41,6 +41,7 @@ pub async fn rekey_all(
     archives: &ArchiveRepository,
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
+    stamps: &StampRepository,
     jobs: &JobRegistry,
     job_id: &str,
 ) -> Result<RekeySummary, RepositoryError> {
@@ -85,7 +86,15 @@ pub async fn rekey_all(
             }
             return Err(e);
         }
-        update_references(categories, groupings, &archive.id, &new_id).await?;
+        update_references(
+            categories,
+            groupings,
+            stamps,
+            &archive.id,
+            &new_id,
+            &archive.stamp_ids,
+        )
+        .await?;
         summary.rekeyed.push((archive.id.clone(), new_id));
     }
 
@@ -124,11 +133,14 @@ pub async fn backfill_reverse_indexes(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_references(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
+    stamps: &StampRepository,
     old_id: &ArchiveId,
     new_id: &ArchiveId,
+    stamp_ids: &[lanrurugi_core::ids::StampId],
 ) -> Result<(), RepositoryError> {
     for mut category in categories.list_all().await? {
         if let Some(pos) = category.archives.iter().position(|id| id == old_id) {
@@ -140,6 +152,20 @@ async fn update_references(
         if let Some(pos) = grouping.archives.iter().position(|id| id == old_id) {
             grouping.archives[pos] = new_id.clone();
             groupings.save(&grouping).await?;
+        }
+    }
+    // A stamp's own `archive_id` field is a separate reverse-reference, not part of the archive
+    // hash itself — `ArchiveRepository::rename_id`'s Redis `RENAME` moves the archive's own key
+    // (carrying `stamp_ids`, which is how this function knows which stamps to fix at all) but
+    // can't reach into a *different* key (`STAMPS_<page>_<millis>`) to update a field inside it.
+    // Left unfixed, every stamp on a re-keyed archive would silently point at an archive id that
+    // no longer exists (caught via external code review, 2026-08-29).
+    for stamp_id in stamp_ids {
+        if let Some(mut stamp) = stamps.get(stamp_id).await? {
+            if &stamp.archive_id == old_id {
+                stamp.archive_id = new_id.clone();
+                stamps.restore_raw(&stamp).await?;
+            }
         }
     }
     Ok(())
@@ -157,7 +183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rekeys_a_legacy_id_and_updates_category_and_grouping_references() {
+    async fn rekeys_a_legacy_id_and_updates_category_grouping_and_stamp_references() {
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -165,6 +191,7 @@ mod tests {
         let archives = ArchiveRepository::new(pool.clone());
         let categories = CategoryRepository::new(pool.clone());
         let groupings = GroupingRepository::new(pool.clone());
+        let stamps = StampRepository::new(pool.clone());
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.zip");
@@ -177,6 +204,11 @@ mod tests {
             legacy_id, new_id,
             "test fixture must actually change ID under rebuild"
         );
+
+        let stamp_id = stamps
+            .create(&legacy_id, 0, "❤", "10,10", "", "", 1_700_000_000_000)
+            .await
+            .unwrap();
 
         archives
             .save(&Archive {
@@ -193,7 +225,7 @@ mod tests {
                 lastreadtime: 1000,
                 thumbhash: None,
                 toc: vec![],
-                stamp_ids: vec![],
+                stamp_ids: vec![stamp_id.clone()],
                 heal_failed_at: None,
                 corrupted_pages: vec![],
                 has_patch: false,
@@ -234,7 +266,7 @@ mod tests {
 
         let jobs = JobRegistry::new();
         let job_id = jobs.create("rebuild").await;
-        let summary = rekey_all(&archives, &categories, &groupings, &jobs, &job_id)
+        let summary = rekey_all(&archives, &categories, &groupings, &stamps, &jobs, &job_id)
             .await
             .unwrap();
 
@@ -248,10 +280,15 @@ mod tests {
         assert_eq!(updated_category.archives, vec![new_id.clone()]);
         let updated_grouping = groupings.get(&tankid).await.unwrap().unwrap();
         assert_eq!(updated_grouping.archives, vec![new_id.clone()]);
+        // The stamp's own `archive_id` — a reverse-reference no `RENAME` on the archive's own key
+        // can reach — must point at the new id too, not the now-deleted legacy one.
+        let updated_stamp = stamps.get(&stamp_id).await.unwrap().unwrap();
+        assert_eq!(updated_stamp.archive_id, new_id);
 
         archives.delete(&new_id).await.unwrap();
         categories.delete(&catid).await.unwrap();
         groupings.delete(&tankid).await.unwrap();
+        stamps.delete(&stamp_id).await.unwrap();
     }
 
     #[tokio::test]

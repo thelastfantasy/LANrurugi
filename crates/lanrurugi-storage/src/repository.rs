@@ -130,14 +130,16 @@ impl ArchiveRepository {
     /// must be surfaced, never guessed.
     pub async fn find_all_by_filename(&self, filename: &str) -> Result<Vec<Archive>> {
         let archives = self.list_all().await?;
+        // `a.name` (legacy's own `name` field — see `Archive::name`'s own docs) is already the
+        // extension-less basename `filename` needs to match against. `Path::new(&a.file
+        // ).file_name()` was tried here first but is wrong: `a.file` is the *full disk path*, so
+        // its `file_name()` always includes the extension (e.g. "foo.zip"), which can never equal
+        // an extension-less legacy `filename` ("foo") — that comparison silently failed for every
+        // archive, making this whole basename-fallback path a no-op. Confirmed live via an
+        // external code review against a real backup export, 2026-08-29.
         Ok(archives
             .into_iter()
-            .filter(|a| {
-                std::path::Path::new(&a.file)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    == Some(filename)
-            })
+            .filter(|a| a.name == filename)
             .collect())
     }
 

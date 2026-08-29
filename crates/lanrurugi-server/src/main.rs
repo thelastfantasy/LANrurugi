@@ -1029,6 +1029,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         &repos.archives,
         &repos.categories,
         &repos.groupings,
+        &repos.stamps,
         &jobs,
         &job_id,
     )

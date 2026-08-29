@@ -447,6 +447,7 @@ mod tests {
             lanrurugi_storage::repository::CategoryRepository::new(archive_pool.clone());
         let groupings =
             lanrurugi_storage::repository::GroupingRepository::new(archive_pool.clone());
+        let stamps = lanrurugi_storage::repository::StampRepository::new(archive_pool.clone());
         let jobs = lanrurugi_core::jobs::JobRegistry::new();
         let job_id = jobs.create("rebuild").await;
 
@@ -454,6 +455,7 @@ mod tests {
             &archives,
             &categories,
             &groupings,
+            &stamps,
             &jobs,
             &job_id,
         )

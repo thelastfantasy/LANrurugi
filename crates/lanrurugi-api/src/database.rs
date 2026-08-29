@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -20,6 +20,12 @@ use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::CONFIG_KEY;
 
+/// `Multipart`'s `DefaultBodyLimit` default (2 MB, see `upload.rs`'s own comment on the same
+/// issue) is too small for a real large library's backup export — confirmed live against a real
+/// 6228-archive LANraragi export at 5.4 MB, comfortably under this cap but already 2.7x the
+/// default. A pure-text JSON export would need an implausibly large library to approach 100 MB.
+const MAX_IMPORT_LEGACY_BYTES: usize = 100 * 1024 * 1024;
+
 pub fn router() -> Router<AppState> {
     // `/database/drop` — whole-library, irreversible ("数据销毁类") — no API token, admin-role or
     // not, may reach this; only a real session cookie can. Enforced by `require_api_key` itself
@@ -35,7 +41,10 @@ pub fn router() -> Router<AppState> {
         .route("/database/isnew", delete(clear_new_all))
         .route("/database/clean", post(clean_database))
         .route("/database/rebuild-index", post(rebuild_index))
-        .route("/database/import-legacy", post(queue_import_legacy))
+        .route(
+            "/database/import-legacy",
+            post(queue_import_legacy).layer(DefaultBodyLimit::max(MAX_IMPORT_LEGACY_BYTES)),
+        )
         .route("/database/import-legacy/count", get(import_legacy_count))
         .route("/database/import-snapshots", get(list_import_snapshots))
         .route(
@@ -527,6 +536,7 @@ async fn run_rebuild_sequence(
         &repos.archives,
         &repos.categories,
         &repos.groupings,
+        &repos.stamps,
         jobs,
         job_id,
     )
@@ -774,25 +784,29 @@ async fn queue_import_legacy(
         )
         .await;
 
-        let (summary, snapshot) = match import_result {
-            Ok(result) => result,
-            Err(e) => {
-                record_manual(
-                    &state_for_task,
-                    auth_for_task.as_ref(),
-                    action_types::DATABASE_IMPORT_LEGACY,
-                    target,
-                    Outcome::Failure {
-                        reason: e.to_string(),
-                    },
-                    None,
-                    None,
-                )
-                .await;
-                jobs.fail(&job_id_for_task, e.to_string()).await;
-                return;
-            }
+        // `import_from_legacy` is not transactional (see its own docs) — on `Err`, it still
+        // returns whatever `summary`/`snapshot` had accumulated before the failing write, rather
+        // than discarding that progress. Persist that partial snapshot the same as a full success
+        // (still a valid rollback point for whatever *did* get written) and surface the error
+        // alongside how much of the import actually completed, instead of just "it failed".
+        let (summary, snapshot, import_error) = match import_result {
+            Ok((summary, snapshot)) => (summary, snapshot, None),
+            Err((e, summary, snapshot)) => (summary, snapshot, Some(e)),
         };
+        if let Some(e) = &import_error {
+            record_manual(
+                &state_for_task,
+                auth_for_task.as_ref(),
+                action_types::DATABASE_IMPORT_LEGACY,
+                target.clone(),
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+        }
 
         // A snapshot with nothing in it (nothing this import actually overwrote — e.g. every
         // record was skipped or matched nothing) is not worth a rollback point; saving it would
@@ -818,33 +832,68 @@ async fn queue_import_legacy(
             }
         };
 
-        match run_rebuild_sequence(
-            &state_for_task,
-            &job_id_for_task,
-            action_types::DATABASE_IMPORT_LEGACY,
-            auth_for_task.as_ref(),
-        )
-        .await
-        {
-            Ok(rebuild_result) => {
-                jobs.finish(
-                    &job_id_for_task,
-                    json!({
-                        "archives_updated": summary.archives_updated,
-                        "archives_skipped_already_exists": summary.archives_skipped_already_exists,
-                        "archives_skipped_no_match": summary.archives_skipped_no_match,
-                        "archives_ambiguous_match": summary.archives_ambiguous_match,
-                        "titles_mojibake_repaired": summary.titles_mojibake_repaired,
-                        "categories_restored": summary.categories_restored,
-                        "tankoubons_restored": summary.tankoubons_restored,
-                        "stamps_restored": summary.stamps_restored,
-                        "rebuild": rebuild_result,
-                        "import_count": import_count,
-                    }),
-                )
-                .await;
+        let summary_json = json!({
+            "archives_updated": summary.archives_updated,
+            "archives_skipped_already_exists": summary.archives_skipped_already_exists,
+            "archives_skipped_no_match": summary.archives_skipped_no_match,
+            "archives_ambiguous_match": summary.archives_ambiguous_match,
+            "archives_multiple_legacy_records_same_target": summary.archives_multiple_legacy_records_same_target,
+            "titles_mojibake_repaired": summary.titles_mojibake_repaired,
+            "categories_restored": summary.categories_restored,
+            "categories_skipped_already_exists": summary.categories_skipped_already_exists,
+            "tankoubons_restored": summary.tankoubons_restored,
+            "tankoubons_skipped_already_exists": summary.tankoubons_skipped_already_exists,
+            "stamps_restored": summary.stamps_restored,
+            "stamps_skipped_already_exists": summary.stamps_skipped_already_exists,
+            "new_category_ids": summary.new_category_ids,
+            "new_tankoubon_ids": summary.new_tankoubon_ids,
+            "new_stamp_ids": summary.new_stamp_ids,
+            "import_count": import_count,
+        });
+
+        // Skip the (workspace-wide, not cheap) rebuild entirely when nothing was actually
+        // written — every archive/category/tankoubon/stamp was either skipped, unmatched, or
+        // ambiguous. Mirrors `snapshot_is_empty` above (both are really asking the same "did this
+        // call change anything" question), but also covers a fresh category/tankoubon creation,
+        // which writes real data without necessarily populating `snapshot` (nothing pre-existed to
+        // snapshot).
+        let nothing_written = summary.archives_updated == 0
+            && summary.categories_restored == 0
+            && summary.tankoubons_restored == 0
+            && summary.stamps_restored == 0;
+        if nothing_written && import_error.is_none() {
+            jobs.finish(&job_id_for_task, summary_json).await;
+        } else {
+            match run_rebuild_sequence(
+                &state_for_task,
+                &job_id_for_task,
+                action_types::DATABASE_IMPORT_LEGACY,
+                auth_for_task.as_ref(),
+            )
+            .await
+            {
+                Ok(rebuild_result) => {
+                    let mut result = summary_json;
+                    result["rebuild"] = json!(rebuild_result);
+                    match import_error {
+                        // The import itself failed partway through — still report how much of it
+                        // completed (not transactional, see `import_from_legacy`'s own docs)
+                        // rather than only "it failed" with no indication of the partial write.
+                        Some(e) => {
+                            result["partial"] = json!(true);
+                            jobs.fail(
+                                &job_id_for_task,
+                                format!("{e} (partial progress: {result})"),
+                            )
+                            .await;
+                        }
+                        None => {
+                            jobs.finish(&job_id_for_task, result).await;
+                        }
+                    }
+                }
+                Err(e) => jobs.fail(&job_id_for_task, e).await,
             }
-            Err(e) => jobs.fail(&job_id_for_task, e).await,
         }
     });
 

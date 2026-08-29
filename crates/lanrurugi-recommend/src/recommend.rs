@@ -142,8 +142,16 @@ mod tests {
     /// caller can skip (not fail) the test on a fresh checkout with no local fixture file.
     fn load_fixture_with_volumes() -> Option<Vec<(String, String, Option<u32>)>> {
         let path = std::env::var("LANRURUGI_TEST_FIXTURE_SERIES_TITLES_PATH").ok()?;
+        // `cargo test`/`cargo test -p <crate>` both run this test binary with its CWD set to
+        // this crate's own manifest directory, NOT the workspace root — a relative path from
+        // `.env.local` silently fails to resolve here specifically. Anchoring on
+        // `CARGO_MANIFEST_DIR` (known at compile time) sidesteps needing to know which invocation
+        // shape actually ran — same fix as `tankoubon_grouping.rs`'s own
+        // `tankoubon_grouping_real_data_score_matrix` test, which hit this identically.
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let data: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+            serde_json::from_str(&std::fs::read_to_string(workspace_root.join(&path)).ok()?)
+                .ok()?;
         Some(
             data["archives"]
                 .as_array()?
