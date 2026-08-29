@@ -458,5 +458,19 @@
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
   "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
-  "upload.waiting": "Waiting…"
+  "upload.waiting": "Waiting…",
+  "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
+  "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
+  "settings.importLegacyConflictModeMerge": "Merge tags, keep this library's title/summary",
+  "settings.importLegacyConflictModeSkip": "Skip — leave existing metadata untouched",
+  "settings.importLegacyButton": "Import",
+  "settings.importLegacyInProgress": "Import in progress...",
+  "settings.importLegacyComplete": "Import complete!",
+  "settings.importLegacyFailedError": "Import failed: {{error}}",
+  "settings.importLegacyArchivesUpdated": "Archives updated",
+  "settings.importLegacyArchivesSkippedExisting": "Archives skipped (already existed)",
+  "settings.importLegacyArchivesSkippedNoMatch": "Archives skipped (no match found)",
+  "settings.importLegacyCategoriesRestored": "Categories restored",
+  "settings.importLegacyTankoubonsRestored": "Tankoubons restored",
+  "settings.importLegacyStampsRestored": "Stamps restored"
 }

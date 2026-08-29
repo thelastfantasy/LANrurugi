@@ -6,11 +6,19 @@
 
 use lanrurugi_core::entities::{Category, Grouping, Stamp};
 use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
+use lanrurugi_storage::bookmarks::BookmarksRepository;
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError, StampRepository,
 };
 
 use crate::build::BackupDocument;
+
+fn map_bookmarks_error(e: lanrurugi_storage::bookmarks::BookmarksError) -> RepositoryError {
+    match e {
+        lanrurugi_storage::bookmarks::BookmarksError::Redis(e) => RepositoryError::Redis(e),
+        lanrurugi_storage::bookmarks::BookmarksError::Pool(e) => RepositoryError::Pool(e),
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RestoreSummary {
@@ -19,6 +27,7 @@ pub struct RestoreSummary {
     pub categories_restored: usize,
     pub tankoubons_restored: usize,
     pub stamps_restored: usize,
+    pub bookmarks_restored: usize,
 }
 
 pub async fn restore(
@@ -27,6 +36,7 @@ pub async fn restore(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
     stamps: &StampRepository,
+    bookmarks: &BookmarksRepository,
 ) -> Result<RestoreSummary, RepositoryError> {
     let mut summary = RestoreSummary::default();
 
@@ -111,6 +121,25 @@ pub async fn restore(
         summary.stamps_restored += 1;
     }
 
+    for backup_bookmark in &doc.bookmarks {
+        // `add` itself is idempotent (an existing bookmark's `bookmarked_at` is simply
+        // overwritten with the backup's own value) — no existence check needed first, same
+        // "restore re-applies verbatim" posture as stamps above. Unlike archives, a bookmark
+        // referencing an archive id absent from this instance is *not* separately counted/skipped
+        // — `BookmarksRepository` has no archive-existence dependency of its own (it's a flat
+        // `archive_id:page` hash, not a foreign key), so restoring it is harmless even if that
+        // archive never gets re-ingested; it simply never surfaces anywhere until it does.
+        bookmarks
+            .add(
+                &backup_bookmark.archive_id,
+                backup_bookmark.page,
+                backup_bookmark.bookmarked_at,
+            )
+            .await
+            .map_err(map_bookmarks_error)?;
+        summary.bookmarks_restored += 1;
+    }
+
     Ok(summary)
 }
 
@@ -162,6 +191,7 @@ mod tests {
         let categories = CategoryRepository::new(pool.clone());
         let groupings = GroupingRepository::new(pool.clone());
         let stamps = StampRepository::new(pool.clone());
+        let bookmarks = BookmarksRepository::new(pool.clone());
 
         // Archive already exists on "this instance" (as if freshly re-scanned, no metadata yet).
         let id = ArchiveId("7".repeat(40));
@@ -200,11 +230,19 @@ mod tests {
             categories: vec![],
             tankoubons: vec![],
             stamps: vec![],
+            bookmarks: vec![],
         };
 
-        let summary = restore(&doc, &archives, &categories, &groupings, &stamps)
-            .await
-            .unwrap();
+        let summary = restore(
+            &doc,
+            &archives,
+            &categories,
+            &groupings,
+            &stamps,
+            &bookmarks,
+        )
+        .await
+        .unwrap();
         assert_eq!(summary.archives_updated, 1);
         assert_eq!(summary.archives_skipped_missing, 0);
 
@@ -227,6 +265,7 @@ mod tests {
         let categories = CategoryRepository::new(pool.clone());
         let groupings = GroupingRepository::new(pool.clone());
         let stamps = StampRepository::new(pool.clone());
+        let bookmarks = BookmarksRepository::new(pool.clone());
 
         let doc = build::BackupDocument {
             archives: vec![BackupArchive {
@@ -240,11 +279,19 @@ mod tests {
             categories: vec![],
             tankoubons: vec![],
             stamps: vec![],
+            bookmarks: vec![],
         };
 
-        let summary = restore(&doc, &archives, &categories, &groupings, &stamps)
-            .await
-            .unwrap();
+        let summary = restore(
+            &doc,
+            &archives,
+            &categories,
+            &groupings,
+            &stamps,
+            &bookmarks,
+        )
+        .await
+        .unwrap();
         assert_eq!(summary.archives_updated, 0);
         assert_eq!(summary.archives_skipped_missing, 1);
     }

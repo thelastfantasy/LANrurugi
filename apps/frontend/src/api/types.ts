@@ -810,3 +810,59 @@ export interface ActivityRetention {
 export interface HoverPageOrderResponse {
   order: string | null
 }
+
+/** How to reconcile an archive already present on this instance with the same archive's record
+ *  in the LANraragi backup JSON being imported — see `Backup.tsx`'s own docs on why `"merge"` is
+ *  the default (least information loss of the three). */
+export type ImportConflictMode = "overwrite" | "merge" | "skip"
+
+/** Response shape for `POST /database/import-legacy` (`lanrurugi_backup::import_legacy::
+ *  ImportLegacySummary`, plus the shared `rebuild` result `run_rebuild_sequence` also produces
+ *  for `POST /database/rebuild-index`) — a real file upload, not a remote Redis connection; see
+ *  `import_legacy.rs`'s own module docs for why an earlier "connect to a remote Redis" design was
+ *  rejected (the official LANraragi Docker image never exposes its bundled Redis externally). */
+export interface ImportLegacyResult {
+  archives_updated: number
+  archives_skipped_already_exists: number
+  archives_skipped_no_match: number
+  /** A legacy record's basename matched more than one archive here — excluded rather than
+   *  guessed, per the "accuracy over recall" requirement this feature was built around. */
+  archives_ambiguous_match: number
+  titles_mojibake_repaired: number
+  categories_restored: number
+  tankoubons_restored: number
+  stamps_restored: number
+  rebuild: {
+    rekeyed: number
+    unchanged: number
+    missing_file: number
+    scanned: number
+    newly_catalogued: number
+    errors: number
+    pagecount_heal: {
+      checked: number
+      healed: number
+      failed: number
+      skipped_known_failed: number
+    }
+  }
+  /** Running count of LANraragi imports this instance has ever completed (including this one) —
+   *  same value `GET /database/import-legacy/count` returns, included here too so a caller
+   *  polling this job's result doesn't need a second request just to know whether to warn about
+   *  the *next* import. */
+  import_count: number
+}
+
+/** One row of `GET /database/import-snapshots` — a Time-Machine-style rollback point
+ *  `queue_import_legacy` captured automatically (the pre-write state of every record that
+ *  import actually overwrote), listed newest first. No `document` payload here — see
+ *  `useDownloadImportSnapshot`'s own docs for why the full backup JSON is fetched separately,
+ *  only when the user actually clicks download. */
+export interface ImportSnapshotMetadata {
+  id: string
+  created_at: number
+  archive_count: number
+  category_count: number
+  tankoubon_count: number
+  stamp_count: number
+}

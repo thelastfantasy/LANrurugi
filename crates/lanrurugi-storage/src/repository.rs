@@ -103,19 +103,55 @@ impl ArchiveRepository {
         .await
     }
 
-    /// Finds the archive whose stored `file` path has `filename` as its basename, if any. No
-    /// indexed lookup exists for this (legacy has none either — `file` is not a secondary Redis
-    /// index anywhere) so this is a full `list_all` scan; acceptable given this project's existing
-    /// library-size assumptions (`list_all` is already called unconditionally by, e.g., full-library
-    /// search-index rebuilds).
+    /// Finds the archive whose stored `file` path has `filename` as its basename, if any —
+    /// returns only the *first* match. No indexed lookup exists for this (legacy has none either
+    /// — `file` is not a secondary Redis index anywhere) so this is a full `list_all` scan;
+    /// acceptable given this project's existing library-size assumptions (`list_all` is already
+    /// called unconditionally by, e.g., full-library search-index rebuilds).
+    ///
+    /// Prefer [`Self::find_all_by_filename`] over this when the caller needs to know *whether*
+    /// the match was unambiguous — `lanrurugi-backup::import_legacy`'s accuracy requirement means
+    /// a caller that silently takes "the first match" when several archives share a basename
+    /// (different subdirectories, same filename) can end up attaching a legacy record's metadata
+    /// to the wrong file. This method still exists for callers that only ever care about "is
+    /// there at least one" and don't need to distinguish ambiguous from unambiguous.
     pub async fn find_by_filename(&self, filename: &str) -> Result<Option<Archive>> {
+        Ok(self
+            .find_all_by_filename(filename)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// Same basename match as [`Self::find_by_filename`], but returns *every* match rather than
+    /// just the first — lets a caller detect ambiguity (more than one archive sharing the same
+    /// basename in different subdirectories) instead of silently picking one. Used by
+    /// `lanrurugi-backup::import_legacy`, whose accuracy requirement means an ambiguous match
+    /// must be surfaced, never guessed.
+    pub async fn find_all_by_filename(&self, filename: &str) -> Result<Vec<Archive>> {
         let archives = self.list_all().await?;
-        Ok(archives.into_iter().find(|a| {
-            std::path::Path::new(&a.file)
-                .file_name()
-                .and_then(|n| n.to_str())
-                == Some(filename)
-        }))
+        Ok(archives
+            .into_iter()
+            .filter(|a| {
+                std::path::Path::new(&a.file)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some(filename)
+            })
+            .collect())
+    }
+
+    /// Finds the archive whose stored `file` matches `file` exactly (full path, not just
+    /// basename) — used by `lanrurugi-backup::import_legacy`'s id-reconciliation fallback, where
+    /// a full-path match is the correct precision level: the two libraries being reconciled are
+    /// only guaranteed to share the same *directory tree* (a "same manga folder" precondition),
+    /// not that every basename within it is globally unique, so `find_by_filename`'s
+    /// basename-only match would risk a false-positive collision across different subdirectories
+    /// that this stricter check avoids. Same full-`list_all()`-scan caveat as `find_by_filename`
+    /// above applies.
+    pub async fn find_by_file_path(&self, file: &str) -> Result<Option<Archive>> {
+        let archives = self.list_all().await?;
+        Ok(archives.into_iter().find(|a| a.file == file))
     }
 
     /// Creates or fully overwrites an archive record's hash fields.
@@ -317,14 +353,15 @@ impl CategoryRepository {
         } else {
             Vec::new()
         };
+        // Defaults to `false` rather than hard-erroring on absence, same leniency as `pinned`
+        // just above — a legacy LANraragi category hash (e.g. one read via a one-off pool
+        // pointed at a foreign legacy Redis instance, `lanrurugi-backup::import_legacy`) never
+        // had this LANrurugi-only field at all, and "not guest-visible" is the correct, safe
+        // interpretation of that absence, not an error condition.
         let visible_to_guest = fields
             .get("visible_to_guest")
             .map(|v| v == "1")
-            .ok_or_else(|| RepositoryError::MissingField {
-                kind: "category",
-                key: catid.as_str().to_string(),
-                field: "visible_to_guest",
-            })?;
+            .unwrap_or(false);
         Ok(Some(Category {
             catid: catid.clone(),
             name: fields.get("name").cloned().unwrap_or_default(),

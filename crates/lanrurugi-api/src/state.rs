@@ -214,6 +214,10 @@ pub struct AppState {
     /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
     /// docs for the full data model/retention/query design.
     pub activity: Arc<ActivityRepository>,
+    /// Time-Machine-style rollback snapshots [`lanrurugi_backup::import_legacy::
+    /// import_from_legacy`] captures per LANraragi import — also on the `config` logical DB, same
+    /// placement as `api_tokens`/`activity`. See `lanrurugi_backup::import_snapshot` module docs.
+    pub import_snapshots: Arc<lanrurugi_backup::import_snapshot::ImportSnapshotRepository>,
     /// Short-lived, single-use registry for `POST /plugin-wizard/generate/start`'s raw request
     /// body, handed off to `GET /plugin-wizard/generate/stream/{id}` — the two-step pattern real
     /// SSE streaming needs since `EventSource` is GET-only and can't carry a request body (unlike

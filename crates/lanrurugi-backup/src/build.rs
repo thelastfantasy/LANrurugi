@@ -10,12 +10,13 @@
 //! layer never exposes a document mid-write.
 
 use lanrurugi_core::entities::{Category, Grouping, Stamp};
+use lanrurugi_storage::bookmarks::{Bookmark, BookmarksRepository};
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError, StampRepository,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupArchive {
     pub arcid: String,
     pub title: String,
@@ -25,7 +26,7 @@ pub struct BackupArchive {
     pub filename: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupCategory {
     pub catid: String,
     pub name: String,
@@ -33,7 +34,7 @@ pub struct BackupCategory {
     pub archives: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupTankoubon {
     pub tankid: String,
     pub name: String,
@@ -42,7 +43,7 @@ pub struct BackupTankoubon {
     pub archives: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupStamp {
     pub stamp_id: String,
     pub content: String,
@@ -54,12 +55,25 @@ pub struct BackupStamp {
     pub rect: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackupBookmark {
+    pub archive_id: String,
+    pub page: u32,
+    pub bookmarked_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupDocument {
     pub archives: Vec<BackupArchive>,
     pub categories: Vec<BackupCategory>,
     pub tankoubons: Vec<BackupTankoubon>,
     pub stamps: Vec<BackupStamp>,
+    /// Additive — no legacy equivalent (`bookmarks.rs`'s own module docs: this is a LANrurugi-only
+    /// concept, legacy's "bookmark" was really just a category alias). `#[serde(default)]` so a
+    /// pre-existing backup JSON exported before this field existed still deserializes fine (an
+    /// old backup simply restores with zero bookmarks, not a hard parse error).
+    #[serde(default)]
+    pub bookmarks: Vec<BackupBookmark>,
 }
 
 pub async fn build(
@@ -67,10 +81,15 @@ pub async fn build(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
     stamps: &StampRepository,
+    bookmarks: &BookmarksRepository,
 ) -> Result<BackupDocument, RepositoryError> {
     let archive_list = archives.list_all().await?;
     let category_list = categories.list_all().await?;
     let grouping_list = groupings.list_all().await?;
+    let bookmark_list = bookmarks.list_all().await.map_err(|e| match e {
+        lanrurugi_storage::bookmarks::BookmarksError::Redis(e) => RepositoryError::Redis(e),
+        lanrurugi_storage::bookmarks::BookmarksError::Pool(e) => RepositoryError::Pool(e),
+    })?;
 
     let mut stamp_docs = Vec::new();
     for archive in &archive_list {
@@ -96,10 +115,19 @@ pub async fn build(
         categories: category_list.into_iter().map(to_backup_category).collect(),
         tankoubons: grouping_list.into_iter().map(to_backup_tankoubon).collect(),
         stamps: stamp_docs,
+        bookmarks: bookmark_list.into_iter().map(to_backup_bookmark).collect(),
     })
 }
 
-fn to_backup_category(c: Category) -> BackupCategory {
+pub(crate) fn to_backup_bookmark(b: Bookmark) -> BackupBookmark {
+    BackupBookmark {
+        archive_id: b.archive_id,
+        page: b.page,
+        bookmarked_at: b.bookmarked_at,
+    }
+}
+
+pub(crate) fn to_backup_category(c: Category) -> BackupCategory {
     BackupCategory {
         catid: c.catid.into_string(),
         name: c.name,
@@ -108,7 +136,7 @@ fn to_backup_category(c: Category) -> BackupCategory {
     }
 }
 
-fn to_backup_tankoubon(g: Grouping) -> BackupTankoubon {
+pub(crate) fn to_backup_tankoubon(g: Grouping) -> BackupTankoubon {
     BackupTankoubon {
         tankid: g.tankid.into_string(),
         name: g.name,
@@ -118,7 +146,7 @@ fn to_backup_tankoubon(g: Grouping) -> BackupTankoubon {
     }
 }
 
-fn to_backup_stamp(s: Stamp) -> BackupStamp {
+pub(crate) fn to_backup_stamp(s: Stamp) -> BackupStamp {
     BackupStamp {
         stamp_id: s.stamp_id.into_string(),
         content: s.content,
@@ -150,6 +178,7 @@ mod tests {
         let categories = CategoryRepository::new(pool.clone());
         let groupings = GroupingRepository::new(pool.clone());
         let stamp_repo = StampRepository::new(pool.clone());
+        let bookmarks = BookmarksRepository::new(pool.clone());
 
         let id = lanrurugi_core::ids::ArchiveId("9".repeat(40));
         archives
@@ -178,8 +207,9 @@ mod tests {
             .create(&id, 1, "hi", "1,2", "", "", 1_700_000_000_000)
             .await
             .unwrap();
+        bookmarks.add(id.as_str(), 3, 1_700_000_001).await.unwrap();
 
-        let doc = build(&archives, &categories, &groupings, &stamp_repo)
+        let doc = build(&archives, &categories, &groupings, &stamp_repo, &bookmarks)
             .await
             .unwrap();
         let entry = doc
@@ -191,8 +221,16 @@ mod tests {
         assert_eq!(entry.tags, "artist:jane");
         assert_eq!(entry.thumbhash.as_deref(), Some("abc123"));
         assert!(doc.stamps.iter().any(|s| s.stamp_id == stamp_id.as_str()));
+        assert!(doc
+            .bookmarks
+            .iter()
+            .any(|b| b.archive_id == id.as_str() && b.page == 3));
 
         archives.delete(&id).await.unwrap();
         stamp_repo.delete(&stamp_id).await.unwrap();
+        bookmarks
+            .remove(id.as_str(), 3, 1_700_000_002)
+            .await
+            .unwrap();
     }
 }

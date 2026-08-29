@@ -1120,5 +1120,19 @@
   "bookmarks.bookmarkRemoved": "「{{title}}」の {{page}} ページ目のブックマークを削除しました",
   "bookmarks.errorRemovingBookmark": "ブックマークの削除に失敗しました",
   "settings.guestMode": "ゲストモード",
-  "settings.evenWithThePasswordProtection": "未ログインの訪問者が、ゲストに公開すると設定したカテゴリを閲覧できるようにします。すべてのコンテンツへのログインを必須にする代わりに使えます。どのカテゴリをゲストに公開するかはカテゴリ編集ページで設定します。このスイッチをオンにしていても、ゲストに公開されているカテゴリが一つもない場合（アクセス可能なアーカイブ数がゼロの場合）、ゲストモードは実質的に無効なままです。"
+  "settings.evenWithThePasswordProtection": "未ログインの訪問者が、ゲストに公開すると設定したカテゴリを閲覧できるようにします。すべてのコンテンツへのログインを必須にする代わりに使えます。どのカテゴリをゲストに公開するかはカテゴリ編集ページで設定します。このスイッチをオンにしていても、ゲストに公開されているカテゴリが一つもない場合（アクセス可能なアーカイブ数がゼロの場合）、ゲストモードは実質的に無効なままです。",
+  "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
+  "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
+  "settings.importLegacyConflictModeMerge": "Merge tags, keep this library's title/summary",
+  "settings.importLegacyConflictModeSkip": "Skip — leave existing metadata untouched",
+  "settings.importLegacyButton": "Import",
+  "settings.importLegacyInProgress": "Import in progress...",
+  "settings.importLegacyComplete": "Import complete!",
+  "settings.importLegacyFailedError": "Import failed: {{error}}",
+  "settings.importLegacyArchivesUpdated": "Archives updated",
+  "settings.importLegacyArchivesSkippedExisting": "Archives skipped (already existed)",
+  "settings.importLegacyArchivesSkippedNoMatch": "Archives skipped (no match found)",
+  "settings.importLegacyCategoriesRestored": "Categories restored",
+  "settings.importLegacyTankoubonsRestored": "Tankoubons restored",
+  "settings.importLegacyStampsRestored": "Stamps restored"
 }

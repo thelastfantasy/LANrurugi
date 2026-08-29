@@ -80,6 +80,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -121,6 +124,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
 
     // See `contract_api.rs`'s own `test_app()` for why this layer is required: `require_api_key`

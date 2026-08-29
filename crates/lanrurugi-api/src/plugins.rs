@@ -3255,6 +3255,11 @@ pub(crate) mod tests {
             activity: Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
                 redis.config.clone(),
             )),
+            import_snapshots: Arc::new(
+                lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(
+                    redis.config.clone(),
+                ),
+            ),
         })
     }
 

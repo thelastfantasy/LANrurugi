@@ -969,6 +969,13 @@ div.id4 {
   color: #fff;
 }
 
+/* Radio-only override — see g.css's own docs on this rule (native-radio-style ring look,
+   confirmed live 2026-08-29). This theme's unchecked `common-form-control-bg` background
+   (#55585F) is what shows through as the ring instead of the shared blue fill. */
+.common-form-control-bg.common-radio-bg[data-checked] {
+  background: #55585F;
+}
+
 /* Additive — no legacy equivalent. Sets `Select.tsx`'s own `--select-item-bg` custom property
    (see that file's own docs on why a background can't just be a plain inline style there) so a
    `common-ui/Form/Select` popup item can be marked "this option is special" the same way

@@ -35,6 +35,13 @@ pub fn router() -> Router<AppState> {
         .route("/database/isnew", delete(clear_new_all))
         .route("/database/clean", post(clean_database))
         .route("/database/rebuild-index", post(rebuild_index))
+        .route("/database/import-legacy", post(queue_import_legacy))
+        .route("/database/import-legacy/count", get(import_legacy_count))
+        .route("/database/import-snapshots", get(list_import_snapshots))
+        .route(
+            "/database/import-snapshots/{id}",
+            get(download_import_snapshot).delete(delete_import_snapshot),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -144,6 +151,7 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
         &state.repos.categories,
         &state.repos.groupings,
         &state.repos.stamps,
+        &state.bookmarks,
     )
     .await
     .map_err(|e| {
@@ -166,6 +174,7 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
     let job_id = state.jobs.create("backup").await;
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
+    let bookmarks = state.bookmarks.clone();
     let job_id_for_task = job_id.clone();
 
     tokio::spawn(async move {
@@ -175,6 +184,7 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
+            &bookmarks,
         )
         .await
         {
@@ -269,6 +279,7 @@ async fn queue_restore(
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
+            &state_for_task.bookmarks,
         )
         .await;
         match result {
@@ -282,6 +293,7 @@ async fn queue_restore(
                         "categories_restored": summary.categories_restored,
                         "tankoubons_restored": summary.tankoubons_restored,
                         "stamps_restored": summary.stamps_restored,
+                        "bookmarks_restored": summary.bookmarks_restored,
                     }),
                 )
                 .await;
@@ -486,6 +498,116 @@ async fn clean_database(
 /// on-disk content now hashes differently (T074/T075), then does a full directory scan to
 /// discover and catalogue any previously-invisible sibling files the historical false-merge
 /// defect had hidden (T074, completing data-model.md's "Rebuild/Reindex operation").
+/// Shared "recompute archive IDs + rescan the library + heal pagecounts + backfill reverse
+/// indexes" sequence — originally inline in `rebuild_index` below, extracted so
+/// `queue_import_legacy` can run the exact same rebuild after a legacy import lands new/changed
+/// archive metadata, without either call site's copy silently drifting from the other over time.
+/// Records its own `record_manual` failure entries (using `action_type`/`target` from the
+/// caller, since `rebuild_index` and `queue_import_legacy` want different activity-log framing)
+/// and returns `Err` with the failure reason on the first failing step — the caller is
+/// responsible for calling `jobs.fail` with it; this function itself never touches `jobs.finish`/
+/// `jobs.fail` so a caller that wants to fold this result into a larger combined payload (e.g.
+/// alongside an import summary) can still do so.
+async fn run_rebuild_sequence(
+    state: &AppState,
+    job_id: &str,
+    action_type: &'static str,
+    auth: Option<&AuthContext>,
+) -> Result<serde_json::Value, String> {
+    let repos = &state.repos;
+    let jobs = &state.jobs;
+
+    let rebuild_failure_target = ActivityTarget {
+        id: None,
+        label: None,
+        kind: Some("database".to_string()),
+    };
+
+    let rekey_summary = match lanrurugi_storage::rebuild::rekey_all(
+        &repos.archives,
+        &repos.categories,
+        &repos.groupings,
+        jobs,
+        job_id,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            record_manual(
+                state,
+                auth,
+                action_type,
+                rebuild_failure_target,
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            return Err(e.to_string());
+        }
+    };
+
+    let scan_summary = lanrurugi_scanner::full_scan::full_scan(
+        &state.library.archive_dir,
+        &repos.archives,
+        &state.redis.config,
+        &state.redis.search,
+        &state.library.thumb_dir,
+        jobs,
+        job_id,
+        Some(state.new_archive_tx.clone()),
+    )
+    .await;
+
+    let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
+
+    // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
+    // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`
+    // reverse index existed has never had its membership written into it at all, regardless of
+    // whether this particular rebuild happened to change any archive ID.
+    if let Err(e) =
+        lanrurugi_storage::rebuild::backfill_reverse_indexes(&repos.categories, &repos.groupings)
+            .await
+    {
+        record_manual(
+            state,
+            auth,
+            action_type,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("database".to_string()),
+            },
+            Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
+        return Err(e.to_string());
+    }
+
+    Ok(json!({
+        "rekeyed": rekey_summary.rekeyed.len(),
+        "unchanged": rekey_summary.unchanged,
+        "missing_file": rekey_summary.missing_file,
+        "scanned": scan_summary.scanned,
+        "newly_catalogued": scan_summary.catalogued,
+        "errors": scan_summary.errors,
+        "pagecount_heal": {
+            "checked": heal_summary.checked,
+            "healed": heal_summary.healed,
+            "failed": heal_summary.failed,
+            "skipped_known_failed": heal_summary.skipped_known_failed,
+            "details": heal_summary.details,
+        },
+    }))
+}
+
 async fn rebuild_index(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
@@ -507,46 +629,159 @@ async fn rebuild_index(
 
     let job_id = state.jobs.create("rebuild_index").await;
     let jobs = state.jobs.clone();
-    let repos = state.repos.clone();
-    let redis = state.redis.clone();
-    let library_path = state.library.archive_dir.clone();
-    let thumb_dir = state.library.thumb_dir.clone();
     let job_id_for_task = job_id.clone();
-    // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` spawns once at
-    // startup — a manually-triggered rebuild discovering previously-invisible files should
-    // auto-tag them exactly the same way the watcher/startup scan would, so this just hands that
-    // same consumer a clone of its sender rather than spawning a redundant one of its own.
-    let new_archive_tx = state.new_archive_tx.clone();
     let state_for_task = state.clone();
     let auth_for_task = auth.as_ref().map(|e| e.0.clone());
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
-
-        let rebuild_failure_target = ActivityTarget {
-            id: None,
-            label: None,
-            kind: Some("database".to_string()),
-        };
-
-        let rekey_summary = match lanrurugi_storage::rebuild::rekey_all(
-            &repos.archives,
-            &repos.categories,
-            &repos.groupings,
-            &jobs,
+        match run_rebuild_sequence(
+            &state_for_task,
             &job_id_for_task,
+            action_types::DATABASE_REBUILD_INDEX,
+            auth_for_task.as_ref(),
         )
         .await
         {
-            Ok(s) => s,
+            Ok(result) => jobs.finish(&job_id_for_task, result).await,
+            Err(e) => jobs.fail(&job_id_for_task, e).await,
+        }
+    });
+
+    axum::Json(json!({
+        "operation": "rebuild_index",
+        "success": 1,
+        "job": job_id,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ImportConflictModeParam {
+    Overwrite,
+    Merge,
+    Skip,
+}
+
+impl From<ImportConflictModeParam> for lanrurugi_backup::import_legacy::ImportConflictMode {
+    fn from(m: ImportConflictModeParam) -> Self {
+        match m {
+            ImportConflictModeParam::Overwrite => Self::Overwrite,
+            ImportConflictModeParam::Merge => Self::Merge,
+            ImportConflictModeParam::Skip => Self::Skip,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportLegacyQuery {
+    on_existing: ImportConflictModeParam,
+    /// See `lanrurugi_backup::import_legacy::import_from_legacy`'s own `minimize_tags` param docs.
+    /// Defaults to `false` (full tag import) when the query string omits it — matches every other
+    /// boolean query param in this API (e.g. `ArchiveListParams`'s own `new_only`).
+    #[serde(default)]
+    minimize_tags: bool,
+}
+
+/// Imports a LANraragi (or LANrurugi) backup JSON file the caller uploads directly — no live
+/// connection to any remote Redis instance (see `lanrurugi_backup::import_legacy`'s own module
+/// docs for why: the official LANraragi Docker image never exposes its bundled Redis outside the
+/// container by default). Same multipart-file-upload shape as `queue_restore` above, but this is
+/// deliberately its own independent handler/parsing/persistence path, not a variant of
+/// `queue_restore` — see `import_legacy`'s own docs on why the two must not share code despite
+/// superficially similar JSON shapes.
+async fn queue_import_legacy(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Query(query): Query<ImportLegacyQuery>,
+    mut multipart: Multipart,
+) -> Response {
+    let mut file_bytes: Option<Vec<u8>> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
             Err(e) => {
-                // The rebuild task actually started and failed partway through (re-keying pass) —
-                // distinct from the "request accepted" record already written above.
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "queue_import_legacy",
+                    e.to_string(),
+                )
+            }
+        };
+        if field.name() == Some("file") {
+            file_bytes = field.bytes().await.ok().map(|b| b.to_vec());
+        }
+    }
+    let Some(bytes) = file_bytes else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "queue_import_legacy",
+            "No file provided.",
+        );
+    };
+    let doc: lanrurugi_backup::import_legacy::LegacyBackupDocument =
+        match serde_json::from_slice(&bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "queue_import_legacy",
+                    format!("Not a valid LANraragi backup JSON: {e}"),
+                )
+            }
+        };
+
+    let target = ActivityTarget {
+        id: None,
+        label: None,
+        kind: Some("database".to_string()),
+    };
+
+    record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DATABASE_IMPORT_LEGACY,
+        target.clone(),
+        Outcome::Success,
+        None,
+        None,
+    )
+    .await;
+
+    let on_existing: lanrurugi_backup::import_legacy::ImportConflictMode = query.on_existing.into();
+    let minimize_tags = query.minimize_tags;
+    let job_id = state.jobs.create("import_legacy").await;
+    let jobs = state.jobs.clone();
+    let repos = state.repos.clone();
+    let job_id_for_task = job_id.clone();
+    let state_for_task = state.clone();
+    let auth_for_task = auth.as_ref().map(|e| e.0.clone());
+
+    let import_snapshots = state.import_snapshots.clone();
+
+    tokio::spawn(async move {
+        jobs.mark_active(&job_id_for_task).await;
+        let import_result = lanrurugi_backup::import_legacy::import_from_legacy(
+            doc,
+            on_existing,
+            minimize_tags,
+            &repos.archives,
+            &repos.categories,
+            &repos.groupings,
+            &repos.stamps,
+        )
+        .await;
+
+        let (summary, snapshot) = match import_result {
+            Ok(result) => result,
+            Err(e) => {
                 record_manual(
                     &state_for_task,
                     auth_for_task.as_ref(),
-                    action_types::DATABASE_REBUILD_INDEX,
-                    rebuild_failure_target,
+                    action_types::DATABASE_IMPORT_LEGACY,
+                    target,
                     Outcome::Failure {
                         reason: e.to_string(),
                     },
@@ -559,77 +794,186 @@ async fn rebuild_index(
             }
         };
 
-        let scan_summary = lanrurugi_scanner::full_scan::full_scan(
-            &library_path,
-            &repos.archives,
-            &redis.config,
-            &redis.search,
-            &thumb_dir,
-            &jobs,
+        // A snapshot with nothing in it (nothing this import actually overwrote — e.g. every
+        // record was skipped or matched nothing) is not worth a rollback point; saving it would
+        // just be a no-op entry cluttering the list with nothing to undo.
+        let snapshot_is_empty = snapshot.archives.is_empty()
+            && snapshot.categories.is_empty()
+            && snapshot.tankoubons.is_empty()
+            && snapshot.stamps.is_empty();
+        if !snapshot_is_empty {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_secs() as i64;
+            if let Err(e) = import_snapshots.save(now, snapshot).await {
+                tracing::warn!(error = %e, "failed to save import rollback snapshot — import itself still succeeded");
+            }
+        }
+        let import_count = match import_snapshots.increment_import_count().await {
+            Ok(count) => count,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to increment import count");
+                0
+            }
+        };
+
+        match run_rebuild_sequence(
+            &state_for_task,
             &job_id_for_task,
-            Some(new_archive_tx),
-        )
-        .await;
-
-        let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
-
-        // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
-        // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`
-        // reverse index existed has never had its membership written into it at all, regardless of
-        // whether this particular rebuild happened to change any archive ID.
-        if let Err(e) = lanrurugi_storage::rebuild::backfill_reverse_indexes(
-            &repos.categories,
-            &repos.groupings,
+            action_types::DATABASE_IMPORT_LEGACY,
+            auth_for_task.as_ref(),
         )
         .await
         {
-            // Same reasoning as the re-key failure above — the rebuild ran and failed on its
-            // reverse-index backfill pass, a real operational failure worth its own record.
-            record_manual(
-                &state_for_task,
-                auth_for_task.as_ref(),
-                action_types::DATABASE_REBUILD_INDEX,
-                ActivityTarget {
-                    id: None,
-                    label: None,
-                    kind: Some("database".to_string()),
-                },
-                Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                None,
-            )
-            .await;
-            jobs.fail(&job_id_for_task, e.to_string()).await;
-            return;
+            Ok(rebuild_result) => {
+                jobs.finish(
+                    &job_id_for_task,
+                    json!({
+                        "archives_updated": summary.archives_updated,
+                        "archives_skipped_already_exists": summary.archives_skipped_already_exists,
+                        "archives_skipped_no_match": summary.archives_skipped_no_match,
+                        "archives_ambiguous_match": summary.archives_ambiguous_match,
+                        "titles_mojibake_repaired": summary.titles_mojibake_repaired,
+                        "categories_restored": summary.categories_restored,
+                        "tankoubons_restored": summary.tankoubons_restored,
+                        "stamps_restored": summary.stamps_restored,
+                        "rebuild": rebuild_result,
+                        "import_count": import_count,
+                    }),
+                )
+                .await;
+            }
+            Err(e) => jobs.fail(&job_id_for_task, e).await,
         }
-
-        jobs.finish(
-            &job_id_for_task,
-            json!({
-                "rekeyed": rekey_summary.rekeyed.len(),
-                "unchanged": rekey_summary.unchanged,
-                "missing_file": rekey_summary.missing_file,
-                "scanned": scan_summary.scanned,
-                "newly_catalogued": scan_summary.catalogued,
-                "errors": scan_summary.errors,
-                "pagecount_heal": {
-                    "checked": heal_summary.checked,
-                    "healed": heal_summary.healed,
-                    "failed": heal_summary.failed,
-                    "skipped_known_failed": heal_summary.skipped_known_failed,
-                    "details": heal_summary.details,
-                },
-            }),
-        )
-        .await;
     });
 
     axum::Json(json!({
-        "operation": "rebuild_index",
+        "operation": "queue_import_legacy",
         "success": 1,
         "job": job_id,
     }))
     .into_response()
+}
+
+/// How many times this instance has ever run a LANraragi import — read by the frontend before
+/// showing the import UI, so it can warn ("you've done this before — consider a full backup
+/// first") on a 2nd-or-later import without waiting for the import itself to complete. Read-only,
+/// separate from `queue_import_legacy`'s own increment (which happens after a real import
+/// finishes), matching `ImportSnapshotRepository::import_count`'s own read/increment split.
+async fn import_legacy_count(State(state): State<AppState>) -> Response {
+    match state.import_snapshots.import_count().await {
+        Ok(count) => axum::Json(json!({ "import_count": count })).into_response(),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "import_legacy_count",
+            e.to_string(),
+        ),
+    }
+}
+
+fn import_snapshot_metadata_json(
+    m: &lanrurugi_backup::import_snapshot::ImportSnapshotMetadata,
+) -> serde_json::Value {
+    json!({
+        "id": m.id,
+        "created_at": m.created_at,
+        "archive_count": m.archive_count,
+        "category_count": m.category_count,
+        "tankoubon_count": m.tankoubon_count,
+        "stamp_count": m.stamp_count,
+    })
+}
+
+/// Newest-first metadata list (no `document` payload — see
+/// `ImportSnapshotRepository::list_metadata`'s own docs) for the Backup page's Time-Machine-style
+/// rollback-point picker.
+async fn list_import_snapshots(State(state): State<AppState>) -> Response {
+    match state.import_snapshots.list_metadata().await {
+        Ok(snapshots) => {
+            let body: Vec<_> = snapshots
+                .iter()
+                .map(import_snapshot_metadata_json)
+                .collect();
+            axum::Json(body).into_response()
+        }
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "list_import_snapshots",
+            e.to_string(),
+        ),
+    }
+}
+
+/// Returns the full `BackupDocument` payload as a downloadable JSON file — same shape
+/// `POST /database/restore` accepts, so the frontend's own "restore" flow can take this file
+/// straight back in with zero format translation on either side.
+async fn download_import_snapshot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.import_snapshots.get(&id).await {
+        Ok(Some(snapshot)) => (
+            [(header::CONTENT_TYPE, "application/json")],
+            axum::Json(snapshot.document),
+        )
+            .into_response(),
+        Ok(None) => not_found(
+            "download_import_snapshot",
+            format!("Snapshot {id} not found."),
+        ),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "download_import_snapshot",
+            e.to_string(),
+        ),
+    }
+}
+
+async fn delete_import_snapshot(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.import_snapshots.get(&id).await {
+        Ok(None) => {
+            return not_found(
+                "delete_import_snapshot",
+                format!("Snapshot {id} not found."),
+            )
+        }
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "delete_import_snapshot",
+                e.to_string(),
+            )
+        }
+        Ok(Some(_)) => {}
+    };
+    match state.import_snapshots.delete(&id).await {
+        Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DATABASE_IMPORT_LEGACY,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("import_snapshot".to_string()),
+                },
+                Outcome::Success,
+                None,
+                None,
+            )
+            .await;
+            axum::Json(json!({ "operation": "delete_import_snapshot", "success": 1 }))
+                .into_response()
+        }
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "delete_import_snapshot",
+            e.to_string(),
+        ),
+    }
 }

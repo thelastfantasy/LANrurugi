@@ -31,6 +31,7 @@ import type {
   DuplicateGroup,
   ExportPatchInsertion,
   HoverPageOrderResponse,
+  ImportSnapshotMetadata,
   JobRecord,
   JobsResponse,
   LoginStatus,
@@ -809,6 +810,36 @@ export function useRenameApiToken() {
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       sendJson<{ data: ApiToken }>("PATCH", `/tokens/${encodeURIComponent(id)}`, { name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+  })
+}
+
+// --- LANraragi import rollback snapshots ---------------------------------------------------------
+// Time-Machine-style pre-write snapshots `queue_import_legacy` captures automatically — see
+// `crates/lanrurugi-backup/src/import_snapshot.rs`'s own module docs.
+
+export function useImportSnapshots() {
+  return useQuery({
+    queryKey: ["import-snapshots"],
+    queryFn: () => fetchJson<ImportSnapshotMetadata[]>("/database/import-snapshots"),
+  })
+}
+
+/** Running count of LANraragi imports this instance has ever completed — the Backup page reads
+ *  this before showing the import UI to decide whether to warn ("you've done this before —
+ *  consider a full backup first") on a 2nd-or-later import. */
+export function useImportLegacyCount() {
+  return useQuery({
+    queryKey: ["import-legacy-count"],
+    queryFn: () => fetchJson<{ import_count: number }>("/database/import-legacy/count"),
+  })
+}
+
+export function useDeleteImportSnapshot() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson("DELETE", `/database/import-snapshots/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["import-snapshots"] }),
   })
 }
 

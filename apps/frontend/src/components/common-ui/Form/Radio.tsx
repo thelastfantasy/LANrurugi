@@ -65,18 +65,18 @@ export function RadioItem({
 >) {
   return (
     <label
-      className={`inline-flex items-center gap-[6px] align-middle ${
+      className={`inline-flex items-start gap-[6px] align-middle ${
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
       }`}
     >
       <BaseRadio.Root
         value={value}
         disabled={disabled}
-        className="common-form-control-bg inline-flex size-[13px] shrink-0 items-center justify-center rounded-full border border-solid border-current p-0 outline-none"
+        className="common-form-control-bg common-radio-bg mt-[2px] inline-flex size-[13px] shrink-0 items-center justify-center rounded-full border border-solid border-current p-0 outline-none data-checked:border-[#1a73e8]"
         {...rootProps}
       >
         <BaseRadio.Indicator
-          className="size-[7px] rounded-full bg-current"
+          className="size-[7px] rounded-full bg-[#1a73e8]"
           keepMounted={false}
         />
       </BaseRadio.Root>

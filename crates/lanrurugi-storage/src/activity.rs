@@ -96,6 +96,7 @@ pub mod action_types {
     pub const DATABASE_CLEAR_NEW_FLAGS: &str = "database.clear_new_flags";
     pub const DATABASE_CLEAN: &str = "database.clean";
     pub const DATABASE_REBUILD_INDEX: &str = "database.rebuild_index";
+    pub const DATABASE_IMPORT_LEGACY: &str = "database.import_legacy";
     pub const PLUGIN_EXECUTE: &str = "plugin.execute";
     pub const PLUGIN_UPLOAD: &str = "plugin.upload";
     pub const PLUGIN_PRIORITY_UPDATE: &str = "plugin.priority_update";

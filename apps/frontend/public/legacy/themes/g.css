@@ -967,6 +967,14 @@ div.id4 {
   color: #fff;
 }
 
+/* Radio-only override — reproduces the native `<input type="radio">` look (a white/theme-colored
+   ring around a solid dot, not an all-blue filled circle like Checkbox's checkmark-in-a-box uses)
+   confirmed better-looking live, 2026-08-29. Keeps this theme's own unchecked background instead
+   of the shared blue fill above; `Radio.tsx`'s own `Indicator` draws the blue dot instead. */
+.common-form-control-bg.common-radio-bg[data-checked] {
+  background: #FFFFFF;
+}
+
 /* Additive — no legacy equivalent. Sets `Select.tsx`'s own `--select-item-bg` custom property
    (see that file's own docs on why a background can't just be a plain inline style there) so a
    `common-ui/Form/Select` popup item can be marked "this option is special" the same way

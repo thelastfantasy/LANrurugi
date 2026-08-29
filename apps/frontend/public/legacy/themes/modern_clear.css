@@ -1075,6 +1075,13 @@ div.id4 a:hover {
   color: #fff;
 }
 
+/* Radio-only override — see g.css's own docs on this rule (native-radio-style ring look,
+   confirmed live 2026-08-29). Keeps this theme's own unchecked white background instead of the
+   shared blue fill above. */
+.common-form-control-bg.common-radio-bg[data-checked] {
+  background: #FFFFFF;
+}
+
 /* Additive — no legacy equivalent. Sets `Select.tsx`'s own `--select-item-bg` custom property
    (see that file's own docs on why a background can't just be a plain inline style there) so a
    `common-ui/Form/Select` popup item can be marked "this option is special" the same way

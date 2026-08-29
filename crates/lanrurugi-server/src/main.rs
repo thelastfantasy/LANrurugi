@@ -319,6 +319,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     // Same "run it every startup, cheap no-op once already backfilled" pattern as
     // `backfill_reverse_indexes` above — `outcome` didn't always exist on `ActivityEntry`, so an
     // instance with pre-existing activity history has entries `append` never indexed by outcome at
@@ -427,6 +430,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
 
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of

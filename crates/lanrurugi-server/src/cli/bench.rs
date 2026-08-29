@@ -102,6 +102,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
 
     // Same long-lived "自动运行" auto-plugin consumer `serve`'s own `main.rs` wires up — kept
     // consistent here too (rather than a no-op sender) since `rebuild_index`'s handler (what this
@@ -156,6 +159,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
 
     {

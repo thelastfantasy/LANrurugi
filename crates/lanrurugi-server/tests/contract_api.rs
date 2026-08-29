@@ -54,6 +54,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = std::sync::Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -103,6 +106,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
     // `MockConnectInfo` — `require_api_key` extracts `ConnectInfo<SocketAddr>` unconditionally (for
     // the API-token last-used-IP field), which is normally supplied by
@@ -391,6 +395,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = std::sync::Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -440,6 +447,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -545,6 +553,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = std::sync::Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis,
         repos,
@@ -594,6 +605,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
 
     let static_dir = tempfile::tempdir().unwrap();
@@ -759,6 +771,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = std::sync::Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
 
     let library_dir = tempfile::tempdir().unwrap();
     let subfolder = library_dir.path().join("My Series");
@@ -840,6 +855,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
     let app = lanrurugi_server::app::build_app(state, None, None).layer(
         axum::extract::connect_info::MockConnectInfo(std::net::SocketAddr::from((

@@ -73,6 +73,7 @@ p, token_admin, /api/activity/:id, DELETE, deny
 p, token_admin, /api/activity/retention, PUT, deny
 p, token_admin, /api/archives, DELETE, deny
 p, token_admin, /api/database/drop, POST, deny
+p, token_admin, /api/database/import-legacy, POST, deny
 p, token_admin, /api/settings/password, POST, deny
 p, token_admin, /api/tokens, GET, deny
 p, token_admin, /api/tokens, POST, deny
@@ -90,6 +91,7 @@ p, token_guest, /api/activity/:id, DELETE, deny
 p, token_guest, /api/activity/retention, PUT, deny
 p, token_guest, /api/archives, DELETE, deny
 p, token_guest, /api/database/drop, POST, deny
+p, token_guest, /api/database/import-legacy, POST, deny
 p, token_guest, /api/settings/password, POST, deny
 p, token_guest, /api/tokens, GET, deny
 p, token_guest, /api/tokens, POST, deny

@@ -47,6 +47,9 @@ async fn test_app() -> Option<axum::Router> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let import_snapshots = Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
     let state = AppState {
         redis: redis.clone(),
         repos,
@@ -91,6 +94,7 @@ async fn test_app() -> Option<axum::Router> {
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        import_snapshots,
     };
     let app = lanrurugi_server::app::build_app(state, None, None).layer(
         axum::extract::connect_info::MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
