@@ -530,17 +530,31 @@ async fn import_from_legacy_inner(
     // coincidentally collide with an unrelated archive that happens to share a 40-char hex string —
     // basename is the only field with actual cross-library meaning (confirmed live via external
     // code review, 2026-08-29).
+    // A per-legacy-record `find_all_by_filename` call (a full `list_all()` scan each time) is
+    // O(legacy_count × current_count) — negligible for a handful of records, but a real ~6000-
+    // archive backup against a similarly-sized current instance turns into tens of millions of
+    // archive-hash reads (confirmed live via external code review, 2026-08-29). Loading the
+    // current instance's archives *once* and grouping by basename turns every legacy record's
+    // lookup into an O(1) `HashMap` access instead.
+    let mut current_by_basename: HashMap<String, Vec<String>> = HashMap::new();
+    for archive in archives.list_all().await? {
+        current_by_basename
+            .entry(archive.name)
+            .or_default()
+            .push(archive.id.into_string());
+    }
+
     let mut id_map: HashMap<String, String> = HashMap::new();
 
     for legacy_archive in &doc.archives {
-        let matches = archives
-            .find_all_by_filename(&legacy_archive.filename_or_empty())
-            .await?;
+        let matches = current_by_basename
+            .get(&legacy_archive.filename_or_empty())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         match matches.len() {
             0 => summary.archives_skipped_no_match += 1,
             1 => {
-                let matched_id = matches[0].id.as_str().to_string();
-                id_map.insert(legacy_archive.arcid.clone(), matched_id);
+                id_map.insert(legacy_archive.arcid.clone(), matches[0].clone());
             }
             _ => summary.archives_ambiguous_match += 1,
         }
@@ -673,7 +687,20 @@ async fn import_from_legacy_inner(
     // whatever this call is about to overwrite, via `crate::build`'s own `to_backup_*` converters
     // (`pub(crate)`) rather than hand-duplicating the field mapping here.
     let existing_categories = categories.list_all().await?;
-    let category_by_name: HashMap<String, Category> = existing_categories
+    // `&mut` and updated after every write (not built once and left read-only) for two reasons
+    // (both caught live via external code review, 2026-08-29):
+    // 1. If this instance already has more than one category sharing a name — legacy has no
+    //    uniqueness constraint on category names, so this can genuinely happen — a build-once
+    //    map keyed by name would silently keep only one of them, and every legacy record for that
+    //    name would only ever reconcile against the surviving one, silently dropping the other.
+    //    Not fully solved here (this map still keys by name — a real duplicate-name pair on this
+    //    instance is inherently ambiguous to reconcile against by name alone), but at least a
+    //    freshly-created entry (case 2 below) doesn't compound the problem by creating *another*
+    //    one.
+    // 2. Two legacy records sharing a name within the *same* import: the first creates a new
+    //    category and must be visible to the second so it reconciles against that fresh category
+    //    instead of independently creating a second same-named one.
+    let mut category_by_name: HashMap<String, Category> = existing_categories
         .into_iter()
         .map(|c| (c.name.clone(), c))
         .collect();
@@ -701,26 +728,27 @@ async fn import_from_legacy_inner(
                 (catid, false, false)
             }
         };
-        categories
-            .save(&Category {
-                catid,
-                name: legacy_category.name.clone(),
-                search: legacy_category.search.clone(),
-                archives: legacy_category
-                    .archives
-                    .iter()
-                    .cloned()
-                    .map(ArchiveId)
-                    .collect(),
-                pinned,
-                visible_to_guest,
-            })
-            .await?;
+        let saved = Category {
+            catid,
+            name: legacy_category.name.clone(),
+            search: legacy_category.search.clone(),
+            archives: legacy_category
+                .archives
+                .iter()
+                .cloned()
+                .map(ArchiveId)
+                .collect(),
+            pinned,
+            visible_to_guest,
+        };
+        categories.save(&saved).await?;
+        category_by_name.insert(saved.name.clone(), saved);
         summary.categories_restored += 1;
     }
 
+    // Same `&mut`-and-updated-after-every-write reasoning as `category_by_name` above.
     let existing_tankoubons = groupings.list_all().await?;
-    let tankoubon_by_name: HashMap<String, Grouping> = existing_tankoubons
+    let mut tankoubon_by_name: HashMap<String, Grouping> = existing_tankoubons
         .into_iter()
         .map(|g| (g.name.clone(), g))
         .collect();
@@ -731,47 +759,56 @@ async fn import_from_legacy_inner(
             summary.tankoubons_skipped_already_exists += 1;
             continue;
         }
-        let (tankid, progress, thumbnail_manual, thumbnail_source_archive, thumbnail_source_page) =
-            match &existing {
-                Some(existing) => {
-                    snapshot
-                        .tankoubons
-                        .push(crate::build::to_backup_tankoubon(existing.clone()));
-                    (
-                        existing.tankid.clone(),
-                        existing.progress,
-                        existing.thumbnail_manual,
-                        existing.thumbnail_source_archive.clone(),
-                        existing.thumbnail_source_page,
-                    )
-                }
-                None => {
-                    let tankid = allocate_tank_id(groupings, &mut next_tankid_attempt).await?;
-                    summary.new_tankoubon_ids.push(tankid.as_str().to_string());
-                    (tankid, 0, false, None, None)
-                }
-            };
-        groupings
-            .save(&Grouping {
-                tankid,
-                name: legacy_tank.name.clone(),
-                summary: legacy_tank.summary.clone(),
-                tags: legacy_tank.tags.clone(),
-                progress,
-                archives: legacy_tank
-                    .archives
-                    .iter()
-                    .cloned()
-                    .map(ArchiveId)
-                    .collect(),
-                thumbnail_manual,
-                thumbnail_source_archive,
-                thumbnail_source_page,
-                chapter_names: Default::default(),
-                created_at: None,
-                updated_at: None,
-            })
-            .await?;
+        let (
+            tankid,
+            progress,
+            thumbnail_manual,
+            thumbnail_source_archive,
+            thumbnail_source_page,
+            chapter_names,
+            created_at,
+        ) = match &existing {
+            Some(existing) => {
+                snapshot
+                    .tankoubons
+                    .push(crate::build::to_backup_tankoubon(existing.clone()));
+                (
+                    existing.tankid.clone(),
+                    existing.progress,
+                    existing.thumbnail_manual,
+                    existing.thumbnail_source_archive.clone(),
+                    existing.thumbnail_source_page,
+                    existing.chapter_names.clone(),
+                    existing.created_at,
+                )
+            }
+            None => {
+                let tankid = allocate_tank_id(groupings, &mut next_tankid_attempt).await?;
+                summary.new_tankoubon_ids.push(tankid.as_str().to_string());
+                (tankid, 0, false, None, None, Default::default(), None)
+            }
+        };
+        let saved = Grouping {
+            tankid,
+            name: legacy_tank.name.clone(),
+            summary: legacy_tank.summary.clone(),
+            tags: legacy_tank.tags.clone(),
+            progress,
+            archives: legacy_tank
+                .archives
+                .iter()
+                .cloned()
+                .map(ArchiveId)
+                .collect(),
+            thumbnail_manual,
+            thumbnail_source_archive,
+            thumbnail_source_page,
+            chapter_names,
+            created_at,
+            updated_at: Some(unix_seconds()),
+        };
+        groupings.save(&saved).await?;
+        tankoubon_by_name.insert(saved.name.clone(), saved);
         summary.tankoubons_restored += 1;
     }
 
@@ -812,10 +849,23 @@ async fn import_from_legacy_inner(
             }
             None => {
                 let page = page_of(&legacy_stamp.stamp_id).unwrap_or(0);
-                let stamp_id = StampId(format!(
-                    "STAMPS_{page}_{}",
-                    unix_millis_monotonic(&mut next_stamp_millis)
-                ));
+                // `next_stamp_millis` only guarantees uniqueness *within this one import call* —
+                // it says nothing about a stamp some earlier, already-completed import (or any
+                // other concurrent writer) already created under the same key, which becomes a
+                // real possibility once two imports land in the same wall-clock second (the
+                // counter's own seed). Checking existence before committing to a candidate id
+                // (looping on collision) turns a silent `restore_raw` overwrite of a real,
+                // unrelated stamp into "just pick the next candidate" instead (caught live via
+                // external code review, 2026-08-29).
+                let stamp_id = loop {
+                    let candidate = StampId(format!(
+                        "STAMPS_{page}_{}",
+                        unix_millis_monotonic(&mut next_stamp_millis)
+                    ));
+                    if stamps.get(&candidate).await?.is_none() {
+                        break candidate;
+                    }
+                };
                 summary.new_stamp_ids.push(stamp_id.as_str().to_string());
                 (stamp_id, String::new(), String::new())
             }

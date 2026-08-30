@@ -828,11 +828,26 @@ export interface ImportLegacyResult {
   /** A legacy record's basename matched more than one archive here — excluded rather than
    *  guessed, per the "accuracy over recall" requirement this feature was built around. */
   archives_ambiguous_match: number
+  /** More than one *distinct* legacy record independently resolved (by basename) to the same
+   *  archive here — purely informational, doesn't change what gets written. */
+  archives_multiple_legacy_records_same_target: number
   titles_mojibake_repaired: number
   categories_restored: number
+  categories_skipped_already_exists: number
   tankoubons_restored: number
+  tankoubons_skipped_already_exists: number
   stamps_restored: number
-  rebuild: {
+  stamps_skipped_already_exists: number
+  /** ids of brand-new category/tankoubon/stamp records this import created — these have no prior
+   *  version on this instance, so the accompanying snapshot (differential-apply, never deletes)
+   *  can't roll them back; a full "undo this import" via the snapshot won't remove them. */
+  new_category_ids: string[]
+  new_tankoubon_ids: string[]
+  new_stamp_ids: string[]
+  /** Absent when nothing was actually written (every archive/category/tankoubon/stamp was
+   *  skipped, unmatched, or ambiguous) — the backend skips the rebuild entirely in that case
+   *  rather than running one over an unchanged library. */
+  rebuild?: {
     rekeyed: number
     unchanged: number
     missing_file: number
@@ -846,6 +861,10 @@ export interface ImportLegacyResult {
       skipped_known_failed: number
     }
   }
+  /** Present only when the import failed partway through (see `import_from_legacy`'s own docs on
+   *  why this isn't transactional) — `true` if the summary/counts above reflect a partial import,
+   *  not a completed one. */
+  partial?: boolean
   /** Running count of LANraragi imports this instance has ever completed (including this one) —
    *  same value `GET /database/import-legacy/count` returns, included here too so a caller
    *  polling this job's result doesn't need a second request just to know whether to warn about
