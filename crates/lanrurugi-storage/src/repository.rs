@@ -8,6 +8,8 @@
 //! (`LRR_TITLES`, `INDEX_*`, `LRR_UNTAGGED`, `LRR_TANKGROUPED`, ...) live in `lanrurugi-search` and
 //! `lanrurugi-scanner`, which call into this module rather than duplicating its Redis access.
 
+use std::path::Path;
+
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::{Archive, Category, ChapterNameEntry, Grouping, Stamp, TocEntry};
@@ -141,6 +143,22 @@ impl ArchiveRepository {
             .into_iter()
             .filter(|a| a.name == filename)
             .collect())
+    }
+
+    /// Finds the archive whose stored `file` path has `filename` as its literal basename
+    /// (extension included) — used by `lanrurugi-scanner::pipeline`'s filename-collision check
+    /// for `DuplicatePolicy`, where the caller's `intended_filename` is always a real destination
+    /// filename (e.g. `"foo.zip"`), not `Archive::name`'s own extension-less form. Do not use
+    /// [`Self::find_by_filename`] for this — that method matches `a.name` (extension-less)
+    /// on purpose for its own caller (`import_legacy`'s legacy-basename reconciliation), so an
+    /// extensioned filename never matches there; confirmed live as the root cause of
+    /// `lanrurugi-scanner::pipeline::tests::overwrite_policy_deletes_old_archive_on_filename_collision`
+    /// silently never finding its collision target (2026-08-31).
+    pub async fn find_by_exact_file_basename(&self, filename: &str) -> Result<Option<Archive>> {
+        let archives = self.list_all().await?;
+        Ok(archives
+            .into_iter()
+            .find(|a| Path::new(&a.file).file_name().and_then(|n| n.to_str()) == Some(filename)))
     }
 
     /// Finds the archive whose stored `file` matches `file` exactly (full path, not just

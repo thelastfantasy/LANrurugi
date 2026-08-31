@@ -289,7 +289,10 @@ pub async fn ingest_file_with_policy(
     }
 
     if let Some(intended_filename) = intended_filename {
-        if let Some(existing) = archives.find_by_filename(intended_filename).await? {
+        if let Some(existing) = archives
+            .find_by_exact_file_basename(intended_filename)
+            .await?
+        {
             if existing.id != id {
                 match duplicate_policy {
                     DuplicatePolicy::Reject => {
@@ -819,10 +822,18 @@ mod tests {
         let archives = ArchiveRepository::new(archive_pool);
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
+        // Unique per run — `find_by_exact_file_basename` does a full `list_all()` scan and takes
+        // the first match, so a fixed literal here can collide with a *previous* (possibly
+        // panicked-before-cleanup) test run's own leftover record in this same shared test Redis
+        // DB, silently deleting the wrong stale archive instead of this run's real `existing` one
+        // (confirmed live as a real, reproducible flake, 2026-08-31 — same root cause
+        // `activity.rs`'s own test-timestamp doc comment already documents for a different
+        // fixed-literal collision). No `FLUSHDB` needed once the name itself can't collide.
+        let shared_name = format!("shared-name-{}.zip", uuid::Uuid::new_v4());
 
         // The "existing" archive: catalogued under its own staging path, but its stored `file`
-        // basename ("shared-name.zip") is what the collision check below matches against —
-        // mirroring how a real download's staging path differs from its intended filename.
+        // basename (`shared_name`) is what the collision check below matches against — mirroring
+        // how a real download's staging path differs from its intended filename.
         let existing_staged_path = make_zip_with_pages(dir.path(), "existing-staged.zip", 1);
         let existing = ingest_file(
             &archives,
@@ -837,17 +848,13 @@ mod tests {
             panic!("expected Catalogued, got {existing:?}");
         };
         let mut existing_archive = archives.get(&existing_id).await.unwrap().unwrap();
-        existing_archive.file = dir
-            .path()
-            .join("shared-name.zip")
-            .to_string_lossy()
-            .to_string();
+        existing_archive.file = dir.path().join(&shared_name).to_string_lossy().to_string();
         archives.save(&existing_archive).await.unwrap();
         // The "existing" archive's real file, at the filename the new file will collide with.
-        std::fs::copy(&existing_staged_path, dir.path().join("shared-name.zip")).unwrap();
+        std::fs::copy(&existing_staged_path, dir.path().join(&shared_name)).unwrap();
 
         // A new, content-distinct file staged under its own temp name but destined for that same
-        // "shared-name.zip" basename.
+        // `shared_name` basename.
         let new_staged_path = make_zip_with_pages(dir.path(), "new-staged.zip", 4);
 
         let outcome = ingest_file_with_policy(
@@ -856,7 +863,7 @@ mod tests {
             &search_pool,
             thumb_dir.path(),
             &new_staged_path,
-            IngestOptions::named(DuplicatePolicy::Overwrite, "shared-name.zip"),
+            IngestOptions::named(DuplicatePolicy::Overwrite, &shared_name),
         )
         .await
         .unwrap();
@@ -872,7 +879,7 @@ mod tests {
         let replacement = archives.get(&new_id).await.unwrap().unwrap();
         assert_eq!(replacement.pagecount, 4);
         assert!(
-            !dir.path().join("shared-name.zip").exists(),
+            !dir.path().join(&shared_name).exists(),
             "old archive's on-disk file should be gone (new file is still at its staged path)"
         );
 
