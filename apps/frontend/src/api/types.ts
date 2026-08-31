@@ -1,13 +1,11 @@
-// Shapes match lanrurugi-api's JSON responses, which in turn match the legacy
-// `tools/openapi.yaml` schemas (ArchiveMetadataJson / CategoryMetadataJson / TankoubonMetadataJson)
-// — constitution Principle II.
+// Shapes match lanrurugi-api's JSON responses, mirroring legacy's openapi.yaml schemas.
 
+/** One table-of-contents entry. */
 export interface TocEntry {
   name: string
   page: number
-  /** `true` for auto-generated "archive boundary" entries in Tankoubon mode — these
-   *  are NOT real ToC data from the member archive, just visual markers showing where
-   *  each member starts. They should not be editable or deletable. */
+  /** `true` for auto-generated archive-boundary markers in Tankoubon mode — not real ToC
+   *  data, not editable or deletable. */
   synthetic?: boolean
 }
 
@@ -24,19 +22,14 @@ export interface ArchiveMetadata {
   lastreadtime: number
   size: number
   toc: TocEntry[]
-  /** Only present on a synthetic Tankoubon entry within search results (`arcid` starting with
-   * `TANK_`, `extension: ".tank"`) — `null` for a real archive. Mirrors legacy's own
-   * `build_tank_json` aggregate shape (`~/LANraragi/lib/LANraragi/Utils/Database.pm`). */
+  /** Only present on a synthetic Tankoubon entry (`arcid` starting with `TANK_`); `null`
+   * otherwise. */
   archive_count: number | null
-  /** Whether a sidecar `.patch.zip` currently exists next to this archive (issue #77's own
-   * follow-on design) — additive, LANrurugi-only field alongside the legacy-pinned ones above,
-   * not present on a synthetic Tankoubon entry (`archive_count !== null`). */
+  /** Whether a sidecar `.patch.zip` exists; not present on a synthetic Tankoubon entry. */
   has_patch?: boolean
 }
 
-/** `DELETE /archives` (issue #63) — per-id outcome of a batch delete, so the caller can show
- * exactly which archives failed instead of assuming the whole batch either fully succeeded or
- * fully failed. */
+/** `DELETE /archives` — per-id outcome of a batch delete. */
 export interface BatchDeleteResult {
   id: string
   success: boolean
@@ -54,9 +47,7 @@ export interface CategoryMetadata {
   id: string
   name: string
   pinned: number
-  /** 007-guest-restricted-access: whether an unauthenticated guest visitor (when the site-wide
-   *  `guestmode` setting is on) can see archives belonging to this category — `0`/`1`, matching
-   *  `pinned`'s own integer-boolean convention. */
+  /** Whether a guest visitor can see this category's archives (`0`/`1`), when guest mode is on. */
   visible_to_guest: number
   search: string | null
   archives: string[]
@@ -78,12 +69,8 @@ export interface TankoubonListResponse {
   filtered: number
 }
 
-/** `GET /tankoubons/{id}/full` — same fields as `TankoubonMetadata` plus `full_data`, one
- * `ArchiveMetadata` per entry in `archives`, in the same (reading) order — used to build the
- * concatenated multi-archive page list a Tankoubon "read" session needs (`useTankoubonReading`).
- * `full_data.length` can be `< archives.length`: the backend silently drops any member archive
- * missing from the archive repository (a stale grouping entry) rather than erroring, so a
- * consumer must match entries by their own `arcid`, not assume index alignment with `archives`. */
+/** `GET /tankoubons/{id}/full` — like `TankoubonMetadata` plus `full_data`. `full_data.length`
+ * can be `< archives.length` (stale entries dropped); match by `arcid`, not index. */
 export interface TankoubonFullResponse {
   result: TankoubonMetadata & { full_data: ArchiveMetadata[] }
   total: number
@@ -97,29 +84,19 @@ export interface Settings {
   motd: string
   excludednamespaces: string
   tagrules: string
-  /** IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"`) — see `lanrurugi_search::engine`'s
-   * `date_added` date-range handling. Used by the frontend to render `date_added`/`timestamp` tag
-   * values as `yyyy-mm-dd` in this timezone (via `Intl.DateTimeFormat({ timeZone })`, which the
-   * browser implements natively for any IANA id) and to build same-day search URLs. */
+  /** IANA timezone id (e.g. `"Asia/Tokyo"`) used to render date-tag values and build
+   *  same-day search URLs. */
   timezone: string
-  /** How long an archive's "new" badge stays visible: `until_opened` (legacy — cleared when the
-   * reader loads), `until_finished` (cleared once read to the last page), or `3d`/`7d`/`10d`
-   * (a time window from `date_added`). See `lanrurugi_api::archives::effective_isnew`. */
+  /** How long a "new" badge stays visible: `until_opened`, `until_finished`, or `3d`/`7d`/`10d`. */
   newbadgemode: string
-  /** Whether a DeepSeek API key has been configured (Redis or DEEPSEEK_API_KEY env var).
-   *  The real key is never sent to the frontend. */
+  /** Whether a DeepSeek API key is configured; the real key is never sent to the frontend. */
   llm_api_key_set: boolean
-  /** Reader recommendation-cache precision (`"low"` / `"medium"` / `"high"`) — how many
-   *  candidates the background precompute job keeps per archive's cached similar-archive list.
-   *  Changing this triggers a full background rebuild (see `lanrurugi_api::settings::put_settings`). */
+  /** Reader recommendation-cache precision (`"low"`/`"medium"`/`"high"`); changing it triggers
+   *  a full background rebuild. */
   recommendprecision: string
-  /** JWT access-token lifetime, in seconds — the short-lived cookie a login issues; a request
-   *  past this age transparently refreshes rather than failing (see `api/client.ts`'s own
-   *  refresh-then-retry interceptor). Issue #44. */
+  /** JWT access-token lifetime in seconds; an expired request transparently refreshes. */
   access_token_lifetime_secs: number
-  /** Refresh-token lifetime, in seconds — the longer-lived, rotating, revocable cookie that
-   *  actually re-issues access tokens. See `lanrurugi_storage::refresh_tokens`'s own docs for the
-   *  rotation/reuse-detection semantics. Issue #44. */
+  /** Refresh-token lifetime in seconds — the longer-lived, rotating, revocable cookie. */
   refresh_token_lifetime_secs: number
   pagesize: number
   tempmaxsize: number
@@ -129,13 +106,11 @@ export interface Settings {
   enablecors: boolean
   localprogress: boolean
   authprogress: boolean
-  /** issue #97: placing a stamp on a not-yet-bookmarked page also bookmarks it. */
+  /** Placing a stamp on a not-yet-bookmarked page also bookmarks it. */
   stampautobookmark: boolean
-  /** issue #97: removing a page's last remaining stamp also removes that page's bookmark — only
-   *  meaningful while `stampautobookmark` is also on. */
+  /** Removing a page's last stamp also removes its bookmark (only while `stampautobookmark` is on). */
   stampautounbookmark: boolean
-  /** 007-guest-restricted-access: site-wide guest-mode master switch — see `Category.
-   *  visible_to_guest` for the per-category half of this two-layer setting. */
+  /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   enableresize: boolean
   hqthumbpages: boolean
@@ -153,11 +128,9 @@ export interface ServerInfo {
   version: string
   version_name: string
   version_desc: string
-  /** Always `true` as of 007-guest-restricted-access — password protection can no longer be
-   *  disabled. Kept present (not removed) since third-party clients read this field. */
+  /** Always `true` — password protection can no longer be disabled; kept for third-party clients. */
   has_password: boolean
-  /** Now reflects a deploy-time flag, not a Settings-page toggle (`devmode` — which had zero
-   *  server-side behavior of its own — is removed entirely). */
+  /** Reflects a deploy-time flag, not a Settings-page toggle. */
   debug_mode: boolean
   archives_per_page: number
   server_resizes_images: boolean
@@ -194,53 +167,36 @@ export interface PluginInfo {
   icon: string | null
   oneshot_arg: string | null
   login_from: string | null
-  // Case-insensitive regex (source only, no delimiters) matched against a full candidate URL —
-  // the precise trigger condition for a real download/metadata fetch (the Upload page's own
-  // URL-queue grouping). NOT what a domain-ownership lookup should match against — see
-  // `domain_match` below for that. `null` when this plugin has no meaningful URL-based routing.
+  /** Regex matched against a candidate URL to trigger a download/metadata fetch. Not for
+   * domain-ownership lookups — see `domain_match`. */
   url_pattern: string | null
-  // Bare domains (no scheme, no path, e.g. ["e-hentai.org", "exhentai.org"]) this plugin
-  // considers itself the owner of — only for domain-ownership lookups (`findPluginByDomain` in
-  // `pages/Upload/shared.tsx`), never for real dispatch (still `url_pattern`'s job). Empty when
-  // undeclared, matching the backend's own `Vec<String>` (never `null`).
+  /** Bare domains this plugin owns, used only for domain-ownership lookups, never dispatch. */
   domain_match: string[]
-  // Persisted display-order position within its own `type` group — `null` when never explicitly
-  // set. `GET /plugins/{type}` already returns the list pre-sorted by this, so a caller only needs
-  // this field to render a drag handle's current position, not to re-derive the sort.
+  /** Persisted display-order position within its `type` group; `null` when never set. */
   priority: number | null
   parameters: Array<{ name: string; desc: string; type?: string }>
-  // `specs/006-ai-plugin-wizard` FR-026/FR-027 — self-declared by a wizard-generated plugin's own
-  // `pluginInfo()`, never inferred by the host. Absent/false for a hand-written plugin.
+  /** Self-declared by a wizard-generated plugin; absent/false for a hand-written one. */
   generated_by_wizard?: boolean
 }
 
-// One `customargs` element's real type — `PluginInfo.parameters[i].type` decides which: `"bool"`
-// is a real `boolean`, `"int"` a real `number`, `"string"` (or absent) a `string`. Carried as its
-// real type end to end (settings form → PUT → Redis → plugin's own `exec_*` call) rather than a
-// uniform `string[]` a plugin has to parse back out itself.
+/** One `customargs` element's real type, per `PluginInfo.parameters[i].type`. */
 export type CustomArgValue = string | boolean | number
 
-// `GET/PUT /api/plugins/settings?namespace=...` — a plugin's own persisted custom-parameter
-// values (e.g. E-Hentai login's cookie fields), positionally matching `PluginInfo.parameters`,
-// plus (metadata plugins only) legacy's "Run Automatically" toggle. Distinct from the
-// download-specific `PluginOptions` below (concurrency/rate-limit/bundling).
+/** `GET/PUT /api/plugins/settings` — a plugin's persisted custom-parameter values plus the
+ * "Run Automatically" toggle. Distinct from the download-specific `PluginOptions` below. */
 export interface PluginSettings {
   customargs: CustomArgValue[]
   enabled: boolean
 }
 
-// `PUT`'s own body is a genuine partial update — an absent field leaves that stored value
-// untouched, so toggling "Run Automatically" doesn't require resending the current parameter
-// values just to avoid clobbering them (and vice versa).
+/** `PUT`'s body is a partial update — an absent field leaves that stored value untouched. */
 export interface PluginSettingsUpdate {
   customargs?: CustomArgValue[]
   enabled?: boolean
 }
 
-// `GET/PUT/DELETE /api/plugins/options?namespace=...` (specs/005-download-plugin-progress,
-// contracts/download-settings-api.md) — a download plugin's effective concurrency/rate-limit/
-// bundling settings (its own `pluginOptions()` declared defaults merged with any persisted user
-// override). `source` on each field distinguishes an inherited default from a user customization.
+/** `GET/PUT/DELETE /api/plugins/options` — a download plugin's effective concurrency/rate-limit/
+ * bundling settings. `source` on each field distinguishes default from user override. */
 export type PluginOptionsSource = "plugin_default" | "user_override"
 
 export interface EffectiveDomainRule {
@@ -268,16 +224,13 @@ export interface EffectiveOverwriteOnDuplicate {
 export interface PluginOptions {
   namespace: string
   domain_rules: EffectiveDomainRule[]
-  // Absent entirely for a single-resource-only plugin (contract: "only meaningful for a plugin
-  // whose execDownload can return more than one downloads[] element").
+  /** Absent for a single-resource-only plugin. */
   bundle_as_archive?: EffectiveBundleAsArchive
-  // Absent when this plugin declares no opinion on overwrite-on-duplicate — the effective
-  // behavior then falls back to the global `Settings.replacedupe` value.
+  /** Absent when the plugin has no opinion; falls back to `Settings.replacedupe`. */
   overwrite_on_duplicate?: EffectiveOverwriteOnDuplicate
 }
 
-// `PUT /api/plugins/options`'s request body — a partial update; an omitted field leaves that
-// setting at its current effective value (plugin default, or a previously-set override).
+/** `PUT /api/plugins/options`'s body — a partial update; an omitted field keeps its current value. */
 export interface PluginOptionsUpdate {
   domain_rules?: Array<{
     pattern?: string
@@ -301,9 +254,7 @@ export interface JobStatus {
   error: string | null
 }
 
-// Native job-console shape (specs/002-job-console `GET /api/jobs`), distinct from the legacy-
-// mimicking `JobStatus` above: real field names straight off `lanrurugi_core::jobs::JobStatus`
-// (`serde(rename_all = "snake_case")`), no legacy translation layer (contracts/jobs-api.md).
+/** Native job-console shape, distinct from the legacy-mimicking `JobStatus` above. */
 export type JobRecordState = "queued" | "active" | "finished" | "failed"
 
 export interface JobRecord {
@@ -311,23 +262,15 @@ export interface JobRecord {
   name: string
   state: JobRecordState
   progress: number
-  // Present only for a real download-type job once its byte transfer has actually started
-  // (specs/005-download-plugin-progress) — genuinely absent from the JSON response, not `null`,
-  // for every other job and before that point (contracts/download-settings-api.md's extended job
-  // shape). `total_bytes` may stay absent even once `downloaded_bytes` is present (the server
-  // didn't report a size) — render an indeterminate indicator in that case, not a 0/NaN percentage.
+  /** Present only once a download job's byte transfer has started. */
   downloaded_bytes?: number
+  /** May stay absent even with `downloaded_bytes` present — render indeterminate, not 0/NaN. */
   total_bytes?: number
-  // Present only for a download-type job once it has started (issue #2), mirroring the backend's
-  // `rate_limit_bytes_per_sec`/`rate_limit_matched_pattern`. `rate_limit_bytes_per_sec` absent
-  // means unlimited (no matching rule, or the rule declared no cap); both absent for every non-
-  // download job. The frontend highlights the speed label and shows a tooltip when a cap is set.
+  /** Absent means unlimited (or non-download job). */
   rate_limit_bytes_per_sec?: number
   rate_limit_matched_pattern?: string
   result: unknown | null
-  // Issue #67: `true` only when the job's own result exceeded the server's `MAX_JOB_RESULT_BYTES`
-  // cap — `result` is `null` in that case (dropped, not partially kept), and the Jobs page's
-  // detail view should show an explanatory message instead of an empty/missing result.
+  /** `true` when the result exceeded the server's size cap and was dropped (not partially kept). */
   result_truncated: boolean
   error: string | null
 }
@@ -336,10 +279,7 @@ export interface JobsResponse {
   jobs: JobRecord[]
 }
 
-// Upload page's persistent, plugin-grouped download queue (additive, no legacy equivalent) —
-// mirrors `lanrurugi_storage::download_queue::DownloadQueueItem` field-for-field. Backed by
-// Redis so a queued/in-progress item survives a page refresh or a different browser tab; the
-// actual download itself is a `JobRecord` (`job_id` below links the two once started).
+/** Upload page's persistent download queue, backed by Redis so items survive a page refresh. */
 export type DownloadQueueState =
   | "queued"
   | "starting"
@@ -349,14 +289,11 @@ export type DownloadQueueState =
   | "error"
   | "cancelled"
 
-/** An interpolation value in a `QueueError`'s `data` map — mirrors
- * `lanrurugi_core::queue_error::PluginErrorValue`'s untagged `String | Number` union. */
+/** An interpolation value in a `QueueError`'s `data` map. */
 export type PluginErrorValue = string | number
 
-/** Mirrors `lanrurugi_core::queue_error::QueueError` field-for-field, including its `#[serde(tag
- * = "kind", rename_all = "snake_case")]` wire shape — every download-queue failure the backend
- * can produce, structured (no free-text `detail`) so `QueueErrorText` (`components/`) can map
- * `kind` to a translated string and interpolate each variant's own fields into it. */
+/** Every structured download-queue failure the backend can produce, tagged by `kind` so
+ * `QueueErrorText` can map it to a translated, interpolated string. */
 export type QueueError =
   | { kind: "plugin_reported"; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
   | { kind: "plugin_execution_failed"; plugin: string }
@@ -375,12 +312,8 @@ export type QueueError =
   | { kind: "stale_after_restart" }
   | { kind: "already_patched"; existing_id: string; filename: string }
 
-/** Mirrors `lanrurugi_storage::download_queue::PendingFilenameConflict` — set on a queue item
- * whose download was blocked by a `Filename` collision (content is genuinely new, only the
- * resolved filename collides with an existing archive) and staged to `temp_dir` rather than being
- * discarded, awaiting the user's choice via `POST /download_queue/{id}/overwrite` or `.../rename`.
- * See that Rust type's own docs for why this is distinct from `QueueError::DuplicateArchive`'s
- * `content_hash` case, which never reaches this state at all. */
+/** Set on a queue item whose download was blocked by a filename collision (content is new, only
+ * the filename collides) and staged pending the user's overwrite/rename choice. */
 export interface PendingFilenameConflict {
   temp_path: string
   original_filename: string
@@ -388,20 +321,16 @@ export interface PendingFilenameConflict {
   crc32: string
 }
 
-/** Mirrors `lanrurugi_imgcompare::PageComparison` — one aligned page pair's own sharpness scores
- * (issue #77's AI quality-comparison judgment). `a`/`b` are deliberately not "new"/"old" here
- * either — `POST /download_queue/{id}/compare` (the only caller today) assigns `a` = the staged
- * download, `b` = the existing library archive, but this type itself stays symmetric. */
+/** One aligned page pair's sharpness scores. `a`/`b` stay symmetric even though the only current
+ * caller assigns `a` = staged download, `b` = existing library archive. */
 export interface PageComparison {
   a_page_index: number
   b_page_index: number
-  /** This page's own real filename inside the archive (e.g. `"012.jpg"`) — distinct from
-   * `ComparisonResult.a_filename`/`b_filename`, which are the whole *archive's* filename. */
+  /** This page's own filename inside the archive, distinct from `ComparisonResult`'s archive-level
+   * filenames. */
   a_filename: string
   b_filename: string
-  /** This page's own compressed byte size inside the archive (not the decoded pixel buffer's
-   * size). Distinct from `ComparisonResult.a_file_size`/`b_file_size`, which are the whole
-   * *archive's* size. */
+  /** This page's compressed byte size, distinct from `ComparisonResult`'s archive-level size. */
   a_file_size: number
   b_file_size: number
   a_sharpness: number
@@ -410,17 +339,13 @@ export interface PageComparison {
   a_height: number
   b_width: number
   b_height: number
-  /** Maps a point in A's pixel space to the corresponding point in B's — accounts for the two
-   * scans having a different crop margin and/or resolution (a common real scenario). Identity
-   * (`scale: 1, offset_x: 0, offset_y: 0`) when no reliable alignment was found. */
+  /** Maps a point in A's pixel space to B's, accounting for crop/resolution differences.
+   * Identity when no reliable alignment was found. */
   crop_alignment: CropAlignment
 }
 
-/** Mirrors `lanrurugi_imgcompare::crop_align::CropAlignment` — maps a point in A to the
- * corresponding point in B, in normalized per-own-dimension (UV-texture-style) coordinates: given
- * `a_u = a_px_x / a_width`, `a_v = a_px_y / a_height`, the corresponding B point is
- * `b_u = a_u * scale + offset_x`, `b_v = a_v * scale + offset_y`, then `b_px_x = b_u * b_width`,
- * `b_px_y = b_v * b_height`. */
+/** Maps a point in A to B in normalized per-dimension coordinates: `b_u = a_u * scale + offset_x`,
+ * `b_v = a_v * scale + offset_y`. */
 export interface CropAlignment {
   scale: number
   offset_x: number
@@ -429,33 +354,23 @@ export interface CropAlignment {
 
 export type ComparisonSide = "a" | "b"
 
-/** Mirrors `lanrurugi_scanner::archive_format::ArchiveEntryInfo` — one raw archive entry (file
- * *or* directory, including empty directories) from a cheap header-only walk. A strict superset
- * of the page list whenever the archive bundles non-image files (readme/torrent/etc) alongside
- * its actual pages, and of the page count whenever it contains empty directories the page list
- * silently skips. Powers the tree-structure popover next to each side's filename in the
- * comparison modal. */
+/** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
+ * popover in the comparison modal. */
 export interface ArchiveEntryInfo {
   name: string
   is_regular_file: boolean
   is_page: boolean
 }
 
-/** Mirrors `lanrurugi_imgcompare::UnmatchedPage` — one page with no counterpart on the other side,
- * plus a ready-made default for where a patch inserting it should anchor (the *other* side's own
- * page index — ready to pass straight through as `ExportPatchInsertion.after_filename`'s
- * equivalent once resolved to a real filename via `useComparePages`). `default_insert_after: null`
- * means "insert at the very start." No AI/LLM involved in computing this — see that Rust type's
- * own docs for why the alignment DP's output already encodes it. */
+/** One page with no counterpart on the other side, plus a default anchor for where a patch
+ * inserting it should go. `default_insert_after: null` means insert at the start. */
 export interface UnmatchedPage {
   page_index: number
   default_insert_after: number | null
 }
 
-/** Mirrors `lanrurugi_imgcompare::ComparisonResult`. `likely_different_language` is a separate
- * signal from `recommendation` being absent — see that Rust type's own docs for why "probably two
- * legitimate language editions" and "genuine quality conflict, too close to call" need different
- * UI treatment rather than collapsing into one "no recommendation" case. */
+/** `likely_different_language` is a separate signal from `recommendation` being absent — "two
+ * legitimate editions" and "genuine conflict" need different UI treatment. */
 export interface ComparisonResult {
   aligned_pairs: number
   a_total_pages: number
@@ -467,36 +382,21 @@ export interface ComparisonResult {
   b_filename: string
   a_file_size: number
   b_file_size: number
-  /** Every entry (files and directories, including empty ones) inside each archive — see
-   * `ArchiveEntryInfo`'s own docs. */
+  /** Every entry (files and directories) inside each archive. */
   a_entries: ArchiveEntryInfo[]
   b_entries: ArchiveEntryInfo[]
-  /** A's own pages with no counterpart found in B (issue #77's own follow-on design) — the
-   * material for the "keep some of A's extra pages as a patch" flow, read via the existing
-   * `.../compare/page?side=a&index=N` endpoint (same indices `samples`' own `a_page_index` uses). */
+  /** A's own pages with no counterpart in B — material for the "keep extra pages as patch" flow. */
   a_unmatched_pages: UnmatchedPage[]
-  /** The `b`-side mirror of `a_unmatched_pages` — for the symmetric "keep some of B's extra pages
-   * even when picking A overall" flow. */
+  /** The B-side mirror of `a_unmatched_pages`. */
   b_unmatched_pages: UnmatchedPage[]
 }
 
-/** Mirrors `lanrurugi_imgcompare::ComparePhase` — which pass produced a `CompareEvent::Sample`.
- * `"coarse"` is the fast pipeline every sample gets first (opens the result view immediately);
- * `"precise"` is a pixel-accurate replacement `crop_alignment` streamed in afterward for whichever
- * samples the coarse pass already flagged as needing a synthetic border — see
- * `useCompareQueueItemStream`'s own docs for how the two get merged into one live sample list. */
+/** Which pass produced a `CompareEvent::Sample` — `"coarse"` opens the result view immediately;
+ * `"precise"` streams in a pixel-accurate replacement afterward. */
 export type ComparePhase = "coarse" | "precise"
 
-/** Mirrors `lanrurugi_imgcompare::CompareEvent` — one `GET /download_queue/{id}/compare/stream`
- * SSE message, tagged by `type` so the frontend never has to infer phase from message order (issue
- * #77's own confirmed design: "注意sse的数据里面要进行区分，用flag标明是粗结果还是精结果"). `sample`
- * carries `sample_index` (this sample's stable position in the eventual result's own `samples`
- * array — NOT `a_page_index`/`b_page_index`) so a `"precise"` event can be applied as an in-place
- * replacement of the matching `"coarse"` one. `done` is emitted exactly once, after every `sample`
- * event across both phases, carrying every `ComparisonResult` field except `samples` itself (the
- * frontend has already assembled that incrementally by the time `done` arrives) — see that
- * variant's own docs for why this doubles as the explicit stream-end marker
- * ("并且sse要有结束标记") instead of relying on the connection closing. */
+/** One compare-stream SSE message. `sample_index` lets a `"precise"` event replace its matching
+ * `"coarse"` one in place; `done` fires once as the stream-end marker. */
 export type CompareEvent =
   | { type: "sample"; sample_index: number; phase: ComparePhase; sample: PageComparison }
   | {
@@ -516,51 +416,35 @@ export type CompareEvent =
       b_unmatched_pages: UnmatchedPage[]
     }
 
-/** One insertion group for `POST /download_queue/{id}/compare/export-patch`,
- * `/overwrite`, or `/compare/keep-b` — mirrors `lanrurugi-api`'s own `ExportPatchInsertion`.
- * `after_filename`/`before_filename` are real entry names from the *target*'s own page list (the
- * user picks the anchor visually, resolved via `useComparePages`), `page_indices` are the
- * *source* side's own unmatched page indices (from `ComparisonResult.a_unmatched_pages`/
- * `b_unmatched_pages`) to insert there, in order. Which side is source vs. target depends on the
- * endpoint: exporting/keeping B reads from A onto B; the overwrite flow (keeping A) reads from B
- * onto the new A. */
+/** One insertion group for the patch/overwrite/keep-b endpoints. `after_filename`/`before_filename`
+ * anchor into the target's page list; `page_indices` are the source side's unmatched pages to insert. */
 export interface ExportPatchInsertion {
   after_filename?: string | null
   before_filename?: string | null
   page_indices: number[]
 }
 
-// `#[serde(default)]` on the Rust side — absent on any record written before this field existed,
-// which always means 'download' (the only kind that could have produced them).
+/** Absent on records written before this field existed, which always means `'download'`. */
 export type QueueItemOrigin = "download" | "local_upload"
 
 export interface DownloadQueueItem {
   id: string
   origin?: QueueItemOrigin
-  // For a download: the source URL. For a local upload: the uploaded file's own filename — see
-  // `origin`.
+  /** Source URL for a download, or the uploaded filename for a local upload. */
   url: string
-  // Resolved once, client-side, at add-to-queue time and fixed from then on — not re-resolved at
-  // start time. For a local upload: the fixed placeholder `'local_upload'`, never a real plugin.
+  /** Resolved once at add-to-queue time. `'local_upload'` placeholder for a local upload. */
   plugin_namespace: string
-  // Known at creation time for a local upload (the request body's byte length) — absent for a
-  // download, which instead reports its size live through the linked job's own `total_bytes`
-  // (see `JobRecord`).
+  /** Known at creation for a local upload; a download reports size via the linked job instead. */
   file_size?: number | null
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean
   state: DownloadQueueState
   job_id: string | null
-  // Set once a managed download completes successfully — persisted here (not just in the linked
-  // job's own ephemeral result) so the completed-item reader link survives a server restart.
-  // Absent on items finished before this field existed, or via the unmanaged `file_path` fallback.
+  /** Set once a managed download completes, so the reader link survives a server restart. */
   archive_ids?: string[] | null
   title: string | null
-  // The metadata plugin's full `execMetadata` response (`{tags?, title?, summary?}`, per
-  // `lanrurugi_plugin::protocol::MetadataResult`), set by the "Fetch metadata" preview action —
-  // untyped since every plugin's `tags` string uses its own namespace vocabulary (E-Hentai's
-  // `artist:`/`uploader:`/`category:`/`timestamp:` mean nothing to a different site's plugin).
+  /** The metadata plugin's full response, untyped since `tags` vocabulary varies per plugin. */
   metadata_preview: Record<string, unknown> | null
   metadata_preview_at: number | null
   error: QueueError | null
@@ -568,7 +452,6 @@ export interface DownloadQueueItem {
   created_at: number
 }
 
-/** `created_at` added by backend's `list_all` sort — pure display-only ordering field. */
 export interface DownloadQueueListResponse {
   items: DownloadQueueItem[]
 }
@@ -613,32 +496,20 @@ export interface SearchResponse {
   recordsFiltered: number
 }
 
-// `GET /login/status` — deliberately not a field on `ServerInfo` (see `misc.rs`'s doc comment):
-// `/info` mirrors legacy's third-party `ServerInfo` OpenAPI schema field-for-field, and
-// "am I logged in right now" has no place in that contract, only in our own SPA session.
+/** `GET /login/status` — deliberately not a field on `ServerInfo`, which mirrors legacy's
+ * third-party OpenAPI schema and has no place for "am I logged in right now". */
 export interface LoginStatus {
-  /** As of 007-guest-restricted-access, means exactly "a valid administrator session exists" —
-   *  password login can no longer be disabled, so this no longer conflates "authenticated" with
-   *  "the whole instance happens to require no credentials". */
+  /** Means "a valid administrator session exists" — password login can't be disabled. */
   logged_in: boolean
-  /** Drives the homepage's "you're using the default password" warning toast — legacy's own
-   * `[% IF usingdefpass %]` (`Controller/Index.pm`). */
+  /** Drives the homepage's "you're using the default password" warning toast. */
   using_default_password: boolean
-  /** Whether the site-wide guest-mode switch is on (007-guest-restricted-access) — on its own
-   *  doesn't guarantee an unauthenticated visitor sees anything (at least one category also needs
-   *  to be `visible_to_guest`), but tells `RouteGuards.tsx`'s `AllowGuest` guard and `Layout.tsx`'s
-   *  nav links whether to attempt scoped guest rendering at all instead of redirecting to /login. */
+  /** Whether guest mode is on; doesn't alone guarantee a guest sees anything (needs a
+   *  `visible_to_guest` category too). */
   guest_mode_enabled: boolean
 }
 
-// `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` (issue #54) — first-party API token
-// management, replacing legacy's single fixed `apikey` mechanism. Mirrors
-// `lanrurugi_api::api_tokens::token_json` exactly — never carries the token's own hash or raw
-// value except immediately after creation (`ApiTokenCreateResponse` below).
-/** Matches `lanrurugi_storage::api_tokens::TokenRole`'s `#[serde(rename_all = "snake_case")]`
- *  wire shape exactly. `admin`: full access except token management itself and the other
- *  session-only-gated actions (see `lanrurugi_api::procedure::require_session`'s own docs).
- *  `guest`: read-only — every non-`GET` request is rejected regardless of endpoint. */
+/** First-party API token management, replacing legacy's single fixed `apikey`. Never carries the
+ * token's raw value except immediately after creation (`ApiTokenCreateResponse` below). */
 export type TokenRole = "admin" | "guest"
 
 export interface ApiToken {
@@ -652,26 +523,20 @@ export interface ApiToken {
   last_used_ip: string | null
 }
 
-/** `POST /api/tokens`'s response — same fields as `ApiToken` plus the raw token value, present
- *  only this once (the server never stores or returns it again after this response). */
+/** `POST /api/tokens`'s response — same as `ApiToken` plus the raw token value, present only once. */
 export interface ApiTokenCreateResponse extends ApiToken {
   token: string
 }
 
-// Matches `lanrurugi-api::stamps::StampJson` exactly (constitution Principle II, verified against
-// `~/LANraragi/tools/openapi.yaml` + `Model/Stamp.pm`). `position` is a single "x,y" string, not a
-// pre-split pair, matching legacy's own storage shape.
+/** `position` is a single "x,y" string, not a pre-split pair, matching legacy's storage shape. */
 export interface StampJson {
   id: string
   position: string
   content: string
-  /** A literal emoji character, or a Font Awesome class name prefixed `fa:` (e.g. `fa:fa-heart`)
-   * — see the backend's own `Stamp::icon` docs. Empty string means "no custom icon, use the
-   * default marker pin," true for every stamp created before this field existed. */
+  /** A literal emoji, or a Font Awesome class prefixed `fa:`. Empty means no custom icon. */
   icon: string
-  /** `"x,y,width,height,anchor,color"` (percent x/y/w/h, an 8-way anchor code, `#rrggbb` outline
-   * color) — see the backend's own `Stamp::rect` docs. Empty string means this stamp is a plain
-   * point with no selection rectangle, true for every stamp created before this field existed. */
+  /** `"x,y,width,height,anchor,color"` (percent x/y/w/h, 8-way anchor, outline color); empty
+   * means a plain point with no selection rectangle. */
   rect: string
 }
 
@@ -688,8 +553,7 @@ export interface RandomArchivesResponse {
   recordsTotal: number
 }
 
-// `GET /bookmarks` — page-level reading bookmarks aggregated by archive. `pages` is ascending;
-// the first entry is what a hover preview treats as "the" cover-aligned thumbnail.
+/** `pages` is ascending; the first entry is treated as the cover-aligned thumbnail. */
 export interface BookmarkedArchiveResponse {
   archive: ArchiveMetadata
   pages: number[]
@@ -697,28 +561,44 @@ export interface BookmarkedArchiveResponse {
 
 export type BookmarkSort = "bookmarked_at" | "title" | "date_added"
 
-/** `GET /bookmarks?sort=...&cursor=...&limit=...`'s own paginated envelope — `next_cursor: null`
- * means this was the last page. */
+/** Paginated envelope; `next_cursor: null` means this was the last page. */
 export interface BookmarksPageResponse {
   entries: BookmarkedArchiveResponse[]
   next_cursor: string | null
 }
 
-/** `GET /archives/{id}/bookmarks` — one archive's own bookmarked pages, each with its resolved
- * in-archive filename (`null` if the page no longer corresponds to a real entry, e.g. the archive
- * was re-scanned with fewer pages since the bookmark was added). */
+/** `GET /archives/{id}/bookmarks` — one archive's bookmarked pages, `filename: null` if the page
+ * no longer corresponds to a real entry. */
 export interface BookmarkedPageResponse {
   page: number
   filename: string | null
-  /** Unix seconds this specific page was bookmarked — for `BookmarkHoverGrid`'s own "sort by when
-   * bookmarked" option. Distinct from `BookmarkedArchiveResponse`'s archive-level sort key. */
+  /** Unix seconds this page was bookmarked. */
   bookmarked_at: number
-  /** issue #97: how many stamps currently sit on this page — `0` when none. */
+  /** How many stamps currently sit on this page — `0` when none. */
   stamp_count: number
+  /** Optional user-given name; `null` if never named. */
+  name: string | null
 }
 
-// `/activity*` (issue #87) — structured, persisted operator activity records, distinct from the
-// unstructured `tracing`-based request log. Matches `lanrurugi_storage::activity::ActivityEntry`.
+/** `GET /tankoubons/{id}/bookmarks` — every bookmark across every member archive, translated
+ * into the Tankoubon's global page numbering. */
+export interface TankBookmarkedPageResponse {
+  /** Tankoubon-global page number, not this member's local page. */
+  page: number
+  /** This member archive's local page number that `page` resolves to. */
+  local_page: number
+  local_pagecount: number
+  /** 0-based position of the member archive in the Tankoubon's reading order. */
+  archive_index: number
+  archive_id: string
+  filename: string | null
+  bookmarked_at: number
+  stamp_count: number
+  /** Optional user-given name; `null` if never named. */
+  name: string | null
+}
+
+/** Structured, persisted operator activity records, distinct from the unstructured request log. */
 export type ActivityActorKind = "session" | "token" | "system" | "anonymous"
 
 export interface ActivityActor {
@@ -731,12 +611,8 @@ export interface ActivityTarget {
   id: string | null
   label: string | null
   kind: string | null
-  /** Whether this target still exists (checked live against the database at list-fetch time) —
-   * only ever set for `archive`/`tankoubon` kinds (see `activity.rs::target_exists`'s own docs),
-   * `undefined` for every other kind (not applicable, not "unknown"). `false` means the resource
-   * was deleted by some *other*, unrelated action after this entry was written (a rating/metadata
-   * update on an archive later deleted) — the row still renders its own historical content, just
-   * with its title struck through and no longer a live link. */
+  /** Whether this target still exists (checked live); only set for `archive`/`tankoubon` kinds.
+   * `false` renders the row's title struck through and no longer a live link. */
   exists?: boolean
 }
 
@@ -746,10 +622,7 @@ export interface ActivityCausedBy {
   description: string
 }
 
-// Matches `lanrurugi_storage::activity::Outcome`'s own `#[serde(tag = "status", rename_all =
-// "snake_case")]` internally-tagged shape — a real, discriminated union on `status`, not two
-// separate optional fields, so a `Failure` entry's `reason` is only ever reachable once the caller
-// has already narrowed on `status === "failure"`.
+/** A discriminated union on `status` — `reason` is only reachable after narrowing to `"failure"`. */
 export type ActivityOutcome = { status: "success" } | { status: "failure"; reason: string }
 
 export interface ActivityEntry {
@@ -794,12 +667,11 @@ export interface ActivityFilter {
   limit?: number
   start_ts?: number
   end_ts?: number
-  /** OR'd together — matches the backend's own `ActivityFilter::actor_keys` semantics (a single
-   *  entry has exactly one actor, so this can only ever be "match any of", never "match all of"). */
+  /** OR'd together — a single entry has exactly one actor. */
   actors?: string[]
-  /** OR'd together — same reasoning as `actors` above. */
+  /** OR'd together. */
   actionTypes?: string[]
-  /** `"success"` | `"failure"`, OR'd together — same reasoning as `actors`/`actionTypes` above. */
+  /** `"success"` | `"failure"`, OR'd together. */
   outcomes?: string[]
 }
 
@@ -811,25 +683,23 @@ export interface HoverPageOrderResponse {
   order: string | null
 }
 
-/** How to reconcile an archive already present on this instance with the same archive's record
- *  in the LANraragi backup JSON being imported — see `Backup.tsx`'s own docs on why `"merge"` is
- *  the default (least information loss of the three). */
+export interface OnlyMatchingBookmarksResponse {
+  only_matching: boolean
+}
+
+/** How to reconcile an archive already present with its record in the imported backup JSON;
+ *  `"merge"` is the default (least information loss). */
 export type ImportConflictMode = "overwrite" | "merge" | "skip"
 
-/** Response shape for `POST /database/import-legacy` (`lanrurugi_backup::import_legacy::
- *  ImportLegacySummary`, plus the shared `rebuild` result `run_rebuild_sequence` also produces
- *  for `POST /database/rebuild-index`) — a real file upload, not a remote Redis connection; see
- *  `import_legacy.rs`'s own module docs for why an earlier "connect to a remote Redis" design was
- *  rejected (the official LANraragi Docker image never exposes its bundled Redis externally). */
+/** Response shape for `POST /database/import-legacy`, a real file upload not a remote Redis
+ *  connection (the official LANraragi Docker image never exposes Redis externally). */
 export interface ImportLegacyResult {
   archives_updated: number
   archives_skipped_already_exists: number
   archives_skipped_no_match: number
-  /** A legacy record's basename matched more than one archive here — excluded rather than
-   *  guessed, per the "accuracy over recall" requirement this feature was built around. */
+  /** A legacy record's basename matched more than one archive — excluded rather than guessed. */
   archives_ambiguous_match: number
-  /** More than one *distinct* legacy record independently resolved (by basename) to the same
-   *  archive here — purely informational, doesn't change what gets written. */
+  /** More than one distinct legacy record resolved to the same archive — informational only. */
   archives_multiple_legacy_records_same_target: number
   titles_mojibake_repaired: number
   categories_restored: number
@@ -838,15 +708,11 @@ export interface ImportLegacyResult {
   tankoubons_skipped_already_exists: number
   stamps_restored: number
   stamps_skipped_already_exists: number
-  /** ids of brand-new category/tankoubon/stamp records this import created — these have no prior
-   *  version on this instance, so the accompanying snapshot (differential-apply, never deletes)
-   *  can't roll them back; a full "undo this import" via the snapshot won't remove them. */
+  /** ids of brand-new records this import created — the rollback snapshot can't undo these. */
   new_category_ids: string[]
   new_tankoubon_ids: string[]
   new_stamp_ids: string[]
-  /** Absent when nothing was actually written (every archive/category/tankoubon/stamp was
-   *  skipped, unmatched, or ambiguous) — the backend skips the rebuild entirely in that case
-   *  rather than running one over an unchanged library. */
+  /** Absent when nothing was written — the backend skips the rebuild in that case. */
   rebuild?: {
     rekeyed: number
     unchanged: number
@@ -861,22 +727,14 @@ export interface ImportLegacyResult {
       skipped_known_failed: number
     }
   }
-  /** Present only when the import failed partway through (see `import_from_legacy`'s own docs on
-   *  why this isn't transactional) — `true` if the summary/counts above reflect a partial import,
-   *  not a completed one. */
+  /** `true` if the import failed partway through and this reflects a partial result. */
   partial?: boolean
-  /** Running count of LANraragi imports this instance has ever completed (including this one) —
-   *  same value `GET /database/import-legacy/count` returns, included here too so a caller
-   *  polling this job's result doesn't need a second request just to know whether to warn about
-   *  the *next* import. */
+  /** Running count of LANraragi imports this instance has ever completed, including this one. */
   import_count: number
 }
 
-/** One row of `GET /database/import-snapshots` — a Time-Machine-style rollback point
- *  `queue_import_legacy` captured automatically (the pre-write state of every record that
- *  import actually overwrote), listed newest first. No `document` payload here — see
- *  `useDownloadImportSnapshot`'s own docs for why the full backup JSON is fetched separately,
- *  only when the user actually clicks download. */
+/** One row of `GET /database/import-snapshots` — an automatic rollback point capturing the
+ *  pre-write state of every overwritten record, listed newest first. */
 export interface ImportSnapshotMetadata {
   id: string
   created_at: number

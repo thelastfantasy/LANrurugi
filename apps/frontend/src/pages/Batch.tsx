@@ -22,27 +22,16 @@ async function fetchArchive(id: string): Promise<ArchiveMetadata> {
 
 type Operation = "plugin" | "clearnew" | "tagrules" | "addcat" | "delete"
 
-/** Legacy's own progress line (`batch.js`'s `#arcs`/`#totalarcs` DOM-id template, not `{{}}`
- * interpolation) — substituted the same way rather than adding a second, differently-shaped key
- * for the same translated sentence across all 14 locales. */
+/** Legacy's own progress line uses a DOM-id template, not `{{}}` interpolation — substituted the
+ * same way rather than adding a second, differently-shaped key across all 14 locales. */
 function formatProgress(t: (key: string) => string, done: number, total: number): string {
   return t('Processed <span id="arcs"></span> out of <span id="totalarcs"></span>')
     .replace('<span id="arcs"></span>', String(done))
     .replace('<span id="totalarcs"></span>', String(total))
 }
 
-// Mirrors legacy's `~/LANraragi/templates/batch.html.tt2` — `.left-column` (task `<select
-// class="favtag-btn">` + one `.tag-options` row per operation, only the selected one shown) /
-// `.id1.right-column` (`ul.checklist` of archives to apply it to). Doesn't reproduce per-plugin arg
-// overrides or job-progress polling (`batch.js`) — this still runs each operation archive-by-archive
-// synchronously, matching what the existing hooks/API surface already do.
-/** A premade selection handed off from the index page's multi-select mode (`Library.tsx`'s own
- * "Run Batch Operations on selection" action, which opens this page in a new tab — matching
- * legacy's own `openBatchOnSelection`) — read once as the initial `selected` set and immediately
- * cleared, exactly matching legacy's own `localStorage.getItem/removeItem("msmSelection")` pair
- * (`~/LANraragi/public/js/{mod/index,batch}.js`). `TANK_`-prefixed IDs (a Tankoubon caught up in
- * the selection) are left as-is rather than expanded to their constituent archives — a real,
- * documented simplification versus legacy's own fetch-and-expand behavior. */
+/** A premade selection handed off from the Library page's "Run Batch Operations" action — read
+ * once as the initial `selected` set and immediately cleared. `TANK_` IDs are left unexpanded. */
 function takePremadeSelection(): string[] {
   const raw = localStorage.getItem(MSM_SELECTION_KEY)
   localStorage.removeItem(MSM_SELECTION_KEY)
@@ -55,6 +44,8 @@ function takePremadeSelection(): string[] {
   }
 }
 
+/** Mirrors legacy's batch.html.tt2 — task select + one operation row / archive checklist; runs
+ * each operation archive-by-archive synchronously, no job-progress polling. */
 export function Batch() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -103,11 +94,8 @@ export function Batch() {
         }>("POST", `/plugins/use?${new URLSearchParams({ plugin: pluginNamespace, id })}`).catch(
           () => null,
         )
-        // Mirrors legacy's `Controller::Batch::batch_plugin` (`set_tags($id, $new_tags, 1)` —
-        // the trailing `1` means append-to-existing, not replace — plus `set_title`/`set_summary`
-        // when present) applying the plugin's result directly, unlike the single-archive Edit
-        // page's staging-then-Save flow: a batch run over many archives has no per-archive review
-        // step to stage through, so legacy persists immediately, and this matches that.
+        // Applies the plugin's result directly, unlike the single-archive Edit page's
+        // staging-then-Save flow — a batch run has no per-archive review step.
         if (result?.success && result.data) {
           const { tags: newTags, title, summary } = result.data
           if (newTags || (title && (settings.data?.replacetitles ?? true)) || summary) {
@@ -192,10 +180,6 @@ export function Batch() {
     setBusy(true)
     setStatus(null)
     try {
-      // One request for the whole batch (issue #63) — the backend does the same per-id delete
-      // work `DELETE /archives/{id}` always did, just server-side in a loop, and reports which
-      // ids actually succeeded so a partial failure (an id already deleted elsewhere, a locked
-      // file, ...) doesn't silently read as "all done" the way the old client-side loop did.
       const response = await batchDeleteArchives.mutateAsync([...selected])
       setSelected(new Set())
       if (response.deleted === response.total) {
@@ -204,22 +188,13 @@ export function Batch() {
       } else {
         const message = t("batch.deletedNOfMFailed", { deleted: response.deleted, total: response.total })
         setStatus(message ?? null)
-        // Named per-title with its own failure reason, not just a bare count — "3 of 10 failed"
-        // alone gives no way to tell *which* 3 or *why* without cross-referencing ids by hand
-        // against server logs. Falls back to the bare id if the archive isn't in the already-loaded
-        // `archives.data` for some reason (most commonly: `error` already says "does not exist",
-        // so there's nothing in the library list to look the title up in).
         const failedLines = response.results
           .filter((r) => !r.success)
           .map((r) => {
             const title = archives.data?.find((a) => a.arcid === r.id)?.title ?? r.id
             return r.error ? `${title}: ${r.error}` : title
           })
-        // `deleted === 0` (every single one failed, not just some) still shows as `warning` here
-        // rather than `error` — the request itself succeeded (a real per-id result list came
-        // back, this isn't a network/auth failure), so it's a "here's what happened, some/all of
-        // it didn't go as planned" situation, same as a partial failure, just at 0%. The `catch`
-        // branch below is what's reserved for `error` — the request itself never completing.
+        // Still "warning", not "error" — the request itself succeeded with a real result list.
         toast({ heading: message ?? undefined, text: failedLines.join("\n"), icon: "warning" })
       }
       await refresh()
@@ -265,8 +240,6 @@ export function Batch() {
             </tbody>
           </table>
 
-          {/* Legacy overrides `.id1`'s own `width: 228px`/`min-height: 335px` (meant for
-              thumbnail cards) inline here too: `style="padding:4px; height:unset; width:97%;"`. */}
           <div className="id1 tag-options" style={{ padding: 4, height: "unset", width: "97%" }}>
             {operation === "plugin" && (
               <div className="operation plugin-operation">
@@ -346,9 +319,7 @@ export function Batch() {
           {status && <p>{status}</p>}
         </div>
 
-        {/* Legacy sets `width: 60% !important` inline on this exact element
-            (`~/LANraragi/templates/batch.html.tt2`) since `.id1`'s own class rule (`width: 228px`,
-            meant for thumbnail cards) would otherwise win. */}
+        {/* Legacy sets width: 60% inline here since .id1's own class rule would otherwise win. */}
         <div className="id1 right-column" style={{ textAlign: "center", minWidth: 400, width: "60%", height: 500, padding: 12 }}>
           <div id="arclist-container">
             <ul className="checklist" style={{ listStyle: "none" }}>

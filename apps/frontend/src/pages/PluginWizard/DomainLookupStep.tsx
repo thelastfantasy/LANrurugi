@@ -6,15 +6,8 @@ import { toast } from "@/toast"
 
 import type { DomainLookupResult, TypeCoverage } from "./useWizardSession"
 
-/** The raw `/plugin-wizard/lookup` response shape exactly as the wire has it (`lookup.rs`'s own
- * `snake_case` fields) — `DomainLookupResult`/`TypeCoverage` themselves use `camelCase`
- * (`sourceCode`/`declaredNamespace`), matching this codebase's own convention of mapping a wire
- * response into a differently-cased frontend type rather than asserting the bare JSON directly
- * into it (see e.g. `TrialRunResult.tsx`'s own `per_link` → `perLink` mapping). A previous version
- * of this file skipped that mapping step entirely — `sendJson<DomainLookupResult>` straight off
- * the wire — which silently left `TypeCoverage.sourceCode` `undefined` forever (the real key was
- * `source_code`), quietly breaking FR-009's same-domain reference-sample reuse in `GenerationStep.
- * tsx::findSameDomainSample` from the very start without ever surfacing as an error anywhere. */
+/** Raw `snake_case` wire shape of `/plugin-wizard/lookup`; mapped below to the frontend's
+ * `camelCase` `DomainLookupResult`/`TypeCoverage` rather than asserted directly. */
 interface WireTypeCoverage {
   covered: boolean
   namespace?: string
@@ -37,10 +30,7 @@ function toTypeCoverage(wire: WireTypeCoverage): TypeCoverage {
     namespace: wire.namespace,
     declaredNamespace: wire.declared_namespace,
     sourceCode: wire.source_code,
-    // `custom/` is `CUSTOM_PLUGIN_DIR` on the Rust side — every plugin the wizard itself ever
-    // saves lands under that prefix, and nothing else does (built-in plugins live directly under
-    // their own type folder, e.g. `metadata/foo.ts`), so this string check alone is enough to
-    // classify a coverage hit without the backend needing to send a separate field.
+    // `custom/` is `CUSTOM_PLUGIN_DIR` on the Rust side — only wizard-saved plugins land there.
     coverageSource: wire.namespace.startsWith("custom/") ? "ai-generated" : "built-in",
   }
 }
@@ -53,8 +43,8 @@ function toDomainLookupResult(wire: WireDomainLookupResult): DomainLookupResult 
   }
 }
 
-/** FR-001: the wizard's entry point — a domain input that triggers `POST /plugin-wizard/lookup`
- * (`contracts/plugin-wizard-api.md`) and hands the result to the parent session state. */
+/** The wizard's entry point — a domain input that triggers `POST /plugin-wizard/lookup` and hands
+ * the result to the parent session state. */
 export function DomainLookupStep({
   initialDomain,
   onLookupSucceeded,

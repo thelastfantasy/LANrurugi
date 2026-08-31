@@ -50,9 +50,7 @@ export function Edit() {
     )
   }
 
-  // Keyed by archiveId so navigating directly from one archive's edit page to another's (e.g.
-  // via a Tankoubon's member list) remounts this form with fresh initial state, rather than
-  // needing an effect to re-sync it.
+  // Keyed by archiveId so switching between archives' edit pages remounts with fresh state.
   return <EditForm key={archiveId} archiveId={archiveId} archive={metadata.data} />
 }
 
@@ -66,9 +64,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const deleteArchive = useDeleteArchive()
   const renameArchive = useRenameArchive(archiveId)
 
-  // Matches this page's own real `<h2>` heading text below ("Editing %1") — legacy's real
-  // `edit.html.tt2` puts the same "Editing {archive}" text in both places too (its own `<title>`:
-  // `[% title %] - [% c.lh("Editing [_1]", arctitle) %]`).
   useDocumentTitle(t("edit.editing1").replace("%1", archive.title))
   const [title, setTitle] = useState(archive.title)
   const [summary, setSummary] = useState(archive.summary ?? "")
@@ -77,12 +72,8 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const [pluginArg, setPluginArg] = useState("")
   const [pluginRunning, setPluginRunning] = useState(false)
 
-  // Real legacy's own suggestion list (`Edit.suggestions`, `edit.js:49-54`): every tag used at
-  // least twice across the library (`useStats(2)`), rendered as `namespace:text` when namespaced.
   const tagSuggestions = (stats.data ?? []).map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
 
-  // Legacy's own `Edit.saveMetadata` (`edit.js`) shows a "Metadata saved!" toast on every
-  // successful save via `Server.callAPIBody`'s built-in success-message handling.
   async function handleSave() {
     await updateMetadata.mutateAsync({ title, summary, tags })
     toast({ heading: t("edit.metadataSaved") ?? undefined, icon: "success" })
@@ -94,25 +85,11 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     navigate("/")
   }
 
-  // Additive, no legacy equivalent (see `archives.rs::rename_archive`'s own docs). Renames the
-  // on-disk file — distinct from `title`, which is just a display label archive.metadata already
-  // covers — so it goes through its own confirmation step and its own mutation rather than being
-  // folded into `handleSave`. The extension is split off and rendered as a fixed, non-editable
-  // suffix in the dialog (see `renameArchiveDialog`'s own docs), so only the stem ever round-trips
-  // to the backend — matches `RenameArchiveParams::stem`'s own contract exactly. Uses `archive.
-  // extension` (a separate, already-dotless field — legacy's own `name`/`filename` field is itself
-  // stored *without* an extension, verified live: `archive.filename` for a real "foo.zip" archive
-  // is just "foo") rather than trying to split one back out of `archive.filename` — that field
-  // simply doesn't have one to split.
+  /** Renames the on-disk file — distinct from `title`, a display label. Only the stem round-trips;
+   * `archive.extension` is a separate, already-dotless field. */
   async function handleRename() {
     const nextStem = await renameArchiveDialog(archive.filename, archive.extension)
     if (nextStem === null || nextStem.trim() === "" || nextStem.trim() === archive.filename) return
-    // The backend queues behind any in-progress ingest/rescan that happens to hold the same
-    // filename (`archives.rs::rename_archive`'s own docs) rather than rejecting outright, so this
-    // request can occasionally take a while — with no feedback at all in that window, a slow
-    // rename reads as the button having done nothing. `hideAfter: false` + `closeOnClick: false`
-    // (dismissed explicitly once the mutation settles, below) so it stays up for however long the
-    // wait actually takes, not a fixed guess.
     const pendingToastId = toast({
       heading: t("edit.renaming") ?? undefined,
       text: t("edit.thisMayTakeAMoment") ?? undefined,
@@ -138,10 +115,8 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     }
   }
 
-  // Real legacy's `Edit.runPlugin` always saves current form state FIRST, then fetches+merges
-  // plugin tags (`edit.js:343-345`: `Edit.saveMetadata().then(() => Edit.getTags())`) — it's not a
-  // preview, it unconditionally persists whatever's in the fields right now, matching the warning
-  // text shown below the plugin row.
+  /** Saves current form state first, then fetches+merges plugin tags — not a preview, it
+   * unconditionally persists whatever's in the fields right now. */
   async function runPlugin() {
     if (!selectedPlugin) return
     setPluginRunning(true)
@@ -158,22 +133,9 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
       }
       if (data.success && data.data) {
         const result = data.data
-        // Computed locally (not read back off `title`/`summary`/`tags` state, which wouldn't yet
-        // reflect this same render's `setTitle`/etc. calls below) so the save call after this
-        // block always persists exactly what the toasts below claim was just applied — a real,
-        // reported gap: the plugin's result only ever updated these form fields' on-screen values,
-        // never actually saved back to the archive, silently discarded on navigating away unless
-        // the user remembered to separately click "Save Metadata" themselves.
         let nextTitle = title
         let nextSummary = summary
         let nextTags = tags
-        // Mirrors legacy's own `Edit.getTags` exactly (`edit.js:293-337`): a toast per changed
-        // field, plus always one tags-outcome toast (added vs. none) whether or not new tags
-        // came back.
-        // Gated on the global "Allow Plugins to replace archive titles" toggle
-        // (`Model/Config.pm::can_replacetitles`, defaults to true) — mirrors legacy's own
-        // `Model::Plugins::exec_metadata_plugin` gate exactly (tags/summary are never gated,
-        // only title).
         if (result.title && (settings.data?.replacetitles ?? true)) {
           nextTitle = result.title
           setTitle(nextTitle)
@@ -185,11 +147,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           toast({ heading: t("edit.archiveSummaryUpdated") ?? undefined, icon: "info" })
         }
         if (result.tags) {
-          // Matches legacy's own `Edit.addTag` (`edit.js:293-337`'s per-tag `Edit.addTag` calls
-          // into the real `tagger` widget's `allow_duplicates: false` init option) — a plugin can
-          // return a tag the archive already has (re-running the same plugin, or a tag two
-          // different plugins both add), and appending the whole comma-joined string unconditionally
-          // would duplicate it instead of silently no-opping like legacy/`TagInput.commit` do.
           const existing = tags
             .split(/,\s?/)
             .map((t) => t.trim())
@@ -205,9 +162,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           }
           nextTags = merged.join(", ")
           setTags(nextTags)
-          // Reflects what was actually merged in, not the plugin's raw (possibly-already-present)
-          // return value — a re-run that comes back with tags the archive already has should say
-          // so via the "No new tags added!" branch below, not claim tags were added that weren't.
           if (actuallyNew.length > 0) {
             toast({
               heading: t("edit.addedTheFollowingTags") ?? undefined,
@@ -236,10 +190,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
 
   return (
     <div className="ido" style={{ textAlign: "center", maxWidth: 800, margin: "10px auto" }}>
-      {/* Real legacy's `Edit.pm::index` (the plain-archive, non-Tankoubon branch this page covers)
-          never passes an `artist` template var at all — only `edit_tankoubon` does — so the
-          "Editing %1 by %2" heading variant never actually fires for a plain archive; always the
-          plain "Editing %1" form. */}
       <h2 className="ih" style={{ textAlign: "center" }}>
         {t("edit.editing1").replace("%1", archive.title)}
       </h2>
@@ -250,19 +200,11 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         onSubmit={(e) => e.preventDefault()}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
-          {/* `maxWidth: 'none'` on every `.stdinput` below — legacy theme CSS's own `.stdinput`
-              rule (`g.css` etc.) caps it at `max-width: 450px`, which is fine at legacy's own
-              narrower page width but visibly wastes the right-hand two-thirds of this page's
-              wider card once the form itself was widened (this and `.ido`'s own `maxWidth` above,
-              issue #45) — the input just stops growing at 450px while the grid column it sits in
-              keeps stretching. Overriding it lets every field genuinely fill the column instead. */}
+          {/* maxWidth: 'none' overrides .stdinput's theme cap of 450px so fields fill the
+              grid column on this page's wider card. */}
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", alignItems: "center", gap: 6 }}>
             <span>{t("edit.currentFileName")}</span>
             <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} value={archive.filename} />
-            {/* height: 18px matches the filename `.stdinput` next to it exactly (verified via
-                `getBoundingClientRect()` — that input renders at 18px tall under this theme's own
-                `.stdinput` padding/font-size, not the 25px this app's other `.stdbtn`s elsewhere
-                on this page use, which sit in taller/differently-padded rows). */}
             <input
               className="stdbtn"
               type="button"
@@ -312,12 +254,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>{t("edit.importTagsFromPlugin")}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", textAlign: "left" }}>
-              {/* The help icon+tooltip sits after the button, at the row's own height, replacing
-                  legacy's own separate "Help" button (`edit.js`'s `Edit.showHelp`, a click-triggered
-                  33s toast) with a lighter hover-tooltip — mirrors the exact same
-                  `EditHelpTitle`/`EditHelp` copy (issue #45). `height: 25` on both the `<select>`
-                  and the button (matched to the select's own real rendered height) fixes the two
-                  visibly not lining up/the button reading shorter than the dropdown next to it. */}
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <select
                   className="favtag-btn"
@@ -347,12 +283,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                     <>
                       <strong>{t("edit.aboutPlugins")}</strong>
                       <br />
-                      {/* `dangerouslySetInnerHTML` — same pattern already used throughout
-                          Settings.tsx/Plugins.tsx for legacy-sourced translation strings that
-                          embed real markup (here, `<br/>`) in their own msgid, matching every
-                          other locale file's real translated value (`zh.json`/`ja.json`/etc.,
-                          migrated verbatim from legacy's own `.po` files) rather than a
-                          hand-rolled paraphrase that wouldn't line up with those. */}
                       <span
                         dangerouslySetInnerHTML={{
                           __html: t(
@@ -363,10 +293,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                     </>
                   }
                 >
-                  {/* No FA size class (`fa-lg`'s ~1.33em read too small next to the row's own
-                      25px-tall select/button; `fa-2x`, matching the warning icon below, read too
-                      large for an inline row icon) — a literal `fontSize` instead, chosen to sit
-                      visually in between and roughly fill the row's own height. */}
                   <i className="fas fa-question-circle" style={{ fontSize: 20, cursor: "help" }} aria-hidden="true"></i>
                 </Tooltip>
               </div>

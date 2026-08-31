@@ -4,11 +4,8 @@ import { useTranslation } from "react-i18next"
 import { useServerInfo, useUpdateCheck } from "@/api/hooks"
 import { toast } from "@/toast"
 
-/** Fires legacy's own update-available toast (`~/LANraragi/public/js/mod/index.js::checkVersion`'s
- * `LRR.toast({ heading: I18N.IndexUpdateNotif(...), ... })`) once a newer release is detected —
- * same trigger (`useUpdateCheck`), same `toast()` call shape, just via the shared `toast()` helper
- * instead of legacy's Preact-wrapped one. Renders nothing itself; requires the app-wide
- * `<ToastContainer />` mounted in `App.tsx` to actually display anything. */
+/** Fires an update-available toast once a newer release is detected. Renders nothing itself;
+ * requires the app-wide `<ToastContainer />` mounted in `App.tsx`. */
 export function UpdateBanner() {
   const { t } = useTranslation()
   const info = useServerInfo()
@@ -27,7 +24,7 @@ export function UpdateBanner() {
       draggable: false,
       hideAfter: 7000,
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fire if the detected release itself changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [check.data])
 
   return null

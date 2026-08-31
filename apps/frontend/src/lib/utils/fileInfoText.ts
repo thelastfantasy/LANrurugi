@@ -5,9 +5,8 @@ interface PageDimensions {
   height: number
 }
 
-/** Legacy's `.file-info` (`updateMetadata`, reader.js:1281): "filename :: WxH :: sizeKB", and
- * "fileA - fileB :: (WA+WB)xH :: (sizeA+sizeB)KB" for a double-page spread. Extracted as a pure
- * function (out of Reader.tsx's closure) so it's unit-testable without a full component render. */
+/** Legacy's `.file-info` format (`updateMetadata`, reader.js:1281): "filename :: WxH :: sizeKB",
+ * or "fileA - fileB :: (WA+WB)xH :: (sizeA+sizeB)KB" for a double-page spread. */
 export function fileInfoText(
   pageUrls: { url: string }[],
   spread: Spread,

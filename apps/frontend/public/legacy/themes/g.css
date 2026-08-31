@@ -985,3 +985,30 @@ div.id4 {
 .select-item-guest-visible {
   --select-item-bg: rgba(240, 165, 0, 0.15);
 }
+
+/* Additive — no legacy equivalent (legacy has no Base UI Menu-style popup of its own to derive
+   from). `common-ui/Display/Menu.tsx`'s own item-highlight color — reuses this theme's own
+   `.select-item-highlighted` colors verbatim (both are just Base UI's `data-highlighted` on a
+   floating popup item), kept as a separate class per this repo's own "one class per concept"
+   convention (see `.activity-combobox-item-highlighted`'s own docs above for why a shared color
+   still gets its own name per component rather than one class reused by className). */
+.menu-item-highlighted[data-highlighted] {
+  background-color: #F2EFDF;
+  color: #5C0D11;
+}
+
+/* Additive — no legacy equivalent (a transparent/borderless button for an icon inside an
+   already-chromed container, e.g. a popover bubble, where `.stdbtn`'s own background/border
+   would double up against the container's). Hover color reuses this theme's own
+   `.menu-item-highlighted` accent, not a new one. */
+.ghost-btn {
+  background: transparent;
+  border: 0 none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  background-color: #5f0d1f;
+  color: #F2EFDF;
+}

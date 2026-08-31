@@ -1,13 +1,7 @@
 import { useEffect, useState } from "react"
 
-/** Modern AI-thinking skeleton — pulsing robot icon + shimmer bars + animated dots. Extracted
- * from `TankoubonEdit.tsx` (originally private to that page's own AI-rename overlay) so
- * `Categories.tsx`'s AI-grouping-suggestions modal can reuse the exact same loading treatment
- * instead of re-implementing it — every caller gets the same "AI is thinking" feel regardless of
- * which AI feature is actually running. Ships its own `@keyframes`/`.ai-skel-bar` styles inline
- * (via a one-off `<style>` tag) so a caller doesn't need to separately import CSS — safe to mount
- * more than once on the same page, since repeated identical `@keyframes` declarations are a no-op
- * in CSS, not an error. */
+/** AI-thinking skeleton — pulsing robot icon + shimmer bars + animated dots, shared across every
+ * AI feature's loading state. Ships its own `<style>` tag; safe to mount more than once. */
 export function AiSkeleton() {
   const [dots, setDots] = useState(0)
   useEffect(() => {
@@ -16,7 +10,6 @@ export function AiSkeleton() {
   }, [])
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "20px 0" }}>
-      {/* Pulsing robot icon */}
       <div style={{ animation: "ai-pulse 1.5s ease-in-out infinite" }}>
         <i className="fa fa-robot" aria-hidden="true" style={{ fontSize: 40, opacity: 0.7 }} />
       </div>

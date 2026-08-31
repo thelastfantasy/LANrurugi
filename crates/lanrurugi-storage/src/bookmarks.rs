@@ -29,12 +29,27 @@ pub enum BookmarksError {
 type Result<T> = std::result::Result<T, BookmarksError>;
 
 const HASH_KEY: &str = "LANRURUGI_BOOKMARKS";
+/// Separate Hash, `"{archive_id}:{page}" → name` — a bookmark's optional user-given name. Kept
+/// out of `HASH_KEY`'s own value (which is just a bare timestamp) rather than folding the name
+/// into that value's own encoding, so existing data (every bookmark saved before this field
+/// existed) needs no migration at all: a field simply absent from this Hash reads back as `None`,
+/// identical to a real bookmark that was never given a name. A field here is deleted (not left as
+/// an empty string) the moment a name is cleared or its bookmark is removed — same "absent means
+/// nothing to say" posture `UPDATED_AT_HASH_KEY`'s own per-archive field takes once an archive's
+/// last bookmark is gone.
+const NAMES_HASH_KEY: &str = "LANRURUGI_BOOKMARK_NAMES";
 /// Single Redis String — the user's saved preference for how `BookmarkHoverGrid` orders pages
 /// within its own popup (one of the four `HoverGridPageOrder` variants the frontend defines, e.g.
 /// `"bookmarkedAtDesc"`). Stored verbatim as whatever string the frontend sends — this crate
 /// doesn't validate it against a fixed enum of its own, same "server trusts the frontend's own
 /// closed set of values" posture `settings.rs`'s theme field already takes.
 const PAGE_ORDER_KEY: &str = "LANRURUGI_BOOKMARK_HOVER_PAGE_ORDER";
+/// Single Redis String (`"1"`/absent, same boolean-as-string-presence convention `settings.rs`
+/// uses for its own flag fields) — whether `BookmarkHoverGrid` should, when `/bookmarks`'s own `q`
+/// filter matched an archive only via one of its bookmarks' names/page numbers (not the archive's
+/// own title/basename), show just the matching bookmark(s) instead of every bookmark on that
+/// archive. Absent means the historical always-show-everything behavior.
+const ONLY_MATCHING_BOOKMARKS_KEY: &str = "LANRURUGI_BOOKMARK_HOVER_ONLY_MATCHING";
 /// Separate Hash, `archive_id → Unix-seconds timestamp` of that archive's own most recent
 /// bookmark *event* (add or remove) — distinct from any individual bookmark's own `bookmarked_at`
 /// (which only ever moves forward on `add`, and is silently orphaned by a `remove` that happens
@@ -51,6 +66,7 @@ pub struct Bookmark {
     pub archive_id: String,
     pub page: u32,
     pub bookmarked_at: u64,
+    pub name: Option<String>,
 }
 
 fn field(archive_id: &str, page: u32) -> String {
@@ -77,16 +93,21 @@ impl BookmarksRepository {
 
     /// Every bookmark across every archive — malformed individual entries (should never happen
     /// outside manual Redis tampering) are skipped rather than failing the whole read, same
-    /// posture as `ignored_group_suggestions::list_all`.
+    /// posture as `ignored_group_suggestions::list_all`. `name` is a second Hash read
+    /// (`NAMES_HASH_KEY`) joined in by the same `"{archive_id}:{page}"` field — a bookmark with no
+    /// entry there (every bookmark saved before names existed, or one never given a name) gets
+    /// `name: None`, not an error.
     pub async fn list_all(&self) -> Result<Vec<Bookmark>> {
         let mut conn = self.pool.get().await?;
         let raw: HashMap<String, String> = conn.hgetall(HASH_KEY).await?;
+        let names: HashMap<String, String> = conn.hgetall(NAMES_HASH_KEY).await?;
         Ok(raw
             .into_iter()
             .filter_map(|(f, v)| {
                 let (archive_id, page) = parse_field(&f)?;
                 let bookmarked_at = v.parse().ok()?;
                 Some(Bookmark {
+                    name: names.get(&f).cloned(),
                     archive_id,
                     page,
                     bookmarked_at,
@@ -155,12 +176,37 @@ impl BookmarksRepository {
     pub async fn remove(&self, archive_id: &str, page: u32, removed_at: u64) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let _: () = conn.hdel(HASH_KEY, field(archive_id, page)).await?;
+        // Same field as `HASH_KEY`'s own — deleted unconditionally, not just when the bookmark
+        // turns out to have had a name (`HDEL` on a nonexistent field is already a no-op), so a
+        // removed-then-re-added bookmark never resurrects a stale name from before.
+        let _: () = conn.hdel(NAMES_HASH_KEY, field(archive_id, page)).await?;
         if self.list_for_archive(archive_id).await?.is_empty() {
             let _: () = conn.hdel(UPDATED_AT_HASH_KEY, archive_id).await?;
         } else {
             let _: () = conn
                 .hset(UPDATED_AT_HASH_KEY, archive_id, removed_at.to_string())
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// Sets or clears this bookmark's own name — `name: None` (or an empty/whitespace-only
+    /// string, already trimmed by the caller, `bookmarks.rs` in `lanrurugi-api`) deletes the
+    /// field from `NAMES_HASH_KEY` entirely rather than storing an empty string there, keeping
+    /// "no name" indistinguishable in storage from "never named at all" — a bookmark's own
+    /// existence isn't checked here (the caller, `crate::bookmarks::rename_bookmark`, already does
+    /// that and returns `404` before ever reaching this method).
+    pub async fn set_name(&self, archive_id: &str, page: u32, name: Option<&str>) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        match name {
+            Some(name) if !name.is_empty() => {
+                let _: () = conn
+                    .hset(NAMES_HASH_KEY, field(archive_id, page), name)
+                    .await?;
+            }
+            _ => {
+                let _: () = conn.hdel(NAMES_HASH_KEY, field(archive_id, page)).await?;
+            }
         }
         Ok(())
     }
@@ -176,6 +222,22 @@ impl BookmarksRepository {
     pub async fn set_hover_page_order(&self, order: &str) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let _: () = conn.set(PAGE_ORDER_KEY, order).await?;
+        Ok(())
+    }
+
+    /// `false` when never set — same "absent means the historical default" convention this
+    /// module's other preferences (`hover_page_order`) already follow.
+    pub async fn only_matching_bookmarks(&self) -> Result<bool> {
+        let mut conn = self.pool.get().await?;
+        let value: Option<String> = conn.get(ONLY_MATCHING_BOOKMARKS_KEY).await?;
+        Ok(value.as_deref() == Some("1"))
+    }
+
+    pub async fn set_only_matching_bookmarks(&self, value: bool) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = conn
+            .set(ONLY_MATCHING_BOOKMARKS_KEY, if value { "1" } else { "0" })
+            .await?;
         Ok(())
     }
 }
@@ -215,7 +277,10 @@ mod tests {
     async fn clear_test_archives(pool: &Pool, archive_ids: &[&str], pages: &[(&str, u32)]) {
         let mut conn = pool.get().await.unwrap();
         let fields: Vec<String> = pages.iter().map(|(a, p)| field(a, *p)).collect();
-        let _: () = deadpool_redis::redis::AsyncCommands::hdel(&mut conn, HASH_KEY, fields)
+        let _: () = deadpool_redis::redis::AsyncCommands::hdel(&mut conn, HASH_KEY, fields.clone())
+            .await
+            .unwrap();
+        let _: () = deadpool_redis::redis::AsyncCommands::hdel(&mut conn, NAMES_HASH_KEY, fields)
             .await
             .unwrap();
         let _: () = deadpool_redis::redis::AsyncCommands::hdel(
@@ -375,5 +440,83 @@ mod tests {
             .await
             .unwrap()
             .contains_key("archive-e"));
+    }
+
+    #[tokio::test]
+    async fn set_name_round_trips_and_list_all_joins_it_in() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = BookmarksRepository::new(pool.clone());
+        let pages = [("archive-f", 1)];
+        clear_test_archives(&pool, &["archive-f"], &pages).await;
+
+        repo.add("archive-f", 1, 1_700_000_000).await.unwrap();
+        // A bookmark saved with no name yet joins as `None` — same "absent means never named"
+        // posture as a pre-this-feature bookmark, not a special case.
+        let before = repo.list_for_archive("archive-f").await.unwrap();
+        assert_eq!(before[0].name, None);
+
+        repo.set_name("archive-f", 1, Some("决战前夜"))
+            .await
+            .unwrap();
+        let named = repo.list_for_archive("archive-f").await.unwrap();
+        assert_eq!(named[0].name, Some("决战前夜".to_string()));
+
+        repo.remove("archive-f", 1, 1_700_000_100).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_name_with_empty_or_none_clears_it() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = BookmarksRepository::new(pool.clone());
+        let pages = [("archive-g", 1), ("archive-g", 2)];
+        clear_test_archives(&pool, &["archive-g"], &pages).await;
+
+        repo.add("archive-g", 1, 1_700_000_000).await.unwrap();
+        repo.add("archive-g", 2, 1_700_000_000).await.unwrap();
+        repo.set_name("archive-g", 1, Some("temp")).await.unwrap();
+        repo.set_name("archive-g", 2, Some("temp2")).await.unwrap();
+
+        // `Some("")` clears (matches an explicitly empty string) — same effect as `None`.
+        repo.set_name("archive-g", 1, Some("")).await.unwrap();
+        repo.set_name("archive-g", 2, None).await.unwrap();
+
+        let all = repo.list_for_archive("archive-g").await.unwrap();
+        assert!(all.iter().all(|b| b.name.is_none()));
+
+        repo.remove("archive-g", 1, 1_700_000_100).await.unwrap();
+        repo.remove("archive-g", 2, 1_700_000_100).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_also_clears_the_bookmarks_own_name() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = BookmarksRepository::new(pool.clone());
+        let pages = [("archive-h", 1)];
+        clear_test_archives(&pool, &["archive-h"], &pages).await;
+
+        repo.add("archive-h", 1, 1_700_000_000).await.unwrap();
+        repo.set_name("archive-h", 1, Some("will be removed"))
+            .await
+            .unwrap();
+        repo.remove("archive-h", 1, 1_700_000_100).await.unwrap();
+
+        // Re-adding the same (archive_id, page) after a `remove` must not resurrect the old name
+        // — this is the actual bug `remove`'s own unconditional `NAMES_HASH_KEY` cleanup fixes
+        // (without it, a stale name from a previous, unrelated bookmark on this exact page would
+        // silently reappear the moment the page was bookmarked again).
+        repo.add("archive-h", 1, 1_700_000_200).await.unwrap();
+        let resurrected = repo.list_for_archive("archive-h").await.unwrap();
+        assert_eq!(resurrected[0].name, None);
+
+        repo.remove("archive-h", 1, 1_700_000_300).await.unwrap();
     }
 }

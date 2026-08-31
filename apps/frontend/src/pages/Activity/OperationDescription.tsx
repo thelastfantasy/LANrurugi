@@ -7,10 +7,8 @@ import { parseRating } from "@/lib/utils/rating"
 
 import { actionTypeLabel, hasNoTarget, isDeletionActionType, PLUGIN_TYPE_LABEL_KEYS, targetLink } from "./activityTarget"
 
-/** `action_type` values whose `before`/`after` both carry a unified `{ name: string }` shape (see
- * `archives.rs::rename_archive`'s own docs on why every rename-type write site now agrees on this
- * one field name) — these get the "将 A 重命名为 B" two-value treatment instead of the plain
- * single-title-link every other non-deletion action type uses. */
+/** `action_type` values whose `before`/`after` share a unified `{ name: string }` shape — these
+ * get the "将 A 重命名为 B" two-value treatment instead of a plain single-title-link. */
 const RENAME_ACTION_TYPES = new Set([
   "archive.rename",
   "tankoubon.rename",
@@ -26,11 +24,8 @@ function readName(value: unknown): string | undefined {
   return undefined
 }
 
-/** `download_queue.add`/`download_queue.start`'s own `after.url` — the item's real source link,
- * set unconditionally alongside `target.label` (which prefers an already-fetched title when one
- * exists, per `download_queue.rs::start_queue_item`'s own docs) so both can be shown together:
- * a title alone doesn't tell two different downloads apart, and a bare URL alone loses the
- * human-readable name once one's actually known. */
+/** `download_queue.add`/`download_queue.start`'s own `after.url` — shown alongside `target.label`
+ * so a bare URL doesn't lose the human-readable name once one's known. */
 function readUrl(value: unknown): string | undefined {
   if (value && typeof value === "object" && "url" in value) {
     const url = (value as { url: unknown }).url
@@ -41,10 +36,7 @@ function readUrl(value: unknown): string | undefined {
 
 const DOWNLOAD_QUEUE_URL_ACTION_TYPES = new Set(["download_queue.add", "download_queue.start"])
 
-/** `bookmark.add`/`bookmark.remove`'s own `after.page` — the one piece of information a bare
- * archive title/link doesn't carry: which specific page the bookmark was on
- * (`bookmarks.rs::add_bookmark`/`remove_bookmark` both record it, per that module's own
- * `record_manual` calls). */
+/** `bookmark.add`/`bookmark.remove`'s own `after.page` — which specific page the bookmark was on. */
 function readPage(value: unknown): number | undefined {
   if (value && typeof value === "object" && "page" in value) {
     const page = (value as { page: unknown }).page
@@ -55,9 +47,8 @@ function readPage(value: unknown): number | undefined {
 
 const BOOKMARK_ACTION_TYPES = new Set(["bookmark.add", "bookmark.remove"])
 
-/** `archive.rating_update`'s own `before.rating`/`after.rating` — each is either a bare
- * `"rating:X"` tag string or `null` (rating cleared/absent), per
- * `archives.rs::update_archive_metadata`'s rating-only-change branch. */
+/** `archive.rating_update`'s own `before.rating`/`after.rating` — a bare `"rating:X"` tag string
+ * or `null` (cleared/absent). */
 function readRatingTag(value: unknown): string | null | undefined {
   if (value && typeof value === "object" && "rating" in value) {
     const rating = (value as { rating: unknown }).rating
@@ -66,13 +57,8 @@ function readRatingTag(value: unknown): string | null | undefined {
   return undefined
 }
 
-/** Short, single-line summary of an `archive.metadata_update`/`tankoubon.metadata_update`'s own
- * `after` (the precomputed `tags_added`/`tags_removed` plus whether the title/name field actually
- * changed — `archives.rs` calls its field `title`, `tankoubons.rs` calls its own `name`, both
- * checked here) — for the "操作内容" column/field, which only has room for a line of text, not the
- * full `MetadataDiff` word-level diff the detail modal renders below it. `undefined` when nothing
- * about `after` looks like a real change summary (a malformed/unexpected shape), letting the
- * caller fall back to just the title. */
+/** Short single-line summary of a metadata-update's `after` (title change + tag counts) for the
+ * "操作内容" column. `undefined` lets the caller fall back to just the title. */
 function metadataChangeSummary(
   t: (key: string, opts?: Record<string, unknown>) => string | null,
   before: unknown,
@@ -93,22 +79,13 @@ function metadataChangeSummary(
   return parts.length > 0 ? parts.join(", ") : undefined
 }
 
-/** A resource title, linked to its real page when `activityTarget.ts::targetLink` has one for
- * this `target.kind`/`action_type` combination, plain text otherwise (e.g. a `database.*` entry
- * with no single-resource page at all, or a deletion-type entry — that resource no longer exists,
- * so a link would only ever 404). Shared by the rename case's own "B" half below and the plain
- * non-rename case. */
+/** A resource title, linked to its real page when `targetLink` has one, plain text otherwise. */
 function TargetTitle({ entry, title }: { entry: ActivityEntry; title: string }) {
   if (isDeletionActionType(entry.action_type)) return <>{title}</>
   const href = targetLink(entry.target.kind, entry.target.id, entry.target.label, entry.after, entry.action_type)
   if (!href) return <>{title}</>
-  // `target.exists === false` — the resource this entry is *about* (not this entry's own action)
-  // was deleted by some later, unrelated action (e.g. a rating change on an archive that's since
-  // been removed). The link would only ever 404 now, so navigation is blocked — but the `<Link>`
-  // itself (and its real `href`) stays intact rather than degrading to a plain `<span>`, per
-  // explicit feedback: hovering must still show the target URL in the browser's status bar, and
-  // right-click "copy link address" must still work. Only the click's default navigation is
-  // suppressed (`e.preventDefault()`), same struck-through styling as before.
+  // `target.exists === false`: keep the real `<Link>`/`href` (hover/copy-link still work), just
+  // suppress the click's navigation — a deleted target would only ever 404.
   return (
     <Link
       to={href}
@@ -123,13 +100,8 @@ function TargetTitle({ entry, title }: { entry: ActivityEntry; title: string }) 
   )
 }
 
-/** `settings.update`/`plugin.priority_update` (and other `plugin.*`) entries have no per-resource
- * title at all (`target.label`/`target.id` both `null` — there's no single "thing" a settings
- * change or a priority reorder is about, just a section of the config surface). Rather than
- * falling into the "no title, render em dash" case below, these get the action's own translated
- * name (`actionTypeLabel`, already shown as this entry's chip) linked to the specific accordion
- * `activityTarget.ts::targetLink` resolves for it — e.g. "更新设置" linking straight to
- * `/config?section=tags-thumbnails` when the changed fields were all thumbnail-related. */
+/** `settings.update`/`plugin.*` entries have no per-resource title — these get the action's own
+ * translated name linked to the specific accordion `targetLink` resolves for it. */
 const SECTION_LINK_ONLY_KINDS = new Set(["settings", "plugin"])
 
 function SectionLink({ entry }: { entry: ActivityEntry }) {
@@ -144,19 +116,8 @@ function SectionLink({ entry }: { entry: ActivityEntry }) {
   )
 }
 
-/** What the "操作内容" (operation content) column/field shows for one entry:
- * - a whole-database action with no single target at all (`hasNoTarget`) → a fixed, no-
- *   placeholder description string (`activity.operationFixed.*`).
- * - a rename-type action (`RENAME_ACTION_TYPES`) → "将 {old name} 重命名为 {new name}", the new
- *   name linked to the resource's real page (old name is plain text — it's no longer this
- *   resource's own name, linking it would be misleading).
- * - a deletion-type action (`isDeletionActionType`) → "已删除 {title}", plain text (the resource
- *   named no longer exists, so a link would only ever 404).
- * - everything else → the target's own title, linked to its real page when one exists for this
- *   `target.kind`, plain text otherwise.
- *
- * `target.label` (a human title, snapshotted at write time) is preferred over the raw `target.id`
- * wherever available — see `ActivityTarget::label`'s own backend docs. */
+/** What the "操作内容" column shows for one entry: a fixed description for whole-database actions,
+ * "A 重命名为 B" for renames, "已删除 X" for deletions, else the target's title, linked if possible. */
 export function OperationDescription({ entry }: { entry: ActivityEntry }) {
   const { t } = useTranslation()
 
@@ -164,17 +125,12 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
     return <>{t(`activity.operationFixed.${entry.action_type}`, { defaultValue: entry.action_type }) ?? entry.action_type}</>
   }
 
-  // `plugin.priority_update`'s own `target.label` is the raw plugin `type` value itself
-  // (`body.kind`, e.g. `"metadata"`) — translated here via the same i18n key
-  // `PluginsPage.tsx`'s own accordion header uses for that group, rather than shown as-is.
   const rawTitle = entry.target.label ?? entry.target.id
   const title =
     entry.target.kind === "plugin" && rawTitle && rawTitle in PLUGIN_TYPE_LABEL_KEYS
       ? (t(PLUGIN_TYPE_LABEL_KEYS[rawTitle]) ?? rawTitle)
       : rawTitle
   if (!title) {
-    // `settings.update`/most `plugin.*` entries have no title at all (see `SectionLink`'s own
-    // docs) — still worth a real link to the section that actually changed, not just an em dash.
     if (entry.target.kind && SECTION_LINK_ONLY_KINDS.has(entry.target.kind)) return <SectionLink entry={entry} />
     return <>—</>
   }
@@ -183,11 +139,6 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
     const oldName = readName(entry.before)
     const newName = readName(entry.after) ?? title
     if (oldName && oldName !== newName) {
-      // `activity.renamePrefix` is deliberately just the "将 {{from}} 重命名为 " lead-in, not the
-      // whole sentence — the new name is a live `<Link>`, not plain text, so it can't be baked
-      // into a single interpolated i18n string the way the rest of this component's descriptions
-      // are. This is the one place in the Activity page's copy that isn't a single self-contained
-      // translated sentence for that reason.
       return (
         <>
           {t("activity.renamePrefix", { from: oldName })}
@@ -216,16 +167,6 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
     }
   }
 
-  // A rating change's own real star-row widgets (`StarRatingDisplay`, the same read-only rendering
-  // `ArchiveOverviewOverlay.tsx`'s `TagsTable` already uses for a rating tag, not plain text) —
-  // shown right in the "操作内容" column/field itself rather than only inside the detail modal,
-  // since it's compact enough to always fit on one line unlike a full metadata diff. Shows *both*
-  // the old and new rating (old → new, an arrow between them, GitHub-diff-style before/after —
-  // matching how every other change on this page shows both sides, not just the result), omitting
-  // the "before" side only when there genuinely was none (a fresh first-time rating, not a
-  // changed one). Covers both an archive's own rating and a Tankoubon's
-  // (`tankoubons.rs::update_tankoubon`'s own rating-only branch) — same `{rating: ...}`
-  // before/after shape either way.
   if (entry.action_type === "archive.rating_update" || entry.action_type === "tankoubon.rating_update") {
     const newRatingTag = readRatingTag(entry.after)
     const oldRatingTag = readRatingTag(entry.before)
@@ -252,11 +193,6 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
     }
   }
 
-  // Metadata edits get a short "what changed" suffix right in this column/field too (see
-  // `metadataChangeSummary`'s own docs) — the full word-level diff still only renders in the
-  // detail modal below "变更内容", this is just enough to tell at a glance whether the title
-  // changed and how many tags were added/removed without opening it. Covers both an archive's own
-  // edit and a Tankoubon's (`tankoubons.rs::update_tankoubon`'s non-rating branch).
   if (entry.action_type === "archive.metadata_update" || entry.action_type === "tankoubon.metadata_update") {
     const summary = metadataChangeSummary(t, entry.before, entry.after)
     if (summary) {
@@ -270,10 +206,6 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
     }
   }
 
-  // `bookmark.add`/`bookmark.remove` get a "第 N 页" suffix — `TargetTitle` alone only ever shows
-  // the archive itself, which a page-level bookmark event needs one more piece of context beyond
-  // (an archive can carry any number of independent page bookmarks at once, so "已添加书签" on its
-  // own doesn't say which one this entry was actually about).
   if (BOOKMARK_ACTION_TYPES.has(entry.action_type)) {
     const page = readPage(entry.after)
     if (page != null) {

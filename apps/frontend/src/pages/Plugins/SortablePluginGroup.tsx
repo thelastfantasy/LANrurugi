@@ -6,23 +6,15 @@ import { SortableList } from "@/components/common-ui/Display"
 
 import { PluginCard } from "./PluginCard"
 
-/** One `type` group's drag-to-reorder plugin list (additive — legacy has no concept of plugin
- * priority at all). Local `order` state is seeded from (and re-synced with) the server's already
- * priority-sorted list, so a drag reorders instantly without waiting on the round trip, and a
- * background refetch doesn't fight the in-progress drag. On drop, persists the complete new order
- * via `useReorderPlugins` — this matters because `findMatchingPlugin` (Upload.tsx) picks the first
- * URL-pattern match in this exact order, so dragging one plugin above another is what makes it the
- * one actually used for a URL both could handle. */
+/** One `type` group's drag-to-reorder plugin list. Local `order` state is seeded from the
+ * server's list so a drag reorders instantly; order matters for `findMatchingPlugin`. */
 export function SortablePluginGroup({ type, plugins }: { type: PluginInfo["type"]; plugins: PluginInfo[] }) {
   const reorder = useReorderPlugins()
   const serverOrder = plugins.map((p) => p.namespace)
   const serverOrderKey = serverOrder.join(",")
 
-  // Local `order` state only reflects an in-progress/just-finished drag ahead of the server round
-  // trip — reset during render (React's pattern for "adjust state when a prop changes", not a
-  // `useEffect`) whenever the server's list changes for a reason other than this component's own
-  // drag. Skipped while a drag-triggered mutation is still in flight, so the just-dropped order
-  // doesn't visibly snap back to the pre-drag server value.
+  // Reset during render (not useEffect) when the server list changes for a reason other than our
+  // own drag; skipped while a drag-triggered mutation is in flight to avoid a visible snap-back.
   const [order, setOrder] = useState(serverOrder)
   const [syncedKey, setSyncedKey] = useState(serverOrderKey)
   if (serverOrderKey !== syncedKey && !reorder.isPending) {

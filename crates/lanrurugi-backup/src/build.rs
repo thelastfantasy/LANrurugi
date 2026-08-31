@@ -60,6 +60,11 @@ pub struct BackupBookmark {
     pub archive_id: String,
     pub page: u32,
     pub bookmarked_at: u64,
+    /// Additive — `#[serde(default)]` so a backup exported before named bookmarks existed
+    /// deserializes to `None` (no name) rather than a hard parse error, same posture `bookmarks`
+    /// itself on `BackupDocument` already takes for a pre-bookmarks-feature backup entirely.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,6 +129,7 @@ pub(crate) fn to_backup_bookmark(b: Bookmark) -> BackupBookmark {
         archive_id: b.archive_id,
         page: b.page,
         bookmarked_at: b.bookmarked_at,
+        name: b.name,
     }
 }
 

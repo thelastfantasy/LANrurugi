@@ -1,10 +1,5 @@
-// Shared star-rating rendering — a CSS-sprite-clip star row (empty-star background image +
-// gold-star image, the gold layer's width clipped to the exact rated fraction) rather than
-// Font Awesome's fixed on/off star icons, since only a continuously-clippable image (not a
-// discrete icon glyph) can render fractional stars at 0.1 precision — e.g. a rating of 4.3 shows
-// the 5th star's gold layer clipped to 30% width, not just rounded to the nearest half/whole
-// icon. Modeled on E-Hentai's own rating widget (empty-star + colored-star image pair, clipped by
-// width), the only real prior art for this exact interaction the user pointed to directly.
+// CSS-sprite-clip star row (empty-star base + gold-star image clipped to the rated fraction),
+// not Font Awesome's fixed icons — needed for fractional stars at 0.1 precision.
 
 const STAR_SIZE = 24
 const MAX_STARS = 5
@@ -15,10 +10,8 @@ function starFraction(rating: number, index: number): number {
   return Math.max(0, Math.min(1, rating - index))
 }
 
-/** Read-only star row for a 0-5 rating, clipped to a real tenth's precision — used wherever a
- * rating is *displayed*, not set (`ArchiveOverviewOverlay.tsx`'s `TagsTable`). The interactive
- * click/hover-to-set widget is `RatingWidget.tsx`, which reuses this same per-star sprite
- * rendering but adds pointer handling on top. */
+/** Read-only star row for a 0-5 rating at tenth precision. `RatingWidget.tsx` reuses this
+ * rendering but adds click/hover handling for the interactive case. */
 export function StarRatingDisplay({
   rating,
   size = STAR_SIZE,
@@ -35,10 +28,8 @@ export function StarRatingDisplay({
   )
 }
 
-/** One star cell: the empty-star image as the base layer, a gold-star image cropped to `fraction`
- * of its own width absolutely positioned on top — `overflow: hidden` on the crop wrapper is what
- * actually clips the gold layer's visible extent, not the image's own dimensions (the gold `<img>`
- * itself is always rendered at full `size`; only its containing box is narrower). */
+/** One star cell: empty-star base layer, gold-star image cropped to `fraction` width on top via
+ * `overflow: hidden` on the wrapper (the gold `<img>` itself always renders at full `size`). */
 export function StarSprite({ fraction, size }: { fraction: number; size: number }) {
   return (
     <span style={{ position: "relative", display: "inline-block", width: size, height: size }}>

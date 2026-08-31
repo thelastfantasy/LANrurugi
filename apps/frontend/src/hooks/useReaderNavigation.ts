@@ -1,9 +1,5 @@
-// Page-turn decision tree, ported from legacy reader.js's `changePage`/`goToPage`
-// (`~/LANraragi/public/js/reader.js:1938`/`:1337`) — manga mode negates the numeric offset and
-// swaps "first"/"last", double-page mode tries to pair `page`/`page+1` as a spread unless either
-// image is a "widespread" (auto-detected: `naturalWidth > naturalHeight`), in which case it falls
-// back to single-page display and re-anchors. All 1-indexed, matching legacy and the rest of this
-// app's archive-page API.
+/** Page-turn decision tree, ported from legacy reader.js's `changePage`/`goToPage`. All
+ * 1-indexed, matching legacy and the rest of this app's archive-page API. */
 
 export type ChangePageTarget = "prev" | "next" | "first" | "last"
 
@@ -11,13 +7,12 @@ export interface Spread {
   /** The page shown in the left DOM slot (`#img`). */
   left: number
   /** The page shown in the right DOM slot (`#img_doublepage`), or `null` if only one page is
-   * showing (first/last page, or a widespread fallback). */
+   * showing. */
   right: number | null
 }
 
-/** Resolves a navigation intent (`target`) plus current state into the next 1-indexed page. Pure
- * function — doesn't touch the DOM or fetch anything; widespread detection happens by measuring
- * already-loaded `<img>` elements at the call site (see `Reader.tsx`), same as legacy. */
+/** Resolves a navigation intent plus current state into the next 1-indexed page. Widespread
+ * detection happens by measuring already-loaded `<img>` elements at the call site (`Reader.tsx`). */
 export function computeNextPage(
   target: ChangePageTarget,
   currentPage: number,
@@ -40,10 +35,8 @@ export function clamp(page: number, min: number, max: number): number {
   return Math.min(Math.max(page, min), max)
 }
 
-/** Given the current page and whether double-page mode is on, decides which two (or one) pages to
- * display and in which DOM slot — manga mode swaps left/right so pages read highest-index-first.
- * `widespreadCheck(page)` returns true if that single page's image is wider than tall (legacy's
- * "widespread" detection) — caller supplies it since it requires a loaded image's natural size. */
+/** Decides which one or two pages to display and in which DOM slot — manga mode swaps left/right
+ * so pages read highest-index-first. `widespreadCheck` requires a loaded image's natural size. */
 export function computeSpread(
   currentPage: number,
   totalPages: number,
@@ -66,7 +59,5 @@ export function computeSpread(
     return { left: currentPage, right: null }
   }
 
-  // Normal LTR: currentPage on the left, partner on the right. Manga mode flips which page goes
-  // in which slot so the higher page number reads first (right-to-left).
   return mangaMode ? { left: partner, right: currentPage } : { left: currentPage, right: partner }
 }

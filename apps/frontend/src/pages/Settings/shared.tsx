@@ -28,12 +28,9 @@ export function CheckboxRow({
   checked: boolean
   onChange: (v: boolean) => void
   label: string
-  /** issue #97: greys out the switch (via `Switch.tsx`'s own `data-disabled` variant) without
-   * hiding the row — used for a sub-option whose parent switch is currently off, so the sub-
-   * option's existence/current value both stay visible rather than disappearing. */
+  /** Greys out the switch without hiding the row — for a sub-option whose parent is off. */
   disabled?: boolean
-  /** issue #97: left-indents this row's label to visually read as "belongs to the row above" —
-   * paired with `disabled` for a parent/child switch pair, but independently usable. */
+  /** Left-indents this row's label to read as "belongs to the row above". */
   indent?: boolean
   children: ReactNode
 }) {

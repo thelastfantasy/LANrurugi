@@ -752,3 +752,21 @@ input[type="checkbox"]:disabled {
 .bookmarks-grid div.id1 div.id3 img {
   max-height: none;
 }
+
+/* Library page's `SearchBar.tsx` — the search box and the four-button row below it each get their
+ * own `div` inside a `flexWrap: "wrap"` parent, so a narrow viewport wraps them onto two separate
+ * lines instead of squeezing everything onto one cramped row. On a wide viewport (still one row)
+ * the button row stays its own natural content width, hugging the search box's right edge — the
+ * existing, unremarkable look. Once wrapped onto its own line, though, that same content-width
+ * button row visibly doesn't line up with the search box's own full width above it, reading as
+ * lopsided (reported live, 2026-08-30). `560px` matches `lrr.css`'s own mobile breakpoint
+ * (`BookmarksPage.tsx`'s `MOBILE_BREAKPOINT` constant cites the same value) — this can't be done
+ * with an inline style alone (no container query bound to *this row's own* wrap state, just the
+ * viewport), hence a real class + `@media` rule instead. */
+@media (max-width: 560px) {
+  .searchbar-button-row {
+    width: 100%;
+    justify-content: center;
+  }
+}
+

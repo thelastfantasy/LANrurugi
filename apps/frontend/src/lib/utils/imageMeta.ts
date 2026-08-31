@@ -1,10 +1,5 @@
-/** Fetches an already-loaded `<img>`'s own byte size via a `HEAD` request's `Content-Length`
- * header, rounded down to whole KB — browsers don't expose response size for a plain `<img>` load
- * itself, so this is a second, deliberate request against the same URL (already in the browser's
- * HTTP cache from the `<img>` load, so it's cheap) purely to read that header. Resolves to `null`
- * if the header is missing/unparseable or the request itself fails (e.g. offline), matching the
- * pre-extraction callers' own silent-skip behavior — the caller's own dimensions/other metadata
- * already rendered by this point and shouldn't block or error out on this being unavailable. */
+/** Fetches an `<img>`'s byte size via a `HEAD` request's `Content-Length` header (rounded to KB)
+ * — browsers don't expose it otherwise. Resolves to `null` if unavailable. */
 export async function fetchContentLengthKb(url: string): Promise<number | null> {
   try {
     const res = await fetch(url, { method: "HEAD" })
@@ -16,9 +11,8 @@ export async function fetchContentLengthKb(url: string): Promise<number | null> 
   }
 }
 
-/** The resize-optimization metadata `serve_page` stamps on a converted page's response — lets
- * the reader's file-info bar show "served WebP" vs "original entry" side by side. `null` when the
- * page wasn't converted (no `x-lrr-resized` header) or the `HEAD` itself fails. */
+/** Resize-optimization metadata `serve_page` stamps on a converted page's response, letting the
+ * reader's file-info bar show "served WebP" vs "original entry". `null` if unconverted or the HEAD fails. */
 export interface ResizedPageInfo {
   origSizeBytes: number
   origWidth: number

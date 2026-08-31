@@ -54,7 +54,6 @@ export function usePaginatedOverview(
     [archiveId, anchorPage],
   )
 
-  // Initial load: batch around anchor page
   useEffect(() => {
     fetchedRanges.current.clear()
     const half = Math.floor(BATCH_SIZE / 2)
@@ -68,11 +67,8 @@ export function usePaginatedOverview(
     void fetchRange(from, BATCH_SIZE)
   }, [archiveId, anchorPage, fetchRange])
 
-  // Debounced: a jump (e.g. scroll-to-top) can bring dozens of placeholder cells into view in
-  // the same frame, each independently calling loadUp/loadDown — without debouncing this fires
-  // one fetch per placeholder instead of one fetch total. Waiting for a quiet 150ms window
-  // collapses that burst into a single call using whatever loadedStart/loadedEnd is current by
-  // the time the burst settles.
+  // Debounced: a jump into view can trigger loadUp/loadDown from dozens of placeholders in the
+  // same frame; without this it'd fire one fetch per placeholder instead of one total.
   const loadUpTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const loadUp = useCallback(() => {
     clearTimeout(loadUpTimer.current)
@@ -92,7 +88,6 @@ export function usePaginatedOverview(
     }, 150)
   }, [loadedEnd, total, loadingDir, fetchRange])
 
-  /** Sorted array of page numbers currently in view */
   const pages = Array.from(loadedPages.keys()).sort((a, b) => a - b)
 
   return {

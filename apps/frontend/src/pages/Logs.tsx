@@ -15,11 +15,8 @@ const CATEGORY_LABELS: Record<LogCategory, string> = {
   http: "HTTP",
 }
 
-// Matches legacy's own button copy exactly (`logs.html.tt2`'s `#show-*` buttons) for every
-// category except `http` (legacy calls the equivalent category `mojo`, after its own underlying
-// web framework — this project runs Axum, not Mojolicious, so the button copy names the protocol
-// instead of a framework this project doesn't use — issue #86), distinct from `CATEGORY_LABELS`
-// above (which is just the bare category name, used for the "Currently Viewing:" indicator).
+// Matches legacy's button copy, except `http` (legacy's `mojo` after its own framework — this
+// project runs Axum, so the button names the protocol instead).
 const CATEGORY_BUTTON_LABELS: Record<LogCategory, string> = {
   general: "View LANrurugi Logs",
   shinobu: "View Shinobu Logs",
@@ -28,11 +25,8 @@ const CATEGORY_BUTTON_LABELS: Record<LogCategory, string> = {
   http: "View HTTP Request Logs",
 }
 
-// Mirrors legacy's `~/LANraragi/templates/logs.html.tt2` — the intro paragraph + per-category
-// bullet list, `.ih` heading with a floated refresh icon and a "Lines:" count input, and the log
-// body itself is a one-row `table.itg` (`tr.gtr1 > td > pre.log-panel`), not a styled card.
-// Doesn't reproduce the live-tailing/auto-refresh behavior (`logs.js`'s polling) — this refetches
-// on category/line-count change and via the refresh icon only.
+// Mirrors legacy's logs.html.tt2 layout. Doesn't reproduce live-tailing/auto-refresh — refetches
+// only on category/line-count change and via the refresh icon.
 export function Logs() {
   const { t } = useTranslation()
   const navigate = useNavigate()

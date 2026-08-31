@@ -7,7 +7,8 @@ import { useTranslation } from "react-i18next"
 
 import { useComparePages } from "@/api/hooks"
 import type { ExportPatchInsertion, UnmatchedPage } from "@/api/types"
-import { IconButton, Tooltip } from "@/components/common-ui/Display"
+import { Tooltip } from "@/components/common-ui/Display"
+import { IconButton } from "@/components/common-ui/Form"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { ScrollRow, THUMB_ASPECT_RATIO } from "./shared"
@@ -83,7 +84,6 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
     }
     if (!el || !container) return
     const pct = (el.offsetLeft + el.clientWidth / 2) / container.scrollWidth
-    // 两行都滚到相同百分比
     const sl = sourceLenisRef.current?.lenis; const tl = targetLenisRef.current?.lenis
     if (sr) { const t = Math.max(0, pct * sr.scrollWidth - sr.clientWidth / 2); if (sl) sl.scrollTo(t); else sr.scrollTo({ left: t, behavior: "instant" as ScrollBehavior }) }
     if (tr) { const t = Math.max(0, pct * tr.scrollWidth - tr.clientWidth / 2); if (tl) tl.scrollTo(t); else tr.scrollTo({ left: t, behavior: "instant" as ScrollBehavior }) }
@@ -163,7 +163,6 @@ export function PatchAssignmentView({ queueItemId, sourceSide, targetSide, sourc
             </Slot>
           </div>
 
-          {/* 目标行 */}
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ height: 28, display: "flex", alignItems: "center", fontSize: FONT_SIZE_SM, opacity: 0.7, marginBottom: 4 }}>
               {t("upload.targetPagesDropZoneBetween")}

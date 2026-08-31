@@ -175,7 +175,6 @@ export function EntryTreePopover({ entries }: { entries: ArchiveEntryInfo[] }) {
         left: Math.max(8, Math.min(rect.left, maxLeft)),
         width,
       });
-      // Reset to all-collapsed on every fresh open.
       const allDirs = new Set<string>();
       collectDirectoryPaths(tree, allDirs);
       setCollapsed(allDirs);

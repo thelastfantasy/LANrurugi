@@ -41,3 +41,4 @@ sysinfo.workspace = true
 rayon.workspace = true
 regex.workspace = true
 casbin.workspace = true
+unicode-segmentation.workspace = true

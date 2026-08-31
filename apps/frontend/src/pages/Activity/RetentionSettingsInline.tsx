@@ -6,10 +6,8 @@ import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Z_OVERLAY_CONTENT } from "@/theme"
 import { toast } from "@/toast"
 
-/** Same five-option shape as `ApiTokensSection.tsx`'s own `EXPIRY_OPTIONS` (1周/1个月/3个月/1年/
- * 永久) — a familiar, already-established picker convention, reused here for "how long activity
- * records are kept" instead of "how long a token stays valid". `"forever"` maps to `null`
- * (`retention_secs: None` — matches the backend's own `Option<i64>` semantics, "keep forever"). */
+/** Same five-option shape as `ApiTokensSection.tsx`'s `EXPIRY_OPTIONS`. `"forever"` maps to
+ * `null` (`retention_secs: None`, "keep forever"). */
 const RETENTION_OPTIONS: { value: string; secs: number | null }[] = [
   { value: "1w", secs: 7 * 86400 },
   { value: "1m", secs: 30 * 86400 },
@@ -25,18 +23,7 @@ function closestOption(secs: number | null): string {
 }
 
 /** Gear-icon popover for the activity retention period — same trigger/menu pattern as
- * `Library/SettingsMenu.tsx`'s own view-options gear (own `open` state, an outside-click listener
- * that also checks the portaled menu's own ref, a left/right open direction picked from available
- * viewport space). Pulled out of the filter bar's own inline row into this popover per direct
- * feedback: an always-visible `<select>` sitting in the middle of the filter controls read as just
- * another filter despite governing something structurally different (log retention, not the
- * current query) — a gear icon in the page's own top-right corner (matching the Library page's
- * view-settings gear) reads as "page-level setting" instead.
- *
- * Lives on the Activity page itself (not the Settings page) — the plan's own deliberate choice,
- * since this setting only ever matters in the context of the activity log it governs. The select's
- * value is derived directly from the query result (`react-query`'s own cache is the single source
- * of truth) rather than mirrored into local state via an effect. */
+ * `Library/SettingsMenu.tsx`'s view-options gear. */
 export function RetentionSettingsMenu() {
   const { t } = useTranslation()
   const retention = useActivityRetention()

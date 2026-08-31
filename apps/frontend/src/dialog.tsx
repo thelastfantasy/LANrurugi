@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
-import { Checkbox } from "@/components/common-ui/Form"
+import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
@@ -13,60 +13,23 @@ import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
 
-// Real, themed replacements for `window.prompt`/`window.confirm` — same call shape as those
-// (`await promptDialog(message, defaultValue)` / `await confirmDialog(message)`, both resolving
-// to what the plain browser function would have returned: the entered string or `null` if
-// cancelled/empty for a prompt, a boolean for a confirm) so existing call sites need only add
-// `await` and drop the `window.` prefix, not a structural rewrite. A *native* `window.prompt`/
-// `window.confirm` is an unstyled OS dialog outside the page's own DOM/CSS entirely — it happens
-// to pick up a vaguely similar red/cream palette on some Linux desktop themes purely by
-// coincidence of that OS theme, never because of anything this app's own CSS controls. Legacy
-// itself never used the native versions either — its real popups are SweetAlert2 (`LRR.showPopUp`/
-// `Swal.fire`), which is exactly what `.swal2-popup`/`.swal2-actions>.stdbtn` (real classes already
-// vendored per-theme, e.g. `~/LANraragi/public/themes/g.css:643,220`) exist to style — this module
-// reuses those same classes rather than either the native dialogs or a new SweetAlert2 dependency,
-// matching `Library.tsx`'s own pre-existing `DeleteConfirmDialog` in spirit (a from-scratch themed
-// popup) but as a shared, promise-based module usable from any file instead of one bespoke
-// component wired into one page's own local state.
-//
-// Architecture mirrors `toast.tsx` exactly: a module-level "current request" state that any file
-// can push into via a plain function call, rendered by one `<DialogHost />` mounted once in
-// `App.tsx` (matching `toast.tsx`'s own `<ToastContainer>` convention) — not a React hook, since
-// call sites need this to work from plain event handlers exactly like `window.prompt` did, not
-// only from inside a component's own render.
+// Themed prompt/confirm replacements driven by module-level state, rendered by <DialogHost />.
 
 export type NewCategoryResult = { name: string; isDynamic: boolean; search: string; visibleToGuest: boolean }
 
-/** One of the 8 points along a stamp's own selection-rectangle border (4 corners + 4 edge
- * midpoints) the icon can be anchored to — matches `Stamp::rect`'s own `anchor` segment on the
- * backend exactly (short codes, not full names, to keep the stored string compact). */
+/** One of 8 rect-border points the icon can be anchored to (wire-format short codes). */
 export type StampAnchor = "tl" | "t" | "tr" | "r" | "br" | "b" | "bl" | "l"
 
 const STAMP_ANCHORS: StampAnchor[] = ["tl", "t", "tr", "r", "br", "b", "bl", "l"]
 
-/** A stamp's optional selection rectangle — percent `x`/`y`/`width`/`height` of the page image
- * (matching `position`'s own percent convention), which of the 8 border points the icon sits on,
- * and the rect outline's own color. `null` (not e.g. an all-zero rect) means "this stamp has no
- * rectangle, just its plain point," the same "empty string is the absence, not a degenerate
- * value" convention `icon`/`rect` already use on the wire. */
-/** How the rect's own interior is rendered — `solid`/`stripes` are plain translucent overlays
- * (`rect.color` layered on top of whatever's underneath); `mosaic`/`blur` instead obscure the
- * underlying page content itself via `backdrop-filter: blur()` at two different intensities (see
- * `MarkerLayer.tsx`'s own render for the actual CSS — there's no real CSS pixelation filter for
- * arbitrary backdrop content, so `mosaic` is a strong-blur approximation of an obscuring effect
- * rather than true square-block pixelation). A per-stamp choice, not a global reader setting,
- * same as `anchor`/`color`. */
+/** How the rect's interior is rendered — mosaic/blur obscure via backdrop-filter (no real CSS
+ * pixelation exists, so mosaic is a strong blur). */
 export type StampFill = "solid" | "stripes" | "mosaic" | "blur"
 
-/** Sharp (right-angle) vs rounded corners on the rect's own outline. */
+/** Sharp (right-angle) vs rounded corners on the rect's outline. */
 export type StampCorner = "sharp" | "round"
 
-/** Whether the rect's own outline/fill is visible only while hovering the stamp's icon (`hover`,
- * the original/default behavior — a rect that's otherwise invisible clutter until you're actually
- * interested in it), or always painted on the page regardless of hover state (`always` — useful
- * for a rect meant to be a permanent, visible annotation rather than a hidden-until-inspected
- * one). Selecting a stamp (single-click, entering resize/adjust mode) always shows the outline
- * either way — this only governs the plain, unselected resting state. */
+/** Resting-state outline visibility; selecting a stamp always shows the outline. */
 export type StampDisplay = "hover" | "always"
 
 export interface StampRect {
@@ -79,34 +42,17 @@ export interface StampRect {
   fill: StampFill
   corner: StampCorner
   display: StampDisplay
-  // Stacking order among overlapping rect stamps on the *same page* — higher paints on top, no
-  // fixed range (a "bring to front"/"send to back" keyboard shortcut just picks one past whatever
-  // the current extremes on that page already are; see `MarkerLayer.tsx`'s own
-  // `bringToFront`/`sendToBack`). Defaults to `0` for every stamp created before this field
-  // existed, the same "zero value round-trips as the have-never-been-touched default" convention
-  // every other `StampRect` field already uses.
+  // Stacking order among overlapping rects on a page; higher paints on top. Defaults to 0.
   layer: number
 }
 
-// Remembers the last-picked anchor/fill/corner/display style across dialog opens within the same
-// session — same "shouldn't have to re-pick a preference for every new stamp" reasoning as
-// `lastPickedColor` (icon color) above, requested explicitly ("能够在下次绘制时就直接应用").
-// `lastPickedAnchor` was originally left out of this group on the theory that "where on *this*
-// rect the icon sits" has no sensible cross-stamp meaning — reported live as a real gap once it
-// turned out users do expect it to carry over exactly like the other three, so it's included here
-// too now.
+// Last-picked rect style across dialog opens this session.
 let lastPickedAnchor: StampAnchor = "tl"
 let lastPickedFill: StampFill = "solid"
 let lastPickedCorner: StampCorner = "sharp"
 let lastPickedDisplay: StampDisplay = "hover"
 
-/** `"x,y,width,height,anchor,color,fill,corner,display,layer"` → `StampRect`, or `null` for an
- * empty/malformed string — matches `Stamp::rect`'s own wire format exactly (see that field's docs
- * on the backend, which stores this as an opaque string with no format validation of its own —
- * the frontend owns the whole schema). Every segment past `color` is optional on read (each falls
- * back to a sensible default if missing/unrecognized) so a rect stored before that segment existed
- * still parses successfully — the same forward-compatible convention `anchor`/`color` themselves
- * already established. */
+/** Wire string → `StampRect`, or null; segments past `color` are optional for older stored rects. */
 export function parseStampRect(rect: string): StampRect | null {
   if (!rect) return null
   const [xStr, yStr, wStr, hStr, anchorStr, color, fillStr, cornerStr, displayStr, layerStr] = rect.split(",")
@@ -135,16 +81,12 @@ export function parseStampRect(rect: string): StampRect | null {
   }
 }
 
-/** `StampRect` → `"x,y,width,height,anchor,color,fill,corner,display,layer"`, the inverse of
- * `parseStampRect`. */
+/** `StampRect` → wire string, the inverse of `parseStampRect`. */
 export function formatStampRect(rect: StampRect): string {
   return `${rect.x.toFixed(2)},${rect.y.toFixed(2)},${rect.width.toFixed(2)},${rect.height.toFixed(2)},${rect.anchor},${rect.color},${rect.fill},${rect.corner},${rect.display},${rect.layer}`
 }
 
-/** Where a given anchor code sits on a rect's own border, as a 0-100 percent pair *relative to
- * the rect's own box* (not the page image) — `0,0` is the rect's own top-left corner, `100,100`
- * its bottom-right. Shared by the marker's own icon placement (`MarkerLayer.tsx`) and the picker
- * UI below, so the two can't drift on what e.g. `'t'` actually means. */
+/** Where an anchor code sits on the rect's border, as a rect-relative 0-100 percent pair. */
 export function anchorPercent(anchor: StampAnchor): { x: number; y: number } {
   switch (anchor) {
     case "tl":
@@ -179,11 +121,7 @@ type DialogRequest =
       kind: "confirm"
       message: ReactNode
       danger: boolean
-      // Set for a confirmation dangerous enough that a plain Cancel/OK pair isn't enough friction
-      // (e.g. batch-deleting an arbitrary number of archives at once, issue #63) — the confirm
-      // button stays disabled until the typed text exactly matches the localized word this holds
-      // (`common.delete`, upper-cased for `en` specifically — see `DialogHost`'s own resolution of
-      // this field for why only `en` gets that treatment).
+      // The confirm button stays disabled until typed text matches the localized "delete" word.
       requireTypedConfirmation: boolean
       resolve: (value: boolean) => void
     }
@@ -218,26 +156,15 @@ function setRequest(request: DialogRequest | null) {
   listeners.forEach((l) => l())
 }
 
-/** Drop-in replacement for `window.prompt(message, defaultValue)` — resolves to the entered
- * string, or `null` if cancelled (matches the native function's own return shape exactly, so a
- * call site's existing `if (title && title.trim() !== '')` guard keeps working unchanged). */
+/** Drop-in replacement for `window.prompt` — resolves the entered string, or null if cancelled. */
 export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
   return new Promise((resolve) => {
     setRequest({ kind: "prompt", message, defaultValue, resolve })
   })
 }
 
-/** Drop-in replacement for `window.confirm(message)`. `danger` (default `false`) styles the
- * confirm button with `.stdbtn-danger` (real red class, themed per theme file) instead of the
- * plain `.stdbtn` — same distinction `components/Display/Confirm.tsx`'s own `danger` prop makes,
- * so a call site whose confirm actually deletes files/data (not just a reversible grouping) reads
- * as visibly destructive rather than identical to a routine confirm.
- *
- * `requireTypedConfirmation` (default `false`) raises the bar further for an especially dangerous
- * confirm (issue #63's own batch-delete, which can remove an arbitrary number of archives — every
- * *other* delete entry point in the app only ever targets one thing at a time) — the confirm
- * button stays disabled until the user types the localized word for "delete" exactly (see
- * `DialogHost`'s own resolution of that word). */
+/** Drop-in replacement for `window.confirm`. `danger` styles the button red for destructive
+ * actions; `requireTypedConfirmation` additionally requires typing the localized "delete" word. */
 export function confirmDialog(
   message: ReactNode,
   danger = false,
@@ -248,45 +175,29 @@ export function confirmDialog(
   })
 }
 
-/** A single-button acknowledgement dialog — for content that must be shown once and can never be
- *  recovered afterward if dismissed without reading (e.g. a freshly-issued API token's raw value,
- *  `ApiTokensSection.tsx`), where a plain `toast()` isn't insistent enough and `confirmDialog`'s
- *  Cancel/OK pair implies a real decision rather than "acknowledge and move on." */
+/** Single-button acknowledgement dialog for content that can't be recovered if dismissed unread. */
 export function infoDialog(message: ReactNode): Promise<void> {
   return new Promise((resolve) => {
     setRequest({ kind: "info", message, resolve: () => resolve() })
   })
 }
 
-/** One combined "New Category" dialog (name + a static/dynamic tab switcher, with a predicate
- * field that only appears in dynamic mode) shared by every quick-create entry point (the Reader
- * overview overlay, the Upload page, and — in spirit — `Categories.tsx`'s own longer-standing
- * pair of "New Static/New Dynamic" buttons), rather than two separate single-purpose buttons each
- * call site would otherwise have to lay out and wire up itself. Resolves `null` if cancelled. */
+/** Combined "New Category" dialog (name + static/dynamic tabs). Resolves null if cancelled. */
 export function newCategoryDialog(): Promise<NewCategoryResult | null> {
   return new Promise((resolve) => {
     setRequest({ kind: "newCategory", resolve })
   })
 }
 
-/** Edit page's filename-rename button (`archives.rs::rename_archive`). The extension is rendered
- * as a fixed, non-editable suffix rather than left in the same field as the editable stem — typing
- * over/dropping it by accident would silently change the archive's file type as far as the OS is
- * concerned (the actual bytes are untouched; only what they're named), a much easier mistake to
- * make in a single free-text field than a deliberate choice a user would ever actually want here.
- * Resolves the new *stem* only (no extension) if confirmed, `null` if cancelled. */
+/** Filename-rename dialog — the extension is a fixed non-editable suffix. Resolves the new stem
+ * only, or null if cancelled. */
 export function renameArchiveDialog(currentStem: string, extension: string): Promise<string | null> {
   return new Promise((resolve) => {
     setRequest({ kind: "renameArchive", currentStem, extension, resolve })
   })
 }
 
-/** Replaces the old plain `promptDialog(t('Enter Stamp name:'))` call `MarkerLayer.tsx` used for
- * both placing a new stamp and renaming an existing one — same name field, plus a Windows
- * (Win+.)-style emoji/icon grid so a stamp can carry a custom marker instead of always the
- * default pin, and (when `defaultRect` is non-`null` — a rectangle-drag placement, not a plain
- * click) an anchor-position + outline-color picker for that rectangle. Resolves `null` if
- * cancelled. */
+/** Stamp name field + emoji/icon grid, plus anchor/color pickers for a rect placement. */
 export function stampEditorDialog(
   defaultContent = "",
   defaultIcon = "",
@@ -297,10 +208,7 @@ export function stampEditorDialog(
   })
 }
 
-/** A literal emoji character stored as-is; a Font Awesome icon stored `fa:`-prefixed to tell the
- * two apart at render time (an emoji could otherwise collide with a real fa- class name only by
- * extreme coincidence, but the prefix makes it unambiguous rather than relying on that). Shared
- * between the picker here and `MarkerLayer.tsx`'s own marker rendering, so the two can't drift. */
+/** A literal emoji as-is; a Font Awesome icon `fa:`-prefixed to tell the two apart. */
 export function renderStampIcon(icon: string): React.ReactNode {
   if (!icon) return null
   if (icon.startsWith("fa:")) {
@@ -310,12 +218,7 @@ export function renderStampIcon(icon: string): React.ReactNode {
   return icon
 }
 
-/** `fa:<class>` or `fa:<class>:<#rrggbb>` — the color segment only ever applies to a Font Awesome
- * icon (an emoji already carries its own fixed color via the system emoji font; a "color" input
- * next to one wouldn't do anything, so the picker only ever shows it for this tab). Splitting this
- * out of the plain 3-way `.split(':')` inline at both call sites (here and the editor form below)
- * would've meant re-deriving the same "is the 3rd segment actually a valid hex color" check twice,
- * with two chances to drift out of sync. */
+/** `fa:<class>` or `fa:<class>:<#rrggbb>` — the color segment only applies to a FA icon. */
 function parseFaIcon(icon: string): { cls: string; color: string | null } {
   const [, cls, color] = icon.split(":")
   return { cls: cls ?? "", color: color && /^#[0-9a-fA-F]{6}$/.test(color) ? color : null }
@@ -331,14 +234,7 @@ interface EmojiGroup {
   slug: string
   emojis: EmojiEntry[]
 }
-// `unicode-emoji-json`'s own group order/keys, from unicode.org's real CLDR emoji category data —
-// the complete set (all 9 categories, ~1900 emoji total), not a hand-picked subset: a stamp marker
-// with only 40-odd curated options isn't actually "an emoji picker," it's a slightly-nicer preset
-// list, and the whole point of matching the Windows (Win+.) picker's own look was the real thing.
-// One representative glyph stands in for each category's own tab (matching that same picker's
-// icon-only category rail) rather than a text label, which wouldn't fit nine of them across a
-// 320px-wide dialog. Loaded lazily (see `useEmojiGroups` below) — ~400KB of JSON nobody needs
-// until they actually open this picker shouldn't ride along in the app's main bundle.
+// Full CLDR emoji set (9 groups), loaded lazily in `useEmojiGroups` below.
 const EMOJI_GROUP_TAB_ICON: Record<string, string> = {
   smileys_emotion: "😀",
   people_body: "👋",
@@ -351,27 +247,13 @@ const EMOJI_GROUP_TAB_ICON: Record<string, string> = {
   flags: "🏳️",
 }
 
-// Excluded from the Flags category specifically (not a general moderation list — everything else
-// in the full unicode.org set stays as-is).
+// Excluded from the Flags category specifically (not a general moderation list).
 const EXCLUDED_EMOJI_SLUGS = new Set(["flag_taiwan"])
 
-// Remembers the last color picked for a Font Awesome icon across dialog opens within the same
-// session (module-level, not persisted to storage) — picking a color once per stamp would get old
-// fast if every new stamp reset back to black regardless of what was just chosen. Deliberately
-// separate from `lastPickedRectColor` below (`dialog.tsx`'s own `StampFill`/`StampCorner` section)
-// — an icon's color and a selection rectangle's outline color are conceptually different choices;
-// picking one shouldn't silently change the other's own remembered default.
+// Last icon color picked this session; separate from the rect outline color below.
 let lastPickedColor = "#000000"
 
-/** Last-picked rect anchor/outline color/fill/corner/display style, applied as the starting point
- * for a *newly drawn* rectangle (`MarkerLayer.tsx`'s `openEditorAndCreate`) — same "shouldn't have
- * to re-pick a preference for every new stamp" reasoning as `lastPickedColor` above, requested
- * explicitly ("能够在下次绘制时就直接应用"). Exported (unlike `lastPickedColor`, read only from
- * `StampEditorForm` in this same file) since `MarkerLayer.tsx` needs a real, already-known
- * `StampRect` value to hand to `stampEditorDialog` as `defaultRect` the moment a drag finishes —
- * there's no earlier point in that flow where `StampEditorForm` itself could inject a fallback
- * the way it does for `color` (whose fallback only ever needs to apply to a Font Awesome icon
- * that was already picked in the very same render). */
+/** Last-picked rect style, applied as the starting point for a newly-drawn rectangle. */
 export function lastPickedRectStyle(): {
   anchor: StampAnchor
   color: string
@@ -389,26 +271,14 @@ export function lastPickedRectStyle(): {
 }
 let lastPickedRectColor = "#ff0000"
 
-/** Maximum number of recently-*submitted* colors remembered per picker (a 3-column x 2-row
- * swatch grid, requested explicitly at that exact shape) — old entries fall off the end as new
- * ones are recorded, most-recent first. */
+/** Max recently-submitted colors remembered per picker (3-column x 2-row swatch grid). */
 const COLOR_HISTORY_LIMIT = 6
 
-/** Separate history lists for the icon-color and rect-color pickers, same reasoning as
- * `lastPickedColor`/`lastPickedRectColor` being two different variables rather than one shared
- * one — the two colors are conceptually unrelated choices, so their own "recently used" lists
- * shouldn't bleed into each other either. Only ever appended to on a real dialog *submission*
- * (`recordColorHistory`, called from `StampEditorForm.submit()`), not on every `onChange` — a
- * color someone was just previewing by dragging the native picker's own hue slider around
- * without ever confirming it isn't "recently used" in any meaningful sense. */
+/** Separate history lists per picker — appended to only on submission, not on every onChange. */
 let iconColorHistory: string[] = []
 let rectColorHistory: string[] = []
 
-/** Records `color` as the most-recent entry in `history` (an existing occurrence is moved to the
- * front rather than duplicated), capped at `COLOR_HISTORY_LIMIT`. Returns a new array — callers
- * reassign their own module-level `let` binding with the result, since a plain array push
- * wouldn't trigger anything to re-read it (these aren't React state; the tooltip that reads them
- * only ever does so at render time, when the dialog reopens). */
+/** Records `color` as the most-recent entry, capped at COLOR_HISTORY_LIMIT; returns a new array. */
 function recordColorHistory(history: string[], color: string): string[] {
   return [color, ...history.filter((c) => c !== color)].slice(0, COLOR_HISTORY_LIMIT)
 }
@@ -418,35 +288,19 @@ interface EmojiZhNames {
   emojis: Record<string, string>
 }
 
-// unicode-emoji-json's own `name`/group `name` fields are English-only (CLDR's own upstream
-// short-name annotations, not translated per-locale by that package) — for the one language this
-// app has real localized names generated for (`scripts/generate-emoji-zh-names.mjs`, sourced from
-// Unicode's own CLDR zh annotations, not machine translation), swap them in at load time rather
-// than leaving all ~1900 emoji tooltips + all 9 category tab titles in English even when the rest
-// of the UI is in Chinese. Loaded lazily and only for `zh` — the other 13 supported languages have
-// no equivalent generated data yet, so they keep falling back to the English names exactly as
-// before this file existed.
+// Swaps in generated Chinese names for `zh`; other languages keep the package's English names.
 function useEmojiGroups(): EmojiGroup[] | null {
   const { i18n } = useTranslation()
   const language = i18n.resolvedLanguage ?? i18n.language
   const [groups, setGroups] = useState<EmojiGroup[] | null>(null)
   useEffect(() => {
     let cancelled = false
-    // Deliberately doesn't reset `groups` to `null` before the new language's data resolves
-    // (which would need a synchronous `setState` call in the effect body, flagged by
-    // `react-hooks/set-state-in-effect` as a cascading-render footgun) — the brief window where a
-    // language switch still shows the *previous* language's names until the new import resolves
-    // is a cosmetic non-issue (this data is only ever visible inside an already-open picker, and
-    // both JSON chunks are already warmed in the browser cache after the first load), not worth
-    // fighting the lint rule for.
     void Promise.all([
       import("unicode-emoji-json/data-by-group.json"),
       language === "zh" ? import("./i18n/emoji-names-zh.json") : Promise.resolve(null),
     ]).then(([mod, zhMod]) => {
       if (cancelled) return
-      // TypeScript's own JSON-module inference reads this file's `{"0": {...}, "1": {...}, ...}`
-      // shape as an array (sequential 0-based numeric keys), which is also exactly the runtime
-      // shape `Object.values` would have produced anyway — no conversion actually needed.
+      // TS reads the JSON's sequential numeric keys as an array — exactly the shape we need.
       const raw = mod.default as unknown as EmojiGroup[]
       const zhNames = zhMod?.default as unknown as EmojiZhNames | undefined
       setGroups(
@@ -466,22 +320,14 @@ function useEmojiGroups(): EmojiGroup[] | null {
   return groups
 }
 
-// This app already vendors the full Font Awesome font (every `fa-*` class throughout the UI) —
-// reusing it here for the "icon library" half of the picker costs nothing extra to load, unlike
-// adding a whole new icon-set dependency for a curated subset.
 const STAMP_FA_ICONS = [
   "fa-star", "fa-heart", "fa-fire", "fa-check", "fa-xmark", "fa-question", "fa-exclamation",
   "fa-thumbtack", "fa-bookmark", "fa-flag", "fa-eye", "fa-comment", "fa-bell", "fa-bolt",
   "fa-crown", "fa-gem", "fa-skull", "fa-paw", "fa-leaf", "fa-music", "fa-circle", "fa-triangle-exclamation",
 ]
 
-// Both button components below are declared at module scope, not inside `IconPicker`'s own body
-// (an earlier version defined them there, closing over `icon`/`onChange`/`palette` directly) —
-// `react-hooks/static-components` flags that as a real bug, not just style: a component
-// re-declared on every render gets a *new* identity each time, which React treats as "a
-// completely different component type" at that position in the tree, discarding and remounting
-// it instead of reconciling — for `TabButton`, used ten times in a `.map()`, that would mean every
-// single tab remounts from scratch on every keystroke in the name field above it.
+// Declared at module scope — components re-declared in render get new identities and remount
+// on every keystroke.
 function OptionButton({
   selected,
   title,
@@ -509,15 +355,7 @@ function OptionButton({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        // A 2px `currentColor` border (this dialog's own themed text color) rather than
-        // `palette.hoverBg`, whose actual color in this theme reads as too close to the
-        // unselected/hover background to tell apart at a glance — reported live for the Fill
-        // Style/Corner Style swatches specifically ("选中后看不出明显区别" — no visible
-        // difference after selecting), the same underlying contrast problem `RectAnchorPicker`'s
-        // own selection dots had. Kept as a border only (not a filled background, unlike that
-        // fix) since this button's children are already visually rich content of their own (an
-        // icon glyph, an emoji, or — for Fill/Corner — a small colored swatch) that a solid
-        // background fill would compete with or obscure.
+        // 2px currentColor border — palette.hoverBg reads too close to the unselected background.
         border: `2px solid ${selected ? "currentColor" : "transparent"}`,
         borderRadius: 4,
         background: selected ? palette.hoverBg : "transparent",
@@ -577,32 +415,18 @@ function TabButton({
 function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string) => void }) {
   const { t } = useTranslation()
   const emojiGroups = useEmojiGroups()
-  // Defaults to the first real emoji group once loaded, not a hardcoded slug — avoids a render
-  // where the tab rail shows 9 category icons but none of them are actually selected yet.
   const [tab, setTab] = useState<string>("icons")
   const palette = useMenuPalette()
   const activeGroup = emojiGroups?.find((g) => g.slug === tab)
 
   return (
     <div style={{ textAlign: "left", marginBottom: 12 }}>
-      {/* Icon-only tabs (one representative glyph per category, `title` carrying the real name for
-          a hover tooltip) — nine emoji-group names plus "Icons" as full text labels wouldn't fit
-          across this dialog's own width at all, matching why the real Windows picker this is
-          modeled on uses the same icon-only category rail rather than text tabs. Deliberately not
-          `.favtag-btn` here (unlike the fit-mode/tab buttons elsewhere in this file) — its real
-          theme CSS (`min-width: 50px`, a 2px border, `padding: 0 4px`, all on top of `content-box`
-          sizing that a plain `width` style can't override) is built for text-labeled pill buttons,
-          not compact icon squares; stacked onto ten of them it rendered far larger than intended
-          and wrapped onto a second row instead of fitting across in one. `flexWrap: 'nowrap'` +
-          `overflowX: 'auto'` guarantees a single row (with a scrollbar as the fallback, not a
-          silent second row) rather than just hoping ten 24px cells + gaps happen to fit exactly.*/}
+      {/* Icon-only tabs (title carries the name) — text labels can't fit; nowrap + overflow
+          guarantees a single row. */}
       <div role="tablist" style={{ display: "flex", flexWrap: "nowrap", overflowX: "auto", justifyContent: "space-between", gap: 2, marginBottom: 6 }}>
         <TabButton selected={tab === "icons"} title={t("app.icons") ?? undefined} onClick={() => setTab("icons")} palette={palette}>
           <i className="fas fa-icons" aria-hidden="true"></i>
         </TabButton>
-        {/* Separates the Font Awesome "Icons" tab from the nine emoji-category tabs that follow —
-            those two groups aren't really the same kind of thing (a curated icon library vs. the
-            full Unicode emoji set), so a plain unbroken row read as one undifferentiated list. */}
         <div aria-hidden="true" style={{ flexShrink: 0, width: 1, alignSelf: "stretch", background: palette.border, margin: "0 2px" }} />
         {emojiGroups?.map((g) => (
           <TabButton key={g.slug} selected={tab === g.slug} title={g.name} onClick={() => setTab(g.slug)} palette={palette}>
@@ -650,11 +474,6 @@ function IconPicker({ icon, onChange }: { icon: string; onChange: (icon: string)
                 </OptionButton>
               ))
             : (
-                // Still loading (`useEmojiGroups` hasn't resolved its dynamic import yet) — this
-                // only shows for the first tab switch away from "Icons"; the ~400KB JSON chunk is
-                // small enough that a real user won't see this for more than a frame or two on
-                // any connection, but showing *nothing* at all during that gap would read as the
-                // picker being broken rather than just loading.
                 <span style={{ opacity: 0.6, padding: 4 }}>{t("common.loading") ?? undefined}</span>
               )}
       </div>
@@ -670,13 +489,8 @@ const FILL_LABEL: Record<StampFill, string> = {
   blur: "Blur",
 }
 
-/** A small preview square for one `StampFill` option, in the currently-picked `color` — `solid`/
- * `stripes` reuse the exact same CSS this fill produces on the real rect (a flat translucent tint,
- * or the `repeating-linear-gradient` stripe pattern); `mosaic`/`blur` can't show their own real
- * effect at this scale (there's no actual page content behind a 18x18px swatch for
- * `backdrop-filter` to blur), so they instead show a plain frosted-glass-style translucent white
- * layer — enough to communicate "this obscures what's underneath" as a *concept*, distinctly from
- * the tinted-but-transparent solid/stripes options, without pretending to preview the real effect. */
+/** Preview swatch for one fill option — mosaic/blur show a frosted placeholder (nothing behind
+ * a small swatch to blur). */
 function FillSwatch({ fill, color }: { fill: StampFill; color: string }) {
   const SIZE = 18
   if (fill === "solid" || fill === "stripes") {
@@ -718,12 +532,7 @@ const ANCHOR_LABEL: Record<StampAnchor, string> = {
   l: "Left",
 }
 
-/** A native `<input type="color">` wrapped in a `Tooltip` showing up to `COLOR_HISTORY_LIMIT`
- * recently-*submitted* colors (3 columns x 2 rows, requested at that exact shape) as clickable
- * swatches — hovering the swatch next to the native picker reveals the grid; clicking a swatch
- * applies that color immediately without needing to reopen the native picker and re-navigate to
- * a shade already used before. Tooltip content is `null` (renders nothing extra) when `history`
- * is empty, e.g. the very first time either picker is ever used in a session. */
+/** Native color input with a hover tooltip of recently-submitted colors (3x2 swatch grid). */
 function ColorPickerWithHistory({
   value,
   onChange,
@@ -789,15 +598,7 @@ function ColorPickerWithHistory({
   )
 }
 
-/** An 8-dot grid tracing a rectangle's own border (4 corners + 4 edge midpoints), one dot per
- * `StampAnchor` — picks which point on the stamp's own selection rectangle the icon sits on.
- * Deliberately a small square outline rather than e.g. a dropdown of 8 text labels: the spatial
- * layout *is* the explanation, matching where the icon will actually end up visually far better
- * than "Top Right" as plain text would on its own. `color` is the rect's own currently-picked
- * outline color (not `currentColor`/the dialog's own text color) — a solid black-filled dot read
- * as harsh/out of place next to the dialog's cream-and-red palette when it didn't match anything
- * else on screen; using the same color the rect itself will actually be drawn in ties the picker
- * visually back to the thing it's configuring. */
+/** 8-dot grid picking which border point the icon sits on; dots use the rect's own outline color. */
 function RectAnchorPicker({
   anchor,
   onChange,
@@ -836,13 +637,8 @@ function RectAnchorPicker({
               position: "absolute",
               left: `${pos.x}%`,
               top: `${pos.y}%`,
-              // A selected dot grows and gets a colored ring (a soft tinted fill + a solid-color
-              // border, in the rect's own outline color) rather than only swapping a 1px
-              // border/background pair — at this dot's small scale, a thin ring in the dialog's
-              // own low-contrast theme colors read as barely different from the unselected state
-              // at a glance (reported live twice: once for being too subtle, once for the fix —
-              // a flat solid-black fill — reading as visually harsh/out of place). A ring rather
-              // than a flat fill keeps the dot looking like a "marker," not a plain black disc.
+              // A selected dot grows + gets a colored ring — a thin theme-colored ring reads as
+              // barely different from unselected at this scale.
               transform: `translate(-50%, -50%) scale(${selected ? 1.35 : 1})`,
               width: DOT,
               height: DOT,
@@ -876,33 +672,13 @@ function StampEditorForm({
 }) {
   const { t } = useTranslation()
   const palette = useMenuPalette()
-  // A brand-new stamp (no name typed yet anywhere) starts pre-filled with a real default value
-  // rather than an empty field backed only by a placeholder — a placeholder disappears the moment
-  // typing starts and submits as "" if left untouched, whereas a real value can just be accepted
-  // as-is with one Enter/click. A freshly *dragged* rectangle defaults to "Selection" rather than
-  // "Marker" — the two placement modes create meaningfully different things (a point pin vs. a
-  // region), and the default name should say which one this actually is rather than reusing the
-  // point-stamp wording for both.
   const [content, setContent] = useState(
     defaultContent || (defaultRect ? t("app.selection") : t("app.marker")) || "Marker",
   )
-  // `icon` here is always the *base* value (`fa:<class>` or a plain emoji, never with a color
-  // segment) — the one `IconPicker`'s own grid buttons compare their own (also always base) values
-  // against for "is this cell the selected one." A color, when the current icon is a Font Awesome
-  // one, is tracked separately and only ever recombined into the full `fa:<class>:<#rrggbb>` form
-  // at the two points that actually need it: the live preview, and submission.
+  // `icon` is always the base value; the color is recombined only for preview and submission.
   const initialParsed = useMemo(() => parseFaIcon(defaultIcon), [defaultIcon])
   const [icon, setIcon] = useState(defaultIcon.startsWith("fa:") ? `fa:${initialParsed.cls}` : defaultIcon)
-  // Falls back to whatever color was last picked in a previous stamp this session, not always
-  // black — picking a color once shouldn't mean re-picking it for every stamp after.
   const [color, setColor] = useState(initialParsed.color ?? lastPickedColor)
-  // `anchor`/`rectColor`/`fill`/`corner` all carry forward from the last-confirmed rect —
-  // `MarkerLayer.tsx` already seeds `defaultRect` with `lastPickedRectStyle()` for a freshly drawn
-  // rectangle, so `defaultRect`'s own values here are already correct in both cases (a genuinely-
-  // remembered default for a new rect, this stamp's own real stored values when editing an
-  // existing one); the `?? lastPickedAnchor`/`?? lastPickedRectColor` fallbacks below only matter
-  // if `defaultRect` were ever missing a field for some other reason. (`anchor` was originally left
-  // out of this group — see `lastPickedAnchor`'s own docs for why that turned out to be wrong.)
   const [anchor, setAnchor] = useState<StampAnchor>(defaultRect?.anchor ?? lastPickedAnchor)
   const [rectColor, setRectColor] = useState(defaultRect?.color ?? lastPickedRectColor)
   const [fill, setFill] = useState<StampFill>(defaultRect?.fill ?? lastPickedFill)
@@ -921,10 +697,6 @@ function StampEditorForm({
     const trimmed = content.trim()
     if (!trimmed) return
     const rect = defaultRect ? { ...defaultRect, anchor, color: rectColor, fill, corner, display } : null
-    // Recorded here — on actual submission — rather than on every `onChange` of either color
-    // input: a color someone previewed by dragging the native picker's own hue slider around
-    // without ever confirming isn't meaningfully "recently used," and would otherwise crowd out
-    // real choices in a 6-slot history almost immediately.
     if (isFaIcon) iconColorHistory = recordColorHistory(iconColorHistory, color)
     if (rect) rectColorHistory = recordColorHistory(rectColorHistory, rectColor)
     onSubmit({ content: trimmed, icon: combinedIcon, rect })
@@ -934,10 +706,6 @@ function StampEditorForm({
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
       <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("app.enterStampName")}</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
-        {/* A live preview of the currently-picked icon (or the default marker's own bare pin, once
-            none is chosen) right next to the name field — the picker below is a whole grid to
-            scroll through, so seeing what's actually selected without hunting for its highlighted
-            cell is worth the one extra element. */}
         <div
           style={{
             width: 25,
@@ -967,13 +735,6 @@ function StampEditorForm({
             if (e.key === "Enter") submit()
           }}
         />
-        {/* Only meaningful for a Font Awesome icon — an emoji already renders in its own fixed,
-            full colors via the system emoji font, so picking a color wouldn't visibly do anything
-            for one. Disabled rather than unmounted when an emoji is selected: removing the element
-            entirely shifts the name input's own width every time the icon type is toggled, which
-            reads as the layout jittering. The native picker (not a custom-built one) — this is
-            exactly what `<input type="color">` exists for, and every browser already ships a
-            themed, familiar one of its own. */}
         <ColorPickerWithHistory
           value={color}
           disabled={!isFaIcon}
@@ -986,13 +747,6 @@ function StampEditorForm({
         />
       </div>
       <IconPicker icon={icon} onChange={setIcon} />
-      {/* Only present for a rectangle stamp (dragged to create, not a plain click) — a plain point
-          stamp has no rectangle for an anchor position or outline color to apply to. Laid out as
-          two stacked rows (anchor picker alone on its own row, the three smaller controls sharing
-          a second row below) rather than four items crammed into one `flex` row — the anchor
-          picker's own box is taller than a single label+control pair, so packed side by side the
-          three narrower controls' labels ended up misaligned with each other and the whole row
-          read as cramped at this dialog's 320px width (reported live: "排版太丑了"). */}
       {defaultRect && (
         <div style={{ textAlign: "left", marginBottom: 12, paddingTop: 12, borderTop: "1px solid currentColor" }}>
           <p style={{ fontWeight: "bold", margin: "0 0 10px" }}>{t("app.selectionRectangle")}</p>
@@ -1097,10 +851,8 @@ function StampEditorForm({
   )
 }
 
-// Same fragment-matching/sort rule as `Library.tsx`'s own search-bar autocomplete
-// (`loadTagSuggestions`): only the piece after the last `,`/`-`/whitespace, case-insensitive
-// substring, sorted by tag weight descending. Used for the dynamic-category predicate field,
-// whose value is itself a LANraragi search-query string, not a plain name.
+// Matches Library.tsx's autocomplete rule: fragment after the last separator, case-insensitive
+// substring, weight-descending.
 function TagSearchField({
   id,
   value,
@@ -1127,8 +879,7 @@ function TagSearchField({
     return (stats.data ?? [])
       .map((s) => ({
         label: s.namespace ? `${s.namespace}:${s.text}` : s.text,
-        // Quoted when `s.text` has a space, unlike `label` (plain text shown in the dropdown) —
-        // space is a real AND-separator in the search grammar now (issue #59).
+        // Quoted when the text has a space — a real AND-separator in the search grammar.
         insertValue: buildSearchToken(s.namespace ?? "", s.text),
       }))
       .filter((s) => s.label.toLowerCase().includes(needle))
@@ -1184,11 +935,6 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   const [name, setName] = useState("")
   const [isDynamic, setIsDynamic] = useState(false)
   const [search, setSearch] = useState("")
-  // 007-guest-restricted-access: was only ever settable from `Categories.tsx`'s own longer-lived
-  // edit form (once a category already existed) — this quick-create dialog had no equivalent
-  // field at all, so a category created here could only be marked guest-visible by immediately
-  // reopening it in the edit form afterward. Defaults to `false` (not guest-visible), matching
-  // `CreateCategoryParams`'s own `#[serde(default)]` on the backend.
   const [visibleToGuest, setVisibleToGuest] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
@@ -1204,9 +950,6 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
       <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("common.newCategory")}</p>
-      {/* Segmented tab switcher — reuses `favtag-btn`/`.toggled`, the same pill-button-row pattern
-          `Library.tsx`'s category filter bar already uses for a mutually-exclusive choice, rather
-          than native radio inputs (visually inconsistent with the rest of the themed UI). */}
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         <button
           type="button"
@@ -1233,9 +976,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
         <label htmlFor="new-category-name" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
           {t("app.enterANameForThe")}
         </label>
-        {/* `height: 25` — matches the tab buttons/`Edit.tsx`'s own `.stdinput`/`<select>` override
-            (issue #45), since legacy theme CSS's own `.stdinput` rule is a much shorter ~18px by
-            default and looks visually cramped next to this dialog's other, taller controls. */}
+        {/* height 25 matches the other controls here; legacy .stdinput defaults much shorter. */}
         <input
           ref={nameRef}
           id="new-category-name"
@@ -1312,15 +1053,7 @@ function RenameArchiveForm({
   return (
     <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
       <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("app.enterTheNewFileName")}</p>
-      {/* The extension is a fixed suffix, not part of the editable field — see
-          `renameArchiveDialog`'s own docs for why. Both halves are real `.stdinput`s (not a plain
-          `<span>` for the extension) so the fixed suffix picks up the same real per-theme border/
-          background this modal's other inputs already use, rather than a hand-picked color that'd
-          need its own entry in all 5 theme files (or a hardcoded value that wouldn't adapt at
-          all) for what's really just this same input styled read-only. `flex` row: the stem input
-          grows, the extension shrinks to fit its own text (`flex: '0 0 auto'` + a `size` matching
-          its actual character count, since a bare `width: auto` on an `<input>` doesn't shrink to
-          content the way it would on most other elements). */}
+      {/* Both halves are .stdinput so theming matches; the read-only suffix shrinks to its text. */}
       <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
         <input
           ref={stemRef}
@@ -1354,19 +1087,12 @@ function RenameArchiveForm({
   )
 }
 
-/** Mounted once, app-wide (see `App.tsx`) — matches `toast.tsx`'s own `<ToastContainer>`
- * convention exactly: a single always-present host that any file's plain `promptDialog`/
- * `confirmDialog`/`newCategoryDialog` call can push a request into, regardless of which component
- * tree is currently mounted where. */
+/** Mounted once app-wide — renders whatever dialog the module-level API pushed. */
 export function DialogHost() {
   const { t, i18n } = useTranslation()
   const [, forceUpdate] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
-  // Backs the extra "type the word to confirm" field a `requireTypedConfirmation` request adds —
-  // module state (`currentRequest`) has no room for live keystroke-by-keystroke input the way this
-  // component's own local state does, and unlike the prompt dialog's plain `defaultValue`-seeded
-  // `inputRef`, this field always starts empty regardless of what request preceded it.
   const [typedConfirmation, setTypedConfirmation] = useState("")
+  const [promptValue, setPromptValue] = useState("")
 
   useEffect(() => {
     const listener = () => forceUpdate((n) => n + 1)
@@ -1378,32 +1104,16 @@ export function DialogHost() {
 
   const request = currentRequest
 
-  useEffect(() => {
-    if (request?.kind === "prompt") inputRef.current?.select()
-  }, [request])
-  // Resets whenever a *new* request object replaces the previous one (not on every render) —
-  // otherwise text typed for one confirm would still be sitting there, already "matching," the
-  // next time a `requireTypedConfirmation` dialog opens. Computed during render and compared
-  // against the previous request rather than reset from a `useEffect` (which `react-hooks/
-  // set-state-in-effect` flags for unconditionally calling `setState` in its body) — this is the
-  // "adjusting state when a prop changes" pattern React's own docs call out as the one case where
-  // a plain in-render conditional `setState` is the intended tool, not an effect.
+  // In-render reset on a new request (React's adjusting-state pattern), not an effect.
   const previousRequestRef = useRef<DialogRequest | null>(null)
   if (previousRequestRef.current !== request) {
     previousRequestRef.current = request
     if (typedConfirmation !== "") setTypedConfirmation("")
+    if (request?.kind === "prompt") setPromptValue(request.defaultValue)
   }
 
   if (!request) return null
 
-  // Resolved once per render, not baked into the `DialogRequest` itself at `confirmDialog()`
-  // call time — the word has to reflect whatever language is active *when the dialog is shown*,
-  // which can differ from the call site's own module-load-time language if the user switches
-  // languages mid-session. Only `en` itself gets upper-cased (`common.delete` → "Delete" → "DELETE")
-  // — every other language, including the 11 without their own translation that fall back to the
-  // English string via `fallbackLng`, types that language's own `common.delete` value as-is per
-  // issue #63's own resolution (not forced to shout in English if their actual UI language isn't
-  // English, and not given a second, differently-cased copy of the same English word to maintain).
   const requiredConfirmationWord =
     request.kind === "confirm" && request.requireTypedConfirmation
       ? i18n.resolvedLanguage === "en"
@@ -1417,8 +1127,7 @@ export function DialogHost() {
 
   function submitPrompt() {
     if (request?.kind !== "prompt") return
-    const value = inputRef.current?.value ?? ""
-    request.resolve(value)
+    request.resolve(promptValue)
     close()
   }
 
@@ -1617,10 +1326,6 @@ export function DialogHost() {
 
   const onCancel = request.kind === "prompt" ? cancelPrompt : confirmNo
   const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
-  // Blocks both the button and the Enter-key shortcut below until the typed word matches exactly
-  // (case-sensitive — `requiredConfirmationWord` is already the exact-cased target, upper-cased
-  // for `en` or not depending on language, so a lenient case-insensitive compare here would let
-  // "delete" satisfy an "DELETE" requirement and defeat the point of asking for the shoutier form).
   const confirmationBlocked = requiredConfirmationWord !== null && typedConfirmation !== requiredConfirmationWord
 
   return createPortal(
@@ -1649,31 +1354,23 @@ export function DialogHost() {
           if (e.key === "Enter" && request.kind === "confirm" && !confirmationBlocked) onConfirm()
         }}
       >
-        {/* Warning-triangle icon only for `confirm` (a yes/no decision about a — often
-            destructive — action), not `prompt` (a plain text-input dialog with nothing to warn
-            about) — same icon+bold-message shape `components/Display/Confirm.tsx` established,
-            kept in sync visually even though this promise-based helper predates that component
-            and isn't itself built on top of it (different call shape: this one is driven by a
-            `DialogRequest` union covering four dialog kinds in one render function, not a simple
-            two-button component). */}
         {request.kind === "confirm" && (
           <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
         )}
         <div style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</div>
         {request.kind === "prompt" && (
-          <input
-            ref={inputRef}
-            type="text"
-            className="stdinput"
-            // `height: 25` matches `SettingsOverlay.tsx`'s own `CONTROL_HEIGHT` — legacy theme
-            // CSS's own `.stdinput` rule defaults to a much shorter ~18px, which read as visibly
-            // undersized/cramped for a modal whose only content is this one field.
-            style={{ width: "100%", height: 25, boxSizing: "border-box", marginBottom: 12 }}
-            defaultValue={request.defaultValue}
+          <Input
+            rows={1}
+            value={promptValue}
+            onValueChange={(value) => setPromptValue(value)}
             placeholder={request.defaultValue || undefined}
             autoFocus
+            style={{ width: "100%", boxSizing: "border-box", marginBottom: 12, textAlign: "left" }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onConfirm()
+              if (e.key === "Enter") {
+                e.preventDefault()
+                onConfirm()
+              }
             }}
           />
         )}

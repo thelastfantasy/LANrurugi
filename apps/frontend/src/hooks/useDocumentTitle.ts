@@ -2,10 +2,8 @@ import { useEffect } from "react"
 
 import { useSettings } from "@/api/hooks"
 
-/** Matches legacy's own per-page `<title>[% title %] - [% c.lh("Page Name") %]</title>` pattern
- * (`title` is the site's `htmltitle` setting) — `index.html`'s own `<title>` is just the Vite
- * scaffold default ("frontend") and nothing here ever touched `document.title` per route, unlike
- * every real legacy template. */
+/** Matches legacy's own per-page `<title>{htmltitle} - {Page Name}</title>` pattern
+ * (`htmltitle` is a site setting); `index.html`'s own `<title>` never varies per route. */
 export function useDocumentTitle(pageName?: string) {
   const settings = useSettings()
   const htmltitle = settings.data?.htmltitle

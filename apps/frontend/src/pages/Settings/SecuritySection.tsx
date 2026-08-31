@@ -5,9 +5,7 @@ import { FONT_SIZE_SM } from "@/theme"
 
 import { CheckboxRow, Row } from "./shared"
 
-/** Seconds-per-hour/day converters for the two token-lifetime fields below — the backend/wire
- *  format is always seconds (`Settings.access_token_lifetime_secs`/`refresh_token_lifetime_secs`),
- *  but a raw seconds count is a hostile unit for a human to type ("14400" vs. "4 hours"). */
+/** Seconds-per-hour/day converters for the token-lifetime fields — wire format is always seconds. */
 const SECS_PER_HOUR = 3600
 const SECS_PER_DAY = 86400
 
@@ -40,10 +38,7 @@ export function SecuritySection({
     <CollapsibleSection id="security" icon="fa-shield-alt" title={t("settings.security")}>
       <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         <tbody>
-          {/* Password login can no longer be disabled (007-guest-restricted-access) — the
-              enablepass/nofunmode toggles that used to gate these fields are gone, so the fields
-              themselves are now unconditionally visible instead of nested inside `{enablepass &&
-              (...)}`. */}
+          {/* Password login can no longer be disabled — fields are unconditionally visible now. */}
           <Row label={t("settings.newPassword")}>
             <input
               className="stdinput"

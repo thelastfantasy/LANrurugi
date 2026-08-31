@@ -1049,3 +1049,27 @@ div.id4 a:hover {
 .select-item-guest-visible {
   --select-item-bg: rgba(216, 59, 102, 0.2);
 }
+
+/* Additive — no legacy equivalent. See g.css's own identical rule for the full reasoning
+   (`.menu-item-highlighted` mirrors `.select-item-highlighted`'s own colors, kept as a separate
+   class per component). */
+.menu-item-highlighted[data-highlighted] {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}
+
+/* Additive — no legacy equivalent (a transparent/borderless button for an icon inside an
+   already-chromed container, e.g. a popover bubble, where `.stdbtn`'s own background/border
+   would double up against the container's). Hover color reuses this theme's own
+   `.menu-item-highlighted` accent, not a new one. */
+.ghost-btn {
+  background: transparent;
+  border: 0 none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}

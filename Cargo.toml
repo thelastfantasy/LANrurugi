@@ -77,6 +77,12 @@ sha2 = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"
+# Already in the dependency tree transitively (a `criterion`/`clap` dependency of a dependency) —
+# promoted to a direct workspace dependency for `bookmarks.rs`'s own grapheme-cluster-accurate
+# name-length check (`MAX_BOOKMARK_NAME_LEN`), which `str::chars().count()` alone gets wrong for a
+# combined/ZWJ-sequence emoji (a single visually-one-glyph family emoji is 7 Unicode scalar values,
+# would cost 7x its real "one character" toward the limit under a plain `chars()` count).
+unicode-segmentation = "1.13"
 # `chrono` + `chrono-tz`: only used for `date_added` date-range search/display math (converting a
 # Unix timestamp to a `yyyy-mm-dd` in an arbitrary IANA timezone, including DST) — `std::time`
 # can't do that on its own. `chrono-tz` carries its own bundled tzdata (no system `tzdata` dep).
@@ -86,3 +92,18 @@ sysinfo = "0.33"
 
 [profile.release]
 lto = "thin"
+
+# `codegen-units` trades a bit of build time for a lower dev-build memory peak — added after
+# repeated real OOM/systemd-oomd incidents building this workspace (see
+# scripts/cargo-container-run.sh's own docs for the fuller incident history that CARGO_BUILD_JOBS=1
+# already responds to; this attacks the *other* knob, per-crate codegen memory, which staying at
+# jobs=1 alone doesn't touch). A real clean-build A/B measurement (cgroup memory.peak, 2026-08-30)
+# found this alone barely moves the actual peak (~3.06GB stock vs ~3.05GB here) — the workspace's
+# real memory cost is concentrated in a handful of heavy crates (rav1e/av1-grain/ort) this setting
+# doesn't meaningfully touch — so don't expect this to prevent an OOM on its own; kept anyway since
+# it's harmless and a genuine (if small) improvement. A paired `debug = "line-tables-only"` was
+# tried alongside it in that same measurement and reverted — full DWARF debug info is worth keeping
+# for real `gdb`/`lldb` step-through debugging, and the measured combined effect wasn't worth
+# trading that away either.
+[profile.dev]
+codegen-units = 16

@@ -3,19 +3,8 @@ import { useTranslation } from "react-i18next"
 
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
-/** Generic confirm/warning dialog — the `.swal2-popup`/`.swal2-actions` styling `dialog.tsx`'s own
- * `confirmDialog()` already established (real classes, themed per theme file — see those files'
- * own `.swal2-popup` rules — not a hardcoded white box/gray border the way an earlier,
- * from-scratch version of this dialog did), packaged as a reusable component so a caller with its
- * own two-button confirm flow (e.g. `DeleteConfirmDialog.tsx`) doesn't have to hand-roll the same
- * backdrop/box/button-row markup again. Doesn't own any business copy (no "delete" wording baked
- * in) — `message`, `confirmLabel`, and `danger` are all caller-supplied, same generic-component
- * shape `Modal.tsx` uses.
- *
- * Plays a scale-up entrance animation on mount (`confirm-pop-in`, defined once in `index.css` and
- * shared with `dialog.tsx`'s own `confirmDialog()`/`promptDialog()` render — see that keyframe's
- * own comment for why it's not colocated here). CSS `animation`, not a JS transition library,
- * since this is a one-shot mount-triggered effect with no state to coordinate. */
+/** Generic confirm/warning dialog using `dialog.tsx`'s `.swal2-popup`/`.swal2-actions` styling.
+ * Owns no business copy — `message`/`confirmLabel`/`danger` are all caller-supplied. */
 export function Confirm({
   message,
   icon = "fa-exclamation-triangle",
@@ -69,11 +58,7 @@ export function Confirm({
           <input type="button" className="stdbtn" value={cancelLabel ?? t("common.cancel") ?? undefined} onClick={onCancel} />
           <input
             type="button"
-            // `.stdbtn-danger`, not an inline `style={{ background: '#d33', ... }}` — a real class
-            // per theme file (see g.css's own comment on this class), since an inline style always
-            // wins over `.stdbtn:hover`'s own CSS rule and silently kills the hover effect
-            // entirely (a real, live-reported bug: the earlier inline-style version of this button
-            // never visibly changed color on hover).
+            // .stdbtn-danger, not an inline style — an inline style would beat .stdbtn:hover's rule.
             className={danger ? "stdbtn stdbtn-danger" : "stdbtn"}
             value={confirmLabel ?? t("common.ok") ?? undefined}
             onClick={onConfirm}

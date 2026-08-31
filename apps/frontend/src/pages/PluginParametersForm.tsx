@@ -4,12 +4,8 @@ import { useTranslation } from "react-i18next"
 import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { CustomArgValue, PluginSettings } from "@/api/types"
 
-// Per-plugin custom-parameter settings (e.g. E-Hentai login's cookie fields) — one text input per
-// `PluginInfo.parameters` entry, dynamically rendered from the plugin's own declared metadata,
-// rendered inside a real nested accordion matching legacy's own "插件设置" panel
-// (`~/LANraragi/templates/plugins.html.tt2` lines 181-208, `.collapsible-title`/`.collapsible-body`
-// with the `fa-sliders-h` icon). Distinct from `PluginOptionsForm` (download-specific
-// concurrency/rate-limit/bundling settings).
+// Per-plugin custom-parameter settings — one text input per `PluginInfo.parameters` entry,
+// inside an accordion matching legacy's own "插件设置" panel. Distinct from `PluginOptionsForm`.
 export function PluginParametersForm({
   namespace,
   parameters,
@@ -75,11 +71,7 @@ function PluginParametersFormBody({
       <tbody>
         {parameters.map((param, i) =>
           param.type === "bool" ? (
-            // Real legacy markup (`~/LANraragi/templates/plugins.html.tt2`): `type="checkbox"
-            // class="fa"` — `class="fa"` supplies the Font Awesome font-family `config.css`'s
-            // `::before`/`::after` glyph content needs to actually render as the ON/OFF switch
-            // look, not a bare native checkbox. `checked`/`onChange` carry a real `boolean`
-            // end to end now, not the legacy `"1"`/`""` string encoding.
+            // class="fa" supplies the Font Awesome glyphs config.css's ON/OFF switch look needs.
             <tr key={param.name}>
               <td style={{ verticalAlign: "middle" }}>
                 <b>{t(param.desc)} :</b>

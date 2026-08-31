@@ -8,11 +8,8 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { useApplyTheme } from "@/theme"
 
-// Mirrors legacy's `~/LANraragi/templates/duplicates.html.tt2` — empty/start state with a
-// `.stdbtn.find-duplicates` button, results state as a `table#ds.ds.itg` (the same "index table
-// grid" class the Library page's table view would use). Doesn't reproduce DataTables
-// sorting/paging or Tippy.js tag tooltips (both separate JS features) — this is a plain static
-// table, still fully functional for scan/clear/delete.
+/** Mirrors legacy's `duplicates.html.tt2` as a plain static table — no DataTables sorting/paging
+ * or Tippy.js tooltips, still fully functional for scan/clear/delete. */
 export function Duplicates() {
   const { t } = useTranslation()
   const navigate = useNavigate()

@@ -1,15 +1,8 @@
 import { useEffect, useRef } from "react"
 import { useSearchParams } from "react-router-dom"
 
-/** Reads `?section=<id>` (e.g. `/config?section=security`), opens the matching
- * `CollapsibleSection` (`id` prop → `data-section-id`), scrolls it into view, and briefly flashes
- * its background — the same deep-link pattern `PluginCard.tsx`'s own `?focus=<namespace>` effect
- * already established for individual plugin cards, generalized here for whole accordion sections
- * so the Activity page's operation-content links can jump straight to "which settings section
- * changed" instead of just the bare `/config` page. `CollapsibleSection`'s `open` is local state
- * with no external prop to set it from here, so this simulates a real click on the section's own
- * `.collapsible-title` to open it — same effect a user clicking it themselves would have, just
- * fired programmatically once on mount for the matching section. */
+/** Reads `?section=<id>`, opens the matching `CollapsibleSection`, scrolls it into view, and
+ * briefly flashes its background — simulates a click since `open` has no external prop. */
 export function useSectionDeepLink() {
   const [searchParams] = useSearchParams()
   const sectionId = searchParams.get("section")

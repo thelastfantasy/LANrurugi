@@ -1,14 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
-/** issue #92's own catch-all for a render crash (React itself has no function-component API for
- * this — `componentDidCatch`/`getDerivedStateFromError` are still class-only even in React 19) —
- * wraps the whole `<App />` (`main.tsx`) so an unhandled exception anywhere in the tree renders
- * this generic recovery UI instead of leaving a blank white page with no indication anything went
- * wrong, which is what happens with no boundary at all. Deliberately outside `Layout`/`BrowserRouter`
- * context assumptions (no `useTranslation`/`useNavigate` — a crash could originate from the i18n or
- * router setup itself) — plain hardcoded English/`window.location`, not because localization
- * doesn't matter here but because a component that might itself be reacting to a broken provider
- * tree shouldn't lean on that same tree to render its own fallback. */
+/** Catch-all for a render crash (class-only API) — wraps `<App />` so an unhandled exception
+ * renders this recovery UI instead of a blank page. Deliberately outside Layout/Router context. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   constructor(props: { children: ReactNode }) {
     super(props)
@@ -20,9 +13,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Last resort: this fires only when nothing else in the tree (including any page-level error
-    // handling) caught the exception, so a real console.error trace is the only diagnostic trail
-    // an admin has left.
     console.error("Unhandled render error", error, info)
   }
 

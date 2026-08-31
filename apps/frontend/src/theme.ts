@@ -4,11 +4,8 @@ import { THEME_STORAGE_KEY } from "@/lib/storageKeys"
 
 import { useLoginStatus, usePublicSettings, useSettings } from "./api/hooks"
 
-// Matches legacy's own theme file names and display data exactly (`Utils/Generic.pm::
-// css_default_data`) — the `id` is stored verbatim in the shared `LRR_CONFIG` Redis hash under
-// `theme`, so this list must stay in sync with legacy. `color` is each theme's real `body`
-// background colour — note that Nadeko and H-Verse are actually light themes, easy to get
-// backwards without checking the real file.
+// Matches legacy's own theme file names/display data (`Utils/Generic.pm::css_default_data`);
+// `id` is stored verbatim under Redis `LRR_CONFIG`'s `theme` key.
 export const THEMES = [
   { id: "modern.css", name: "Hachikuji", color: "#34353B" },
   { id: "modern_red.css", name: "Nadeko", color: "#E9BBC5" },
@@ -19,11 +16,8 @@ export const THEMES = [
 
 export const DEFAULT_THEME_ID = "modern.css"
 
-/** Popup-menu palette per theme (right-click menu, index settings gear menu) — real colour values
- * read directly off each theme's own `.context-menu-list`/`.context-menu-item`/`.context-menu-
- * item.context-menu-hover`/`.context-menu-separator` rules, so the from-scratch Tailwind-based
- * `PopupMenu` component matches each theme's real popup styling without linking any menu-plugin
- * CSS file at all. */
+/** Popup-menu palette per theme — real colors read off each theme's own context-menu CSS rules,
+ * so the from-scratch `PopupMenu` component matches without linking a menu-plugin CSS file. */
 export const MENU_PALETTE: Record<
   (typeof THEMES)[number]["id"],
   { bg: string; border: string; text: string; hoverBg: string; hoverText: string; separator: string; shadow: string }
@@ -75,67 +69,34 @@ export const MENU_PALETTE: Record<
   },
 }
 
-// `lrr.css`/`allcollapsible.css` hardcode several rules in `pt` (some `!important`) — these are
-// the `rem` equivalents used throughout the app instead (16px root font size assumed), so a
-// pt-sized legacy rule and our own inline styles agree on the same rendered size. Named by
-// relative size (XS/SM/MD), not the legacy pt value each one replaces — an earlier version of
-// this file named them FONT_SIZE_8PT/9PT/10PT after that legacy value, but that made the constant
-// names actively misleading at every call site: FONT_SIZE_9PT (0.833rem) is *larger* than
-// FONT_SIZE_10PT (0.75rem), since pt-to-rem isn't a monotonic renaming, and nothing about a call
-// site reading `FONT_SIZE_9PT` communicates that it's the *biggest* of the three. Real CSS length
-// units (rem), not `pt` in either the name or the value, per the project's own confirmed
-// direction.
+// `rem` equivalents of legacy's hardcoded `pt` sizes (16px root assumed). Named by relative size
+// (XS/SM/MD), not the pt value, since pt-to-rem isn't a monotonic renaming.
 export const FONT_SIZE_XS = "0.667rem"
 
 export const FONT_SIZE_MD = "0.833rem"
 
 export const FONT_SIZE_SM = "0.75rem"
 
-// Shared full-screen-overlay layering: a fixed, click-to-dismiss backdrop behind a floating menu/
-// popup — used by Library's/the Reader's own context menus. `CONTENT` is exactly one level above
-// `BACKDROP` so the popup itself always wins the stacking order.
+// Shared overlay layering: a fixed backdrop behind a floating menu/popup; `CONTENT` sits one level above.
 export const Z_OVERLAY_BACKDROP = 1000
 
 export const Z_OVERLAY_CONTENT = 1001
 
-// `Tooltip` needs to win against *any* trigger it's attached to, including one that's itself
-// already floating at `Z_OVERLAY_CONTENT` (e.g. a `RatingWidget` rendered as a row inside a
-// `PopupMenu`, per `Library.tsx`'s context menu) — confirmed via a real screenshot where the
-// tooltip rendered visibly *behind* the popup menu's own rows using `Z_OVERLAY_BACKDROP` (equal
-// to the menu's backdrop layer, one level below the menu content itself). Comfortably above
-// `Z_OVERLAY_CONTENT` rather than merely `+1`, so a future overlay layer inserted between the two
-// doesn't silently reopen this same gap.
+// Must win against any trigger, including one already floating at `Z_OVERLAY_CONTENT`
+// (e.g. a `RatingWidget` inside a `PopupMenu` row) — comfortably above, not merely `+1`.
 export const Z_OVERLAY_TOOLTIP = 1100
 
-// A real, always-visible "this is floating above everything else" drop shadow for Base UI
-// (`Popover`/`Combobox`) popups — deliberately NOT `useMenuPalette()`'s own `shadow` value
-// (`PopupMenu.tsx`'s source of truth for right-click/gear menus), since two of the five real
-// themes (`g.css`/`ex.css`) set that value to the literal string `"none"` — a popup using it would
-// render with zero elevation cue at all on those two themes, reading as flatly stuck to the page
-// rather than floating over it. A fixed, theme-independent shadow is what actually gives "floats
-// above the page" its visual weight, regardless of which theme happens to be active.
+// Fixed, theme-independent shadow for Base UI popups — not `useMenuPalette()`'s `shadow`, since
+// two of the five themes set that to `"none"` (zero elevation cue).
 export const FLOATING_POPUP_SHADOW = "0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25)"
 
-// Scale/opacity enter+exit transition driven by Base UI's own `data-starting-style`/
-// `data-ending-style` attributes (its documented CSS-transition hook, present on the popup only
-// while it's actively animating in/out). Pair with an inline `transformOrigin: "var(--transform-
-// origin)"` (not a Tailwind arbitrary-value class for the same property, which would depend on
-// Tailwind's own CSS-custom-property interpolation support rather than a plain, guaranteed-to-work
-// inline style) so the scale animates from the edge closest to the trigger, matching where the
-// popup is actually anchored, rather than always from dead center.
+// Driven by Base UI's `data-starting-style`/`data-ending-style` hooks; pair with an inline
+// `transformOrigin: "var(--transform-origin)"` so scale animates from the trigger-facing edge.
 export const FLOATING_POPUP_TRANSITION_CLASSES =
   "transition-[transform,opacity] duration-150 ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0"
 
-// Legacy's own real `.base-overlay` class (`lrr.css` — the Archive Overview modal's own outer
-// class, `#archivePagesOverlay`) carries a hardcoded `z-index: 9000`, far above every generic
-// overlay tier above — anything meant to render *on top of* that modal (rather than as a popup
-// triggered from inside it, which the tiers above already cover) needs to clear 9000 specifically,
-// not just the app's own internal overlay stack. `PageLightbox` (`ArchiveOverviewOverlay.tsx`) is
-// the first, and so far only, real case of this: a confirmed live bug where its own `Z_OVERLAY_
-// CONTENT` (1001) silently lost the stacking fight to the still-open Archive Overview modal
-// underneath it, rendering the lightbox's own dark backdrop and content invisible behind that
-// modal despite mounting later in the React tree (DOM/mount order doesn't override an explicit,
-// much higher `z-index`).
+// Legacy's `.base-overlay` (the Archive Overview modal) hardcodes `z-index: 9000` — anything
+// rendering on top of that modal itself (not just a popup triggered from inside it) must clear it.
 export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
 
 const LEGACY_STRUCTURAL_CSS_ID = "legacy-structural-css"
@@ -149,32 +110,23 @@ export function ensureLink(id: string, href: string) {
     link = document.createElement("link")
     link.id = id
     link.rel = "stylesheet"
-    // Appended (not inserted at a fixed position) so it always lands after anything Tailwind's
-    // own `@import`s already put in `<head>` at module-load time — same-specificity element
-    // selectors (`body`, `.stdbtn`, ...) are decided by source order, and legacy's real CSS must
-    // win that tiebreak for pixel parity, not just contribute a bunch of overridden dead rules.
+    // Appended (not inserted at a fixed position) so it lands after Tailwind's `@import`s —
+    // same-specificity selectors are decided by source order, and legacy's CSS must win that.
     document.head.appendChild(link)
   }
   if (link.href !== href) link.href = href
 }
 
-/** Removes a `<link>` added by {@link ensureLink}. For CSS that's only meant to apply to a single
- * page (unlike the always-on structural/theme/vendor links below) — legacy loads it via a full
- * page load that naturally discards it on navigation, so an SPA route away must undo it by hand
- * to avoid leaking page-scoped rules (e.g. `config.css`'s global `input[type=checkbox]` override)
- * onto other routes. */
+/** Removes a `<link>` added by {@link ensureLink} — needed for page-scoped CSS an SPA route
+ * change must undo by hand (legacy discards it via full page load instead). */
 export function removeLink(id: string) {
   document.getElementById(id)?.remove()
 }
 
 const LEGACY_CONFIG_CSS_ID = "legacy-config-css"
 
-/** `config.css` (real vendor file, `~/LANraragi/public/css/config.css`) is only ever linked by
- * legacy's own `config.html.tt2`/`plugins.html.tt2` — it globally restyles every
- * `input[type=checkbox]` on the page into the ON/OFF toggle look. Legacy gets this "for free"
- * since navigating away is a full page load; an SPA has to link/unlink it by hand so those rules
- * don't leak onto other routes. Shared by `Settings` and `Plugins` (the only two real legacy pages
- * that link it) rather than each hand-rolling the identical `useEffect`. */
+/** `config.css` globally restyles every `input[type=checkbox]` into an ON/OFF toggle — shared by
+ * `Settings` and `Plugins`, the two pages that link it. */
 export function useLegacyConfigCss() {
   useEffect(() => {
     ensureLink(LEGACY_CONFIG_CSS_ID, "/legacy/config.css")
@@ -182,41 +134,11 @@ export function useLegacyConfigCss() {
   }, [])
 }
 
-/** Links in legacy's own real stylesheets — `lrr.css` (structural, theme-independent, loaded
- * once) and whichever theme file is currently selected (swapped by changing one `<link>`'s
- * `href`, exactly how legacy's own settings page switches themes — not a CSS-variable
- * recalculation). Both are verbatim copies of legacy's own CSS (see `public/legacy/`), so
- * components written against legacy's own classnames get pixel-accurate styling for free.
- *
- * Also links a vendor stylesheet legacy's own templates load that isn't part of LANraragi's own
- * CSS (pulled from an npm package at legacy's build time), fetched from the same real package
- * here (`blueimp-file-upload`) rather than approximated:
- * - `fileupload-vendor.css`: the `.fileinput-button` positioning (an invisible, absolutely
- *   positioned `<input type=file>` layered over the visible button) every file-picker button
- *   depends on to not render a raw native input.
- * - `allcollapsible.css`: the `.collapsible`/`.collapsible-title`/`.collapsible-body`/
- *   `.caret-right` accordion classes used by the nav carousel, Stats, Plugins, and Batch.
- *
- * Popup menus are a from-scratch `PopupMenu` component styled with Tailwind + the `MENU_PALETTE`
- * table above — no menu-plugin CSS file is linked in for them at all. */
+/** Links legacy's real stylesheets: `lrr.css` (structural, loaded once), the currently-selected
+ * theme file, and the `blueimp-file-upload`/collapsible vendor CSS legacy's templates also load. */
 export function useApplyTheme() {
   const loginStatus = useLoginStatus()
-  // issue #92: `GET /settings` also carries the API key and other genuinely secret fields, so it's
-  // auth-gated and 401s when nothing's logged in yet — previously this ran unconditionally anyway
-  // (the `publicTheme` fallback below existed for the resulting *data*, but the 401 itself still
-  // reached `client.ts`'s own *global* 401 handler, which force-navigates to `/login` regardless
-  // of whether the calling hook has a fallback ready). Deliberately `=== true`, not `?? true` —
-  // `Layout.tsx`'s own nav-link default treats "login status still loading" as "assume logged in"
-  // (a reasonable UI default there), but doing the same *here* means `useSettings` still fires
-  // during that brief window for every visitor, logged in or not — a real, live-confirmed 401 on
-  // every single logged-out page load — since `loginStatus.data` starts `undefined` regardless of
-  // which way it eventually resolves. `publicTheme` below already covers the resulting "no
-  // `settings.data` yet" gap while this stays disabled, so this costs a logged-in visitor nothing
-  // beyond momentarily reading the public theme/language instead of the authenticated copy.
   const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
-  // Only ever actually fetched when `settings` has no data to offer (see the enabled check below)
-  // — i.e. pre-login, where `settings` above is disabled entirely rather than fetched-and-401ing.
-  // Once authenticated, `settings.data` wins and this stays idle.
   const publicTheme = usePublicSettings({ enabled: settings.data === undefined })
 
   useEffect(() => {
@@ -225,23 +147,8 @@ export function useApplyTheme() {
     ensureLink(LEGACY_COLLAPSIBLE_CSS_ID, "/legacy/allcollapsible.css")
   }, [])
 
-  // `settings`/`publicTheme` are both `undefined` for one or more renders after mount, before
-  // either query has actually resolved — naively falling back to `DEFAULT_THEME_ID` during that
-  // window overwrites the theme `index.html`'s own inline script already applied synchronously
-  // (from the server-injected `data-theme` attribute, or a cached `localStorage` value) with the
-  // hardcoded default, then swaps it back once the real value arrives: a real, live-confirmed
-  // flash-of-default-theme regression (issue #58 follow-up), not a hypothetical one — the *fix*
-  // for that flash was itself re-introducing it. Only apply the `DEFAULT_THEME_ID` fallback once
-  // both queries have actually settled (succeeded or errored) with no real value between them —
-  // until then, leave whatever's already applied alone rather than guessing.
-  // `settings` itself is now `enabled: false` for the whole time a visitor is logged out (see
-  // above) — a disabled query never transitions to `isSuccess`/`isError` at all (it just sits at
-  // its initial `pending` status forever), so without this, `settingsSettled` below would never
-  // become `true` pre-login and the `DEFAULT_THEME_ID` fallback could never kick in even once
-  // `publicTheme` itself has genuinely settled. `settings` stays disabled for as long as
-  // `loginStatus` itself hasn't resolved to `true` — including the initial "still loading" window,
-  // not just a confirmed "not logged in" — so once `loginStatus` has settled one way or the other,
-  // `settings` being disabled (still) *is* its own settled state, nothing further to wait on.
+  // Only fall back to `DEFAULT_THEME_ID` once both queries have genuinely settled — applying it
+  // too early overwrites `index.html`'s own synchronous theme application, flashing the default.
   const settingsDisabledAndLoginStatusSettled =
     settings.data === undefined && (loginStatus.isSuccess || loginStatus.isError)
   const publicThemeEnabled = settings.data === undefined
@@ -253,17 +160,11 @@ export function useApplyTheme() {
     const theme = resolvedTheme ?? DEFAULT_THEME_ID
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
-    // Cache for `index.html`'s own inline script (see that file's own docs) to apply synchronously,
-    // before paint, on the *next* visit — this run is always too late for that to help this one.
-    // Only once a real theme value has actually arrived (not the `DEFAULT_THEME_ID` fallback) —
-    // caching the fallback would let a slow network turn one single slow load into a permanently-
-    // wrong cached theme for every visit after it.
     if (resolvedTheme) {
       try {
         localStorage.setItem(THEME_STORAGE_KEY, theme)
       } catch {
-        // localStorage can throw (private browsing, disabled storage, etc.) — losing the cache is
-        // harmless, just means the next visit won't get the synchronous head start.
+        /* empty */
       }
     }
   }, [resolvedTheme, settingsSettled, publicThemeSettled])

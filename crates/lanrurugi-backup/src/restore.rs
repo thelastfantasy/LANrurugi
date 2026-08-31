@@ -137,6 +137,21 @@ pub async fn restore(
             )
             .await
             .map_err(map_bookmarks_error)?;
+        // Only written when the backup actually carries a name — `set_name(None)` would be a
+        // harmless no-op either way (`BookmarksRepository::set_name`'s own docs), but skipping the
+        // call entirely for an un-named backup entry avoids a wasted Redis round trip on the
+        // overwhelmingly common case (backups exported before this feature existed, or a bookmark
+        // that was simply never named).
+        if backup_bookmark.name.is_some() {
+            bookmarks
+                .set_name(
+                    &backup_bookmark.archive_id,
+                    backup_bookmark.page,
+                    backup_bookmark.name.as_deref(),
+                )
+                .await
+                .map_err(map_bookmarks_error)?;
+        }
         summary.bookmarks_restored += 1;
     }
 

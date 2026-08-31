@@ -20,11 +20,8 @@ import {
   TOOLBAR_BUTTON_STYLE,
 } from "./shared"
 
-/** Right-column panel: the persistent queue, grouped by `plugin_namespace` (one
- * `CollapsibleSection` per namespace present), with bulk Select All / Invert Selection / Start /
- * Clear Completed / Delete actions and per-item controls. A row is selectable while `queued` or
- * `error` — `error` is a startable state too, so a failed download has a way back to running again
- * once the underlying problem (e.g. missing login credentials) is fixed. */
+/** Right-column panel: the persistent queue, grouped by `plugin_namespace`, with bulk
+ * Select All / Invert Selection / Start / Clear Completed / Delete actions. */
 export function DownloadQueuePanel({
   downloadPlugins,
   metadataPlugins,
@@ -41,12 +38,8 @@ export function DownloadQueuePanel({
   const clearCompleted = useClearCompletedQueue()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const items = useMemo(() => queue.data ?? [], [queue.data])
-  // Auto-select freshly-added queue items ("添加到队列" then straight to "开始" without having to
-  // tick every checkbox). `seenRef` starts null — the first *non-empty* `items` snapshot is the
-  // pre-existing queue and must NOT be selected (the empty first frame from the still-loading
-  // query is deliberately skipped, or every item would look "fresh" the moment data arrives and
-  // the whole queue would get auto-checked, inflating 开始/删除's counts); only ids appearing
-  // after that snapshot (a new "添加到队列" click) get auto-checked.
+  // Auto-select freshly-added queue items. seenRef starts null: the first non-empty snapshot is
+  // the pre-existing queue and must NOT be selected, or the whole queue gets auto-checked once.
   const seenRef = useRef<Set<string> | null>(null)
   useEffect(() => {
     let seen = seenRef.current
@@ -81,17 +74,12 @@ export function DownloadQueuePanel({
     return map
   }, [items])
 
-  // Prune stale IDs at render time (per-row delete clears items from the queue but the
-  // `selected` Set can still hold now-removed IDs — the toolbar counts must stay in sync).
   const itemIds = useMemo(() => new Set(items.map((i) => i.id)), [items])
   const effectiveSelected = useMemo(
     () => new Set([...selected].filter((id) => itemIds.has(id))),
     [selected, itemIds],
   )
 
-  // Auto-fetch-metadata-on-completion: watches for a linked job reaching `finished` on an item
-  // with `auto_fetch_metadata: true`, then fires the metadata preview call. Ref-guarded so this
-  // doesn't re-fire on every poll tick once triggered.
   const triggeredRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     for (const item of items) {
@@ -113,8 +101,6 @@ export function DownloadQueuePanel({
           "POST",
           `/plugins/use?plugin=${encodeURIComponent(metadataPlugin.namespace)}&id=${encodeURIComponent(archiveId)}`,
         ).catch(() => null)
-        // Merges into whatever tags the fresh archive already has (normally none yet) rather than
-        // assuming it's empty.
         if (!result?.success || !result.data) return
         const { tags: newTags, title, summary } = result.data
         if (!newTags && !(title && (settings.data?.replacetitles ?? true)) && !summary) return
@@ -140,14 +126,9 @@ export function DownloadQueuePanel({
 
   if (items.length === 0) return null
 
-  // `error`/`cancelled` are startable states too (retry reuses the same start/select flow as a
-  // first attempt; see `start_one`'s own docs on the Rust side). `downloading`/`starting`/`done`
-  // are never selectable.
   const selectableIds = items
     .filter((i) => i.state === "queued" || i.state === "error" || i.state === "cancelled")
     .map((i) => i.id)
-  // Matches the backend `clear_completed` handler's filter exactly — `error` is excluded since
-  // it's still-actionable, not "completed".
   const cleared = items.filter((i) => i.state === "done").length
 
   function selectAll() {
@@ -164,10 +145,6 @@ export function DownloadQueuePanel({
         {t("upload.downloadQueue")}
       </h2>
 
-      {/* `.control-btn-group` carries no actual CSS from any theme — a plain unstyled class name —
-          so `display: 'flex'` must be set explicitly here. `.stdbtn`'s theme `min-width: 150px`
-          (5 buttons = 750px, doesn't fit most viewports) is overridden to `0` per-button via
-          `TOOLBAR_BUTTON_STYLE` so all 5 fit on one row instead of wrapping. */}
       <div
         className="control-btn-group"
         style={{ display: "flex", flexWrap: "nowrap", justifyContent: "center", gap: 4, marginBottom: 6 }}
@@ -199,8 +176,6 @@ export function DownloadQueuePanel({
             const selectedIds = [...effectiveSelected]
             await startSelected.mutateAsync(selectedIds)
             setSelected(new Set())
-            // Metadata auto-fetch now lives backend-side (post-download, via
-            // `ensure_metadata_cached`) — no frontend fire-and-forget loop needed.
           }}
         >
           {t("upload.startN", { n: effectiveSelected.size })}
@@ -229,10 +204,6 @@ export function DownloadQueuePanel({
       </div>
 
       <ul className="collapsible extensible with-right-caret" style={{ width: "100%" }}>
-        {/* Local uploads always pinned to the top, ahead of every download-plugin group —
-            `grouped`'s own iteration order otherwise just follows whichever namespace's first
-            item happened to appear earliest in `items` (queue insertion order), which puts local
-            uploads wherever they landed rather than somewhere a user can reliably expect. */}
         {[...grouped.entries()]
           .sort(([a], [b]) => {
             if (a === LOCAL_UPLOAD_NAMESPACE) return -1

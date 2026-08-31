@@ -9,41 +9,20 @@ import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_SM,
 import { ActivityChip, CHIP_REMOVE_BUTTON_STYLE } from "./ActivityChip"
 import type { ChipColor } from "./activityColors"
 
-/** Shared minimum row height for every control in the Activity filter bar (this multi-select
- * shell, the single-select time-range trigger, and — via `ActivityFilterBar.tsx`'s own use of this
- * same constant — the delete button) so the whole row reads as one consistent height regardless of
- * how many chips the multi-select currently holds. Sized to fit one line of 24px-tall
- * `ActivityChip`s plus this shell's own 2px top/bottom padding; without an explicit floor the empty
- * state (just placeholder text, no chips) rendered visibly shorter than the chip-filled state,
- * confirmed live as a jarring height jump when the first chip was added/the last one removed. */
+/** Shared minimum row height for every control in the Activity filter bar, so the row doesn't
+ * jump height between the empty (placeholder-only) and chip-filled states. */
 export const ACTIVITY_FILTER_ROW_HEIGHT = 30
 
-/** What a selected value renders as inside its own removable chip — `content` is the chip's own
- * label (i18n-translated where applicable), `color` its fixed categorical color (see
- * `activityColors.ts`), and `tooltip` an optional hover label for when the visible text alone
- * doesn't fully identify the value (e.g. a token's display name doesn't show its id). */
+/** What a selected value renders as inside its removable chip: label, categorical color, and an
+ * optional hover tooltip for when the visible text doesn't fully identify the value. */
 export interface ChipRenderResult {
   content: ReactNode
   color: ChipColor
   tooltip?: ReactNode
 }
 
-/** Shared visual shell for the Activity page's two multi-select filter comboboxes (action type /
- * actor — `TimeRangeCombobox` is single-select and keeps its own simpler trigger-only shell).
- * Base UI's own components (`Combobox.Root`/`InputGroup`/`Chips`/`Input`/`Trigger`/`Positioner`/
- * `Popup`/`List`/`Item`/`Group`/`GroupLabel`) are unstyled by design (`className`, which can be a
- * `(state) => string` function, plus `data-*` state attributes are the documented customization
- * surface); `Combobox.Chip`/`ChipRemove` specifically are used only for their *behavior*
- * (removable-chip semantics/keyboard handling) via the `render` prop, composed with this page's
- * own {@link ActivityChip} for the actual colored-pill visual — Base UI's own default chip
- * rendering is an unstyled `<div>`, and this page's chips need a real per-value color, not the
- * single flat theme-palette tint an unconditional `className` could give every chip alike.
- *
- * `renderChip` renders each currently-selected value as a chip inside `Combobox.Value`'s own
- * render-prop, per Base UI's documented multiple-selection pattern (`selectedValue` is `string[]`
- * when the root's `multiple` prop is set) — the caller supplies the chip's own label/color/tooltip
- * (e.g. an i18n-translated action-type name) since only it knows how to look those up from the raw
- * string value. */
+/** Shared visual shell for the Activity page's two multi-select filter comboboxes. `Combobox.Chip`
+ * is used only for its behavior; {@link ActivityChip} supplies the actual colored-pill visual. */
 export function ActivityComboboxShell({
   placeholder,
   emptyLabel,
@@ -56,8 +35,7 @@ export function ActivityComboboxShell({
   renderChip: (value: string) => ChipRenderResult
   children: ReactNode
   /** Widens the control (and its popup) beyond the default 320px cap — used by the merged
-   * `ActivityFilterCombobox`, whose chip row can carry both action-type and actor selections at
-   * once and needs more room than either standalone combobox did on its own. */
+   * combobox, whose chip row can carry both action-type and actor selections at once. */
   wide?: boolean
 }) {
   const palette = useMenuPalette()
@@ -70,20 +48,12 @@ export function ActivityComboboxShell({
         flexWrap: "wrap",
         alignItems: "center",
         gap: 4,
-        // Below the narrow-viewport breakpoint this fills its own container's width instead of
-        // the fixed `min`/`maxWidth` caps below — those caps assume the desktop filter bar's own
-        // horizontal layout, where several controls share one row and this one shouldn't hog it;
-        // on a real phone viewport (`ActivityFilterBar.tsx`'s own narrow layout stacks controls
-        // full-width instead) the same fixed `minWidth: 320` forced this control to overflow its
-        // container regardless of how narrow the actual viewport was, confirmed live.
         width: narrow ? "100%" : "auto",
         minWidth: narrow ? undefined : wide ? 320 : 160,
         maxWidth: narrow ? undefined : wide ? 560 : 320,
         minHeight: ACTIVITY_FILTER_ROW_HEIGHT,
         padding: "2px 6px",
         boxSizing: "border-box",
-        // `.stdinput`'s asymmetric `margin: 4px 1px 0` throws off vertical centering against
-        // `.stdbtn`'s neighbors; zero only the vertical axis, keep the horizontal 1px.
         marginTop: 0,
         marginBottom: 0,
         marginLeft: 1,
@@ -127,10 +97,6 @@ export function ActivityComboboxShell({
         placeholder={placeholder}
         style={{ border: "none", background: "transparent", outline: "none", flex: 1, minWidth: 60, fontSize: FONT_SIZE_SM }}
       />
-      {/* No `className` (an unstyled `<button>` otherwise carries the browser's own default
-          border/background/padding chrome) — matches the flat, inline caret
-          `ActivitySingleSelectShell`'s `.stdbtn` trigger shows next to "全部时间", instead of
-          rendering as its own separate boxed button next to the input. */}
       <Combobox.Trigger
         style={{
           display: "inline-flex",
@@ -153,11 +119,6 @@ export function ActivityComboboxShell({
               border: `1px solid ${palette.border}`,
               boxShadow: FLOATING_POPUP_SHADOW,
               color: palette.text,
-              // `--anchor-width` (Base UI's own `ComboboxPositionerCssVars`) is the trigger's real
-              // rendered width — matching the popup to it keeps the dropdown visually aligned with
-              // the input it belongs to instead of shrinking to its own content's intrinsic width,
-              // which reads as a mismatched, narrower-than-the-input popup (confirmed live once the
-              // input itself became wide, e.g. this shell's `wide`/full-width narrow-mode variants).
               width: "var(--anchor-width)",
               minWidth: wide ? 320 : 220,
               maxHeight: 400,
@@ -166,12 +127,6 @@ export function ActivityComboboxShell({
               transformOrigin: "var(--transform-origin)",
             }}
           >
-            {/* Base UI's own docs: `Combobox.Empty`'s root element must stay mounted at all times
-                (never conditionally rendered/hidden) for consistent screen-reader announcements —
-                only its `children` become `null` once the list isn't empty. Styling belongs on a
-                wrapper *inside* those children, not on `Combobox.Empty` itself: padding applied
-                directly to it stayed put even with no children, confirmed live as a blank padded
-                strip sitting above the results whenever the list wasn't actually empty. */}
             <Combobox.Empty>
               <div style={{ padding: "8px 12px", opacity: 0.65 }}>{emptyLabel}</div>
             </Combobox.Empty>
@@ -183,12 +138,8 @@ export function ActivityComboboxShell({
   )
 }
 
-/** Trigger-only shell for the Activity page's single-select filter combobox (`TimeRangeCombobox`
- * — a time range is one value, never a set to union together, so it has no business rendering
- * chips). Kept separate from {@link ActivityComboboxShell} above rather than making that one
- * handle both shapes, since a single-select trigger button and a multi-select chip-input-group
- * are different enough visual objects that trying to share one component would need more
- * conditional branching than just having two small ones. */
+/** Trigger-only shell for the single-select filter combobox (`TimeRangeCombobox`) — kept separate
+ * from {@link ActivityComboboxShell} since the two are visually different enough objects. */
 export function ActivitySingleSelectShell({
   placeholder,
   triggerLabel,
@@ -206,12 +157,8 @@ export function ActivitySingleSelectShell({
         minWidth: 0,
         width: "auto",
         height: ACTIVITY_FILTER_ROW_HEIGHT,
-        // `.stdbtn` defaults to `content-box` (no explicit `box-sizing`), so force `border-box`
-        // to match `.stdinput`'s neighbor and zero only the vertical margin, keeping horizontal.
+        // border-box to match .stdinput's neighbor; padding matches .stdbtn's own asymmetry.
         boxSizing: "border-box",
-        // Matches `.stdbtn`'s own `0 4px 1px` vertical asymmetry (not a flat `0 10px`) — the
-        // delete button next to this trigger has no padding override and keeps that asymmetry, so
-        // overriding it flat here shifted this trigger's content 1px up relative to it.
         padding: "0 10px 1px",
         marginTop: 0,
         marginBottom: 0,
@@ -259,18 +206,8 @@ export function ActivitySingleSelectShell({
   )
 }
 
-/** One selectable row — its own label renders as a real miniature `ActivityChip` (the same colored
- * pill its selected-value chip becomes once picked), not plain text next to a color swatch dot —
- * so the dropdown itself directly previews what color/shape each candidate's chip will be, rather
- * than requiring the user to select it first to see. `data-highlighted` (keyboard/pointer focus
- * within the popup, distinct from CSS `:hover` since `PopupMenu`'s own precedent keeps those
- * independently controllable) still drives a background swap on the row itself via the palette,
- * so the highlighted row is visually distinguishable from its neighbors independent of the chip's
- * own fixed color. `color` is optional (a plain row with no categorical color — none exist today,
- * but this keeps the type honest for one that might) — omitted, `label` renders as plain text
- * instead of a chip. `count`/`tooltip` are appended after the chip, outside its own colored
- * boundary, matching how a facet's usage count and a token's hover detail read better as
- * plain neighboring content than crammed inside the pill itself. */
+/** One selectable row — its label renders as a miniature `ActivityChip` so the dropdown previews
+ * the picked look up front. `count`/`tooltip` render outside the chip's own colored boundary. */
 export function ActivityComboboxItem({
   value,
   color,
@@ -286,11 +223,6 @@ export function ActivityComboboxItem({
 }) {
   const palette = useMenuPalette()
   const chip = color ? <ActivityChip color={color}>{label}</ActivityChip> : label
-  // Compact padding (`px-1 py-[.15em]`) only applies to a real colored chip row — those wrap
-  // several to a line (`ActivityComboboxGroup`'s own flex-wrap container), so a tight hit target
-  // is what lets many fit per row. A plain-text row (no `color` — `TimeRangeCombobox`'s own preset
-  // list, one per line, no wrapping) needs its own full-row padding instead; reusing the chip's
-  // compact padding here made those rows look visibly cramped compared to before, confirmed live.
   const itemPadding = color ? "px-1 py-[.15em]" : "px-3 py-[.3em]"
   return (
     <Combobox.Item
@@ -322,10 +254,7 @@ export function ActivityComboboxGroup({ label, children }: { label: string; chil
       >
         {label}
       </Combobox.GroupLabel>
-      {/* Items wrap onto shared rows instead of each claiming its own full-width line (each
-          `Combobox.Item` renders as a plain block `<div>` by default) — with a real facet list
-          this could otherwise run to a dozen+ one-per-line rows, confirmed live as needing a lot
-          of scrolling for what's mostly short chip labels that fit several to a line. */}
+      {/* Items wrap onto shared rows instead of each claiming its own full-width block line. */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "0 8px 4px" }}>{children}</div>
     </Combobox.Group>
   )

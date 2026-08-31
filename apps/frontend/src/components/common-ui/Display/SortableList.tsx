@@ -21,23 +21,16 @@ import { CSS } from "@dnd-kit/utilities"
 import Lenis from "lenis"
 import { useEffect, useRef, useState } from "react"
 
-/** Props a caller's `renderItem` must spread onto whatever element should act as the grab handle
- * (`{...dragHandleProps.attributes} {...dragHandleProps.listeners}`) — kept distinct from the
- * whole row so clicking a row's own interactive controls (checkboxes, buttons, inputs) doesn't
- * fight the pointer sensor's activation constraint. `attributes`/`listeners` are absent for
- * `DragOverlay`'s render of `renderItem` — that copy is a purely visual stand-in, so it needs no
- * working drag listeners of its own. */
+/** Props a caller's `renderItem` must spread onto the grab handle so clicking interactive
+ * controls elsewhere in the row doesn't fight the pointer sensor. Absent for `DragOverlay`. */
 export interface DragHandleProps {
   attributes?: ReturnType<typeof useSortable>["attributes"]
   listeners?: ReturnType<typeof useSortable>["listeners"]
   isDragging: boolean
 }
 
-/** One sortable row — renders its own `renderItem` output, wired to dnd-kit's per-item position
- * tracking. While dragging, this row becomes an invisible placeholder rather than moving in
- * place: the real, fully-styled dragged content renders once, separately, inside `SortableList`'s
- * own `DragOverlay` — see that component's docs for why a same-flow-moving item caused visual
- * overlap against neighboring rows of a different height. */
+/** One sortable row. While dragging, this row becomes an invisible placeholder — the real
+ * dragged content renders inside `SortableList`'s own `DragOverlay` instead. */
 function SortableRow<T>({
   id,
   item,
@@ -51,9 +44,7 @@ function SortableRow<T>({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    // The dragged row's own in-flow slot becomes invisible (not `display: none`, which would
-    // collapse layout and cause everything below to jump) while `DragOverlay` shows the real,
-    // undistorted content elsewhere — see this function's own docs.
+    // Not display: none, which would collapse layout and jump everything below.
     visibility: isDragging ? "hidden" : "visible",
   }
 
@@ -64,18 +55,8 @@ function SortableRow<T>({
   )
 }
 
-/** Drag-and-drop reorderable list (dnd-kit), generic over any item type — extracted from the
- * Plugins page's own per-type priority reordering so any future list needing "drag a row, persist
- * the new order" doesn't need to re-wire dnd-kit from scratch.
- *
- * Uses `DragOverlay` for the actively-dragged row's real rendered content rather than each row
- * moving in its own document-flow slot — necessary because rows can have very different heights
- * (e.g. a plugin card with a multi-line notice vs. a bare one-liner); without it, a tall row
- * dragged over a shorter one visually overlapped the shorter row's content (a real, observed bug).
- *
- * `items`/`getId`/`renderItem` mirror a typical virtualized-list API: `renderItem` receives the
- * item plus `DragHandleProps` to spread onto whichever element the caller wants as the grab
- * handle, so callers keep full control over their own row layout. */
+/** Drag-and-drop reorderable list (dnd-kit), generic over any item type. Uses `DragOverlay` for
+ * the dragged row's real content, since rows of differing heights otherwise visually overlap. */
 export function SortableList<T>({
   items,
   getId,
@@ -85,16 +66,10 @@ export function SortableList<T>({
 }: {
   items: T[]
   getId: (item: T) => string
-  /** Called once, after a drop actually changes the order — receives the complete new ordered id
-   * list (not a single from/to delta), matching how most "persist this order" APIs expect a full
-   * replacement rather than an incremental patch. */
+  /** Called once after a drop changes the order — receives the complete new ordered id list. */
   onReorder: (newOrder: string[]) => void
   renderItem: (item: T, dragHandleProps: DragHandleProps) => React.ReactNode
-  /** `'vertical'` (default) relies on each row's own block-level element stacking normally — no
-   * wrapping flex container needed, matching the Plugins page's original usage. `'horizontal'`
-   * additionally wraps the rows in a `display: flex` row with `overflow-x: auto` (scrolls rather
-   * than wraps when there isn't room, matching a card-row/carousel-style list) and switches
-   * dnd-kit's own sorting strategy to match — items only reorder left/right, not vertically. */
+  /** `'horizontal'` reorders left/right in a scrolling flex row instead of vertically. */
   direction?: "vertical" | "horizontal"
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -103,7 +78,7 @@ export function SortableList<T>({
   const containerRef = useRef<HTMLDivElement>(null)
   const lenisRef = useRef<Lenis | null>(null)
 
-  // Horizontal mode: Lenis handles wheel→horizontal with damp, just like ScrollRow and PageLightbox.
+  // Horizontal mode: Lenis handles wheel-to-horizontal with damp.
   useEffect(() => {
     const el = containerRef.current
     if (!el || direction !== "horizontal") return

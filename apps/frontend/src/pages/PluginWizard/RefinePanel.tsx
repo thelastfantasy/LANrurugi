@@ -11,13 +11,8 @@ import { useGenerationProgress } from "./useGenerationProgress"
 import type { ConversationTurn, DraftRevision, PluginType, TypeSession, WizardSession } from "./useWizardSession"
 import { availableCredentialsFor, cleanLinks } from "./useWizardSession"
 
-/** User-driven free-text follow-up on an already-generated draft (e.g. "帮我加上从 source tag
- * 提取 ID 的回退逻辑") — distinct from US5's AI-auto-fix (`TrialRunResult.tsx`'s own
- * `triggerAutoFix`), which is trial-run-failure-driven and needs no user input. This is available
- * any time there's an active revision, success or failure, since it's not fixing anything —
- * `TypeSession.conversationHistory` (every past round's own ask+code, replayed by the backend)
- * is what lets this build on everything already discussed rather than the model only ever seeing
- * the latest code snapshot in isolation. */
+/** User-driven free-text follow-up on an already-generated draft, distinct from the
+ * trial-run-failure-driven AI auto-fix in `TrialRunResult.tsx`. */
 export function RefinePanel({
   session,
   typeSession,
@@ -46,12 +41,6 @@ export function RefinePanel({
   const [instruction, setInstruction] = useState("")
   const [refining, setRefining] = useState(false)
   const { items, elapsedSeconds, start: startProgress, stop: stopProgress, onProgress } = useGenerationProgress()
-  // Real per-theme colors (`MENU_PALETTE`, already used elsewhere for exactly this "bordered card
-  // that isn't a legacy element" case — `PopupMenu.tsx`), not `.ptbox` — that class carries no
-  // actual CSS rule in any of the 5 themes (verified), so every other `.ptbox` usage in this same
-  // wizard reads as unbordered whitespace, not a real card. This one gets a real border/background
-  // specifically because the user asked for this section to read as visually separated (real
-  // feedback, 2026-08-26).
   const palette = useMenuPalette()
 
   async function trigger() {
@@ -127,9 +116,6 @@ export function RefinePanel({
           onChange={(e) => setInstruction(e.target.value)}
           placeholder={t("pluginWizard.refinePlaceholder") ?? undefined}
           rows={3}
-          // `.stdinput`'s own theme CSS caps `max-width: 450px` — override so this textarea can
-          // actually reach the wizard's own 720px step container width, same fix as
-          // `SharedLinksForm.tsx`'s own textarea.
           style={{ width: "100%", maxWidth: "none", display: "block" }}
         />
       </label>

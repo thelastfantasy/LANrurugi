@@ -646,39 +646,66 @@ async fn force_apply_first_archive_cover(
 }
 
 /// Maps a Tankoubon-wide global page number to the real member archive and that archive's own
-/// local page number it falls in — matches legacy's `Model::Tankoubon::translate_global_page`
-/// exactly: walk `archives` in stored (reading) order, summing `pagecount`, and return the first
-/// member whose cumulative range covers `global_page`. `None` if the page is out of range for
-/// every member (including an empty/all-missing Tankoubon).
+/// local page number it falls in — matches legacy's `Model::Tankoubon::translate_global_page`.
+/// Thin wrapper over `GroupingRepository::resolve_global_page` (the actual walk-and-sum logic now
+/// lives there, shared with `bookmarks.rs`/`stamps.rs`'s own Tankoubon routes) — drops the
+/// `archive_index` that method also returns (no caller here needs it) and collapses a storage
+/// error into `None`, same "a lookup failure just means no match" tolerance the original private
+/// version of this function had via its own `.ok().flatten()`.
 async fn resolve_global_page(
     state: &AppState,
     archives: &[ArchiveId],
     global_page: u32,
 ) -> Option<(ArchiveId, u32)> {
-    // Parallel fetch (same `join_all` reasoning as `common_member_tags`/`resolve_search_entry`),
-    // but the offset walk itself has to stay sequential/ordered — it's a running sum, not an
-    // independent per-item computation.
-    let pagecounts = join_all(archives.iter().map(|id| async move {
-        state
-            .repos
-            .archives
-            .get(id)
-            .await
-            .ok()
-            .flatten()
-            .map(|a| a.pagecount)
-            .unwrap_or(0)
-    }))
-    .await;
+    state
+        .repos
+        .groupings
+        .resolve_global_page(&state.repos.archives, archives, global_page)
+        .await
+        .ok()
+        .flatten()
+        .map(|(id, page, _index)| (id, page))
+}
 
-    let mut offset = 0u32;
-    for (id, pagecount) in archives.iter().zip(pagecounts) {
-        if global_page <= offset + pagecount {
-            return Some((id.clone(), global_page - offset));
+/// Resolves a Tankoubon id + Tankoubon-global page number down to the real member archive id and
+/// that archive's own local page number, looking the Tankoubon itself up first (unlike
+/// [`resolve_global_page`] above, which takes an already-fetched `archives` list) — shared by
+/// `bookmarks.rs`/`stamps.rs`'s own Tankoubon-page-addressed routes (`/tankoubons/{id}/bookmarks/
+/// {page}`, `/tankoubons/{id}/stamps/{page}`), which need this exact "look up the grouping, then
+/// resolve the page" sequence and have no `Grouping` of their own to hand in. Returns the
+/// `Response` to send back directly (a `404`/`400`/`500`) on any resolution failure, so call sites
+/// can `let (archive_id, local_page) = match resolve_tank_page(...).await { Ok(v) => v, Err(r) =>
+/// return r };` without duplicating the same three failure branches at every call site.
+pub(crate) async fn resolve_tank_page(
+    state: &AppState,
+    tank_id: &TankId,
+    op: &str,
+    global_page: u32,
+) -> Result<(ArchiveId, u32), Response> {
+    let grouping = match state.repos.groupings.get(tank_id).await {
+        Ok(Some(g)) => g,
+        Ok(None) => {
+            return Err(not_found(
+                op,
+                format!("{tank_id} doesn't exist in the database!"),
+            ))
         }
-        offset += pagecount;
+        Err(e) => return Err(error(StatusCode::INTERNAL_SERVER_ERROR, op, e.to_string())),
+    };
+    match state
+        .repos
+        .groupings
+        .resolve_global_page(&state.repos.archives, &grouping.archives, global_page)
+        .await
+    {
+        Ok(Some((archive_id, local_page, _index))) => Ok((archive_id, local_page)),
+        Ok(None) => Err(error(
+            StatusCode::BAD_REQUEST,
+            op,
+            format!("Page {global_page} is out of range for this tankoubon."),
+        )),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, op, e.to_string())),
     }
-    None
 }
 
 #[derive(Debug, Deserialize)]

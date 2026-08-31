@@ -27,9 +27,7 @@ import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
 export function App() {
   return (
     <BrowserRouter>
-      {/* Mounted once app-wide, matching legacy's own `initializeToasts()` — see `toast.tsx`. */}
       <ToastContainer limit={7} theme="light" />
-      {/* Mounted once app-wide — see `dialog.tsx`'s own docs. */}
       <DialogHost />
       <Routes>
         <Route
@@ -49,14 +47,8 @@ export function App() {
           }
         />
         <Route element={<Layout />}>
-          {/* An unknown route (issue #92) is content-free and legacy never gated it on login
-              either — nested here, outside `RequireAuth` below, so it stays reachable (and never
-              itself triggers a login redirect) regardless of session state, while still getting
-              the same nav/theme/i18n/Footer shell every other in-`Layout` page has. */}
           <Route path="*" element={<NotFoundPage />} />
-          {/* 007-guest-restricted-access: Library is the one `Layout`-wrapped page an eligible
-              guest may also reach (a scoped view, not a redirect to `/login`) — every other
-              management/admin page below stays strictly `RequireAuth`-only. */}
+          {/* Library is the one Layout-wrapped page a guest may reach (scoped view, not a redirect). */}
           <Route element={<AllowGuest />}>
             <Route path="/" element={<Library />} />
           </Route>

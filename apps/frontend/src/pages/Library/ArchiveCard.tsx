@@ -4,23 +4,20 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { routes } from "@/lib/routes"
+import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { TagLine } from "./TagLine"
 
-/** Read-crown/new/tankoubon status badges — ports `buildStatusDiv` exactly, including its
- * mutual-exclusion rule (an archive shows 🆕 XOR 👑, never both; a Tankoubon can show both plus
- * 📚) and its >85%-read threshold. */
+/** Status badges — 🆕 and 👑 are mutually exclusive (a Tankoubon can show both plus 📚); read
+ * threshold is >85%. */
 function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   const { t } = useTranslation()
   const isTank = isTankoubonId(archive.arcid)
   const isRead = archive.pagecount > 0 && archive.progress / archive.pagecount > 0.85
   const showNew = archive.isnew
   const showCrown = isRead && (isTank || !showNew)
-  // Additive, LANrurugi-only badge (issue #77's own follow-on design) — a sidecar `.patch.zip`
-  // exists next to this archive, so what the reader shows for it differs from the raw file on
-  // disk. No legacy equivalent, so no mutual-exclusion rule with the other three (unlike 🆕/👑,
-  // which are deliberately XOR) — a patched archive can be new/read/a Tankoubon at the same time.
+  // No legacy equivalent, so no mutual-exclusion with the other badges.
   const showPatch = archive.has_patch === true
 
   if (!showNew && !showCrown && !isTank && !showPatch) return null
@@ -34,10 +31,8 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   )
 }
 
-/** Ports `buildPageCountDiv` — a Tankoubon with pages shows the 3-part `progress/pagecount/
- * archive_count` form (via its own `archive_count` field, populated server-side only for
- * synthetic Tankoubon search-result entries — see `search.rs`'s `resolve_search_entry`); a plain
- * archive shows the 2-part form; nothing renders when `pagecount` is 0. */
+/** A Tankoubon shows the 3-part `progress/pagecount/archive_count` form; a plain archive shows
+ * the 2-part form. */
 function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   const { t } = useTranslation()
   if (archive.pagecount <= 0) return null
@@ -53,11 +48,8 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   )
 }
 
-/** Mirrors legacy's exact thumbnail card markup (`buildThumbnailDiv` in
- * `~/LANraragi/public/js/mod/common.js`) — `div.id1` > (`div.id2` status icons + title, `div.id3`
- * cover image, `div.id4` page count + tags) — so the copied theme CSS (`useApplyTheme`) styles it
- * identically. Right-click opens `ArchiveContextMenu` (real functional parity); multi-select mode
- * overlays a checkbox instead of navigating on click. */
+/** Mirrors legacy's thumbnail card markup so the copied theme CSS styles it identically.
+ * Right-click opens `ArchiveContextMenu`; multi-select mode overlays a checkbox instead. */
 export function ArchiveCard({
   archive,
   multiSelect,
@@ -67,6 +59,7 @@ export function ArchiveCard({
   onContextMenu,
   onOpen,
   onSearchTag,
+  highlightQuery,
 }: {
   archive: ArchiveMetadata
   multiSelect: boolean
@@ -76,6 +69,8 @@ export function ArchiveCard({
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
   onSearchTag: (namespacedTag: string) => void
+  /** Space-separated keywords to `<mark>` inside the title, e.g. from a search box. */
+  highlightQuery?: string
 }) {
   const id = archive.arcid
   const isTank = isTankoubonId(id)
@@ -108,7 +103,7 @@ export function ArchiveCard({
           onClick={handleOpen}
           style={{ flex: "0 1 auto", minWidth: 0 }}
         >
-          {archive.title}
+          {highlightText(archive.title, highlightQuery)}
         </a>
         <StatusIcons archive={archive} />
       </div>

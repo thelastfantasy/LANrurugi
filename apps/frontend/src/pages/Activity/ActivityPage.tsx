@@ -17,20 +17,8 @@ import { RetentionSettingsMenu } from "./RetentionSettingsInline"
 
 const PAGE_LIMIT = 50
 
-/** Operator Activity page (issue #87) — a structured, persisted, filterable/paginated record of
- * who did what, distinct from the unstructured `tracing`-based request log
- * (`procedure.rs::trace_request`). Cursor-paginated against `GET /activity` (this project's first
- * back-end-paginated list — see the storage layer's own docs on why cursor over offset), with a
- * client-side "page stack" of cursors so Previous can step back without the backend needing to
- * support reverse pagination.
- *
- * Bulk/single delete always renders a delete affordance here — this page is only ever reached
- * through the browser UI, which always authenticates via the Session cookie (API tokens are for
- * third-party clients calling the API directly, never for this app's own frontend — there is no
- * "am I a Token client" state to check on this side at all). The server still independently
- * enforces Session-only on the DELETE routes (`activity.rs::router()`'s own `require_session`
- * gate) as the real authority; this is just about the button being present, not the actual
- * security boundary. */
+/** Operator Activity page — cursor-paginated against `GET /activity`, with a client-side "page
+ * stack" of cursors so Previous can step back without the backend needing reverse pagination. */
 export function ActivityPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -61,11 +49,6 @@ export function ActivityPage() {
   const entries = useMemo(() => activity.data?.entries ?? [], [activity.data])
   const canDelete = true
 
-  // Three real states for the "select all on this page" checkbox — fully checked (every entry on
-  // this page selected), fully unchecked (none), or `indeterminate` (some but not all) — matching
-  // `Jobs/JobsPage.tsx`'s own precedent for the same three-state header checkbox. `indeterminate`
-  // has no JSX prop at all (it's not a real HTML attribute, just a DOM property a native
-  // `<input type="checkbox">` exposes) — has to be set imperatively via a ref, same as that page.
   const allSelected = entries.length > 0 && entries.every((e) => selected.has(e.id))
   const someSelected = entries.some((e) => selected.has(e.id))
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null)
@@ -144,20 +127,10 @@ export function ActivityPage() {
   }
 
   const isEmpty = !activity.isLoading && entries.length === 0 && pageIndex === 0
-  // "操作者"/"操作" hold short, fixed-size chips, not flowing text — `auto` (size to content)
-  // instead of `1fr` stops them stretching to an equal share of the row's width on a wide
-  // viewport, which left a lot of empty space inside each chip's own column; "操作内容" (the one
-  // column with genuinely variable-length content) absorbs whatever's left over via its own `1fr`.
   const gridColumns = canDelete ? "auto auto auto auto 1fr auto auto" : "auto auto auto 1fr auto"
 
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12, boxSizing: "border-box", position: "relative" }}>
-      {/* Absolutely positioned over the centered `.ih` heading rather than sharing a flex row with
-          it — `.ih` is legacy's own centered-title class, and turning this into a flex row to make
-          room for a right-aligned gear icon would mean re-deriving that centering (accounting for
-          the icon's own width) instead of just overlaying a corner element on top of it, which is
-          what the Library page's own gear icon effectively does too (sits in its own toolbar
-          corner, not fighting the heading for space). */}
       <div style={{ position: "absolute", top: 8, right: 8 }}>
         <RetentionSettingsMenu />
       </div>
@@ -190,10 +163,6 @@ export function ActivityPage() {
       {entries.length > 0 && (
         <>
           {narrow ? (
-            // Narrow mode: `ActivityRow` renders each entry as its own self-contained card rather
-            // than a `display: contents` grid row, so there's no shared grid/header to align
-            // against here — just a "select all" affordance above a plain stacked list of cards,
-            // divided the same way the app's other legacy-derived checklists separate rows.
             <div style={{ marginTop: 16 }}>
               {canDelete && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 4px", fontSize: FONT_SIZE_SM, opacity: 0.65 }}>
@@ -233,12 +202,7 @@ export function ActivityPage() {
                 }}
               >
                 {canDelete && (
-                  // Matches `ActivityRow.tsx`'s own checkbox cell exactly (`display: flex,
-                  // justifyContent: "center"`, same padding/margin) — a plain `textAlign: "center"`
-                  // block here centered the checkbox slightly differently than the row cells' own
-                  // flex-centered layout once those gained their negative-margin gap-bridging
-                  // (see that component's own docs), confirmed live as a visible header/row
-                  // misalignment in this column specifically.
+                  // Matches ActivityRow's checkbox cell layout exactly to avoid header/row misalignment.
                   <div style={{ display: "flex", justifyContent: "center", opacity: 0.65, padding: "4px 6px", margin: "0 -6px 0 0" }}>
                     <input
                       ref={selectAllCheckboxRef}

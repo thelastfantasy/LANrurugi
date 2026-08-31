@@ -34,12 +34,8 @@ import {
 } from "./shared";
 import { useCompareStream } from "./useCompareStream";
 
-/** A `JobProgressBar` for a rate-limited download, with a hover tooltip anchored to *just the
- * speed figure itself* (via `JobProgressBar`'s own `speedTooltip` prop) showing the limit +
- * matched domain rule and a deep-link to that plugin's rate-limit settings (issue #2). Deliberately
- * not a `Tooltip` wrapped around the whole bar/row — that shadowed the title's own metadata-preview
- * tooltip (`TooltipIfPresent` above this bar), since both triggers would then overlap the same
- * area. */
+/** A `JobProgressBar` for a rate-limited download, with a hover tooltip (just the speed figure,
+ * not the whole row, which would shadow the title's own metadata-preview tooltip). */
 function RateLimitedProgressBar({
   job,
   pluginNamespace,
@@ -110,30 +106,14 @@ export function QueueItemRow({
   const overwriteConflict = useOverwriteQueueItem();
   const renameConflict = useRenameQueueItem();
   const compareStream = useCompareStream();
-  // `ConflictMenu` takes this ref directly and tracks it live via Floating UI's `autoUpdate` — a
-  // measured-once `DOMRect` snapshot went stale between opens whenever the list's own polling
-  // reflowed row heights in between (reported live, both mobile and desktop).
   const [conflictMenuOpen, setConflictMenuOpen] = useState(false);
   const conflictButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renamePopover, setRenamePopover] = useState<{
     x: number;
     y: number;
   } | null>(null);
-  // Modal visibility is driven by whether the stream has produced anything to show yet — opened
-  // the moment the FIRST sample arrives (not waiting for `done`), per issue #77's own confirmed
-  // streaming design: "发第一对的时候就开始显示modal，这样是一个很大的提速". Closing the modal tears
-  // the stream down early via `compareStream.close()` (see `onClose` below) rather than just
-  // hiding it — an abandoned comparison shouldn't keep computing in the background.
-  //
-  // Real state, not a ref — `showModal` below reads it during render, so flipping it to `false` on
-  // close must trigger a re-render itself. An earlier ref-based version didn't: the modal stayed
-  // visible until whatever OTHER unrelated re-render happened to sweep through next (this row's own
-  // 1s download-queue poll), which is exactly the reported "关闭按钮点击后延迟响应" — nothing was
-  // actually slow, the close was just invisible until the next incidental render.
+  // Real state (not a ref) — showModal reads it during render, so closing must re-render.
   const [started, setStarted] = useState(false);
-  // Mirrors `started`, read synchronously inside the error-handling effect below so that effect's
-  // own guard doesn't need `started` in its dependency array (which would make its `setStarted(false)`
-  // call a same-effect self-trigger, flagged by the `react-hooks` linter as a cascading-render risk).
   const startedRef = useRef(false);
   const pendingCompareToastRef = useRef<ReturnType<typeof toast> | null>(null);
   const archiveId =
@@ -143,9 +123,6 @@ export function QueueItemRow({
   const isLocalUpload = item.plugin_namespace === LOCAL_UPLOAD_NAMESPACE;
   const fileSize = item.file_size ?? job?.total_bytes;
 
-  // Backend-owned now (`POST /download_queue/{id}/fetch-metadata` → the same 10-min-cache
-  // path the post-download auto-fetch uses); the updated `metadata_preview` comes back over
-  // the queue SSE delta, so nothing to write locally.
   function handleFetchMetadata() {
     if (!metadataPlugin) return;
     fetchMetadata.mutate(item.id);
@@ -153,11 +130,6 @@ export function QueueItemRow({
 
   function handleCompare() {
     setConflictMenuOpen(false);
-    // The comparison itself (perceptual-hash every sampled page, banded-DP align, decode a
-    // handful of pages for the sharpness pass) still takes a few seconds before the FIRST sample
-    // is ready — with no feedback at all in that window, a click reads as having not registered
-    // (reported live: "点击ai选项时没有skeleton或正在处理的toast"). Dismissed the moment the modal
-    // actually opens (first sample) or a stream-level error arrives, below.
     const pendingToastId = toast({
       heading: t("upload.analyzing") ?? "Analyzing…",
       icon: "info",
@@ -192,11 +164,6 @@ export function QueueItemRow({
         dismissToast(pendingCompareToastRef.current);
         pendingCompareToastRef.current = null;
       }
-      // Surfaces the server's own real error message (e.g. "the staged download no longer exists
-      // on disk — try downloading again") rather than a generic string for every possible failure
-      // — reported live (pre-streaming): a stale/cleaned-up staged file and a genuine bug both
-      // showed the exact same undifferentiated "Comparison failed" toast, with no way to tell
-      // which one it actually was.
       toast({ heading: compareStream.error, icon: "error" });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -383,9 +350,6 @@ export function QueueItemRow({
 
         {item.pending_filename_conflict ? (
           <>
-            {/* `position: relative` wrapper — `ConflictMenu` renders non-portaled inside it
-                (`portal={false}`) so its own `position: absolute` resolves against THIS box, not
-                the viewport/document, and scrolls with the row as ordinary page content. */}
             <div style={{ position: "relative" }}>
               <Tooltip label={t("upload.resolveConflict") ?? ""}>
                 <button
@@ -474,8 +438,6 @@ export function QueueItemRow({
                 start.isPending
               }
               onClick={() => {
-                // Metadata auto-fetch now lives backend-side (post-download, via
-                // `ensure_metadata_cached`) — no frontend trigger needed on Start.
                 void start.mutateAsync(item.id);
               }}
             >

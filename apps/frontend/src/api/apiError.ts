@@ -7,9 +7,7 @@ export class ApiError extends Error {
   }
 }
 
-/** A `422` field-level validation failure (spec FR-014, e.g. `PUT /plugins/options` rejecting a
- * non-positive `max_concurrent`/`max_bytes_per_sec`) — carries which field failed and why, so a
- * settings form can show an inline error next to the exact input instead of a generic message. */
+/** A 422 field-level validation failure, carrying which field failed. */
 export class ValidationError extends ApiError {
   field: string
 

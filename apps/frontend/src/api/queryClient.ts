@@ -2,10 +2,7 @@ import { QueryClient } from "@tanstack/react-query"
 
 import { ApiError } from "./client"
 
-// A 4xx (e.g. opening the reader on an archive id that no longer exists) is a deterministic
-// failure — retrying it just re-plays the same 404 three more times with exponential backoff,
-// turning an instant "not found" into several seconds of spinner for no benefit. 5xx/network
-// errors (the default's actual target) still retry normally.
+/** A 4xx is a deterministic failure — don't retry it. 5xx/network errors still retry normally. */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

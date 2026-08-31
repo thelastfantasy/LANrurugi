@@ -6,7 +6,7 @@ import { CodeBlock } from "@/components/Display"
 import { JobProgressBar, STATE_COLOR } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
-/** State → i18n key (bare English word, added to the locale files in T024). */
+/** State → i18n key. */
 export const STATE_LABEL_KEYS: Record<JobRecordState, string> = {
   queued: "Queued",
   active: "Active",
@@ -16,9 +16,7 @@ export const STATE_LABEL_KEYS: Record<JobRecordState, string> = {
 
 export const isTerminal = (s: JobRecordState) => s === "finished" || s === "failed"
 
-/** One job row + its expandable detail (US2/T010). The leading checkbox drives multi-select clear
- * (US3); only terminal jobs are selectable, others render a disabled checkbox so the row still
- * aligns under the select-all column. No per-row action button — clearing is via the toolbar. */
+/** One job row + expandable detail. Only terminal jobs are checkbox-selectable for batch clear. */
 export function JobRow({
   job,
   selected,
@@ -77,9 +75,7 @@ export function JobRow({
   )
 }
 
-/** US2 (T010): a finished job's result (syntax-highlighted JSON via `CodeBlock`), or a failed job's
- * specific error (a red-tinted panel) — the data is already in `GET /jobs`'s response, so no extra
- * fetch is needed. */
+/** A finished job's result or a failed job's error, both already in the `GET /jobs` response. */
 function JobDetail({ job }: { job: JobRecord }) {
   const { t } = useTranslation()
   if (job.state === "failed") {

@@ -14,9 +14,7 @@ import { useApplyTheme, useLegacyConfigCss } from "@/theme"
 import { ExportWizardPluginModal } from "./ExportWizardPluginModal"
 import { SortablePluginGroup } from "./SortablePluginGroup"
 
-// Legacy's own left/right split (`~/LANraragi/templates/plugins.html.tt2`): left column is
-// Login Plugins → Downloaders → Scripts (script-*type* plugins, not this app's own maintenance
-// scripts below), right column is just Metadata Plugins.
+// Legacy's own left/right split: left is Login/Downloaders/Scripts, right is Metadata Plugins.
 const LEFT_GROUPS: Array<{ type: PluginInfo["type"]; icon: string; label: string }> = [
   { type: "login", icon: "fa-plug", label: "Login Plugins" },
   { type: "download", icon: "fa-cloud-download-alt", label: "Downloaders" },
@@ -26,14 +24,8 @@ const RIGHT_GROUPS: Array<{ type: PluginInfo["type"]; icon: string; label: strin
   { type: "metadata", icon: "fa-digital-tachograph", label: "Metadata Plugins" },
 ]
 
-// Mirrors legacy's `~/LANraragi/templates/plugins.html.tt2` — plugins grouped into
-// `.collapsible.extensible.with-right-caret` > `.option-flyout` flyouts by type, each plugin a
-// card with icon/name/version/author/description. There is deliberately no "run this plugin
-// against an archive" affordance here — legacy has none either: a metadata plugin's "Run
-// Automatically" checkbox controls whether it fires on new archives, a script-type plugin has its
-// own "Trigger Script" button, and a download plugin is only invoked via the upload page's
-// URL-download form. Manually running one plugin against one existing archive is `Edit.tsx`'s job
-// — script-type "Library-wide maintenance scripts" below have no legacy equivalent at all.
+// Mirrors legacy's plugins.html.tt2 — plugins grouped into flyouts by type, each a card. No
+// "run this plugin against an archive" affordance — that's Edit.tsx's job, matching legacy.
 export function Plugins() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -86,10 +78,7 @@ export function Plugins() {
     const groupPlugins = plugins.data?.filter((p) => p.type === group.type) ?? []
     return (
       <CollapsibleSection id={group.type} icon={group.icon} title={t(group.label)} key={group.type}>
-        {/* Legacy's own `plugins.html.tt2:84-91` — sits at the top of the Metadata Plugins flyout
-            body, above the plugin list itself. Gates whether a metadata plugin's returned `title`
-            is actually applied to an archive (`Edit.tsx`'s own `handleSave`/`runPlugin`); tags and
-            summary are never gated. */}
+        {/* Gates whether a metadata plugin's returned title is applied; tags/summary aren't gated. */}
         {group.type === "metadata" && (
           <div style={{ padding: "4px 0 8px 0" }}>
             <h1 className="ih" style={{ display: "inline" }}>
@@ -137,13 +126,6 @@ export function Plugins() {
         <ul className="collapsible extensible with-right-caret">
           {LEFT_GROUPS.map(renderGroupFlyout)}
 
-          {/* This app's own library-wide maintenance scripts — a genuinely new feature with no
-              legacy template, labeled distinctly from legacy's real "Scripts" flyout above
-              (per-plugin script execution) so the two aren't confused. Only "Subfolders to
-              Categories" lives here — it walks the entire archive directory tree, I/O-heavy enough
-              to warrant a native Rust endpoint rather than a Deno-subprocess round trip. Source
-              Finder / nHentai Source Converter are real `script`-type plugins and render as
-              ordinary cards in the "Scripts" flyout above. */}
           <CollapsibleSection id="maintenance-scripts" icon="fa-scroll" title={t("plugins.maintenanceScripts")}>
               <p>{t("plugins.librarywideMaintenanceScriptsOperateOn")}</p>
 
@@ -183,18 +165,9 @@ export function Plugins() {
 
       {uploadStatus && <p style={{ textAlign: "center" }}>{uploadStatus}</p>}
 
-      {/* `justifyContent`/`alignItems: center` (flex) instead of plain `text-align: center` —
-          a `<span class="fileinput-button">` (text baseline) and an `<input type="button">`
-          (replaced-ish element) align differently under `vertical-align: baseline` when sitting
-          side by side inline, offsetting the Upload Plugin button above the Return to Library
-          button. Flex sidesteps the baseline-vs-replaced-element quirk entirely. */}
+      {/* flex instead of text-align: center — a span and an input[type=button] baseline-align
+          differently inline, offsetting the buttons. */}
       <h1 style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8 }}>
-        {/* Also flex: an `<input type="button">`'s value text is vertically centered in its
-            content box natively, but a `<span>` wrapping plain text just follows normal inline
-            flow, leaving the label sitting near the top of the box instead of centered.
-            `fontWeight: 'normal'` on the inner label: this `<h1>`'s own bold inherits into a plain
-            `<span>` child, since form controls don't inherit a heading's bold by browser UA
-            default the way ordinary text elements do. */}
         <span className="stdbtn fileinput-button" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
           <span style={{ fontWeight: "normal" }}>{t("plugins.uploadPlugin")}</span>
           <input

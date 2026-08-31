@@ -3,13 +3,8 @@ import { useTranslation } from "react-i18next"
 
 import type { LoginSuggestion, WizardSession } from "./useWizardSession"
 
-/** T041/T042/T043 (US7/FR-025) — shown when a metadata/download trial run fails and AI judges the
- * failure might be login-related (`login_suggestion.relevant`). Dismissible (spec Edge Cases —
- * the user must be able to ignore it), and offers a real "add a login plugin" entry point:
- * - if the domain already has a covered login plugin, associates it directly, no generation needed
- * - otherwise selects "login" as a type (reusing US1's per-type input collection / US2's generate
- *   flow the same way the up-front FR-013 path does) so the user can generate/trial-run one now
- */
+/** Shown, dismissibly, when a metadata/download trial run fails and AI judges it may be
+ * login-related — offers to associate an existing login plugin or select "login" as a new type. */
 export function LoginSuggestionPanel({
   session,
   suggestion,

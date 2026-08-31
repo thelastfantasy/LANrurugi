@@ -18,12 +18,8 @@ import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
 
-/** Ports legacy's own right-click menu (`~/LANraragi/public/js/mod/index_contextmenu.js`) — same
- * action set and same login-gating (Edit/Delete/Rating/Category only shown when `useLoginStatus`
- * reports logged in). Built entirely from `PopupMenu`/`PopupMenuItem`/`PopupMenuSeparator`
- * (`components/PopupMenu.tsx`) — a from-scratch React component styled with Tailwind + this app's
- * own `MENU_PALETTE` colour table, matching each of legacy's 5 real themes without depending on
- * any menu-plugin's markup or CSS. Closes on any outside click or right-click. */
+/** Ports legacy's right-click menu — same action set and login-gating (Edit/Delete/Rating/
+ * Category only shown when logged in). Closes on any outside click or right-click. */
 export function ArchiveContextMenu({
   state,
   categories,
@@ -43,13 +39,8 @@ export function ArchiveContextMenu({
     | { id: string; name: string; search: string | null; archives: string[] }[]
     | undefined;
   loggedIn: boolean;
-  /** The live, refetch-synced search results (`shown` in the parent) — `state.archive` itself is
-   * a one-time snapshot taken at right-click time and never updated, which used to be harmless
-   * (every action that changed the archive also closed the menu immediately) but broke once the
-   * rating row became a persistent, stay-open-after-click control: clicking a star correctly
-   * updated the archive in Redis, but the menu kept rendering the stale pre-click tags until
-   * closed and reopened. Looked up by ID so the rating row (and anything else keying off
-   * `archive.tags`) reflects the real just-saved value without needing its own separate refetch. */
+  /** The live, refetch-synced search results — `state.archive` is a stale right-click-time
+   * snapshot; looked up by id so the rating row reflects the just-saved value. */
   liveArchives: ArchiveMetadata[];
   onClose: () => void;
   onToggleCategory: (
@@ -66,16 +57,8 @@ export function ArchiveContextMenu({
   ) => void;
   onToggleSelection: (id: string) => void;
   isSelected: boolean;
-  /** "Mark as Read"/"Mark as Unread" — the actual mutation lives in the parent `Library`
-   * component, not here, because `onClose()` (called first, on the same click) unmounts this
-   * whole menu immediately; a `useMutation` instance owned by *this* component would have its
-   * observer torn down before the mutation's async response ever arrives, silently dropping
-   * whatever `onSuccess` callback was passed to that particular `mutate()` call (TanStack Query's
-   * own `hasListeners()` guard on delivering per-call `mutate(vars, { onSuccess })` callbacks — a
-   * real, live-confirmed bug: the write to Redis genuinely succeeded and the main grid's `invalidate
-   * Queries`-driven refetch picked it up fine since that mutation is defined in the *parent*, but
-   * a second effect meant to also refresh the On Deck carousel never fired at all, because it was
-   * wired through this component's own now-torn-down mutation instance instead). */
+  /** Mutation lives in the parent, not here — `onClose()` unmounts this menu immediately, which
+   * would tear down a locally-owned mutation before its callback ever fires. */
   onSetProgress: (archiveId: string, page: number) => void;
 }) {
   const { t } = useTranslation();
@@ -88,9 +71,7 @@ export function ArchiveContextMenu({
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const palette = useMenuPalette();
 
-  // Submenu opens on hover (matching legacy's `jquery-contextMenu`, and standard desktop
-  // context-menu behavior generally) rather than click. A short close delay absorbs the mouse
-  // briefly leaving the trigger row while crossing the gap into the submenu itself.
+  // Submenu opens on hover; a short close delay absorbs the mouse crossing the gap into it.
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function openSubmenu(which: "category") {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -124,8 +105,6 @@ export function ArchiveContextMenu({
 
   return (
     <>
-      {/* Full-viewport transparent overlay — the standard "click outside to dismiss" pattern for
-          a positioned popup, cheaper than a document-level listener + ref check. */}
       <div
         style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP }}
         onClick={onClose}
@@ -134,11 +113,6 @@ export function ArchiveContextMenu({
           onClose();
         }}
       />
-      {/* `position: "absolute"` (document-relative), not `"fixed"` (viewport-relative) — paired
-          with `useLibrary.ts::handleContextMenu` already converting `x`/`y` to document-relative
-          coordinates (`clientX/Y` + scroll offset) at capture time, so the menu stays anchored to
-          the thumbnail it was opened next to and scrolls along with the page instead of staying
-          pinned to the same screen position while the page scrolls underneath it. */}
       <PopupMenu
         style={{
           position: "absolute",
@@ -149,12 +123,6 @@ export function ArchiveContextMenu({
       >
         {loggedIn && (
           <>
-            {/* A compact icon-only row at the very top of the menu (Firefox's own right-click
-                menu puts Back/Forward/Reload/Bookmark the same way) rather than a full-width
-                "Add Rating" row that opens a whole separate hover submenu — the star widget's own
-                click targets are already precise enough that a submenu was pure overhead. Not a
-                `PopupMenuItem` (no hover-highlight-the-whole-row/click-closes-menu behavior makes
-                sense for a row of independent controls). */}
             <li
               className="flex items-center justify-center gap-1 px-2 pt-1"
               style={{
@@ -185,20 +153,6 @@ export function ArchiveContextMenu({
           <i className="fa fa-book-open" style={{ width: 18 }}></i>{" "}
           {t("common.read")}
         </PopupMenuItem>
-        {/* Not offered on a Tankoubon — it's an aggregate container with no single `progress`/
-            `pagecount` of its own (each member archive tracks its own separately), so "mark this
-            one thing as read" doesn't have a single well-defined target the way it does for a
-            plain archive. Toggles on `progress > 0` (any progress at all counts as "not unread"),
-            not the 85%-complete threshold `hidecompleted`/On Deck use elsewhere — those answer a
-            different question ("is this basically finished, worth hiding from an in-progress
-            list") than this menu item's own binary read/unread state. */}
-        {/* 007-guest-restricted-access: neither "mark as read/unread" (progress) nor "download"
-            was actually gated on `loggedIn` before this — both are real write/raw-file actions a
-            guest_visitor's Casbin policy already denies server-side (progress is PUT, download has
-            its own explicit deny rule), but the menu item itself stayed visible and clickable,
-            surfacing a confusing failed-request error instead of just not offering the action at
-            all — the same UI-affordance-matches-real-permission gap Edit/Delete/Rating/Category
-            below already avoid. */}
         {loggedIn && !isTank && archive.pagecount > 0 && (
           <PopupMenuItem
             onClick={() => {

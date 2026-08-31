@@ -6,14 +6,8 @@ import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
-// Full IANA timezone list for the Settings-page `<select>`, grouped by continent — phpBB-style
-// (every real zone the runtime knows about, not a hand-curated subset). Built at module load from
-// `Intl.supportedValuesOf('timeZone')`, which every modern browser ships with the same bundled
-// IANA tzdata Node/Rust `chrono-tz` also use, so the offered ids always line up with what the
-// backend's `parse_date_range` actually accepts — no list to keep in sync by hand. `UTC` is
-// hoisted into its own top group as the documented default. Anything `Intl.supportedValuesOf`
-// doesn't return (older browsers, or a genuinely unusual id a user typed before this UI existed)
-// still round-trips through the "Custom…" free-text fallback below.
+// Full IANA timezone list, grouped by continent (phpBB-style), built from
+// `Intl.supportedValuesOf('timeZone')` so it stays in sync with the backend's `chrono-tz`.
 const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
   const supported: string[] = (Intl.supportedValuesOf?.("timeZone") as string[] | undefined) ?? []
   const groups = new Map<string, string[]>()
@@ -153,14 +147,8 @@ export function TagsThumbnailsSection({
             </CheckboxRow>
           )}
           <Row label={t("settings.timezone")}>
-            {/* `date_added` display + day-range search resolve in this IANA timezone so
-                every viewer agrees on which day an archive belongs to, regardless of
-                their own browser timezone (see `lanrurugi_search::engine`'s
-                `parse_date_range`). The dropdown lists every IANA zone the runtime knows
-                (built from `Intl.supportedValuesOf('timeZone')` at module load — see
-                `TIMEZONE_GROUPS`), grouped by continent phpBB-style; a value the runtime
-                doesn't recognize (older browser, or an unusual id set before this UI
-                existed) falls through to a "Custom…" free-text input. */}
+            {/* `date_added` display + day-range search resolve in this IANA timezone so every
+                viewer agrees on which day an archive belongs to, regardless of browser timezone. */}
             <select
               className="stdbtn"
               value={isKnownTimezone(timezone) ? timezone : "__custom__"}

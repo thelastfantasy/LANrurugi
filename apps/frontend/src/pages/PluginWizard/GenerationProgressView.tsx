@@ -2,11 +2,8 @@ import { useTranslation } from "react-i18next"
 
 import type { ProgressItem } from "./useGenerationProgress"
 
-/** Shared render for `useGenerationProgress`'s accumulated state — a live elapsed-time counter,
- * then `items` in the order they actually happened (a `fetch_page`/`fetch_result` log line
- * interleaved with the model's own streamed commentary/answer at the point it arrived, not two
- * separate blocks). Renders nothing once there's neither an item nor any elapsed time yet (before
- * the first tick/SSE event, or after a `start()`/before it), so it never shows an empty box. */
+/** Renders `useGenerationProgress`'s accumulated items in arrival order, plus a live elapsed-time counter.
+ * Renders nothing when there's neither an item nor elapsed time yet. */
 export function GenerationProgressView({ items, elapsedSeconds }: { items: ProgressItem[]; elapsedSeconds: number }) {
   const { t } = useTranslation()
   if (items.length === 0 && elapsedSeconds === 0) return null

@@ -12,24 +12,14 @@ import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 import { FilterChip } from "./FilterChip"
 import { isTerminal, JobRow, STATE_LABEL_KEYS } from "./JobRow"
 
-// Background Job Console (specs/002-job-console). Surfaces the existing in-process
-// `lanrurugi_core::jobs::JobRegistry` as a browsable admin UI: list every tracked job with live
-// state/progress, inspect a finished/failed job's result or error, clear terminal-state entries,
-// and filter/search/paginate a long list — all of US4's counts/filter/search/paging are derived
-// client-side from the single `useJobs()` array (research.md §5), no extra endpoint. Styling
-// matches the ported pages' legacy conventions (`.ido`/`.ih`/`.itg`/`.stdbtn` — see Logs.tsx,
-// Stats.tsx). The clear interaction mirrors legacy Minion Admin: a checkbox column + a toolbar
-// "Remove selected" batch action, NOT a per-row button (legacy Minion is multi-select → toolbar,
-// and a per-row `.stdbtn` column overflowed the `.ido` container). Deliberately omits Workers/
-// Locks stats (single-process Tokio architecture has no worker processes / distributed locks —
-// spec Assumptions).
-
 const PAGE_SIZES = [10, 20, 50, 100]
 const DEFAULT_PAGE_SIZE = 50
 
 /** Render order for states in the stat bar + filter. */
 const STATE_ORDER: JobRecordState[] = ["active", "queued", "finished", "failed"]
 
+/** Background Job Console: browsable admin UI over the in-process job registry — list, inspect,
+ * filter/search/paginate, and batch-clear terminal jobs. No Workers/Locks stats (single-process). */
 export function Jobs() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -39,12 +29,8 @@ export function Jobs() {
   useApplyTheme()
   useDocumentTitle(t("jobs.backgroundJobs") ?? undefined)
 
-  // Stabilize the array identity so the derived `useMemo`s below don't recompute every render when
-  // `jobs.data` is referentially unchanged.
   const all: JobRecord[] = useMemo(() => jobs.data ?? [], [jobs.data])
 
-  // US4 (T020): per-state counts over the UNFILTERED array — fixed totals that must not change as
-  // the admin filters/searches (research.md §5).
   const counts = useMemo(() => {
     const c: Record<JobRecordState, number> = { queued: 0, active: 0, finished: 0, failed: 0 }
     for (const job of all) c[job.state] += 1
@@ -58,7 +44,6 @@ export function Jobs() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [status, setStatus] = useState("")
 
-  // US4 (T021/T022): state + name filters applied to the rendered list.
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase()
     return all.filter((job) => {
@@ -68,21 +53,17 @@ export function Jobs() {
     })
   }, [all, stateFilter, search])
 
-  // US4 (T023): pagination applied after the filters. Clamp the page when the filtered set shrinks.
+  // Pagination applied after filters; clamp when the filtered set shrinks.
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
   const safePage = Math.min(page, pageCount - 1)
   const paginated = filtered.slice(safePage * pageSize, safePage * pageSize + pageSize)
 
-  // Selection is by id (persists across filter/page changes). Prune against the live set so a job
-  // that vanished (cleared/evicted) between select and action isn't counted.
   const liveIds = useMemo(() => new Set(all.map((j) => j.id)), [all])
   const liveSelected = useMemo(
     () => new Set([...selected].filter((id) => liveIds.has(id))),
     [selected, liveIds],
   )
 
-  // Select-all operates over the terminal jobs on the current page (legacy Minion's current-view
-  // semantics). Non-terminal jobs can't be cleared (FR-004), so their checkboxes stay disabled.
   const pageTerminalIds = useMemo(
     () => paginated.filter((j) => isTerminal(j.state)).map((j) => j.id),
     [paginated],
@@ -147,7 +128,6 @@ export function Jobs() {
         {t("jobs.theBackgroundJobConsoleShows")}
       </p>
 
-      {/* US4 stat bar (T020) — each count is a clickable state filter (T021). */}
       <div className="control-btn-group" style={{ flexWrap: "wrap", gap: 4 }}>
         <FilterChip
           active={stateFilter === "all"}
@@ -185,9 +165,6 @@ export function Jobs() {
             setPage(0)
           }}
         />
-        {/* Toolbar batch action over the checkbox selection — only terminal jobs are selectable, so
-            every selected id is clearable. Disabled (not hidden) at zero so the control stays
-            discoverable. */}
         <button
           type="button"
           className="stdbtn"
@@ -198,8 +175,6 @@ export function Jobs() {
             ? t("jobs.removing")
             : t("jobs.removeSelectedN", { n: liveSelected.size })}
         </button>
-        {/* Unscoped nuclear option (research.md §5 / FR-004): always every finished+failed job
-            server-side, regardless of the active filter or selection. */}
         <button
           type="button"
           className="stdbtn"
@@ -225,7 +200,6 @@ export function Jobs() {
         </div>
       )}
 
-      {/* FR-007: explicit empty state, not a blank page or error. */}
       {isEmpty && (
         <div id="nojobs" style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-inbox"></i>
@@ -238,8 +212,6 @@ export function Jobs() {
         </div>
       )}
 
-      {/* Filter/search yielded nothing (but jobs exist) — a targeted hint, distinct from the
-          fresh-server empty state above (FR-007 covers all-empty; this covers all>0 && none match). */}
       {all.length > 0 && filtered.length === 0 && (
         <div style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-search"></i>
@@ -249,9 +221,6 @@ export function Jobs() {
 
       {all.length > 0 && filtered.length > 0 && (
         <>
-          {/* `overflow-x: auto` wrapper is the bulletproof guard against any column content (long
-              unbreakable job names, the progress bar) ever escaping the `.ido` container — the
-              original per-row `.stdbtn` column overflowed without it. */}
           <div style={{ overflowX: "auto", marginTop: 16 }}>
             <table className="itg" style={{ width: "100%", minWidth: 560 }}>
               <thead>
@@ -284,7 +253,6 @@ export function Jobs() {
             </table>
           </div>
 
-          {/* US4 pagination (T023). */}
           <div
             className="control-btn-group"
             style={{ marginTop: 8, justifyContent: "center", alignItems: "center" }}

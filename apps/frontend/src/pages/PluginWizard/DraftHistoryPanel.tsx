@@ -10,9 +10,8 @@ const ORIGIN_LABEL_KEY = {
   "loaded-from-existing": "pluginWizard.originLoadedFromExisting",
 } as const
 
-/** T038 (US5 AC3/AC4) — lists every revision for the active type (code origin + trial-run
- * outcomes) and lets the user set any one as `activeRevisionIndex`, independent of recency. Only
- * rendered once there's more than one revision to choose between. */
+/** Lists every revision for the active type (origin + trial-run outcomes) and lets the user pick
+ * any one as `activeRevisionIndex`, independent of recency. */
 export function DraftHistoryPanel({
   typeSession,
   onActiveRevisionChanged,

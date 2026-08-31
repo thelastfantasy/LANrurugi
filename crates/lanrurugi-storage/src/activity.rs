@@ -124,6 +124,7 @@ pub mod action_types {
     pub const AUTO_DOWNLOAD: &str = "auto_download.fetch";
     pub const BOOKMARK_ADD: &str = "bookmark.add";
     pub const BOOKMARK_REMOVE: &str = "bookmark.remove";
+    pub const BOOKMARK_RENAME: &str = "bookmark.rename";
     /// issue #97: a stamp add/delete that also added/removed a page's bookmark — one merged
     /// record for both halves of the linked action (not a separate stamp record plus a separate
     /// bookmark record), direction distinguished by `after.bookmark.action` (`"add"`/`"remove"`).

@@ -8,16 +8,8 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 
-// Mirrors legacy's `~/LANraragi/templates/login.html.tt2` line-for-line: a plain centered `.ido`
-// form, "Admin Password:"/input on one table row (not stacked), the wrong-password row only when
-// `wrongpass` is set — verified against the real template, not the index page's separate "no-pass"
-// redirect text this previously (incorrectly) reused. `[% INCLUDE footer %]` sits *outside* the
-// closing `</div>` of `.ido` in the real template (a body-level sibling, not nested inside the
-// card), so `<Footer />` here is a sibling of `.ido`, not a child of it.
-//
-// Route protection (an already-logged-in session never sees this form) lives in `RequireGuest`
-// (`App.tsx`'s wrapper around this route), not here — keeps this component focused on the form
-// itself.
+/** Mirrors legacy's `login.html.tt2` line-for-line. Route protection lives in `RequireGuest`
+ * (`App.tsx`), not here. */
 export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()

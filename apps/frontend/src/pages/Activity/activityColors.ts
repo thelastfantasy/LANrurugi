@@ -1,16 +1,5 @@
-/** Fixed color per action-type namespace (`archive.*`, `settings.*`, ...) and per actor kind
- * (`session`/`token`/`system`/`anonymous`) — a real, deliberately-picked palette (not a
- * hash-string-to-hue function): a hash gives an inconsistent, uncontrolled, sometimes muddy color
- * for the same namespace across sessions/renders depending on what happens to hash where, and
- * offers no way to keep e.g. `database.*` reading as "destructive" (matching this page's existing
- * `.activity-chip-danger` convention for that one namespace) or to keep two visually-similar
- * namespaces from landing on near-identical hues by coincidence. Each entry is a `{ bg, text }`
- * pair chosen for contrast (WCAG-AA-ish at this chip's small size), not theme-adaptive — unlike
- * `.activity-row-automatic`/`.activity-chip-danger` (CSS classes per theme file), these are a
- * fixed categorical palette in the same spirit as `Jobs/JobProgress.tsx`'s own `STATE_COLOR`
- * (state → fixed color, not derived from the active theme) — a colored action/actor badge reads
- * the same regardless of which of the 5 UI themes is active, the same way GitHub's own labels
- * don't restyle themselves per OS dark/light mode. */
+// Fixed, hand-picked palette per action-type namespace/actor kind — not theme-adaptive or hashed,
+// so colors stay stable and distinguishable across renders/themes.
 
 export interface ChipColor {
   bg: string
@@ -26,30 +15,16 @@ const NAMESPACE_COLORS: Record<string, ChipColor> = {
   tankoubon: { bg: "#ec4899", text: "#ffffff" },
   database: { bg: "#dc2626", text: "#ffffff" },
   plugin: { bg: "#6366f1", text: "#ffffff" },
-  // Distinct from `plugin` (a plain manual `.ts` upload) — real user feedback, 2026-08-26: asked
-  // whether AI-generated/installed/edited plugins leave any trail at all, distinguishably from a
-  // manual upload. Same indigo family as `plugin` (still "a plugin got installed") but a visibly
-  // different shade so the two read as related-but-distinct in a mixed activity feed.
   plugin_wizard: { bg: "#818cf8", text: "#1f2937" },
   scanner: { bg: "#64748b", text: "#ffffff" },
   metadata_plugin: { bg: "#0ea5e9", text: "#ffffff" },
   auto_download: { bg: "#84cc16", text: "#1f2937" },
-  // Deliberately *not* gray/slate — every gray-ish entry in this table (`scanner`, and
-  // `ACTOR_KIND_COLORS.system` below) is a system/automated actor, and `bookmark.*` was left
-  // unlisted here at first, silently falling through to `FALLBACK_NAMESPACE_COLOR` (also gray) —
-  // reading, confusingly, as if bookmarking were itself some kind of automated/bot action rather
-  // than the manual, human-initiated one it actually is. Rose, not yet used by any other
-  // namespace in this table (`tankoubon`'s pink is the closest neighbor but distinct enough at
-  // this chip's size).
+  // Not gray — gray reads as automated/system here, but bookmarking is a manual action.
   bookmark: { bg: "#f43f5e", text: "#ffffff" },
 }
 
 const FALLBACK_NAMESPACE_COLOR: ChipColor = { bg: "#6b7280", text: "#ffffff" }
 
-/** `"archive.delete"` → the `archive` namespace's fixed color. Unknown/future namespaces fall
- * back to a neutral gray rather than crashing or going unstyled — a new `action_types` constant
- * added to the backend later still renders a real (if generic) chip immediately, no frontend
- * change required to avoid a broken-looking badge. */
 export function actionTypeColor(actionType: string): ChipColor {
   const namespace = actionType.includes(".") ? actionType.slice(0, actionType.indexOf(".")) : actionType
   return NAMESPACE_COLORS[namespace] ?? FALLBACK_NAMESPACE_COLOR
@@ -61,14 +36,7 @@ const ACTOR_KIND_COLORS: Record<string, ChipColor> = {
   anonymous: { bg: "#9ca3af", text: "#1f2937" },
 }
 
-/** A fixed, hand-picked rotation for `token`-kind actors specifically — unlike `session`/`system`/
- * `anonymous` (each a single fixed concept with exactly one real-world instance, so one fixed
- * color per kind is enough to tell them apart), an instance can have many distinct API tokens, and
- * two different tokens both rendering as the same flat "token cyan" would make them
- * indistinguishable at a glance in a mixed activity feed — the whole point of a colored chip.
- * Deterministically picked by hashing the token's own id (stable across renders/reloads, no
- * server-side color assignment needed) rather than by creation order (would shift as tokens are
- * added/removed, an already-memorized color changing out from under a user for no visible reason). */
+/** Per-token color rotation, hashed from the token's own id (stable, no server assignment needed). */
 const TOKEN_ROTATION: ChipColor[] = [
   { bg: "#06b6d4", text: "#ffffff" },
   { bg: "#f97316", text: "#ffffff" },
@@ -88,9 +56,6 @@ function hashString(value: string): number {
   return Math.abs(hash)
 }
 
-/** `kind` alone for `session`/`system`/`anonymous`; `tokenId` (the token's own record id, not its
- * display name — a rename must not shift which color it's already known by) picks this token's
- * spot in `TOKEN_ROTATION` for the `token` kind. */
 export function actorKindColor(kind: string, tokenId?: string): ChipColor {
   if (kind === "token") {
     if (!tokenId) return TOKEN_ROTATION[0]
@@ -99,10 +64,6 @@ export function actorKindColor(kind: string, tokenId?: string): ChipColor {
   return ACTOR_KIND_COLORS[kind] ?? FALLBACK_NAMESPACE_COLOR
 }
 
-/** `"success"` | `"failure"` — matches `lanrurugi_storage::activity::Outcome`'s own `status`
- * discriminant. Fixed green/red, the same universal success/failure convention every other status
- * indicator in this app already uses (`Jobs/JobProgress.tsx`'s own `STATE_COLOR`), not derived from
- * the active theme — same reasoning as every other color in this file. */
 const OUTCOME_COLORS: Record<string, ChipColor> = {
   success: { bg: "#22c55e", text: "#ffffff" },
   failure: { bg: "#dc2626", text: "#ffffff" },

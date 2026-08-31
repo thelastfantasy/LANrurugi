@@ -1,11 +1,8 @@
 import Lenis from "lenis"
 import { useEffect, useRef } from "react"
 
-/** Mounts a Lenis instance on `elRef.current` configured for horizontal scrolling
- * (`orientation: "horizontal"`, `gestureOrientation: "both"` so vertical mouse wheel
- * drives horizontal scroll). The returned ref gives callers access to `scrollTo` /
- * `stop()` / `start()` / `targetScroll` — used by arrow-button repeat-scroll, keyboard
- * sync, and drag-safety pause/resume elsewhere. Lenis is destroyed on unmount. */
+/** Mounts a Lenis instance on `elRef.current` for horizontal scrolling
+ * (`gestureOrientation: "both"` lets vertical wheel input drive horizontal scroll). */
 export function useHorizontalScroll(
   elRef: React.RefObject<HTMLElement | null>,
   opts?: { wheelMultiplier?: number; lerp?: number },

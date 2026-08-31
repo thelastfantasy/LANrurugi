@@ -17,33 +17,11 @@ import { sortCategories } from "@/lib/utils/sortCategories"
 import { FONT_SIZE_MD, FONT_SIZE_SM, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
-// Mirrors legacy's `~/LANraragi/templates/category.html.tt2` + `public/js/category.js` — a
-// select-then-edit-in-place form (not a create/delete-only list): picking a category from the
-// combobox populates Name/Predicate/Pin/Bookmark-link fields, each of which auto-saves on
-// change (matching `category.js`'s own `change` event bindings) with a "Saving.../Saved!"
-// status indicator, plus a full library-wide archive checklist for static categories. Uses
-// `promptDialog`/`confirmDialog` (a real themed popup, `dialog.tsx` — legacy's own real
-// equivalent is SweetAlert2's `LRR.showPopUp`/`Swal.fire`) for the new-category/delete flows,
-// not the plain `window.prompt`/`window.confirm` an earlier version of this file used: those are
-// unstyled native OS dialogs outside the page's own DOM/CSS entirely, not something this app's
-// own theme ever actually controls (a coincidental resemblance on some Linux desktop themes was
-// mistaken for real theming during an earlier pass — corrected app-wide, see `dialog.tsx`'s own
-// docs for the full list of call sites this affected).
-// The Tankoubons sub-list is a real, functioning checklist: legacy's own `add_to_category`
-// (`$redis->exists($arc_id)`, a generic key-existence check — verified against
-// `~/LANraragi/lib/LANraragi/Model/Category.pm`) accepts a `TANK_`-prefixed id just as readily as
-// a real archive id, so legacy genuinely supports static categories containing Tankoubons. The
-// host-side gap that used to make this permanently empty (`add_archive_to_category` only checking
-// `state.repos.archives`) is fixed; this list reuses the exact same
-// `PUT`/`DELETE /categories/{id}/{archiveId}` toggle endpoint as the Archives checklist below,
-// just passing a tank id instead of an archive id.
+/** A select-then-edit-in-place form: picking a category populates Name/Predicate/Pin/Bookmark-link
+ * fields, each auto-saving with a "Saving.../Saved!" indicator, plus an archive checklist. */
 export function Categories() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // The URL is the source of truth for which category is selected (`/config/categories/:categoryId`)
-  // — `setSelectedId` further down is a thin wrapper that navigates instead of touching local state
-  // directly, so a direct link/bookmark/browser-back to a specific category's URL opens straight
-  // into it instead of always landing on "no category selected".
   const { categoryId } = useParams<{ categoryId?: string }>()
   const selectedId = categoryId ?? ""
   function setSelectedId(id: string) {
@@ -68,13 +46,6 @@ export function Categories() {
   const isStatic = !!selected && !selected.search
   const sortedCategoryOptions = sortCategories(categories.data ?? [])
 
-  // Which Tankoubon(s) (if any) each archive is currently folded into — an archive shows here
-  // fine even while it's "hidden" from the default grouped Library view for exactly that reason,
-  // since this checklist reflects the category's real membership, not a grouped search result
-  // (see this file's own module doc comment). Surfaced as a hover tooltip so that isn't
-  // mysterious: "this archive's checkbox is checked but I don't see it on the homepage" is
-  // otherwise a real, reported point of confusion, not something this checklist should silently
-  // paper over by hiding rows or changing what the category itself contains.
   const tanksByArchiveId = new Map<string, TankoubonMetadata[]>()
   for (const tank of tankoubons.data?.result ?? []) {
     for (const memberId of tank.archives) {
@@ -87,14 +58,6 @@ export function Categories() {
     }
   }
 
-  // Re-syncs the editable fields whenever the *selection itself* changes — the React-recommended
-  // "adjusting state when a prop changes" pattern (calling setState directly during render, not
-  // inside a `useEffect`, which the project's lint rules flag as cascading-render-prone). Keyed on
-  // `selectedId` plus whether `selected` has actually resolved yet (not just `selectedId` alone) —
-  // opening a `/config/categories/:categoryId` URL directly starts with `selectedId` already set
-  // from the URL param while `categories.data` is still loading, so `selected` is `undefined` on
-  // that first render; without also re-checking once the query resolves, `syncedId` matches
-  // `selectedId` from the very first render and the fields never populate at all.
   const syncKey = `${selectedId}:${selected ? "loaded" : "pending"}`
   const [syncedKey, setSyncedKey] = useState(syncKey)
   if (syncedKey !== syncKey) {
@@ -109,10 +72,8 @@ export function Categories() {
     return queryClient.invalidateQueries({ queryKey: ["categories"] })
   }
 
-  // Always sends the *full* current name/search/pinned/visible_to_guest quadruple, not just the
-  // one field that changed — neither `pinned` nor `visible_to_guest` has a "leave as-is" sentinel
-  // server-side (both bare `#[serde(default)]` bools, not `Option`s), so omitting either on a
-  // plain name edit would silently reset it to false.
+  /** Always sends the full name/search/pinned/visible_to_guest quadruple — neither bool field has
+   * a "leave as-is" server-side sentinel, so omitting one would silently reset it to false. */
   async function saveDetails(next: { name?: string; search?: string; pinned?: boolean; visibleToGuest?: boolean }) {
     if (!selectedId) return
     setStatus("saving")
@@ -120,10 +81,6 @@ export function Categories() {
       await sendForm("PUT", `/categories/${selectedId}`, {
         name: next.name ?? name,
         search: next.search ?? search,
-        // `pinned`/`visible_to_guest` deserialize as plain Rust `bool`s on the backend
-        // (`crates/lanrurugi-api/src/categories.rs::UpdateCategoryParams`) via axum's Form
-        // extractor (serde_urlencoded), which only accepts the literal strings "true"/"false" —
-        // "1"/"0" fail deserialization with a 422.
         pinned: (next.pinned ?? pinned) ? "true" : "false",
         visible_to_guest: (next.visibleToGuest ?? visibleToGuest) ? "true" : "false",
       })
@@ -224,22 +181,8 @@ export function Categories() {
                       { value: "", label: t("common.NoCategory") },
                       ...sortedCategoryOptions.map((c) => ({
                         value: c.id,
-                        // Dynamic categories (search-defined, real `c.search`) get the same
-                        // lightning-bolt icon this page's own icon legend above already uses to
-                        // mark them — a real SVG glyph reads unambiguously at this small size,
-                        // unlike bold text (tried first, dropped: barely legible weight
-                        // difference at this font size, easy to miss entirely) or an emoji (no
-                        // real "bold" rendering to fall back on either). Guest-visibility below
-                        // is an independent axis (a category can be dynamic *and* guest-visible
-                        // at once) so it still owns the background-color channel separately.
                         label: c.search ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            {/* `-translate-y-px` — same real-browser "SVG glyph's own visual
-                                center sits slightly above adjacent text's x-height even inside a
-                                `align-items: center` flex row" gap `Checkbox.tsx`'s own docs
-                                cover in more detail; a plain flex `align-items: center` centers
-                                the SVG's *box*, not its visually-perceived ink, so a small nudge
-                                is still needed on top of that. */}
                             <FaBolt aria-hidden="true" className="relative top-px" />
                             {c.name}
                           </span>
@@ -265,14 +208,6 @@ export function Categories() {
                       <td style={{ textAlign: "right" }}>{t("categories.predicate")}</td>
                       <td>
                         <input value={search} onChange={(e) => setSearch(e.target.value)} onBlur={() => void saveDetails({ search })} />{" "}
-                        {/* Same rich React-node syntax reference `dialog.tsx`'s own new-category
-                            dialog and the Library page's top search bar both use (`SearchSyntaxHelp`)
-                            — this used to be a plain-text `toast()` call with much thinner content
-                            (a stale, pre-existing `categories.predicatesFollowTheSameSyntax` key),
-                            confirmed live, 2026-08-27, to read as noticeably less helpful side by
-                            side with the other two. `Tooltip` (hover, not click-to-toggle) matches
-                            this icon's existing `cursor: help`-style affordance better than
-                            `ClickPopover` would. */}
                         <Tooltip label={<SearchSyntaxHelp />}>
                           <i
                             id="predicate-help"
@@ -380,13 +315,6 @@ export function Categories() {
                     archives.data.map((a) => {
                       const memberTanks = tanksByArchiveId.get(a.arcid)
                       const title = memberTanks?.length ? (
-                        // Not `anchor="cursor"`: this label has real, clickable links in it, and
-                        // cursor-following repositions the bubble on every mousemove over the
-                        // trigger — moving the pointer down toward the link (through these very
-                        // short, tightly-packed checklist rows) crosses into the next row before
-                        // it gets there, closing the tooltip out from under the cursor. The default
-                        // `'element'` anchor keeps the bubble in one fixed spot instead, so the
-                        // pointer can actually travel to and click the link.
                         <Tooltip
                           label={
                             <>
@@ -421,12 +349,6 @@ export function Categories() {
                           title={title}
                           checked={selected.archives.includes(a.arcid)}
                           onChange={(checked) => void handleArchiveToggle(a.arcid, checked)}
-                          // `.tankoubon-member-row` — a real per-theme class (each of the 5 real
-                          // theme files under `public/legacy/themes/`), not a hardcoded color: this
-                          // page is written directly against legacy's own classnames, so a color
-                          // needs to swap correctly when the active theme changes, the same way
-                          // every other themed color here does (see those files' own docs on this
-                          // class for the full reasoning).
                           className={memberTanks?.length ? "tankoubon-member-row" : undefined}
                         />
                       )

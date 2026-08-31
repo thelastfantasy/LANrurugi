@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem, PopupMenuSeparator } from "@/components/common-ui/Display"
-import { Z_OVERLAY_CONTENT } from "@/theme"
+import { Popover, PopupMenuItem, PopupMenuSeparator } from "@/components/common-ui/Display"
+import { CheckboxField, IconButton, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 
-/** Settings gear menu (legacy's `#settings-menu` contextMenu, `index.js:117-199`) — bundles
- * Display Mode (thumbnail grid vs compact table), Crop Thumbnails, Hide Completed, and Group
- * Tankoubons into one dropdown, each persisted to the same `localStorage` keys legacy itself
- * uses. Positioned next to "Go to Page", matching legacy's own placement. */
+/** Settings gear menu (legacy's `#settings-menu`) — Display Mode, Crop Thumbnails, Hide
+ * Completed, Group Tankoubons, each persisted to the same `localStorage` keys legacy uses. */
 export function SettingsMenu({
   viewMode,
   setViewMode,
@@ -28,115 +25,58 @@ export function SettingsMenu({
   setGroupbyTanks: (v: boolean) => void
 }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  // Which side the menu opens toward — decided fresh each time it opens, not a fixed direction,
-  // from the gear icon's own position: opens
-  // toward the side with more room, so it never gets clipped by the viewport edge regardless of
-  // where "Go to Page"/the gear ends up sitting (this toolbar is at the far right of the page, so
-  // a hardcoded direction is wrong in one direction or the other depending on viewport width).
-  const [openTowardLeft, setOpenTowardLeft] = useState(false)
-  const ref = useRef<HTMLSpanElement>(null)
-  // The menu itself is portaled to `document.body` (see PopupMenu's doc comment), so it's no
-  // longer a DOM descendant of `ref` — checking only `ref.current.contains(...)` below would
-  // treat every click *inside* the open menu as an "outside" click and close it before the
-  // item's own onClick fires. Also checking this second ref against the portaled `<ul>` fixes it.
-  const menuRef = useRef<HTMLUListElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    function onClick(e: globalThis.MouseEvent) {
-      const target = e.target as Node
-      if (ref.current?.contains(target)) return
-      if (menuRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    document.addEventListener("click", onClick)
-    return () => document.removeEventListener("click", onClick)
-  }, [open])
 
   return (
-    <span ref={ref} style={{ position: "relative", marginLeft: 6, top: 2 }}>
-      <a
-        href="#"
-        className="fa fa-cog fa-2x table-option"
-        style={{ position: "relative", }}
-        title={t("library.indexSettings") ?? undefined}
-        onClick={(e) => {
-          e.preventDefault()
-          if (!open && ref.current) {
-            const rect = ref.current.getBoundingClientRect()
-            const spaceRight = window.innerWidth - rect.right
-            // Menu itself is ~220px (`PopupMenu`'s own min-width) — opens left if the right side
-            // genuinely doesn't have room for it, not just "less than the left side".
-            setOpenTowardLeft(spaceRight < 220)
-          }
-          setOpen((v) => !v)
-        }}
-      ></a>
-      {open && (
-        <PopupMenu
-          ref={menuRef}
-          // `position: absolute` here is measured against this menu's own trigger `<span
-          // ref={ref} style={{ position: 'relative' }}>` (`top: '100%'`/`left`/`right: 0`) — not
-          // portaled, so that ancestor is still the one it's positioned against instead of
-          // `document.body`. The toolbar this lives in doesn't clip overflow, so there's no
-          // clipping problem `portal` would be solving here anyway.
-          portal={false}
-          style={{
-            position: "absolute",
-            top: "100%",
-            ...(openTowardLeft ? { right: 0 } : { left: 0 }),
-            zIndex: Z_OVERLAY_CONTENT,
-          }}
-          // The gear icon's own real title (`Index Settings`) — this menu's actual name, as
-          // distinct from `Display Mode` right below, which is a sub-heading for just the
-          // Thumbnail/Compact radio pair, not the whole menu.
-          mainLabel={{ icon: "fa-cog", text: t("library.indexSettings") ?? "Index Settings" }}
-        >
-          <PopupMenuItem disabled>
-            <i className="fas fa-table" style={{ width: 18 }}></i> {t("library.displayMode")}
-          </PopupMenuItem>
+    <Popover
+      trigger={
+        <IconButton
+          icon={<i className="fa fa-cog" style={{ fontSize: 18 }}></i>}
+          size={25}
+          title={t("library.indexSettings") ?? undefined}
+          style={{ border: "none", background: "transparent", marginLeft: 6 }}
+        />
+      }
+    >
+      {/* `PopupMenuItem`/`PopupMenuSeparator` render `<li>`s — same wrapping `<ul>` classes
+          `PopupMenu` itself uses, since `Popover`'s children land directly inside its own
+          `<div>` Popup rather than a list container. */}
+      <ul className="m-[.3em] inline-block w-max list-none rounded-[.2em] py-[.25em] ps-0 text-left">
+        <PopupMenuItem disabled>
+          <i className="fa fa-cog" style={{ width: 18 }}></i> {t("library.indexSettings")}
+        </PopupMenuItem>
+        <PopupMenuSeparator />
+        <PopupMenuItem disabled>
+          <i className="fas fa-table" style={{ width: 18 }}></i> {t("library.displayMode")}
+        </PopupMenuItem>
+        <RadioGroup value={viewMode} onValueChange={setViewMode}>
           <PopupMenuItem onClick={() => setViewMode("thumbnail")}>
-            <input type="radio" readOnly checked={viewMode === "thumbnail"} /> {t("library.thumbnail")}
+            <RadioItem value="thumbnail" size="inherit">
+              {t("library.thumbnail")}
+            </RadioItem>
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setViewMode("compact")}>
-            <input type="radio" readOnly checked={viewMode === "compact"} /> {t("library.compact")}
+            <RadioItem value="compact" size="inherit">
+              {t("library.compact")}
+            </RadioItem>
           </PopupMenuItem>
-          <PopupMenuSeparator />
-          {/* `marginLeft: 0` overrides the browser's own native checkbox UA-stylesheet margin
-              (Chrome: 4px) — left as default, these sit ~4px right of the icon column above
-              (`索引设置`/`显示模式`'s `<i style={{ width: 18 }}>`, which has no such margin),
-              even though these three are top-level toggles (siblings of Display Mode), not
-              sub-items nested under it the way the radio pair above them is. */}
-          <PopupMenuItem onClick={() => setCropThumbs(!cropThumbs)}>
-            <input
-              type="checkbox"
-              readOnly
-              checked={cropThumbs}
-              style={{ marginLeft: 0 }}
-            />{" "}
+        </RadioGroup>
+        <PopupMenuSeparator />
+        <PopupMenuItem onClick={() => setCropThumbs(!cropThumbs)}>
+          <CheckboxField checked={cropThumbs} onCheckedChange={setCropThumbs} size="inherit">
             {t("library.cropThumbnails")}
-          </PopupMenuItem>
-          <PopupMenuItem onClick={() => setHideCompleted(!hideCompleted)}>
-            <input
-              type="checkbox"
-              readOnly
-              checked={hideCompleted}
-              style={{ marginLeft: 0 }}
-            />{" "}
+          </CheckboxField>
+        </PopupMenuItem>
+        <PopupMenuItem onClick={() => setHideCompleted(!hideCompleted)}>
+          <CheckboxField checked={hideCompleted} onCheckedChange={setHideCompleted} size="inherit">
             {t("library.hideCompletedArchives")}
-          </PopupMenuItem>
-          <PopupMenuItem onClick={() => setGroupbyTanks(!groupbyTanks)}>
-            <input
-              type="checkbox"
-              readOnly
-              checked={groupbyTanks}
-              style={{ marginLeft: 0 }}
-            />{" "}
+          </CheckboxField>
+        </PopupMenuItem>
+        <PopupMenuItem onClick={() => setGroupbyTanks(!groupbyTanks)}>
+          <CheckboxField checked={groupbyTanks} onCheckedChange={setGroupbyTanks} size="inherit">
             {t("library.groupTankoubons")}
-          </PopupMenuItem>
-        </PopupMenu>
-      )}
-    </span>
+          </CheckboxField>
+        </PopupMenuItem>
+      </ul>
+    </Popover>
   )
 }

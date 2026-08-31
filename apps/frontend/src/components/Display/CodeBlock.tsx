@@ -2,13 +2,8 @@ import { Highlight, themes } from "prism-react-renderer"
 
 import { FONT_SIZE_SM } from "@/theme"
 
-/** Syntax-highlighted code block for the job detail view (finished jobs' JSON `result`).
- *
- * Uses `prism-react-renderer` (Prism) — the closest thing to a "source-mapped code highlighter"
- * for React: tokenizes a string and renders colored spans with a theme. `json` is one of its
- * bundled grammars, no extra setup needed. Chosen over `react-syntax-highlighter` (heavier —
- * would bloat the bundle past the existing >500 kB chunk warning) and `shiki` (async/WASM,
- * overkill for tiny job-result payloads). */
+/** Syntax-highlighted code block for the job detail view. Uses `prism-react-renderer`, chosen
+ * over `react-syntax-highlighter` (bundle size) and `shiki` (async/WASM, overkill here). */
 export function CodeBlock({
   code,
   language = "json",

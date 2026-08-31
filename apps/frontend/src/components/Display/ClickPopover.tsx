@@ -4,22 +4,8 @@ import type { ReactElement } from "react"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_MD, Z_OVERLAY_TOOLTIP } from "@/theme"
 
-/** Click-to-open/close popover — the "?" help-bubble pattern (long, multi-line explanatory
- * content the user deliberately opens and reads, rather than something that flashes past on
- * hover). Built on Base UI's own `Popover` (same primitive family as `ActivityCombobox.tsx`'s
- * `Combobox`-based shells) rather than a hand-rolled `getBoundingClientRect` positioning loop —
- * `Popover.Positioner`'s anchor-positioning (viewport-aware side flipping, `sideOffset`) and
- * `Popover.Trigger`'s built-in click-to-toggle/outside-click/Escape handling cover exactly this
- * component's needs for free. `Tooltip.tsx` stays a separate, hand-rolled component (hover/focus
- * lifecycle, cursor-follow mode) rather than being ported onto the same primitive — a hover
- * tooltip that also responds to clicks would leave callers to reason about which of two different
- * open/close lifecycles applies to their case.
- *
- * `trigger` renders as the popover's own anchor via Base UI's `render` prop — pass any single
- * element (a button, an icon) and Base UI clones its own trigger behavior (onClick/aria-*) onto
- * it, so a caller can nest this directly inside a positioned wrapper (e.g. an `<input>`'s own
- * `position: relative` container, MUI/Chakra `InputAdornment`-style) instead of it always
- * rendering as a freestanding sibling element. */
+/** Click-to-open/close popover — the "?" help-bubble pattern, built on Base UI's `Popover`.
+ * `Tooltip.tsx` stays separate (hover/focus lifecycle) rather than sharing this primitive. */
 export function ClickPopover({
   label,
   trigger,

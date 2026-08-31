@@ -1,16 +1,11 @@
-// Cross-archive "read next/previous archive in these search results" navigation — verified
-// against legacy's `setupArchiveNavigation`/`loadPreviousDatatablesArchives`/
-// `loadNextDatatablesArchives`/`readPreviousArchive`/`readNextArchive`
-// (`~/LANraragi/public/js/reader.js:2044-2231`). The index page (`Library.tsx`) writes the
-// "current search results" handoff on archive-open; the reader reads/mutates it as the user
-// steps across archive boundaries. All key names match legacy exactly since they're pure
-// per-browser scratch state, not synced with any server value.
+// Mirrors legacy's setupArchiveNavigation/readPreviousArchive/readNextArchive; key names match
+// legacy exactly since this is pure per-browser scratch state, not synced with any server value.
 
 const SEARCH_IDS_KEY = "currArchiveIds"
 const PREV_IDS_KEY = "previousArchiveIds"
 const NEXT_IDS_KEY = "nextArchiveIds"
 const DT_PAGE_KEY = "currDatatablesPage"
-const NAV_STATE_KEY = "navigationState" // sessionStorage, not localStorage — legacy's own choice
+const NAV_STATE_KEY = "navigationState" // sessionStorage, not localStorage
 const CURRENT_SEARCH_KEY = "currentSearch"
 const SELECTED_CATEGORY_KEY = "selectedCategory"
 const INDEX_SORT_KEY = "indexSort"
@@ -29,9 +24,8 @@ export interface IndexSearchState {
   hidecompleted: boolean
 }
 
-/** Called by the index page right before navigating into the reader — records which search
- * produced the current results page and the full ordered ID list, so the reader can page across
- * archive boundaries without re-deriving the search itself. */
+/** Called before navigating into the reader — records the search that produced the current
+ * results page so the reader can page across archive boundaries. */
 export function recordSearchNavigation(ids: string[], datatablesPage: number, state: IndexSearchState) {
   localStorage.setItem(SEARCH_IDS_KEY, JSON.stringify(ids))
   localStorage.setItem(DT_PAGE_KEY, String(datatablesPage))
@@ -42,8 +36,7 @@ export function recordSearchNavigation(ids: string[], datatablesPage: number, st
   localStorage.setItem(DT_PAGE_SIZE_KEY, String(state.pageSize))
   localStorage.setItem(GROUP_TANKS_KEY, String(state.groupbyTanks))
   localStorage.setItem(HIDE_COMPLETED_KEY, String(state.hidecompleted))
-  // Cached adjacent-page ID lists are now stale for a *new* search — clear them so the reader
-  // re-fetches instead of cross-linking two different searches' results.
+  // Clear cached adjacent-page IDs — they're for the previous search, not this new one.
   localStorage.removeItem(PREV_IDS_KEY)
   localStorage.removeItem(NEXT_IDS_KEY)
   sessionStorage.setItem(NAV_STATE_KEY, "datatables")
@@ -99,10 +92,8 @@ export interface ArchiveNavState {
   index: number
 }
 
-/** Mirrors legacy's `setupArchiveNavigation` — resolves whether cross-archive nav applies to this
- * reader session at all (same-origin referrer + a "datatables" navigation handoff present), and
- * if so, eagerly prefetches the adjacent search-results page when the opened archive is at either
- * edge of the current page's list (so the very first `,`/`.` press doesn't have to wait on it). */
+/** Resolves whether cross-archive nav applies (same-origin referrer + a "datatables" handoff
+ * present), and eagerly prefetches the adjacent page when the archive is at either list edge. */
 export async function setupArchiveNavigation(archiveId: string): Promise<ArchiveNavState> {
   const referrer = document.referrer
   const isDirectNavigation = !referrer || !referrer.includes(window.location.host)
@@ -139,9 +130,8 @@ export async function setupArchiveNavigation(archiveId: string): Promise<Archive
   return { ids, index }
 }
 
-/** Mirrors legacy's `readPreviousArchive`/`readNextArchive`: steps within the cached ID list, or,
- * at an edge, consumes the pre-fetched adjacent page (shifting the whole cache window). Returns
- * `null` (and lets the caller show a toast) when there's nowhere further to go. */
+/** Steps within the cached ID list, or at an edge consumes the pre-fetched adjacent page.
+ * Returns `null` when there's nowhere further to go. */
 export function resolveAdjacentArchive(
   nav: ArchiveNavState,
   direction: "prev" | "next",

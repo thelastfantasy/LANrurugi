@@ -8,6 +8,8 @@ import {
 } from "@tanstack/react-query"
 import { useEffect, useSyncExternalStore } from "react"
 
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+
 import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
 import type {
   ActivityFacets,
@@ -35,6 +37,7 @@ import type {
   JobRecord,
   JobsResponse,
   LoginStatus,
+  OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
   PluginInfo,
   PluginOptions,
@@ -49,6 +52,7 @@ import type {
   StampedPagesResponse,
   StampsByPageResponse,
   StatTag,
+  TankBookmarkedPageResponse,
   TankoubonFullResponse,
   TankoubonListResponse,
   TankoubonMetadata,
@@ -56,14 +60,9 @@ import type {
   UpdateQueueItemBody,
 } from "./types"
 
-/** Standard polling frequency for anything that needs "close to live" freshness without a
- * push/SSE mechanism (Shinobu status, log tail) — shared so both agree on the same cadence rather
- * than each hardcoding its own copy of "5 seconds". */
+/** Shared polling cadence for background status indicators (Shinobu status, log tail). */
 const POLL_INTERVAL_MS = 5000
-/** `useJobs()` and the Upload page's download queue both poll faster than the shared default
- * above — an in-progress download's byte progress/speed is the one thing on this whole page a
- * user is likely to be actively watching tick up in real time, so it gets its own, snappier
- * cadence rather than sharing the "good enough for a background status indicator" one. */
+/** Faster cadence for actively-watched progress (jobs, download queue). */
 const DOWNLOAD_QUEUE_POLL_INTERVAL_MS = 1000
 const UPDATE_CHECK_STALE_TIME_MS = 60 * 60 * 1000
 
@@ -81,27 +80,15 @@ export function useCategories() {
   })
 }
 
-/** Legacy's own `Category.addNewCategory(isDynamic)` (`category.js`) — a static category has an
- * empty `search`; a dynamic (smart) one stores its filter expression there instead. Only the
- * Categories management page had this (`Categories.tsx`'s own `handleNewCategory`, ported first);
- * this is the same `PUT /categories` call factored out so the "添加到:" dropdown elsewhere
- * (`ArchiveOverviewOverlay.tsx`, `Upload/index.tsx`) can offer it inline too, without a detour to
- * that separate page (issue #42 — legacy itself never offered this shortcut either; verified
- * against `reader.html.tt2`/`index_contextmenu.js`, whose own "添加到:" `#add-category` button
- * only ever adds the *current* archive to an already-selected category, not creates a new one). */
+/** A static category has an empty `search`; a dynamic one stores its filter expression there. */
 export function useCreateCategory() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (params: { name: string; isDynamic: boolean; search?: string; visibleToGuest?: boolean }) =>
       sendForm<{ category_id: string }>("PUT", "/categories", {
         name: params.name,
-        // Falls back to legacy's own "bogus search" placeholder (`category.js`'s
-        // `addNewCategory`) when the caller doesn't supply a real predicate up front.
         search: params.isDynamic ? (params.search?.trim() || "language:english") : "",
-        // 007-guest-restricted-access: `CreateCategoryParams::visible_to_guest` deserializes as a
-        // plain Rust `bool` via axum's Form extractor (serde_urlencoded), same as `pinned`
-        // elsewhere in this file — only the literal strings "true"/"false" are accepted, "1"/"0"
-        // fail deserialization with a 422.
+        // Only literal "true"/"false" deserialize; "1"/"0" fail with a 422.
         visible_to_guest: (params.visibleToGuest ?? false) ? "true" : "false",
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["categories"] }),
@@ -123,17 +110,7 @@ export function useSettings(options?: { enabled?: boolean }) {
   })
 }
 
-/** Unauthenticated equivalent of `useSettings().data?.theme`/`.language` — any page that can
- * render before a session exists (the Login page, and per issue #92 now also the 404 page and
- * anything else `Layout` wraps while logged out) needs these two fields without triggering the
- * full, auth-gated `GET /settings` — that response also carries the API key and other genuinely
- * secret fields, so it 401s pre-login, and `client.ts`'s own *global* 401 handler force-navigates
- * to `/login` on any 401 regardless of whether the calling hook already has a fallback ready
- * (`useApplyTheme`'s own `enabled: settings.data === undefined` gate below existed for exactly
- * this, but couldn't stop the global redirect from firing first) — live-reported as a real
- * double-navigation once the 404 catch-all route existed: its content flashed, then `/login`
- * anyway. Backed by `GET /theme`, a separate public endpoint (see
- * `lanrurugi_api::settings::public_router`) that now also returns `language`, not just `theme`. */
+/** Unauthenticated theme/language read via public `GET /theme` (`GET /settings` 401s pre-login). */
 export function usePublicSettings(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["theme"],
@@ -157,9 +134,7 @@ export function usePlugins(kind: string = "all") {
   })
 }
 
-/** Persists a drag-and-drop reorder of one plugin `type` group (`POST /plugins/priority`) —
- * invalidates every cached `usePlugins(...)` variant (`'all'`, the reordered type, and any other
- * already-fetched type) since `'all'`'s own cached list also needs the new order reflected. */
+/** Persists a drag-and-drop reorder of one plugin `type` group. */
 export function useReorderPlugins() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -169,11 +144,7 @@ export function useReorderPlugins() {
   })
 }
 
-/** `null` (not an error state) when the plugin declares no `pluginOptions()` at all (spec FR-015
- * — a `404` from the endpoint means exactly this, not a real failure) — callers use this to decide
- * whether to render a settings affordance for a given download plugin at all. Pass `''` for a
- * non-download plugin to skip the request entirely (`enabled: false`) rather than firing a
- * guaranteed-404 call with an empty namespace. */
+/** `null` (not an error) when the plugin declares no `pluginOptions()`. `''` skips the request. */
 export function usePluginOptions(namespace: string) {
   return useQuery({
     queryKey: ["plugin-options", namespace],
@@ -206,9 +177,7 @@ export function useResetPluginOptions(namespace: string) {
   })
 }
 
-/** A plugin's own persisted custom-parameter values (e.g. E-Hentai login's cookie fields) — see
- * `PluginSettings`'s own docs. Distinct from `usePluginOptions` above (download-specific
- * concurrency/rate-limit/bundling settings). */
+/** A plugin's own persisted custom-parameter values. Distinct from `usePluginOptions` above. */
 export function usePluginSettings(namespace: string) {
   return useQuery({
     queryKey: ["plugin-settings", namespace],
@@ -251,11 +220,7 @@ export function useArchivePages(id: string | null) {
   })
 }
 
-/** Only ever called from the infinite-scroll reader view, and only for `count` = however many
- * pages precede wherever tracked progress is about to resume-scroll to — see the backend's own
- * `read_page_dimensions` docs for why this is a bounded count, not "every page." `enabled` is the
- * caller's job (gate it on infinite-scroll actually being on and a real target being known) rather
- * than baked in here, same pattern as `useArchiveMetadata`'s own `id !== null` gate. */
+/** Page dimensions for the first `count` pages — caller gates `enabled` on infinite-scroll resume. */
 export function usePageDimensions(id: string | null, count: number, enabled: boolean) {
   return useQuery({
     queryKey: ["archive-page-dimensions", id, count],
@@ -275,19 +240,7 @@ export function useUpdateProgress(id: string | null) {
   })
 }
 
-/** Same endpoint as `useUpdateProgress`, but not bound to one archive at mount time — used by the
- * Library grid's "Mark as Read"/"Mark as Unread" context-menu item, which operates on whichever
- * archive was right-clicked rather than a single archive the whole component is scoped to.
- *
- * Also invalidates every `['search', ...]` query, not just `['archives']` — the Library page's
- * own main grid and "On Deck"/etc. filters go through `useSearch` (query key `['search',
- * options]`, one distinct key per options object), not `useArchives`'s plain `['archives']`; a
- * real, live-confirmed bug (this mutation originally only invalidated `['archives']`, matching
- * `useUpdateProgress`'s own pre-existing pattern above — but nothing in the Library page actually
- * queries under that key, so the grid's displayed progress silently kept showing the pre-mutation
- * value until an unrelated refetch happened to occur). A `predicate` matching on the query key's
- * first element is needed since the second element (the full `SearchOptions` object) varies per
- * distinct search/filter/sort combination and there's no single exact key to invalidate. */
+/** Unbound `useUpdateProgress`; also invalidates `['search', ...]` queries via predicate. */
 export function useSetArchiveProgress() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -303,29 +256,17 @@ export function useSetArchiveProgress() {
 export interface SearchOptions {
   filter?: string
   category?: string
-  /** `"title"` (default), `"lastread"`, or any tag namespace (e.g. `"date_added"`) — matches
-   * `lanrurugi-search::engine::sort_ids`'s own three branches: an indexed sort for `"title"`, a
-   * per-archive-field scan for `"lastread"`, and a generic "sort by this tag namespace's value"
-   * fallback for everything else, which is what makes `"date_added"` (the other option legacy's
-   * own index page dropdown offers) work with no dedicated backend support of its own. */
+  /** `"title"` (default), `"lastread"`, or any tag namespace (e.g. `"date_added"`). */
   sortby?: string
   order?: "asc" | "desc"
-  /** Pagination cursor — the *index* into the filtered+sorted result set, not a page number
-   * (`lanrurugi-api::search`'s own fixed 100-per-page `PAGE_SIZE`). */
+  /** Pagination cursor — an index into the result set, not a page number. */
   start?: number
-  /** The two hardcoded quick-filter categories (`NEW_ONLY`/`UNTAGGED_ONLY` in legacy's own
-   * `index.js`) are intercepted client-side before ever reaching `category`, and become these
-   * two flags instead — matches `LANraragi::Controller::Api::Search::handle_databases`. */
   newonly?: boolean
   untaggedonly?: boolean
   tankonly?: boolean
-  /** Index-settings-menu toggles (`localStorage.hidecompleted`/`grouptanks` in legacy), sent on
-   * every search so both the main grid and (if built) the carousel stay in sync with them. */
   hidecompleted?: boolean
   groupbyTanks?: boolean
-  /** Defaults to `true`. Set `false` to skip firing the request entirely — e.g. a live
-   * search-as-you-type dropdown (`TankoubonEdit.tsx`'s archive picker) that shouldn't query the
-   * whole library while its input is empty. */
+  /** Defaults to `true`; set `false` to skip firing the request entirely. */
   enabled?: boolean
 }
 
@@ -365,10 +306,7 @@ export function useUpdateArchiveMetadata(id: string) {
   })
 }
 
-/** Edit page's filename-rename affordance (additive, no legacy equivalent — see
- * `archives.rs::rename_archive`'s own docs). `stem` is the desired basename *without* its
- * extension — the backend always keeps the archive's existing extension and also renames the
- * sidecar `.patch.zip`, if any, alongside it. */
+/** Renames the archive file; `stem` is the basename without extension (extension is kept). */
 export function useRenameArchive(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -382,8 +320,7 @@ export function useRenameArchive(id: string) {
   })
 }
 
-/** Reader overview overlay's "set as thumbnail" hover icon (legacy `.set-thumbnail`) — regenerates
- * the archive's cover thumbnail from the given page (`PUT /archives/{id}/thumbnail?page=N`). */
+/** Regenerates the archive's cover thumbnail from the given page. */
 export function useSetArchiveThumbnail(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -395,8 +332,7 @@ export function useSetArchiveThumbnail(id: string) {
   })
 }
 
-/** Deletes the sidecar `.patch.zip` for an archive and clears its `has_patch` flag —
- * `DELETE /archives/{id}/patch`. */
+/** Deletes the sidecar `.patch.zip` and clears the archive's `has_patch` flag. */
 export function useDeletePatch(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -409,7 +345,6 @@ export function useDeletePatch(id: string) {
   })
 }
 
-/** Reader overview overlay's "add chapter" hover icon (legacy `.add-toc`, `addTocSection`). */
 export function useAddTocEntry(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -422,7 +357,6 @@ export function useAddTocEntry(id: string) {
   })
 }
 
-/** Chapter selector's edit/delete actions (legacy `.edit-toc`/`.remove-toc`). */
 export function useRemoveTocEntry(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -434,13 +368,7 @@ export function useRemoveTocEntry(id: string) {
   })
 }
 
-/** Unbound counterpart to `useAddTocEntry` — the target archive id is only known once a
- * Tankoubon-wide global page number has been resolved back to its real member archive at call
- * time (`ArchiveOverviewOverlay`'s own `resolvePage` prop), not fixed at mount like the bound
- * version above. Matches `useUpdateProgress`/`useSetArchiveProgress`'s own bound/unbound pairing.
- * (Setting a *cover* thumbnail has no equivalent unbound variant: Tankoubon-mode "set as cover"
- * always targets the Tankoubon's own cover via `useSetTankoubonThumbnail`, never a specific
- * member archive's — matches legacy's own `reader_archive_overlay.js`.) */
+/** Unbound `useAddTocEntry` — archive id resolved from a Tankoubon-global page at call time. */
 export function useAddTocEntryForId() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -453,7 +381,7 @@ export function useAddTocEntryForId() {
   })
 }
 
-/** Unbound counterpart to `useRemoveTocEntry` — see `useSetArchiveThumbnailForId`'s own docs. */
+/** Unbound `useRemoveTocEntry` — archive id resolved at call time. */
 export function useRemoveTocEntryForId() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -473,12 +401,7 @@ export function useDeleteArchive() {
   })
 }
 
-/** `DELETE /archives` (issue #63) — one request for the Batch page's own "delete archives"
- * operation instead of firing `DELETE /archives/{id}` once per selected id in a plain client-side
- * loop (no atomicity, no way to tell which ids failed without diffing the library before/after).
- * Session-only on the backend (`route_policy.csv` denies every token role) — a Token-authenticated
- * caller gets a 403 if it ever reaches this, though the Batch page itself is only ever reachable
- * from an authenticated browser session in the first place. */
+/** Batch delete in one request — session-only endpoint (token roles get 403). */
 export function useBatchDeleteArchives() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -535,9 +458,7 @@ export function useAddToTankoubon(id: string) {
   })
 }
 
-/** `GET /tankoubons/{id}/full` — every member archive's own full metadata (including `pagecount`,
- * needed to build the cumulative page-offset table), not just the summary `useTankoubon` returns.
- * Used by `useTankoubonReading` to read a Tankoubon as one concatenated multi-archive book. */
+/** Full member metadata incl. `pagecount` — for reading a Tankoubon as one concatenated book. */
 export function useTankoubonFull(id: string | null) {
   return useQuery({
     queryKey: ["tankoubon-full", id],
@@ -577,27 +498,13 @@ export function useAiRenameChapter() {
 }
 
 export interface AiGroupSuggestion {
-  /** New members to add — for an `existing_tankoubon_id` suggestion, these are the *additional*
-   * archives only; the Tankoubon's own existing members are never repeated here. */
+  /** Additional archives only — existing members are never repeated. */
   archive_ids: string[]
-  /** Present when this suggestion is "add these archives to an existing Tankoubon" rather than
-   * "group these loose archives into a new one" — see the backend's own `tankoubon_grouping.rs`
-   * module docs for how an existing Tankoubon participates in the same clique algorithm as a
-   * synthetic node. */
+  /** Present when adding to an existing Tankoubon instead of creating a new one. */
   existing_tankoubon_id?: string
 }
 
-/** `POST /tankoubons/ai-group-suggestions` — no id param (unlike `useAiRenameTankoubon`), since
- * this scans the whole library's ungrouped archives rather than operating on one already-existing
- * Tankoubon. Local-model-only (see that endpoint's own module docs) — no `useLlmKeyStatus` gate
- * needed, just the same `model_not_ready` 503 the reader recommendations endpoint can return,
- * surfaced to the caller as a thrown `ApiError` like any other failed mutation.
- *
- * `includeIgnored` mirrors the backend's own `?include_ignored=true` query param (default
- * `false`) — the "Show ignored combinations" checkbox re-requests with this set to `true` rather
- * than filtering a locally-cached result, since the ignored set can change between requests (a
- * user un-ignoring something in a previous session) and the backend is the source of truth for
- * which fingerprints are currently ignored. */
+/** Whole-library grouping suggestions; local-model-only (503 `model_not_ready` if not ready). */
 export function useAiGroupSuggestions() {
   return useMutation({
     mutationFn: (includeIgnored?: boolean) =>
@@ -614,9 +521,7 @@ export interface IgnoredGroupSuggestion {
   ignored_at: number
 }
 
-/** Backs the "Show ignored combinations" checklist in `AiSmartTankoubonModal.tsx` — the raw
- * dismissed-suggestion entries; titles are resolved client-side against the already-loaded
- * archive list (same `titleById` map the main suggestion cards use), not hydrated server-side. */
+/** Raw dismissed-suggestion entries; titles resolved client-side. */
 export function useIgnoredGroupSuggestions(enabled: boolean) {
   return useQuery({
     queryKey: ["tankoubons", "ai-group-suggestions", "ignored"],
@@ -625,9 +530,7 @@ export function useIgnoredGroupSuggestions(enabled: boolean) {
   })
 }
 
-/** "Don't suggest this again" — dismisses one specific suggestion (exact archive-id-set +
- * `existing_tankoubon_id` match, see the backend's own `fingerprint` docs) so future
- * `useAiGroupSuggestions()` calls skip it by default. */
+/** Dismisses one suggestion by exact archive-id-set match. */
 export function useIgnoreGroupSuggestion() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -637,8 +540,7 @@ export function useIgnoreGroupSuggestion() {
   })
 }
 
-/** Re-enables a previously-ignored suggestion (the "Un-ignore" button on the ignored-combinations
- * checklist). */
+/** Re-enables a previously-ignored suggestion. */
 export function useUnignoreGroupSuggestion() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -648,11 +550,7 @@ export function useUnignoreGroupSuggestion() {
   })
 }
 
-/** Same shape as `useUpdateProgress`, but for a Tankoubon read as one concatenated book — `page`
- * is the *global* page number across every member archive, matching the backend's own
- * `PUT /tankoubons/{id}/progress/{page}` (`update_tankoubon_progress`), which stores it directly
- * on the Tankoubon's own record rather than resolving it back to any one member archive's
- * progress. */
+/** `page` is the global page number across all member archives, stored on the Tankoubon itself. */
 export function useUpdateTankoubonProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -664,10 +562,7 @@ export function useUpdateTankoubonProgress(id: string | null) {
   })
 }
 
-/** Sets a Tankoubon's own cover thumbnail from a page within one of its member archives,
- * addressed by *global* page number — the backend (`update_tankoubon_thumbnail`) resolves which
- * member archive that page actually falls in server-side (matching legacy's own
- * `translate_global_page`), so the caller doesn't need to do that resolution itself first. */
+/** Sets a Tankoubon's cover from a member-archive page, by *global* page number. */
 export function useSetTankoubonThumbnail(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -692,11 +587,7 @@ function extractVersionNumbers(raw: string): number[] {
   return (raw.match(/\d+/g) ?? []).map(Number)
 }
 
-/** Numeric, position-by-position comparison (`1.10.0` > `1.9.0`) — legacy's own version of this
- * check (`~/LANraragi/public/js/mod/index.js::checkVersion`) instead concatenates each version's
- * digit groups into one string and compares those lexicographically, which silently breaks the
- * moment either version reaches a two-digit component (`"1.10.0"` → `"1100"` sorts *before*
- * `"1.9.0"` → `"190"`). Not carrying that bug forward into a from-scratch implementation. */
+/** Numeric position-by-position comparison (`1.10.0` > `1.9.0`). */
 function compareVersions(a: number[], b: number[]): number {
   const len = Math.max(a.length, b.length)
   for (let i = 0; i < len; i++) {
@@ -706,12 +597,7 @@ function compareVersions(a: number[], b: number[]): number {
   return 0
 }
 
-/** Mirrors legacy's own client-side update check (`checkVersion` in the file above) — hits
- * GitHub's public releases API directly from the browser (no backend involvement needed;
- * `/api/info` already tells us our own running version) and is skipped entirely in debug mode,
- * same as legacy. Resolves to `null` on *any* failure (no release published yet, rate-limited,
- * offline) rather than throwing — this is a "nice to have" notification, never something that
- * should surface as an error to the user. */
+/** Client-side GitHub releases check; resolves `null` on any failure instead of throwing. */
 export function useUpdateCheck(currentVersion: string | undefined, debugMode: boolean) {
   return useQuery({
     queryKey: ["update-check", currentVersion],
@@ -747,10 +633,7 @@ export function useLogout() {
   })
 }
 
-/** Legacy's `userlogged` (`enable_pass == 0 || session('is_logged')`) — gates admin-only reader
- * UI (Clean Archive Cache, Archive Overview's edit/delete/category panel) and picks which side of
- * the progress-persistence decision tree applies. See `crates/lanrurugi-api/src/login.rs::status`
- * for why this is its own endpoint rather than a field on `ServerInfo`. */
+/** Session state — gates admin-only reader UI and progress persistence. */
 export function useLoginStatus() {
   return useQuery({
     queryKey: ["login-status"],
@@ -764,9 +647,7 @@ export function useChangePassword() {
   })
 }
 
-// --- API token management (issue #54) -----------------------------------------------------------
-// Replaces legacy's single fixed `apikey` — see `crates/lanrurugi-api/src/api_tokens.rs`'s own
-// module docs. Mounted in the protected router, so these all require an already-valid session.
+// --- API token management (session-protected) ---
 
 export function useApiTokens() {
   return useQuery({
@@ -775,14 +656,8 @@ export function useApiTokens() {
   })
 }
 
-/** Response's `data.token` is the raw value — present in this one response only, never
- *  retrievable again afterward. Callers must show it to the user immediately (see
- *  `Settings/ApiTokensSection.tsx`'s "new token" flow) since neither this hook nor any later
- *  `useApiTokens()` refetch will ever see it again.
- *
- *  `expiresInSecs: undefined` (omitted) issues a permanent token — matches the backend's own
- *  `expires_in_secs: Option<i64>` (`None` = permanent), so this hook forwards `undefined` as-is
- *  rather than substituting a sentinel the server would have to special-case. */
+/** The raw token is present in this one response only — show it to the user immediately.
+ *  `expiresInSecs: undefined` issues a permanent token. */
 export function useCreateApiToken() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -813,9 +688,7 @@ export function useRenameApiToken() {
   })
 }
 
-// --- LANraragi import rollback snapshots ---------------------------------------------------------
-// Time-Machine-style pre-write snapshots `queue_import_legacy` captures automatically — see
-// `crates/lanrurugi-backup/src/import_snapshot.rs`'s own module docs.
+// --- LANraragi import rollback snapshots ---
 
 export function useImportSnapshots() {
   return useQuery({
@@ -824,9 +697,7 @@ export function useImportSnapshots() {
   })
 }
 
-/** Running count of LANraragi imports this instance has ever completed — the Backup page reads
- *  this before showing the import UI to decide whether to warn ("you've done this before —
- *  consider a full backup first") on a 2nd-or-later import. */
+/** Completed-import count; the Backup page warns on a 2nd-or-later import. */
 export function useImportLegacyCount() {
   return useQuery({
     queryKey: ["import-legacy-count"],
@@ -865,10 +736,7 @@ export function useClearNewFlags() {
   })
 }
 
-/** Clears a single archive's own "new" badge — legacy's reader fires the equivalent
- * `DELETE /api/archives/{id}/isnew` the moment it loads (`reader_common.js`'s init sequence,
- * unconditionally, not tied to finishing the archive or any elapsed time), which is what actually
- * makes the badge disappear after a first read rather than staying "new" forever. */
+/** Clears one archive's "new" badge (fired on reader load, not on completion). */
 export function useClearArchiveNew() {
   return useMutation({
     mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}/isnew`),
@@ -888,7 +756,6 @@ export function useDiscardSearchCache() {
 }
 
 // --- Reader: stamps (page annotations) ---
-// `crates/lanrurugi-api/src/stamps.rs` — full CRUD, verified against legacy's `Model/Stamp.pm`.
 
 export function useStampedPages(id: string | null) {
   return useQuery({
@@ -898,13 +765,8 @@ export function useStampedPages(id: string | null) {
   })
 }
 
-/** Fetches stamped-page lists for several archives in parallel — used by
- * `ArchiveOverviewOverlay`'s "filter stamped pages" toggle in Tankoubon-read mode, where the
- * stamped-pages indicator has to cover every member archive, not just one. Query keys match
- * `useStampedPages`'s own (`['stamped-pages', id]`), so this shares cache with a single-archive
- * read of the same archive elsewhere. Returns the raw per-archive results in `ids`' own order —
- * the caller (which already has each archive's own global-page offset) is what converts each
- * entry's local page numbers into the Tankoubon's global page numbering. */
+/** Parallel `useStampedPages` over many archives; shares its query keys/cache. Caller converts
+ * local page numbers to Tankoubon-global numbering. */
 export function useStampedPagesForArchives(ids: string[]) {
   return useQueries({
     queries: ids.map((id) => ({
@@ -914,10 +776,16 @@ export function useStampedPagesForArchives(ids: string[]) {
   })
 }
 
+/** `id` may be an archive id or `TANK_xxx`; the id decides which route the request takes. */
 export function useStampsForPage(id: string | null, page: number) {
   return useQuery({
     queryKey: ["stamps", id, page],
-    queryFn: () => fetchJson<StampsByPageResponse>(`/archives/${id}/stamps/${page}`),
+    queryFn: () =>
+      fetchJson<StampsByPageResponse>(
+        id !== null && isTankoubonId(id)
+          ? `/tankoubons/${id}/stamps/${page}`
+          : `/archives/${id}/stamps/${page}`,
+      ),
     enabled: id !== null && page > 0,
   })
 }
@@ -941,18 +809,13 @@ export function useAddStamp(id: string) {
       const params = new URLSearchParams({ content, position })
       if (icon) params.set("icon", icon)
       if (rect) params.set("rect", rect)
-      // The response's own `stamp_id` is the new stamp's real ID (`crates/lanrurugi-api::stamps::
-      // add_stamp` — matches legacy's own `add_stamp` response shape) — declared here (not left
-      // as the untyped default) so a call site can read it back out of `mutate`'s own `onSuccess`
-      // callback, e.g. to select a stamp immediately after creating it via Ctrl+drag copy.
-      return sendJson<{ stamp_id: string }>("PUT", `/archives/${id}/stamps/${page}?${params.toString()}`)
+      const base = isTankoubonId(id) ? `/tankoubons/${id}/stamps` : `/archives/${id}/stamps`
+      return sendJson<{ stamp_id: string }>("PUT", `${base}/${page}?${params.toString()}`)
     },
     onSuccess: (_data, { page }) => {
       queryClient.invalidateQueries({ queryKey: ["stamps", id, page] })
       queryClient.invalidateQueries({ queryKey: ["stamped-pages", id] })
-      // issue #97: a stamp add can silently auto-bookmark its page server-side — keep the
-      // reader's bookmark icon and BookmarkHoverGrid in sync without a manual refresh, same
-      // query key useAddBookmark/useRemoveBookmark already invalidate.
+      // Stamp adds can silently auto-bookmark the page server-side — keep bookmarks in sync.
       queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
     },
   })
@@ -992,17 +855,13 @@ export function useDeleteStamp() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stamps"] })
       queryClient.invalidateQueries({ queryKey: ["stamped-pages"] })
-      // issue #97: deleting a page's last stamp can silently auto-remove its bookmark — see
-      // useAddStamp's own identical invalidation above for why.
+      // Deleting the last stamp can silently auto-remove the page's bookmark.
       queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
     },
   })
 }
 
-// --- Reader: thumbnail generation trigger ---
-// `POST /archives/{id}/files/thumbnails` always completes synchronously (pages are decoded on
-// demand, not pre-extracted — see the doc comment on `generate_page_thumbnails`), so this is a
-// plain mutation with no job-polling needed.
+// --- Reader: thumbnail generation trigger (completes synchronously; no job polling) ---
 
 export function useGenerateThumbnails(id: string) {
   return useMutation({
@@ -1010,11 +869,7 @@ export function useGenerateThumbnails(id: string) {
   })
 }
 
-/** Same endpoint as `useGenerateThumbnails`, but not bound to one archive at mount time — used by
- * the reader's "Clean Archive Cache" link when reading a Tankoubon as one concatenated book
- * (`useTankoubonReading`'s own `chapters`), where "the archive" is actually N member archives
- * decided at render time, not a single id `Reader.tsx` is mounted with. Matches
- * `useUpdateProgress`/`useSetArchiveProgress`'s own bound/unbound pairing. */
+/** Unbound `useGenerateThumbnails` — for Tankoubon reads spanning N member archives. */
 export function useGenerateThumbnailsForArchives() {
   return useMutation({
     mutationFn: (ids: string[]) =>
@@ -1022,26 +877,15 @@ export function useGenerateThumbnailsForArchives() {
   })
 }
 
-// --- Reader: random archive ---
-// Legacy's reader just links `<a href="/random">` (plain navigation). Not a react-query hook —
-// every call must pick a fresh random archive, there's nothing to cache.
+// --- Reader: random archive (not cached — every call must be fresh) ---
 export async function fetchRandomArchiveId(): Promise<string | null> {
   const result = await fetchJson<RandomArchivesResponse>("/search/random?count=1")
   return result.data[0]?.arcid ?? null
 }
 
-// --- Reader: page-level bookmarks ---
-// `crates/lanrurugi-api/src/bookmarks.rs` — a bookmark is `(archive_id, page)`, so a single
-// archive can carry any number of independent bookmarks. Every query key here is prefixed with
-// `"bookmarks"`, so `useAddBookmark`/`useRemoveBookmark`'s own `invalidateQueries({ queryKey:
-// ["bookmarks"] })` below invalidates all of them (React Query's own prefix-matching) without
-// needing to know each one's exact shape.
+// --- Reader: page-level bookmarks (all query keys share the "bookmarks" prefix) ---
 
-/** This archive's own bookmarked pages (ascending, each with its resolved filename), unpaginated
- * — `GET /archives/{archiveId}/bookmarks`. Used by the reader (is the current page bookmarked?)
- * and `BookmarkHoverGrid` (needs the filename for its caption — bundled into this same response
- * rather than a second `GET /archives/{id}/files` call, which would scan the entire archive just
- * to look up two or three filenames out of it). */
+/** This archive's bookmarked pages with resolved filenames. Always a real archive id. */
 export function useBookmarksForArchive(archiveId: string | null) {
   return useQuery({
     queryKey: ["bookmarks", "archive", archiveId],
@@ -1050,33 +894,74 @@ export function useBookmarksForArchive(archiveId: string | null) {
   })
 }
 
-/** The full paginated `/bookmarks` listing (`GET /bookmarks?sort=...&cursor=...`), one page per
- * `fetchNextPage()` call. `sort` is part of the query key — switching it starts a fresh query
- * from the first page rather than needing any manual reset. */
-export function useInfiniteBookmarks(sort: BookmarkSort) {
+/** A Tankoubon's bookmarks merged across members, in global page numbering. */
+export function useBookmarksForTankoubon(tankId: string | null) {
+  return useQuery({
+    queryKey: ["bookmarks", "tankoubon", tankId],
+    queryFn: () => fetchJson<TankBookmarkedPageResponse[]>(`/tankoubons/${tankId}/bookmarks`),
+    enabled: tankId !== null,
+  })
+}
+
+/** Paginated `/bookmarks` listing; `sort`/`q` are in the query key. Caller must debounce `q` —
+ * this hook does not. */
+export function useInfiniteBookmarks(sort: BookmarkSort, q?: string) {
   return useInfiniteQuery({
-    queryKey: ["bookmarks", "page", sort],
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-      fetchJson<BookmarksPageResponse>(`/bookmarks?sort=${sort}${pageParam ? `&cursor=${pageParam}` : ""}`),
+    queryKey: ["bookmarks", "page", sort, q ?? ""],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
+      const params = new URLSearchParams({ sort })
+      if (pageParam) params.set("cursor", pageParam)
+      if (q) params.set("q", q)
+      return fetchJson<BookmarksPageResponse>(`/bookmarks?${params.toString()}`)
+    },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: BookmarksPageResponse) => last.next_cursor ?? undefined,
   })
 }
 
+/** `archiveId` may be an archive id or `TANK_xxx`; the id decides the route (Tankoubon-global
+ * page is resolved to member+local page server-side). */
 export function useAddBookmark() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ archiveId, page }: { archiveId: string; page: number }) =>
-      sendJson("POST", `/archives/${archiveId}/bookmarks/${page}`),
+      sendJson(
+        "POST",
+        isTankoubonId(archiveId)
+          ? `/tankoubons/${archiveId}/bookmarks/${page}`
+          : `/archives/${archiveId}/bookmarks/${page}`,
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
   })
 }
 
+/** Same id-decides-the-route shape as `useAddBookmark`. */
 export function useRemoveBookmark() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ archiveId, page }: { archiveId: string; page: number }) =>
-      sendJson("DELETE", `/archives/${archiveId}/bookmarks/${page}`),
+      sendJson(
+        "DELETE",
+        isTankoubonId(archiveId)
+          ? `/tankoubons/${archiveId}/bookmarks/${page}`
+          : `/archives/${archiveId}/bookmarks/${page}`,
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
+  })
+}
+
+/** Sets a bookmark's name; `null` or empty/whitespace clears it. */
+export function useSetBookmarkName() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ archiveId, page, name }: { archiveId: string; page: number; name: string | null }) =>
+      sendJson(
+        "PUT",
+        isTankoubonId(archiveId)
+          ? `/tankoubons/${archiveId}/bookmarks/${page}/name`
+          : `/archives/${archiveId}/bookmarks/${page}/name`,
+        { name },
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmarks"] }),
   })
 }
@@ -1133,9 +1018,7 @@ export function useLogLines(category: LogCategory, lines = 100) {
   })
 }
 
-// --- Background Job Console (specs/002-job-console) --------------------------------------------
-// Native `/api/jobs` endpoints, additive over the legacy-mimicking `/api/minion/*` contract
-// (research.md §1).
+// --- Background Job Console (native /api/jobs endpoints) ---
 
 function jobsRefetchInterval(query: { state: { data?: JobsResponse } }) {
   const jobs = query.state.data?.jobs ?? []
@@ -1147,19 +1030,13 @@ export function useJobs() {
   return useQuery({
     queryKey: ["jobs"],
     queryFn: () => fetchJson<JobsResponse>("/jobs"),
-    // `select` unwraps the `{ jobs: [...] }` envelope so consumers get the array directly.
     select: (data) => data.jobs as JobRecord[],
-    // Fast cadence only while a job is actually active — see `downloadQueueRefetchInterval`'s own
-    // reasoning above.
     refetchInterval: jobsRefetchInterval,
     refetchIntervalInBackground: true,
   })
 }
 
-// Multi-select clear: fires one `DELETE /jobs/{id}` per selected job (no batch-by-ids endpoint
-// exists by design — research.md §5 keeps the backend minimal). Only terminal jobs are ever
-// selectable in the UI (FR-004), so every selected id is clearable; per-id try/catch still
-// tolerates a job vanishing between select and click. Reports how many actually got removed.
+/** Multi-select clear — one `DELETE /jobs/{id}` per id; reports succeeded/failed counts. */
 export function useClearJobs() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1182,9 +1059,7 @@ export function useClearJobs() {
   })
 }
 
-// `useClearFinishedJobs()` is deliberately unscoped (research.md §5 / FR-004): it always targets
-// the full server-side set of finished+failed jobs, regardless of any client-side state/name filter
-// the admin happens to have applied to the displayed list.
+/** Always clears the full server-side finished+failed set, ignoring client-side filters. */
 export function useClearFinishedJobs() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1193,17 +1068,9 @@ export function useClearFinishedJobs() {
   })
 }
 
-// --- Upload page's persistent download queue ----------------------------------------------------
-// Additive `/download_queue*` endpoints (no legacy equivalent) — see `DownloadQueueItem`'s own
-// docs. Live updates arrive over SSE (`GET /download_queue/stream`), not polling — see
-// `useDownloadQueue`'s own EventSource wiring below.
+// --- Upload page's persistent download queue (SSE-updated, not polled) ---
 
-/** Partial fields an `update` delta carries — set-if-present merged over the existing item.
- * Flat on the event itself (not nested under an `item` key) because every backend broadcast site
- * (`update_queue_item_state` in `plugins.rs`, the `update`-kind sends in `download_queue.rs`)
- * spreads these directly onto the JSON object alongside `kind` — unlike the `add` case below,
- * whose payload really is the *whole* record under `item` (a freshly created queue entry, not a
- * partial patch). */
+/** Partial set-if-present patch for an `update` delta (flat, unlike `add`'s whole `item`). */
 interface DownloadQueueItemPatch {
   id: string
   state?: DownloadQueueItem["state"]
@@ -1227,16 +1094,8 @@ type DownloadQueueDelta =
       total_bytes: number | null
     }
 
-/** SSE-pushed byte progress, keyed by job ID — deliberately NOT folded into the `["jobs"]`
- * React Query cache via `setQueryData`. TanStack Query v5's `refetchInterval` reschedules its
- * next tick off `dataUpdatedAt`, which `setQueryData` bumps on every call — a real download
- * streams a `progress` SSE event up to 5/sec (the backend's own 200ms throttle), so writing each
- * one into the query cache continuously pushed the *next* real `/jobs` poll back, starving it for
- * the download's entire duration (confirmed live, 2026-08-26: a 29s transfer produced zero
- * intermediate `/jobs` responses — request timestamps jumped straight from the pre-transfer poll
- * to one fired only after the SSE stream stopped at completion). A plain external store read via
- * `useSyncExternalStore` sits completely outside React Query, so writing to it can never affect
- * any query's own fetch scheduling. */
+/** SSE byte progress, keyed by job ID. Must stay OUTSIDE the `["jobs"]` query cache: writing
+ * progress into it bumps `dataUpdatedAt` and starves the real `/jobs` poll for the whole download. */
 const jobProgressOverrides = new Map<string, { downloaded_bytes: number; total_bytes?: number }>()
 const jobProgressListeners = new Set<() => void>()
 
@@ -1245,11 +1104,7 @@ function setJobProgressOverride(jobId: string, downloaded_bytes: number, total_b
   for (const listener of jobProgressListeners) listener()
 }
 
-/** Reads the latest SSE-pushed progress for one job, re-rendering only the component that calls
- * this when that specific job's own entry changes (each `jobProgressOverrides.set` triggers every
- * listener, but `useSyncExternalStore`'s own snapshot-equality check no-ops the re-render for any
- * component whose `jobId` wasn't the one just updated). Merges on top of `useJobs()`'s own polled
- * `downloaded_bytes`/`total_bytes` at the call site — see `JobProgressBar`'s caller. */
+/** Latest SSE-pushed progress for one job; merged over `useJobs()`'s polled values at call site. */
 export function useJobProgressOverride(jobId: string | undefined) {
   return useSyncExternalStore(
     (onStoreChange) => {
@@ -1263,8 +1118,7 @@ export function useJobProgressOverride(jobId: string | undefined) {
 export function useDownloadQueue() {
   const queryClient = useQueryClient()
 
-  // Initial snapshot via a plain one-shot fetch — no polling. Live updates arrive over the
-  // SSE stream below (`full` replaces the whole list, `delta` patches one item in place).
+  // One-shot snapshot; live updates arrive over the SSE stream below.
   const query = useQuery({
     queryKey: ["download-queue"],
     queryFn: () => fetchJson<DownloadQueueListResponse>("/download_queue"),
@@ -1289,10 +1143,6 @@ export function useDownloadQueue() {
         type: "delta"
       } & DownloadQueueDelta
       if (data.type !== "delta") return
-      // A byte-progress tick doesn't touch `DownloadQueueItem` at all (there's nowhere on that
-      // shape for it to go) — it feeds the standalone `jobProgressOverrides` store instead (see
-      // that store's own docs for why NOT `queryClient.setQueryData(["jobs"], ...)` — doing so
-      // previously starved the real `/jobs` poll for a download's entire duration).
       if (data.kind === "progress") {
         setJobProgressOverride(data.job_id, data.downloaded_bytes, data.total_bytes ?? undefined)
         return
@@ -1307,8 +1157,7 @@ export function useDownloadQueue() {
             break
           }
           case "add":
-            // Append unless the id is somehow already present (e.g. the `full` bootstrap
-            // raced ahead of this delta) — a replace then, never a duplicate row.
+            // Replace (never duplicate) if `full` already raced this delta in.
             items = items.some((it) => it.id === data.item.id)
               ? items.map((it) => (it.id === data.item.id ? data.item : it))
               : [...items, data.item]
@@ -1344,10 +1193,7 @@ export function useUpdateQueueItem() {
   })
 }
 
-/** "Fetch Metadata" button — runs the backend's plugin-`execMetadata` + 10-min-cache path
- * (`POST /download_queue/{id}/fetch-metadata`), not a direct `/plugins/use` call, so a manual
- * preview shares the same cache the post-download auto-fetch uses. No `onSuccess` invalidation —
- * the updated item arrives via the `/download_queue/stream` SSE delta the backend broadcasts. */
+/** Manual metadata preview; the updated item arrives via SSE delta, so no invalidation here. */
 export function useFetchQueueItemMetadata() {
   return useMutation({
     mutationFn: (id: string) =>
@@ -1383,11 +1229,7 @@ export function useStopQueueItem() {
   return useMutation({
     mutationFn: (id: string) =>
       sendJson("POST", `/download_queue/${encodeURIComponent(id)}/stop`),
-    // Optimistic: cancellation is cooperative (the download task has to notice the token and
-    // clean up before server-side state actually flips), so waiting for a poll round-trip made the
-    // button swap feel laggy. Flips `state` to `cancelled` in the cache synchronously on click; the
-    // eventual real poll overwrites this with the server's matching value regardless. `cancelled`
-    // is a real, persisted queue state, so this also survives a page refresh.
+    // Optimistic flip: cancellation is cooperative server-side, so waiting felt laggy.
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: ["download-queue"] })
       const previous = queryClient.getQueryData<DownloadQueueListResponse>(["download-queue"])
@@ -1412,10 +1254,8 @@ export function useStopQueueItem() {
   })
 }
 
-/** `insertions`, when given, packages B's own unique pages (`ComparisonResult.b_unmatched_pages`,
- * issue #77's own follow-on design) into a `.patch.zip` for the new A that's replacing B —
- * omitted for every ordinary overwrite that never went through the AI comparison flow, which
- * remains a plain `{ id }` call exactly as before this parameter existed. */
+/** Overwrite B with the new download; `insertions` optionally packages B's unique pages into a
+ * `.patch.zip` first. */
 export function useOverwriteQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1444,21 +1284,14 @@ export function useRenameQueueItem() {
   })
 }
 
-/** Read-only — doesn't invalidate any query (unlike overwrite/rename above), since a comparison
- * resolves nothing about the conflict itself, just informs the user's own choice of which
- * resolution to pick next. */
+/** Read-only comparison — resolves nothing, so no invalidation. */
 export function useCompareQueueItem() {
   return useMutation({
     mutationFn: (id: string) => sendJson<{ result: ComparisonResult }>("POST", `/download_queue/${encodeURIComponent(id)}/compare`),
   })
 }
 
-/** B's own real entry-name list, natural-sorted (issue #77's own follow-on design) — the "insert
- * after/before this page" anchor picker needs real filenames to send to `useExportComparePatch`,
- * not just the numeric indices every other part of the comparison UI deals in (see
- * `ExportPatchInsertion`'s own docs for why `patch.rs`'s JSON schema uses filenames, not indices,
- * as its anchor). Only ever fetched once the user actually opens the picker (`enabled`), not
- * eagerly alongside the comparison result itself. */
+/** Natural-sorted real entry names for one side — anchors are filenames, not indices. */
 export function useComparePages(id: string | null, side: "a" | "b") {
   return useQuery({
     queryKey: ["compare-pages", id, side],
@@ -1467,12 +1300,7 @@ export function useComparePages(id: string | null, side: "a" | "b") {
   })
 }
 
-/** Builds a `.patch.zip` from a user-picked selection of A's own unique pages
- * (`ComparisonResult.a_unmatched_pages`, issue #77's own follow-on design) and returns it as a
- * `Blob` ready for the caller to trigger a real browser download with — this mutation doesn't
- * install the patch anywhere itself (confirmed design: the user places it next to the target
- * archive on disk manually), so there's nothing here to invalidate either, same as
- * `useCompareQueueItem` above. */
+/** Builds a `.patch.zip` Blob for the user to place manually; installs nothing. */
 export function useExportComparePatch() {
   return useMutation({
     mutationFn: ({ id, insertions }: { id: string; insertions: ExportPatchInsertion[] }) =>
@@ -1480,21 +1308,14 @@ export function useExportComparePatch() {
   })
 }
 
-/** Packs several installed plugins' own `.ts` files into one `.zip` (`POST /plugins/export-batch`)
- * — `ExportWizardPluginModal`'s checkbox picker. */
+/** Packs several installed plugins' `.ts` files into one `.zip`. */
 export function useExportPluginsBatch() {
   return useMutation({
     mutationFn: (namespaces: string[]) => sendJsonForBlob("POST", "/plugins/export-batch", { namespaces }),
   })
 }
 
-/** "Keep the existing library archive (B), discard this download (A)" — issue #77's own follow-on
- * design. `insertions`, when given, packages A's own unique pages straight onto B's own sidecar
- * `.patch.zip` server-side (unlike `useExportComparePatch` above, this doesn't hand back a file
- * for the user to place themselves — this flow's own frontend already walked them through picking
- * insertion points as part of *choosing* to keep B). Always deletes the queue item on success
- * (nothing is left for it to track — see the endpoint's own docs), so this invalidates the queue
- * list same as delete/overwrite/rename. */
+/** Keep library archive B, discard the download; always deletes the queue item on success. */
 export function useKeepSideB() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1537,10 +1358,7 @@ export function useDeleteSelectedQueue() {
   })
 }
 
-/** `GET /activity` (issue #87) — cursor-paginated, so `filter.cursor` changing between calls is
- *  a "load next page" request, not a "these are different independent results" one:
- *  `placeholderData: keepPreviousData` keeps the previous page's rows on screen while the next
- *  page loads instead of flashing to an empty/loading state. */
+/** Cursor-paginated; `keepPreviousData` avoids a flash between pages. */
 export function useActivity(filter: ActivityFilter) {
   return useQuery({
     queryKey: ["activity", filter],
@@ -1550,8 +1368,6 @@ export function useActivity(filter: ActivityFilter) {
       if (filter.limit != null) params.set("limit", String(filter.limit))
       if (filter.start_ts != null) params.set("start_ts", String(filter.start_ts))
       if (filter.end_ts != null) params.set("end_ts", String(filter.end_ts))
-      // Comma-separated — matches the backend's own `ListActivityParams::actor`/`action_type`
-      // query-param convention (`activity.rs::split_csv_param`).
       if (filter.actors && filter.actors.length > 0) params.set("actor", filter.actors.join(","))
       if (filter.actionTypes && filter.actionTypes.length > 0) {
         params.set("action_type", filter.actionTypes.join(","))
@@ -1621,5 +1437,21 @@ export function useSetHoverPageOrder() {
   return useMutation({
     mutationFn: (order: string) => sendJson("PUT", "/bookmarks/hover-page-order", { order }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmark-hover-page-order"] }),
+  })
+}
+
+export function useOnlyMatchingBookmarks() {
+  return useQuery({
+    queryKey: ["bookmark-only-matching"],
+    queryFn: () => fetchJson<OnlyMatchingBookmarksResponse>("/bookmarks/only-matching"),
+  })
+}
+
+export function useSetOnlyMatchingBookmarks() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (onlyMatching: boolean) =>
+      sendJson("PUT", "/bookmarks/only-matching", { only_matching: onlyMatching }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmark-only-matching"] }),
   })
 }

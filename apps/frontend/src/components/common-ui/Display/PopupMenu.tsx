@@ -1,32 +1,12 @@
+import { Separator } from "@base-ui/react/separator"
 import type { CSSProperties, ReactNode } from "react"
 import { forwardRef } from "react"
 import { createPortal } from "react-dom"
 
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 
-/** A themed popup menu box — the shared "floating list of clickable rows" every right-click menu
- * and the index settings gear menu renders. Built from scratch with Tailwind utility classes and
- * the visual result still matches each of legacy's 5 real themes.
- *
- * `portal` (default `true`) renders via `createPortal` into `document.body` instead of as a
- * normal DOM child of the trigger — same reasoning as `Tooltip`'s own portal: an ancestor's
- * `overflow: hidden`/`scroll` would otherwise clip a `position: fixed`/`absolute` menu, and an
- * ancestor `transform` breaks `fixed`'s viewport-relative coordinates. Pass `portal={false}` for
- * a menu intentionally positioned relative to its own parent instead of the viewport (e.g. a
- * submenu opening off a parent `PopupMenuItem` via `left: '100%'`).
- *
- * Forwards `ref` onto the rendered `<ul>` itself (not the trigger). A caller's own
- * outside-click-to-close handler that does `triggerRef.current.contains(e.target)` breaks once
- * the menu is portaled to `document.body` — pass a second ref here and also check
- * `menuRef.current?.contains(e.target)` to fix that.
- *
- * `mainLabel`, when given, renders a disabled, icon-prefixed header row + separator above
- * `children` — the "name this menu" row `Library.tsx`'s own gear-icon `SettingsMenu` hand-wrote
- * itself (a `<PopupMenuItem disabled>` + `<PopupMenuSeparator>` pair) before this prop existed;
- * pulled up into `PopupMenu` itself once a second, independent menu
- * (`ArchiveOverviewOverlay.tsx`'s quick-add-chapter/delete-chapter popups) needed the identical
- * row and copy-pasting the same two-element pair a second time read as the header really being
- * this component's own concern, not each individual menu's. */
+/** A themed popup menu box for right-click menus and the settings gear menu. `portal` (default
+ * `true`) renders into `document.body`; pass `false` for a submenu positioned via `left: '100%'`. */
 export const PopupMenu = forwardRef<
   HTMLUListElement,
   {
@@ -44,11 +24,8 @@ export const PopupMenu = forwardRef<
       ref={ref}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      // `inline-block` + `w-max` sizes to its own longest row's real content rather than a
-      // guessed min/max range. `text-left` overrides any ancestor's own `text-align`. `ps-0` is
-      // load-bearing: `list-none` only resets `list-style-type`, not the UA stylesheet's own
-      // `padding-inline-start: 40px` on every `<ul>` — left unreset, that 40px stacks with each
-      // `PopupMenuItem`'s own `px-4`, making the menu visibly lopsided.
+      // ps-0 is load-bearing: list-none only resets list-style-type, not the UA's own
+      // padding-inline-start: 40px, which would otherwise stack with PopupMenuItem's own px-4.
       className="m-[.3em] inline-block w-max list-none rounded-[.2em] py-[.25em] ps-0 text-left"
       style={{
         background: palette.bg,
@@ -72,9 +49,8 @@ export const PopupMenu = forwardRef<
   return portal ? createPortal(menu, document.body) : menu
 })
 
-/** One clickable (or disabled) row inside a {@link PopupMenu}. `disabled` rows (e.g. a "Display
- * Mode" section header) get the theme's dimmed text colour and no hover/click affordance —
- * matches legacy's own `.context-menu-item.context-menu-disabled`. */
+/** One clickable (or disabled) row inside a {@link PopupMenu} — matches legacy's own
+ * `.context-menu-item.context-menu-disabled` for the disabled state. */
 export function PopupMenuItem({
   disabled,
   onClick,
@@ -122,8 +98,11 @@ export function PopupMenuItem({
 }
 
 /** A horizontal divider between groups of {@link PopupMenuItem}s — matches legacy's own
- * `.context-menu-separator`. */
+ * `.context-menu-separator`. Renders as `<li>` (via `render`) since it sits inside `PopupMenu`'s
+ * own `<ul>`, not Base UI's default `<div>`. Negative horizontal margin cancels out the `<ul>`'s
+ * own `m-[.3em]` so the line reaches the Popup's real outer border instead of stopping at the
+ * `<ul>`'s own inset edge, which the menu rows' `px-4` (padding, not margin) doesn't share. */
 export function PopupMenuSeparator() {
   const palette = useMenuPalette()
-  return <li className="my-[.35em] border-b" style={{ borderColor: palette.separator }}></li>
+  return <Separator render={<li />} className="my-[.35em] -mx-[.3em] border-b" style={{ borderColor: palette.separator }} />
 }

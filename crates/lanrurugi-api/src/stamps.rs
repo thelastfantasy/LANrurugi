@@ -13,7 +13,7 @@ use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use lanrurugi_core::ids::{ArchiveId, StampId};
+use lanrurugi_core::ids::{ArchiveId, StampId, TankId};
 
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
@@ -40,6 +40,53 @@ pub fn router() -> Router<AppState> {
             "/stamps/{id}",
             get(get_stamp).put(update_stamp).delete(delete_stamp),
         )
+        // Tankoubon-global-page-addressed equivalents of the two `/archives/{id}/stamps/{index}`
+        // routes above — a Tankoubon read as one concatenated book (`useTankoubonReading.ts`)
+        // addresses pages by a global (Tankoubon-wide) number, not any one member archive's own
+        // local page number, so the reader can't call the plain `/archives/{id}/stamps/{index}`
+        // routes directly without first resolving that itself (which it used to do — see this
+        // route's own handler docs for why that split was the actual bug). Resolution happens
+        // here, once, server-side (`GroupingRepository::resolve_global_page`), then delegates to
+        // the exact same `stamps_by_page`/`add_stamp` logic real archives already use — the data
+        // this writes is unchanged, still keyed by the real member archive id, never `TANK_xxx`.
+        .route(
+            "/tankoubons/{id}/stamps/{page}",
+            get(tank_stamps_by_page).put(tank_add_stamp),
+        )
+}
+
+async fn tank_stamps_by_page(
+    State(state): State<AppState>,
+    Path((tank_id, page)): Path<(TankId, u32)>,
+) -> Response {
+    let (archive_id, local_page) =
+        match crate::tankoubons::resolve_tank_page(&state, &tank_id, "get_stamps_by_page", page)
+            .await
+        {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+    stamps_by_page(State(state), Path((archive_id, local_page))).await
+}
+
+async fn tank_add_stamp(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path((tank_id, page)): Path<(TankId, u32)>,
+    Query(params): Query<StampParams>,
+) -> Response {
+    let (archive_id, local_page) =
+        match crate::tankoubons::resolve_tank_page(&state, &tank_id, "add_stamp", page).await {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+    add_stamp(
+        State(state),
+        auth,
+        Path((archive_id, local_page)),
+        Query(params),
+    )
+    .await
 }
 
 /// `GET /archives/{id}/stamps` — pages that have at least one stamp (legacy `get_stamped_pages`).

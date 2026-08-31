@@ -9,17 +9,8 @@ import { toast } from "@/toast"
 import type { LoginParameter, PluginType, TypeSession, WizardSession } from "./useWizardSession"
 import { cleanLinks } from "./useWizardSession"
 
-/** FR-005/FR-006/FR-007: per-type input collection layered on top of `WizardSession.sharedLinks`
- * (the one domain-level link box every type draws from — see that field's own doc comment for why
- * links were merged into a single shared input rather than one box per type). Metadata/download
- * need nothing further here beyond the login-dependency question — their own generation/trial-run
- * reads `sharedLinks` directly (`GenerationStep.tsx`/`TrialRunResult.tsx`). Login is the one type
- * with real per-type work left: an AI-analyzed credential-field form
- * (`/plugin-wizard/analyze-login` inspects the shared links' first entry — or a page/API doc among
- * them the user points at instead — and decides whether the site needs a password pair, a single
- * token/API key, a cookie value, or something else; never assumed up front). No free-text
- * page-feature description anywhere — AI infers page structure itself via `fetch_page` against the
- * real shared links. */
+/** Per-type input collection layered on top of `WizardSession.sharedLinks`. Login is the one
+ * type with real per-type work: an AI-analyzed credential-field form via `/plugin-wizard/analyze-login`. */
 export function TypeDetailsForm({
   session,
   typeSession,
@@ -29,18 +20,14 @@ export function TypeDetailsForm({
   session: WizardSession
   typeSession: TypeSession
   onPatch: (patch: Partial<TypeSession>) => void
-  /** FR-007: only true when this run's selection includes both "login" and this (metadata/
-   * download) type — the question must be asked explicitly per type, never assumed from
-   * "login was selected too". Always `false`/ignored for the login type itself. */
+  /** True only when this run's selection includes both "login" and this type. Always
+   * false/ignored for the login type itself. */
   showLoginDependencyQuestion: boolean
 }) {
   const { t } = useTranslation()
   const needsLinks = typeSession.type === "metadata" || typeSession.type === "download"
   const [analyzing, setAnalyzing] = useState(false)
   const [loginReferenceUrlOverride, setLoginReferenceUrlOverride] = useState("")
-  // Defaults to the shared links' first entry (per real user feedback: a single API doc URL
-  // often documents auth alongside metadata/download, so login analysis shouldn't need its own
-  // separately-pasted URL in the common case) — still freely overridable per-type below.
   const loginReferenceUrl = loginReferenceUrlOverride || cleanLinks(session.sharedLinks)[0] || ""
 
   async function analyzeLogin() {
@@ -69,11 +56,6 @@ export function TypeDetailsForm({
       <h2>{t(`pluginWizard.type.${typeSession.type as PluginType}`)}</h2>
 
       {showLoginDependencyQuestion && needsLinks && (
-        // Not a native <fieldset>/<legend> — its browser-drawn default border rendered as a stray,
-        // visually inconsistent vertical rule against this theme's background (real user feedback,
-        // 2026-08-26). Same `.favtag-btn`/`.toggled` pill pattern `WizardSteps.tsx`'s own type-tab
-        // row uses (itself borrowed from `dialog.tsx`'s `NewCategoryForm`), just semantically a
-        // `radiogroup` of two mutually exclusive options instead of tabs.
         <div style={{ marginBottom: 8 }}>
           <p style={{ margin: "0 0 4px", fontWeight: "bold" }}>{t("pluginWizard.dependsOnLoginQuestion")}</p>
           <div role="radiogroup" style={{ display: "flex", gap: 4, maxWidth: 200 }}>
@@ -84,17 +66,6 @@ export function TypeDetailsForm({
               className={`favtag-btn${typeSession.dependsOnLogin === true ? " toggled" : ""}`}
               style={{ flex: 1 }}
               onClick={() => {
-                // Answering "yes" here used to only set `dependsOnLogin` (FR-013's generation-
-                // ordering gate) and leave `loginAssociation` untouched — the *only* two things
-                // that ever set it were an after-the-fact AI trial-run suggestion or a manual
-                // "link the login plugin I just generated" click, so a domain whose login plugin
-                // was already installed (found at the initial lookup step) never actually got
-                // associated at all: the generated code never declared `login_from`, silently
-                // defeating the whole point of answering "yes" (real report, 2026-08-25). Prefers
-                // whatever the domain lookup already found installed; falls back to a login
-                // plugin *this session* generated and saved; leaves the existing association
-                // (if any) alone if neither source has anything yet — a later AI suggestion or
-                // manual link can still fill it in.
                 const existingLogin = session.lookupResult.login
                 const sessionLogin = session.typeSessions.login
                 const loginAssociation = existingLogin.covered

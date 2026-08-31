@@ -20,9 +20,8 @@ import vi from "./locales/vi.json"
 import zh from "./locales/zh.json"
 import zhHant from "./locales/zh_Hant.json"
 
-// The 14 languages the legacy LANraragi shipped translation templates for
-// (verified by listing `locales/template/*.po` in the legacy source), each
-// keyed by its English source string per `research.md` #10.
+// The 14 languages legacy LANraragi shipped translation templates for, each keyed by its
+// English source string.
 export const SUPPORTED_LANGUAGES = [
   { code: "en", nativeName: "English" },
   { code: "ja", nativeName: "日本語" },
@@ -60,23 +59,13 @@ void i18n
       nb_NO: { translation: nbNO },
       as: { translation: asLocale },
     },
-    // FR-019: any string missing from the selected language's resource falls back to English
-    // rather than rendering blank — `as` in particular ships with zero translated strings (its
-    // legacy .po template has no filled-in msgstr entries at all) so this path is exercised for
-    // real, not just hypothetically.
+    // Falls back to English rather than rendering blank — `as` ships with zero translated
+    // strings, so this path is exercised for real.
     fallbackLng: "en",
     supportedLngs: SUPPORTED_LANGUAGES.map((l) => l.code),
     interpolation: { escapeValue: false },
-    // Translation keys here are literal English source sentences (legacy's own `c.lh("...")`
-    // text, carried over verbatim — see `research.md` #10), not a nested namespace/key hierarchy,
-    // so i18next's own default separators actively break real keys instead of organizing them:
-    // `nsSeparator: ':'` in particular turns any key containing a colon (e.g. `"Lines:"`,
-    // `"Category:"`, `"Currently Viewing:"` — 65 of them across `en.json`) into "look up an empty
-    // key in a namespace named everything before the colon", which always fails and silently
-    // renders nothing. `keySeparator: '.'` has the same failure mode for the (far more common)
-    // keys ending in a period, though a real corpus check found it only actually breaks a key
-    // when what follows the first `.` happens to itself resolve as a nested path — disabled here
-    // too since these resource files are already flat and were never meant to nest.
+    // Keys are literal English source sentences, not a namespace/key hierarchy — i18next's default
+    // separators would break real keys containing a colon or period (e.g. "Lines:", "Category:").
     nsSeparator: false,
     keySeparator: false,
     detection: {
@@ -86,38 +75,18 @@ void i18n
     },
   })
 
-/** Applies the server-side `language` setting (Settings page's "Language" dropdown,
- * `LRR_CONFIG.language`) on top of i18next's own `localStorage`/browser-navigator detection —
- * that detector has no idea the server-side setting exists at all, so picking a language there
- * previously did nothing (issue #85). `"auto"` (the default) intentionally leaves the detector's
- * own choice alone. Mounted once in `Layout.tsx` alongside `useApplyTheme`, the same "sync a
- * Settings-page value into a global, non-React API on every settings change" pattern — and, per
- * issue #92, the same auth-gated-`/settings`-401s-while-logged-out fix `useApplyTheme` itself
- * needed: `useSettings()` is disabled outright while logged out (rather than fetched and left to
- * 401, which `client.ts`'s own global 401 handler force-navigates away from regardless of this
- * hook's own readiness to just fall back), falling back to the public `/theme` endpoint's now
- * also-`language`-carrying response instead. */
+/** Applies the server-side `language` setting on top of i18next's own detection, which has no
+ * idea it exists. Falls back to the public `/theme` endpoint's `language` field while logged out. */
 export function useApplySettingsLanguage() {
   const loginStatus = useLoginStatus()
-  // `=== true`, not `?? true` — see `theme.ts::useApplyTheme`'s own identical fix for why treating
-  // "login status still loading" as "assume logged in" here would still let this fire (and 401)
-  // during that brief window on every logged-out page load.
   const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
   const publicSettings = usePublicSettings({ enabled: settings.data === undefined })
   const language = settings.data?.language ?? publicSettings.data?.language
   useEffect(() => {
     if (!language) return
     if (language === "auto") {
-      // Switching back to "auto" after a specific language was picked previously must actually
-      // undo that pick, not just stop re-applying it — `i18next-browser-languagedetector`'s own
-      // `caches: ["localStorage"]` (below) wrote the previous explicit selection into
-      // `lanrurugi_language`, which its own `detection.order` (`["localStorage", "navigator"]`)
-      // then keeps preferring over real browser-language detection forever, since nothing was
-      // ever clearing it — a real bug (confirmed live, 2026-08-27): setting the dropdown back to
-      // "Automatic" left the UI stuck on whatever language had been explicitly chosen before,
-      // with no way back to following the browser's own language short of manually clearing
-      // localStorage. `i18n.changeLanguage()` with no argument re-runs the detector's own
-      // `order` from scratch and re-caches whatever it lands on.
+      // Undoes a previous explicit pick, not just stops re-applying it — otherwise the detector's
+      // own localStorage cache would keep preferring it forever over real navigator detection.
       localStorage.removeItem("lanrurugi_language")
       void i18n.changeLanguage()
       return

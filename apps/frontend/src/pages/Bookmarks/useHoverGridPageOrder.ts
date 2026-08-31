@@ -1,9 +1,7 @@
 import { useHoverPageOrder, useSetHoverPageOrder } from "@/api/hooks"
 
-/** How `BookmarkHoverGrid` orders a single archive's own bookmarked pages within its popup —
- * distinct from `BookmarksPage.tsx`'s own `sort` (which orders the *list of archives*, not the
- * pages inside any one archive's preview). Four options: by when each page was bookmarked
- * (newest/oldest first) or by page number itself (ascending/descending). */
+/** How `BookmarkHoverGrid` orders a single archive's bookmarked pages within its popup — distinct
+ * from `BookmarksPage.tsx`'s `sort`, which orders the list of archives, not pages within one. */
 export type HoverGridPageOrder = "bookmarkedAtDesc" | "bookmarkedAtAsc" | "pageAsc" | "pageDesc"
 
 const DEFAULT_ORDER: HoverGridPageOrder = "pageDesc"
@@ -12,11 +10,8 @@ function isValidOrder(value: string | null | undefined): value is HoverGridPageO
   return value === "bookmarkedAtDesc" || value === "bookmarkedAtAsc" || value === "pageAsc" || value === "pageDesc"
 }
 
-/** Persisted server-side (Redis, via `GET`/`PUT /bookmarks/hover-page-order`) rather than
- * `localStorage` — a per-instance preference the user expects to follow them across devices/
- * browsers, unlike `useLibrary.ts`'s own view-option toggles. Falls back to `DEFAULT_ORDER` both
- * while the query is still in flight and once it resolves with `order: null` (never explicitly
- * saved before). */
+/** Persisted server-side (Redis) rather than `localStorage`, so it follows the user across
+ * devices. Falls back to `DEFAULT_ORDER` while loading or if never explicitly saved. */
 export function useHoverGridPageOrder(): [HoverGridPageOrder, (order: HoverGridPageOrder) => void] {
   const query = useHoverPageOrder()
   const setOrderMutation = useSetHoverPageOrder()

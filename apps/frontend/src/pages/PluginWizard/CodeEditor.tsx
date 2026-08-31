@@ -1,8 +1,7 @@
 import { javascript } from "@codemirror/lang-javascript"
 import CodeMirror from "@uiw/react-codemirror"
 
-/** T033 (US4) — thin CodeMirror 6 wrapper for manually editing a draft revision's code. Controlled:
- * the caller owns the actual `DraftRevision` state, this component only ever reports `onChange`. */
+/** Controlled CodeMirror wrapper: the caller owns the code state, this only reports `onChange`. */
 export function CodeEditor({
   code,
   onChange,

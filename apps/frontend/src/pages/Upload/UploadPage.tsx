@@ -18,12 +18,8 @@ import { toast } from "@/toast"
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 
-// "Add from URL" stages matched URLs into a persistent, server-side queue (`useDownloadQueue`),
-// grouped by which download plugin's `url_pattern` matched, so the queue survives a page refresh
-// or a different browser tab. Manual file upload (left column) now goes through that exact same
-// persistent queue too (`crates/lanrurugi-api/src/upload.rs` writes a `local_upload`-origin queue
-// item before/around its own synchronous ingest) — `DownloadQueuePanel` renders both kinds from
-// one `useDownloadQueue()` poll, so this page itself no longer tracks any upload state of its own.
+/** Both "Add from URL" and manual file upload stage into the same persistent server-side queue
+ * (`useDownloadQueue`); `DownloadQueuePanel` renders both kinds from one poll. */
 export function Upload() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -48,10 +44,7 @@ export function Upload() {
       formData.append("file", toUpload)
       if (category) formData.append("catid", category)
 
-      // The handler's own JSON response is no longer this page's source of truth for what to show
-      // — the queue item it created (and its outcome, including a filename conflict) is. Refetch
-      // is what actually surfaces the new row; `archives`/`stats` are invalidated too so the
-      // Library/Stats pages don't need their own separate refresh to see a successful upload.
+      // The queue item's own outcome is the source of truth, not this response; refetch surfaces it.
       await fetch("/api/archives/upload", { method: "PUT", body: formData }).catch(() => null)
       await Promise.all([
         downloadQueue.refetch(),
@@ -90,9 +83,7 @@ export function Upload() {
     setUrls("")
   }
 
-  // Resolving each URL's checkbox defaults needs a per-plugin settings/options fetch, which can't
-  // happen inside a plain callback (hooks can't be called conditionally/in a loop) — so defaults
-  // are resolved via direct one-off fetches instead of hooks.
+  // Hooks can't be called conditionally/in a loop, so defaults are resolved via one-off fetches.
   async function resolveDefaultsAndAdd(
     items: Array<{
       url: string
@@ -227,7 +218,6 @@ export function Upload() {
             onPaste={(e) => {
               const raw = e.clipboardData.getData("text")
               if (!raw.trim()) return
-              // 无换行 → 识别分隔符转成换行；有换行 → 原样保留；单条 URL 原样保留
               let insert: string
               if (raw.includes("\n")) {
                 insert = raw
@@ -236,7 +226,6 @@ export function Upload() {
                 const lines = raw.trim().split(sep).filter(Boolean)
                 insert = lines.length <= 1 ? raw.trim() : lines.join("\n")
               }
-              // 末尾无空行时追加一个
               if (!insert.endsWith("\n\n")) insert = insert.replace(/\n?$/, "\n")
               e.preventDefault()
               const ta = e.target as HTMLTextAreaElement

@@ -6,22 +6,14 @@ import { useNavigate } from "react-router-dom"
 import { waitForJob } from "@/api/client"
 import { useDeleteImportSnapshot, useImportLegacyCount, useImportSnapshots } from "@/api/hooks"
 import type { ImportConflictMode, ImportLegacyResult } from "@/api/types"
-import { IconButton } from "@/components/common-ui/Display/IconButton"
-import { Button, Checkbox, RadioGroup, RadioItem } from "@/components/common-ui/Form"
+import { Button, Checkbox, IconButton, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 
-/** A "field / this library / legacy backup / result" example for one `ImportConflictMode` radio
- * option, using the same fixed sample archive for all three modes (see the `importLegacyExample*`
- * i18n keys) so the only thing that varies between them is the `result` column — makes the
- * difference between modes legible at a glance rather than three unrelated prose sentences. A
- * fixed `gridTemplateColumns` (not per-`<dl>` auto width, which left the three modes' tables
- * visibly misaligned — reported live, 2026-08-29) keeps all three modes' columns aligned with each
- * other. Category is included even though it's not affected by `conflictMode` at all (categories
- * are always merged in regardless — see `importFromLegacyDescription`'s own "分类将始终被恢复"),
- * since seeing that row's `result` stay identical across all three modes is itself informative. */
+/** One `ImportConflictMode` example row set — same sample archive across all three modes so only
+ * `result` varies, with a fixed `gridTemplateColumns` keeping all three tables' columns aligned. */
 function ImportConflictExample({
   resultTitle,
   resultTag,
@@ -98,10 +90,8 @@ function ImportConflictExample({
   )
 }
 
-// Mirrors legacy's `~/LANraragi/templates/backup.html.tt2` layout (backup/restore actions, a
-// processing spinner, a return button) using common-ui `Button`s with hidden file inputs
-// triggered via `ref.current.click()`, rather than legacy's own table markup. Doesn't reproduce
-// the upload-plugin progress bar (`backup.js`) — status is a plain text line instead.
+/** Mirrors legacy's backup/restore layout (backup/restore actions, spinner, return button) using
+ * common-ui `Button`s instead of legacy's table markup; status is a plain text line, no progress bar. */
 export function Backup() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -110,9 +100,6 @@ export function Backup() {
   const [busy, setBusy] = useState(false)
 
   const legacyFileInputRef = useRef<HTMLInputElement>(null)
-  // "merge" is the default — least information loss of the three modes (unlike "overwrite", it
-  // never silently discards a title/summary edit already made on this instance; unlike "skip",
-  // it still pulls in whatever tagging — e.g. a `rating:` tag — only the legacy library has).
   const [conflictMode, setConflictMode] = useState<ImportConflictMode>("merge")
   const [minimizeTags, setMinimizeTags] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
@@ -182,10 +169,8 @@ export function Backup() {
   }
 
   async function handleImportLegacy(file: File) {
-    // A 2nd-or-later import means this instance already has at least one automatic rollback
-    // snapshot on record (see the list below) — still worth an explicit nudge toward a *full*
-    // backup before importing again, since the automatic snapshot only covers what *this*
-    // specific import touches, not the whole library the way `handleBackup` does.
+    // A 2nd-or-later import already has an automatic rollback snapshot, but it only covers what
+    // that import touched, not the whole library — nudge toward a full backup first.
     if ((importCountQuery.data?.import_count ?? 0) >= 1) {
       const proceed = await confirmDialog(t("settings.importLegacyRepeatWarning"))
       if (!proceed) return
@@ -245,14 +230,6 @@ export function Backup() {
         <div style={{ marginTop: 8 }}>{t("settings.categoriesWillAlwaysBeRestored")}</div>
       </div>
 
-      {/* Was a one-row, two-cell `<table>` — the cells did nothing a table specifically needs
-          (no column alignment across multiple rows, no header), just side-by-side layout for two
-          buttons, so a flex row reproduces the same visual result without table semantics that
-          were never actually used. `justifyContent: "center"` replaces the table's own
-          `margin: auto` horizontal-centering. No explicit `gap` — the spacing between the two
-          buttons was never the table's own cell padding (this project's `td`s carry none), it was
-          each `.stdbtn`'s own `margin: 1px` (see themes/*.css), which still applies unchanged
-          since the buttons are still real `.stdbtn` elements, just no longer inside `<td>`s. */}
       <div
         id="files"
         style={{
@@ -271,17 +248,8 @@ export function Backup() {
           <i className="fa fa-download fa-2x" style={{ paddingTop: 6, paddingBottom: 5 }}></i>
           <div>{t("settings.backupDatabase")}</div>
         </Button>
-        {/* `fileinput-button` (legacy's own CSS, `public/legacy/fileupload-vendor.css`) makes the
-            `<input type="file">` itself the actual clickable surface — a huge (font-size: 200px),
-            fully transparent input absolutely positioned over the button, not a hidden input
-            opened via a JS `.click()` call. That distinction matters: a browser only treats a
-            file-picker `.click()` as a trusted user gesture when it's the element the user's real
-            pointer event landed on — a `<button onClick>` handler calling `ref.current.click()`
-            on a *different*, hidden input is one JS-event hop removed from the actual click, which
-            some browsers silently refuse to honor (confirmed live, 2026-08-29: `ref.click()` fired
-            correctly in every programmatic check, yet no file picker ever opened for a real user
-            click). Wrapping `Button` in this span keeps the common-ui `Button` visuals while
-            restoring that same trusted-click guarantee. */}
+        {/* `fileinput-button` overlays a transparent file input on the button — some browsers
+            refuse untrusted programmatic file-picker clicks via `ref.current.click()`. */}
         <span className="fileinput-button" style={{ display: "inline-block" }}>
           <Button
             style={{ minHeight: 70, padding: "8px 16px", display: "inline-block" }}
@@ -403,9 +371,6 @@ export function Backup() {
             {t("settings.importLegacyMinimizeTagsLabel")}
           </label>
         </div>
-        {/* Same trusted-click reasoning as the restore button's own `fileinput-button` span
-            above — file selection *is* the submit action here, there's no separate "confirm"
-            step once a file is chosen. */}
         <span className="fileinput-button" style={{ display: "block" }}>
           <Button style={{ height: 40, width: "100%" }} disabled={importBusy}>
             {t("settings.importLegacyButton")}

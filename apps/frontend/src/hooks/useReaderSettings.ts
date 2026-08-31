@@ -1,15 +1,7 @@
 import { useState } from "react";
 
-// Mirrors legacy reader.js's own localStorage-backed settings exactly (key names, string
-// serialization of booleans as "true"/"false", fitMode absent = container mode) — verified
-// against `~/LANraragi/public/js/reader.js`. Analogous to `useSettings`/`useUpdateSettings` for
-// server-side config, but localStorage-backed (no network, so a plain custom hook, not
-// react-query) since these are genuinely per-browser reader preferences in legacy too.
-
-/** Keys SCREAMING_SNAKE_CASE, values the real `localStorage` strings (kebab-case, matching this
- * setting's own pre-existing on-disk format) — same reasoning/precedent as `K_BEHAVIOR` further
- * down this file: comparisons read `FIT_MODE.FIT_WIDTH` etc., not a bare string literal, so a typo
- * is a compile error with autocomplete instead of a silently-never-matching new string. */
+/** Mirrors legacy reader.js's localStorage-backed settings exactly (key names, "true"/"false"
+ * string booleans, fitMode absent = container mode). */
 export const FIT_MODE = {
   CONTAINER: "container",
   FIT_WIDTH: "fit-width",
@@ -18,11 +10,8 @@ export const FIT_MODE = {
 
 export type FitMode = (typeof FIT_MODE)[keyof typeof FIT_MODE];
 
-/** `J_SCROLL_UNIT.PERCENT` scales with the viewport (`vh` is exactly this, expressed as a CSS unit
- * rather than a plain number — the two aren't different concepts, just different ways of writing
- * the same relative-to-viewport-height fraction) so `j`'s scroll step stays proportionally the
- * same whether it's a phone or an ultrawide monitor; `PX` is a fixed distance regardless of
- * viewport size, for a reader who wants the *exact same* jump every time. */
+/** `PERCENT` scales `j`'s scroll step with viewport height; `PX` is a fixed distance regardless
+ * of viewport size. */
 export const J_SCROLL_UNIT = {
   PERCENT: "percent",
   PX: "px",
@@ -30,42 +19,16 @@ export const J_SCROLL_UNIT = {
 
 export type JScrollUnit = (typeof J_SCROLL_UNIT)[keyof typeof J_SCROLL_UNIT];
 
-/** The full set of `KBehavior` values, named — the single source of truth both the exported type
- * below and `readFromLocalStorage`'s own validation derive from, so adding/renaming/removing an
- * option only ever needs a change in one place instead of the type literal and a hand-written
- * `raw === "..." || ...` validation chain silently drifting apart from each other. Comparisons
- * elsewhere in the reader (`Reader.tsx`'s own `case "k"` and `goTo`/`goToInfiniteScrollPage`)
- * read `K_BEHAVIOR.BACK_BOTTOM` etc. rather than a bare string literal — a typo in a hand-typed
- * `"backBotom"` would silently compile as a *new*, never-matching string (TypeScript doesn't
- * reject an arbitrary string literal being compared against a wider string-typed value), where
- * the same typo referencing this object is a real `Property 'BACK_BOTOM' does not exist` compile
- * error, and the editor's own autocomplete lists the three real property names as soon as
- * `K_BEHAVIOR.` is typed instead of requiring the exact spelling to already be known. Keys are
- * SCREAMING_SNAKE_CASE (this codebase's own constant-naming convention, e.g. `MAX_COLUMNS`/
- * `FRAME_PADDING` in `BookmarkHoverGrid.tsx`) — only the *values* are the real `localStorage`
- * strings (`fitMode`/`jScrollUnit`'s own existing values are lowercase/kebab-case, not
- * SCREAMING_SNAKE_CASE, so the keys and values deliberately don't share one casing here). */
+/** Single source of truth for valid `kBehavior` values, referenced by `readFromLocalStorage`'s
+ * validation instead of a hand-written string-literal check. */
 export const K_BEHAVIOR = {
   BACK: "back",
   BACK_BOTTOM: "backBottom",
   BACK_TOP: "backTop",
 } as const;
 
-/** What `k` does in non-infinite-scroll mode (infinite-scroll mode always just jumps a whole page
- * via `goToInfiniteScrollPage`, unaffected by this setting — there every page already shares one
- * continuously-scrolling document a plain wheel/trackpad scroll already reads top-to-bottom or
- * back, so there's no incremental-scroll-then-turn behavior to configure in the first place):
- * - `K_BEHAVIOR.BACK`: no incremental scrolling at all — `k` always jumps straight to the previous
- *   page immediately, landing whatever the browser leaves in place with no explicit `scrollTo`
- *   call at all (this reader's original `k` behavior, matching Google Reader's own `k`).
- * - `K_BEHAVIOR.BACK_BOTTOM`: mirrors `j`'s own "scroll down, then advance a page" behavior in the
- *   opposite direction — scroll *up* incrementally (same `jScrollUnit`/`jScrollAmount` step) until
- *   there's nothing further up to scroll, then turn back a page and land at its *bottom*,
- *   continuing a backward read the same way `j` continues a forward one. The default value — most
- *   requests for this setting are for reading a page bottom-to-top symmetrically with `j`, not the
- *   original direct-jump `k`.
- * - `K_BEHAVIOR.BACK_TOP`: same incremental-scroll-then-turn mirroring as `BACK_BOTTOM`, but lands
- *   at the *top* of the previous page instead. */
+/** What `k` does in non-infinite-scroll mode: `BACK` jumps back immediately; `BACK_BOTTOM`/
+ * `BACK_TOP` scroll incrementally to the edge first, mirroring `j`'s forward behavior. */
 export type KBehavior = (typeof K_BEHAVIOR)[keyof typeof K_BEHAVIOR];
 
 export interface ReaderSettings {
@@ -90,8 +53,7 @@ const DEFAULTS: ReaderSettings = {
   mangaMode: false,
   doublePageMode: false,
   ignoreProgress: false,
-  // Deliberately `true`, unlike legacy's own `false` default — a real, requested product
-  // decision to always land on the archive overview first, not a port of legacy's own behavior.
+  // Deliberately `true`, unlike legacy's `false` default.
   showOverlayByDefault: true,
   fitMode: FIT_MODE.CONTAINER,
   containerWidth: "",
@@ -99,8 +61,6 @@ const DEFAULTS: ReaderSettings = {
   preloadCount: 2,
   autoNextPageInterval: 10,
   infiniteScroll: false,
-  // Matches the `j`/`" "` scroll step's original hardcoded value (`window.innerHeight * 0.8`)
-  // exactly, so introducing this setting doesn't change anyone's existing scroll feel by default.
   jScrollUnit: J_SCROLL_UNIT.PERCENT,
   jScrollAmount: 80,
   kBehavior: K_BEHAVIOR.BACK_BOTTOM,

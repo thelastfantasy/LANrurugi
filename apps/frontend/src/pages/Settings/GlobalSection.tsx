@@ -80,8 +80,6 @@ export function GlobalSection({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // Only true while the user is actively typing a new key — the real key is never
-  // rendered into the DOM as an input value (prevents $0.value from leaking it).
   const [editingKey, setEditingKey] = useState(false)
   const cleanDatabase = useCleanDatabase()
   const dropDatabase = useDropDatabase()
@@ -248,9 +246,6 @@ export function GlobalSection({
             <br />
             {t("settings.fullyEffectiveAfterRestartingLanraragi")}
           </CheckboxRow>
-          {/* issue #97: placing a stamp auto-bookmarks its page; the sub-option below stays
-              visible (not hidden) but disabled while this is off, per the confirmed "always show,
-              grey out" UX — not the enableresize-style conditional-render pattern above. */}
           <CheckboxRow
             id="stampautobookmark"
             checked={stampautobookmark}
@@ -269,10 +264,8 @@ export function GlobalSection({
           >
             {t("settings.autoUnbookmarkOnLastStampRemovedDescription")}
           </CheckboxRow>
-          {/* 007-guest-restricted-access: site-wide guest-mode master switch (spec FR-003) — on
-              its own it grants nothing, an administrator also needs to mark at least one category
-              visible to guests (Categories.tsx) before an unauthenticated visitor is routed into
-              scoped browsing instead of the login page (spec FR-005/FR-006). */}
+          {/* Site-wide guest-mode switch (FR-003) — grants nothing alone; also needs a category
+              marked visible to guests (Categories.tsx) to actually route guests in. */}
           <CheckboxRow
             id="guestmode"
             checked={guestmode}

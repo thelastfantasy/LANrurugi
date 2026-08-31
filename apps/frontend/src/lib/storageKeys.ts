@@ -1,23 +1,18 @@
 // `localStorage` keys shared across more than one page/component — kept in one place so the two
 // (or more) files reading/writing the same key can't drift apart on the string itself.
 
-/** Multi-select batch-operation "handshake" — legacy's own `localStorage` key name
- * (`~/LANraragi/public/js/mod/index.js`). Library writes the current multi-select set here before
- * navigating to Batch, which reads it once on mount and clears it immediately after (a one-shot
- * handoff, not a persisted setting). */
+/** Multi-select batch-operation "handshake" — legacy's own `localStorage` key name. Library writes
+ * the set here before navigating to Batch, which reads+clears it once on mount (a one-shot handoff). */
 export const MSM_SELECTION_KEY = "msmSelection"
 
-/** NOT the thumbnail grid's own layout — legacy's grid is a plain CSS `flex-wrap` with no
- * configurable column count at all. `columnCount` only ever controls how many custom namespace
- * columns (e.g. "Artist", "Series") the compact table view renders beyond Title — see
- * `CUSTOM_COLUMN_PREFIX` below. */
+/** NOT the thumbnail grid's own layout (a plain CSS `flex-wrap`, no configurable column count) —
+ * controls how many custom namespace columns the compact table view renders beyond Title. */
 export const COLUMN_COUNT_KEY = "columnCount"
 
 export const DEFAULT_COLUMN_COUNT = 2
 
 /** Prefix for each compact-table custom column's chosen namespace — real keys are
- * `customColumn1`, `customColumn2`, etc. Defaults to `artist`/`series` for columns 1/2,
- * `Header N` for any column beyond that. */
+ * `customColumn1`, `customColumn2`, etc. */
 export const CUSTOM_COLUMN_PREFIX = "customColumn"
 
 export const DEFAULT_CUSTOM_COLUMNS = ["artist", "series"]
@@ -49,13 +44,6 @@ export const INDEX_SORT_KEY = "indexSort"
 
 export const INDEX_ORDER_KEY = "indexOrder"
 
-/** Last-applied legacy theme filename (e.g. `"modern.css"`) — written by `theme.ts`'s
- * `useApplyTheme` once the real value comes back from `/settings`/`/theme`. Read synchronously by
- * a same-named inline script in `index.html` (that file can't `import` this constant — it isn't a
- * module, and it has to run before any JS module even starts loading), so this string literal and
- * the one hardcoded there must be kept in sync by hand; this is the only other place either one is
- * allowed to change. Exists purely to close the "flash of default theme" gap between first paint
- * and `useApplyTheme`'s own effect actually running (issue #58 follow-up) — the inline script
- * applies this cached value immediately, synchronously, before the browser paints anything at all,
- * and `useApplyTheme` silently corrects it later if the real settings ever disagree. */
+/** Last-applied legacy theme filename — also hardcoded in `index.html`'s inline script (can't
+ * `import` this constant); keep both in sync by hand if this key name ever changes. */
 export const THEME_STORAGE_KEY = "lrrTheme"

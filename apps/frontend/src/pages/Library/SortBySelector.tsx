@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next"
+import { FaArrowDownAZ, FaArrowUpAZ } from "react-icons/fa6"
 
 import type { StatTag } from "@/api/types"
+import { IconButton } from "@/components/common-ui/Form"
 
 export function SortBySelector({
   sortby,
@@ -31,6 +33,7 @@ export function SortBySelector({
         className="favtag-btn"
         value={sortby}
         onChange={(e) => onSortBy(e.target.value)}
+        style={{ margin: 0 }}
       >
         <option value="title">{t("common.title")}</option>
         <option value="date_added">{t("library.date")}</option>
@@ -40,16 +43,13 @@ export function SortBySelector({
           </option>
         ))}
       </select>
-      <a
-        className={`fa fa-2x fa-sort-alpha-${order === "asc" ? "down" : "up"} table-option`}
-        style={{ position: "relative", top: 6 }}
-        href="#"
+      <IconButton
+        icon={order === "asc" ? <FaArrowDownAZ size={18} /> : <FaArrowUpAZ size={18} />}
+        size={25}
         title={t("library.sortOrder") ?? undefined}
-        onClick={(e) => {
-          e.preventDefault()
-          onToggleOrder()
-        }}
-      ></a>
+        style={{ border: "none", background: "transparent" }}
+        onClick={onToggleOrder}
+      />
     </div>
   )
 }

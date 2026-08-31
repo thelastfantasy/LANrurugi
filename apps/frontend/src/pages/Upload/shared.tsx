@@ -44,19 +44,14 @@ export function ScrollRow({ count, renderPage, rowRef, lenisApiRef }: {
 
 /* ─── 原有 Upload 工具函数 ─── */
 
-/** The fixed `plugin_namespace` every local-upload queue item is stored under
- * (`crates/lanrurugi-api/src/upload.rs`'s own constant of the same name) — never a real installed
- * plugin, just this item type's own grouping key on the Upload page. */
+/** Fixed `plugin_namespace` every local-upload queue item is stored under — never a real
+ * installed plugin, just this item type's own grouping key. */
 export const LOCAL_UPLOAD_NAMESPACE = "local_upload"
 
-// Common compound extensions hardcoded, not user-configurable — rare enough in this app's actual
-// corpus that a settings surface would be over-engineering.
 const COMPOUND_EXTENSIONS = ["tar.gz", "tar.bz2", "tar.xz", "tar.zst"]
 
-/** Splits a filename into stem and extension, recognizing `COMPOUND_EXTENSIONS` as one unit
- * (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`, not `{stem: "archive.tar", ext: "gz"}`)
- * — otherwise the `{filename}`/`{ext}` template variables `FilenameTemplateEditor` feeds from
- * this, and `TruncatedFilename`'s own truncation below, would both mangle a `.tar.gz` name. */
+/** Splits a filename into stem/extension, treating `COMPOUND_EXTENSIONS` as one unit
+ * (`archive.tar.gz` → `{stem: "archive", ext: "tar.gz"}`). */
 export function splitFilenameStemAndExt(filename: string): { stem: string; ext: string } {
   for (const compound of COMPOUND_EXTENSIONS) {
     const suffix = `.${compound}`
@@ -70,24 +65,15 @@ export function splitFilenameStemAndExt(filename: string): { stem: string; ext: 
   return { stem: filename.slice(0, lastDot), ext: filename.slice(lastDot + 1) }
 }
 
-/** A queue row's title/filename text, truncated with an ellipsis when too long for its row —
- * but truncating the *stem* only, never the extension: `splitFilenameStemAndExt` splits the two
- * apart so the stem sits in a `min-width: 0` flex-shrinking span (the part that actually
- * truncates) while the extension sits in its own `flexShrink: 0` span at the end, always fully
- * visible. A plain single-span `text-overflow: ellipsis` would truncate from the end, silently
- * eating the extension along with however much of the stem doesn't fit — hiding exactly the part
- * (`.zip` vs. `.pdf` vs. `.cbz`) most useful for telling two similarly-named rows apart at a
- * glance. Skips the split entirely (renders `text` as one plain truncating span) when `text` is
- * `item.title` rather than a real filename — a plugin-supplied title has no meaningful
- * "extension" to preserve. */
+/** Truncates a queue row's title/filename with an ellipsis, but only the *stem* — the extension
+ * stays in its own `flexShrink: 0` span so `.zip`/`.pdf`/`.cbz` stays visible. */
 export function TruncatedFilename({
   text,
   isFilename,
   style,
 }: {
   text: string
-  /** `true` only when `text` is actually `item.url`/a filename — `item.title` (a plugin- or
-   * metadata-supplied display name) has no extension worth carving out. */
+  /** `true` only when `text` is a real filename, not a plugin-supplied display title. */
   isFilename: boolean
   style?: React.CSSProperties
 }) {
@@ -116,30 +102,20 @@ export function matchesPattern(plugin: PluginInfo, url: string): boolean {
   }
 }
 
-/** First match wins when multiple plugins' `url_pattern` match the same URL. Relies on
- * `usePlugins(...)`'s list already being sorted by priority server-side
- * (`lanrurugi_api::plugins::list_plugins`), reflecting the Plugins page's drag-to-reorder.
- *
- * This is the *precise trigger* check — real dispatch (which download plugin actually fetches
- * this URL). For "is there a plugin that could handle this domain at all" questions (the
- * "fetch metadata" button's enablement), use `findPluginByDomain` below instead — using this one
- * for that purpose was a real, confirmed bug (2026-08-26): a plugin's `url_pattern` can be
- * intentionally narrower than its domain (e.g. requiring a specific path), which is correct for
- * deciding when to actually fire a fetch but wrong for "does a plugin exist for this domain". */
+/** First match wins (plugin list is priority-sorted server-side) — the *precise trigger* check
+ * for actual dispatch. Use `findPluginByDomain` for "does a plugin exist for this domain at all". */
 export function findMatchingPlugin(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
   return plugins?.find((p) => matchesPattern(p, url)) ?? null
 }
 
-/** Lowercases and strips a leading `www.` — mirrors the backend's own `normalize_domain`
- * (`plugins.rs`), the only two normalizations any real plugin declaration or user-typed domain
- * actually needs. */
+/** Lowercases and strips a leading `www.` — mirrors the backend's own `normalize_domain`. */
 function normalizeDomain(d: string): string {
   const lower = d.trim().replace(/\/+$/, "").toLowerCase()
   return lower.startsWith("www.") ? lower.slice(4) : lower
 }
 
-/** Extracts a bare hostname out of a full URL for domain-ownership comparisons; falls back to the
- * input unchanged if it doesn't parse as an absolute URL (already a bare domain). */
+/** Extracts a bare hostname for domain-ownership comparisons; falls back to the input unchanged
+ * if it doesn't parse as an absolute URL. */
 function hostnameOf(url: string): string {
   try {
     return new URL(url).hostname
@@ -148,11 +124,8 @@ function hostnameOf(url: string): string {
   }
 }
 
-/** Domain-ownership check — does `plugin.domain_match` (or, when empty, a loose `url_pattern`-as-
- * domain-containment fallback) consider `url`'s domain covered? Use this for "is there a plugin
- * that could handle this domain at all" questions (the Upload page's "fetch metadata" button
- * enablement) — `matchesPattern`/`findMatchingPlugin` above stay the precise trigger check for an
- * actual fetch/download call; do not replace those call sites with this. */
+/** Domain-ownership check — does `plugin.domain_match` (or, when empty, `url_pattern`) cover
+ * `url`'s domain? For "fetch metadata" enablement, not actual fetch/download dispatch. */
 export function matchesDomain(plugin: PluginInfo, url: string): boolean {
   const needle = normalizeDomain(hostnameOf(url))
   if (plugin.domain_match.length > 0) {
@@ -161,17 +134,13 @@ export function matchesDomain(plugin: PluginInfo, url: string): boolean {
   return matchesPattern(plugin, url)
 }
 
-/** Domain-ownership counterpart to `findMatchingPlugin` — see `matchesDomain`'s own docs on when
- * to use which. */
+/** Domain-ownership counterpart to `findMatchingPlugin` — see `matchesDomain`'s docs. */
 export function findPluginByDomain(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
   return plugins?.find((p) => matchesDomain(p, url)) ?? null
 }
 
-/** A square, icon-only `.stdbtn` — overrides its default padding/width so the icon is centered in
- * a fixed 24x24 box instead of stretching to fit label text (there is none). `minWidth` must be
- * overridden too since `.stdbtn`'s theme `min-width: 150px` is a hard floor a smaller inline
- * `width` alone can't shrink below. `boxSizing: 'border-box'` keeps the button's true footprint
- * consistent across themes where `.stdbtn` has a real `border` (`ex.css`, `g.css`) vs. `border: 0`. */
+/** A square, icon-only `.stdbtn` — fixed 24x24 box; `minWidth` override needed since `.stdbtn`'s
+ * theme `min-width: 150px` is a hard floor a smaller inline `width` can't shrink below. */
 export const ICON_BUTTON_STYLE: React.CSSProperties = {
   width: 24,
   minWidth: 24,
@@ -184,9 +153,8 @@ export const ICON_BUTTON_STYLE: React.CSSProperties = {
   fontSize: FONT_SIZE_XS,
 }
 
-/** Overrides `.stdbtn`'s theme `min-width: 150px` (5 buttons at that width, plus gaps, don't fit
- * most viewports) so the download-queue toolbar sizes each button to its own text instead of
- * wrapping. */
+/** Overrides `.stdbtn`'s theme `min-width: 150px` so the toolbar sizes each button to its own
+ * text instead of wrapping. */
 export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
   minWidth: 0,
   width: "auto",
@@ -196,10 +164,8 @@ export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
   padding: "0 6px",
 }
 
-/** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body —
- * schema-agnostic (see `DownloadQueueItem.metadata_preview`'s own docs), grouped by namespace via
- * the shared `TagTable`. No separate "raw URL" line: a `source:` tag, when present, already links
- * to the same URL, so showing both would be duplication. */
+/** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body,
+ * grouped by namespace. No separate "raw URL" line when a `source:` tag already covers it. */
 export function MetadataPreviewTooltip({ preview, url }: { preview: Record<string, unknown>; url: string }) {
   const tags = typeof preview.tags === "string" ? preview.tags : ""
   const summary = typeof preview.summary === "string" ? preview.summary : undefined
@@ -217,10 +183,8 @@ export function MetadataPreviewTooltip({ preview, url }: { preview: Record<strin
   )
 }
 
-/** Wraps `children` in a `Tooltip` only when `preview` is actually present — extracted so the
- * `Tooltip` itself (and therefore its anchor measurement) wraps the *bordered* container, not
- * just the inner text span, so the bubble's left edge lines up with the border the user actually
- * sees, not with the unbordered text a few pixels further in. */
+/** Wraps `children` in a `Tooltip` only when `preview` is present — wraps the bordered container
+ * itself so the bubble's anchor lines up with the visible border, not the inner text. */
 export function TooltipIfPresent({
   preview,
   url,
@@ -233,9 +197,7 @@ export function TooltipIfPresent({
   wrapperStyle?: React.CSSProperties
 }) {
   if (!preview) {
-    // No `Tooltip` wrapper needed, but `wrapperStyle` still has to land somewhere, or this
-    // branch's element shrinks to its content width instead of matching the tooltip-present
-    // branch's sizing.
+    // wrapperStyle still needs to land here or this branch's sizing won't match the tooltip case.
     return (
       <span style={{ position: "relative", display: "inline-flex", ...wrapperStyle }}>{children}</span>
     )

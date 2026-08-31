@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { FaRobot, FaXmark } from "react-icons/fa6"
 import { useNavigate, useParams } from "react-router-dom"
 
 import { ApiError } from "@/api/client"
@@ -15,10 +16,10 @@ import {
   useUpdateTankoubon,
 } from "@/api/hooks"
 import type { TankoubonMetadata } from "@/api/types"
-import { IconButtonWithTooltip } from "@/components/common-ui/Display"
-import { IconButton, Modal, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { Modal, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { SortableList } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
+import { Button, IconButton, IconButtonWithTooltip } from "@/components/common-ui/Form"
 import { AiSkeleton } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -44,12 +45,10 @@ function BookPages({
   const sug = suggestions[page]
   if (!sug) return null
 
-  // Display chapters sorted by AI's suggested order
   const sortedChapters = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Book header with navigation */}
       <div
         style={{
           display: "flex",
@@ -80,7 +79,6 @@ function BookPages({
         </button>
       </div>
 
-      {/* Book page card */}
       <div
         style={{
           border: "1px solid rgba(128,128,128,0.3)",
@@ -88,7 +86,6 @@ function BookPages({
           overflow: "hidden",
         }}
       >
-        {/* Page top bar */}
         <div
           style={{
             display: "flex",
@@ -107,7 +104,6 @@ function BookPages({
           </span>
         </div>
 
-        {/* Tank name */}
         <div style={{ padding: "14px 16px 8px" }}>
           <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>
             {t("Title")}
@@ -117,7 +113,6 @@ function BookPages({
           </div>
         </div>
 
-        {/* Chapter mappings — sorted by AI, left=original right=suggested */}
         <div style={{ padding: "6px 16px 12px" }}>
           <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
             {t("Chapters")} · {t("sorted order")}
@@ -139,7 +134,6 @@ function BookPages({
               <span style={{ fontSize: 10, opacity: 0.35, minWidth: 16, flexShrink: 0 }}>
                 {ch.sorted_index}
               </span>
-              {/* Original (left) — struck through, multiline */}
               <span
                 style={{
                   flex: 1,
@@ -152,7 +146,6 @@ function BookPages({
                 {mem?.title ?? "—"}
               </span>
               <i className="fa fa-arrow-right" aria-hidden="true" style={{ opacity: 0.25, flexShrink: 0, fontSize: 10, alignSelf: "flex-start", marginTop: 3 }}></i>
-              {/* Suggested (right) — multiline */}
               <span
                 style={{
                   flex: 1,
@@ -168,7 +161,6 @@ function BookPages({
           })}
         </div>
 
-        {/* Page footer with Apply */}
         <div
           style={{
             display: "flex",
@@ -207,9 +199,7 @@ function BookPages({
   )
 }
 
-/** Archive title with hover-thumbnail tooltip — title comes from the tankoubon's own
- * `full_data` (no per-archive fetch needed), matching real legacy's own `edit.html.tt2`
- * (`is_tank` branch, line 147: `archive.title` with `onmouseover="IndexTable.buildImageTooltip(this)"`). */
+/** Archive title with hover-thumbnail tooltip, sourced from the tankoubon's own `full_data`. */
 function ArchiveTitle({ archiveId, title }: { archiveId: string; title: string }) {
   return (
     <Tooltip
@@ -235,10 +225,7 @@ export function TankoubonEdit() {
   const { tankId = "" } = useParams<{ tankId: string }>()
   const tankoubonFull = useTankoubonFull(tankId)
   const tankoubon = tankoubonFull.data?.result
-  // Title lookup built from full_data + manually-added archives. Ref so additions
-  // persist across re-renders (new Map on every render would lose them).
   const titleById = useRef(new Map<string, string>())
-  // Populate on first data load — useRef only uses the initial value once.
   useEffect(() => {
     if (tankoubon) {
       for (const a of tankoubon.full_data ?? []) {
@@ -256,9 +243,6 @@ export function TankoubonEdit() {
   }
 
   if (tankoubonFull.isError || !tankoubon) {
-    // See `LibraryPage.tsx`'s own identical guard: a 401 here just means `RequireAuth`
-    // (`RouteGuards.tsx`) is already about to navigate to `/login` in reaction to the same
-    // invalidated `login-status` query.
     if (tankoubonFull.error instanceof ApiError && tankoubonFull.error.status === 401) return null
 
     return (
@@ -276,24 +260,17 @@ export function TankoubonEdit() {
     )
   }
 
-  // Keyed by tankId so navigating between two different tankoubons' edit pages remounts this
-  // form with fresh initial state, rather than needing an effect to re-sync it.
+  // Keyed by tankId so switching tankoubons remounts the form with fresh initial state.
   return <TankoubonForm key={tankId} tankId={tankId} tankoubon={tankoubon} titleById={titleById.current} />
 }
 
 function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tankoubon: TankoubonMetadata; titleById: Map<string, string> }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // Matches this page's own real heading text below ("Editing %1 (Tankoubon)") — no legacy
-  // equivalent to cross-check against (Tankoubon editing is additive to this rewrite), so this
-  // just keeps the tab title and the on-page heading in sync with each other.
   useDocumentTitle(t("tankoubonEdit.editing1Tankoubon").replace("%1", tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
   const stats = useStats(2)
-  // Same source/shape as `Edit.tsx`'s own `tagSuggestions` (every tag used at least twice across
-  // the library) — this page's Tags field now uses the same `TagInput` chip editor as the
-  // archive edit page, not a plain textarea.
   const tagSuggestions = (stats.data ?? []).map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
 
   const [name, setName] = useState(tankoubon.name)
@@ -315,27 +292,16 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
   }
   const [chapterNames, setChapterNames] = useState<Record<string, string>>(initChapters)
 
-  // Debounced so the title-search dropdown below doesn't fire one request per keystroke —
-  // additive on top of the raw-ID input, which still works unchanged (see `addArchiveId`).
   const [debouncedQuery, setDebouncedQuery] = useState("")
   useEffect(() => {
     const timeout = setTimeout(() => setDebouncedQuery(newArchiveId.trim()), 250)
     return () => clearTimeout(timeout)
   }, [newArchiveId])
   const archiveSearch = useSearch({ filter: debouncedQuery, enabled: debouncedQuery.length > 0 })
-  // Excludes archives already in this Tankoubon, and any synthetic Tankoubon-aggregate rows the
-  // search endpoint can return (`archive_count !== null`, matching `ArchiveMetadata`'s own doc
-  // comment) — a Tankoubon can't usefully contain another Tankoubon. Capped at 15, same as the
-  // Library search bar's own tag-autocomplete dropdown (`Library/index.tsx`'s `tagSuggestions`)
-  // — the underlying `/search` endpoint's own page size (100) is far too many to usefully scroll
-  // through in a suggestion dropdown.
   const archiveSearchResults = (archiveSearch.data?.data ?? [])
     .filter((a) => a.archive_count === null && !archives.includes(a.arcid))
     .slice(0, 15)
 
-  // Legacy's own `Edit.saveMetadata` (`edit.js`) shows a "Metadata saved!" toast on every
-  // successful save via `Server.callAPIBody`'s built-in success-message handling — this port's
-  // `updateTankoubon` doesn't have that generic per-call toasting, so it's shown explicitly here.
   async function handleSave() {
     await updateTankoubon.mutateAsync({
       archives,
@@ -344,11 +310,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
     toast({ heading: t("edit.metadataSaved") ?? undefined, icon: "success" })
   }
 
-  // Real legacy's own `edit.html.tt2` (`is_tank` branch) reorders this list via drag (`Sortable.
-  // min.js`, `.drag-handle`), not up/down buttons — reusing `SortableList` (already used by
-  // `SortablePluginGroup.tsx`) rather than the earlier button-based reorder this page started
-  // with. The dropped order becomes the Tankoubon's own volume order (`archives`, order-
-  // significant), persisted the same way `moveArchive` used to.
   function handleReorder(next: string[]) {
     setArchives(next)
   }
@@ -362,13 +323,9 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
     navigate(routes.library())
   }
 
-  // Shared by the raw-ID "Add" button and picking a row from the title-search dropdown below —
-  // same mutation either way, just a different source for the ID. `title` is used for newly-added
-  // archives that aren't in the initial `full_data` (otherwise the row shows the raw hash).
   function addArchiveId(archiveId: string, title?: string) {
     setArchives((prev) => [...prev, archiveId])
     if (title) titleById.set(archiveId, title)
-    // Auto-scroll so the newly-added row stays visible at the bottom
     setTimeout(() => {
       window.scrollBy({ top: 52, behavior: "smooth" })
     }, 50)
@@ -425,9 +382,10 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
             {hasLlmKey && (
               <IconButtonWithTooltip
-                icon="fa fa-robot"
+                icon={<FaRobot size={16} />}
                 title={t("tankoubonEdit.aiSmartRename")}
                 description={t("tankoubonEdit.analyzeTheArchiveListAnd")}
+                size={26}
                 style={{ alignSelf: "flex-start" }}
                 disabled={aiRename.isPending}
                 onClick={() => {
@@ -468,7 +426,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                       borderBottom: "1px solid rgba(128,128,128,0.12)",
                     }}
                   >
-                    {/* Drag handle — column 1, spans both rows when two-row */}
                     <span
                       {...dragHandleProps.attributes}
                       {...dragHandleProps.listeners}
@@ -485,7 +442,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                       <i className="fa fa-grip-vertical" aria-hidden="true"></i>
                     </span>
 
-                    {/* Archive title — row 1, column 2 */}
                     <span
                       style={{
                         gridColumn: "2",
@@ -497,7 +453,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                       <ArchiveTitle archiveId={archiveId} title={titleById.get(archiveId) ?? archiveId} />
                     </span>
 
-                    {/* Edit + ✕ — column 3, spans both rows */}
                     <div
                       style={{
                         gridColumn: "3",
@@ -508,22 +463,25 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                         alignItems: "center",
                       }}
                     >
-                      <button
-                        type="button"
-                        className="stdbtn"
+                      <Button
                         onClick={() => navigate(routes.edit(archiveId))}
-                        style={{ minWidth: 32 }}
+                        style={{ minWidth: 32, margin: 0 }}
                       >
                         {t("tankoubonEdit.edit")}
-                      </button>
+                      </Button>
                       <IconButton
-                        icon="fa fa-times"
+                        icon={<FaXmark size={16} />}
                         onClick={() => removeArchive(archiveId)}
                         title={t("tankoubonEdit.removeFromTankoubon") ?? undefined}
+                        // `.stdbtn` is `box-sizing: border-box`, so its own `height: 21px` already
+                        // includes its `border: 2px` — confirmed via `getBoundingClientRect` (21px
+                        // rendered, not 25px) rather than assumed. Matched here so the two buttons
+                        // share one row height instead of the button defaulting to its own
+                        // unrelated 26px square.
+                        size={21}
                       />
                     </div>
 
-                    {/* Chapter input + AI Rename — row 2, column 2 */}
                     {twoRow && (
                       <div style={{ gridColumn: "2", display: "flex", gap: 4, alignItems: "center" }}>
                         {chapterAiLoading === memberIndex ? (
@@ -544,15 +502,21 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                             placeholder={t("tankoubonEdit.chapterName") ?? undefined}
                             value={chapterNames[archiveId] ?? ""}
                             onChange={(e) => setChapterNames((prev) => ({ ...prev, [archiveId]: e.target.value }))}
-                            style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "7pt" }}
+                            // `.stdinput`'s own `margin: 4px 1px 0` pushes this input's visual box
+                            // 4px lower than the icon button beside it under this row's
+                            // `alignItems: center` — both are centered by their own margin-box, so
+                            // a margin only one of them has desyncs the two centerlines. Zeroed
+                            // here rather than compensating on the button, since the margin has no
+                            // purpose in this flex row to begin with.
+                            style={{ flex: 1, maxWidth: "none", height: 18, fontSize: "9.33px", margin: 0 }}
                           />
                         )}
                         <IconButtonWithTooltip
-                          icon="fa fa-robot"
+                          icon={<FaRobot size={12} />}
                           title={t("tankoubonEdit.aiChapterName")}
                           description={t("tankoubonEdit.suggestAChapterTitleBased")}
-                          size="small"
-                          style={{ fontSize: "7pt" }}
+                          size={18}
+                          style={{ fontSize: "9.33px" }}
                           disabled={chapterAiLoading !== null}
                           onClick={() => {
                             setChapterAiLoading(memberIndex)
@@ -587,7 +551,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             </div>
           </div>
 
-          {/* AI Suggestions overlay — skeleton while loading, book-page cards on success */}
           {aiOverlayOpen && (
             <Modal onClose={() => setAiOverlayOpen(false)} textAlign="left">
               {aiRename.isPending ? (
@@ -602,7 +565,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                     const sorted = [...sug.chapters].sort((a, b) => a.sorted_index - b.sorted_index)
                     const reordered: string[] = []
                     for (const ch of sorted) {
-                      // original_index matches the `index` field on original_member_names (1-based)
                       const mem = aiSuggestions.original_member_names.find((m) => m.index === ch.original_index)
                       if (mem) {
                         if (ch.name) next[mem.id] = ch.name
@@ -610,7 +572,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                       }
                     }
                     setChapterNames((prev) => ({ ...prev, ...next }))
-                    // Only update order if all members are accounted for
                     if (reordered.length === archives.length) {
                       setArchives(reordered)
                     }
@@ -622,9 +583,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             </Modal>
           )}
 
-          {/* Inline keyframe for the per-chapter shimmer placeholder above (line ~543) — the
-              overlay's own "AI is thinking" shimmer/pulse styles now live inside the shared
-              `AiSkeleton` component instead of being duplicated here. */}
           <style>{`
             @keyframes ai-shimmer {
               0%   { background-position: -200% 0; }
@@ -635,36 +593,15 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
             <span>{t("tankoubonEdit.addArchiveToTankoubon")}</span>
             <div style={{ display: "flex", gap: 6 }}>
-              {/* The raw-ID paste-and-click-Add flow below is unchanged; this additionally
-                  live-searches by title as the user types (debounced, `archiveSearch` above) and
-                  offers a click-to-add dropdown with a thumbnail preview per match — for anyone
-                  who doesn't already have the 40-char ID copied. */}
               <span style={{ position: "relative", width: "100%" }}>
                 <input
                   className="stdinput"
                   type="text"
-                  // The surrounding `<form autoComplete="off">` doesn't reliably stop Chrome's
-                  // own value-history autofill dropdown on a plain text input — it needs
-                  // `autoComplete="off"` set directly on the field itself. That native dropdown
-                  // is browser-chrome UI, not page DOM, so it can never get a hover-thumbnail
-                  // like the custom `PopupMenu` search dropdown below can; turning it off avoids
-                  // the two dropdowns visually fighting each other instead.
                   autoComplete="off"
-                  // `.stdinput`'s own legacy height (18px) is 3px shorter than `.stdbtn`'s
-                  // (21px, border-box, both already `boxSizing: 'border-box'` from the theme
-                  // CSS) — matches the button next to it exactly rather than sitting visibly
-                  // shorter.
                   style={{ width: "100%", maxWidth: "none", height: 21, boxSizing: "border-box" }}
                   value={newArchiveId}
                   onChange={(e) => {
                     setNewArchiveId(e.target.value)
-                    // Also needed here, not just `onFocus` below — `addArchiveId` closes the
-                    // dropdown after a click-to-add, but focus never actually leaves the input
-                    // (the dropdown item's `onMouseDown` calls `preventDefault()` specifically to
-                    // stop that), so `onFocus` never fires again on subsequent keystrokes. A real,
-                    // confirmed bug: after adding one archive via the dropdown, typing a new query
-                    // right after produced zero visible results despite the search request itself
-                    // firing and returning real matches (`archiveSearchOpen` just stayed `false`).
                     setArchiveSearchOpen(true)
                   }}
                   onFocus={() => setArchiveSearchOpen(true)}
@@ -677,20 +614,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                 {archiveSearchOpen && archiveSearchResults.length > 0 && (
                   <PopupMenu
                     portal={false}
-                    // `PopupMenu`'s own `m-[.3em]` class (a deliberate small gap for its usual
-                    // context-menu use) otherwise offsets this flush-to-the-input dropdown a few
-                    // px right/down from the input's real edge — a real, confirmed
-                    // `getBoundingClientRect()` mismatch (input left 138.67 vs. menu left
-                    // 140.86 at a 375px-wide viewport), not just a screenshot artifact.
-                    // `boxSizing: 'border-box'` on top of that: `PopupMenu`'s `<ul>` has no
-                    // box-sizing of its own (content-box default), so its `border: 1px solid`
-                    // was rendering 1px *outside* the `minWidth: 100%` content box on each
-                    // side — 2px wider overall than the input than it should be.
-                    // `left: 1` (not `0`): `.stdinput`'s own legacy CSS margin is
-                    // `4px 1px 0px` — a real 1px left margin that shifts the input's own border
-                    // box 1px right of this wrapping `<span>`'s left edge (which has no margin
-                    // of its own), confirmed via `getBoundingClientRect()` (input left 497 vs.
-                    // an unadjusted `left: 0` menu at 496).
                     style={{
                       position: "absolute",
                       top: "100%",
@@ -741,21 +664,6 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
             </div>
           </div>
 
-          {/* Order matches real legacy exactly (`edit.html.tt2`'s `is_tank` branch: save / Delete
-              Tankoubon / Read Tankoubon / Return to Library) — all four always shown, no
-              conditional on `archives` being non-empty. "Read Tankoubon" navigates to the tank's
-              own ID (`routes.reader(tankId)`, same as legacy's `#read-archive` handler navigating
-              to `/reader?id=<the ID field's value>`, which for this branch is the tank ID, not any
-              one member archive) — the reader route already resolves a Tankoubon ID into its
-              member archives (`ArchiveCard.tsx` uses the same `routes.reader(id)` for both archive
-              and Tankoubon cards in the Library grid).
-              The label itself is a deliberate departure from legacy, though: legacy reuses the
-              exact same "Save Metadata" wording for both archive and Tankoubon edit pages (a
-              single shared `#save-metadata` button in one template) — this page uses "Update"
-              instead, since a Tankoubon's own archive add/remove/reorder actions already persist
-              immediately on each action (unlike legacy, which only saves them as part of this same
-              click), so "Save Metadata" undersells what's already been saved by the time this
-              button exists purely to commit name/summary/tags. */}
           <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 10 }}>
             <input
               className="stdbtn"

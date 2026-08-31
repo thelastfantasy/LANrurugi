@@ -53,17 +53,7 @@ export function ActivityFilterBar({
     </button>
   )
 
-  // Below the narrow-viewport breakpoint, the delete button still stacks full-width on its own
-  // row — the merged filter Combobox's own `wide` mode (320–560px) has nowhere near that much room
-  // on a real phone viewport, so letting everything `flex-wrap` onto one shared row (the very first
-  // version) left it squeezed into whatever was left over on a half-filled trailing row, confirmed
-  // live to render exactly as cramped as that sounds. The filter combobox and time-range trigger,
-  // though, share their own row: the combobox's `flex: 1` absorbs the available width while the
-  // trigger stays sized to its own (short, translated preset name) label — full-width-stacking the
-  // trigger by itself (an earlier version of this row) left it stretched edge-to-edge for no
-  // reason, confirmed live as visually much wider than its own short text needed. The retention
-  // period setting itself lives in `RetentionSettingsMenu`'s own gear-icon popover in the page's
-  // top-right corner now, not in this bar at all — see that component's own doc comment.
+  // Narrow mode: delete button stacks full-width on its own row below the combobox/time-range row.
   if (narrow) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

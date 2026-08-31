@@ -5,9 +5,7 @@ import { useExportPluginsBatch, usePlugins } from "@/api/hooks"
 import { Modal } from "@/components/common-ui/Display"
 
 /** Checkbox picker for exporting several AI-wizard-generated plugins as one `.zip` — only plugins
- * with `generated_by_wizard: true` are listed, since a hand-written/converted plugin already lives
- * in this repo's own `plugins/` tree and has no real need for this download. Defaults to all
- * selected, since exporting everything is the common case. */
+ * with `generated_by_wizard: true` are listed. Defaults to all selected. */
 export function ExportWizardPluginModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const plugins = usePlugins("all")

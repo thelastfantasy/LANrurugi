@@ -7,17 +7,8 @@ export interface ToastConfig {
   /** Rendered as plain text (React's default escaping) unless `html: true` is also set — see that
    * field's own docs. */
   text?: string
-  /** Opt-in to rendering `text` as raw HTML, matching legacy's own `LRR.toast()` `text` field
-   * (e.g. an inline `<a href=...>` link) — only set this for developer-authored strings with no
-   * user- or plugin-controlled content anywhere in them (interpolating a value the user/a plugin
-   * controls into an `html: true` toast is exactly the injection this default-off flag exists to
-   * prevent — see issue #64). Ignored when `text` is unset.
-   *
-   * If a future call site needs to render *partially* trusted content (e.g. a plugin/user string
-   * where only a safe subset of formatting like `<b>`/line breaks should survive), don't just flip
-   * this flag on that string — sanitize it first (e.g. via DOMPurify, not currently a dependency)
-   * and pass the sanitized result. `html: true` itself still means "trust this verbatim," never
-   * "lightly filtered." */
+  /** Opt-in to rendering `text` as raw HTML — only for developer-authored strings with no user-
+   * or plugin-controlled content; never interpolate untrusted input with `html: true`. */
   html?: boolean
   icon?: ToastIcon
   hideAfter?: number | false
@@ -33,27 +24,13 @@ const AUTO_CLOSE_TIME: Record<ToastIcon, number | false> = {
   error: false,
 }
 
-/** Matches legacy's own `LRR.toast()` (`~/LANraragi/public/js/mod/common.js`'s `toast()`) call
- * shape and defaults, with one deliberate deviation — same underlying library (`react-toastify`),
- * just called directly from React instead of through legacy's Preact wrapper around it. Requires a
- * `<ToastContainer limit={7} theme="light" />` mounted once (see `App.tsx`), matching legacy's own
- * `initializeToasts()`.
- *
- * `position: 'bottom-right'`, not legacy's own `top-left` — that placement sits directly under
- * the top nav/search bar, where it's both easy to miss (outside the natural reading path for most
- * of this app's own UI, which is centered/left-to-right below the header) and easy to *mistake*
- * for part of the page's own header content at a glance. `bottom-right` is the de facto standard
- * placement for transient notifications (matching most modern web apps' own convention) and keeps
- * toasts clear of every other interactive chrome on this app's pages (issue #58).
- */
-/** Dismisses a specific toast by the id `toast()` returned (or, called with no id, every toast
- * currently showing) — `react-toastify`'s own `toast.dismiss`, re-exported so call sites needing
- * a "processing…" toast that later gets replaced by a real result don't import that library
- * directly just for this one function. */
+/** Dismisses a toast by id (or, with no id, every toast) — re-export of `toast.dismiss`. */
 export function dismissToast(id?: ReturnType<typeof emitToast>) {
   emitToast.dismiss(id)
 }
 
+/** Matches legacy's own `LRR.toast()` shape/defaults, except `position: 'bottom-right'` (legacy's
+ * `top-left` sits under the nav/search bar). Requires `<ToastContainer>` mounted once (`App.tsx`). */
 export function toast(c: ToastConfig) {
   const type = c.icon ?? "info"
   const isWarningOrError = type === "warning" || type === "error"
@@ -66,18 +43,8 @@ export function toast(c: ToastConfig) {
     draggable: c.draggable ?? !isWarningOrError,
   }
   return emitToast(
-    // `Toastify__toast-body` class + `textAlign: 'left'` inline — `lrr.css` already carries a real
-    // `.Toastify__toast-body h2` rule (14px, weight 600, `margin: 0; padding: 4px 0 8px`) sized
-    // correctly for this exact toast, but this app's actual `react-toastify` version (11.x) never
-    // renders a `.Toastify__toast-body` wrapper on its own (confirmed live via `innerHTML`
-    // inspection — the content div is an unclassed direct child of `.Toastify__toast` instead), so
-    // that selector never matched and the `<h2>` fell through to the bare browser default
-    // (`font-size: 16px`, `margin: 13.28px 0` — issue #58's "ugly whitespace above the heading").
-    // Adding the class back here (rather than re-declaring the same typography inline) makes
-    // legacy's own rule apply again, matching its intent exactly. `textAlign: 'left'` still needed
-    // on top of that: the active theme's own `body { text-align: center }` (`g.css` etc., legacy's
-    // real global centering convention for un-positioned elements like images) inherits all the way
-    // down into the portal, and `lrr.css`'s `.Toastify__toast-body` rule doesn't itself override it.
+    // react-toastify 11.x doesn't render its own `.Toastify__toast-body` wrapper, so this class is
+    // added back manually to pick up lrr.css's h2 styling; textAlign overrides the theme's centered body.
     <div className="Toastify__toast-body" style={{ textAlign: "left" }}>
       {c.heading && <h2>{c.heading}</h2>}
       {c.text && c.html && <div dangerouslySetInnerHTML={{ __html: c.text }} />}

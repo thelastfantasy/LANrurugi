@@ -10,12 +10,14 @@ export function CarouselCard({
   onContextMenu,
   onOpen,
   onSearchTag,
+  highlightQuery,
 }: {
   archive: ArchiveMetadata
   cropThumbs: boolean
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
   onSearchTag?: (namespacedTag: string) => void
+  highlightQuery?: string
 }) {
   return (
     <ArchiveCard
@@ -27,6 +29,7 @@ export function CarouselCard({
       onContextMenu={onContextMenu}
       onOpen={onOpen}
       onSearchTag={onSearchTag ?? (() => {})}
+      highlightQuery={highlightQuery}
     />
   )
 }

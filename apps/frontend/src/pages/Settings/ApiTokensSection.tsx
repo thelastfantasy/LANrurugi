@@ -5,19 +5,14 @@ import { useTranslation } from "react-i18next"
 import { useApiTokens, useCreateApiToken, useDeleteApiToken, useRenameApiToken } from "@/api/hooks"
 import type { TokenRole } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { IconButton } from "@/components/common-ui/Display/IconButton"
+import { IconButton } from "@/components/common-ui/Form"
 import { CollapsibleSection, DateTimeStack, IpGeoLink, ShortId } from "@/components/Display"
 import { confirmDialog, infoDialog, promptDialog } from "@/dialog"
 import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 import { toast } from "@/toast"
 
-/** `1周`/`1个月`/`3个月`/`1年`/`永久` — the exact five options requested for the "New Token" dialog's
- *  expiry picker. Months/years use a fixed 30/365-day approximation (not calendar-aware) — same
- *  simplification every other "duration in seconds" picker in this app already makes (e.g.
- *  `SecuritySection.tsx`'s own token-lifetime hours/days fields), consistent rather than a
- *  precision this single field doesn't need. `"permanent"` maps to `undefined` — omitted entirely
- *  from the create request, matching the backend's own `expires_in_secs: Option<i64>` (`None` =
- *  no expiry) rather than a sentinel value the server would have to special-case. */
+/** Expiry options for the "New Token" dialog. Months/years use a fixed 30/365-day approximation;
+ *  `"permanent"` maps to `undefined`, omitted from the create request (backend's `None` = no expiry). */
 const EXPIRY_OPTIONS: { value: string; labelKey: string; secs: number | undefined }[] = [
   { value: "1w", labelKey: "1 week", secs: 7 * 86400 },
   { value: "1m", labelKey: "1 month", secs: 30 * 86400 },
@@ -26,16 +21,8 @@ const EXPIRY_OPTIONS: { value: string; labelKey: string; secs: number | undefine
   { value: "permanent", labelKey: "Permanent", secs: undefined },
 ]
 
-/** `lru_3b3c****...****77df`-style masking (the shape most API-key UIs — GitHub, Stripe,
- *  DeepSeek's own console — already converge on): first 8 and last 4 characters visible, the
- *  middle collapsed to a fixed-width run of `*`s — deliberately a *fixed* count, not one scaled to
- *  the real token's own length, so the masked string's own length never leaks how long the
- *  underlying secret is. `MASK_STAR_COUNT` is sized to roughly fill the reveal dialog's own input
- *  box width at its current `flex: 1` size (~40 monospace characters at that box's width) rather
- *  than picked arbitrarily — reads oddly short otherwise, left mostly empty in a wide box.
- *  Display-only — the *raw* token this operates on is the one this dialog is itself the one-time
- *  reveal of, never a stored/refetched value (this app never receives a token's raw value again
- *  after creation). */
+/** `lru_3b3c****...****77df`-style masking: first 8 / last 4 chars visible, middle collapsed to a
+ *  fixed-width run of `*` (fixed, not scaled to real length, so the mask can't leak secret length). */
 const MASK_STAR_COUNT = 40
 
 function maskToken(token: string): string {
@@ -50,10 +37,7 @@ function copyToClipboard(value: string, t: (key: string) => string | null) {
     .catch(() => toast({ heading: t("Failed to copy.") ?? undefined, icon: "error" }))
 }
 
-/** Marks each token's role right in the Name column — no separate Role column, an icon +
- *  hover tooltip (native `title`) instead so it doesn't compete for horizontal space in an
- *  already-tight table. `fa-user-shield` (full access) vs. `fa-eye` (read-only) — distinct enough
- *  glyphs to tell apart at a glance without needing to actually hover for the tooltip text. */
+/** Marks a token's role inline in the Name column via icon + tooltip, instead of a separate column. */
 function RoleMarker({ role, t }: { role: TokenRole; t: (key: string) => string | null }) {
   const icon = role === "guest" ? "fa-eye" : "fa-user-shield"
   const label = role === "guest" ? t("Guest") : t("Admin")
@@ -67,20 +51,11 @@ function RoleMarker({ role, t }: { role: TokenRole; t: (key: string) => string |
   )
 }
 
-/** `name` grows to fill remaining space; `id` gets a fixed narrow width (see `ShortId`'s own docs
- *  for why only a prefix is shown there) rather than sizing to the full UUID's own content width;
- *  every other column sizes to its own content, so e.g. the revoke button's column stays its
- *  natural width instead of stretching to match whichever column happens to be widest — the
- *  previous nested-native-`<table>` layout gave every column equal/auto width with no way to size
- *  the button column independently, which is why the Revoke button rendered far wider than its
- *  own label needed. */
+/** Grid column widths — `name` fills remaining space, `id` is fixed-narrow, others size to content. */
 const TOKEN_GRID_COLUMNS = "1fr 7ch auto auto auto auto auto"
 
-/** The "New Token" creation form — name + role (`admin`/`guest`) + expiry, the three fields
- *  confirmed for this dialog. A local component (not routed through `dialog.tsx`'s shared
- *  `DialogRequest` union) since, unlike `newCategoryDialog`/`renameArchiveDialog`, this form has
- *  exactly one call site — growing the shared dialog module for a form nothing else uses would
- *  just be indirection for its own sake. */
+/** "New Token" creation form — name + role + expiry. Local, not routed through `dialog.tsx`'s
+ *  shared union, since it has exactly one call site. */
 function CreateTokenForm({
   onSubmit,
   onCancel,
@@ -90,10 +65,8 @@ function CreateTokenForm({
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState("")
-  // Defaults to the least-privileged, shortest-lived combination (`Guest` + 1 week) — a new token
-  // starts out as narrow as possible; an operator who actually needs full/permanent access can
-  // still pick it, but has to do so deliberately rather than it being what happens if they just
-  // click through the dialog without touching either field.
+  // Defaults to least-privileged/shortest-lived (Guest + 1 week) — broader access must be chosen
+  // deliberately, not fallen into by clicking through unchanged.
   const [role, setRole] = useState<TokenRole>("guest")
   const [expiryValue, setExpiryValue] = useState("1w")
   const nameRef = useRef<HTMLInputElement>(null)
@@ -175,8 +148,7 @@ function CreateTokenForm({
 }
 
 /** First-party API token management (issue #54) — replaces legacy's single fixed `apikey` field.
- *  Lives in its own `CollapsibleSection` (not folded into `SecuritySection`) since it's a full
- *  list-management UI (create/list/revoke), not a handful of settings-form rows. */
+ *  Its own section since it's a full list-management UI, not a handful of settings-form rows. */
 export function ApiTokensSection() {
   const { t } = useTranslation()
   const tokens = useApiTokens()
@@ -188,12 +160,8 @@ export function ApiTokensSection() {
   async function handleCreateSubmit(values: { name: string; role: TokenRole; expiresInSecs: number | undefined }) {
     setCreateDialogOpen(false)
     const response = await createToken.mutateAsync(values)
-    // The one and only time the raw value is ever visible — shown once, in a dedicated
-    // acknowledgement dialog (not a toast, which auto-dismisses and could easily be missed before
-    // the value is copied), then never retrievable again. Masked on screen (same convention
-    // GitHub/Stripe/DeepSeek's own key-management UIs use) with a copy button doing the real work
-    // — a raw secret sitting fully visible in plaintext on screen is needless shoulder-surfing
-    // exposure when nobody actually needs to *read* it character-by-character, only paste it.
+    // Shown once in a dedicated dialog (not an auto-dismissing toast), masked with a copy button —
+    // never retrievable again after this.
     const rawToken = response.data.token
     await infoDialog(
       <>
@@ -244,9 +212,6 @@ export function ApiTokensSection() {
         {t("settings.firstpartyTokensForThirdpartyClients")}
         <br />
         <br />
-        {/* `.stdbtn`'s own legacy CSS carries a flat `min-width: 150px` (built for its usual
-            longer labels elsewhere in the app) — overridden here so this button sizes to its own
-            text + padding instead of stretching wider than "New Token" needs. */}
         <input
           id="create-api-token"
           className="stdbtn"
@@ -265,16 +230,8 @@ export function ApiTokensSection() {
       )}
 
       {tokens.data && tokens.data.length > 0 && (
-        // `TOKEN_GRID_COLUMNS`' fixed-width/`whiteSpace: nowrap` columns (each `DateTimeStack`
-        // alone needs room for a full date + time) add up to well past a phone's own viewport
-        // width — confirmed live, 2026-08-27, on a 390px-wide screen: the Revoke/rename button
-        // column ran off the right edge entirely, with no way to reach it. Rather than
-        // restructuring this into a second, narrow-viewport-only card layout (real effort for a
-        // table an operator only occasionally needs on mobile), this wraps the grid in its own
-        // horizontally-scrollable container — the grid keeps its real, readable column widths
-        // unconditionally (`minWidth: "max-content"` stops it from ever being squeezed narrower
-        // than that), and a viewport too narrow for all seven columns just scrolls sideways to
-        // reach the rest, the same escape hatch a plain HTML `<table>` would fall back on.
+        // The grid's fixed-width columns overflow narrow (phone) viewports — wrapped in a
+        // horizontally-scrollable container instead of a separate mobile layout.
         <div style={{ overflowX: "auto" }}>
           <div
             style={{
@@ -286,11 +243,6 @@ export function ApiTokensSection() {
               minWidth: "max-content",
             }}
           >
-          {/* Header row: lighter (opacity, not a new theme color — see this file's own precedent
-              at `IconButtonWithTooltip`'s description text) and not bold, so it reads as a
-              secondary label rather than competing with the actual row data for attention. No
-              border — rows are separated by generous padding alone (DeepSeek's own key-management
-              table, cited as the visual reference this follows), not a hairline grid. */}
           <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("jobs.name")}</div>
           <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.id")}</div>
           <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.created")}</div>

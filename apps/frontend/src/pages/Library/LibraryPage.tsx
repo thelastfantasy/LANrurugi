@@ -22,11 +22,7 @@ export function Library() {
   const [aiTankoubonModalOpen, setAiTankoubonModalOpen] = useState(false);
 
   if (lib.search.isError) {
-    // A 401 means the session just expired mid-view — `RequireAuth` (`RouteGuards.tsx`) is
-    // already reacting to the same invalidated `login-status` query and about to navigate to
-    // `/login`; rendering nothing here for that one render avoids a "database corrupted" flash
-    // for what's actually just a routine session expiry (the bug this branch used to have before
-    // `client.ts` stopped force-navigating on 401 itself).
+    // 401 means the session just expired mid-view; RequireAuth is already navigating to /login.
     if (lib.search.error instanceof ApiError && lib.search.error.status === 401)
       return null;
 

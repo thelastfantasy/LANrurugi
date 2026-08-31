@@ -10,6 +10,7 @@ import {
   useArchiveMetadata,
   useArchivePages,
   useBookmarksForArchive,
+  useBookmarksForTankoubon,
   useCategories,
   useClearArchiveNew,
   useDeleteTankoubon,
@@ -24,6 +25,7 @@ import {
   useUpdateTankoubonProgress,
 } from "@/api/hooks";
 import { Tooltip } from "@/components/common-ui/Display";
+import { IconButton } from "@/components/common-ui/Form";
 import { ForbiddenPage, NotFoundPage } from "@/components/Display";
 import { Footer } from "@/components/Layout";
 import { confirmDialog, promptDialog } from "@/dialog";
@@ -54,6 +56,7 @@ import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay";
+import { BookmarkButton } from "./BookmarkButton";
 import {
   type ArchiveNavState,
   resolveAdjacentArchive,
@@ -62,20 +65,14 @@ import {
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
 
-// Faithful port of legacy's reader page (`~/LANraragi/templates/reader.html.tt2` +
-// `~/LANraragi/public/js/reader.js`) — real DOM structure (`#i1`-`#i7`) and CSS classnames from
-// `/legacy/lrr.css`, not Tailwind.
+// Port of legacy's reader page (`reader.html.tt2` + `reader.js`) — real DOM structure
+// (`#i1`-`#i7`) and CSS classnames from `/legacy/lrr.css`, not Tailwind.
 
-/** Uniform icon size for every paginator (prev/next-archive, prev/next-page) nav link. `rem`
- * rather than `em` — sized off the root font-size, not whatever this row's own inherited size
- * happens to be, so it doesn't silently shift if an ancestor's font-size ever changes. */
+/** Uniform icon size (rem, not em) for every paginator nav link. */
 const PAGINATOR_ICON_FONT_SIZE = "1.75rem";
-/** `.pagecount`'s own font-size — scaled up alongside the paginator icons above (was inheriting
- * an unset, much smaller ~13px) so the page-number text reads as part of the same control, not a
- * visually separate, undersized label wedged between two oversized icon rows. */
+/** `.pagecount`'s font-size, scaled up alongside the paginator icons above. */
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
-/** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default — specified explicitly to make clear
- * this is deliberate, not incidental inheritance. */
+/** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
 const TOAST_DURATION_MS = 5000;
 
 type OverlayKind = "archive" | "settings" | "help" | null;
@@ -85,14 +82,11 @@ interface WakeLockSentinelLike {
   addEventListener(type: "release", listener: () => void): void;
 }
 
-/** TanStack Query key for a reader's recommendation shortlist — prefetched near the last page
- * so the boundary panel opens with data already in cache (the LLM rerank takes seconds; the
- * prefetch hides that latency behind the reader's own page-turning). */
+/** TanStack Query key for a reader's recommendation shortlist — prefetched ahead of time so the
+ * boundary panel opens with data already cached (LLM rerank takes seconds). */
 const RECS_QUERY_KEY = (id: string) => ["reader-recommendations", id] as const;
 
-/** Square badge chip on recommendation-card thumbnails — fixed 16×16 so the chip itself is a
- * square regardless of the emoji glyph inside (which centers via flex). Neutral overlay chrome
- * (semi-transparent dark), readable on any thumbnail in every theme. */
+/** Fixed 16x16 square badge chip on recommendation-card thumbnails, neutral dark overlay chrome. */
 const badgeChipStyle: React.CSSProperties = {
   width: 16,
   height: 16,
@@ -105,9 +99,7 @@ const badgeChipStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
-/** Inline key-cap styling for the help panel's keyboard shortcuts — same visual language as
- * `FilenameTemplateEditor.tsx`'s own `<code>` preview block (`rgba(0,0,0,0.06)` background,
- * `borderRadius: 3`), just inline rather than block-level since these sit mid-sentence. */
+/** Inline key-cap styling for the help panel's keyboard shortcuts. */
 function Key({ children }: { children: React.ReactNode }) {
   return (
     <code
@@ -129,35 +121,20 @@ export function Reader() {
   const { archiveId = null } = useParams<{ archiveId: string }>();
   useApplyTheme();
 
-  // A `TANK_`-prefixed id means "read this Tankoubon as one concatenated multi-archive book"
-  // (matches real legacy's own `state.id.startsWith("TANK_")` branch throughout
-  // `reader_common.js`/`reader_archive_overlay.js`) rather than a single archive. Both data-
-  // fetching paths below are always called (React's Rules of Hooks — a hook call can't be
-  // conditional), just with the *other* one's id argument forced to `null` so it's a no-op; their
-  // results are merged into the same `metadata`/`pages` variables everything downstream already
-  // reads, so the rest of this file doesn't need its own `isTank` branch for every access.
   const isTank = isTankoubonId(archiveId ?? "");
   const singleMetadata = useArchiveMetadata(isTank ? null : archiveId);
   const singlePages = useArchivePages(isTank ? null : archiveId);
   const tankReading = useTankoubonReading(isTank ? archiveId : null);
   const metadata = isTank ? tankReading.metadata : singleMetadata;
   const pages = isTank ? tankReading.pages : singlePages;
-  // Matches legacy's own real `reader.js` behavior exactly (confirmed against the Perl source
-  // *and* live via `~/LANraragi/templates/reader.html.tt2`'s `<title>[% title %]</title>` initial
-  // server-rendered placeholder, which legacy's own client-side `reader.js` unconditionally
-  // overwrites with `document.title = content.title` once the archive's metadata finishes
-  // loading — the server-rendered value only ever survives the brief pre-JS window, and was never
-  // meant to be this page's real, steady-state tab title. An earlier version of this file got
-  // that wrong, assuming the server-rendered `<title>` value was the final one and setting this
-  // page's tab title to the plain site title with no archive name at all — a real, user-reported
-  // regression.) — just the bare title, once loaded; `undefined` (falls back to the site's own
-  // `htmltitle`, matching the pre-load state) while still loading.
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
   const updateSettings = useUpdateSettings();
   const loginStatus = useLoginStatus();
   const categories = useCategories();
-  const bookmarks = useBookmarksForArchive(archiveId);
+  const singleBookmarks = useBookmarksForArchive(isTank ? null : archiveId);
+  const tankBookmarks = useBookmarksForTankoubon(isTank ? archiveId : null);
+  const bookmarks = isTank ? tankBookmarks : singleBookmarks;
   const addBookmark = useAddBookmark();
   const removeBookmark = useRemoveBookmark();
   const updateProgress = useUpdateProgress(isTank ? null : archiveId);
@@ -171,20 +148,9 @@ export function Reader() {
   const generateThumbnailsForArchives = useGenerateThumbnailsForArchives();
   const [readerSettings, updateReaderSettings] = useReaderSettings();
 
-  // Legacy fires this unconditionally the moment the reader loads (`reader_common.js`'s init
-  // sequence: `DELETE /api/archives/{id}/isnew`, skipped only for a `TANK_` id since tanks have
-  // no `isnew` flag of their own) — not tied to finishing the archive or any elapsed time, just
-  // "was it opened at least once." That's the `until_opened` badge mode (the default); under
-  // `until_finished` or a time-window mode the reader must NOT clear the flag on load, or the
-  // badge would vanish after a single open instead of after completion (or when the window
-  // lapses, which is display-side only and needs no reader involvement).
   const clearArchiveNew = useClearArchiveNew();
   const clearArchiveNewRef = useRef(clearArchiveNew.mutate);
   clearArchiveNewRef.current = clearArchiveNew.mutate;
-  // `settings.data?.newbadgemode` (no `?? fallback` here — a `undefined` mode means the settings
-  // query is still in flight, and the reader must NOT clear the badge before it knows the mode:
-  // with a `?? 'until_opened'` fallback the very first render would default to the legacy mode
-  // and clear the flag even under `until_finished`, before the settings ever arrived).
   const newBadgeMode = settings.data?.newbadgemode;
   useEffect(() => {
     if (!archiveId || isTank || !newBadgeMode) return;
@@ -196,22 +162,9 @@ export function Reader() {
 
   const params = new URLSearchParams(window.location.search);
   const startPage = Number(params.get("p")) || null;
-  // `?overview=1` deep-links straight into the archive overview overlay open (the Activity page's
-  // own `archive.metadata_update`/`archive.rating_update` operation-content links use this — a
-  // rating/metadata change has no dedicated detail page of its own, and the overview overlay is
-  // the real "here's this archive's tags/rating/summary" surface, matching what those entries are
-  // actually about far better than the plain reader view or the Edit page ever did).
   const startWithOverview = params.get("overview") === "1";
 
   const [pageOverride, setPageOverride] = useState<number | null>(startPage);
-  // Whether the overlay's initial value came from `showOverlayByDefault` auto-opening it (true on
-  // mount, before any click) rather than a real click on the grid button — only the latter should
-  // auto-scroll/highlight the current page's thumbnail (`ArchiveOverviewOverlay`'s own `autoFocus`
-  // prop below): auto-opening on every single page load *and* also yanking the scroll position to
-  // hunt down the current page every time was a real, reported annoyance, even though auto-opening
-  // itself is an intentional, user-requested feature (no legacy equivalent) worth keeping as-is.
-  // `startWithOverview` also counts as a non-`autoFocus` open for the same reason — the Activity
-  // link's whole point is showing the archive's current tags/rating, not hunting down a page.
   const openedByDefaultSetting = useRef(
     readerSettings.showOverlayByDefault || startWithOverview,
   );
@@ -219,20 +172,6 @@ export function Reader() {
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   );
 
-  // `?p=`/`?overview=1` are one-shot: they only ever seed `pageOverride`/`overlay`'s *initial*
-  // value above, at mount. Left in the address bar afterward, they go stale the moment the user
-  // pages past `p` or closes the overlay — real progress (tracked separately, in `pageOverride`
-  // itself plus the backend) has moved on, but the URL still claims otherwise. That staleness is
-  // silently harmless as long as this tab keeps running, but a discarded-and-reloaded tab (e.g.
-  // after a phone's screen lock — reported live: reopening the reader after the phone auto-locked
-  // landed back on the page a `?p=` deep link had originally pointed at, well behind where the
-  // user had actually read to) re-runs this component's initializers from scratch and reads the
-  // stale URL as if it were still a fresh, deliberate deep link. Stripping both right after they've
-  // done their one job means a reload from then on falls through to real tracked progress instead.
-  // `replaceState` (not `pushState`) so this doesn't add a spurious back-button entry, and doesn't
-  // re-run on every render (empty deps) — `routes.reader(id)` (the only in-app way this component
-  // ever navigates to a *different* archive without a full remount) never carries either param, so
-  // there's nothing to strip beyond this initial mount.
   useEffect(() => {
     if (!startPage && !startWithOverview) return;
     const url = new URL(window.location.href);
@@ -247,24 +186,15 @@ export function Reader() {
     Record<number, { width: number; height: number }>
   >({});
   const [pageSizesKb, setPageSizesKb] = useState<Record<number, number>>({});
-  // `null` = checked, not converted; `undefined` = not checked yet (see `onImageLoad`).
   const [resizedPageInfo, setResizedPageInfo] = useState<
     Record<number, ResizedPageInfo | null>
   >({});
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
-  // Gates the mobile-only stamp-placement toolbar icon below (`S` has no equivalent on a device
-  // with no physical keyboard) — `!supportsHover` is this app's own established "is this a
-  // touch-only device" proxy (`useSupportsHover`'s own docs, already used the same way by
-  // `BookmarkedArchiveHoverCard`'s tap-to-expand fallback), not a raw viewport-width check, since
-  // a touch laptop with a keyboard still has `S` available and shouldn't show a redundant icon.
   const supportsHover = useSupportsHover();
   const [navState, setNavState] = useState<ArchiveNavState>({
     ids: [],
     index: -1,
   });
-  // Resuming a slideshow across an archive boundary (legacy stashes this in `sessionStorage`
-  // before navigating away — see `readAdjacentArchive` below) is a pure read of already-set-
-  // before-mount state, so it belongs in the initializer, not a `useEffect` calling `setState`.
   const [autoNextActive, setAutoNextActive] = useState(
     () => sessionStorage.getItem("autoNextPage") === "true",
   );
@@ -278,11 +208,6 @@ export function Reader() {
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
-  // A countdown before following an infinite-scroll boundary click into the adjacent archive —
-  // scrolling straight into a full-page navigation with zero warning (what a bare `goTo` does in
-  // standard mode) reads very differently once there's no more discrete "page" to land on
-  // afterward; giving the reader a beat (and a way to cancel) before it fires matches how
-  // `autoNextActive`'s own countdown already works elsewhere on this page.
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: "prev" | "next";
     /** Fetched from `/api/reader/recommendations/{id}` while the overlay shows. `null` = still
@@ -299,24 +224,9 @@ export function Reader() {
       | null;
   } | null>(null);
   const imageAreaRef = useRef<HTMLDivElement>(null);
-  // The previously-rendered `#i3`'s own real height, captured right before a page turn swaps in
-  // a not-yet-loaded image — used as the `.loading` gap's `min-height` instead of the CSS
-  // default's flat `75vh`. That flat floor is only a good match for a page that happens to
-  // render near 75% of viewport height; a wide/short landscape image in the default "container"
-  // fit mode (no `maxHeight` clamp at all — see `imageStyle`'s own docs below) commonly renders
-  // *shorter* than that, so falling back to `75vh` during the loading gap made the page briefly
-  // grow taller than either the outgoing or the incoming page's own real height, then snap back
-  // down once the new image's real dimensions were known — a visible flash pushing the nav
-  // controls toward the bottom of the viewport and back on every single page turn.
   const lastSpreadHeightRef = useRef<number | null>(null);
-  // The previous spread's own full `fileInfoText` output — see `displayedFileInfo`'s own docs
-  // below for why this is held onto rather than always rendering `currentFileInfo` directly.
   const lastFileInfoRef = useRef<string | null>(null);
 
-  // Mirrors legacy's own pick order exactly (reader.js's `loadImages`): an explicit `?p=` param
-  // (bookmark link) always wins, then tracked progress *unless* `ignoreProgress` is on, then page
-  // one. `readerSettings.ignoreProgress` was previously only ever written to, never read here —
-  // toggling it off had no effect on where a reopened archive actually started.
   const currentPage = clamp(
     pageOverride ??
       (readerSettings.ignoreProgress
@@ -326,15 +236,6 @@ export function Reader() {
     totalPages || 1,
   );
 
-  // The fixed target infinite scroll needs to resume to on entry, captured once `currentPage`
-  // reflects a real answer and kept stable after that even as `currentPage` itself keeps changing
-  // as the user reads. Deliberately *not* `useState(() => currentPage)`: that initializer would
-  // run on this component's very first render, which can land before `metadata` has actually
-  // loaded — at that point `currentPage` is still its no-server-answer-yet fallback of `1` (see
-  // `currentPage`'s own computation above), permanently freezing the resume target at the wrong
-  // page. Assigning a ref directly during render, guarded so it only ever takes the *first*
-  // non-loading answer, is the documented way to memoize a value that depends on data not
-  // necessarily ready on mount (react.dev: "adjusting state directly during rendering").
   if (
     infiniteScrollResumePageRef.current === null &&
     !metadata.isLoading &&
@@ -343,26 +244,6 @@ export function Reader() {
     infiniteScrollResumePageRef.current = currentPage;
   }
 
-  // Real natural dimensions for every page up to *and including* the resume target itself (not
-  // just the ones before it) — see the backend's own `read_page_dimensions` docs for why this is
-  // deliberately bounded rather than "the whole archive," and `usePageDimensions`'s own docs for
-  // why standard (non-infinite-scroll) mode never calls this at all.
-  //
-  // The target page's *own* dimensions have nothing to do with the resume jump's own accuracy —
-  // `scrollIntoView({ block: 'start' })` aligning the target's top edge with the viewport's top
-  // only ever depends on the cumulative height of everything *before* it, never its own size. What
-  // the target's own reserved size actually prevents is what happens right *after* that jump
-  // lands: with only the pages before it reserved (an earlier version of this only asked for
-  // those), the target page's own box was still sized off `.loading-placeholder`'s flat guess at
-  // the moment of the jump, then swapped to its real (usually taller) height moments later once
-  // its own bytes actually finished loading — a reflow right at the current scroll position that
-  // can trigger the browser's own scroll-anchoring compensation, a *real* `scroll` event
-  // indistinguishable from the user's own. Verified live: resumed at page 10, the viewport-center
-  // tracker got nudged to 11 within about a second of landing, which then got written back to the
-  // server as progress — a silent forward drift on every single resume. Reserving the target's own
-  // size too means its real bytes loading in doesn't change its box at all, so there's nothing left
-  // to reflow (belt-and-suspenders alongside the grace-period guard below, which catches whatever
-  // this doesn't — neighboring pages with no reserved size of their own still loading in nearby).
   const infiniteScrollResumeDimensions = usePageDimensions(
     archiveId,
     infiniteScrollResumePageRef.current ?? 0,
@@ -379,33 +260,15 @@ export function Reader() {
         (page) => widespreads[page],
       );
 
-  // Mirrors legacy's `#i3.loading` toggle exactly: added before the new page's image starts
-  // loading, removed once decoded. `.loading`'s CSS (`min-height: 75vh`) keeps the page from
-  // visually collapsing while blank — keeping the class after load would leave that floor in
-  // effect forever (dead whitespace below any shorter image). `pageDimensions` already only gets
-  // an entry once `onImageLoad` has fired, so it doubles as the "finished loading" set; both
-  // `spread.left` and (if present) `spread.right` must have an entry, matching legacy waiting on
-  // both images in double-page mode.
   const currentSpreadLoaded =
     pageDimensions[spread.left] !== undefined &&
     (spread.right === null || pageDimensions[spread.right] !== undefined);
 
-  // Every page *before* the infinite-scroll resume target having a known real height — from
-  // `infiniteScrollResumeDimensions` (an `aspect-ratio` computed from it, applied below, well
-  // before the actual bytes have loaded) rather than actually downloading and decoding each one —
-  // is what the resume effect further down is waiting on before it scrolls. Firing early, while
-  // those boxes are still sized off the `.loading-placeholder` CSS's flat `min-height: 40vh`
-  // guess, lands nowhere near the real target: verified live that scrolling to a tracked progress
-  // of page 8 out of 8 while every page's box was still a 40vh guess landed at page 6's midpoint,
-  // since the guessed cumulative height up to page 8 undershot the real one.
   const infiniteScrollResumeReady =
     infiniteScrollResumePageRef.current === null ||
     infiniteScrollResumePageRef.current <= 1 ||
     infiniteScrollResumeDimensions.isSuccess;
 
-  // Legacy toggles infinite-scroll mode via `$("body").addClass("infinite-scroll")`
-  // (`initInfiniteScrollView`, reader.js:674) — a body-level class, not on `#i1` — since
-  // `lrr.css`'s hide rules for `#i2`/`.sn`/etc. are all scoped `body.infinite-scroll #selector`.
   useEffect(() => {
     document.body.classList.toggle(
       "infinite-scroll",
@@ -414,21 +277,8 @@ export function Reader() {
     return () => document.body.classList.remove("infinite-scroll");
   }, [readerSettings.infiniteScroll]);
 
-  // Progress persistence decision tree (verified against legacy's `updateProgress`):
-  // authprogress+logged_in -> server; localprogress -> localStorage; neither -> server anyway.
-  // `${archiveId}-reader`'s localStorage key already works unchanged for tank mode — `archiveId`
-  // is whatever's in the URL, tank or archive id alike, same as legacy's own `${state.id}-reader`.
-  // Only the *server* mutation needs to pick the right endpoint: a Tankoubon's own progress is a
-  // single global page number stored directly on its own record (`useUpdateTankoubonProgress` ->
-  // `PUT /tankoubons/{id}/progress/{page}`), not resolved back to any one member archive's own
-  // progress field.
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
-    // 007: a guest_visitor has no progress-saving capability at all (FR-008 covers read-only page
-    // access, not persistence) — `route_policy.csv` correctly 403s the PUT either way, but issuing
-    // it at all is a needless failed write on every single page turn for a guest session. Always
-    // fall back to localStorage instead, regardless of the `localprogress`/`authprogress` toggles
-    // (which only decide *where an authenticated user's* progress lives).
     if (
       !loggedIn ||
       (settings.data?.localprogress &&
@@ -443,11 +293,6 @@ export function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages]);
 
-  // `until_finished` badge mode: clear the "new" flag once the reader actually reaches the last
-  // page — the same condition the display-side filter (`progress >= pagecount`,
-  // `archives::effective_isnew`) uses, so the badge disappears the moment the archive is
-  // complete rather than lingering as a stale flag. (Declared after `totalPages`/`currentPage`
-  // for that reason.)
   useEffect(() => {
     if (!archiveId || isTank || totalPages === 0 || !newBadgeMode) return;
     if (newBadgeMode === "until_finished" && currentPage >= totalPages) {
@@ -455,11 +300,6 @@ export function Reader() {
     }
   }, [archiveId, isTank, totalPages, currentPage, newBadgeMode]);
 
-  // Prefetches the next `readerSettings.preloadCount` pages beyond the currently-shown spread. A
-  // bare `new Image()` with its `src` set (not appended to the DOM) is enough to make the browser
-  // fetch and HTTP-cache the bytes, so a later real `<img>` for that URL serves from cache
-  // instantly. Concurrent prefetches across pages are bounded server-side by
-  // `AppState::page_singleflight`.
   useEffect(() => {
     if (!pages.data || readerSettings.preloadCount <= 0) return;
     const urls: string[] = [];
@@ -469,8 +309,6 @@ export function Reader() {
       const url = pages.data.pages[page - 1]?.url;
       if (url) urls.push(url);
     }
-    // Keeping references prevents the browser from cancelling an in-flight prefetch request when
-    // the `Image()` object would otherwise be garbage-collected before the request finishes.
     const preloaded = urls.map((url) => {
       const img = new Image();
       img.src = url;
@@ -481,9 +319,6 @@ export function Reader() {
     };
   }, [pages.data, currentPage, totalPages, readerSettings.preloadCount]);
 
-  // Sets up cross-archive `,`/`.` navigation once per archive open (legacy's
-  // `setupArchiveNavigation`, called from `initializeAll`) — resolves whether this reader session
-  // arrived from a same-origin index search, and if so prefetches the adjacent results page.
   useEffect(() => {
     if (!archiveId) return;
     let cancelled = false;
@@ -505,9 +340,7 @@ export function Reader() {
       readerSettings.doublePageMode,
       isSpread,
     );
-    // At an archive boundary, step into the adjacent archive instead of clamping in place —
-    // mirrors legacy's `changePage` calling `readPreviousArchive`/`readNextArchive` when the
-    // destination would fall outside [1, totalPages].
+    // At a boundary, step into the adjacent archive instead of clamping (legacy's behavior).
     if (next === currentPage) {
       const goingForward = readerSettings.mangaMode
         ? target === "prev"
@@ -520,50 +353,16 @@ export function Reader() {
         return;
       }
     }
-    // Captured now, synchronously, before the state update below triggers the re-render that
-    // swaps in the new (not-yet-loaded) image — see `lastSpreadHeightRef`'s own docs for why.
     if (imageAreaRef.current) {
       lastSpreadHeightRef.current =
         imageAreaRef.current.getBoundingClientRect().height;
     }
     setPageOverride(next);
-    // A page tall enough to have been scrolled (a long strip page, a zoomed-in fit mode, a short
-    // viewport) would otherwise leave a turn landing wherever the previous page's scroll position
-    // happened to be, instead of the new page's own title/nav bar at `#i2` starting visible from
-    // the top. Legacy scrolls here instantly; smooth is a deliberate deviation (user-requested —
-    // an instant jump reads as jarring next to the reader's other smoothed motion). Infinite-scroll
-    // mode is excluded, matching legacy's own `if (infiniteScroll) { ... }` branch — there every
-    // page shares one continuously-scrolling document, and `selectPage`'s own `scrollIntoView`
-    // (not this) is what "jump to page N" means there.
-    //
-    // `target === "prev"` (i.e. `k`, or `a`/`ArrowLeft` without shift) is the only direction
-    // `kBehavior` configures — every other target (`next`/`first`/`last`) always lands at the top,
-    // this function's original unconditional behavior. `"bottom"` scrolls to this *document's*
-    // full scroll height (there's no infinite-scroll-style `[data-page]` element to `scrollIntoView`
-    // in non-scroll mode — a single page's own image is the entire scrollable content here); "back"
-    // skips the `scrollTo` call entirely, leaving whatever scroll position the browser already had.
     if (!readerSettings.infiniteScroll) {
       if (
         target === "prev" &&
         readerSettings.kBehavior === K_BEHAVIOR.BACK_BOTTOM
       ) {
-        // A single `requestAnimationFrame` (an earlier version of this) only waits for the next
-        // *paint*, not for the new `<img>`'s own bytes to have actually finished downloading and
-        // laid out — a single `img.complete` poll (an earlier version of this) still wasn't
-        // enough on its own: `complete` flips true the instant the browser finishes *decoding*
-        // the image, which can itself land a frame or two before the browser has finished
-        // reflowing this element's real box into `document.documentElement.scrollHeight`, so a
-        // `scrollTo` fired immediately on `complete` could still read a stale, too-short height —
-        // reported live, 2026-08-08 (repeatedly `k`-ing down to the same page's bottom landed at
-        // visibly different scroll positions run to run, sometimes over 100px short). Waits for
-        // `scrollHeight` to actually stop changing between consecutive animation frames (checked
-        // only once `complete` is true, so this isn't just re-measuring a still-loading image) —
-        // two matching reads in a row is the real signal layout has settled, not a fixed delay
-        // that would either be too short on a slow load or wastefully long on a fast one. Capped
-        // at 40 frames (~0.7s @ 60fps, comfortably past any real image decode+layout on a
-        // reasonable connection) so a genuinely failed/broken image doesn't leave this polling
-        // silently forever — it still scrolls once, to whatever `scrollHeight` is at that point,
-        // rather than doing nothing at all.
         let attempts = 0;
         let lastHeight = -1;
         const scrollWhenSettled = () => {
@@ -589,15 +388,6 @@ export function Reader() {
     }
   }
 
-  // `goTo` deliberately skips scrolling in infinite-scroll mode (see its own docs) — a click on a
-  // page image used to call this directly with its own copy of this exact logic, which meant the
-  // keyboard equivalent (arrow keys / A-D, going through `goTo` like everything else) inherited
-  // that same no-op-scroll behavior: state updated, nothing visibly moved. Shared here so both
-  // input paths agree, instead of the keyboard path silently staying broken while only the click
-  // handler got fixed. `fromPage` lets each caller supply its own idea of "where navigation starts
-  // from" — the image click passes the specific image that was clicked (not necessarily whatever
-  // the scroll-position tracker currently thinks is "current"), the keyboard handler passes
-  // `currentPage` (that tracker's own live answer, the only "where am I" it has).
   function goToInfiniteScrollPage(fromPage: number, target: "prev" | "next") {
     let offset = target === "next" ? 1 : -1;
     if (readerSettings.mangaMode) offset = -offset;
@@ -606,12 +396,7 @@ export function Reader() {
       startArchiveTransition(offset > 0 ? "next" : "prev");
       return;
     }
-    // `target === "prev"` (i.e. `k`) is the only direction `kBehavior` configures — `next` (`j`/
-    // `ArrowRight`/`d`) always lands at the top of the following page regardless of that setting,
-    // matching this function's original, unconditional `block: "start"` for every other caller.
-    // `K_BEHAVIOR.BACK` omits `block` entirely (the browser's own `"nearest"`);
-    // `BACK_BOTTOM`/`BACK_TOP` map straight to `block: "end"`/`"start"` — see `KBehavior`'s own
-    // docs for the reasoning behind each option.
+    // kBehavior only configures `prev`; next always lands at the top. BACK omits block ("nearest").
     const block: ScrollIntoViewOptions["block"] =
       target === "prev"
         ? readerSettings.kBehavior === K_BEHAVIOR.BACK_BOTTOM
@@ -625,11 +410,6 @@ export function Reader() {
       ?.scrollIntoView({ behavior: "smooth", block });
   }
 
-  // Shows the boundary overlay (recommendations only — no auto-jump; the user picks a card or
-  // cancels) and starts fetching the recommendations for the current archive in the background.
-  // Lock the page scroll while the boundary overlay is open (standard lightbox behavior) —
-  // otherwise wheel events over the overlay chain down to the reader page beneath it. The
-  // overlay's own container scrolls internally (max-height + overflow-y).
   useEffect(() => {
     if (!archiveTransition) return;
     const prevOverflow = document.body.style.overflow;
@@ -640,11 +420,6 @@ export function Reader() {
   }, [archiveTransition]);
 
   const queryClient = useQueryClient();
-  // Prefetch the recommendation shortlist as soon as the reader opens, not just near the
-  // boundary — the LLM rerank takes seconds, and starting immediately hides that latency behind
-  // whatever time the reader spends on this archive at all (most sessions read for well past a
-  // few seconds), so the boundary panel opens with cached data far more often. Non-blocking, and
-  // `staleTime` means a user paging back and forth still only ever fires this once per archive.
   useEffect(() => {
     if (!archiveId) return;
     void queryClient.prefetchQuery({
@@ -730,17 +505,10 @@ export function Reader() {
         .querySelector(`[data-page="${page}"]`)
         ?.scrollIntoView({ block: "start" });
     } else {
-      // Same smooth scroll-to-top as `goTo` — every page-jump path (Next/Prev, the overview
-      // thumbnail grid, the page-number input) funnels through legacy's `goToPage` semantics,
-      // just smoothed (deliberate deviation, see `goTo`'s own docs).
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   }
 
-  // The browser's own decode failure is the ground truth for "this format isn't renderable" —
-  // more precise than the server's magic-byte list (per-browser AVIF/TIFF support varies). On a
-  // failed load, retry the same URL with `&optimize=1` once; a URL already carrying the param
-  // (or with no `path` to key the server-side conversion on) is left alone to fail naturally.
   function onImageError(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;
     if (img.src.includes("optimize=1")) return;
@@ -797,11 +565,6 @@ export function Reader() {
     if (id) navigate(routes.reader(id));
   }
 
-  // Reuses the exact same confirmation copy `ArchiveOverviewOverlay`'s own tank-delete button
-  // uses (an existing key already in every locale file) — offered from the empty-Tankoubon state
-  // below since an abandoned, never-populated (or emptied-out) tank has no archives to browse
-  // into that overlay from at all; this is the only other place a user could otherwise clean one
-  // up from besides TankoubonEdit's own delete button.
   async function handleDeleteEmptyTankoubon() {
     if (
       !archiveId ||
@@ -814,9 +577,7 @@ export function Reader() {
   }
 
   function cleanCache() {
-    // Matches legacy's own tank-mode `generateThumbnails` (`reader_common.js`): loops every
-    // member archive's own thumbnail-regen endpoint, not a single call — there's no one "the
-    // archive" to regenerate thumbnails for while reading a concatenated Tankoubon.
+    // Tank mode loops every member archive's thumbnail-regen endpoint.
     if (isTank) {
       generateThumbnailsForArchives.mutate(
         tankReading.chapters.map((c) => c.arcId),
@@ -827,9 +588,6 @@ export function Reader() {
     window.location.reload();
   }
 
-  // Screen Wake Lock — kept alive only while a slideshow is actively running, matching legacy's
-  // `requestWakeLock`/`releaseWakeLock` (reader.js:2293) exactly: no point dimming/sleeping the
-  // screen mid-slideshow, and no reason to hold the lock any other time.
   async function acquireWakeLock() {
     if (wakeLockRef.current) return;
     const nav = navigator as Navigator & {
@@ -877,9 +635,6 @@ export function Reader() {
     else startAutoNextPage();
   }
 
-  // The countdown/advance loop itself — a single interval tied to `autoNextActive`, matching
-  // legacy's `startAutoNextPage`'s own `setInterval` (reader.js:1590), just expressed as a React
-  // effect instead of manually re-arming a fresh `setInterval` after every tick.
   useEffect(() => {
     if (!autoNextActive) return;
     const id = window.setInterval(() => {
@@ -912,9 +667,6 @@ export function Reader() {
     readerSettings.autoNextPageInterval,
   ]);
 
-  // `autoNextActive`'s initializer above already read the resume flag; this effect only handles
-  // the side effects that go with it (clearing the flag so a manual stop+reload doesn't re-arm,
-  // and acquiring the wake lock) once pages are actually available to advance through.
   useEffect(() => {
     if (!autoNextActive || totalPages === 0) return;
     sessionStorage.removeItem("autoNextPage");
@@ -924,9 +676,10 @@ export function Reader() {
 
   useEffect(() => releaseWakeLock, []);
 
-  const isPageBookmarked = (bookmarks.data ?? []).some(
+  const currentBookmark = (bookmarks.data ?? []).find(
     (b) => b.page === currentPage,
   );
+  const isPageBookmarked = currentBookmark !== undefined;
 
   async function toggleBookmark() {
     if (!loggedIn) {
@@ -951,15 +704,8 @@ export function Reader() {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
 
-      // The boundary/recommendations overlay (`archiveTransition`) is a lightbox the reader
-      // pauses on at an archive's first/last page — every navigation/scroll shortcut below
-      // (`j`/`k`/space/arrows/`,`/`.`/`b`/etc.) operating on the reader page underneath it while
-      // this is open was confirmed live, 2026-08-28, to still fire: pressing `j` scrolled the
-      // (locked, per the `overflow: hidden` effect above) page behind the overlay, and `,`/`.`
-      // could silently swap which archive the overlay was even recommending for. `Escape` is the
-      // one exception — it's this overlay's own documented way to cancel and return to reading,
-      // matching the shade's own `onClick={() => setArchiveTransition(null)}`, not a page-turn/
-      // scroll shortcut that would be confusing to still act on while a recommendation is up.
+      // While the boundary overlay is open, only Escape (cancel) acts — navigation shortcuts
+      // firing on the locked page behind it were a live bug.
       if (archiveTransition) {
         if (e.key === "Escape") {
           setArchiveTransition(null);
@@ -981,11 +727,6 @@ export function Reader() {
           navigate(routes.library());
           return;
         case "Escape":
-          // Legacy's own keydown handler (`reader_stamps.js`) checks `state.markerMode` before
-          // anything else and, if armed, only ever cancels *that* — it doesn't also happen to
-          // close some other overlay in the same keystroke. Matches that priority: an Escape while
-          // placing a stamp cancels the placement and stops there, same as pressing it with no
-          // overlay open at all does nothing further.
           if (markerPlacementMode) {
             setMarkerPlacementMode(false);
             return;
@@ -998,23 +739,6 @@ export function Reader() {
             behavior: "smooth",
           });
           return;
-        // Google Reader-style j/k: `j` scrolls like `" "` above until there's nothing further to
-        // scroll, then advances a page instead (so holding it down reads the whole page top to
-        // bottom before moving on, rather than requiring a separate page-turn key once scrolled
-        // content runs out). `k` mirrors that in the other direction *when* `kBehavior` is
-        // `"top"`/`"bottom"` — scroll *up* by the same `jScrollUnit`/`jScrollAmount` step until
-        // there's nothing further up to scroll, only then turn back a page. `kBehavior ===
-        // "default"` opts out of that mirroring entirely and always jumps straight to the previous
-        // page with no incremental scroll step at all (see that `case` arm's own docs) — the
-        // reader's original `k` behavior, matching Google Reader's own `k`, which also jumps
-        // directly rather than scrolling incrementally; `"top"`/`"bottom"` are this reader's own
-        // deliberate deviation from that (requested live, 2026-08-28) for a reader who wants `k` to
-        // read a page bottom-to-top symmetrically with how `j` reads it top-to-bottom. Both
-        // directions skip straight to the page turn in infinite-scroll mode regardless of
-        // `kBehavior` — there every page already shares one continuously-scrolling document a
-        // plain wheel/trackpad scroll already reads top-to-bottom or back; `j`/`k` there exist to
-        // jump a whole page at a time, not to replicate incremental scrolling a mouse already does
-        // natively.
         case "j":
           if (readerSettings.infiniteScroll) {
             goToInfiniteScrollPage(currentPage, "next");
@@ -1035,20 +759,8 @@ export function Reader() {
           if (readerSettings.infiniteScroll) {
             goToInfiniteScrollPage(currentPage, "prev");
           } else if (readerSettings.kBehavior === K_BEHAVIOR.BACK) {
-            // `K_BEHAVIOR.BACK` opts *out* of the incremental-scroll-then-turn behavior entirely
-            // — a plain, immediate page turn with no scrolling step at all, the reader's original
-            // `k` behavior before this setting existed. Only `BACK_TOP`/`BACK_BOTTOM` (below) get
-            // the `j`-mirroring incremental scroll; `BACK` intentionally skips straight to
-            // `goTo("prev")` regardless of the current scroll position, corrected live,
-            // 2026-08-28, after an earlier version of this case applied the incremental-scroll
-            // step unconditionally, effectively ignoring what this option was supposed to mean.
             goTo("prev");
           } else if (window.scrollY <= 0) {
-            // No `- 1` fudge factor here the way `j`'s own boundary check has — that one exists
-            // because `document.documentElement.scrollHeight` is itself a rounded/derived value
-            // that can sit a fractional pixel short of where the *true* bottom is, so `>=` alone
-            // occasionally missed it by that much; `scrollY` at the *top* has no equivalent
-            // derived-value slop (`0` is exact), so a plain `<= 0` is already exact here.
             goTo("prev");
           } else {
             const step =
@@ -1114,10 +826,6 @@ export function Reader() {
           void goRandom();
           return;
         case "s":
-          // Matches legacy's own `addStamp()` guard (`if (!LRR.isUserLogged()) return;`) — stamps
-          // are a per-user API resource, so arming placement mode while logged out would only ever
-          // end in the `addStamp` mutation itself failing after the user already went to the
-          // trouble of picking a spot and typing a name.
           if (!readerSettings.infiniteScroll && loggedIn)
             setMarkerPlacementMode(true);
           return;
@@ -1145,23 +853,8 @@ export function Reader() {
     archiveTransition,
   ]);
 
-  // Infinite scroll: tracks which mounted page is nearest the viewport center and treats that as
-  // "current" for progress purposes — legacy's own hand-rolled hit-test in `changePage`
-  // (`reader_common.js`: walk every `.reader-image`, find whichever one's bounding rect straddles
-  // `window.innerHeight / 2`), not an `IntersectionObserver`. An earlier version of this effect
-  // used `IntersectionObserver` with `threshold: 0.5` instead, driven by whichever entries the
-  // browser happened to report as newly-intersecting in a given callback batch — verified live via
-  // the network panel that this produced non-monotonic progress writes (`3 -> 8 -> 6` while
-  // scrolling steadily downward), almost certainly several `lazy`-loaded images near the initial
-  // viewport all crossing 50% together as they decode in, not in scroll order. A direct viewport-
-  // center hit test on `scroll` (rAF-throttled) has no such batching ambiguity: at any instant
-  // there's exactly one page whose rect can straddle the midpoint.
   useEffect(() => {
     if (!readerSettings.infiniteScroll || totalPages === 0) {
-      // Reset so the next time infinite scroll is (re-)entered — a fresh page load, or just
-      // toggling the setting back on mid-session — resumes at whatever `currentPage` is *then*,
-      // not silently skipping the resume-scroll because it already ran once, arbitrarily long ago,
-      // the first time this component ever saw the mode turned on.
       infiniteScrollResumedRef.current = false;
       infiniteScrollResumePageRef.current = null;
       return;
@@ -1169,20 +862,8 @@ export function Reader() {
     const root = infiniteScrollRootRef.current;
     if (!root) return;
 
-    // A fresh load always starts scrolled to the very top (page one's own image) — the browser
-    // has no notion of "resume where tracked progress left off" here on its own, unlike standard
-    // mode where `currentPage` alone decides which single image renders. Legacy's own
-    // `enterInfiniteScrollView` has the same problem and solves it the same way: one explicit,
-    // instant `scrollIntoView` to the resume page, done once — but only once every page before it
-    // has a real `aspect-ratio` reserved from `infiniteScrollResumeDimensions`
-    // (`infiniteScrollResumeReady`), not still sized off `.loading-placeholder`'s flat `40vh`
-    // guess; firing early lands wherever that guess's cumulative error happens to put it, not the
-    // real target (verified live: jumping to a tracked progress of page 8/8 landed at page 6's
-    // midpoint instead, back when this waited on real decoded image loads instead). The scroll-
-    // position tracker below intentionally doesn't attach until *after* this fires, for the same
-    // reason it needs to fire accurately in the first place: its own first read would otherwise
-    // see the still-at-the-top scroll position and immediately stomp `currentPage` back down to 1
-    // before the resume jump ever got a chance to happen.
+    // One explicit resume scrollIntoView, only once every prior page has a real reserved height —
+    // the tracker attaches after it fires so its first read doesn't stomp currentPage back to 1.
     const alreadyResumed = infiniteScrollResumedRef.current;
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
@@ -1192,21 +873,6 @@ export function Reader() {
         .querySelector<HTMLElement>(`[data-page="${currentPage}"]`)
         ?.scrollIntoView({ block: "start" });
     }
-    // A `scroll` event fires identically whether a person actually dragged/wheeled/keyed the
-    // page, or the browser's own scroll-anchoring silently compensated for some page's box
-    // changing size (any lazy-loaded image swapping its `.loading-placeholder` guess for its real
-    // height, at any point during the whole reading session, not just around the initial resume).
-    // A first attempt compared `document.documentElement.scrollHeight` against its own last-known
-    // value on every `scroll` event to catch this indirectly — abandoned after verifying live it
-    // has a real timing gap: the anchor compensation's own `scrollY` adjustment doesn't necessarily
-    // land in the same animation frame as the height change that caused it, so a check can land in
-    // between — sampling a `scrollHeight` that already looks stable (nothing grew *again* since
-    // the last poll) with a `scrollY` that's *only just* been nudged by a compensation whose
-    // triggering height change this polling loop had already "used up" reacting to on an earlier,
-    // separate poll. A `ResizeObserver` directly on every page's own box sidesteps that gap
-    // entirely: the browser guarantees its callback fires whenever an observed box's size actually
-    // changes, so arming a short guard window from *that* (not from polling a derived height) can't
-    // miss a resize the way sampling scrollHeight on our own schedule can.
     const REFLOW_GUARD_MS = 400;
     let reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
 
@@ -1249,10 +915,6 @@ export function Reader() {
       if (rafId !== null) cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
     };
-    // `currentPage` deliberately excluded: only read once, guarded by `infiniteScrollResumedRef`,
-    // for the initial-resume scroll above — adding it here would re-run this whole effect (tear
-    // down and re-attach the scroll listener) on every page the user scrolls past, since this
-    // effect's own tracking is what drives `currentPage` changes in the first place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     readerSettings.infiniteScroll,
@@ -1274,23 +936,12 @@ export function Reader() {
   }
 
   if (metadata.isError || pages.isError || !pages.data || !metadata.data) {
-    // issue #92: an archive/Tankoubon id that simply doesn't exist (backend now returns a real
-    // 404 for this — `crates/lanrurugi-api/src/common.rs::not_found`) or a permissions denial
-    // (403) both get their own real, dedicated content here — inline, at the *same* `/reader/:id`
-    // URL a visitor actually navigated to, never a `navigate()` to some other route. Anything
-    // else (network failure, 500, ...) keeps the original generic error message below; only a
-    // real `ApiError` with a matching `status` gets the specialized treatment; a bare `Error`
-    // (e.g. `fetch` itself rejecting on a network drop) falls through to the generic branch too.
     const firstError = [metadata.error, pages.error].find(
       (e) => e instanceof ApiError,
     ) as ApiError | undefined;
     if (firstError?.status === 404) return <NotFoundPage />;
     if (firstError?.status === 403)
       return <ForbiddenPage reason={firstError.message} />;
-    // A 401 means the session just expired mid-view — `RequireAuth` (`RouteGuards.tsx`) is
-    // already reacting to the same invalidated `login-status` query and about to navigate to
-    // `/login`; rendering nothing for that one render avoids flashing the generic failure message
-    // below for what's actually a routine session expiry.
     if (firstError?.status === 401) return null;
 
     return (
@@ -1310,14 +961,6 @@ export function Reader() {
     );
   }
 
-  // A Tankoubon with zero member archives has nothing to concatenate into a book — `totalPages`
-  // is genuinely `0`, not a loading/error state. Rendering the normal page-view JSX below for that
-  // case used to fall through to a broken "1 / 0" reader with no image (a real, observed bug — see
-  // `TANK_...`'s own incident this session where a Tankoubon's archive list emptied out and its
-  // reader page silently showed this), rather than a real explanation. `isTank` gates this (a
-  // plain archive's own `totalPages` is only ever `0` mid-load, already handled by the loading
-  // check above) — an intentionally-empty Tankoubon is a real, reachable state (freshly created
-  // and not yet populated, or emptied via archive removal), not an error.
   if (isTank && totalPages === 0) {
     return (
       <div className="ido" style={{ textAlign: "center", padding: 40 }}>
@@ -1362,28 +1005,11 @@ export function Reader() {
   const rightUrl =
     spread.right !== null ? pages.data.pages[spread.right - 1]?.url : null;
 
-  // `MarkerLayer` (stamps) is a per-real-archive resource — in tank mode, the current global page
-  // has to be resolved back to which member archive (and that archive's own local page number)
-  // it actually belongs to first, matching legacy's own `getArchiveForPage` used the same way in
-  // `reader_stamps.js`. `null` (nothing rendered) if that resolution fails — a member archive that
-  // vanished from the repo after the Tankoubon's own `full_data` was fetched (see
-  // `TankoubonFullResponse`'s own docs), a real if rare edge case.
-  const markerTarget = isTank
-    ? tankReading.getArchiveForPage(spread.left)
-    : archiveId
-      ? { arcId: archiveId, localPage: spread.left }
-      : null;
+  const markerTarget = archiveId ? { arcId: archiveId, localPage: spread.left } : null;
 
-  // Mirrors legacy's `applyContainerWidth` (reader.js:1502) exactly: fit mode drives two
-  // *different* styles on two *different* elements — `.reader-image` (each `<img>`) and `.sni`
-  // (the outermost `#i1` container, not some intermediate wrapper) — not a single style applied
-  // to one shared box, which is why "Width" and "Container" modes previously looked identical.
   const isSpreadShowing = spread.right !== null;
   const imageStyle: React.CSSProperties = {};
   const outerStyle: React.CSSProperties = {};
-  // Legacy applies none of this while in fullscreen (`applyContainerWidth`'s own
-  // `if (fscreen.inFullscreen()) return`) — the browser's native fullscreen presentation should
-  // decide sizing there, not these fit-mode rules.
   if (!isFullscreen) {
     if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       const heightVh =
@@ -1403,24 +1029,10 @@ export function Reader() {
     }
   }
 
-  // Legacy's real `addStamp()` (`~/LANraragi/public/js/mod/reader_stamps.js`) bumps only the
-  // *left* image's own `z-index` above `.focus-overlay`'s while placing a stamp — not the
-  // double-page-mode right image (`#img_doublepage` keeps `imageStyle` as-is, unmodified), matching
-  // `MarkerLayer`'s own `imageRef` only ever pointing at this one. `zIndex: 22` beats the
-  // overlay's own 21 (`.focus-overlay` in `/legacy/lrr.css`) so the image stays fully visible and
-  // clickable above the dimmed backdrop instead of getting dimmed along with everything else.
-  // `touchAction: "none"` (only while actually in placement mode — normal reading still needs the
-  // image to allow whatever native scroll/zoom gestures it otherwise supports) — without it, a
-  // touch-drag to place a rectangle stamp races the browser's own default scroll/pinch-zoom
-  // handling for this element, same reasoning `MarkerLayer.tsx`'s own per-marker `touchAction:
-  // "none"` docs explain for the markers themselves.
   const placementImageStyle: React.CSSProperties = markerPlacementMode
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
     : imageStyle;
 
-  // Shared between the `?` icon's hover-tooltip preview and the same icon's click/`H`-key full
-  // panel (`overlay === 'help'` below) — one piece of content, two presentations, rather than
-  // duplicating (and inevitably drifting) the same shortcut list twice.
   const helpContent = (
     <div style={{ fontSize: FONT_SIZE_XS }}>
       <p style={{ margin: "0 0 4px" }}>
@@ -1496,52 +1108,22 @@ export function Reader() {
 
   const pagesel = (
     <>
-      {/* Each `<a>` gets an explicit `marginRight` matching what legacy gets "for free": its own
-          template has these as separate lines of hand-indented HTML
-          (`~/LANraragi/templates/reader.html.tt2`), and adjacent `inline-block` elements collapse
-          the whitespace *between* them into a visible gap (~3px at this font-size) — something
-          JSX's compiled output never produces, since React never inserts whitespace text nodes
-          between sibling elements. Without this, the icons render flush against each other. */}
       <div className="absolute-options absolute-left">
-        <a
-          className="fas fa-cog fa-2x"
-          href="#"
+        <IconButton
+          variant="ghost-btn"
+          icon="fas fa-cog fa-2x"
           title={t("reader.readerOptions") ?? undefined}
-          style={{ marginRight: 3 }}
-          onClick={(e) => {
-            e.preventDefault();
+          size={32}
+          style={{ marginRight: 13, borderRadius: "50%" }}
+          onClick={() => {
             setOverlay((prev) => (prev === "settings" ? null : "settings"));
           }}
         />
-        {/* Mobile-only equivalent of the `S` keyboard shortcut (`Reader.tsx`'s own `onKeyDown`
-            handler above) — a touch device has no physical keyboard to press `S` on at all, so
-            without this the stamp feature (otherwise fully touch-usable — `MarkerLayer.tsx`'s own
-            Pointer Events rework) had no way to actually *enter* placement mode on mobile in the
-            first place. Same two gates the keyboard shortcut itself already applies
-            (`!readerSettings.infiniteScroll && loggedIn`) plus `!supportsHover` to hide it on a
-            device that already has `S` available — a mouse/trackpad user seeing a redundant icon
-            next to a shortcut they already know isn't the goal here. */}
         {!supportsHover && !readerSettings.infiniteScroll && loggedIn && (
           <a
-            // `fa-stamp` (not `fa-thumbtack`, this button's own first pick) — this toolbar button
-            // triggers *placement mode* for the stamp feature as a whole, not one specific stamp;
-            // `fa-thumbtack` is `dialog.tsx`'s own default *per-stamp* icon (used when a stamp has
-            // no custom icon set, `renderStampIcon`'s own fallback) and one of its selectable
-            // icons, a different, narrower role than "this button turns on stamp-placement mode."
-            // `fa-stamp`'s real ink-stamp glyph reads as the feature itself, matching a user's own
-            // screenshot of the icon they expected here, 2026-08-27 — `fa-thumbtack` reading as
-            // "pin a note" was a mismatch for that role even though it's a legitimate stamp icon
-            // in its own, narrower context.
             className="fas fa-stamp fa-2x"
             href="#"
             title={t("reader.placeStamp") ?? undefined}
-            // Same "filled vs. outline reads as the on/off state" language the bookmark icon
-            // right next to it already uses (`isPageBookmarked ? "fas" : "far"`) would need a
-            // `far` (outline) variant of this specific glyph, which Font Awesome's free tier
-            // doesn't ship for `fa-stamp` either — an opacity dim is the next-closest "this is
-            // currently active" cue without introducing a mismatched visual language of its own
-            // (e.g. a background pill `.toggled` wasn't designed for, and visibly looks like a
-            // pressed button rather than a plain toolbar icon here).
             style={{ marginRight: 3, opacity: markerPlacementMode ? 1 : 0.55 }}
             onClick={(e) => {
               e.preventDefault();
@@ -1549,78 +1131,80 @@ export function Reader() {
             }}
           />
         )}
-        {loggedIn && (
-          <a
-            className={`${isPageBookmarked ? "fas" : "far"} fa-bookmark fa-2x toggle-bookmark`}
-            href="#"
-            title={t("reader.toggleBookmark") ?? undefined}
-            style={{ marginRight: 3 }}
-            onClick={(e) => {
-              e.preventDefault();
-              void toggleBookmark();
+        {loggedIn && archiveId && (
+          <BookmarkButton
+            archiveId={archiveId}
+            page={currentPage}
+            bookmarked={isPageBookmarked}
+            name={currentBookmark?.name}
+            loggedIn={loggedIn}
+            onRequireLogin={() => {
+              const template = t("reader.aHrefUrlLogin") ?? "";
+              toast({
+                text: template.replace("${url}", "/login"),
+                html: true,
+                icon: "warning",
+                hideAfter: TOAST_DURATION_MS,
+              });
             }}
           />
         )}
-        {/* Hover for a quick preview (`Tooltip`'s own `anchor="element"` default); `H` still opens
-            the full `#reader-help` panel below — the complete list (including the ones easy to
-            forget) stays reachable that way. No `onClick` here (previously also opened the same
-            panel) — on touch, a tap synthesizes a `mouseenter` before the `click` fires, so
-            `Tooltip`'s own hover-open and this icon's click-open both fired from the same tap,
-            opening the preview and the full panel simultaneously (reported live, screenshotted on
-            mobile Firefox). Dropping the click leaves the icon as a pure `Tooltip` trigger —
-            tapping shows the same hover preview desktop gets, `H` remains the only way to the full
-            panel on any device. */}
         <Tooltip label={helpContent} maxWidth={420}>
-          <a
-            className="fas fa-question-circle fa-2x"
-            href="#"
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
             title={t("reader.help") ?? undefined}
-            style={{ marginRight: 3 }}
-            onClick={(e) => e.preventDefault()}
+            size={32}
+            style={{ marginRight: 13, borderRadius: "50%" }}
           />
         </Tooltip>
       </div>
       <div className="absolute-options absolute-right">
-        <a
-          className={`fas ${readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"} fa-2x reading-direction`}
-          href="#"
+        <IconButton
+          variant="ghost-btn"
+          className="reading-direction"
+          icon={`fas ${readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"} fa-2x`}
           title={t("reader.readingDirection") ?? undefined}
-          style={{ marginRight: 3 }}
-          onClick={(e) => {
-            e.preventDefault();
+          size={32}
+          style={{ marginRight: 13, borderRadius: "50%" }}
+          onClick={() => {
             updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
           }}
         />
-        <a
-          className="fas fa-stopwatch fa-2x toggle-auto-next-page"
-          href="#"
+        <IconButton
+          variant="ghost-btn"
+          className="toggle-auto-next-page"
+          icon={
+            <>
+              <i className="fas fa-stopwatch fa-2x" aria-hidden="true" />
+              {autoNextActive ? autoNextCountdown : ""}
+            </>
+          }
           title={t("reader.autoNextPage") ?? undefined}
-          style={{ marginRight: 3 }}
-          onClick={(e) => {
-            e.preventDefault();
+          size={32}
+          style={{ marginRight: 13, borderRadius: "50%" }}
+          onClick={() => {
             toggleAutoNextPage();
           }}
-        >
-          {autoNextActive ? autoNextCountdown : ""}
-        </a>
-        <a
-          className="fas fa-th fa-2x"
-          href="#"
+        />
+        <IconButton
+          variant="ghost-btn"
+          icon="fas fa-th fa-2x"
           title={t("reader.archiveOverview") ?? undefined}
-          style={{ marginRight: 3 }}
-          onClick={(e) => {
-            e.preventDefault();
+          size={32}
+          style={{ marginRight: 13, borderRadius: "50%" }}
+          onClick={() => {
             openedByDefaultSetting.current = false;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
-        <a
-          className={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
-          href="#"
+        <IconButton
+          variant="ghost-btn"
+          icon={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
           title={t("reader.fullscreen") ?? undefined}
-          style={{ marginRight: 3 }}
-          onClick={(e) => {
-            e.preventDefault();
+          size={32}
+          style={{ marginRight: 13, borderRadius: "50%" }}
+          onClick={() => {
             toggleFullScreen();
           }}
         />
@@ -1628,28 +1212,7 @@ export function Reader() {
     </>
   );
 
-  // `body.infinite-scroll .sn { display: none }` (legacy's `lrr.css`) can't win against this
-  // element's own inline `style.display` below (inline style always beats an external stylesheet
-  // selector short of `!important`) — verified live: the row stayed visible with the class
-  // correctly applied to `<body>`. Not rendering it at all in that mode, rather than trying to
-  // out-fight the inline style with a conditional `display` value, since infinite-scroll mode
-  // doesn't have a notion of "current page" a click on these icons could jump to anyway (see
-  // `goTo`'s own no-scroll early-exit for that mode).
   const arrows = readerSettings.infiniteScroll ? null : (
-    // `marginTop`/`marginBottom` override each theme's own real `div.sn { margin: 1px auto }`
-    // (verified live via `getComputedStyle` — e.g. `g.css`), which leaves only ~1px between this
-    // row and the archive title/file-info text immediately above or below it (this same `arrows`
-    // element renders twice — once above the image in `#i2`, once below it in `#i4` — so both
-    // spots need the fix).
-    // `display: flex` + `alignItems: 'center'` — the icons and `.pagecount` text used to rely on
-    // each inline element's own `vertical-align: baseline` (the CSS default) to line up, which
-    // looked fine at the old, uniformly small font-size but visibly mismatched once the icons and
-    // page-number text were enlarged to two different sizes (each size's own baseline sits at a
-    // different height). Flex's cross-axis centering doesn't care about font-size/baseline at
-    // all — it's already `display: block` at 100% of its parent's width (verified live:
-    // `getBoundingClientRect` both 1200px), so switching to flex doesn't disturb the existing
-    // horizontal centering; `justifyContent: 'center'` replaces the `margin: auto` a flex
-    // container doesn't honor the same way.
     <div
       className="sn paginator"
       style={{
@@ -1661,15 +1224,6 @@ export function Reader() {
         marginBottom: 10,
       }}
     >
-      {/* `gap` on the flex container above is the single source of spacing between every icon
-          and `.pagecount` — legacy's own `div.sn div { margin: 2px 25px 0 }` theme rule only ever
-          matched `.pagecount` (a real `div`), never these `<a>` tags, so the two pairs of adjacent
-          arrows (first/prev, next/last) rendered flush against each other with zero gap
-          (verified live via `getBoundingClientRect` — 0px) — `gap` fixes all of them uniformly
-          instead of hand-tuning per-element margins that would fight `.pagecount`'s own margin
-          reset below. `title` on each: legacy itself never set one here (checked
-          `reader.html.tt2` — bare `<a class="page-link">`, no title attribute at all), a real gap
-          beyond a port, not a missed one. */}
       <a
         className="fas fa-backward-step page-link archive-nav-link"
         title={t("reader.previousArchive") ?? undefined}
@@ -1691,15 +1245,6 @@ export function Reader() {
         style={{ fontSize: PAGINATOR_ICON_FONT_SIZE }}
         onClick={() => goTo("prev")}
       />
-      {/* `lineHeight: 1` — matches the icons' own real rendered line-height (`font-size`'s own
-          value, since Font Awesome glyphs are `line-height: 1` by convention); without it,
-          `line-height: normal`'s default leading throws off vertical centering at this larger
-          size. `margin: 0, padding: 0` overrides legacy theme CSS's real `.pagecount` rule
-          (`margin: 2px 25px 0; padding: 0 0 8px` — sized for the old, much smaller font, verified
-          live via `getComputedStyle`), whose bottom-heavy padding pushed the box itself visibly
-          off-center (3px gap above vs. 1px below, measured live) — flex's own `alignItems:
-          'center'`/`justifyContent: 'center'` already place this correctly, so the leftover
-          legacy spacing only fights it now. */}
       <div
         className="pagecount"
         style={{
@@ -1736,14 +1281,6 @@ export function Reader() {
     </div>
   );
 
-  // `fileInfoText` returns just the bare filename (dimensions/size omitted) whenever the new
-  // spread's `pageDimensions`/`pageSizesKb` aren't known yet — true for every freshly-turned-to
-  // page until its `onLoad` (and the follow-up `HEAD` request for byte size) resolve. Rendering
-  // that shorter string immediately made this line visibly shrink then grow back on every single
-  // page turn; holding the *previous* spread's full text during that gap (via a ref, so this
-  // doesn't itself trigger an extra render) keeps the line's content — and thus its wrapped
-  // height — stable until the new page's real info is ready to replace it outright, matching how
-  // `lastSpreadHeightRef` above smooths the image area's own height across the same gap.
   const currentFileInfo = pages.data
     ? fileInfoText(
         pages.data.pages,
@@ -1765,10 +1302,6 @@ export function Reader() {
   const displayedFileInfo = isFileInfoReady
     ? currentFileInfo
     : (lastFileInfoRef.current ?? currentFileInfo);
-  // Single-page + converted-to-WebP: render the info bar as two colored segments — the served
-  // variant (theme "good" green) first, then the original entry's own format/dimensions/size
-  // (theme "warning" red) plus how much the optimization shaved off. Spreads and unconverted
-  // pages keep the legacy plain-text line above.
   const leftResizeInfo =
     spread.right === null ? resizedPageInfo[spread.left] : undefined;
   const pageEntryName = pages.data
@@ -1814,14 +1347,6 @@ export function Reader() {
     </div>
   );
 
-  // Matches legacy's own real `reader.js` exactly: `content.tags.match(/artist:([^,]+)(?:,|$)/i)`
-  // — case-insensitive, the value runs up to the next comma or end of string. When present, the
-  // heading reads "{title} by {artist}" with the artist name as a real link to that artist's own
-  // search results (`getTagSearchURL`, the same helper `TagTable.tsx`'s tag chips already use);
-  // otherwise just the bare title, same as before. The literal `" by "` is not run through `t()`
-  // — verified against legacy's own real source (`reader.js` and every `locales/template/*.po`):
-  // this exact string was never internationalized there either, always a plain hardcoded English
-  // JS string concatenation regardless of the active UI language.
   const artistMatch = metadata.data.tags.match(/artist:([^,]+)(?:,|$)/i);
   const archiveHeading = artistMatch ? (
     <>
@@ -1852,13 +1377,6 @@ export function Reader() {
               ? "loading"
               : undefined
           }
-          // Overrides `.loading`'s CSS `min-height: 75vh` with the previous spread's own real
-          // height (captured in `goTo`, right before this page turn) whenever one's actually
-          // known — a floor that already matches what's about to render is far less likely to
-          // over- or under-shoot the incoming page's real height than a flat, content-blind 75vh
-          // guess. Falls through to the CSS default (by simply not setting `minHeight` at all,
-          // rather than overriding it with something equally arbitrary) for the very first page
-          // load, when there's no previous spread to measure yet.
           style={
             !currentSpreadLoaded && lastSpreadHeightRef.current !== null
               ? { minHeight: lastSpreadHeightRef.current }
@@ -1869,15 +1387,6 @@ export function Reader() {
             <div id="display" ref={infiniteScrollRootRef}>
               {pages.data.pages.map((url, i) => {
                 const hasRealHeight = pageDimensions[i + 1] !== undefined;
-                // Every page before the resume target gets its real `aspect-ratio` from
-                // `infiniteScrollResumeDimensions` (a lightweight, dimensions-only backend read —
-                // see its own docs) *before* its actual bytes have loaded, so the browser can
-                // compute this box's real rendered height right away from `imageStyle`'s own
-                // existing width/height constraint (e.g. `width: '100%'`) the exact same way it
-                // would once the image data itself arrives — no need to force this fetch any
-                // earlier than native `loading="lazy"` already would on its own. Pages beyond that
-                // range fall back to `.loading-placeholder`'s flat guess, same as before; they were
-                // never part of what the resume jump needs to land accurately.
                 const resumeDim =
                   infiniteScrollResumeDimensions.data?.dimensions[i];
                 const style: React.CSSProperties =
@@ -1923,17 +1432,6 @@ export function Reader() {
                   const x = e.clientX;
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();
-                  // A real `<a href>` becomes the focused element on click (standard browser
-                  // behavior for any focusable/clickable anchor) — left alone, that focus stuck
-                  // around after the click itself finished, so the very next keyboard shortcut
-                  // (`B` to toggle a bookmark, any other single-letter hotkey) made the browser's
-                  // own focus-ring heuristic treat this as "focus via keyboard interaction" and
-                  // paint a visible outline around the whole image, even though the user's actual
-                  // intent was just "press B", not "navigate to this link" — reported live,
-                  // 2026-08-28 (mouse-click a page to turn it, then press B on the next page).
-                  // `preventDefault()` above already stops the anchor's own navigation; `blur()`
-                  // here stops the *focus* from lingering afterward, matching what a plain
-                  // non-anchor click target would have done all along.
                   e.currentTarget.blur();
                   goTo(isLeftHalf ? "prev" : "next");
                 }}
@@ -2049,8 +1547,6 @@ export function Reader() {
 
         {overlay === "help" && (
           <>
-            {/* Legacy shows this via `.fadeTo(150, 0.6, ...)` — animates to 60% opacity, not fully
-              opaque black, so content behind the shade stays faintly visible. */}
             <div
               id="overlay-shade"
               style={{ display: "block", opacity: 0.6 }}
@@ -2062,17 +1558,8 @@ export function Reader() {
           </>
         )}
 
-        {/* Boundary overlay: recommendations only — no auto-jump (the user picks a card or
-          cancels). Legacy had nothing here (it immediately called
-          `readNextArchive`/`readPreviousArchive`, which toasted "last archive" without search
-          context); the panel replaces that toast with actual next-read suggestions. The
-          container is deliberately an *invisible* modal — no panel box, just the shade plus
-          the content floating above it (the boxy `base-overlay` panel felt obstructive).
-          Clicking the shade cancels, same as every other overlay on this page. */}
         {archiveTransition && (
           <>
-            {/* Lightbox-style shade: noticeably darker than the reader's own 0.6 overlays so the
-              recommendation cards pop, matching the classic lightbox look. */}
             <div
               id="overlay-shade"
               style={{
@@ -2082,12 +1569,6 @@ export function Reader() {
               }}
               onClick={() => setArchiveTransition(null)}
             />
-            /* Full-width fixed container (left:0/right:0 + translateY only) — a
-            `left: 50% + translate(-50%)` shrink-to-fit container's width is
-            content/available-derived and came out narrower than the 760px flex
-            row, wrapping the 5-per-row cards into more rows; the full-width
-            container lets the inner flex row's own maxWidth rule correctly
-            center a 5-across two-row grid on any desktop viewport. */
             <div
               className="rec-overlay"
               onClick={() => setArchiveTransition(null)}
@@ -2180,9 +1661,6 @@ export function Reader() {
                                 alt={rec.title}
                                 loading="lazy"
                               />
-                              {/* Status badges, same emoji set as the Library grid cards (🆕 new /
-                            👑 read / 📚 tankoubon). Semi-transparent dark chips stay readable on
-                            any thumbnail; neutral overlay chrome, not theme-colored. */}
                               {(rec.isnew || rec.is_read || rec.is_tank) && (
                                 <span
                                   style={{
@@ -2195,9 +1673,6 @@ export function Reader() {
                                     gap: 3,
                                   }}
                                 >
-                                  {/* Square 16px chips (emoji vertically/horizontally centered) — a
-                                padding-based chip would be a flat rectangle, since the emoji
-                                glyph's own box is taller than its advance width. */}
                                   {rec.is_tank && (
                                     <span
                                       title={
@@ -2244,10 +1719,6 @@ export function Reader() {
                 />
               </div>
             </div>
-            {/* Close button lives OUTSIDE the scrollable container — a fixed viewport-top-right
-              element, since the container's overflow would clip an absolutely-positioned child
-              that sits outside its box (top: -24 was getting cut off). White semi-transparent
-              circle, lightbox convention — neutral overlay chrome, not theme-colored. */}
             <button
               type="button"
               aria-label={t("reader.close") ?? undefined}
@@ -2262,7 +1733,6 @@ export function Reader() {
                 border: "none",
                 cursor: "pointer",
                 padding: 0,
-                // Flex centering (not line-height) so the glyph sits on the button's true center
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",

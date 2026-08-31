@@ -1,36 +1,30 @@
 import type { CSSProperties } from "react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { useInfiniteBookmarks } from "@/api/hooks"
 import type { BookmarkSort } from "@/api/types"
+import { IconButton, Input, InputGroup } from "@/components/common-ui/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
+import { FONT_SIZE_MD, FONT_SIZE_SM, useApplyTheme } from "@/theme"
 
 import { BookmarkedArchiveHoverCard } from "./BookmarkedArchiveHoverCard"
 import { HoverGridOrderSettingsMenu } from "./HoverGridOrderSettingsMenu"
 
+/** How long the search box waits after typing stops before firing a `q`-filtered request. */
+const SEARCH_DEBOUNCE_MS = 300
+
 const GRID_GAP = 16
-/** Fixed column counts — desktop always shows 5, the `560px` breakpoint (matching `lrr.css`'s own
- * mobile breakpoint) always shows 2 — rather than however many `228px`-wide cards happen to fit.
- * Column *width* is then derived from the real container width (see `columnWidth` below) and fed
- * back into `div.id1`'s own CSS as `--bookmark-card-width` (`index.css`), so the card genuinely
- * scales to fill its column instead of the grid trying to match a card stuck at a fixed size. */
+/** Fixed column counts per breakpoint, not however many 228px cards happen to fit — column width
+ * is then derived from real container width and fed to `.id1` as `--bookmark-card-width`. */
 const DESKTOP_COLUMNS = 5
 const MOBILE_COLUMNS = 2
 const MOBILE_BREAKPOINT = 560
 
-/** `div.id1`'s real rendered footprint at a given CSS `width` is wider than `width` itself — every
- * theme file (e.g. `themes/g.css`) gives it `margin: 3px 2px 2px 3px` plus a `content-box` `1px`
- * border, and `.id1` is `display: inline-block`, so its actual right edge lands `marginLeft +
- * borderBox width` past whatever contains it, i.e. `width + 5`, not just `width` (confirmed live:
- * setting `.id1`'s `width` to a column's full share bled its visible right edge 5px past the
- * grid's own column boundary). `cardWidthFor` backs that 5px out of the column's own share before
- * handing it to `.id1` as `--bookmark-card-width` (`index.css`), so `.id1`'s real visible edge —
- * not just its declared `width` — lands exactly on the column boundary, keeping the "line up with
- * the sort `<select>`" edge correct regardless of how wide each column ends up being. */
+/** `.id1`'s real rendered footprint is 5px wider than its declared `width` (theme margin +
+ * content-box border) — backed out here so its real edge lands on the column boundary. */
 const CARD_SPILL = 5
 
 /** Full width of one grid column/track, given how many columns the row is fixed to. */
@@ -39,25 +33,42 @@ function columnWidth(containerWidth: number, columns: number): number {
 }
 
 
-/** Independent bookmarks page (replaces the old "link a category to be the bookmark" mechanism)
- * — lists every archive with at least one page-level bookmark, one card per archive, hovering a
- * card expands a thumbnail grid of that archive's own bookmarked pages
- * (`BookmarkedArchiveHoverCard`). Skeleton mirrors `pages/Activity/ActivityPage.tsx`, but paginates
- * via `useInfiniteBookmarks` + an `IntersectionObserver` sentinel (same `rootMargin: "240px"`
- * pattern as `ArchiveOverviewOverlayPanel.tsx::PagePlaceholder`) instead of Activity's own
- * cursor-stack Prev/Next — scroll-to-load-more reads more naturally for a card grid than paged
- * buttons do. Switching `sort` changes the query key, which resets `useInfiniteQuery` back to the
- * first page on its own; no manual state reset needed. */
+/** Independent bookmarks page — one card per archive with at least one page-level bookmark;
+ * hovering expands a thumbnail grid of that archive's bookmarked pages. */
 export function BookmarksPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   useApplyTheme()
   useDocumentTitle(t("bookmarks.pageTitle") ?? undefined)
 
   const [sort, setSort] = useState<BookmarkSort>("bookmarked_at")
-  const bookmarks = useInfiniteBookmarks(sort)
+  const [queryInput, setQueryInput] = useState(() => searchParams.get("q") ?? "")
+  const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get("q")?.trim() ?? "")
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(queryInput.trim()), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [queryInput])
+
+  // Reflects the debounced query into the URL via `replace` — never `push` — so typing doesn't
+  // spam browser history with one entry per keystroke/debounce tick.
+  useEffect(() => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (debouncedQuery) next.set("q", debouncedQuery)
+        else next.delete("q")
+        return next
+      },
+      { replace: true },
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery])
+
+  const bookmarks = useInfiniteBookmarks(sort, debouncedQuery || undefined)
   const entries = bookmarks.data?.pages.flatMap((page) => page.entries) ?? []
   const isEmpty = !bookmarks.isLoading && entries.length === 0
+  const isSearching = debouncedQuery.length > 0
 
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = bookmarks
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -74,20 +85,11 @@ export function BookmarksPage() {
     return () => observer.disconnect()
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
-  // Column count is fixed per breakpoint (`DESKTOP_COLUMNS`/`MOBILE_COLUMNS`), not however many
-  // fixed-width cards happen to fit (`repeat(auto-fill, ...)` — tried and rejected, see the grid's
-  // own comment below). What's measured here, off `gridWrapperRef`'s own rendered width (a plain
-  // block element, `width: auto`, fills `.ido`), is only the container width needed to turn that
-  // fixed column count into an actual per-column pixel width (`cardWidthFor`).
   const gridWrapperRef = useRef<HTMLDivElement>(null)
   const [layout, setLayout] = useState({ columns: DESKTOP_COLUMNS, trackWidth: 0, cardWidth: 0 })
   const hasEntries = entries.length > 0
-  // Deliberately depends on `hasEntries` (not `[]`) — `gridWrapperRef`'s div is only rendered once
-  // `entries` is non-empty, so an empty-deps effect that runs once at mount (before the first
-  // successful fetch resolves) would find `gridWrapperRef.current` still `null`, bail out via the
-  // early `return`, and then never run again once the div actually exists — confirmed live as
-  // exactly this: layout stuck at its initial value even once cards had loaded and the wrapper was
-  // rendered at its real (much wider) size.
+  // Depends on hasEntries, not [] — gridWrapperRef's div only renders once entries is non-empty,
+  // so an empty-deps effect running at mount would find it null and never re-run once it exists.
   useLayoutEffect(() => {
     const el = gridWrapperRef.current
     if (!el) return
@@ -106,15 +108,6 @@ export function BookmarksPage() {
       <h1 className="ih">{t("bookmarks.pageTitle")}</h1>
       <p style={{ fontSize: FONT_SIZE_SM }}>{t("bookmarks.pageDescription")}</p>
 
-      {/* `position: sticky` — stays visible while scrolling through a long card grid, rather than
-          needing a scroll back to the top just to change either sort. `background: "inherit"`
-          (not a hardcoded color) picks up `.ido`'s own theme-specific background — each of the 5
-          real themes sets a different value for it (`themes/g.css`'s own `#EDEBDF`, etc.) — so
-          cards scrolling underneath this bar don't show through it, without needing a per-theme
-          override of this bar's own background the way a genuinely new color would (per this
-          repo's own "custom colors must be theme-aware" rule — inheriting an already-theme-aware
-          value isn't a new color at all). `zIndex: 1` clears the card grid below (`z-index: auto`
-          by default) so a card's own thumbnail never paints over this bar during the scroll. */}
       <div
         style={{
           position: "sticky",
@@ -130,6 +123,46 @@ export function BookmarksPage() {
           paddingBottom: 4,
         }}
       >
+        <InputGroup
+          // Fixed `width`, not `minWidth` — the group must not shrink-to-fit, or mounting/
+          // unmounting the clear-button `endElement` (conditional on `queryInput`) changes the
+          // box's own width (confirmed live: 200px empty vs 210px with text).
+          style={{ width: 200 }}
+          endElement={
+            queryInput && (
+              <IconButton
+                variant="ghost-btn"
+                size={18}
+                icon="fa fa-times"
+                aria-label={t("bookmarks.clearSearch") ?? undefined}
+                title={t("bookmarks.clearSearch") ?? undefined}
+                onClick={() => setQueryInput("")}
+              />
+            )
+          }
+        >
+          <Input
+            type="text"
+            value={queryInput}
+            placeholder={t("bookmarks.searchPlaceholder") ?? undefined}
+            style={{
+              width: "100%",
+              // Always reserved, not conditional on `queryInput` — the slot's presence must not
+              // change the input's own content box, only whether it's visibly occupied.
+              paddingRight: 22,
+              // Matches the adjacent `.favtag-btn` sort `<select>`'s look (outset border, bold,
+              // rounded, taller) instead of `.stdinput`'s thinner default. Border/text color is
+              // left to `.stdinput`'s own per-theme cascade — only the shape/weight is overridden.
+              height: 25,
+              borderWidth: 2,
+              borderStyle: "outset",
+              borderRadius: 3,
+              fontSize: FONT_SIZE_MD,
+              fontWeight: "bold",
+            }}
+            onChange={(e) => setQueryInput(e.target.value)}
+          />
+        </InputGroup>
         <select
           className="favtag-btn"
           value={sort}
@@ -151,21 +184,11 @@ export function BookmarksPage() {
       {isEmpty && (
         <div style={{ textAlign: "center", margin: "24px 0" }}>
           <i className="fa fa-3x fa-bookmark"></i>
-          <p>{t("bookmarks.noBookmarksYet")}</p>
+          <p>{isSearching ? t("bookmarks.noMatchingBookmarks") : t("bookmarks.noBookmarksYet")}</p>
         </div>
       )}
 
       {entries.length > 0 && (
-        // `gridWrapperRef` — a plain block div, `width: auto`, fills `.ido` — exists only to be
-        // measured (see the `ResizeObserver` above): its rendered width is how `layout` gets
-        // picked. The grid's own tracks are set to that same computed `trackWidth` in px
-        // (`columnWidth`) rather than `1fr` — `1fr` was tried first and rejected: its resolved
-        // track width didn't exactly match `columnWidth`'s own arithmetic (confirmed live, off by
-        // a couple px — plausibly `1fr`'s own internal rounding), so `.id1`'s width (set from the
-        // same `columnWidth` via `--bookmark-card-width`) ended up sized for a slightly different
-        // track than the grid actually rendered. Using one shared computed number for *both* the
-        // grid's `gridTemplateColumns` and `.id1`'s CSS variable removes that gap entirely — they
-        // can't disagree if they're the same number.
         <div ref={gridWrapperRef}>
           <div
             className="bookmarks-grid"
@@ -186,6 +209,7 @@ export function BookmarksPage() {
                 cropThumbs={true}
                 onContextMenu={(e) => e.preventDefault()}
                 onOpen={(id) => navigate(routes.reader(id))}
+                highlightQuery={debouncedQuery}
               />
             ))}
           </div>
@@ -199,12 +223,6 @@ export function BookmarksPage() {
         </div>
       )}
 
-      {/* `position: sticky` + `bottom: 0` — stays reachable regardless of how far the infinite
-          scroll has loaded, rather than sitting at the true end of an ever-growing card list
-          (effectively unreachable without scrolling past everything). Same `background: "inherit"`/
-          `zIndex: 1` reasoning as the sort bar's own sticky wrapper above — picks up `.ido`'s
-          theme-specific background so cards scrolling underneath don't show through, and clears
-          the card grid's default stacking order. */}
       <div
         style={{ position: "sticky", bottom: 0, zIndex: 1, background: "inherit", paddingTop: 12, paddingBottom: 12 }}
       >

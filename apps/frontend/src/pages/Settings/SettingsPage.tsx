@@ -32,10 +32,8 @@ export function Settings() {
   }
 
   if (settings.isError || !settings.data) {
-    // See `LibraryPage.tsx`'s own identical guard: a 401 here just means `RequireAuth`
-    // (`RouteGuards.tsx`) is already about to navigate to `/login` in reaction to the same
-    // invalidated `login-status` query — rendering nothing for that one render avoids flashing a
-    // generic "failed to load" message for what's actually a routine session expiry.
+    // A 401 here just means RequireAuth is about to redirect to /login — render nothing rather
+    // than flash a generic error for a routine session expiry.
     if (settings.error instanceof ApiError && settings.error.status === 401) return null
 
     return (
@@ -61,17 +59,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [htmltitle, setHtmltitle] = useState(settings.htmltitle)
   const [motd, setMotd] = useState(settings.motd)
   const [language, setLanguage] = useState(settings.language)
-  // The sidebar's own `LanguageSelector` (rendered lower on this same page) writes
-  // `settings.language` directly and expects the Global section's "Language" dropdown to reflect
-  // that pick immediately, not just after a reload — every other field here is fine staying a
-  // one-time snapshot (`useState(settings.x)`) because nothing *else* on this page writes to
-  // `settings` mid-render, but `language` is the one exception now that a second control writes
-  // it. React's own recommended "adjusting state when a prop changes" pattern (setState directly
-  // during render when a tracked value changes, not inside a `useEffect` — same convention
-  // `Categories.tsx`'s own `syncedId` already establishes in this codebase) rather than an effect,
-  // which this project's lint rules flag as cascading-render-prone. The tradeoff (an in-progress,
-  // unsaved edit to *this* dropdown specifically could be clobbered by a concurrent sidebar pick)
-  // is accepted as the much less likely case to actually happen in practice.
+  // Synced via "adjust state during render" (not an effect) since the sidebar's LanguageSelector
+  // writes settings.language directly and this dropdown must reflect it immediately.
   const [syncedLanguage, setSyncedLanguage] = useState(settings.language)
   if (syncedLanguage !== settings.language) {
     setSyncedLanguage(settings.language)
@@ -88,10 +77,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
-  // Incremented after each save to remount GlobalSection (resets editingKey).
   const [saveTick, setSaveTick] = useState(0)
-  // The real key is never sent to the frontend — `llm_api_key_set` is a boolean only.
-  // `keyInput` holds whatever the user types when they actively choose to set/change it.
   const [keyInput, setKeyInput] = useState("")
 
   const [newPassword, setNewPassword] = useState("")
@@ -115,9 +101,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
   const [status, setStatus] = useState("")
 
-  // Dirty tracking for the bottom save bar: any field the Save button submits differing from
-  // the server-loaded snapshot means there's something to save. `theme` is deliberately NOT in
-  // this list — the theme switcher saves itself immediately on click (see the Theme section).
   const isDirty = useMemo(
     () =>
       htmltitle !== settings.htmltitle ||
@@ -159,8 +142,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   )
 
   async function handleSave() {
-    // Password login can no longer be disabled (007-guest-restricted-access) — a new-password
-    // submission is no longer gated on an `enablepass` toggle, only on the field being filled in.
+    // A new-password submission is gated only on the field being filled in, not an enablepass toggle.
     if (newPassword) {
       if (newPassword !== newPassword2) {
         setStatus(t("settings.passwordsDonTMatch") ?? "")
@@ -246,17 +228,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
         {status && <p style={{ fontSize: FONT_SIZE_SM }}>{status}</p>}
 
-        {/* Not part of legacy's own left-column (legacy has no visible logout affordance — its
-            session just expires — and only one site-wide language, set below in Global
-            Settings). Kept minimal and visually separate since this SPA needs both. */}
         <hr style={{ margin: "12px 0" }} />
-        {/* Both `LanguageSelector` (a `common-ui/Select`) and the logout button (a `common-ui/
-            Button`) render a real `<button>` as their outer box — this is what actually fixes the
-            vertical-alignment mismatch a plain `<select className="favtag-btn">` next to a
-            `<input className="stdbtn">` had (real user feedback, 2026-08-27): no amount of forcing
-            height/font-size/vertical-align to match closed the gap, because a native `<select>`
-            reserves its own internal layout space for the platform's dropdown arrow that isn't
-            reflected in any of those CSS properties at all. */}
         <LanguageSelector variant="stdbtn" />{" "}
         <Button id="logout" onClick={() => void handleLogout()}>
           {t("settings.logout")}
@@ -266,7 +238,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       <form
         className="right-column"
         onSubmit={(e) => e.preventDefault()}
-        // Bottom clearance so the fixed save bar never covers the last section's content.
         style={{ paddingBottom: 72 }}
       >
         <ul className="collapsible extensible with-right-caret">
@@ -406,13 +377,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         </ul>
       </form>
 
-      {/* Fixed bottom save bar, shown only while there are unsaved changes — the Save button
-          used to sit at the top-left column, far from the sections being edited. The bar's own
-          background/border color is theme-specific (`.settings-save-bar` in each theme file,
-          reusing that theme's own accent hue per CLAUDE.md's custom-color rule); this container
-          is always mounted so the transition isn't a mount/unmount flash, the bar itself is
-          hidden when clean. `pointer-events: none` when hidden so an invisible bar can't block
-          clicks on content beneath it. */}
       <div className="settings-save-bar" style={isDirty ? undefined : { display: "none" }}>
         <input id="save" className="stdbtn" type="button" value={t("pluginOptions.saveSettings") ?? undefined} onClick={() => void handleSave()} />
       </div>

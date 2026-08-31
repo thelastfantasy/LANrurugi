@@ -1,8 +1,12 @@
+export * from "./BubbleActionMenu"
+
 export * from "./ErrorBoundary"
 
-export * from "./IconButton"
+export * from "./Menu"
 
 export * from "./Modal"
+
+export * from "./Popover"
 
 export * from "./PopupMenu"
 

@@ -776,6 +776,72 @@ impl GroupingRepository {
         let _: () = conn.del(tankid.as_str()).await?;
         Ok(())
     }
+
+    /// Maps a Tankoubon-global page number to the real member archive it falls in (and that
+    /// archive's own local page number), by walking `archives` in order and summing each member's
+    /// own `pagecount` — same cumulative-offset approach as the frontend's own
+    /// `useTankoubonReading.ts::getArchiveForPage` and this crate's former private
+    /// `tankoubons.rs::resolve_global_page` (now a thin caller of this method instead of its own
+    /// copy). `archive_index` (0-based) is included alongside the resolved archive/page so a
+    /// caller building a chapter-numbered label (e.g. `bookmarks.rs`'s Tankoubon-bookmark listing)
+    /// doesn't have to re-walk `archives` a second time just to find the member's own position.
+    /// `None` if `global_page` is out of range, including when every member's `pagecount` is `0`
+    /// (an archive not yet scanned, or one that's vanished — same tolerance
+    /// `TankoubonFullResponse`'s own docs describe for `full_data` silently omitting a missing
+    /// member).
+    pub async fn resolve_global_page(
+        &self,
+        archives_repo: &ArchiveRepository,
+        archives: &[ArchiveId],
+        global_page: u32,
+    ) -> Result<Option<(ArchiveId, u32, usize)>> {
+        let mut offset = 0u32;
+        for (index, id) in archives.iter().enumerate() {
+            let pagecount = archives_repo
+                .get(id)
+                .await?
+                .map(|a| a.pagecount)
+                .unwrap_or(0);
+            if global_page > offset && global_page <= offset + pagecount {
+                return Ok(Some((id.clone(), global_page - offset, index)));
+            }
+            offset += pagecount;
+        }
+        Ok(None)
+    }
+
+    /// The inverse of [`Self::resolve_global_page`]: given a real archive id and that archive's
+    /// own local page number, finds every Tankoubon this archive is currently a member of (via
+    /// [`Self::for_archive`]) and, for each, the equivalent Tankoubon-global page number and this
+    /// member's 0-based position in that Tankoubon's own reading order. An archive can be a member
+    /// of more than one Tankoubon (issue #67 — the reverse index this relies on is many-to-many),
+    /// so this returns a `Vec`, not a single result; empty when the archive isn't a member of any
+    /// Tankoubon. Used by `bookmarks.rs`'s `GET /bookmarks` aggregation to fold a bookmark sitting
+    /// on a Tankoubon member into that Tankoubon's own card instead of listing the bare archive.
+    pub async fn resolve_local_page(
+        &self,
+        archives_repo: &ArchiveRepository,
+        archive_id: &ArchiveId,
+        local_page: u32,
+    ) -> Result<Vec<(TankId, u32, usize)>> {
+        let mut results = Vec::new();
+        for grouping in self.for_archive(archive_id).await? {
+            let mut offset = 0u32;
+            for (index, id) in grouping.archives.iter().enumerate() {
+                if id == archive_id {
+                    results.push((grouping.tankid.clone(), offset + local_page, index));
+                    break;
+                }
+                let pagecount = archives_repo
+                    .get(id)
+                    .await?
+                    .map(|a| a.pagecount)
+                    .unwrap_or(0);
+                offset += pagecount;
+            }
+        }
+        Ok(results)
+    }
 }
 
 /// Stamps are `STAMPS_<page>_<millisecond-timestamp>` hashes (verified: `Model/Stamp.pm`).
@@ -1092,5 +1158,188 @@ mod tests {
         assert!(final_archive.stamp_ids.is_empty());
 
         archive_repo.delete(&archive_id).await.unwrap();
+    }
+
+    fn minimal_archive(id: &ArchiveId, pagecount: u32) -> Archive {
+        Archive {
+            id: id.clone(),
+            name: id.as_str().to_string(),
+            title: id.as_str().to_string(),
+            file: format!("/x/{}.zip", id.as_str()),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        }
+    }
+
+    /// `resolve_global_page`/`resolve_local_page` are the mapping this crate now offers so a
+    /// Tankoubon can be addressed by a single global page number end to end (bookmarks/stamps
+    /// placed while reading a Tankoubon as one concatenated book — issue #97's own follow-on) —
+    /// covers both directions plus their edge cases: a page landing on the boundary between two
+    /// members, out-of-range in both directions, a zero-`pagecount` member (not yet scanned) being
+    /// skipped over rather than treated as a valid 0-length range, and an archive that's a member
+    /// of more than one Tankoubon (issue #67's own many-to-many reverse index).
+    #[tokio::test]
+    async fn resolve_global_and_local_page_round_trip_across_tankoubon_members() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives_repo = ArchiveRepository::new(pool.clone());
+        let groupings_repo = GroupingRepository::new(pool);
+
+        let a1 = ArchiveId("1".repeat(40));
+        let a2 = ArchiveId("2".repeat(40));
+        let a3_unscanned = ArchiveId("3".repeat(40));
+        let a4 = ArchiveId("4".repeat(40));
+        archives_repo.save(&minimal_archive(&a1, 5)).await.unwrap();
+        archives_repo.save(&minimal_archive(&a2, 3)).await.unwrap();
+        archives_repo
+            .save(&minimal_archive(&a3_unscanned, 0))
+            .await
+            .unwrap();
+        archives_repo.save(&minimal_archive(&a4, 4)).await.unwrap();
+
+        let tankid = TankId("TANK_1700000010".to_string());
+        let grouping = Grouping {
+            tankid: tankid.clone(),
+            name: "Series".to_string(),
+            summary: String::new(),
+            tags: String::new(),
+            progress: 0,
+            archives: vec![a1.clone(), a2.clone(), a3_unscanned.clone(), a4.clone()],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        };
+        groupings_repo.save(&grouping).await.unwrap();
+
+        // Global pages 1-5 -> a1 (pagecount 5), local pages 1-5.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 1)
+                .await
+                .unwrap(),
+            Some((a1.clone(), 1, 0))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 5)
+                .await
+                .unwrap(),
+            Some((a1.clone(), 5, 0))
+        );
+        // Global page 6 is the first page of a2 (the boundary right after a1 ends) — not off-by-one
+        // into a1's own range.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 6)
+                .await
+                .unwrap(),
+            Some((a2.clone(), 1, 1))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 8)
+                .await
+                .unwrap(),
+            Some((a2.clone(), 3, 1))
+        );
+        // a3_unscanned has pagecount 0 — contributes no range at all, so global page 9 (right after
+        // a2's own last page) resolves straight through to a4, not to a3 at some invalid local page.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 9)
+                .await
+                .unwrap(),
+            Some((a4.clone(), 1, 3))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 12)
+                .await
+                .unwrap(),
+            Some((a4.clone(), 4, 3))
+        );
+        // Out of range on both ends: page 0 and past the Tankoubon's total (12).
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 0)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 13)
+                .await
+                .unwrap(),
+            None
+        );
+
+        // Inverse: a2's own local page 3 is global page 8 in this Tankoubon, at member index 1.
+        let reverse = groupings_repo
+            .resolve_local_page(&archives_repo, &a2, 3)
+            .await
+            .unwrap();
+        assert_eq!(reverse, vec![(tankid.clone(), 8, 1)]);
+
+        // An archive not a member of any Tankoubon resolves to no entries at all, not an error.
+        let not_a_member = ArchiveId("5".repeat(40));
+        archives_repo
+            .save(&minimal_archive(&not_a_member, 1))
+            .await
+            .unwrap();
+        assert!(groupings_repo
+            .resolve_local_page(&archives_repo, &not_a_member, 1)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // issue #67: an archive that's a member of two different Tankoubons resolves to one entry
+        // per membership, not just the first.
+        let tankid2 = TankId("TANK_1700000020".to_string());
+        let grouping2 = Grouping {
+            tankid: tankid2.clone(),
+            name: "Series 2".to_string(),
+            summary: String::new(),
+            tags: String::new(),
+            progress: 0,
+            archives: vec![a2.clone()],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        };
+        groupings_repo.save(&grouping2).await.unwrap();
+        let mut both = groupings_repo
+            .resolve_local_page(&archives_repo, &a2, 1)
+            .await
+            .unwrap();
+        both.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        assert_eq!(both, vec![(tankid.clone(), 6, 1), (tankid2.clone(), 1, 0)]);
+
+        groupings_repo.delete(&tankid).await.unwrap();
+        groupings_repo.delete(&tankid2).await.unwrap();
+        archives_repo.delete(&a1).await.unwrap();
+        archives_repo.delete(&a2).await.unwrap();
+        archives_repo.delete(&a3_unscanned).await.unwrap();
+        archives_repo.delete(&a4).await.unwrap();
+        archives_repo.delete(&not_a_member).await.unwrap();
     }
 }

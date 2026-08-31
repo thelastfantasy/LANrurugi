@@ -46,11 +46,7 @@ export function RecentlyAddedCarousel({
   hideCompleted: boolean;
   groupbyTanks: boolean;
   cropThumbs: boolean;
-  /** 007-guest-restricted-access: gates the "Bookmarked" carousel mode — an unauthenticated guest
-   * has no personal bookmarks (bookmarking itself is a write action guest_visitor's Casbin policy
-   * already denies), so offering a mode whose own `GET /bookmarks` call would just come back
-   * empty is a confusing dead end rather than a real feature, even though that GET itself is
-   * technically reachable by a guest. */
+  /** Gates the "Bookmarked" carousel mode — an unauthenticated guest has no personal bookmarks. */
   loggedIn: boolean;
   onContextMenu: (
     e: MouseEvent,
@@ -61,10 +57,7 @@ export function RecentlyAddedCarousel({
   multiSelect: boolean;
   selectedIds: string[];
   onToggleSelected: (id: string) => void;
-  /** Drag-to-reorder in the selection list below — additive (legacy has no such capability at
-   * all, its own selection list is a plain unordered `Set`). The new order becomes the merged
-   * Tankoubon's own volume order (`archives`, itself order-significant) when `onMerge` folds the
-   * selection into one, rather than whatever arbitrary order clicking each archive happened in. */
+  /** Drag-to-reorder in the selection list — the new order becomes the merged Tankoubon's volume order. */
   onReorderSelection: (newOrder: string[]) => void;
   onSelectPage: () => void;
   onClearSelection: () => void;
@@ -82,10 +75,6 @@ export function RecentlyAddedCarousel({
       (localStorage.getItem(CAROUSEL_TYPE_KEY) as CarouselMode | null) ??
       "ondeck",
   );
-  // A logged-out guest previously left in "Bookmarked" mode (the localStorage value from a
-  // prior, authenticated session) falls back to "On Deck" rather than rendering an empty
-  // "Bookmarked" carousel with no way to explain why — the persisted preference itself is left
-  // alone so it resumes once the same browser logs back in.
   const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode;
   const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
@@ -93,18 +82,8 @@ export function RecentlyAddedCarousel({
   const stepSlide = useCallback(() => {
     const firstChild = carouselRef.current
       ?.firstElementChild as HTMLElement | null;
-    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236; // 228 + 8 gap
+    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236;
   }, []);
-  // Drives the carousel's own Lenis instance from a wheel gesture `BookmarkHoverGrid` decided not
-  // to consume itself (see that component's `onWheelPassthrough` prop docs for the full three-way
-  // dispatch this feeds). Deliberately *replays* the original event onto `carouselRef.current`
-  // (a synthetic `WheelEvent` with the same deltas) rather than computing a `lenis.scrollTo(...)`
-  // offset by hand — Lenis owns its own `wheelMultiplier`/inertia/`lerp` pipeline internally
-  // (its `VirtualScroll` class listens for real `wheel` events on exactly this element), and a
-  // hand-rolled `scrollTo` call bypasses all of that, producing a scroll that's both slower and
-  // less smooth than scrolling the strip directly (confirmed live: passthrough scroll felt
-  // noticeably different from the carousel's own native wheel handling). Replaying the real event
-  // instead means Lenis processes it exactly as if the wheel had been over the strip itself.
   const handleBookmarkWheelPassthrough = useCallback(
     (deltaX: number, deltaY: number) => {
       const el = carouselRef.current;
@@ -126,9 +105,6 @@ export function RecentlyAddedCarousel({
     localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0");
   }, [open]);
 
-  // The mode-switch "..." dropdown is its own local overlay (not the page-level
-  // `contextMenu`/`categoryOverflowOpen` state Escape already clears in the parent), so it needs
-  // its own listener to close on Escape too.
   useEffect(() => {
     if (!menuOpen) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -138,18 +114,9 @@ export function RecentlyAddedCarousel({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [menuOpen]);
   useEffect(() => {
-    // Persists `storedMode` (the real, user-chosen preference), not `mode` (its guest-aware
-    // fallback) — a logged-out guest's "Bookmarked" preference from a prior session must survive
-    // this render's fallback-to-"On Deck" and still be there once the same browser logs back in.
     localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode);
   }, [storedMode]);
 
-  // Legacy's own `enterSelectionCarouselMode` (`index.js`) force-expands the carousel — entering
-  // MSM with it collapsed would otherwise hide the very selection list the mode exists to show.
-  // A derived value (not an effect calling `setOpen`) since this is plain synchronous rendering
-  // logic, not a sync-with-an-external-system concern — `open` itself still holds only the user's
-  // own manually-toggled preference (that's what's persisted to `localStorage` above), unaffected
-  // by MSM's temporary forced-expand.
   const isOpen = open || multiSelect;
 
   const params = new URLSearchParams();
@@ -185,9 +152,6 @@ export function RecentlyAddedCarousel({
       path = `/search?${modeParams.toString()}`;
       break;
     case "bookmark":
-      // Unused — `carouselQuery` below is disabled in this mode (`useInfiniteBookmarks()`
-      // supplies `items` instead), but `path` still needs a value to satisfy the
-      // `let path: string` declaration below.
       path = "";
       break;
     default:
@@ -204,10 +168,6 @@ export function RecentlyAddedCarousel({
     queryFn: () => fetchJson<SearchResponse>(path),
     enabled: isOpen && !multiSelect && !isBookmarkMode,
   });
-  // Only the first page — this is a horizontal-scroll strip, not a "scroll to load more" list
-  // (that's what the standalone `/bookmarks` page is for), so `fetchNextPage` is never called.
-  // Fixed to the default `bookmarked_at` sort — sort switching is only offered on the standalone
-  // page.
   const bookmarksQuery = useInfiniteBookmarks("bookmarked_at");
   const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? [];
   const items: ArchiveMetadata[] = useMemo(
@@ -223,12 +183,8 @@ export function RecentlyAddedCarousel({
     ? bookmarksQuery.isLoading
     : carouselQuery.isLoading;
 
-  // Lenis init with `items` guard — the carousel div only mounts when data arrives. Lenis drives
-  // real `scrollLeft` on `el` (not a `transform`), so `el`'s own native `scroll` event still
-  // fires during a Lenis-driven scroll — `BookmarkedArchiveHoverCard`'s own `[data-scroll-container]`
-  // listener (see that component's docs) relies on exactly this to keep an open bookmark-hover
-  // preview correctly anchored/closed as the strip scrolls underneath a stationary cursor, with no
-  // Lenis-specific wiring needed here beyond the `data-scroll-container` attribute below.
+  // Lenis drives real `scrollLeft` on `el` (not a `transform`), so native `scroll` events still
+  // fire — `BookmarkedArchiveHoverCard`'s `[data-scroll-container]` listener relies on this.
   useEffect(() => {
     const el = carouselRef.current;
     if (!el || lenisRef.current) return;
@@ -258,11 +214,6 @@ export function RecentlyAddedCarousel({
 
   return (
     <ul className="collapsible index-carousel with-right-caret">
-      {/* Real legacy class list is exactly `collapsible index-carousel with-right-caret` with no
-          inline style — `index-carousel`'s CSS (`lrr.css`) supplies the panel's own margins/inset,
-          and `.option-flyout>.collapsible-title` is a direct-child selector, so
-          `.collapsible-title`/`.collapsible-right` must stay direct children of `.option-flyout`
-          (no wrapper div) or that styling silently drops. */}
       <li
         className="option-flyout"
         style={{
@@ -271,10 +222,6 @@ export function RecentlyAddedCarousel({
           justifyContent: "space-between",
         }}
       >
-        {/* Matches legacy's real two-sibling split — `caret-right`'s CSS `::after` glyph paints
-            at the end of whichever element carries the class, so keeping the refresh/more-options
-            buttons out of `.collapsible-title` entirely puts the caret right after "On Deck"
-            instead of at the far right past both buttons. */}
         <div
           className={`collapsible-title caret-right${isOpen ? " active" : ""}`}
           onClick={() => setOpen((o) => !o)}
@@ -285,9 +232,6 @@ export function RecentlyAddedCarousel({
             overflow: "hidden",
           }}
         >
-          {/* Legacy's `enterSelectionCarouselMode`/`exitSelectionCarouselMode` (`index.js`) swap
-              this same header's icon/text in place rather than showing a second header — MSM is a
-              *mode the carousel itself enters*, not a separate panel underneath it. */}
           <i
             className={
               multiSelect ? "fas fa-check-square" : `fa ${CAROUSEL_ICON[mode]}`
@@ -303,14 +247,9 @@ export function RecentlyAddedCarousel({
             className="collapsible-right"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Legacy's real 4-button MSM toolbar lives in this exact `.collapsible-right`
-                slot, replacing the refresh/more-options icons. `updateSelectionCount` hides
-                batch-ops/merge/clear at zero selected — only select-page stays visible. */}
             {selectedIds.length > 0 && (
               <span>{t("library.selected", { n: selectedIds.length })}</span>
             )}
-            {/* No `marginBottom` offset on these four, unlike the refresh/more-options icons
-                below (`margin-bottom: 0px` vs. `-4px` in legacy's real computed style). */}
             {selectedIds.length > 0 && (
               <a
                 href="#"
@@ -387,9 +326,6 @@ export function RecentlyAddedCarousel({
                 }}
               ></a>
               {menuOpen && (
-                // Not portaled — positioned via `top: '100%'`/`right: 0` against this menu's own
-                // trigger `<span style={{ position: 'relative' }}>`, which a default portal to
-                // `document.body` would detach it from.
                 <PopupMenu
                   portal={false}
                   style={{
@@ -435,27 +371,11 @@ export function RecentlyAddedCarousel({
           </div>
         )}
         {isOpen && multiSelect && (
-          // Legacy's carousel body is repurposed into the selection list itself during MSM,
-          // reusing the same empty-state icon/copy the normal "no results" state has.
-          //
-          // `boxSizing: 'border-box'` matters here: `.option-flyout>.collapsible-body`'s real CSS
-          // gives it `padding: 10px !important`, which under content-box sizing would add on top
-          // of `width: 100%` instead of being included in it, overflowing the `<li>`'s right edge.
           <div
             className="collapsible-body"
             style={{ width: "100%", boxSizing: "border-box" }}
           >
             {selectedIds.length === 0 ? (
-              /* The empty state reuses the grid card's own DOM skeleton (`div.id1` > `id2` +
-                 `id3` + `id4`, exactly `ArchiveCard`'s structure) instead of a hardcoded height —
-                 the card's height is pure CSS (`id2` 30px + `id3` 280px desktop / 196px under
-                 `lrr.css`'s `max-width: 560px` breakpoint + `id4` 20px + `id1`'s `padding-top`),
-                 so this panel matches the grid's cards on any device/theme with no measurement
-                 and no state. The outer `padding: '8px 0'` wrapper is the *same* wrapper the
-                 populated branch's `SortableList` row sits in — without it the empty state
-                 rendered 16px shorter than the populated one (the row padding's height), a
-                 live-confirmed panel-height jump on selecting the first archive. The hint text
-                 sits centered inside the `id3` cover slot. */
               <div style={{ padding: "8px 0" }}>
                 <div
                   className="id1"
@@ -480,13 +400,6 @@ export function RecentlyAddedCarousel({
                 </div>
               </div>
             ) : (
-              // Deliberately not the `<Swiper>` the read-only carousel modes below use — `swiper/
-              // react` requires `SwiperSlide` to be a direct JSX child of `Swiper` (see
-              // `SelectedArchiveSlideContent`'s own docs for the real bug that comes from breaking
-              // that), and combining Swiper's own slide-transform positioning with dnd-kit's
-              // sortable transforms on the *same* elements would be fighting two libraries over the
-              // same job. `SortableList`'s `horizontal` direction gives the same "row of cards,
-              // scrolls instead of wrapping" look via a plain `overflow-x: auto` flex row.
               <div style={{ padding: "8px 0" }}>
                 <SortableList
                   items={selectedIds}
@@ -497,10 +410,6 @@ export function RecentlyAddedCarousel({
                     <div
                       {...dragHandleProps.attributes}
                       {...dragHandleProps.listeners}
-                      // `.carousel-slide` (`index.css`) — same responsive-width fix as the
-                      // read-only carousel above, and the same bug: a plain inline `width: 228`
-                      // can't respond to `lrr.css`'s own `max-width: 560px` breakpoint that
-                      // `div.id1` (inside `SelectedArchiveSlideContent`) shrinks to 164px under.
                       className="carousel-slide"
                       style={{
                         marginRight: 8,
@@ -525,7 +434,6 @@ export function RecentlyAddedCarousel({
           </div>
         )}
         {isOpen && !multiSelect && (
-          // Same `boxSizing: 'border-box'` reasoning as the MSM branch above.
           <div
             className="collapsible-body"
             style={{ width: "100%", boxSizing: "border-box" }}
@@ -564,10 +472,6 @@ export function RecentlyAddedCarousel({
                 <div
                   ref={carouselRef}
                   className="hide-scrollbar"
-                  // `data-scroll-container` — a stable, purpose-declared hook `BookmarkedArchiveHoverCard`'s
-                  // own `closest()` scroll-re-anchor listener looks for (see that component's docs),
-                  // instead of coupling to `hide-scrollbar`/a specific className that's free to change
-                  // for purely visual reasons unrelated to "this is the element that actually scrolls."
                   data-scroll-container
                   style={{
                     display: "flex",

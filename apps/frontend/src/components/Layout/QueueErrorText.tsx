@@ -4,16 +4,8 @@ import { useNavigate } from "react-router-dom"
 import type { QueueError } from "@/api/types"
 import { routes } from "@/lib/routes"
 
-/** Renders a structured `QueueError` (`lanrurugi_core::queue_error::QueueError`) as translated
- * text — maps `.kind` to an i18n key and interpolates that variant's own fields into it, rather
- * than showing untranslatable raw English `Display` text (the previous behavior this replaces).
- * `duplicate_archive` additionally renders `existing_id` as a real link to that archive's reader
- * page, since a bare ID string in prose isn't independently actionable.
- *
- * A `plugin_reported` error's `error_code` IS the i18n key itself (the plugin author's own
- * English phrase — see `plugin-sdk.ts`'s `PluginError` docs) rather than one of this component's
- * own fixed per-kind keys — this is the mechanism that makes a plugin's ~41 individual error
- * sites translatable without the frontend needing to enumerate every plugin's every message. */
+/** Renders a structured `QueueError` as translated text, mapping `.kind` to an i18n key. A
+ * `plugin_reported` error's `error_code` is itself the i18n key (see `plugin-sdk.ts`'s `PluginError`). */
 export function QueueErrorText({ error }: { error: QueueError }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
