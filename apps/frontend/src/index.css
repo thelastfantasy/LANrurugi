@@ -526,33 +526,6 @@ input[type="checkbox"]:disabled {
 .ai-group-checklist-item + .ai-group-checklist-item {
   border-top: 1px solid rgba(128, 128, 128, 0.12);
 }
-/* ArchiveChecklistItem's own markup separates the checkbox from the title with a single literal
- * space character (`{" "}`) — visually tight at this page's small base font size, especially next
- * to titles long enough to need the row-height fix above. A real margin on the checkbox itself
- * (scoped to this modal's own class, not ArchiveChecklistItem — Categories.tsx/Batch.tsx's denser
- * lists don't have this problem at their own font sizes) gives it real breathing room instead. */
-.ai-group-checklist-item input[type="checkbox"] {
-  margin-right: 10px !important;
-  transform: scale(1.15);
-  /* Without this, the checkbox's own inline layout box still reserves space at its PRE-scale
-     size, so the enlarged checkbox visually overlaps/crowds the text that follows it. */
-  flex-shrink: 0;
-}
-/* Plain inline flow (ArchiveChecklistItem's own default) wraps a long title's second line all
- * the way back to the row's left edge, under the checkbox, rather than staying indented under
- * the first line's own text start — confirmed live via a real long title splitting across two
- * lines. A flex row with two real boxes (the checkbox as a fixed-width first item, the title's
- * own <span> — see ArchiveChecklistItem.tsx's own docs on why that wrapper exists — as the
- * second, taking the remaining width) keeps every wrapped line's left edge aligned with the
- * first line's text, not the checkbox. */
-.ai-group-checklist-item label {
-  display: flex;
-  align-items: flex-start;
-}
-.ai-group-checklist-item label > span {
-  flex: 1;
-  min-width: 0;
-}
 
 /* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button — a pill button with the label
  * on the left and a small checkbox toggle on the right, separated by a `currentColor` divider,

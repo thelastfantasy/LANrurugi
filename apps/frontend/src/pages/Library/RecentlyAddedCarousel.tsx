@@ -7,15 +7,10 @@ import { useTranslation } from "react-i18next";
 import { fetchJson } from "@/api/client";
 import { useInfiniteBookmarks } from "@/api/hooks";
 import type { ArchiveMetadata, SearchResponse } from "@/api/types";
-import {
-  PopupMenu,
-  PopupMenuItem,
-  SortableList,
-} from "@/components/common-ui/Display";
+import { Menu, MenuItem, SortableList } from "@/components/common-ui/Display";
 import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants";
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys";
 import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard";
-import { Z_OVERLAY_CONTENT } from "@/theme";
 
 import { CarouselCard } from "./CarouselCard";
 import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
@@ -76,7 +71,6 @@ export function RecentlyAddedCarousel({
       "ondeck",
   );
   const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode;
-  const [menuOpen, setMenuOpen] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
   const lenisRef = useRef<Lenis | null>(null);
   const stepSlide = useCallback(() => {
@@ -105,14 +99,6 @@ export function RecentlyAddedCarousel({
     localStorage.setItem(CAROUSEL_OPEN_KEY, open ? "1" : "0");
   }, [open]);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuOpen(false);
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [menuOpen]);
   useEffect(() => {
     localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode);
   }, [storedMode]);
@@ -314,60 +300,29 @@ export function RecentlyAddedCarousel({
                 else void carouselQuery.refetch();
               }}
             ></a>
-            <span style={{ position: "relative" }}>
-              <a
-                href="#"
-                className="fa fa-2x fa-ellipsis-h"
-                style={{ marginBottom: -4, marginLeft: 12 }}
-                title={t("library.carouselMode") ?? undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setMenuOpen((m) => !m);
-                }}
-              ></a>
-              {menuOpen && (
-                <PopupMenu
-                  portal={false}
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    right: 0,
-                    zIndex: Z_OVERLAY_CONTENT,
-                  }}
-                >
-                  {(loggedIn
-                    ? ([
-                        "ondeck",
-                        "random",
-                        "inbox",
-                        "untagged",
-                        "bookmark",
-                      ] as CarouselMode[])
-                    : ([
-                        "ondeck",
-                        "random",
-                        "inbox",
-                        "untagged",
-                      ] as CarouselMode[])
-                  ).map((m) => (
-                    <PopupMenuItem
-                      key={m}
-                      style={{ fontWeight: m === mode ? "bold" : undefined }}
-                      onClick={() => {
-                        setMode(m);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      <i
-                        className={`fa ${CAROUSEL_ICON[m]}`}
-                        aria-hidden="true"
-                      ></i>{" "}
-                      {modeLabel[m]}
-                    </PopupMenuItem>
-                  ))}
-                </PopupMenu>
-              )}
-            </span>
+            <Menu
+              trigger={
+                <a
+                  href="#"
+                  className="fa fa-2x fa-ellipsis-h"
+                  style={{ marginBottom: -4, marginLeft: 12 }}
+                  title={t("library.carouselMode") ?? undefined}
+                  onClick={(e) => e.preventDefault()}
+                ></a>
+              }
+            >
+              {(loggedIn
+                ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
+                : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
+              ).map((m) => (
+                <MenuItem key={m} onClick={() => setMode(m)}>
+                  <span style={{ fontWeight: m === mode ? "bold" : undefined }}>
+                    <i className={`fa ${CAROUSEL_ICON[m]}`} aria-hidden="true"></i>{" "}
+                    {modeLabel[m]}
+                  </span>
+                </MenuItem>
+              ))}
+            </Menu>
           </div>
         )}
         {isOpen && multiSelect && (

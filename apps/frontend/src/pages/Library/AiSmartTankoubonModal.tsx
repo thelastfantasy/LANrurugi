@@ -16,7 +16,9 @@ import {
   useUnignoreGroupSuggestion,
 } from "@/api/hooks"
 import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { IconButton } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
+import { routes } from "@/lib/routes"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
 
@@ -217,6 +219,15 @@ function SuggestionCard({
                   return next
                 })
               }}
+              trailing={
+                <IconButton
+                  variant="ghost-btn"
+                  icon={<i className="fa fa-book-open" />}
+                  size={22}
+                  title={t("common.read") ?? undefined}
+                  onClick={() => window.open(routes.reader(id), "_blank", "noreferrer")}
+                />
+              }
             />
           ))}
         </ul>
