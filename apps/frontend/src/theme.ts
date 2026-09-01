@@ -160,12 +160,27 @@ export function useApplyTheme() {
     const theme = resolvedTheme ?? DEFAULT_THEME_ID
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
-    if (resolvedTheme) {
+    // Only a real admin session's own theme belongs in `lrrTheme` — it's `index.html`'s
+    // dev-server-only fallback for *that* value specifically (see that file's own docs), read
+    // before any session exists. Writing a guest's resolved theme here would leave the *next*
+    // guest visit's dev-mode first paint reading a stale admin-or-guest value that has nothing to
+    // do with the admin's actual preference.
+    if (settings.data?.theme) {
       try {
         localStorage.setItem(THEME_STORAGE_KEY, theme)
       } catch {
         /* empty */
       }
+    } else if (publicThemeSettled) {
+      // A confirmed guest/logged-out resolution — proactively clear any `lrrTheme` left behind by
+      // an admin session (or, historically, by the `get_settings` guest-leak bug this same commit
+      // fixes server-side) rather than leaving it for `index.html`'s own dev-mode fallback to keep
+      // reading on every future guest visit until someone manually clears it.
+      try {
+        localStorage.removeItem(THEME_STORAGE_KEY)
+      } catch {
+        /* empty */
+      }
     }
-  }, [resolvedTheme, settingsSettled, publicThemeSettled])
+  }, [resolvedTheme, settingsSettled, publicThemeSettled, settings.data?.theme])
 }
