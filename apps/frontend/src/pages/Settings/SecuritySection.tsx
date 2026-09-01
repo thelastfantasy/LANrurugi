@@ -36,8 +36,7 @@ export function SecuritySection({
 
   return (
     <CollapsibleSection id="security" icon="fa-shield-alt" title={t("settings.security")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
-        <tbody>
+      <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
           {/* Password login can no longer be disabled — fields are unconditionally visible now. */}
           <Row label={t("settings.newPassword")}>
             <input
@@ -94,8 +93,7 @@ export function SecuritySection({
             <br />
             {t("settings.turnThisOnIfYou")}
           </CheckboxRow>
-        </tbody>
-      </table>
+      </div>
     </CollapsibleSection>
   )
 }

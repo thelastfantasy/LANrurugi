@@ -86,8 +86,7 @@ export function GlobalSection({
 
   return (
     <CollapsibleSection id="global" icon="fa-cubes" title={t("settings.globalSettings")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
-        <tbody>
+      <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
           <Row label={t("settings.siteTitle")}>
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={htmltitle} onChange={(e) => setHtmltitle(e.target.value)} type="text" />
             <br />
@@ -304,8 +303,7 @@ export function GlobalSection({
             <br />
             {t("settings.clickingThisButtonWillReset")}
           </ActionRow>
-        </tbody>
-      </table>
+      </div>
     </CollapsibleSection>
   )
 }

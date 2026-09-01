@@ -27,8 +27,7 @@ export function ArchiveFilesSection({
 
   return (
     <CollapsibleSection id="archive-files" icon="fa-file-archive" title={t("settings.archiveFiles")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
-        <tbody>
+      <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
           <ActionRow
             id="rescan-button"
             label={t("settings.rescanArchiveDirectory")}
@@ -95,8 +94,7 @@ export function ArchiveFilesSection({
             <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
             {t("settings.thisWillDeleteMetadataFor")}
           </CheckboxRow>
-        </tbody>
-      </table>
+      </div>
     </CollapsibleSection>
   )
 }

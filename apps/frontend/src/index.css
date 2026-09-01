@@ -450,27 +450,50 @@ input[type="checkbox"]:disabled {
   }
 }
 
-/* Settings page (`config.html`-derived): `.option-td`/`.config-td` (`shared.tsx`'s `Row`/
-   `CheckboxRow`/`ActionRow`, plus `WorkersSection.tsx`'s own identical table) are legacy's own
-   real classes — a plain two-column `<table>` row, label left (`.option-td`, `lrr.css`'s own
-   `width: 200px`, narrowed to `150px !important` under legacy's own `max-width: 540px` query) /
-   control-or-description right (`.config-td`, `config.css`'s own `width: 30vw`). Legacy itself
-   never goes further than that width squeeze — confirmed live on a 390px viewport, 2026-08-27:
-   the label column alone still eats ~150px of a ~350px content area, leaving the value column
-   (an already-`30vw`-capped input, a `<select>`, or wrapped description prose) a cramped ~200px
-   to work with, ".左右结构有点不太合适" (real user report, phone width). This isn't a regression
-   from anything this port changed — legacy's own `config.css` carries zero media queries of its
-   own for this table at all — but it's a confirmed usability break worth fixing outright rather
-   than preserving, same reasoning as `.category-panel`'s own docs above. Below `600px`, every
-   `.option-td`/`.config-td` pair switches from side-by-side table cells to a stacked block
-   layout (label row, then its control/description row) — the standard "responsive table"
-   technique of overriding `display` on `<tr>`/`<td>` without touching the HTML's real `<table>`
-   structure (`shared.tsx` itself is untouched). `!important` is required on every `display`
-   override here: `lrr.css`'s own `.option-td`/`.config-td` rules don't set `display` themselves,
-   but legacy's UA-stylesheet-equivalent table display (`table-cell`) still has to be beaten, and
-   Tailwind's own reset layer already applies its own display values earlier in the cascade. */
+/* Settings page (`config.html`-derived): `.option-td`/`.config-td` are now rendered as CSS grid
+   rows by `shared.tsx` (`Row`/`CheckboxRow`/`ActionRow`). The explicit two-column grid
+   (`200px` label / `minmax(0, 1fr)` value) is what actually makes the label column honor its
+   intended `200px`; legacy table auto-layout treated that width as a preference and let content
+   (especially the DeepSeek key read/edit toggle) reflow both columns. Grid also keeps the value
+   column stable when the key's edit input/cancel button are rendered.
+
+   Legacy's own `.option-td`/`.config-td` rules are kept on the grid children so themes continue
+   to style them, but their table-oriented widths (`200px`, `30vw`) are overridden for grid rows:
+   the track definitions above own the sizing. */
+.settings-table {
+  display: block;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  column-gap: 20px;
+  align-items: start;
+}
+
+.settings-row .option-td {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  padding-right: 0;
+}
+
+.settings-row .config-td {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+/* Below 600px, every `.option-td`/`.config-td` pair switches from side-by-side columns to a
+   stacked block layout. The `.settings-table` rows are the grid rows from `shared.tsx`; the
+   `table` rules below are kept for the remaining legacy table-based theme-picker table in
+   `SettingsPage.tsx`. `!important` is required where legacy class rules otherwise win. */
 @media (max-width: 600px) {
   .right-column table tr:has(> .option-td, > .config-td) {
+    display: block !important;
+  }
+  .right-column .settings-row {
     display: block !important;
   }
   .right-column .option-td,

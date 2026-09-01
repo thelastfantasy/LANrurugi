@@ -79,8 +79,7 @@ export function TagsThumbnailsSection({
 
   return (
     <CollapsibleSection id="tags-thumbnails" icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
-      <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
-        <tbody>
+      <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
           <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("settings.useHighqualityThumbnailsForPages")}>
             {t("settings.lanraragiGeneratesLowerqualityThumbnailsFor")}
             <br />
@@ -228,8 +227,7 @@ export function TagsThumbnailsSection({
             <br />
             <span dangerouslySetInnerHTML={{ __html: t("settings.bNamespaceNewnamespace") }} />
           </Row>
-        </tbody>
-      </table>
+      </div>
     </CollapsibleSection>
   )
 }
