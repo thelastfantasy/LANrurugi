@@ -393,7 +393,7 @@ p#nb {
 }
 
 .option-flyout>.collapsible-body {
-  padding: 10px !important;
+  padding: 0 10px !important;
 }
 
 .left-column {

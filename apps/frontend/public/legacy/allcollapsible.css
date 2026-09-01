@@ -13,7 +13,7 @@ Copyright (c) 2018 Aditya Srivastava*/
 	cursor: pointer;
 }
 .collapsible-body{
-	padding: 2rem;
+	padding: 0 2rem;
 	border: 1px solid #ddd;
 }
 .fadein {

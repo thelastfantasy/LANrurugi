@@ -3,18 +3,51 @@ import Lenis from "lenis";
 import type { MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { IconType } from "react-icons";
+import {
+  FaArrowsRotate,
+  FaBook,
+  FaBookmark,
+  FaCaretDown,
+  FaCheckDouble,
+  FaChevronLeft,
+  FaChevronRight,
+  FaCompress,
+  FaDice,
+  FaEject,
+  FaEllipsis,
+  FaHammer,
+  FaInbox,
+  FaSquareCheck,
+  FaTag,
+} from "react-icons/fa6";
 
 import { fetchJson } from "@/api/client";
 import { useInfiniteBookmarks } from "@/api/hooks";
 import type { ArchiveMetadata, SearchResponse } from "@/api/types";
 import { Menu, MenuItem, SortableList } from "@/components/common-ui/Display";
-import { CAROUSEL_ICON, NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants";
+import { IconButton } from "@/components/common-ui/Form";
+import { NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants";
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys";
 import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard";
 
 import { CarouselCard } from "./CarouselCard";
 import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
 import { type CarouselMode } from "./types";
+
+/** One icon component per `CarouselMode` — moved out of `lib/constants.ts` (a plain `.ts` file,
+ * can't hold JSX) since this is the only consumer. Was previously a `Record<CarouselMode,
+ * string>` of literal emoji characters fed into `` `fa ${...}` `` — a real, previously-unnoticed
+ * bug: `"fa 📚"` isn't a valid Font Awesome class, so neither the `fa` base class nor the emoji
+ * ever rendered anything (confirmed live via `getComputedStyle`: empty `<i>`, no `::before`
+ * content). */
+const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
+  ondeck: FaBook,
+  random: FaDice,
+  inbox: FaInbox,
+  untagged: FaTag,
+  bookmark: FaBookmark,
+}
 
 export function RecentlyAddedCarousel({
   filter,
@@ -198,6 +231,8 @@ export function RecentlyAddedCarousel({
     bookmark: t("library.bookmarked"),
   };
 
+  const ModeIcon = CAROUSEL_MODE_ICON[mode];
+
   return (
     <ul className="collapsible index-carousel with-right-caret">
       <li
@@ -209,24 +244,30 @@ export function RecentlyAddedCarousel({
         }}
       >
         <div
-          className={`collapsible-title caret-right${isOpen ? " active" : ""}`}
+          className="collapsible-title"
           onClick={() => setOpen((o) => !o)}
           style={{
             display: "flex",
             alignItems: "center",
-            flex: "1 1 0",
             overflow: "hidden",
           }}
         >
-          <i
-            className={
-              multiSelect ? "fas fa-check-square" : `fa ${CAROUSEL_ICON[mode]}`
-            }
-            aria-hidden="true"
-          ></i>
+          {multiSelect ? (
+            <FaSquareCheck size={16} aria-hidden="true" />
+          ) : (
+            <ModeIcon size={16} aria-hidden="true" />
+          )}
           <div style={{ marginLeft: 8 }}>
             {multiSelect ? t("app.selection") : modeLabel[mode]}
           </div>
+          <FaCaretDown
+            size={24}
+            style={{
+              marginLeft: 6,
+              transform: isOpen ? "translateY(2px) rotate(180deg)" : "translateY(-1px)",
+              transition: "transform 0.2s ease",
+            }}
+          />
         </div>
         {isOpen && multiSelect && (
           <div
@@ -237,51 +278,43 @@ export function RecentlyAddedCarousel({
               <span>{t("library.selected", { n: selectedIds.length })}</span>
             )}
             {selectedIds.length > 0 && (
-              <a
-                href="#"
-                className="fa fa-2x fa-hammer"
+              <IconButton
+                variant="ghost-btn"
+                icon={<FaHammer size={18} />}
+                size={28}
                 style={{ marginLeft: 12 }}
                 title={t("library.runBatchOperationsOnSelection") ?? undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  onRunBatch();
-                }}
-              ></a>
+                onClick={onRunBatch}
+              />
             )}
             {canMerge && (
-              <a
-                href="#"
-                className="fa fa-2x fa-compress-alt"
+              <IconButton
+                variant="ghost-btn"
+                icon={<FaCompress size={18} />}
+                size={28}
                 style={{ marginLeft: 12 }}
                 title={t("library.mergeArchivesIntoTankoubon") ?? undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  onMerge();
-                }}
-              ></a>
+                onClick={onMerge}
+              />
             )}
             {selectedIds.length > 0 && (
-              <a
-                href="#"
-                className="fa fa-2x fa-eject"
+              <IconButton
+                variant="ghost-btn"
+                icon={<FaEject size={18} />}
+                size={28}
                 style={{ marginLeft: 12 }}
                 title={t("library.clearSelection") ?? undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  onClearSelection();
-                }}
-              ></a>
+                onClick={onClearSelection}
+              />
             )}
-            <a
-              href="#"
-              className="fa fa-2x fa-check-double"
+            <IconButton
+              variant="ghost-btn"
+              icon={<FaCheckDouble size={18} />}
+              size={28}
               style={{ marginLeft: 12 }}
               title={t("library.selectAllInPage") ?? undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                onSelectPage();
-              }}
-            ></a>
+              onClick={onSelectPage}
+            />
           </div>
         )}
         {isOpen && !multiSelect && (
@@ -289,39 +322,41 @@ export function RecentlyAddedCarousel({
             className="collapsible-right"
             onClick={(e) => e.stopPropagation()}
           >
-            <a
-              href="#"
-              className={`fa fa-2x fa-sync${loading ? " fa-spin" : ""}`}
-              style={{ marginBottom: -4 }}
+            <IconButton
+              variant="ghost-btn"
+              icon={<FaArrowsRotate size={18} className={loading ? "fa-spin" : undefined} />}
+              size={28}
               title={t("library.refresh") ?? undefined}
-              onClick={(e) => {
-                e.preventDefault();
+              onClick={() => {
                 if (isBookmarkMode) void bookmarksQuery.refetch();
                 else void carouselQuery.refetch();
               }}
-            ></a>
+            />
             <Menu
               trigger={
-                <a
-                  href="#"
-                  className="fa fa-2x fa-ellipsis-h"
-                  style={{ marginBottom: -4, marginLeft: 12 }}
+                <IconButton
+                  variant="ghost-btn"
+                  icon={<FaEllipsis size={18} />}
+                  size={28}
+                  style={{ marginLeft: 4 }}
                   title={t("library.carouselMode") ?? undefined}
-                  onClick={(e) => e.preventDefault()}
-                ></a>
+                />
               }
             >
               {(loggedIn
                 ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
                 : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
-              ).map((m) => (
-                <MenuItem key={m} onClick={() => setMode(m)}>
-                  <span style={{ fontWeight: m === mode ? "bold" : undefined }}>
-                    <i className={`fa ${CAROUSEL_ICON[m]}`} aria-hidden="true"></i>{" "}
-                    {modeLabel[m]}
-                  </span>
-                </MenuItem>
-              ))}
+              ).map((m) => {
+                const ModeIcon = CAROUSEL_MODE_ICON[m]
+                return (
+                  <MenuItem key={m} onClick={() => setMode(m)}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: m === mode ? "bold" : undefined }}>
+                      <ModeIcon size={14} aria-hidden="true" />
+                      {modeLabel[m]}
+                    </span>
+                  </MenuItem>
+                )
+              })}
             </Menu>
           </div>
         )}
@@ -468,38 +503,36 @@ export function RecentlyAddedCarousel({
                         </div>
                       ))}
                 </div>
-                <a
-                  href="#"
-                  className="fa fa-3x fa-chevron-left carousel-prev"
+                <IconButton
+                  className="carousel-prev"
+                  icon={<FaChevronLeft size={24} />}
+                  size={32}
                   style={{
                     position: "absolute",
                     left: 0,
                     top: 136,
-                    cursor: "pointer",
                     zIndex: 20,
                   }}
-                  onClick={(e) => {
-                    e.preventDefault();
+                  onClick={() => {
                     const lenis = lenisRef.current;
                     if (lenis) lenis.scrollTo(lenis.targetScroll - stepSlide());
                   }}
-                ></a>
-                <a
-                  href="#"
-                  className="fa fa-3x fa-chevron-right carousel-next"
+                />
+                <IconButton
+                  className="carousel-next"
+                  icon={<FaChevronRight size={24} />}
+                  size={32}
                   style={{
                     position: "absolute",
                     right: 0,
                     top: 136,
-                    cursor: "pointer",
                     zIndex: 20,
                   }}
-                  onClick={(e) => {
-                    e.preventDefault();
+                  onClick={() => {
                     const lenis = lenisRef.current;
                     if (lenis) lenis.scrollTo(lenis.targetScroll + stepSlide());
                   }}
-                ></a>
+                />
               </div>
             )}
           </div>
