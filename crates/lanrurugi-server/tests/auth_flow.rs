@@ -14,6 +14,7 @@ use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
 use lanrurugi_storage::redis::RedisDbs;
+use lanrurugi_storage::refresh_tokens::RefreshTokenRepository;
 use tower::ServiceExt;
 
 /// Serializes every test in this file against the shared real Redis instance — both suites here
@@ -192,6 +193,45 @@ async fn purge_all_refresh_and_api_tokens(redis: &RedisDbs) {
                 .unwrap();
         }
     }
+}
+
+/// Returns just the refresh-cookie `value` (`token_id.secret`) from a login/refresh response's
+/// truncated cookie list, without any attributes.
+fn refresh_cookie_value(cookies: &[String]) -> &str {
+    cookies
+        .iter()
+        .find(|c| c.starts_with(lanrurugi_core::session::REFRESH_COOKIE_NAME))
+        .map(|c| c.split_once('=').map(|(_, v)| v).unwrap_or(c.as_str()))
+        .expect("login/refresh must always set the refresh cookie")
+}
+
+/// Ages a rotated-away refresh token's `used_at` out of the 5-second grace window so this
+/// integration test deterministically exercises the reuse-detection / burn-family path. The grace
+/// window commit 28c62d2 intentionally forgives immediate same-token replays as benign
+/// multi-tab races; this test is proving the out-of-grace reuse path.
+async fn age_out_used_refresh_token(redis: &RedisDbs, refresh_cookie: &str) {
+    let token_id = refresh_cookie
+        .split('.')
+        .next()
+        .expect("refresh cookie must be token_id.secret");
+    let repo = RefreshTokenRepository::new(redis.config.clone());
+    let mut record = repo
+        .get(token_id)
+        .await
+        .expect("failed to read rotated refresh token")
+        .expect("rotated refresh token should still exist");
+    record.used_at = Some(0);
+    let raw = serde_json::to_string(&record).expect("RefreshTokenRecord must serialize");
+    let key = format!("LANRURUGI_REFRESH_TOKEN_{token_id}");
+    let ttl_secs = (record.expires_at.saturating_sub(record.issued_at)).max(1) as u64;
+    let mut conn = redis
+        .config
+        .get()
+        .await
+        .expect("failed to get Redis connection");
+    let _: () = deadpool_redis::redis::AsyncCommands::set_ex(&mut conn, key, raw, ttl_secs)
+        .await
+        .expect("failed to age out rotated refresh token");
 }
 
 fn set_cookie_values(response: &axum::http::Response<axum::body::Body>) -> Vec<String> {
@@ -383,6 +423,12 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
         rotated_cookies, login_cookies,
         "rotation must issue genuinely new cookie values, not repeat the old ones"
     );
+
+    // Age the rotated-out parent token outside the 5-second grace window before replaying it.
+    // The grace window (commit 28c62d2) would otherwise forgive this immediate replay as a
+    // benign multi-tab race and return 200; this test is specifically checking the stronger
+    // out-of-grace reuse-detection path.
+    age_out_used_refresh_token(&redis, refresh_cookie_value(&login_cookies)).await;
 
     // The rotated access token also authenticates the protected endpoint.
     let protected_resp_2 = request(
