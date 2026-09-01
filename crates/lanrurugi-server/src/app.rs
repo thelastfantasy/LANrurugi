@@ -92,10 +92,11 @@ pub fn build_app(
         // real, current theme instead of serving the file's static bytes verbatim — see that
         // handler's own docs.
         let index_dir = dir.clone();
-        let fallback = service_fn(move |_req: Request| {
+        let fallback = service_fn(move |req: Request| {
             let state = index_state.clone();
             let dir = index_dir.clone();
-            async move { Ok::<_, Infallible>(serve_index(state, dir).await) }
+            let headers = req.headers().clone();
+            async move { Ok::<_, Infallible>(serve_index(state, dir, headers).await) }
         });
         // `append_index_html_on_directories(false)` — without this, `ServeDir`'s own default
         // behavior resolves a directory request (including `/` itself) straight to a literal
@@ -125,7 +126,7 @@ pub fn build_app(
 /// cache, then `modern.css` — see `index.html`) whenever either step can't complete: the file is
 /// missing/unreadable, or the Redis lookup fails/returns an unrecognized value. A broken index page
 /// would be far worse than one that occasionally still has to flash once.
-async fn serve_index(state: AppState, dir: PathBuf) -> Response {
+async fn serve_index(state: AppState, dir: PathBuf, headers: axum::http::HeaderMap) -> Response {
     let path = dir.join("index.html");
     let html = match tokio::fs::read_to_string(&path).await {
         Ok(html) => html,
@@ -148,7 +149,7 @@ async fn serve_index(state: AppState, dir: PathBuf) -> Response {
     // unvalidated theme string — use `fetch_theme_for_html_injection`, never plain `fetch_theme`,
     // for anything that ends up here.
     let placeholder = r#"id="theme-init" data-theme="""#;
-    let html = match fetch_theme_for_html_injection(&state).await {
+    let html = match fetch_theme_for_html_injection(&state, &headers).await {
         Some(theme) => html.replacen(
             placeholder,
             &format!(r#"id="theme-init" data-theme="{theme}""#),

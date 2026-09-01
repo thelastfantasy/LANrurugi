@@ -1347,6 +1347,8 @@
   "pluginWizard.overrideSelected": "Override selected",
   "settings.guestMode": "Guest Mode",
   "settings.evenWithThePasswordProtection": "Lets unauthenticated visitors browse categories you've marked as visible to guests, instead of requiring login for everything. Mark which categories are guest-visible on the Categories page. Even with this switch on, guest mode has no real effect until at least one category is marked guest-visible (zero accessible archives otherwise).",
+  "settings.guestTheme": "Guest Theme",
+  "settings.guestThemeHint": "The theme shown to unauthenticated guest visitors, independent of the theme above (which only applies to your own logged-in session).",
   "settings.importFromLegacyTitle": "Import from a LANraragi backup",
   "settings.importFromLegacyDescription": "Upload a backup JSON file exported from a LANraragi instance (Database > Backup on that instance) to import its archive metadata, categories, tankoubons, and stamps into this library. Matching is done by filename — archives here must already exist for their metadata to be imported.",
   "settings.importLegacyConflictModeLabel": "If an archive already exists here:",

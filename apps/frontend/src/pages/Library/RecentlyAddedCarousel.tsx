@@ -510,7 +510,8 @@ export function RecentlyAddedCarousel({
                   style={{
                     position: "absolute",
                     left: 0,
-                    top: 136,
+                    top: "50%",
+                    transform: "translateY(-50%)",
                     zIndex: 20,
                   }}
                   onClick={() => {
@@ -525,7 +526,8 @@ export function RecentlyAddedCarousel({
                   style={{
                     position: "absolute",
                     right: 0,
-                    top: 136,
+                    top: "50%",
+                    transform: "translateY(-50%)",
                     zIndex: 20,
                   }}
                   onClick={() => {

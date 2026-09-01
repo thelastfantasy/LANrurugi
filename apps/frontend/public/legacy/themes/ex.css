@@ -390,12 +390,14 @@ td.itdc {
     padding: 4px;
     border: 1px solid #000000;
     background-color: #40454b;
+    color: #DDDDDD;
 }
 
 .carousel-next {
     padding: 4px;
     border: 1px solid #000000;
     background-color: #40454b;
+    color: #DDDDDD;
 }
 
 /* image pages */

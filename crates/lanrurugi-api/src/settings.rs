@@ -83,6 +83,14 @@ async fn fetch_theme(state: &AppState) -> Option<String> {
     Some(theme.unwrap_or_else(|| "modern.css".to_string()))
 }
 
+/// Same shape as [`fetch_theme`], for the guest-only `guest_theme` field (see its own doc in
+/// [`STRING_FIELDS`]).
+async fn fetch_guest_theme(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let theme: Option<String> = conn.hget(CONFIG_KEY, "guest_theme").await.ok()?;
+    Some(theme.unwrap_or_else(|| "ex.css".to_string()))
+}
+
 /// Used by `lanrurugi-server`'s own `serve_index` handler (the `index.html`-serving SPA fallback),
 /// which substitutes this value directly into that file's inline anti-flash-of-default-theme
 /// `<script>` body via a plain string replace — not an HTML/JS-aware templating step — so an
@@ -94,10 +102,16 @@ async fn fetch_theme(state: &AppState) -> Option<String> {
 /// only thing standing between a bad value and this `<script>` tag. `None` whenever `fetch_theme`
 /// itself fails *or* the stored value isn't recognized — both already mean "fall back to
 /// `serve_index`'s own built-in default", so this doesn't distinguish them either.
-pub async fn fetch_theme_for_html_injection(state: &AppState) -> Option<String> {
-    fetch_theme(state)
-        .await
-        .filter(|theme| KNOWN_THEME_FILES.contains(&theme.as_str()))
+pub async fn fetch_theme_for_html_injection(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let theme = if is_guest_eligible_request(state, headers).await {
+        fetch_guest_theme(state).await
+    } else {
+        fetch_theme(state).await
+    };
+    theme.filter(|theme| KNOWN_THEME_FILES.contains(&theme.as_str()))
 }
 
 /// Raw `language` field lookup, same shape as [`fetch_theme`] — `None` only on an actual Redis
@@ -122,8 +136,12 @@ async fn fetch_language(state: &AppState) -> Option<String> {
 /// `theme`/`language` are the only two fields anything needs before a session exists, and neither
 /// is remotely secret, so folding `language` into this already-public endpoint is simpler than
 /// standing up a whole second public settings surface for one more field.
-async fn get_theme(State(state): State<AppState>) -> Response {
-    let theme = fetch_theme(&state).await;
+async fn get_theme(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    let theme = if is_guest_eligible_request(&state, &headers).await {
+        fetch_guest_theme(&state).await
+    } else {
+        fetch_theme(&state).await
+    };
     let language = fetch_language(&state).await;
     match (theme, language) {
         (Some(theme), Some(language)) => {
@@ -135,6 +153,34 @@ async fn get_theme(State(state): State<AppState>) -> Response {
             "failed to reach redis".to_string(),
         ),
     }
+}
+
+/// Mirrors `procedure::require_api_key`'s own "is this request eligible for `AuthMethod::
+/// GuestVisitor`" branch (session invalid, `guestmode` on, at least one archive actually guest-
+/// visible), but standalone — `GET /theme` sits in `public_router()`, entirely outside that
+/// middleware (it must work with no session at all, e.g. on the Login page itself), so it can't
+/// read an `AuthContext` the middleware never ran to produce. A request carrying *any* bearer
+/// token is treated as non-guest without validating the token itself: a soon-to-be-authenticated
+/// client asking "what theme should I render right now" should see the admin theme it's about to
+/// actually use, not flicker through the guest one first, and an invalid token is about to 401 on
+/// its very next real request regardless of what this endpoint answers.
+async fn is_guest_eligible_request(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
+    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+        return false;
+    }
+    let cfg = match crate::auth::load(state).await {
+        Ok(cfg) => cfg,
+        Err(_) => return false,
+    };
+    if crate::auth::session_is_valid(&cfg, headers) {
+        return false;
+    }
+    if !cfg.guest_mode_enabled {
+        return false;
+    }
+    crate::search::guest_has_any_visible_archive(state)
+        .await
+        .unwrap_or(false)
 }
 
 /// Reads `LRR_CONFIG`'s `newbadgemode` (see that field's own doc in [`STRING_FIELDS`]),
@@ -192,6 +238,14 @@ pub(crate) async fn read_stamp_autounbookmark(state: &AppState) -> bool {
 /// this table existed, kept as a named constant below for that reason).
 const STRING_FIELDS: &[(&str, &str)] = &[
     ("theme", "modern.css"),
+    // 007-guest-restricted-access follow-up: the theme an unauthenticated `guest_visitor` sees,
+    // independent of whatever theme the admin has picked for their own session — `get_theme`
+    // resolves which of the two to serve based on whether the current request is actually guest-
+    // eligible (`crate::auth::session_is_valid` + `guestmode` + `guest_has_any_visible_archive`),
+    // not on the client's own say-so. Defaults to Sad Panda (`ex.css`), not the admin default —
+    // deliberately a different visual identity so a guest browsing session is never confusable
+    // with an admin one at a glance.
+    ("guest_theme", "ex.css"),
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
     ("motd", "Welcome to this Library running LANrurugi!"),
@@ -311,7 +365,7 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     if !is_known_field {
         return Err(format!("Unknown settings field: \"{key}\"."));
     }
-    if key == "theme" {
+    if key == "theme" || key == "guest_theme" {
         let is_valid_theme = value
             .as_str()
             .is_some_and(|s| KNOWN_THEME_FILES.contains(&s));

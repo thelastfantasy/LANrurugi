@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { ApiError } from "@/api/client"
 import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from "@/api/hooks"
 import type { Settings as SettingsType } from "@/api/types"
+import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Button } from "@/components/common-ui/Form/Button"
 import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
@@ -55,6 +56,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const changePassword = useChangePassword()
 
   const currentTheme = settings.theme ?? DEFAULT_THEME_ID
+  const currentGuestTheme = settings.guest_theme ?? "ex.css"
 
   const [htmltitle, setHtmltitle] = useState(settings.htmltitle)
   const [motd, setMotd] = useState(settings.motd)
@@ -322,6 +324,30 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
                           </label>
                         </div>
                       ))}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td></td>
+                    <td className="config-td">
+                      <br />
+                      <strong>{t("settings.guestTheme")}</strong>
+                      <br />
+                      {t("settings.guestThemeHint")}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ paddingBottom: "1.5em" }}>
+                      <RadioGroup
+                        value={currentGuestTheme}
+                        onValueChange={(theme) => updateSettings.mutate({ guest_theme: theme })}
+                        style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "8px 24px", justifyContent: "center" }}
+                      >
+                        {THEMES.map((theme) => (
+                          <RadioItem key={theme.id} value={theme.id}>
+                            {theme.name}
+                          </RadioItem>
+                        ))}
+                      </RadioGroup>
                     </td>
                   </tr>
                 </tbody>

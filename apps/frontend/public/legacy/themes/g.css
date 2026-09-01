@@ -442,12 +442,14 @@ div#toppane {
     padding: 4px;
     border: 1px solid #5C0D12;
     background-color: #e0ded3;
+    color: #5C0D11;
 }
 
 .carousel-next {
     padding: 4px;
     border: 1px solid #5C0D12;
     background-color: #e0ded3;
+    color: #5C0D11;
 }
 
 .caption,

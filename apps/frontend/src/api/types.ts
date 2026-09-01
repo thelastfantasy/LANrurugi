@@ -79,6 +79,8 @@ export interface TankoubonFullResponse {
 
 export interface Settings {
   theme: string
+  /** Theme shown to an unauthenticated `guest_visitor`, independent of the admin's own `theme`. */
+  guest_theme: string
   language: string
   htmltitle: string
   motd: string

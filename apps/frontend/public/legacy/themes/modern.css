@@ -371,12 +371,14 @@ td.itdc {
   padding: 4px;
   background-color: #363940;
   border-radius: 0px 9px 9px 0px;
+  color: #DDDDDD;
 }
 
 .carousel-next {
   padding: 4px;
   background-color: #363940;
   border-radius: 9px 0px 0px 9px;
+  color: #DDDDDD;
 }
 
 /* image pages */

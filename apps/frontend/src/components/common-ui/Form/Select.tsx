@@ -71,6 +71,8 @@ export function Select<Value extends string>({
               color: palette.text,
               transformOrigin: "var(--transform-origin)",
               fontSize: sizeStyle?.fontSize,
+              maxHeight: "var(--available-height)",
+              overflowY: "auto",
             }}
           >
             <BaseSelect.List>
