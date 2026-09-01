@@ -17,32 +17,86 @@ function invalidateLoginStatus() {
 /** `"network-error"` must never be treated as `"rejected"` — a connectivity blip isn't a dead session. */
 type RefreshOutcome = "ok" | "rejected" | "network-error"
 
-/** Dedupes concurrent 401s into one refresh call — independent calls would race to rotate the
- * same one-time-use token and revoke the session. */
+/** Dedupes concurrent 401s into one refresh call *within this tab*. Independent tabs still each
+ * have their own `refreshInFlight`, which is what {@link tryRefreshOnce}'s `navigator.locks` wrap
+ * additionally guards against — see that function's own docs. */
 let refreshInFlight: Promise<RefreshOutcome> | null = null
 
+/** Written to `localStorage` (visible to every same-origin tab) after any tab successfully
+ * refreshes — lets a tab that's about to take the cross-tab lock notice another tab already did
+ * the work and skip redoing it. */
+const LAST_REFRESH_AT_KEY = "lanrurugi_last_refresh_at"
+
+/** Called on logout — the timestamp itself carries no identity, but leaving a stale one behind
+ * serves no purpose once the session it described is gone. */
+export function clearLastRefreshTimestamp() {
+  localStorage.removeItem(LAST_REFRESH_AT_KEY)
+}
+
+/** Backend rotates the refresh cookie on every use (single-use + reuse detection) — two tabs
+ * presenting the *same* stale cookie is forgiven server-side within a short grace window, but two
+ * tabs still don't need to both hit the network. `navigator.locks` serializes actual refresh
+ * attempts across every same-origin tab; browsers without it (none in this project's target set)
+ * would just fall back to each tab refreshing independently, same as before this existed. */
 async function tryRefreshOnce(): Promise<RefreshOutcome> {
-  if (!refreshInFlight) {
-    refreshInFlight = fetch("/api/token/refresh", { method: "POST" })
-      .then((r): RefreshOutcome => (r.ok ? "ok" : "rejected"))
-      .catch((): RefreshOutcome => "network-error")
-      .finally(() => {
-        refreshInFlight = null
-      })
-  }
+  if (refreshInFlight) return refreshInFlight
+
+  const startedAt = Date.now()
+  refreshInFlight = navigator.locks
+    .request("lanrurugi-token-refresh", async (): Promise<RefreshOutcome> => {
+      // Another tab may have already refreshed while this one was waiting for the lock — if so,
+      // its result covers this request too, and presenting the now-rotated-out cookie again would
+      // just burn a grace-window slot for nothing.
+      const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
+      if (lastRefreshAt > startedAt) return "ok"
+
+      return fetch("/api/token/refresh", { method: "POST" })
+        .then((r): RefreshOutcome => {
+          if (r.ok) localStorage.setItem(LAST_REFRESH_AT_KEY, String(Date.now()))
+          return r.ok ? "ok" : "rejected"
+        })
+        .catch((): RefreshOutcome => "network-error")
+    })
+    .finally(() => {
+      refreshInFlight = null
+    })
   return refreshInFlight
 }
 
 const REFRESH_NETWORK_RETRY_DELAYS_MS = [500, 1500, 3000]
 
-/** Retries only on `"network-error"`; a `"rejected"` response is definitive and never retried. */
+/** How long to wait before double-checking a `"rejected"` refresh against `/login/status` — long
+ * enough for another tab's own in-flight refresh (and its `Set-Cookie`) to land. */
+const REJECTED_REFRESH_RECHECK_DELAY_MS = 300
+
+/** A `"rejected"` refresh in *this* tab doesn't necessarily mean the session is dead — another tab
+ * may have refreshed (and rotated the cookie) in the moment between this tab reading its now-stale
+ * cookie and this request landing. Confirming against `/login/status`, which reads whatever cookie
+ * the browser has *right now*, catches that instead of logging out a still-valid session. */
+async function recheckLoginStatusAfterRejectedRefresh(): Promise<RefreshOutcome> {
+  await sleep(REJECTED_REFRESH_RECHECK_DELAY_MS)
+  try {
+    const response = await fetch("/api/login/status")
+    if (!response.ok) return "rejected"
+    const status = (await response.json()) as { logged_in?: boolean }
+    return status.logged_in ? "ok" : "rejected"
+  } catch {
+    return "rejected" // can't confirm either way; don't leave the caller hanging indefinitely
+  }
+}
+
+/** Retries only on `"network-error"`; a `"rejected"` response gets one recheck against
+ * `/login/status` (see {@link recheckLoginStatusAfterRejectedRefresh}) before being treated as
+ * definitive. */
 async function tryRefreshWithRetry(): Promise<RefreshOutcome> {
   for (const delayMs of REFRESH_NETWORK_RETRY_DELAYS_MS) {
     const outcome = await tryRefreshOnce()
-    if (outcome !== "network-error") return outcome
+    if (outcome === "rejected") return recheckLoginStatusAfterRejectedRefresh()
+    if (outcome === "ok") return outcome
     await sleep(delayMs)
   }
-  return tryRefreshOnce()
+  const outcome = await tryRefreshOnce()
+  return outcome === "rejected" ? recheckLoginStatusAfterRejectedRefresh() : outcome
 }
 
 /** Attempted at most once per request, to avoid hanging if the refreshed token is also rejected. */

@@ -165,51 +165,25 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
 
 ### AI / LLM features
 
-Every AI/LLM feature below (except the plugin wizard itself) is optional and degrades gracefully
-without a configured DeepSeek key — either a local-embedding-only fallback or the feature simply
-staying unavailable, never a hard dependency.
+AI here is not a collection of bolt-on demos; it is used to turn several previously-manual workflows into complete, safe loops. The flagship is the **AI plugin creation wizard** — it takes "write a LANraragi plugin for this site" from reading SDK docs, hand-writing regexes, and debugging scrapers, to a single pipeline: natural-language description → generated plugin → sandboxed trial run → automatic repair → confirmed install → audit trail. That kind of full loop is extremely rare among self-hosted manga servers.
 
-- **AI-assisted Tankoubon editing**, suggesting a title, chapter names, and reading order from
-  member archive titles (DeepSeek-backed, multiple candidates, one-click apply), and **AI-assisted
-  Tankoubon creation**, analyzing archives not yet in any Tankoubon and suggesting groups that
-  likely belong to the same series (local embedding model only, no LLM key required).
+#### AI plugin creation wizard (flagship)
 
-#### AI plugin creation wizard
+- **Generate working login/metadata/download plugins from natural language.** Enter a target domain and the system first reports which of the three plugin types are already covered; for each missing type (up to three per run) you describe the page, supply test links (metadata/download) or test credentials (login), and the AI (via a DeepSeek tool-calling loop) generates the corresponding `.ts` draft. All real network access — fetching pages, running trial calls — is performed by the system itself; the AI only makes semantic judgments.
+- **Drafts are not "probably working" — they are actually trial-run.** Generated code reuses the existing Deno sandbox's two-phase permission model and is executed for real against each supplied test link or the one login attempt. A trial run never installs anything; only an explicit confirm-save does. Manual code edits or an AI auto-fix (capped at 3 consecutive attempts, history never cleared) both re-trigger a fresh trial run, so broken plugins don't get installed.
+- **Trial failures automatically suggest login-related causes.** If a metadata/download trial run fails, the AI judges whether the failure looks login-related and, if so, offers to generate or associate a login plugin in place — once validated and saved, the originally-failing draft is automatically regenerated with the association, no restart of the wizard needed.
+- **Test credentials are never sent to the LLM.** The login call runs entirely locally; only a sanitized outcome is surfaced to the AI. This is what makes AI-generated plugins trustworthy enough for real sites, not just demos.
+- **AI-generated plugins are visibly marked, exportable, and auditable.** Installed-plugins list badges any wizard-generated plugin; every plugin can be exported as a `.zip` with one click; wizard saves — both successes and failures — are recorded in the activity log under their own action type, distinct from manual uploads.
+- **`domain_match` cleanly separates domain ownership from trigger matching.** Previously both shared `url_pattern`, so a narrowly-written trigger regex could make the wizard's own domain lookup or the Upload page's "fetch metadata" button miss a plugin that actually covers the domain. `domain_match` is a plain array of bare domains used only for ownership checks; `url_pattern` keeps its original job of gating real dispatch, with a fallback that preserves existing built-in plugin behavior.
 
-- **Generates login/metadata/download plugins from a natural-language description — legacy has no
-  such tool at all.** Enter a target domain and the system first reports which of the three plugin
-  types are already covered; for each missing type (up to three per run) the user supplies a page
-  feature description plus either test links (metadata/download) or test credentials (login), and
-  AI (via a DeepSeek tool-calling loop) generates the corresponding `.ts` draft — the system
-  performs every real network access (fetching a page, running a trial call) the AI requests and
-  hands back raw results; all semantic judgment stays with AI, never the reverse. The step-by-step
-  wizard shows one step at a time; an already-covered type can be either overridden with a fresh
-  generation or, if it was itself wizard-generated earlier, opened for editing — both actions stay
-  independently available per type.
-- **Every draft is trial-run for real before it can be saved.** Generated code reuses the existing
-  Deno sandbox's two-phase permission model, executed once per supplied test link (or the one
-  login attempt) — a trial run never installs anything; only an explicit confirm-save does. Manual
-  code edits or an AI auto-fix (capped at 3 consecutive attempts, history never cleared) both
-  re-trigger a fresh trial run. Test credentials are never sent to the LLM — the login call itself
-  runs entirely locally, with only a sanitized outcome surfaced to AI.
-- **AI-sourced login-relationship suggestions.** If a metadata/download trial run fails, AI judges
-  whether the failure looks login-related and, if so, offers to generate or associate a login
-  plugin in place — once validated and saved, the originally-failing draft is automatically
-  regenerated with the association, no restart of the wizard needed.
-- **AI-generated plugins carry a visible marker and can always be exported.** The installed-plugins
-  list badges any plugin the wizard generated, and every plugin (wizard-made or hand-written) can
-  be exported as a `.zip` with one click — a deployment whose plugin directory isn't host-mounted
-  only keeps a saved plugin inside that container's writable layer, so a reminder to export a copy
-  appears right after a successful save.
-- **A new `domain_match` field separates "does a domain belong to this plugin" from "does this
-  exact URL trigger it."** Both used to share `url_pattern`, so a narrowly-written trigger regex
-  could make the wizard's own domain lookup (or the Upload page's "fetch metadata" button) miss a
-  plugin that actually covers the domain. `domain_match` is a plain array of bare domains used only
-  for ownership checks; `url_pattern` keeps its original job of gating real dispatch. Falls back to
-  treating `url_pattern` as a loose domain regex when unset, so every built-in plugin is unaffected.
-- **AI plugin wizard saves — both successes and failures — are recorded in the activity log**,
-  under their own action type distinct from a plain manual plugin upload, filterable on
-  `/activity`.
+#### Other AI capabilities
+
+Everything below is optional and degrades gracefully without a configured DeepSeek key — either a local-embedding-only fallback or the feature simply staying unavailable, never a hard dependency:
+
+- **Smart recommendation engine.** At reading boundaries it shows recommendation cards (10 desktop / 6 tablet / 4 mobile), using a local ONNX embedding model for coarse filtering plus a DeepSeek LLM for fine ranking. Tankoubon reading boundaries use the last volume as the anchor and exclude the other volumes of the same Tankoubon.
+- **AI-assisted Tankoubon editing.** One-click analysis of member archive titles to suggest a Tankoubon name, chapter titles, and correct reading order; supports whole-series naming and per-volume chapter-name suggestions with multi-candidate preview and one-click apply.
+- **AI-assisted Tankoubon creation.** Analyzes archives not yet in any Tankoubon and suggests groups that likely belong to the same series, or additions to existing Tankoubons; local-embedding only, no LLM key required. With an LLM key configured, you can optionally apply AI renaming and chapter ordering at creation time; unsatisfactory suggestions can be dismissed with "don't remind me again".
+- **LLM tag backfill.** Uses the LLM to identify and fill in missing author/coser tags from titles, improving grouping suggestions and related features.
 
 ### Frontend
 

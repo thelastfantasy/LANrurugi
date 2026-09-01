@@ -130,6 +130,22 @@ export async function setupArchiveNavigation(archiveId: string): Promise<Archive
   return { ids, index }
 }
 
+/** Clears this module's own search/navigation scratch state — content-derived (which archives were
+ * just searched/browsed), not a user preference, so it must not survive into the next session on
+ * this browser (logout, or a guest session starting fresh). Deliberately leaves `indexSort`/
+ * `indexOrder`/`grouptanks`/`hidecompleted`/`datatablesPageSize` alone even though this same module
+ * writes them too — those are legacy-derived *display preferences*, not browsing history, and
+ * clearing them on logout would just be a worse experience with no privacy benefit. */
+export function clearSearchNavigationState() {
+  localStorage.removeItem(SEARCH_IDS_KEY)
+  localStorage.removeItem(PREV_IDS_KEY)
+  localStorage.removeItem(NEXT_IDS_KEY)
+  localStorage.removeItem(DT_PAGE_KEY)
+  localStorage.removeItem(CURRENT_SEARCH_KEY)
+  localStorage.removeItem(SELECTED_CATEGORY_KEY)
+  sessionStorage.removeItem(NAV_STATE_KEY)
+}
+
 /** Steps within the cached ID list, or at an edge consumes the pre-fetched adjacent page.
  * Returns `null` when there's nowhere further to go. */
 export function resolveAdjacentArchive(

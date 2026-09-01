@@ -89,16 +89,23 @@ fn auth_cookies(
     ]
 }
 
-fn cleared_auth_cookies() -> [String; 2] {
+/// `force_secure` must match whatever `auth_cookies` used to *set* the cookie being cleared here —
+/// a clearing `Set-Cookie` with mismatched attributes isn't guaranteed to be treated as the same
+/// cookie by every client (RFC 6265's identity is `(name, domain, path)`, but real browsers have
+/// historically been inconsistent about `Secure`-attribute mismatches on deletion).
+fn cleared_auth_cookies(force_secure: bool) -> [String; 2] {
+    let secure = if force_secure { "; Secure" } else { "" };
     [
         format!(
-            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
-            session::COOKIE_NAME
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}",
+            session::COOKIE_NAME,
+            secure,
         ),
         format!(
-            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax",
+            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax{}",
             session::REFRESH_COOKIE_NAME,
             REFRESH_COOKIE_PATH,
+            secure,
         ),
     ]
 }
@@ -219,7 +226,7 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
         RotateOutcome::ReuseDetected => {
             // The whole family was just burned by `rotate` itself — clear both cookies so the
             // browser doesn't keep presenting now-dead credentials on its next request.
-            let cookies = cleared_auth_cookies();
+            let cookies = cleared_auth_cookies(auth.force_secure_cookies);
             (
                 StatusCode::UNAUTHORIZED,
                 cookie_headers(cookies),
@@ -310,6 +317,10 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
 /// is all this needs.
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let auth = load_auth_config(&state).await.ok();
+    // Falls back to non-`Secure` clearing cookies if config couldn't even be loaded — an already
+    //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
+    // out at all) would be worse than a `Secure`-attribute mismatch.
+    let force_secure_cookies = auth.as_ref().is_some_and(|a| a.force_secure_cookies);
     if let (Some(auth), Some(cookie_header)) = (
         auth,
         headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
@@ -325,7 +336,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         }
     }
 
-    let cookies = cleared_auth_cookies();
+    let cookies = cleared_auth_cookies(force_secure_cookies);
     (
         StatusCode::OK,
         cookie_headers(cookies),

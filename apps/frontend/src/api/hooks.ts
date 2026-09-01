@@ -8,9 +8,19 @@ import {
 } from "@tanstack/react-query"
 import { useEffect, useSyncExternalStore } from "react"
 
+import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+import { clearSearchNavigationState } from "@/pages/Reader/crossArchiveNav"
 
-import { ApiError, fetchJson, fetchText, sendForm, sendJson, sendJsonForBlob } from "./client"
+import {
+  ApiError,
+  clearLastRefreshTimestamp,
+  fetchJson,
+  fetchText,
+  sendForm,
+  sendJson,
+  sendJsonForBlob,
+} from "./client"
 import type {
   ActivityFacets,
   ActivityFilter,
@@ -627,9 +637,25 @@ export function useLogin() {
   })
 }
 
+/** On top of the server-side session teardown, also clears local state that must not leak into
+ * whatever session (a different admin login, or a guest) starts next on this browser: the
+ * in-memory query cache (otherwise a page that doesn't remount — client-side `navigate`, not a
+ * reload — keeps serving the outgoing session's cached `["settings"]`/etc. responses until each
+ * query happens to refetch on its own), content-derived browsing state (last search, cross-archive
+ * navigation), and the unconsumed Library→Batch multi-select handoff. Deliberately leaves every
+ * pure display-preference key alone (theme, sort order, reader layout, ...) — those aren't a
+ * privacy or correctness concern, and wiping them would just make the next login worse for no
+ * benefit. */
 export function useLogout() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => sendJson("POST", "/logout"),
+    onSuccess: () => {
+      queryClient.clear()
+      clearSearchNavigationState()
+      clearLastRefreshTimestamp()
+      localStorage.removeItem(MSM_SELECTION_KEY)
+    },
   })
 }
 

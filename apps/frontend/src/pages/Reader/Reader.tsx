@@ -99,6 +99,17 @@ const badgeChipStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
+/** Whether reading progress for this session belongs in `localStorage` (`${archiveId}-reader`)
+ * rather than the server: not logged in at all, or `localprogress` is on but this isn't a real
+ * authenticated+`authprogress` session. Shared by both the write side (below) and the read side
+ * (`currentPage`'s own initial-value fallback) so they can't drift apart on the condition. */
+function usesLocalReaderProgress(
+  loggedIn: boolean,
+  settings: { localprogress?: boolean; authprogress?: boolean } | undefined,
+): boolean {
+  return !loggedIn || (!!settings?.localprogress && !(settings?.authprogress && loggedIn));
+}
+
 /** Inline key-cap styling for the help panel's keyboard shortcuts. */
 function Key({ children }: { children: React.ReactNode }) {
   return (
@@ -227,11 +238,16 @@ export function Reader() {
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
 
+  const localReaderProgress =
+    archiveId && usesLocalReaderProgress(loggedIn, settings.data)
+      ? Number(localStorage.getItem(`${archiveId}-reader`))
+      : 0;
+
   const currentPage = clamp(
     pageOverride ??
       (readerSettings.ignoreProgress
         ? 1
-        : Math.max(metadata.data?.progress ?? 1, 1)),
+        : Math.max(localReaderProgress || metadata.data?.progress || 1, 1)),
     1,
     totalPages || 1,
   );
@@ -279,11 +295,7 @@ export function Reader() {
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
-    if (
-      !loggedIn ||
-      (settings.data?.localprogress &&
-        !(settings.data?.authprogress && loggedIn))
-    ) {
+    if (usesLocalReaderProgress(loggedIn, settings.data)) {
       localStorage.setItem(`${archiveId}-reader`, String(currentPage));
     } else if (isTank) {
       updateTankoubonProgress.mutate(currentPage);

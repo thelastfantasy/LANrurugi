@@ -34,6 +34,18 @@ pub enum RefreshTokenStorageError {
 
 type Result<T> = std::result::Result<T, RefreshTokenStorageError>;
 
+/// How long after a refresh token is rotated out that presenting it again is still forgiven as
+/// benign same-family concurrent reuse (multiple browser tabs racing to refresh off the same
+/// stale cookie — see this module's own `rotate` docs) rather than treated as a reuse attack.
+/// Anchored to the *first* rotation's `used_at`, never extended by a later forgiven presentation
+/// — otherwise a token could be kept alive indefinitely by presenting it every `N < GRACE` seconds.
+const REUSE_GRACE_SECS: i64 = 5;
+
+/// Caps how many live sibling tokens one forgiven-reuse token can spawn within its grace window —
+/// a real benign case (a handful of tabs) never approaches this; it exists so a retry-loop bug or
+/// an attacker racing the grace window can't mint unbounded valid tokens from one presentation.
+const MAX_GRACE_REUSES: u32 = 3;
+
 /// A single refresh token's server-side record. The value the browser actually carries in its
 /// `lanrurugi_refresh` cookie is `"{token_id}.{secret}"` — `token_id` is this record's own lookup
 /// key, `secret` is a per-token random value never stored raw (see this module's own docs).
@@ -49,8 +61,22 @@ pub struct RefreshTokenRecord {
     /// [`rotate`]'s own docs for why an actively-rotating chain must still expire.
     pub expires_at: i64,
     /// `true` once this exact token has already been redeemed for a new one — a second
-    /// presentation of a `used: true` token is the reuse-detection trigger.
+    /// presentation of a `used: true` token is the reuse-detection trigger, unless it falls
+    /// within [`REUSE_GRACE_SECS`] of `used_at` (see [`rotate`]'s own docs).
     pub used: bool,
+    /// When this token was first redeemed. `None` for a never-used token, and — critically —
+    /// also `None` for pre-migration Redis records that predate this field (`serde(default)`),
+    /// which deliberately fails safe: no grace period, straight to `ReuseDetected`, same as
+    /// this codebase's behavior before the grace period existed.
+    #[serde(default)]
+    pub used_at: Option<i64>,
+    /// How many times a presentation of this token has been forgiven as benign same-family
+    /// concurrent reuse within the grace window (see [`rotate`]). Capped at
+    /// [`MAX_GRACE_REUSES`] — beyond that, further presentations burn the family same as an
+    /// out-of-window replay, so a buggy retry loop (or a real attacker) can't mint unbounded
+    /// live sibling tokens from one forgiven presentation.
+    #[serde(default)]
+    pub grace_reuse_count: u32,
 }
 
 /// A newly-issued token pair as returned to a caller — the record persisted server-side, plus the
@@ -93,6 +119,18 @@ fn sha256_hex(input: &str) -> String {
     hex_encode(&hasher.finalize())
 }
 
+/// Whether presenting an already-`used` token right now should be forgiven as benign
+/// same-family concurrent reuse rather than treated as a reuse attack — see [`REUSE_GRACE_SECS`]
+/// and [`MAX_GRACE_REUSES`]. A record with `used_at: None` (never used, or a pre-migration record
+/// predating this field) is never forgivable — only a token with a recorded first-use timestamp
+/// can be within a grace window of it.
+fn is_forgivable_reuse(record: &RefreshTokenRecord, now: i64) -> bool {
+    let Some(used_at) = record.used_at else {
+        return false;
+    };
+    record.grace_reuse_count < MAX_GRACE_REUSES && now.saturating_sub(used_at) <= REUSE_GRACE_SECS
+}
+
 #[derive(Clone)]
 pub struct RefreshTokenRepository {
     pool: Pool,
@@ -130,6 +168,8 @@ impl RefreshTokenRepository {
             issued_at: now,
             expires_at: now + lifetime_secs,
             used: false,
+            used_at: None,
+            grace_reuse_count: 0,
         };
         let mut conn = self.pool.get().await?;
         let key = token_key(&token_id);
@@ -156,16 +196,26 @@ impl RefreshTokenRepository {
     /// Outcome of presenting a refresh token — mirrors the three cases `login.rs`'s `refresh`
     /// handler needs to distinguish (see that handler for the HTTP-status mapping).
     ///
-    /// Two racing callers presenting the *same* still-valid token must never both "succeed" —
-    /// that would silently mint two children from one single-use parent. `WATCH` alone doesn't
-    /// give this for free: it only aborts the `EXEC` if the watched key's value changed between
-    /// `WATCH` and `EXEC`, it does NOT re-run arbitrary business logic (the `used` check) against
-    /// the fresh value on a retry. So the `used` check itself has to live *inside* the
-    /// transaction closure, re-reading the record fresh on every attempt (including retries) —
-    /// checking it once outside the closure, then writing the same fixed payload on every retry
-    /// regardless of what changed, is exactly the bug this whole function exists to avoid (this
-    /// was caught by `concurrent_rotation_of_the_same_token_only_lets_one_succeed`'s own test
-    /// failing during development — both racers "won" the first time this was written that way).
+    /// Two racing callers presenting the *same* still-valid (never-used) token must never both
+    /// "succeed" from that single presentation — that would silently mint two children from one
+    /// single-use parent. `WATCH` alone doesn't give this for free: it only aborts the `EXEC` if
+    /// the watched key's value changed between `WATCH` and `EXEC`, it does NOT re-run arbitrary
+    /// business logic (the `used` check) against the fresh value on a retry. So the `used` check
+    /// itself has to live *inside* the transaction closure, re-reading the record fresh on every
+    /// attempt (including retries) — checking it once outside the closure, then writing the same
+    /// fixed payload on every retry regardless of what changed, is exactly the bug this whole
+    /// function exists to avoid (this was caught by
+    /// `concurrent_rotation_of_the_same_token_only_lets_one_succeed`'s own test failing during
+    /// development — both racers "won" the first time this was written that way).
+    ///
+    /// A *separate* presentation of an already-`used` token, within [`REUSE_GRACE_SECS`] of that
+    /// token's `used_at` and under [`MAX_GRACE_REUSES`] prior forgiven presentations, is treated
+    /// as benign same-family concurrent reuse (multiple browser tabs racing off one stale cookie)
+    /// rather than a reuse attack: it still mints a fresh rotated child (so the caller gets a
+    /// working session back), but does NOT touch `used_at` or reset the grace clock — only the
+    /// grace-reuse counter advances. Outside that window/count, or on a token that was never used
+    /// at all before this presentation raced with another, `burn_family` still fires exactly as
+    /// before.
     pub async fn rotate(&self, token_id: &str, secret: &str, now: i64) -> Result<RotateOutcome> {
         let Some(record) = self.get(token_id).await? else {
             return Ok(RotateOutcome::NotFound);
@@ -178,7 +228,7 @@ impl RefreshTokenRepository {
                                                 // but a request racing the exact expiry instant
                                                 // shouldn't get a different answer than "gone"
         }
-        if record.used {
+        if record.used && !is_forgivable_reuse(&record, now) {
             self.burn_family(&record.family_id).await?;
             return Ok(RotateOutcome::ReuseDetected);
         }
@@ -200,6 +250,8 @@ impl RefreshTokenRepository {
             // otherwise "N-day refresh lifetime" is meaningless (see this record's own field docs).
             expires_at,
             used: false,
+            used_at: None,
+            grace_reuse_count: 0,
         };
         let new_key = token_key(&new_token_id);
         let new_raw = serde_json::to_string(&new_record)
@@ -232,26 +284,34 @@ impl RefreshTokenRepository {
                     // `WATCH` but before `EXEC` — this is the actual guard, not the check made
                     // before this closure was ever called (see this fn's own doc comment).
                     let current_raw: Option<String> = conn.get(&old_key).await?;
-                    let still_valid = current_raw
+                    let current = current_raw
                         .as_deref()
                         .and_then(|raw| serde_json::from_str::<RefreshTokenRecord>(raw).ok())
-                        .is_some_and(|current| !current.used && current.secret_hash == secret_hash);
+                        .filter(|current| current.secret_hash == secret_hash);
+                    let still_valid = current
+                        .as_ref()
+                        .is_some_and(|current| !current.used || is_forgivable_reuse(current, now));
                     if !still_valid {
-                        // Someone else already rotated (or burned) this token first. No pipeline
-                        // commands queued this attempt — `transaction_async` treats `Ok(None)` as
-                        // "nothing to commit, stop here" per its own contract; there's genuinely
-                        // nothing left to retry toward, so this exits the loop with a
-                        // business-level "lost the race" flag rather than looping forever.
+                        // Someone else already rotated (or burned) this token first, or the grace
+                        // window/count for a forgivable reuse has since been exhausted by another
+                        // racer's own forgiven presentation. No pipeline commands queued this
+                        // attempt — `transaction_async` treats `Ok(None)` as "nothing to commit,
+                        // stop here" per its own contract; there's genuinely nothing left to retry
+                        // toward, so this exits the loop with a business-level "lost the race" flag
+                        // rather than looping forever.
                         lost_race.store(true, std::sync::atomic::Ordering::Relaxed);
                         return Ok(Some(()));
                     }
-                    let mut marked_used = serde_json::from_str::<RefreshTokenRecord>(
-                        current_raw
-                            .as_deref()
-                            .expect("checked Some above via still_valid"),
-                    )
-                    .expect("checked deserializable above via still_valid");
-                    marked_used.used = true;
+                    let mut marked_used = current.expect("checked Some above via still_valid");
+                    if marked_used.used {
+                        // Forgivable reuse of an already-rotated token: advance only the
+                        // grace-reuse counter, never touch `used_at` — extending it would let a
+                        // token presented every `N < REUSE_GRACE_SECS` seconds stay alive forever.
+                        marked_used.grace_reuse_count += 1;
+                    } else {
+                        marked_used.used = true;
+                        marked_used.used_at = Some(now);
+                    }
                     let old_raw = serde_json::to_string(&marked_used)
                         .expect("RefreshTokenRecord always serializes");
                     // `set_ex`, not `set` — a plain `SET` clears the key's existing TTL, which
@@ -457,7 +517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_rotation_of_the_same_token_only_lets_one_succeed() {
+    async fn concurrent_rotation_of_the_same_token_never_burns_the_family() {
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -483,12 +543,157 @@ mod tests {
             .iter()
             .filter(|o| matches!(o, RotateOutcome::Rotated { .. }))
             .count();
-        // Exactly one of the two racing requests may successfully rotate; the loser must see
-        // either `ReuseDetected` (if it reads the now-`used` record after the winner's commit) or
-        // could itself win in the rare timing where both start their transaction before either
-        // commits — but never both "succeeding" with two different child tokens from one parent.
-        assert_eq!(rotated_count, 1, "exactly one racer must win the rotation");
+        // The winner commits a normal rotation; the loser re-reads inside its own transaction
+        // attempt, sees `used: true` with `used_at` equal to `now` (0 seconds elapsed, well
+        // within the grace window) and forgives it as benign same-family concurrent reuse —
+        // this is exactly the multi-tab scenario the grace window exists for. Neither racer
+        // burns the family, and both walk away with a working rotated token.
+        assert_eq!(
+            rotated_count, 2,
+            "both racers should succeed — the loser's reuse is within the grace window"
+        );
+        assert!(
+            repo.get(&issued.record.family_id).await.is_ok(),
+            "family must not have been burned"
+        );
 
         repo.burn_family(&issued.record.family_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reuse_within_the_grace_window_is_forgiven_and_mints_a_working_token() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+
+        let first = repo
+            .rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+        assert!(matches!(first, RotateOutcome::Rotated { .. }));
+
+        // A second tab, still holding the same now-rotated-out cookie, presents it again 3
+        // seconds later — within `REUSE_GRACE_SECS` (5). It must NOT burn the family, and must
+        // get back its own working rotated token (not the first tab's child).
+        let second = repo
+            .rotate(&issued.record.token_id, &issued.secret, 1_103)
+            .await
+            .unwrap();
+        let RotateOutcome::Rotated {
+            record: second_child,
+            ..
+        } = second
+        else {
+            panic!("expected the grace-window reuse to still rotate, got a different outcome");
+        };
+
+        let parent_after = repo.get(&issued.record.token_id).await.unwrap().unwrap();
+        assert_eq!(
+            parent_after.grace_reuse_count, 1,
+            "the grace-reuse counter must advance"
+        );
+        assert_eq!(
+            parent_after.used_at,
+            Some(1_100),
+            "used_at must stay pinned to the first rotation, not the forgiven reuse"
+        );
+
+        // Both children remain independently usable.
+        assert!(repo.get(&second_child.token_id).await.unwrap().is_some());
+
+        repo.burn_family(&issued.record.family_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reuse_outside_the_grace_window_still_burns_the_family() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+
+        repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+
+        // 6 seconds later — just past `REUSE_GRACE_SECS` (5) — must burn, same as before this
+        // feature existed. Guards against a token being kept alive indefinitely by presenting it
+        // every `N < REUSE_GRACE_SECS` seconds forever.
+        let replay = repo
+            .rotate(&issued.record.token_id, &issued.secret, 1_106)
+            .await
+            .unwrap();
+        assert!(matches!(replay, RotateOutcome::ReuseDetected));
+        assert_eq!(repo.get(&issued.record.token_id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn grace_reuse_count_is_capped_then_burns() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+
+        repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+
+        // MAX_GRACE_REUSES (3) forgiven presentations, all well within the grace window.
+        for _ in 0..3 {
+            let outcome = repo
+                .rotate(&issued.record.token_id, &issued.secret, 1_101)
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RotateOutcome::Rotated { .. }));
+        }
+
+        // The 4th presentation, still within the time window, must now burn — the count cap was
+        // exhausted by the 3 prior forgiven presentations.
+        let fourth = repo
+            .rotate(&issued.record.token_id, &issued.secret, 1_101)
+            .await
+            .unwrap();
+        assert!(matches!(fourth, RotateOutcome::ReuseDetected));
+        assert_eq!(repo.get(&issued.record.token_id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_used_token_missing_used_at_is_never_forgiven() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool.clone());
+        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+
+        repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+
+        // Simulate a pre-migration Redis record: `used: true` but no `used_at` (as if written by
+        // the old binary before this field existed). `serde(default)` is what makes this JSON
+        // shape parse at all.
+        let mut conn = pool.get().await.unwrap();
+        let mut stale = repo.get(&issued.record.token_id).await.unwrap().unwrap();
+        stale.used_at = None;
+        let raw = serde_json::to_string(&stale).unwrap();
+        let _: () = conn
+            .set_ex(token_key(&issued.record.token_id), raw, 604_800)
+            .await
+            .unwrap();
+
+        // Immediately replaying it (0 seconds elapsed) must still burn — a missing `used_at`
+        // fails safe to "not forgivable", matching this codebase's pre-grace-window behavior.
+        let replay = repo
+            .rotate(&issued.record.token_id, &issued.secret, 1_100)
+            .await
+            .unwrap();
+        assert!(matches!(replay, RotateOutcome::ReuseDetected));
     }
 }

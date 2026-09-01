@@ -385,7 +385,16 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     }
 }
 
-async fn get_settings(State(state): State<AppState>) -> Response {
+/// The only `STRING_FIELDS` entries a `guest_visitor` may see — everything else in the full
+/// payload (`pagesize`, `access_token_lifetime_secs`, `tagrules`, `llm_api_key_set`, etc.) is
+/// admin-session configuration a guest has no business reading, even though `route_policy.csv`
+/// allows the *route* itself (guest needs *some* fields off it — `htmltitle`/`timezone` for the
+/// Library page it's allowed into — just not the full admin payload). `theme` is deliberately
+/// absent here: a guest's `theme` value is `guest_theme`'s, substituted in below, not the literal
+/// `STRING_FIELDS` `theme` entry (that's the admin's own pick).
+const GUEST_VISIBLE_STRING_FIELDS: &[&str] = &["language", "htmltitle", "timezone"];
+
+async fn get_settings(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
     let mut conn = match state.redis.config.get().await {
         Ok(c) => c,
         Err(e) => {
@@ -406,6 +415,37 @@ async fn get_settings(State(state): State<AppState>) -> Response {
             )
         }
     };
+
+    // A `guest_visitor` reaches this route too (`route_policy.csv` allows it — the Library page
+    // it's allowed into needs a handful of these fields), but must never see the full admin
+    // payload: that's real admin-session configuration (page size, token lifetimes, tag rules,
+    // whether an LLM key is set, ...), and — the concrete bug this branch fixes — the admin's own
+    // `theme` pick, which a guest seeing even momentarily is a real, live-reproduced state leak
+    // (flashes the correct guest theme, then snaps to the admin's, because the guest's `useSettings`
+    // query and the admin's share one `["settings"]` cache key once this response answers it).
+    if is_guest_eligible_request(&state, &headers).await {
+        let mut body = serde_json::Map::new();
+        for key in GUEST_VISIBLE_STRING_FIELDS {
+            let default = STRING_FIELDS
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, default)| *default)
+                .expect("every GUEST_VISIBLE_STRING_FIELDS entry is a real STRING_FIELDS key");
+            body.insert(
+                (*key).to_string(),
+                json!(fields
+                    .get(*key)
+                    .cloned()
+                    .unwrap_or_else(|| default.to_string())),
+            );
+        }
+        let guest_theme = fields
+            .get("guest_theme")
+            .cloned()
+            .unwrap_or_else(|| "ex.css".to_string());
+        body.insert("theme".to_string(), json!(guest_theme));
+        return axum::Json(Value::Object(body)).into_response();
+    }
 
     let mut body = serde_json::Map::new();
     for (key, default) in STRING_FIELDS {
