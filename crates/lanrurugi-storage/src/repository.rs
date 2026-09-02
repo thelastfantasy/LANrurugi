@@ -1,0 +1,1363 @@
+//! Redis read/write mappers for Archive/Category/Grouping/Stamp, matching the legacy field names
+//! and key shapes verified against `~/LANraragi` source (see module docs on `entities.rs` and
+//! `redis.rs` for what was checked and why). All operations run against the **archive** logical DB
+//! (`RedisDbs::archive`) — Category/Grouping/Stamp share that DB with Archive in the legacy layout,
+//! they are not split across the other four logical DBs.
+//!
+//! Scope note: this module covers the entity CRUD itself. Secondary search-index side effects
+//! (`LRR_TITLES`, `INDEX_*`, `LRR_UNTAGGED`, `LRR_TANKGROUPED`, ...) live in `lanrurugi-search` and
+//! `lanrurugi-scanner`, which call into this module rather than duplicating its Redis access.
+
+use std::path::Path;
+
+use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::Pool;
+use lanrurugi_core::entities::{Archive, Category, ChapterNameEntry, Grouping, Stamp, TocEntry};
+use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum RepositoryError {
+    #[error("Redis error: {0}")]
+    Redis(#[from] deadpool_redis::redis::RedisError),
+    #[error("failed to get a pooled Redis connection: {0}")]
+    Pool(#[from] deadpool_redis::PoolError),
+    #[error("malformed JSON in Redis field {field:?} for key {key:?}: {source}")]
+    Json {
+        key: String,
+        field: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{0} {1:?} not found")]
+    NotFound(&'static str, String),
+    #[error("parallel hashing task failed: {0}")]
+    Concurrency(#[from] lanrurugi_core::concurrency::BlockingTaskError),
+    /// A field this codebase now requires on every record (added by a schema change) is absent —
+    /// deliberately a hard error, not a silent default: pre-existing Redis data must be migrated
+    /// once via the dedicated migration tool before this code path is ever exercised again, rather
+    /// than every future reader carrying a permanent "what if this field is missing" fallback.
+    #[error("required field {field:?} missing on {kind} {key:?} — run the migration tool")]
+    MissingField {
+        kind: &'static str,
+        key: String,
+        field: &'static str,
+    },
+}
+
+type Result<T> = std::result::Result<T, RepositoryError>;
+
+/// Shared shape behind `ArchiveRepository`/`CategoryRepository`/`GroupingRepository`'s own
+/// `list_all`: list every key matching `glob`, then fetch+collect each one that still exists by
+/// the time its own `get` runs (a key can disappear between the `KEYS` scan and the per-id fetch
+/// under concurrent writes — same race tolerated by each repository's own hand-written loop this
+/// replaces, not a new behavior).
+async fn list_all_by_glob<T, F, Fut>(pool: &Pool, glob: &str, get: F) -> Result<Vec<T>>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<T>>>,
+{
+    let mut conn = pool.get().await?;
+    let ids: Vec<String> = conn.keys(glob).await?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(item) = get(id).await? {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+/// 40 lowercase-hex-char pattern, matching legacy `$redis->keys('????????????????????????????????????????')`.
+const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
+
+#[derive(Clone)]
+pub struct ArchiveRepository {
+    pool: Pool,
+}
+
+impl ArchiveRepository {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn get(&self, id: &ArchiveId) -> Result<Option<Archive>> {
+        let mut conn = self.pool.get().await?;
+        let exists: bool = conn.exists(id.as_str()).await?;
+        if !exists {
+            return Ok(None);
+        }
+        let fields: std::collections::HashMap<String, String> = conn.hgetall(id.as_str()).await?;
+        Ok(Some(archive_from_fields(id, fields)?))
+    }
+
+    /// All archive IDs currently in the database (legacy 40-hex-char key glob).
+    pub async fn list_ids(&self) -> Result<Vec<ArchiveId>> {
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.keys(ARCHIVE_KEY_GLOB).await?;
+        Ok(ids.into_iter().map(ArchiveId).collect())
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<Archive>> {
+        list_all_by_glob(&self.pool, ARCHIVE_KEY_GLOB, |id| async move {
+            self.get(&ArchiveId(id)).await
+        })
+        .await
+    }
+
+    /// Finds the archive whose stored `file` path has `filename` as its basename, if any —
+    /// returns only the *first* match. No indexed lookup exists for this (legacy has none either
+    /// — `file` is not a secondary Redis index anywhere) so this is a full `list_all` scan;
+    /// acceptable given this project's existing library-size assumptions (`list_all` is already
+    /// called unconditionally by, e.g., full-library search-index rebuilds).
+    ///
+    /// Prefer [`Self::find_all_by_filename`] over this when the caller needs to know *whether*
+    /// the match was unambiguous — `lanrurugi-backup::import_legacy`'s accuracy requirement means
+    /// a caller that silently takes "the first match" when several archives share a basename
+    /// (different subdirectories, same filename) can end up attaching a legacy record's metadata
+    /// to the wrong file. This method still exists for callers that only ever care about "is
+    /// there at least one" and don't need to distinguish ambiguous from unambiguous.
+    pub async fn find_by_filename(&self, filename: &str) -> Result<Option<Archive>> {
+        Ok(self
+            .find_all_by_filename(filename)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// Same basename match as [`Self::find_by_filename`], but returns *every* match rather than
+    /// just the first — lets a caller detect ambiguity (more than one archive sharing the same
+    /// basename in different subdirectories) instead of silently picking one. Used by
+    /// `lanrurugi-backup::import_legacy`, whose accuracy requirement means an ambiguous match
+    /// must be surfaced, never guessed.
+    pub async fn find_all_by_filename(&self, filename: &str) -> Result<Vec<Archive>> {
+        let archives = self.list_all().await?;
+        // `a.name` (legacy's own `name` field — see `Archive::name`'s own docs) is already the
+        // extension-less basename `filename` needs to match against. `Path::new(&a.file
+        // ).file_name()` was tried here first but is wrong: `a.file` is the *full disk path*, so
+        // its `file_name()` always includes the extension (e.g. "foo.zip"), which can never equal
+        // an extension-less legacy `filename` ("foo") — that comparison silently failed for every
+        // archive, making this whole basename-fallback path a no-op. Confirmed live via an
+        // external code review against a real backup export, 2026-08-29.
+        Ok(archives
+            .into_iter()
+            .filter(|a| a.name == filename)
+            .collect())
+    }
+
+    /// Finds the archive whose stored `file` path has `filename` as its literal basename
+    /// (extension included) — used by `lanrurugi-scanner::pipeline`'s filename-collision check
+    /// for `DuplicatePolicy`, where the caller's `intended_filename` is always a real destination
+    /// filename (e.g. `"foo.zip"`), not `Archive::name`'s own extension-less form. Do not use
+    /// [`Self::find_by_filename`] for this — that method matches `a.name` (extension-less)
+    /// on purpose for its own caller (`import_legacy`'s legacy-basename reconciliation), so an
+    /// extensioned filename never matches there; confirmed live as the root cause of
+    /// `lanrurugi-scanner::pipeline::tests::overwrite_policy_deletes_old_archive_on_filename_collision`
+    /// silently never finding its collision target (2026-08-31).
+    pub async fn find_by_exact_file_basename(&self, filename: &str) -> Result<Option<Archive>> {
+        let archives = self.list_all().await?;
+        Ok(archives
+            .into_iter()
+            .find(|a| Path::new(&a.file).file_name().and_then(|n| n.to_str()) == Some(filename)))
+    }
+
+    /// Finds the archive whose stored `file` matches `file` exactly (full path, not just
+    /// basename) — used by `lanrurugi-backup::import_legacy`'s id-reconciliation fallback, where
+    /// a full-path match is the correct precision level: the two libraries being reconciled are
+    /// only guaranteed to share the same *directory tree* (a "same manga folder" precondition),
+    /// not that every basename within it is globally unique, so `find_by_filename`'s
+    /// basename-only match would risk a false-positive collision across different subdirectories
+    /// that this stricter check avoids. Same full-`list_all()`-scan caveat as `find_by_filename`
+    /// above applies.
+    pub async fn find_by_file_path(&self, file: &str) -> Result<Option<Archive>> {
+        let archives = self.list_all().await?;
+        Ok(archives.into_iter().find(|a| a.file == file))
+    }
+
+    /// Creates or fully overwrites an archive record's hash fields.
+    pub async fn save(&self, archive: &Archive) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let toc_json = serde_json::to_string(&toc_to_legacy_map(&archive.toc)).map_err(|e| {
+            RepositoryError::Json {
+                key: archive.id.to_string(),
+                field: "toc",
+                source: e,
+            }
+        })?;
+        let stamps_json =
+            serde_json::to_string(&archive.stamp_ids).map_err(|e| RepositoryError::Json {
+                key: archive.id.to_string(),
+                field: "stamps",
+                source: e,
+            })?;
+        let corrupted_pages_json =
+            serde_json::to_string(&archive.corrupted_pages).map_err(|e| RepositoryError::Json {
+                key: archive.id.to_string(),
+                field: "corrupted_pages",
+                source: e,
+            })?;
+
+        // `archive: &Archive` already outlives this whole call, so the text fields below don't
+        // need deep-copying just to satisfy `hset_multiple`'s single-`V`-type requirement — `Cow`
+        // lets them stay borrowed (`Cow::Borrowed`) while the fields that were already going
+        // through `.to_string()` regardless (numbers/bools/the pre-serialized JSON blobs above)
+        // keep doing the same allocation they always did (`Cow::Owned`).
+        let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
+            ("name", archive.name.as_str().into()),
+            ("title", archive.title.as_str().into()),
+            ("file", archive.file.as_str().into()),
+            ("tags", archive.tags.as_str().into()),
+            ("summary", archive.summary.as_str().into()),
+            ("arcsize", archive.arcsize.to_string().into()),
+            ("pagecount", archive.pagecount.to_string().into()),
+            ("isnew", if archive.isnew { "true" } else { "false" }.into()),
+            ("progress", archive.lastreadpage.to_string().into()),
+            ("lastreadtime", archive.lastreadtime.to_string().into()),
+            ("toc", toc_json.into()),
+            ("stamps", stamps_json.into()),
+            ("corrupted_pages", corrupted_pages_json.into()),
+            (
+                "has_patch",
+                if archive.has_patch { "true" } else { "false" }.into(),
+            ),
+        ];
+        let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
+        if let Some(thumbhash) = &archive.thumbhash {
+            let _: () = conn
+                .hset(archive.id.as_str(), "thumbhash", thumbhash)
+                .await?;
+        }
+        // `HSET`, unlike `hset_multiple` above, never clears a field on its own — `heal_failed_at`
+        // needs an explicit `HDEL` when `None` so a fresh catalogue of this archive ID (e.g.
+        // re-downloading and overwriting a permanently-broken one) doesn't inherit a stale failure
+        // marker left over from whatever record previously occupied this ID.
+        match archive.heal_failed_at {
+            Some(ts) => {
+                let _: () = conn
+                    .hset(archive.id.as_str(), "heal_failed_at", ts.to_string())
+                    .await?;
+            }
+            None => {
+                let _: () = conn.hdel(archive.id.as_str(), "heal_failed_at").await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: &ArchiveId) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.del(id.as_str()).await?;
+        Ok(())
+    }
+
+    /// Reading-progress accessors: legacy stores this as plain fields on the Archive hash, not a
+    /// separate entity (verified: `Utils::Database::build_json` reads `progress`/`lastreadtime`
+    /// straight off the archive's own hash).
+    pub async fn set_progress(&self, id: &ArchiveId, page: u32, read_at_unix: u64) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let fields: Vec<(&str, String)> = vec![
+            ("progress", page.to_string()),
+            ("lastreadtime", read_at_unix.to_string()),
+        ];
+        let _: () = conn.hset_multiple(id.as_str(), &fields).await?;
+        Ok(())
+    }
+
+    pub async fn rename_id(&self, old_id: &ArchiveId, new_id: &ArchiveId) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = deadpool_redis::redis::cmd("RENAME")
+            .arg(old_id.as_str())
+            .arg(new_id.as_str())
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+}
+
+fn toc_to_legacy_map(toc: &[TocEntry]) -> std::collections::BTreeMap<String, String> {
+    toc.iter()
+        .map(|e| (e.page.to_string(), e.name.clone()))
+        .collect()
+}
+
+fn toc_from_legacy_json(raw: &str) -> Vec<TocEntry> {
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(raw) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<TocEntry> = map
+        .into_iter()
+        .filter_map(|(page, name)| page.parse().ok().map(|page| TocEntry { page, name }))
+        .collect();
+    entries.sort_by_key(|e| e.page);
+    entries
+}
+
+fn archive_from_fields(
+    id: &ArchiveId,
+    mut fields: std::collections::HashMap<String, String>,
+) -> Result<Archive> {
+    let name = fields.remove("name").unwrap_or_default();
+    let title = {
+        let t = fields.remove("title").unwrap_or_default();
+        if t.trim().is_empty() {
+            name.clone()
+        } else {
+            t
+        }
+    };
+    let stamp_ids: Vec<StampId> = fields
+        .get("stamps")
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let corrupted_pages: Vec<String> = fields
+        .remove("corrupted_pages")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let arcsize = fields.remove("arcsize").unwrap_or_default();
+    let pagecount = fields.remove("pagecount").unwrap_or_default();
+    let isnew = fields.remove("isnew").unwrap_or_default();
+    let progress = fields.remove("progress").unwrap_or_default();
+    let lastreadtime = fields.remove("lastreadtime").unwrap_or_default();
+    let heal_failed_at = fields.remove("heal_failed_at").and_then(|s| s.parse().ok());
+    let has_patch = fields.remove("has_patch").unwrap_or_default() == "true";
+
+    Ok(Archive {
+        id: id.clone(),
+        name,
+        title,
+        file: fields.remove("file").unwrap_or_default(),
+        tags: fields.remove("tags").unwrap_or_default(),
+        summary: fields.remove("summary").unwrap_or_default(),
+        arcsize: arcsize.parse().unwrap_or(0),
+        pagecount: pagecount.parse().unwrap_or(0),
+        isnew: isnew == "true",
+        lastreadpage: progress.parse().unwrap_or(0),
+        lastreadtime: lastreadtime.parse().unwrap_or(0),
+        thumbhash: fields.remove("thumbhash"),
+        toc: fields
+            .get("toc")
+            .map(|raw| toc_from_legacy_json(raw))
+            .unwrap_or_default(),
+        stamp_ids,
+        heal_failed_at,
+        corrupted_pages,
+        has_patch,
+    })
+}
+
+/// Categories are `SET_<10-digit-unix-timestamp>` hashes (verified: `Model/Category.pm`).
+#[derive(Clone)]
+pub struct CategoryRepository {
+    pool: Pool,
+}
+
+impl CategoryRepository {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn get(&self, catid: &CategoryId) -> Result<Option<Category>> {
+        let mut conn = self.pool.get().await?;
+        let exists: bool = conn.exists(catid.as_str()).await?;
+        if !exists {
+            return Ok(None);
+        }
+        let fields: std::collections::HashMap<String, String> =
+            conn.hgetall(catid.as_str()).await?;
+        let search = fields.get("search").cloned().filter(|s| !s.is_empty());
+        let archives: Vec<ArchiveId> = if search.is_none() {
+            fields
+                .get("archives")
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        // Defaults to `false` rather than hard-erroring on absence, same leniency as `pinned`
+        // just above — a legacy LANraragi category hash (e.g. one read via a one-off pool
+        // pointed at a foreign legacy Redis instance, `lanrurugi-backup::import_legacy`) never
+        // had this LANrurugi-only field at all, and "not guest-visible" is the correct, safe
+        // interpretation of that absence, not an error condition.
+        let visible_to_guest = fields
+            .get("visible_to_guest")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        Ok(Some(Category {
+            catid: catid.clone(),
+            name: fields.get("name").cloned().unwrap_or_default(),
+            search,
+            archives,
+            pinned: fields.get("pinned").map(|p| p == "1").unwrap_or(false),
+            visible_to_guest,
+        }))
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<Category>> {
+        list_all_by_glob(&self.pool, "SET_??????????", |id| async move {
+            self.get(&CategoryId(id)).await
+        })
+        .await
+    }
+
+    /// Every static category a given archive is currently a member of — the reverse-index-backed
+    /// replacement for what `get_archive_categories` (`lanrurugi-api`) used to answer by calling
+    /// `list_all()` and linearly `.contains()`-checking every category in the library (issue #67).
+    /// `SMEMBERS` the small per-archive index set first, then only `get()`s those specific
+    /// categories — a handful of targeted Redis round trips instead of one that scales with the
+    /// total number of categories in the library regardless of how many actually contain this
+    /// archive. Dynamic categories never appear here, matching `save`'s own indexing rule.
+    pub async fn for_archive(&self, archive_id: &ArchiveId) -> Result<Vec<Category>> {
+        let mut conn = self.pool.get().await?;
+        let catids: Vec<String> = conn
+            .smembers(crate::keys::archive_categories_key(archive_id.as_str()))
+            .await?;
+        let mut categories = Vec::with_capacity(catids.len());
+        for catid in catids {
+            if let Some(category) = self.get(&CategoryId(catid)).await? {
+                categories.push(category);
+            }
+        }
+        Ok(categories)
+    }
+
+    /// Unconditionally `SADD`s this category into every one of its current members' reverse-index
+    /// entries, with no diff-against-previous-state check — used only by
+    /// `rebuild::backfill_reverse_indexes`, which needs to (re-)index a category's membership
+    /// regardless of whether the category's own stored `archives` field has "changed" from
+    /// whatever's already in Redis. `save`'s own diffing can't do this: it diffs the *new* archives
+    /// list against `self.get()`'s *current* stored state, which for an already-saved,
+    /// never-modified category is identical to what's being "saved" again — every diff comes up
+    /// empty and no `SADD` happens, exactly the case (a category saved before this index existed,
+    /// re-saved unchanged) this backfill exists to fix. Never `SREM`s anything — a backfill only
+    /// ever needs to add missing entries back, not remove stale ones (nothing else in this codebase
+    /// can make the index *drop* membership it should still have without going through `save`'s own
+    /// correctly-diffed path).
+    pub(crate) async fn reindex_archive_membership(&self, category: &Category) -> Result<()> {
+        if category.is_dynamic() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await?;
+        for archive_id in &category.archives {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_categories_key(archive_id.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Creates a new static (non-dynamic) category or overwrites metadata on an existing one.
+    ///
+    /// Issue #67: also keeps the `archive_id -> [category_id]` reverse index
+    /// ([`crate::keys::archive_categories_key`]) in sync — diffed against whatever membership was
+    /// previously stored (an extra `get` before the write, only paid on save, not on the much
+    /// hotter read path this index exists to speed up) so a caller changing `category.archives`
+    /// never has to remember to touch the index separately. A dynamic category (`search` set) is
+    /// never indexed here (nor was its previous state, if it was static and just became dynamic —
+    /// `old_archives` comes up empty for a dynamic `previous`), matching `get_archive_categories`'s
+    /// own `!c.is_dynamic()` filter on the read side.
+    pub async fn save(&self, category: &Category) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let archives_json =
+            serde_json::to_string(&category.archives).map_err(|e| RepositoryError::Json {
+                key: category.catid.to_string(),
+                field: "archives",
+                source: e,
+            })?;
+        // Same `Cow` reasoning as `ArchiveRepository::save` above — `category: &Category` already
+        // outlives this call, so the text fields don't need deep-copying just to unify with the
+        // fields that were already allocating (`archives_json`/the `pinned` bool-to-string).
+        let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
+            ("name", category.name.as_str().into()),
+            (
+                "search",
+                category.search.as_deref().unwrap_or_default().into(),
+            ),
+            ("archives", archives_json.into()),
+            ("pinned", if category.pinned { "1" } else { "0" }.into()),
+            (
+                "visible_to_guest",
+                if category.visible_to_guest { "1" } else { "0" }.into(),
+            ),
+        ];
+
+        let previous = self.get(&category.catid).await?;
+        let old_archives: std::collections::HashSet<ArchiveId> = previous
+            .filter(|p| !p.is_dynamic())
+            .map(|p| p.archives.into_iter().collect())
+            .unwrap_or_default();
+        let new_archives: std::collections::HashSet<ArchiveId> = if category.is_dynamic() {
+            std::collections::HashSet::new()
+        } else {
+            category.archives.iter().cloned().collect()
+        };
+
+        let _: () = conn.hset_multiple(category.catid.as_str(), &fields).await?;
+
+        for removed in old_archives.difference(&new_archives) {
+            let _: () = conn
+                .srem(
+                    crate::keys::archive_categories_key(removed.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
+        for added in new_archives.difference(&old_archives) {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_categories_key(added.as_str()),
+                    category.catid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, catid: &CategoryId) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        // Clear this category's own membership out of every member archive's reverse-index entry
+        // before dropping the category hash itself — otherwise a deleted category's ID would keep
+        // showing up in `get_archive_categories` responses for archives that were in it (a stale
+        // reverse-index entry pointing at a now-nonexistent `SET_*` key).
+        if let Some(category) = self.get(catid).await? {
+            for archive_id in &category.archives {
+                let _: () = conn
+                    .srem(
+                        crate::keys::archive_categories_key(archive_id.as_str()),
+                        catid.as_str(),
+                    )
+                    .await?;
+            }
+        }
+        let _: () = conn.del(catid.as_str()).await?;
+        Ok(())
+    }
+}
+
+/// Tankoubons are `TANK_<10-digit-timestamp>` **ZSETs** with packed metadata (verified:
+/// `Model/Tankoubon.pm`). Metadata members sit at scores 0/-1/-2/-3; archive IDs occupy positive
+/// scores 1..N in volume order.
+#[derive(Clone)]
+pub struct GroupingRepository {
+    pool: Pool,
+}
+
+const SCORE_NAME: isize = 0;
+const SCORE_SUMMARY: isize = -1;
+const SCORE_TAGS: isize = -2;
+const SCORE_PROGRESS: isize = -3;
+/// Additive beyond legacy's own `%TANK_METADATA` layout (`name`/`summary`/`tags`/`progress` only)
+/// — see `Grouping::thumbnail_manual`'s own docs for what this tracks.
+const SCORE_THUMBNAIL_MANUAL: isize = -4;
+/// See `Grouping::thumbnail_source_archive`/`thumbnail_source_page`'s own docs. Always written
+/// (matching every other metadata slot's own convention), empty string meaning `None` rather than
+/// omitting the zset member entirely — simpler `get`/`save` symmetry than an optional member.
+const SCORE_THUMBNAIL_SOURCE_ARCHIVE: isize = -5;
+const SCORE_THUMBNAIL_SOURCE_PAGE: isize = -6;
+const SCORE_CHAPTER_NAMES: isize = -7;
+const SCORE_CREATED_AT: isize = -8;
+const SCORE_UPDATED_AT: isize = -9;
+
+impl GroupingRepository {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn get(&self, tankid: &TankId) -> Result<Option<Grouping>> {
+        let mut conn = self.pool.get().await?;
+        let exists: bool = conn.exists(tankid.as_str()).await?;
+        if !exists {
+            return Ok(None);
+        }
+
+        let metadata_members: Vec<String> = conn
+            .zrangebyscore(tankid.as_str(), SCORE_UPDATED_AT, SCORE_NAME)
+            .await?;
+        let mut name = String::new();
+        let mut summary = String::new();
+        let mut tags = String::new();
+        let mut progress = 0u32;
+        let mut thumbnail_manual = false;
+        let mut thumbnail_source_archive = None;
+        let mut thumbnail_source_page = None;
+        let mut chapter_names = String::new();
+        let mut created_at = None;
+        let mut updated_at = None;
+        for member in metadata_members {
+            if let Some(v) = member.strip_prefix("name_") {
+                name = v.to_string();
+            } else if let Some(v) = member.strip_prefix("summary_") {
+                summary = v.to_string();
+            } else if let Some(v) = member.strip_prefix("tags_") {
+                tags = v.to_string();
+            } else if let Some(v) = member.strip_prefix("progress_") {
+                progress = v.parse().unwrap_or(0);
+            } else if let Some(v) = member.strip_prefix("thumbnail_manual_") {
+                thumbnail_manual = v == "1";
+            } else if let Some(v) = member.strip_prefix("thumbnail_source_archive_") {
+                thumbnail_source_archive = (!v.is_empty()).then(|| ArchiveId(v.to_string()));
+            } else if let Some(v) = member.strip_prefix("thumbnail_source_page_") {
+                thumbnail_source_page = v.parse().ok();
+            } else if let Some(v) = member.strip_prefix("chapter_names_") {
+                chapter_names = v.to_string();
+            } else if let Some(v) = member.strip_prefix("created_at_") {
+                created_at = v.parse().ok();
+            } else if let Some(v) = member.strip_prefix("updated_at_") {
+                updated_at = v.parse().ok();
+            }
+        }
+
+        let archive_strs: Vec<String> = conn.zrangebyscore(tankid.as_str(), 1, "+inf").await?;
+        let archives: Vec<ArchiveId> = archive_strs.into_iter().map(ArchiveId).collect();
+
+        let chapter_names: Vec<ChapterNameEntry> =
+            serde_json::from_str(&chapter_names).unwrap_or_default();
+
+        Ok(Some(Grouping {
+            tankid: tankid.clone(),
+            name,
+            summary,
+            tags,
+            progress,
+            archives,
+            thumbnail_manual,
+            thumbnail_source_archive,
+            thumbnail_source_page,
+            chapter_names,
+            created_at,
+            updated_at,
+        }))
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<Grouping>> {
+        list_all_by_glob(&self.pool, "TANK_??????????", |id| async move {
+            self.get(&TankId(id)).await
+        })
+        .await
+    }
+
+    /// Every Tankoubon a given archive is currently a member of — reverse-index-backed, same
+    /// reasoning as `CategoryRepository::for_archive` (issue #67).
+    pub async fn for_archive(&self, archive_id: &ArchiveId) -> Result<Vec<Grouping>> {
+        let mut conn = self.pool.get().await?;
+        let tankids: Vec<String> = conn
+            .smembers(crate::keys::archive_tankoubons_key(archive_id.as_str()))
+            .await?;
+        let mut groupings = Vec::with_capacity(tankids.len());
+        for tankid in tankids {
+            if let Some(grouping) = self.get(&TankId(tankid)).await? {
+                groupings.push(grouping);
+            }
+        }
+        Ok(groupings)
+    }
+
+    /// Unconditionally `SADD`s this grouping into every one of its current members' reverse-index
+    /// entries — same "backfill needs an undiffed write" reasoning as
+    /// `CategoryRepository::reindex_archive_membership`, see that method's own docs.
+    pub(crate) async fn reindex_archive_membership(&self, grouping: &Grouping) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        for archive_id in &grouping.archives {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_tankoubons_key(archive_id.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Writes metadata members and the ordered archive-membership members in one call. Intended
+    /// for create/full-replace; incremental add/remove-one-archive belongs in a higher-level
+    /// service that also maintains `LRR_TANKGROUPED`/`LRR_TITLES` (lanrurugi-search).
+    ///
+    /// Issue #67: also keeps the `archive_id -> [tankoubon_id]` reverse index
+    /// ([`crate::keys::archive_tankoubons_key`]) in sync — same diff-against-previous-membership
+    /// approach as `CategoryRepository::save`, see that method's own docs for the reasoning.
+    pub async fn save(&self, grouping: &Grouping) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let old_archives: std::collections::HashSet<ArchiveId> = self
+            .get(&grouping.tankid)
+            .await?
+            .map(|p| p.archives.into_iter().collect())
+            .unwrap_or_default();
+        let _: () = conn.del(grouping.tankid.as_str()).await?;
+
+        let mut members: Vec<(isize, String)> = vec![
+            (SCORE_NAME, format!("name_{}", grouping.name)),
+            (SCORE_SUMMARY, format!("summary_{}", grouping.summary)),
+            (SCORE_TAGS, format!("tags_{}", grouping.tags)),
+            (SCORE_PROGRESS, format!("progress_{}", grouping.progress)),
+            (
+                SCORE_THUMBNAIL_MANUAL,
+                format!(
+                    "thumbnail_manual_{}",
+                    if grouping.thumbnail_manual { "1" } else { "0" }
+                ),
+            ),
+            (
+                SCORE_THUMBNAIL_SOURCE_ARCHIVE,
+                format!(
+                    "thumbnail_source_archive_{}",
+                    grouping
+                        .thumbnail_source_archive
+                        .as_ref()
+                        .map(|a| a.as_str())
+                        .unwrap_or("")
+                ),
+            ),
+            (
+                SCORE_THUMBNAIL_SOURCE_PAGE,
+                format!(
+                    "thumbnail_source_page_{}",
+                    grouping
+                        .thumbnail_source_page
+                        .map(|p| p.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_CHAPTER_NAMES,
+                format!(
+                    "chapter_names_{}",
+                    serde_json::to_string(&grouping.chapter_names).unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_CREATED_AT,
+                format!(
+                    "created_at_{}",
+                    grouping
+                        .created_at
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
+            (
+                SCORE_UPDATED_AT,
+                format!(
+                    "updated_at_{}",
+                    grouping
+                        .updated_at
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
+        ];
+        for (i, archive_id) in grouping.archives.iter().enumerate() {
+            members.push(((i + 1) as isize, archive_id.to_string()));
+        }
+        // deadpool-redis's ZADD takes (score, member) pairs.
+        let zadd_args: Vec<(isize, String)> = members;
+        let _: () = conn
+            .zadd_multiple(grouping.tankid.as_str(), &zadd_args)
+            .await?;
+
+        let new_archives: std::collections::HashSet<ArchiveId> =
+            grouping.archives.iter().cloned().collect();
+        for removed in old_archives.difference(&new_archives) {
+            let _: () = conn
+                .srem(
+                    crate::keys::archive_tankoubons_key(removed.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
+        for added in new_archives.difference(&old_archives) {
+            let _: () = conn
+                .sadd(
+                    crate::keys::archive_tankoubons_key(added.as_str()),
+                    grouping.tankid.as_str(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, tankid: &TankId) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        // Same "clear the reverse-index entries before dropping the forward key" reasoning as
+        // `CategoryRepository::delete`.
+        if let Some(grouping) = self.get(tankid).await? {
+            for archive_id in &grouping.archives {
+                let _: () = conn
+                    .srem(
+                        crate::keys::archive_tankoubons_key(archive_id.as_str()),
+                        tankid.as_str(),
+                    )
+                    .await?;
+            }
+        }
+        let _: () = conn.del(tankid.as_str()).await?;
+        Ok(())
+    }
+
+    /// Maps a Tankoubon-global page number to the real member archive it falls in (and that
+    /// archive's own local page number), by walking `archives` in order and summing each member's
+    /// own `pagecount` — same cumulative-offset approach as the frontend's own
+    /// `useTankoubonReading.ts::getArchiveForPage` and this crate's former private
+    /// `tankoubons.rs::resolve_global_page` (now a thin caller of this method instead of its own
+    /// copy). `archive_index` (0-based) is included alongside the resolved archive/page so a
+    /// caller building a chapter-numbered label (e.g. `bookmarks.rs`'s Tankoubon-bookmark listing)
+    /// doesn't have to re-walk `archives` a second time just to find the member's own position.
+    /// `None` if `global_page` is out of range, including when every member's `pagecount` is `0`
+    /// (an archive not yet scanned, or one that's vanished — same tolerance
+    /// `TankoubonFullResponse`'s own docs describe for `full_data` silently omitting a missing
+    /// member).
+    pub async fn resolve_global_page(
+        &self,
+        archives_repo: &ArchiveRepository,
+        archives: &[ArchiveId],
+        global_page: u32,
+    ) -> Result<Option<(ArchiveId, u32, usize)>> {
+        let mut offset = 0u32;
+        for (index, id) in archives.iter().enumerate() {
+            let pagecount = archives_repo
+                .get(id)
+                .await?
+                .map(|a| a.pagecount)
+                .unwrap_or(0);
+            if global_page > offset && global_page <= offset + pagecount {
+                return Ok(Some((id.clone(), global_page - offset, index)));
+            }
+            offset += pagecount;
+        }
+        Ok(None)
+    }
+
+    /// The inverse of [`Self::resolve_global_page`]: given a real archive id and that archive's
+    /// own local page number, finds every Tankoubon this archive is currently a member of (via
+    /// [`Self::for_archive`]) and, for each, the equivalent Tankoubon-global page number and this
+    /// member's 0-based position in that Tankoubon's own reading order. An archive can be a member
+    /// of more than one Tankoubon (issue #67 — the reverse index this relies on is many-to-many),
+    /// so this returns a `Vec`, not a single result; empty when the archive isn't a member of any
+    /// Tankoubon. Used by `bookmarks.rs`'s `GET /bookmarks` aggregation to fold a bookmark sitting
+    /// on a Tankoubon member into that Tankoubon's own card instead of listing the bare archive.
+    pub async fn resolve_local_page(
+        &self,
+        archives_repo: &ArchiveRepository,
+        archive_id: &ArchiveId,
+        local_page: u32,
+    ) -> Result<Vec<(TankId, u32, usize)>> {
+        let mut results = Vec::new();
+        for grouping in self.for_archive(archive_id).await? {
+            let mut offset = 0u32;
+            for (index, id) in grouping.archives.iter().enumerate() {
+                if id == archive_id {
+                    results.push((grouping.tankid.clone(), offset + local_page, index));
+                    break;
+                }
+                let pagecount = archives_repo
+                    .get(id)
+                    .await?
+                    .map(|a| a.pagecount)
+                    .unwrap_or(0);
+                offset += pagecount;
+            }
+        }
+        Ok(results)
+    }
+}
+
+/// Stamps are `STAMPS_<page>_<millisecond-timestamp>` hashes (verified: `Model/Stamp.pm`).
+#[derive(Clone)]
+pub struct StampRepository {
+    pool: Pool,
+}
+
+impl StampRepository {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn get(&self, stamp_id: &StampId) -> Result<Option<Stamp>> {
+        let mut conn = self.pool.get().await?;
+        let exists: bool = conn.exists(stamp_id.as_str()).await?;
+        if !exists {
+            return Ok(None);
+        }
+        let fields: std::collections::HashMap<String, String> =
+            conn.hgetall(stamp_id.as_str()).await?;
+        Ok(Some(Stamp {
+            stamp_id: stamp_id.clone(),
+            content: fields.get("content").cloned().unwrap_or_default(),
+            position: fields.get("position").cloned().unwrap_or_default(),
+            archive_id: ArchiveId(fields.get("archive_id").cloned().unwrap_or_default()),
+            icon: fields.get("icon").cloned().unwrap_or_default(),
+            rect: fields.get("rect").cloned().unwrap_or_default(),
+        }))
+    }
+
+    /// Writes a stamp hash verbatim under its own (already-known) key, without touching the
+    /// owning archive's `stamps` list — used by backup restore, which reconciles that list
+    /// separately in one pass (`lanrurugi-backup::restore::relink_stamp_ids`) rather than via
+    /// `create`'s incremental read-modify-write per stamp.
+    pub async fn restore_raw(&self, stamp: &Stamp) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let fields: Vec<(&str, &str)> = vec![
+            ("content", &stamp.content),
+            ("position", &stamp.position),
+            ("archive_id", stamp.archive_id.as_str()),
+            ("icon", &stamp.icon),
+            ("rect", &stamp.rect),
+        ];
+        let _: () = conn.hset_multiple(stamp.stamp_id.as_str(), &fields).await?;
+        Ok(())
+    }
+
+    /// Creates a new stamp for `archive_id`'s page `page` and appends it to that archive's
+    /// `stamps` JSON list (legacy `add_stamp`), returning the new stamp's key.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create(
+        &self,
+        archive_id: &ArchiveId,
+        page: u32,
+        content: &str,
+        position: &str,
+        icon: &str,
+        rect: &str,
+        now_millis: u64,
+    ) -> Result<StampId> {
+        let mut conn = self.pool.get().await?;
+        let stamp_id = StampId(format!("STAMPS_{page}_{now_millis}"));
+
+        let fields: Vec<(&str, &str)> = vec![
+            ("content", content),
+            ("position", position),
+            ("archive_id", archive_id.as_str()),
+            ("icon", icon),
+            ("rect", rect),
+        ];
+        let _: () = conn.hset_multiple(stamp_id.as_str(), &fields).await?;
+
+        let existing: Option<String> = conn.hget(archive_id.as_str(), "stamps").await?;
+        let mut stamps: Vec<StampId> = existing
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        stamps.push(stamp_id.clone());
+        let stamps_json = serde_json::to_string(&stamps).map_err(|e| RepositoryError::Json {
+            key: archive_id.to_string(),
+            field: "stamps",
+            source: e,
+        })?;
+        let _: () = conn
+            .hset(archive_id.as_str(), "stamps", stamps_json)
+            .await?;
+
+        Ok(stamp_id)
+    }
+
+    pub async fn update(
+        &self,
+        stamp_id: &StampId,
+        content: Option<&str>,
+        position: Option<&str>,
+        icon: Option<&str>,
+        rect: Option<&str>,
+    ) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        if let Some(content) = content {
+            let _: () = conn.hset(stamp_id.as_str(), "content", content).await?;
+        }
+        if let Some(position) = position {
+            let _: () = conn.hset(stamp_id.as_str(), "position", position).await?;
+        }
+        if let Some(icon) = icon {
+            let _: () = conn.hset(stamp_id.as_str(), "icon", icon).await?;
+        }
+        if let Some(rect) = rect {
+            let _: () = conn.hset(stamp_id.as_str(), "rect", rect).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, stamp_id: &StampId) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let archive_id: Option<String> = conn.hget(stamp_id.as_str(), "archive_id").await?;
+        if let Some(archive_id) = archive_id {
+            let existing: Option<String> = conn.hget(&archive_id, "stamps").await?;
+            let mut stamps: Vec<StampId> = existing
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+            stamps.retain(|s| s != stamp_id);
+            if let Ok(stamps_json) = serde_json::to_string(&stamps) {
+                let _: () = conn.hset(&archive_id, "stamps", stamps_json).await?;
+            }
+        }
+        let _: () = conn.del(stamp_id.as_str()).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanrurugi_core::entities::TocEntry;
+
+    /// These tests exercise real Redis I/O and are skipped (with a message, not a failure) unless
+    /// `LANRURUGI_TEST_REDIS_URL` is set and reachable — CI wires that up via a Redis service
+    /// container (T007); locally, point it at a throwaway container.
+    async fn test_pool() -> Option<Pool> {
+        crate::test_support::test_pool().await
+    }
+
+    #[tokio::test]
+    async fn archive_roundtrip_preserves_all_fields() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool);
+        let id = ArchiveId("a".repeat(40));
+        let archive = Archive {
+            id: id.clone(),
+            name: "some manga v1".to_string(),
+            title: "Some Manga Vol. 1".to_string(),
+            file: "/library/some manga v1.zip".to_string(),
+            tags: "artist:jane,language:english".to_string(),
+            summary: "a summary".to_string(),
+            arcsize: 123456,
+            pagecount: 20,
+            isnew: true,
+            lastreadpage: 5,
+            lastreadtime: 1_700_000_000,
+            thumbhash: Some("deadbeef".to_string()),
+            toc: vec![TocEntry {
+                page: 1,
+                name: "Chapter 1".to_string(),
+            }],
+            stamp_ids: vec![],
+            heal_failed_at: Some(1_700_000_500),
+            corrupted_pages: vec!["page03.jpg".to_string(), "page07.jpg".to_string()],
+            has_patch: true,
+        };
+
+        repo.save(&archive).await.unwrap();
+        let fetched = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(fetched, archive);
+
+        repo.delete(&id).await.unwrap();
+        assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn grouping_roundtrip_preserves_order_and_metadata() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = GroupingRepository::new(pool);
+        let tankid = TankId("TANK_1700000000".to_string());
+        let grouping = Grouping {
+            tankid: tankid.clone(),
+            name: "My Series".to_string(),
+            summary: "series summary".to_string(),
+            tags: "series:my series".to_string(),
+            progress: 42,
+            archives: vec![
+                ArchiveId("b".repeat(40)),
+                ArchiveId("c".repeat(40)),
+                ArchiveId("d".repeat(40)),
+            ],
+            thumbnail_manual: true,
+            thumbnail_source_archive: Some(ArchiveId("c".repeat(40))),
+            thumbnail_source_page: Some(7),
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        };
+
+        repo.save(&grouping).await.unwrap();
+        let fetched = repo.get(&tankid).await.unwrap().unwrap();
+        assert_eq!(fetched, grouping);
+
+        repo.delete(&tankid).await.unwrap();
+        assert!(repo.get(&tankid).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn category_roundtrip_static_and_dynamic() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = CategoryRepository::new(pool);
+        let catid = CategoryId("SET_1700000001".to_string());
+        let category = Category {
+            catid: catid.clone(),
+            name: "Favorites".to_string(),
+            search: None,
+            archives: vec![ArchiveId("e".repeat(40))],
+            pinned: true,
+            visible_to_guest: true,
+        };
+        repo.save(&category).await.unwrap();
+        assert_eq!(repo.get(&catid).await.unwrap().unwrap(), category);
+
+        let dyn_catid = CategoryId("SET_1700000002".to_string());
+        let dynamic = Category {
+            catid: dyn_catid.clone(),
+            name: "Recently added".to_string(),
+            search: Some("date_added:*".to_string()),
+            archives: vec![],
+            pinned: false,
+            visible_to_guest: false,
+        };
+        repo.save(&dynamic).await.unwrap();
+        let fetched = repo.get(&dyn_catid).await.unwrap().unwrap();
+        assert!(fetched.is_dynamic());
+        assert!(fetched.archives.is_empty());
+
+        repo.delete(&catid).await.unwrap();
+        repo.delete(&dyn_catid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stamp_create_links_to_archive_and_delete_unlinks() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archive_repo = ArchiveRepository::new(pool.clone());
+        let stamp_repo = StampRepository::new(pool);
+
+        let archive_id = ArchiveId("f".repeat(40));
+        let archive = Archive {
+            id: archive_id.clone(),
+            name: "n".to_string(),
+            title: "t".to_string(),
+            file: "/x.zip".to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 10,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        };
+        archive_repo.save(&archive).await.unwrap();
+
+        let stamp_id = stamp_repo
+            .create(
+                &archive_id,
+                3,
+                "hello",
+                "10,20",
+                "🎯",
+                "10,20,30,40,tl,#ff0000",
+                1_700_000_000_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stamp_id.as_str(), "STAMPS_3_1700000000000");
+
+        let fetched = stamp_repo.get(&stamp_id).await.unwrap().unwrap();
+        assert_eq!(fetched.content, "hello");
+        assert_eq!(fetched.archive_id, archive_id);
+        assert_eq!(fetched.page(), Some(3));
+        assert_eq!(fetched.icon, "🎯");
+        assert_eq!(fetched.rect, "10,20,30,40,tl,#ff0000");
+
+        let updated_archive = archive_repo.get(&archive_id).await.unwrap().unwrap();
+        assert_eq!(updated_archive.stamp_ids, vec![stamp_id.clone()]);
+
+        stamp_repo.delete(&stamp_id).await.unwrap();
+        assert!(stamp_repo.get(&stamp_id).await.unwrap().is_none());
+        let final_archive = archive_repo.get(&archive_id).await.unwrap().unwrap();
+        assert!(final_archive.stamp_ids.is_empty());
+
+        archive_repo.delete(&archive_id).await.unwrap();
+    }
+
+    fn minimal_archive(id: &ArchiveId, pagecount: u32) -> Archive {
+        Archive {
+            id: id.clone(),
+            name: id.as_str().to_string(),
+            title: id.as_str().to_string(),
+            file: format!("/x/{}.zip", id.as_str()),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        }
+    }
+
+    /// `resolve_global_page`/`resolve_local_page` are the mapping this crate now offers so a
+    /// Tankoubon can be addressed by a single global page number end to end (bookmarks/stamps
+    /// placed while reading a Tankoubon as one concatenated book — issue #97's own follow-on) —
+    /// covers both directions plus their edge cases: a page landing on the boundary between two
+    /// members, out-of-range in both directions, a zero-`pagecount` member (not yet scanned) being
+    /// skipped over rather than treated as a valid 0-length range, and an archive that's a member
+    /// of more than one Tankoubon (issue #67's own many-to-many reverse index).
+    #[tokio::test]
+    async fn resolve_global_and_local_page_round_trip_across_tankoubon_members() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives_repo = ArchiveRepository::new(pool.clone());
+        let groupings_repo = GroupingRepository::new(pool);
+
+        let a1 = ArchiveId("1".repeat(40));
+        let a2 = ArchiveId("2".repeat(40));
+        let a3_unscanned = ArchiveId("3".repeat(40));
+        let a4 = ArchiveId("4".repeat(40));
+        archives_repo.save(&minimal_archive(&a1, 5)).await.unwrap();
+        archives_repo.save(&minimal_archive(&a2, 3)).await.unwrap();
+        archives_repo
+            .save(&minimal_archive(&a3_unscanned, 0))
+            .await
+            .unwrap();
+        archives_repo.save(&minimal_archive(&a4, 4)).await.unwrap();
+
+        let tankid = TankId("TANK_1700000010".to_string());
+        let grouping = Grouping {
+            tankid: tankid.clone(),
+            name: "Series".to_string(),
+            summary: String::new(),
+            tags: String::new(),
+            progress: 0,
+            archives: vec![a1.clone(), a2.clone(), a3_unscanned.clone(), a4.clone()],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        };
+        groupings_repo.save(&grouping).await.unwrap();
+
+        // Global pages 1-5 -> a1 (pagecount 5), local pages 1-5.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 1)
+                .await
+                .unwrap(),
+            Some((a1.clone(), 1, 0))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 5)
+                .await
+                .unwrap(),
+            Some((a1.clone(), 5, 0))
+        );
+        // Global page 6 is the first page of a2 (the boundary right after a1 ends) — not off-by-one
+        // into a1's own range.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 6)
+                .await
+                .unwrap(),
+            Some((a2.clone(), 1, 1))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 8)
+                .await
+                .unwrap(),
+            Some((a2.clone(), 3, 1))
+        );
+        // a3_unscanned has pagecount 0 — contributes no range at all, so global page 9 (right after
+        // a2's own last page) resolves straight through to a4, not to a3 at some invalid local page.
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 9)
+                .await
+                .unwrap(),
+            Some((a4.clone(), 1, 3))
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 12)
+                .await
+                .unwrap(),
+            Some((a4.clone(), 4, 3))
+        );
+        // Out of range on both ends: page 0 and past the Tankoubon's total (12).
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 0)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            groupings_repo
+                .resolve_global_page(&archives_repo, &grouping.archives, 13)
+                .await
+                .unwrap(),
+            None
+        );
+
+        // Inverse: a2's own local page 3 is global page 8 in this Tankoubon, at member index 1.
+        let reverse = groupings_repo
+            .resolve_local_page(&archives_repo, &a2, 3)
+            .await
+            .unwrap();
+        assert_eq!(reverse, vec![(tankid.clone(), 8, 1)]);
+
+        // An archive not a member of any Tankoubon resolves to no entries at all, not an error.
+        let not_a_member = ArchiveId("5".repeat(40));
+        archives_repo
+            .save(&minimal_archive(&not_a_member, 1))
+            .await
+            .unwrap();
+        assert!(groupings_repo
+            .resolve_local_page(&archives_repo, &not_a_member, 1)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // issue #67: an archive that's a member of two different Tankoubons resolves to one entry
+        // per membership, not just the first.
+        let tankid2 = TankId("TANK_1700000020".to_string());
+        let grouping2 = Grouping {
+            tankid: tankid2.clone(),
+            name: "Series 2".to_string(),
+            summary: String::new(),
+            tags: String::new(),
+            progress: 0,
+            archives: vec![a2.clone()],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        };
+        groupings_repo.save(&grouping2).await.unwrap();
+        let mut both = groupings_repo
+            .resolve_local_page(&archives_repo, &a2, 1)
+            .await
+            .unwrap();
+        both.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        assert_eq!(both, vec![(tankid.clone(), 6, 1), (tankid2.clone(), 1, 0)]);
+
+        groupings_repo.delete(&tankid).await.unwrap();
+        groupings_repo.delete(&tankid2).await.unwrap();
+        archives_repo.delete(&a1).await.unwrap();
+        archives_repo.delete(&a2).await.unwrap();
+        archives_repo.delete(&a3_unscanned).await.unwrap();
+        archives_repo.delete(&a4).await.unwrap();
+        archives_repo.delete(&not_a_member).await.unwrap();
+    }
+}

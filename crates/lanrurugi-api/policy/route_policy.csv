@@ -1,0 +1,143 @@
+p, session, /api/*, *, allow
+
+# Public/bootstrap routes: unauthenticated callers are resolved to AuthMethod::Anonymous by
+# require_api_key and must be explicitly allowed here. This keeps every /api/* route in one
+# policy file instead of maintaining a separate bypass router for public endpoints.
+p, anonymous, /api/login, POST, allow
+p, anonymous, /api/login/status, GET, allow
+p, anonymous, /api/logout, POST, allow
+p, anonymous, /api/token/refresh, POST, allow
+p, anonymous, /api/theme, GET, allow
+p, anonymous, /api/info, GET, allow
+p, anonymous, /api/version, GET, allow
+
+p, token_admin, /api/*, GET, allow
+p, token_admin, /api/*, POST, allow
+p, token_admin, /api/*, PUT, allow
+p, token_admin, /api/*, DELETE, allow
+
+p, token_guest, /api/*, GET, allow
+
+# 007-guest-restricted-access: an unauthenticated caller `require_api_key` has determined is
+# eligible for scoped guest access (site-wide `guestmode` switch on, at least one
+# `Category.visible_to_guest`). Read-only, GET-only — never `anonymous`'s old
+# unrestricted-read-write shape (that role and the `enable_pass=false` open-instance concept it
+# represented are both removed entirely; password login can no longer be disabled, so there is no
+# longer any caller with `token_admin`-equivalent access and no credentials). Category-level
+# content scoping (which archives a guest_visitor may actually see within an allowed route) is a
+# resource-level concern this route-level policy has no mechanism for — enforced in application
+# code instead (`SearchParams.restrict_to_archive_ids`, `archives.rs`'s own guest-scope membership
+# checks), same architectural split this file's own two-Enforcer design already documents.
+#
+# Public/bootstrap routes must also be reachable when guest mode resolves an unauthenticated
+# caller to guest_visitor instead of anonymous.
+p, guest_visitor, /api/login, POST, allow
+p, guest_visitor, /api/login/status, GET, allow
+p, guest_visitor, /api/logout, POST, allow
+p, guest_visitor, /api/token/refresh, POST, allow
+p, guest_visitor, /api/theme, GET, allow
+p, guest_visitor, /api/info, GET, allow
+p, guest_visitor, /api/version, GET, allow
+
+# Explicit whitelist, not `/api/*` GET-allow + deny-list — the previous blanket-allow shape
+# (`token_guest`'s own, copied verbatim for the initial 007 pass) meant every *new* admin-only GET
+# endpoint added anywhere in the app was silently guest-reachable by default unless someone
+# remembered to add a matching deny line here; that gap was real, not hypothetical (FR-010's own
+# `/api/plugins`/`/api/activity`/`/api/stats` denies below were only discovered and added after
+# guest eligibility started actually working in tests, per that block's own doc). A whitelist
+# means a newly added GET endpoint is guest-*unreachable* by default, matching FR-010's own
+# "guest must never reach an administrative function unless explicitly scoped to" framing more
+# directly than a denylist that must be kept in sync by hand.
+#
+# Full route inventory verified against `apps/frontend/src/**` (every GET request an eligible
+# guest's two reachable frontend routes — `/` `Library` and `/reader/:archiveId` `Reader`, per
+# `RouteGuards.tsx`'s `AllowGuest` — can actually issue) and cross-checked against every
+# `.route(...)` declaration under `crates/lanrurugi-api/src/*.rs`, 2026-08-28. Two easy-to-miss
+# entries worth calling out explicitly: `/api/archives/:id/page` is never spelled out as a literal
+# string anywhere in the frontend — it's only reached indirectly via the URLs `GET
+# /archives/:id/files` returns — and `/api/database/stats` (not `/api/stats`, which doesn't exist
+# as a route at all; the old `/api/stats` deny line below was a dead rule that never matched
+# anything) backs the tag-autocomplete suggestions FR-012 requires.
+p, guest_visitor, /api/categories, GET, allow
+p, guest_visitor, /api/tankoubons, GET, allow
+p, guest_visitor, /api/tankoubons/:id/full, GET, allow
+p, guest_visitor, /api/tankoubons/:id/thumbnail, GET, allow
+p, guest_visitor, /api/settings, GET, allow
+p, guest_visitor, /api/database/stats, GET, allow
+p, guest_visitor, /api/search, GET, allow
+p, guest_visitor, /api/search/ids, GET, allow
+p, guest_visitor, /api/search/random, GET, allow
+p, guest_visitor, /api/bookmarks, GET, allow
+p, guest_visitor, /api/archives/:id/metadata, GET, allow
+p, guest_visitor, /api/archives/:id/files, GET, allow
+p, guest_visitor, /api/archives/:id/page, GET, allow
+p, guest_visitor, /api/archives/:id/page-dimensions, GET, allow
+p, guest_visitor, /api/archives/:id/thumbnail, GET, allow
+p, guest_visitor, /api/archives/:id/thumbnails, GET, allow
+p, guest_visitor, /api/archives/:id/stamps, GET, allow
+p, guest_visitor, /api/archives/:id/stamps/:index, GET, allow
+p, guest_visitor, /api/archives/:id/bookmarks, GET, allow
+p, guest_visitor, /api/reader/recommendations/:id, GET, allow
+
+# `MatchedPath` (read by `require_api_key`, which is `.layer()`-ed on the router *before* it's
+# `.nest("/api", ...)`-ed into the top-level app — see `app.rs::build_app`) reflects the full
+# post-nest path, `/api/...`, not the bare `/...` each `router()` function's own `.route(...)`
+# calls declare — confirmed live: a real request to `POST /api/database/drop` produced
+# `obj=/api/database/drop`, not `/database/drop`, and every rule below originally written without
+# the `/api` prefix silently never matched, letting an Admin-role token through a route meant to
+# be Session-only (caught by `session_only_route_rejects_a_real_admin_token_but_accepts_a_real_session`
+# in `lanrurugi-server/tests/auth_flow.rs`, a real end-to-end HTTP test — the pure in-memory
+# `authz::tests` unit tests never exercise axum's own routing layer, so they couldn't have caught
+# this on their own).
+p, token_admin, /api/activity, DELETE, deny
+p, token_admin, /api/activity/:id, DELETE, deny
+p, token_admin, /api/activity/retention, PUT, deny
+p, token_admin, /api/archives, DELETE, deny
+p, token_admin, /api/database/drop, POST, deny
+p, token_admin, /api/database/import-legacy, POST, deny
+p, token_admin, /api/database/import-legacy/count, GET, deny
+p, token_admin, /api/database/import-snapshots, GET, deny
+p, token_admin, /api/database/import-snapshots/:id, GET, deny
+p, token_admin, /api/database/import-snapshots/:id, DELETE, deny
+p, token_admin, /api/settings/password, POST, deny
+p, token_admin, /api/tokens, GET, deny
+p, token_admin, /api/tokens, POST, deny
+p, token_admin, /api/tokens/:id, PATCH, deny
+p, token_admin, /api/tokens/:id, DELETE, deny
+p, token_admin, /api/plugin-wizard/lookup, POST, deny
+p, token_admin, /api/plugin-wizard/analyze-login, POST, deny
+p, token_admin, /api/plugin-wizard/generate/start, POST, deny
+p, token_admin, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_admin, /api/plugin-wizard/trial-run, POST, deny
+p, token_admin, /api/plugin-wizard/save, POST, deny
+
+p, token_guest, /api/activity, DELETE, deny
+p, token_guest, /api/activity/:id, DELETE, deny
+p, token_guest, /api/activity/retention, PUT, deny
+p, token_guest, /api/archives, DELETE, deny
+p, token_guest, /api/database/drop, POST, deny
+p, token_guest, /api/database/import-legacy, POST, deny
+p, token_guest, /api/database/import-legacy/count, GET, deny
+p, token_guest, /api/database/import-snapshots, GET, deny
+p, token_guest, /api/database/import-snapshots/:id, GET, deny
+p, token_guest, /api/database/import-snapshots/:id, DELETE, deny
+p, token_guest, /api/settings/password, POST, deny
+p, token_guest, /api/tokens, GET, deny
+p, token_guest, /api/tokens, POST, deny
+p, token_guest, /api/tokens/:id, PATCH, deny
+p, token_guest, /api/tokens/:id, DELETE, deny
+p, token_guest, /api/plugin-wizard/lookup, POST, deny
+p, token_guest, /api/plugin-wizard/analyze-login, POST, deny
+p, token_guest, /api/plugin-wizard/generate/start, POST, deny
+p, token_guest, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_guest, /api/plugin-wizard/trial-run, POST, deny
+p, token_guest, /api/plugin-wizard/save, POST, deny
+
+# No `guest_visitor` deny rules below `token_guest`'s own — the whitelist above (this file's own
+# earlier `guest_visitor` block) is the only `allow` this role gets at all, on any method; a
+# denylist entry for something never allowed in the first place would be dead weight, not defense
+# in depth. `/api/archives/:id/download` (FR-009's bulk-export exclusion) and every admin *read*
+# surface (`/api/plugins*`, `/api/activity*`, `/api/stats` — note `/api/database/stats` is a
+# different, whitelisted route, see the whitelist block's own note) are simply absent from the
+# whitelist, which is exactly what makes them unreachable by construction rather than by
+# remembering to list them here too.

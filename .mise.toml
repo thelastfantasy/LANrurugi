@@ -1,0 +1,193 @@
+# Pinned toolchain versions (constitution Technology Stack Constraints: "Toolchain version
+# management"). Contributors and CI must not rely on whatever happens to be preinstalled — `mise
+# install` reproduces this exact set. Versions below were the latest stable release as of
+# 2026-07-06 (constitution's "verify at implementation time" rule); bump deliberately, not by
+# copying an older pin from memory.
+[tools]
+# `components` pulls in `rustfmt`/`clippy` alongside the toolchain itself — mise's rust backend
+# otherwise installs rustup's `minimal` profile (rustc/rust-std/cargo only), which is missing both,
+# breaking `cargo fmt`/`cargo clippy` for every contributor and CI run alike ("'cargo-fmt' is not
+# installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
+# contributor machine that already had a system-wide Rust install with these components wouldn't
+# surface the gap).
+rust = { version = "1.97.1", components = "rustfmt,clippy" }
+node = "24.18.0"
+deno = "2.9.1"
+pnpm = "11.10.0"
+# Rust build acceleration (constitution Technology Stack Constraints: "Rust build acceleration").
+sccache = "0.16.0"
+mold = "2.41.0"
+# Local pre-commit quality gate (constitution Engineering Workflow & Quality Gates); see
+# `lefthook.yml`. `mise install` + `lefthook install` wires the actual git hook.
+lefthook = "2.1.9"
+
+[env]
+# `cargo`/`rustc` pick these up automatically; see also `.cargo/config.toml` for the mold linker
+# wiring, which needs a target-triple-scoped rustflag rather than an env var.
+RUSTC_WRAPPER = "sccache"
+
+# Per-contributor overrides (gitignored via .gitignore's `.env.*` pattern) — currently just
+# `CARGO_CONTAINER_YIELD_TO` (see scripts/cargo-container-run.sh's own docs), a personal-machine
+# tuning knob with no sane repo-wide default, so it belongs here rather than hardcoded or checked
+# in. Silently absent/no-op for anyone who hasn't created this file.
+_.file = ".env.local"
+
+# ── Podman dev/CI tasks ──────────────────────────────────────────────────────
+# `lanrurugi-scanner` depends on `libarchive2-sys`, which builds the bundled libarchive C source
+# via CMake + generates bindings via bindgen (libclang) — build deps the host may lack and that the
+# constitution/memo prefer to keep out of the host (build inside a container). These tasks run the
+# Rust workspace commands inside the `Dockerfile.build` image (`lanrurugi-dev`), mounting the repo
+# so cargo's `target/` cache persists across runs. Requires `podman` (or `docker`) on PATH; runs
+# rootless. Run `mise run ci-image` once first to build the image.
+
+[tasks.ci-image]
+description = "Build the Dockerfile.build dev image (lanrurugi-dev) — run once before the other tasks"
+run = "podman build -f Dockerfile.build -t lanrurugi-dev ."
+
+# Every cargo-in-container task below shares the same guardrails via `scripts/cargo-container-run.sh`
+# — see that script's own header comment for the full rationale (added after a real host crash,
+# 2026-07-21: an unbounded `--rm` container running `cargo build` on this 32-core/28GB-RAM machine
+# drove the system into OOM and a hard reboot). In short: memory-capped, parallelism-capped,
+# persistent target/registry cache with a 20GB soft-cap auto-clean, and a step-down (fewer CPUs,
+# lower scheduling priority) when `dwproton` (Wuthering Waves' Proton runtime) is detected running,
+# so a foreground game keeps priority under contention instead of the build starving it.
+
+[tasks.test]
+description = "cargo test --workspace --no-fail-fast inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+# `--no-fail-fast`: without it, cargo stops running further crates' test binaries the moment one
+# fails — `lanrurugi-api` (which has two known Redis-dependent tests that fail without a real
+# Redis instance) sorts before `lanrurugi-llm` in the workspace member list, so those two
+# pre-existing failures were silently preventing every crate after it (lanrurugi-llm included) from
+# ever actually running its own tests, even though `cargo test --workspace` "succeeded" up to that
+# point — confirmed live: new lanrurugi-llm unit tests added across several sessions had only ever
+# been compile-checked, never executed, because this exact task never got past lanrurugi-api's
+# test binary.
+run = "scripts/cargo-container-run.sh cargo test --workspace --no-fail-fast"
+
+[tasks.clippy]
+description = "cargo clippy --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.fmt-check]
+description = "cargo fmt --all --check inside the dev container (pre-commit's rust-check hook; see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo fmt --all --check"
+
+[tasks.fmt]
+description = "cargo fmt --all inside the dev container — auto-fixes what fmt-check flags (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo fmt --all"
+
+[tasks.check-crate]
+description = "cargo check -p <crate> inside the dev container — fast single-crate iteration check, not the full-workspace pre-push gate. Usage: mise run check-crate -- <crate-name> [<crate-name> ...]"
+# `run`'s multi-line form executes under `sh`, not bash — no arrays (`args=(...)`) available, so
+# this builds the repeated `-p <crate>` flags with `set --` instead, which is POSIX.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for c in "$@"; do args+=(-p "$c"); done
+scripts/cargo-container-run.sh cargo check "${args[@]}"
+"""
+
+[tasks.check]
+description = "tsc + eslint + clippy + fmt — must pass before committing"
+run = "npx lefthook run pre-push"
+
+[tasks.build]
+description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
+run = "scripts/cargo-container-run.sh cargo build --workspace"
+
+[tasks.convert-plugins]
+description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
+run = "scripts/convert-plugins.sh \"$@\""
+
+[tasks.eval-recommend-model]
+description = "Quantified series-recognition accuracy of an embedding model against the 60-title fixture — usage: mise run eval-recommend-model -- <model.onnx> <tokenizer.json> [prefix]. Point at files under data/models/ to compare candidates before switching lanrurugi-recommend's production model (see crates/lanrurugi-recommend/examples/eval_fixture.rs's own docs)."
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release --example eval_fixture -- \"$@\""
+
+[tasks.plugin-sdk-docs]
+description = "Generate the plugin-authoring SDK reference (deno doc --html) into target/plugin-sdk-docs/"
+# `plugins/legacy-globals.d.ts` is included alongside the other two (issue #86's type-unification
+# pass) — `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs`/
+# `PluginErrorException` live there now (not in plugin-sdk.ts), since a converted plugin file needs
+# to reference them with zero `import`/reference of its own (see that file's own docs on why); this
+# doc build needs the same file passed in explicitly for those symbols to appear in the output at
+# all — confirmed live (a `deno doc --html` run without it silently drops every one of these
+# symbols from the generated reference, no error, they just aren't there).
+run = """
+deno doc --html --name="LANrurugi Plugin SDK" --output=target/plugin-sdk-docs \
+  crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts \
+  crates/lanrurugi-plugin/dispatcher/dispatcher.ts \
+  plugins/legacy-globals.d.ts
+echo "Open target/plugin-sdk-docs/index.html"
+"""
+
+# ── 003-ui-test-automation ───────────────────────────────────────────────────
+[tasks.test-frontend-unit]
+description = "Run the frontend's fast unit-level test layer (Vitest + Testing Library, no backend required)"
+run = "pnpm -C apps/frontend run test:unit"
+
+[tasks.test-frontend-e2e]
+description = "Run the frontend's end-to-end test layer (Playwright, real backend + Redis). Set KEEP=1 to skip teardown for this run only (inspect a failed run's environment afterward)."
+run = """
+cargo build -p lanrurugi-server
+pnpm -C apps/frontend run test:e2e
+"""
+
+# ── Local full-stack dev environment (compose.dev.yaml / Dockerfile.dev) ─────
+# One container: Redis + a compiled `lanrurugi-server` + `vite dev` with the frontend live
+# hot-reloading from the bind-mounted host source — see compose.dev.yaml's own doc comment.
+# Deliberately separate from the production `compose.yaml`/`Dockerfile` (never touched by these).
+[tasks.dev-up]
+description = "Build (if needed) and start the local full-stack dev container — frontend hot-reloads, backend/Redis are the same as production"
+run = "podman compose -f compose.dev.yaml up -d"
+
+[tasks.dev-down]
+description = "Stop the local full-stack dev container"
+run = "podman compose -f compose.dev.yaml stop"
+
+[tasks.dev-rebuild]
+description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
+# Deliberately `podman build` directly, NOT `podman compose -f compose.dev.yaml build` — this
+# host has no `podman-compose` installed, so `podman compose` falls back to a standalone
+# `docker-compose` binary, which (confirmed live, 2026-08-09) prints "Docker Compose requires
+# buildx plugin to be installed" and silently drops to its own legacy builder instead of calling
+# through to `podman build` — losing `Dockerfile.dev`'s `--mount=type=cache,id=lrr-cargo-registry`/
+# `id=lrr-cargo-target` Rust-build caches entirely (buildah itself DOES support these natively;
+# confirmed via a direct `podman build` on the same Dockerfile completing a warm rebuild in 0.54s
+# vs. several minutes through the compose path). Calling `podman build` directly here bypasses
+# that broken indirection; must stay in sync with `compose.dev.yaml`'s own `build:` section
+# (context `.`, `dockerfile: Dockerfile.dev`, image tag `localhost/lanrurugi-dev-full:latest`) if
+# that ever changes.
+run = """
+podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
+# Re-tagging `latest` above orphans the previous image under this tag as a dangling `<none>`
+# layer — with no automatic GC, these silently accumulate one per rebuild (confirmed live,
+# 2026-08-28: 733 images / 41.77GB before a first manual `podman image prune` cut it to 52 / 9.8GB).
+# Prune right after a successful rebuild, not in `dev-down` — `dev-down` is a routine
+# start/stop toggle run far more often than a rebuild, and paying the prune cost there would
+# slow down the common case for no benefit; a fresh dangling image only ever exists *because*
+# a rebuild just ran, so cleaning up immediately after is both sufficient and the cheapest
+# point to do it. `-f` skips the interactive confirmation (this is scripted, non-interactive
+# use); scoped to dangling images only, never a `system prune` here — that would also sweep
+# named volumes / build cache this and other tasks still rely on.
+podman image prune -f
+"""
+
+[tasks.dev-logs]
+description = "Follow the local dev container's logs"
+run = "podman logs -f lrr-dev"
+
+# ── Local CI reproduction (act) ──────────────────────────────────────────────
+# Runs .github/workflows/ci.yml locally via `act` + podman/docker, so a CI failure can be
+# iterated on in seconds instead of minutes per push, with real stdout/stderr and the ability to
+# `podman exec` into a still-running job container to inspect it directly. Found and fixed four
+# real bugs this way in one session (CI's missing redis-server binary, vite preview --strictPort
+# not actually being strict, the missing fuser dependency, and a flaky Rust test) that would have
+# taken many round-trips to debug from GitHub's own log output alone.
+[tasks.ci-local-image]
+description = "Build the local act-runner image (adds cmake/libclang-dev act's own ubuntu-latest image lacks) — run once before test-ci-local"
+run = "podman build -f Dockerfile.act-runner -t lanrurugi-act-runner ."
+
+[tasks.test-ci-local]
+description = "Run a CI job locally via act — usage: mise run test-ci-local -- -j <job-id> (job ids: rust, frontend; see .github/workflows/ci.yml — no e2e job, removed 2026-08-27: real GitHub-hosted runners repeatedly OOM-killed the Playwright job outright, and act itself was even less resourced for it)"
+run = "act"

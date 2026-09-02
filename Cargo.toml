@@ -1,0 +1,109 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lanrurugi-core",
+    "crates/lanrurugi-storage",
+    "crates/lanrurugi-scanner",
+    "crates/lanrurugi-plugin",
+    "crates/lanrurugi-api",
+    "crates/lanrurugi-search",
+    "crates/lanrurugi-backup",
+    "crates/lanrurugi-server",
+    "crates/lanrurugi-bench",
+    "crates/lanrurugi-plugin-converter",
+    "crates/lanrurugi-recommend",
+    "crates/lanrurugi-llm",
+    "crates/lanrurugi-imgcompare",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/thelastfantasy/LANrurugi"
+
+[workspace.dependencies]
+lanrurugi-core = { path = "crates/lanrurugi-core" }
+lanrurugi-storage = { path = "crates/lanrurugi-storage" }
+lanrurugi-scanner = { path = "crates/lanrurugi-scanner" }
+lanrurugi-plugin = { path = "crates/lanrurugi-plugin" }
+lanrurugi-api = { path = "crates/lanrurugi-api" }
+lanrurugi-search = { path = "crates/lanrurugi-search" }
+lanrurugi-recommend = { path = "crates/lanrurugi-recommend" }
+lanrurugi-llm = { path = "crates/lanrurugi-llm" }
+lanrurugi-backup = { path = "crates/lanrurugi-backup" }
+lanrurugi-bench = { path = "crates/lanrurugi-bench" }
+lanrurugi-imgcompare = { path = "crates/lanrurugi-imgcompare" }
+
+tokio = { version = "1.52", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+rayon = "1.12"
+axum = { version = "0.8", features = ["multipart"] }
+bytes = "1.12"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "cors", "fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+redis = { version = "1.3", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
+sha1 = "0.11"
+crc32fast = "1.5"
+notify = "8.2"
+zip = "8.6"
+libarchive2-sys = "0.2"
+chardetng = "1.0"
+encoding_rs = "0.8"
+libc = "0.2"
+webp = "0.3"
+clap = { version = "4.6", features = ["derive", "env"] }
+criterion = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart", "stream"] }
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+governor = "0.10"
+futures-util = "0.3"
+casbin = { version = "2.20", default-features = false, features = ["runtime-tokio", "logging"] }
+url = "2.5"
+percent-encoding = "2.3"
+image = "0.25"
+thiserror = "2.0"
+anyhow = "1.0"
+uuid = { version = "1.23", features = ["v4", "serde"] }
+rand = "0.10"
+bcrypt = "0.19"
+hmac = "0.13"
+sha2 = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+regex = "1.13"
+# Already in the dependency tree transitively (a `criterion`/`clap` dependency of a dependency) —
+# promoted to a direct workspace dependency for `bookmarks.rs`'s own grapheme-cluster-accurate
+# name-length check (`MAX_BOOKMARK_NAME_LEN`), which `str::chars().count()` alone gets wrong for a
+# combined/ZWJ-sequence emoji (a single visually-one-glyph family emoji is 7 Unicode scalar values,
+# would cost 7x its real "one character" toward the limit under a plain `chars()` count).
+unicode-segmentation = "1.13"
+# `chrono` + `chrono-tz`: only used for `date_added` date-range search/display math (converting a
+# Unix timestamp to a `yyyy-mm-dd` in an arbitrary IANA timezone, including DST) — `std::time`
+# can't do that on its own. `chrono-tz` carries its own bundled tzdata (no system `tzdata` dep).
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+sysinfo = "0.33"
+
+[profile.release]
+lto = "thin"
+
+# `codegen-units` trades a bit of build time for a lower dev-build memory peak — added after
+# repeated real OOM/systemd-oomd incidents building this workspace (see
+# scripts/cargo-container-run.sh's own docs for the fuller incident history that CARGO_BUILD_JOBS=1
+# already responds to; this attacks the *other* knob, per-crate codegen memory, which staying at
+# jobs=1 alone doesn't touch). A real clean-build A/B measurement (cgroup memory.peak, 2026-08-30)
+# found this alone barely moves the actual peak (~3.06GB stock vs ~3.05GB here) — the workspace's
+# real memory cost is concentrated in a handful of heavy crates (rav1e/av1-grain/ort) this setting
+# doesn't meaningfully touch — so don't expect this to prevent an OOM on its own; kept anyway since
+# it's harmless and a genuine (if small) improvement. A paired `debug = "line-tables-only"` was
+# tried alongside it in that same measurement and reverted — full DWARF debug info is worth keeping
+# for real `gdb`/`lldb` step-through debugging, and the measured combined effect wasn't worth
+# trading that away either.
+[profile.dev]
+codegen-units = 16

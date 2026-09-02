@@ -1,0 +1,768 @@
+/* `@import "tailwindcss"` (theme + Preflight + utilities) is intentionally NOT used here:
+   Preflight resets things this app depends on the browser's real defaults for everywhere it's
+   styled against legacy's own raw HTML/CSS (`h1`-`h6` font-size/weight, `box-sizing: content-box`,
+   `ul`/`ol` list-style and margin, `img` inline layout used for centering via a parent's
+   `text-align`, table spacing, form-control font inheritance, ...) — legacy's CSS was written
+   assuming those browser defaults exist and never resets them itself. Importing only `theme` +
+   `utilities` keeps Tailwind's utility classes (still used for a handful of flex/gap layouts)
+   without silently fighting legacy's pixel-fidelity everywhere else. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "@fortawesome/fontawesome-free/css/all.min.css";
+@import "react-toastify/dist/ReactToastify.css";
+
+/* Base UI's `Select`/`Combobox`/`Popover`/... all lock `<body>` scroll (`overflow: hidden`) while
+   open by default (`modal: true`) — on a browser with classic, layout-occupying scrollbars (most
+   Windows/Linux setups; macOS with "always show scrollbars" also counts), the vertical scrollbar
+   disappearing mid-interaction widens the whole page's available content width, visibly shifting
+   every fixed-width/centered layout on the page for as long as the popup stays open (real user
+   feedback, 2026-08-27: opening the Settings page's language `Select` "大幅度影响整个页面的排版").
+   `scrollbar-gutter: stable` permanently reserves the scrollbar's track space whether or not a
+   scrollbar is actually being drawn there, so toggling `overflow: hidden` on/off never changes the
+   viewport's available width in the first place — the standard fix for this exact class of
+   problem, not something specific to Base UI or this app's own scroll-locking components.
+
+   The width values below intentionally match `.thin-scrollbar` below (same 4px width/track/thumb
+   styling) — a real user request to make the page's own main scrollbar as narrow as the one
+   already used inside small popups (`Tooltip`/`Select`), not a separate design decision. Written
+   as plain `html`/`html::-webkit-scrollbar` element selectors rather than reusing the
+   `.thin-scrollbar` class itself, since `<html>` isn't a React-rendered element any component here
+   can attach a className to. */
+html {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+html::-webkit-scrollbar {
+  width: 4px;
+}
+html::-webkit-scrollbar-track {
+  background: transparent;
+}
+html::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.5);
+  border-radius: 3px;
+}
+
+/* Legacy's own structural stylesheet (`~/LANraragi/public/css/lrr.css`, copied verbatim to
+   `public/legacy/lrr.css`) and each theme's own colour stylesheet (`public/legacy/themes/*.css`,
+   also copied verbatim) are linked in at runtime by `theme.ts`'s `useApplyTheme` — components
+   being migrated to pixel-match legacy (`Layout`, `Library` so far) are written directly against
+   legacy's own classnames (`.id1`/`.id2`/`.stdbtn`/`.favtag-btn`/etc.) and colours come from those
+   real stylesheets, not from a hand-approximated parallel palette.
+
+   The `--theme-*` variables below are a **transitional fallback only**, kept solely for
+   components not yet migrated to legacy's own classnames (so they don't render with undefined/
+   black-on-black colours in the meantime) — remove a theme's block here once every component
+   that used to read its variables has been rewritten against the real legacy CSS instead. */
+:root,
+[data-theme="modern.css"] {
+  --theme-bg: #34353b;
+  --theme-fg: #dddddd;
+  --theme-surface: #3f4046;
+  --theme-border: #4a4b52;
+  --theme-accent: #5b7cfa;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #9a9aa0;
+}
+
+[data-theme="modern_red.css"] {
+  --theme-bg: #2b2226;
+  --theme-fg: #f2dde2;
+  --theme-surface: #3a2e33;
+  --theme-border: #4f3d43;
+  --theme-accent: #d83b66;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #b98d98;
+}
+
+[data-theme="modern_clear.css"] {
+  --theme-bg: #ecf0f1;
+  --theme-fg: #2c3e50;
+  --theme-surface: #ffffff;
+  --theme-border: #d7dbdd;
+  --theme-accent: #34495e;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #7f8c8d;
+}
+
+[data-theme="g.css"] {
+  --theme-bg: #1c1013;
+  --theme-fg: #f0d9de;
+  --theme-surface: #2a171c;
+  --theme-border: #40232a;
+  --theme-accent: #5f0d1f;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #a8798a;
+}
+
+[data-theme="ex.css"] {
+  --theme-bg: #2c2d31;
+  --theme-fg: #e6e6e6;
+  --theme-surface: #37383d;
+  --theme-border: #46474d;
+  --theme-accent: #43464e;
+  --theme-accent-fg: #ffffff;
+  --theme-muted: #9b9ba1;
+}
+
+/* Additive to `public/legacy/allcollapsible.css`'s own `.caret-right`/`.caret` glyph pairs (both
+ * verified against that real vendor file — see `CollapsibleSection`'s own docs) — not a class
+ * that file defines. `.caret-right`'s pair is ▼ closed / ▲ open; `.caret`'s pair (▶ closed / ▼
+ * open, the one this project's own callers actually want per-page) uses the opposite
+ * `float: left` layout. This keeps `.caret`'s exact glyph characters but on the right-hand-side
+ * layout `.caret-right` uses, since every real page's title row already has its icon/badge on the
+ * right and switching to a left-floated caret would visually collide with that. */
+.caret-right-down:after {
+  content: '\025BA';
+  font-weight: bold;
+  float: right;
+  margin-left: 1rem;
+}
+/* Additive: none of the vendored theme stylesheets (`public/legacy/themes/*.css`) define a
+ * `.stdbtn`/checkbox `:disabled` rule at all — legacy's own real usage apparently never actually
+ * disables one of these controls, so the gap was never noticed there. This project's download-
+ * queue panel (`Upload.tsx`) is the first real, functional use of disabled `.stdbtn`s/checkboxes
+ * in this app, and without this rule a disabled button/checkbox is visually identical to an
+ * enabled one — same color, same opacity — with the *only* difference being that clicking it does
+ * nothing, discoverable only by trial and error (a real, reported issue: "already disabled? then
+ * you haven't visually distinguished enabled/disabled button appearance"). `cursor: not-allowed`
+ * matches the browser's own native default for a disabled `<input>`/`<button>`, made explicit here
+ * since `.stdbtn`'s own `cursor: pointer` would otherwise override it.
+ */
+.stdbtn:disabled,
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.caret-right-down.active:after {
+  content: '\025BC';
+}
+
+/* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
+ * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
+ * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
+ * cells, so it pulses a few times instead. No legacy equivalent (legacy's own overlay always opens
+ * scrolled to the top, with nothing marking "here").
+ */
+@keyframes lrr-overview-highlight-pulse {
+  0%, 100% { outline-color: #3b97ea; }
+  50% { outline-color: transparent; }
+}
+
+/* Additive: infinite-scroll mode (`Reader.tsx`) renders one native `loading="lazy"` `<img>` per
+ * page up front, so most of an archive sits blank/un-decoded off-screen until scrolled near —
+ * with no reserved size and no visual placeholder, each one popping in as its real, wildly
+ * differently-sized image replaces nothing at all, making the whole page height jump around while
+ * scrolling. No legacy equivalent to match here (legacy's own infinite-scroll instead eagerly
+ * creates every `<img>` up front with a real `src`, no lazy loading at all, pre-sized to a fixed,
+ * often-wrong 800x600 guess) — this is a smaller, honestly-approximate placeholder instead: a
+ * fixed min-height (just enough to read as "something is here," not a real aspect-ratio guess,
+ * since no per-page width/height is available before decode) plus a pulsing skeleton fill so a
+ * not-yet-loaded page reads as "loading," not "missing."
+ */
+.reader-image.loading-placeholder {
+  display: block;
+  min-height: 40vh;
+  background: linear-gradient(90deg, rgba(127, 127, 127, 0.08) 25%, rgba(127, 127, 127, 0.15) 37%, rgba(127, 127, 127, 0.08) 63%);
+  background-size: 400% 100%;
+  animation: lrr-loading-placeholder-pulse 1.4s ease infinite;
+}
+
+@keyframes lrr-loading-placeholder-pulse {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
+ * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
+@keyframes lrr-indeterminate-bar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+
+/* Shared scale-up entrance animation for every popup/modal-style dialog in this app
+ * (components/Display/Confirm.tsx, components/Display/Modal.tsx, and dialog.tsx's own
+ * confirmDialog()/promptDialog() render) — matches real SweetAlert2's own default `swal2-show`
+ * animation, which LANraragi itself uses for every one of its popups but which this port's own
+ * `.swal2-popup`/`.id1` CSS never carried over (only ever copied for static colors/spacing).
+ * Named `confirm-pop-in`/`modal-pop-in` rather than one shared name since the two call sites
+ * animate different properties (Modal.tsx's box is already offset via a flex-centered wrapper, so
+ * it only needs `scale`/`opacity`; dialog.tsx's and Confirm.tsx's own boxes are still positioned
+ * via `translate(-50%, -50%)` directly on the animated element, so their keyframes must preserve
+ * that translate at every step or the box would jump to the top-left corner mid-animation). */
+@keyframes confirm-pop-in {
+  0% { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+@keyframes modal-pop-in {
+  0% { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Additive: `Library/index.tsx`'s `.table-options` toolbar row (Sort by/Columns, the count-text-
+ * plus-numbered-pager unit, Go to Page+gear) — the whole flex layout, not just the breakpoint
+ * override, lives here as real CSS classes rather than inline `style` objects, since a genuinely
+ * different flex `order` per breakpoint can only be expressed with a real conditional media-query
+ * rule in the first place (an inline `style` object has no conditional/media-query mechanism at
+ * all), and keeping the rest of the same layout's properties split across both inline styles and
+ * this file made the one layout harder to read as a whole than necessary.
+ *
+ * `.table-options-row`: the flex container itself.
+ *
+ * `.table-options-result-unit`: the count-text-plus-numbered-pager unit (`ResultInfoAndPager`) —
+ * deliberately merged into one component rather than two independent flex children (see that
+ * component's own docs) so it always moves as one block. `order: 1` sits it between the left group
+ * (default `order: 0`) and the right group (`.table-options-goto`, `order: 2`) on a wide row;
+ * `flex-grow: 1` lets it fill the space between them once there's room. `flex-shrink: 0` + a real
+ * `flex-basis` (not `flex: 1`'s own implicit `flex-basis: 0%`/`flex-shrink: 1`) is what actually
+ * makes `flex-wrap` trigger a genuine line-break for this unit once it doesn't fit — a real, live-
+ * confirmed bug from `flex: 1` alone: with `flex-shrink: 1`, the browser found this unit's own
+ * content *could* still be squeezed (by wrapping its own inner text down to a sliver of a column)
+ * into whatever scraps of space were left over between the left/right groups on the same line,
+ * rather than ever triggering a genuine wrap onto its own line — `flex-wrap` only breaks a line
+ * when an item truly doesn't fit at its basis width, and an infinitely-shrinkable text block
+ * essentially never "doesn't fit." A concrete `flex-basis` gives the wrapping algorithm a real
+ * minimum size to test against instead. `flex-basis` value chosen empirically against this
+ * component's own real rendered content width (not copied from any legacy value).
+ *
+ * Below 640px (chosen empirically against this component's own real rendered widths, not copied
+ * from any legacy value — the point where the three toolbar groups' combined natural width first
+ * exceeds a typical narrow viewport), `.table-options-result-unit` reorders to `order: 3` — *after*
+ * `.table-options-goto`'s own `order: 2` instead of between it and the left group — so the left and
+ * right groups can share the wrapped row's first line together, leaving this unit alone on its own
+ * full-width line beneath both. Plain `flex-wrap` without this per-breakpoint `order` change can't
+ * achieve that on its own: an item can only ever wrap onto a *later* line than the ones before it
+ * in `order`, never pull a later item back onto an earlier line that still has room — a real,
+ * live-confirmed layout bug from an earlier version of this fix that left `order` fixed across
+ * breakpoints (the result unit wrapped to its own line correctly, but dragged the right group down
+ * onto that same wrapped line with it instead of leaving it up on the first line). */
+.table-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  margin-bottom: 0;
+}
+
+.table-options-result-unit {
+  order: 1;
+  flex-grow: 1;
+  flex-shrink: 0;
+  flex-basis: 260px;
+}
+
+.table-options-goto {
+  order: 2;
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .table-options-result-unit {
+    order: 3 !important;
+  }
+}
+
+/* Additive, and meant to be applied ALONGSIDE `.favtag-btn` (not instead of it) — the "Go to Page"
+ * `<select>` shares the exact `.favtag-btn` class with every other themed dropdown/button in this
+ * app (the "Sort by" dropdown, category filter buttons, ...), and that's still correct for the
+ * colour/border/background part: every one of the 5 vendored themes (`modern.css`/`modern_red.css`/
+ * `modern_clear.css`/`ex.css`/`g.css`) defines its own completely different `.favtag-btn` colour
+ * scheme, so hardcoding any one theme's colours into a standalone replacement class here would
+ * silently break every other theme's own look for this one control the moment a user switches
+ * themes (confirmed by actually reading all 5 vendored `.favtag-btn` rules — none of the colour
+ * values match across themes). This class only overrides the non-colour sizing/spacing properties
+ * that the page-number picker's own needs (few, short numeric options, sitting in a tight toolbar
+ * corner next to the gear icon) don't share with `.favtag-btn`'s general-purpose defaults, letting
+ * `.favtag-btn` itself keep supplying the real theme-driven colours underneath. */
+.table-options-goto-select {
+  min-width: 0;
+}
+
+/* Hides the scrollbar chrome on an `overflow-x: auto` row while leaving actual scrolling (wheel/
+ * trackpad/drag) fully working — `scrollbar-width`/`-ms-overflow-style` can't be done inline
+ * (unsupported property names in React's style object) and `::-webkit-scrollbar` is a pseudo-
+ * element, which inline styles can never target at all. Used by `SortableList.tsx`'s horizontal
+ * mode (the selection-mode carousel in `RecentlyAddedCarousel.tsx`): the same carousel's
+ * read-only modes now use a plain `overflow-x: auto` flex row with Lenis wheel handling, which
+ * also has no visible scrollbar — a bare `overflow-x: auto` div showing the browser's own
+ * scrollbar track once enough cards are selected reads inconsistent with the rest of the row. */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* A slim scrollbar (not hidden — `Tooltip.tsx`'s own height-capped bubble needs the user to
+ * actually see/grab it, unlike `.hide-scrollbar` above) for content that scrolls inside a small
+ * floating element, where the browser's default ~15-17px scrollbar track reads oversized and
+ * clutters a compact popup. Same "can't be done inline" reasoning as `.hide-scrollbar` —
+ * `scrollbar-width` isn't a valid React inline-style property and `::-webkit-scrollbar` is a
+ * pseudo-element inline styles can never reach at all. The page's own main scrollbar (the real
+ * `<html>` one, not a popup's) uses this exact same width — see the `html`/`html::-webkit-
+ * scrollbar` rules near the top of this file. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.5);
+  border-radius: 3px;
+}
+
+/* Neither legacy's own CSS nor this port's copied theme files set `vertical-align` on
+ * `.favtag-btn` — it defaults to `baseline`, so adjacent buttons whose *content* has different
+ * glyph metrics (an emoji + CJK text vs. an emoji + Latin text vs. a run of star-rating emoji with
+ * no text at all) end up sitting 1px apart vertically even though every button shares identical
+ * CSS — a sub-pixel browser rendering artifact of mixed-glyph inline-block baselines, not an
+ * actual layout bug. Harmless and safe to flatten with `middle` since every `.favtag-btn` already
+ * shares the same fixed height. */
+.favtag-btn {
+  vertical-align: middle;
+}
+
+/* `RecentlyAddedCarousel.tsx`'s two carousel modes (read-only flex row and drag-to-reorder
+ * `SortableList`) both wrap each card in a fixed-size `.carousel-slide` box. An inline style
+ * can't carry a media query, so both used to stay 228px wide even once `div.id1` inside
+ * them (`lrr.css`) shrank to 164px under its own `max-width: 560px` breakpoint. This class
+ * gives both the same responsive width `div.id1` itself gets — 228px unconditional, 164px
+ * to match that breakpoint. */
+.carousel-slide {
+  width: 228px;
+}
+@media all and (max-width: 560px) {
+  .carousel-slide {
+    width: 164px;
+  }
+}
+
+/* `Categories.tsx`'s right-hand panel (the static-category archive checklist box) borrows
+ * `div.id1`'s visual look (background/border/radius) the same way legacy's own
+ * `category.html.tt2` does (`class="id1 right-column"`, verified verbatim) — but `div.id1` is
+ * really the Library archive-card class, and its own `max-width: 560px` media query sets
+ * `height: 256px !important` for that unrelated purpose. `!important` beats any inline style
+ * (this panel sets its own explicit `height: 500` inline, same as legacy), so on a narrow
+ * viewport the panel silently shrinks to ~335px (that override, clamped back up by `.id1`'s own
+ * unconditional `min-height: 335px`) while its child `.checklist` stays a fixed, unrelated 480px
+ * tall — the child overflows the now-too-short parent with no scrollbar to catch it, spilling
+ * checklist rows over the page's own "Return to Library" button below. Legacy has this exact same
+ * class collision and very likely the same bug on a narrow viewport — not a regression this port
+ * introduced — but it's a genuine, confirmed usability break worth fixing outright rather than
+ * preserving: this class carries only `div.id1`'s *visual* properties (nothing sizing-related,
+ * since the panel already sets its own explicit width/height inline at every viewport), so it's
+ * immune to the archive-card media query entirely. */
+.category-panel {
+  background: none repeat scroll 0 0 #f2efdf;
+  border: 1px solid #e3e0d1;
+  border-radius: 9px;
+  display: inline-block;
+  margin: 3px 2px 2px 3px;
+  padding-top: 3px;
+  vertical-align: top;
+}
+
+/* Reader boundary-overlay recommendation cards — device-adaptive layout (Reader.tsx renders
+   all 10 fetched cards; the media queries hide the overflow so tablets see 6 and phones 4
+   without a JS-side slice, and shrink the cards so each device's row count works out):
+   desktop (>1024px) = 10 cards, 5 per row; tablet (≤1024px, incl. portrait tablets at
+   768-834px) = 6 cards, 3 per row; phone portrait (≤600px) = 4 cards, 2 per row — 600px (not
+   768) keeps portrait iPads on the tablet tier, and a landscape phone (~850px+) naturally
+   falls on the tablet tier too. */
+/* Card sizes are viewport-relative (vw) so they scale continuously instead of jumping at
+   breakpoints; the media queries only switch the *column count* (and the visible card count).
+   Columns: desktop 5 (10 cards), tablet landscape 3 (6), tablet portrait 2 (6),
+   phone 2 (4). The 3:4 image ratio rides along via aspect-ratio. */
+.rec-row {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 16px;
+  flex-wrap: wrap;
+  max-width: min(92vw, 820px);
+  margin-left: auto;
+  margin-right: auto;
+}
+.rec-card {
+  width: min(15.5vw, 152px);
+}
+.rec-card img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 4px;
+}
+/* Title slot: a fixed 3-line-height flex container that vertically centers the clamped text
+   (a one-line title sits on the middle line, a three-line one fills the slot). */
+.rec-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: 4px;
+}
+.rec-title span {
+  font-size: 11px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (max-width: 1024px) {
+  .rec-card:nth-child(n + 7) {
+    display: none;
+  }
+  .rec-card {
+    width: min(26vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 424px);
+  }
+}
+/* Portrait tablet: 2 columns × 3 rows instead of 3×2 — the portrait viewport is narrow, so
+   three small cards per row read cramped; two larger columns use the abundant vertical space. */
+@media (max-width: 1024px) and (orientation: portrait) {
+  .rec-card {
+    width: min(40vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 278px);
+  }
+}
+@media (max-width: 600px) {
+  .rec-card:nth-child(n + 5) {
+    display: none;
+  }
+  .rec-card {
+    width: min(42vw, 132px);
+  }
+  .rec-row {
+    max-width: min(92vw, 278px);
+  }
+}
+
+/* Settings page (`config.html`-derived): `.option-td`/`.config-td` are now rendered as CSS grid
+   rows by `shared.tsx` (`Row`/`CheckboxRow`/`ActionRow`). The explicit two-column grid
+   (`200px` label / `minmax(0, 1fr)` value) is what actually makes the label column honor its
+   intended `200px`; legacy table auto-layout treated that width as a preference and let content
+   (especially the DeepSeek key read/edit toggle) reflow both columns. Grid also keeps the value
+   column stable when the key's edit input/cancel button are rendered.
+
+   Legacy's own `.option-td`/`.config-td` rules are kept on the grid children so themes continue
+   to style them, but their table-oriented widths (`200px`, `30vw`) are overridden for grid rows:
+   the track definitions above own the sizing. */
+.settings-table {
+  display: block;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  column-gap: 20px;
+  align-items: start;
+}
+
+.settings-row .option-td {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  padding-right: 0;
+}
+
+.settings-row .config-td {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+/* Below 600px, every `.option-td`/`.config-td` pair switches from side-by-side columns to a
+   stacked block layout. The `.settings-table` rows are the grid rows from `shared.tsx`; the
+   `table` rules below are kept for the remaining legacy table-based theme-picker table in
+   `SettingsPage.tsx`. `!important` is required where legacy class rules otherwise win. */
+@media (max-width: 600px) {
+  .right-column table tr:has(> .option-td, > .config-td) {
+    display: block !important;
+  }
+  .right-column .settings-row {
+    display: block !important;
+  }
+  .right-column .option-td,
+  .right-column .config-td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding-right: 0 !important;
+  }
+  .right-column .option-td {
+    padding-bottom: 4px !important;
+  }
+}
+
+/* Boundary-overlay scroll container: scrollable but with the scrollbar hidden (the desktop
+   panel fits without scrolling; small viewports still scroll internally, just without a bar). */
+.rec-overlay {
+  scrollbar-width: none;
+}
+.rec-overlay::-webkit-scrollbar {
+  display: none;
+}
+
+/* Boundary-overlay loading skeleton — MUI-style pulse (opacity breathing). */
+.rec-skeleton {
+  animation: rec-skeleton-pulse 1.5s ease-in-out infinite;
+}
+@keyframes rec-skeleton-pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* AiSmartTankoubonModal.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
+ * component itself carries no row spacing (Categories.tsx/Batch.tsx both rely on plain browser
+ * default <li> layout, which is correct for their own denser lists), but this modal's own rows
+ * routinely show long, near-identical titles (same-series archives differing only in a volume
+ * number/subtitle near the end) at the page's small base font size, and the default zero-padding
+ * <li> packed them tight enough that adjacent rows were hard to visually separate at a glance —
+ * confirmed live via getComputedStyle: default row height was 15.7px with 0 padding and
+ * line-height: normal. Real per-row padding (not just line-height) gives each row a visible gap
+ * from its neighbors regardless of how many lines the title itself wraps to. */
+.ai-group-checklist-item {
+  padding: 6px 0;
+  line-height: 1.5;
+}
+.ai-group-checklist-item + .ai-group-checklist-item {
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+/* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button — a pill button with the label
+ * on the left and a small checkbox toggle on the right, separated by a `currentColor` divider,
+ * same left-label/right-action shape as ArchiveOverviewOverlayPanel's own real category chip
+ * (`.gt.category-chip`'s label span + `borderLeft: "1px solid currentColor"` + right-side action
+ * region) rather than a custom invention — `currentColor` means the divider automatically matches
+ * this button's own text/border color per-theme with no extra per-theme CSS file rules needed
+ * (unlike an earlier version of this control, which drew its own circular icon and needed a
+ * bespoke accent-color rule in every theme file just for that). Replaces the original plain-
+ * `<button>`-with-a-bare-checkbox layout a stray browser checkbox rendered ugly and gave no
+ * visual weight to at all.
+ *
+ * `.stdbtn`'s own `height: 28px` / `padding: 0 4px 1px` (legacy's fixed-height text-button sizing)
+ * both need overriding — without `height: auto` the extra vertical padding below has no room to
+ * actually expand the button, confirmed live (padding alone did nothing visually until height was
+ * freed). */
+/* `line-height: normal` is set explicitly (not left to inherit) because `<button>` (the
+ * checkable-button branch) and `<input type="button">` (the plain-pill branch) compute their
+ * default line box height differently for the same font — confirmed live, a real 3px height
+ * mismatch (29px vs 32px) between the two otherwise-identical-padding buttons traced to exactly
+ * this, not the padding/gap rules above (which are already shared and identical). */
+.ai-checkable-btn,
+.ai-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 5px 12px;
+  height: auto;
+  line-height: normal;
+}
+.ai-checkable-btn-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  padding-left: 10px;
+  border-left: 1px solid currentColor;
+  opacity: 0.9;
+}
+.ai-checkable-btn-toggle input[type="checkbox"] {
+  position: absolute;
+  inset: 0 0 0 10px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+/* The circle itself — drawn once, its fill/border swap with `:checked` (see each theme file's own
+ * rule) rather than being two different circles. */
+.ai-checkable-btn-toggle-circle {
+  position: absolute;
+  inset: 0 0 0 10px;
+  border-radius: 50%;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+/* The AI robot icon, shown while unchecked — absolutely centered over the (currently unfilled)
+ * circle, same positioning approach as `.fa-check` below so the two glyphs occupy the exact same
+ * spot and cross-fade in place. Faded out once `:checked` so the check mark reads as replacing
+ * it, not stacking on top of it. */
+.ai-checkable-btn-toggle .fa-robot {
+  position: absolute;
+  inset: 0 0 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  transition: opacity 0.15s;
+}
+.ai-checkable-btn-toggle-circle .fa-check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .fa-robot {
+  opacity: 0;
+}
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle .fa-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* AiSmartTankoubonModal.tsx's suggestion cards — border + header background color varies by
+ * suggestion kind (see each theme file's own `.ai-suggestion-card-add`/`-new` rule pair for the
+ * actual blue/green values); this shared rule only carries the border WIDTH itself, since that's
+ * identical either way and shouldn't need repeating per-theme. */
+.ai-suggestion-card-add,
+.ai-suggestion-card-new {
+  border-width: 1px;
+  border-style: solid;
+}
+.ai-suggestion-card-header {
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+}
+
+/* TagCloud.tsx's 3D word cloud (issue #89) — hover-scale on the INNER span only, never the outer
+ * item TagCloud.js itself writes a fresh `transform` to on every animation frame (see that
+ * component's own top docs on why a `:hover` rule on the outer element would just get stomped out
+ * a frame later). `cursor: default` on the sphere's own container itself — the words aren't links
+ * to a *different page* (matches the old 2D jQCloud port's own behavior in that one specific
+ * sense: no `href`, no navigation), but each one IS clickable now (`onTagClick` — jumps to and
+ * highlights its own row in `#tagList` below), hence `cursor: pointer` on the item itself once
+ * hovered, not the sphere as a whole (moving the mouse across empty space between words inside
+ * the sphere's own bounding box should still read as "nothing to click here"). Not gated behind
+ * `prefers-reduced-motion` — that setting targets involuntary/ambient motion (the sphere's own
+ * continuous drift, already suppressed via `TagCloud.tsx`'s own `keep: false` under that
+ * preference), not a deliberate hover response to the user's own pointer movement.
+ *
+ * `color: var(--tag-cloud-level)` — `TagCloud.tsx` itself sets `--tag-cloud-level` (a per-item
+ * inline style) to whichever of the ten `--tag-cloud-level-1`..`-10` custom properties that
+ * item's own weight level maps to; each of the five real theme files defines all ten (see each
+ * theme file's own `.tag-cloud-3d` block), a real ten-step gradient rather than legacy's own
+ * four-color `w{n}` grouping this replaced (see `TagCloud.tsx`'s own top docs for why). */
+.tag-cloud-3d-container {
+  cursor: default;
+}
+.tag-cloud-3d-item {
+  cursor: pointer;
+}
+.tag-cloud-3d-inner {
+  display: inline-block;
+  color: var(--tag-cloud-level);
+  transition: transform 0.18s ease;
+}
+.tag-cloud-3d-item:hover .tag-cloud-3d-inner {
+  transform: scale(1.35);
+}
+
+/* `#tagList`'s own row, briefly flashed after a `.tag-cloud-3d-item` click above jumps here —
+ * `scroll-margin-top` (not a plain `scrollIntoView({block: 'start'})` with no offset) so the
+ * highlighted row doesn't land flush against the accordion's own top edge, same reasoning
+ * `useSectionDeepLink.ts`'s own scroll target uses. A first version used each theme's own accent
+ * hue (matching `.tankoubon-member-row`'s convention) but was reported live as too subtle to
+ * actually catch the eye against a page full of already-colored namespace tags — unlike that row
+ * highlight (one flat-colored list, any accent reads as "different"), here the highlight has to
+ * compete with the tags' own namespace colors right next to it. A fixed attention-color yellow
+ * (not a per-theme accent) plus a real `outline` reads as "flagged" regardless of which theme's
+ * palette it lands on, which is exactly the point here — this is one deliberate exception to the
+ * project's usual "reuse the theme's own accent hue" custom-color convention, not an oversight. */
+.tag-list-highlighted {
+  scroll-margin-top: 80px;
+  border-radius: 4px;
+  outline: 2px solid rgba(255, 187, 0, 0.9);
+  outline-offset: 2px;
+  animation: tag-list-highlight-flash 0.6s ease-in-out 3;
+}
+/* Flashes 3 times (1.8s total) then settles on the animation's own final frame — a steady
+ * `rgba(255, 221, 0, 0.35)` background, same value the flash itself ends on, so there's no visible
+ * jump once `animation` stops running. */
+@keyframes tag-list-highlight-flash {
+  0%,
+  100% {
+    background-color: rgba(255, 221, 0, 0.35);
+  }
+  50% {
+    background-color: rgba(255, 221, 0, 0.75);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tag-list-highlighted {
+    animation: none;
+    background-color: rgba(255, 221, 0, 0.35);
+  }
+}
+
+/* `/bookmarks` page's own card grid — `div.id1`'s fixed width (`228px` desktop, `164px` below
+ * `lrr.css`'s own `560px` breakpoint) never scales with the container, so a viewport whose width
+ * isn't an exact multiple of `228px + gap` either wastes trailing space or (worse) needs a column
+ * count JS can't get right without knowing the card's true rendered width up front. Both rules
+ * below solve that the same way: `BookmarksPage.tsx` picks a fixed column count for the
+ * breakpoint (5 desktop, 2 mobile — see each rule's own comment) and computes that count's own
+ * share of the container as a `--bookmark-card-width` custom property (set inline on
+ * `.bookmarks-grid` itself, so it's already known by the time these rules read it — no chicken-
+ * and-egg with `auto-fill`, see `BookmarksPage.tsx`'s own docs on that dead end). `div.id3`'s
+ * height then switches from a fixed px value to `aspect-ratio`, so the cover scales
+ * proportionally with the card instead of cropping more or less of it as the width changes.
+ * Scoped to this page's own grid (not `lrr.css`'s global `div.id1`/`div.id3`) so Library's grid,
+ * the carousel, and every other `ArchiveCard` use site keep their original fixed sizing. */
+.bookmarks-grid div.id1 {
+  width: var(--bookmark-card-width);
+}
+.bookmarks-grid div.id1 div.id3 {
+  height: auto !important;
+  aspect-ratio: 228 / 275;
+}
+.bookmarks-grid div.id1 div.id3 img {
+  max-height: none;
+}
+
+/* Library page's `SearchBar.tsx` — the search box and the four-button row below it each get their
+ * own `div` inside a `flexWrap: "wrap"` parent, so a narrow viewport wraps them onto two separate
+ * lines instead of squeezing everything onto one cramped row. On a wide viewport (still one row)
+ * the button row stays its own natural content width, hugging the search box's right edge — the
+ * existing, unremarkable look. Once wrapped onto its own line, though, that same content-width
+ * button row visibly doesn't line up with the search box's own full width above it, reading as
+ * lopsided (reported live, 2026-08-30). `560px` matches `lrr.css`'s own mobile breakpoint
+ * (`BookmarksPage.tsx`'s `MOBILE_BREAKPOINT` constant cites the same value) — this can't be done
+ * with an inline style alone (no container query bound to *this row's own* wrap state, just the
+ * viewport), hence a real class + `@media` rule instead. */
+@media (max-width: 560px) {
+  .searchbar-button-row {
+    width: 100%;
+    justify-content: center;
+  }
+}
+

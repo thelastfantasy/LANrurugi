@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1
+#
+# Pure development/build environment — NOT the runtime image (see `Dockerfile` for that; this
+# one is never deployed, only ever built and run locally, including via the `mise` podman tasks
+# (`.mise.toml` `[tasks.*]`). Has the full Rust toolchain (so it can build every crate in the
+# workspace, not just `lanrurugi-server`) plus Perl + PPI, since `lanrurugi-plugin-converter`
+# shells out to a local `perl` invocation of PPI (Perl's own AST library) to genuinely parse legacy
+# `.pm` plugin source rather than approximating it with regex. Keeping this separate from the
+# runtime `Dockerfile` means the deployable image never carries a Perl toolchain it has no other
+# use for.
+#
+# `cmake` + `libclang-dev` back the `libarchive2-sys` build (archive extraction moved to the
+# libarchive FFI — `crates/lanrurugi-scanner/src/archive_format.rs`): `libarchive2-sys` bundles the
+# full libarchive C source and compiles it as a static lib via CMake, which probes for a C++
+# compiler even though libarchive itself is C (CMake's default `project()` behavior) — `g++` is
+# needed alongside `gcc`, or the build fails with "failed to find tool \"c++\"". Generates its Rust
+# bindings via bindgen (which needs libclang). `libwebp-sys` (thumbnail WebP encoding) bundles its
+# own C and builds with just `gcc`. These are build-only — the runtime image links both statically,
+# so it needs neither cmake nor libclang.
+
+ARG RUST_VERSION=1.97.1
+ARG DENO_VERSION=2.9.1
+
+# Same rationale as `Dockerfile.dev`'s own `deno-bin` stage: some `lanrurugi-api` integration
+# tests (e.g. `plugins.rs`'s real-`ehdl`-plugin end-to-end test) invoke a real plugin through the
+# actual Deno dispatcher, which needs a real `deno` binary — this image otherwise has cargo but no
+# way to run a `.ts` plugin at all. Kept as a separate `COPY --from` stage (not installed via
+# apt/curl in the main image) purely to match the exact version pin `Dockerfile.dev`/the
+# production `Dockerfile` already use, from the same official binary-only image.
+FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
+
+FROM rust:${RUST_VERSION}-slim-bookworm
+
+COPY --from=deno-bin /deno /usr/local/bin/deno
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libssl-dev \
+        perl \
+        cpanminus \
+        make \
+        gcc \
+        g++ \
+        mold \
+        cmake \
+        libclang-dev \
+        zlib1g-dev \
+        libbz2-dev \
+        liblzma-dev \
+        libzstd-dev \
+        liblz4-dev \
+        libxml2-dev \
+        libacl1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Same rootless-tar ownership workaround as the module install itself needs when run inside a
+# container build (harmless when running as root here, kept for consistency/portability).
+ENV TAR_OPTIONS=--no-same-owner
+RUN cpanm --notest PPI JSON::PP
+
+# `clippy` + `rustfmt` aren't in the slim image by default — needed by the `mise run clippy` task
+# and by lefthook's pre-commit (`cargo check` + `cargo fmt --check`).
+RUN rustup component add clippy rustfmt
+
+# `lanrurugi-plugin-converter serve`'s web UI — see `crates/lanrurugi-plugin-converter/src/web.rs`.
+# Documentation only (this image is run manually, not via `docker run -d`); not a `CMD`, since
+# this same image is also used for plain `cargo build`/`cargo run -- convert ...` workspace work.
+EXPOSE 8080
