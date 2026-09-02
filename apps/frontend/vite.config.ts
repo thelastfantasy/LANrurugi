@@ -43,14 +43,27 @@ function preserveOriginalHostHeader(): NonNullable<ProxyOptions['configure']> {
 function injectServerTheme(): Plugin {
   return {
     name: 'inject-server-theme',
-    async transformIndexHtml(html) {
+    // This hook exists for the Vite dev server's live index.html transform only. Production is
+    // served by lanrurugi-server's `serve_index`, which fills `data-theme` at request time from
+    // Redis; running this during `vite build` would bake whatever local backend happened to be
+    // running into `dist/index.html` and prevent request-time substitution.
+    apply: 'serve',
+    async transformIndexHtml(html, ctx) {
       const backendPort = process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'
       try {
         const response = await fetch(`http://127.0.0.1:${backendPort}/api/theme`)
         if (!response.ok) return html
-        const data = (await response.json()) as { theme?: string }
-        if (!data.theme) return html
-        return html.replace('id="theme-init" data-theme=""', `id="theme-init" data-theme="${data.theme}"`)
+        const data = (await response.json()) as { theme?: string; admin_theme?: string }
+        // The Login page is an admin surface; keep the initial paint on the admin's theme even
+        // when guest mode is on and the guest theme differs. `ctx.path` is the rewritten internal
+        // path (`/index.html` for SPA fallback); `originalUrl` is the actual browser route.
+        const requestPath = (ctx.originalUrl ?? ctx.path).split('?')[0]
+        const theme =
+          requestPath === '/login' || requestPath.startsWith('/login/')
+            ? (data.admin_theme ?? data.theme)
+            : data.theme
+        if (!theme) return html
+        return html.replace('id="theme-init" data-theme=""', `id="theme-init" data-theme="${theme}"`)
       } catch {
         // Backend unreachable (not started yet, crashed, etc.) — leave the placeholder empty, same
         // as a production `serve_index` that couldn't reach Redis; the script's own client-side

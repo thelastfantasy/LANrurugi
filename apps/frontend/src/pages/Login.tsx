@@ -8,14 +8,14 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 
-/** Mirrors legacy's `login.html.tt2` line-for-line. Route protection lives in `RequireGuest`
- * (`App.tsx`), not here. */
+/** Mirrors legacy's `login.html.tt2` plus the same return-to-library affordance used by other
+ * admin pages. Route protection lives in `RequireGuest` (`App.tsx`), not here. */
 export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const login = useLogin()
   const [password, setPassword] = useState("")
-  useApplyTheme()
+  useApplyTheme({ preferAdminTheme: true })
   useDocumentTitle(t("app.adminLogin") ?? undefined)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -74,6 +74,15 @@ export function Login() {
             </tbody>
           </table>
         </form>
+
+        <br />
+        <input
+          type="button"
+          id="return"
+          className="stdbtn"
+          value={t("common.returnToLibrary") ?? undefined}
+          onClick={() => navigate(routes.library())}
+        />
       </div>
 
       <Footer />

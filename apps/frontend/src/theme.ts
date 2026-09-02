@@ -135,11 +135,17 @@ export function useLegacyConfigCss() {
 }
 
 /** Links legacy's real stylesheets: `lrr.css` (structural, loaded once), the currently-selected
- * theme file, and the `blueimp-file-upload`/collapsible vendor CSS legacy's templates also load. */
-export function useApplyTheme() {
+ * theme file, and the `blueimp-file-upload`/collapsible vendor CSS legacy's templates also load.
+ *
+ * `opts.preferAdminTheme` makes logged-out rendering use the public `/theme` response's
+ * `admin_theme` field instead of the guest-eligible `theme` field. `/login` uses this so the
+ * admin-password screen always matches the administrator's own theme even when guest mode is on
+ * and the guest theme is a different one. */
+export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
   const loginStatus = useLoginStatus()
-  const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
-  const publicTheme = usePublicSettings({ enabled: settings.data === undefined })
+  const isAdminSession = loginStatus.data?.logged_in === true
+  const settings = useSettings({ enabled: isAdminSession })
+  const publicTheme = usePublicSettings({ enabled: !isAdminSession })
 
   useEffect(() => {
     ensureLink(LEGACY_STRUCTURAL_CSS_ID, "/legacy/lrr.css")
@@ -150,11 +156,20 @@ export function useApplyTheme() {
   // Only fall back to `DEFAULT_THEME_ID` once both queries have genuinely settled — applying it
   // too early overwrites `index.html`'s own synchronous theme application, flashing the default.
   const settingsDisabledAndLoginStatusSettled =
-    settings.data === undefined && (loginStatus.isSuccess || loginStatus.isError)
-  const publicThemeEnabled = settings.data === undefined
-  const settingsSettled = settings.isSuccess || settings.isError || settingsDisabledAndLoginStatusSettled
-  const publicThemeSettled = !publicThemeEnabled || publicTheme.isSuccess || publicTheme.isError
-  const resolvedTheme = settings.data?.theme ?? publicTheme.data?.theme
+    !isAdminSession && settings.data === undefined && (loginStatus.isSuccess || loginStatus.isError)
+  const settingsSettled = isAdminSession
+    ? settings.isSuccess || settings.isError
+    : settingsDisabledAndLoginStatusSettled
+  const publicThemeSettled = publicTheme.isSuccess || publicTheme.isError
+  // `settings.data` can be populated by other hooks even while logged out (e.g.
+  // `useDocumentTitle` on `/login` still asks for guest-visible settings), and in that guest
+  // response `theme` means the guest theme, not the admin's. Only trust it for a real admin
+  // session; public/admin-unknown rendering goes through `/theme`'s `admin_theme`/effective
+  // `theme` fields instead.
+  const settingsTheme = isAdminSession ? settings.data?.theme : undefined
+  const resolvedTheme =
+    settingsTheme ??
+    (opts?.preferAdminTheme ? (publicTheme.data?.admin_theme ?? publicTheme.data?.theme) : publicTheme.data?.theme)
   useEffect(() => {
     if (!resolvedTheme && !(settingsSettled && publicThemeSettled)) return
     const theme = resolvedTheme ?? DEFAULT_THEME_ID
@@ -165,7 +180,7 @@ export function useApplyTheme() {
     // before any session exists. Writing a guest's resolved theme here would leave the *next*
     // guest visit's dev-mode first paint reading a stale admin-or-guest value that has nothing to
     // do with the admin's actual preference.
-    if (settings.data?.theme) {
+    if (isAdminSession && settingsTheme) {
       try {
         localStorage.setItem(THEME_STORAGE_KEY, theme)
       } catch {
@@ -182,5 +197,5 @@ export function useApplyTheme() {
         /* empty */
       }
     }
-  }, [resolvedTheme, settingsSettled, publicThemeSettled, settings.data?.theme])
+  }, [resolvedTheme, settingsSettled, publicThemeSettled, settingsTheme, isAdminSession])
 }

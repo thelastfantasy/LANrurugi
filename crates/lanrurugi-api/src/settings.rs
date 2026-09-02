@@ -101,12 +101,20 @@ async fn fetch_guest_theme(state: &AppState) -> Option<String> {
 /// other way (directly in Redis, a legacy instance sharing the same database, etc.) rather than the
 /// only thing standing between a bad value and this `<script>` tag. `None` whenever `fetch_theme`
 /// itself fails *or* the stored value isn't recognized — both already mean "fall back to
-/// `serve_index`'s own built-in default", so this doesn't distinguish them either.
+/// `serve_index`'s own built-in default", so this doesn't distinguish them either. `path` is the
+/// SPA route being served; `/login` bypasses the guest-eligible branch and always reads the admin
+/// theme, so the password screen never flashes/settles on the guest theme.
 pub async fn fetch_theme_for_html_injection(
     state: &AppState,
     headers: &axum::http::HeaderMap,
+    path: &str,
 ) -> Option<String> {
-    let theme = if is_guest_eligible_request(state, headers).await {
+    // The Login page is an admin surface, not a guest browsing surface — it should never flash or
+    // settle on the guest theme, even when guest mode is on. Every other SPA route keeps the
+    // existing guest-eligible behavior (`theme` = guest theme for an eligible guest request).
+    let theme = if path == "/login" || path == "/login/" {
+        fetch_theme(state).await
+    } else if is_guest_eligible_request(state, headers).await {
         fetch_guest_theme(state).await
     } else {
         fetch_theme(state).await
@@ -135,17 +143,22 @@ async fn fetch_language(state: &AppState) -> Option<String> {
 /// live-reported as a real double-navigation: the 404 content flashes, then `/login` anyway).
 /// `theme`/`language` are the only two fields anything needs before a session exists, and neither
 /// is remotely secret, so folding `language` into this already-public endpoint is simpler than
-/// standing up a whole second public settings surface for one more field.
+/// standing up a whole second public settings surface for one more field. The response also
+/// carries `admin_theme` — always the administrator's own `theme`, regardless of guest-eligibility
+/// — so the Login page can render with the admin theme even when guest mode is on and the guest
+/// theme is a different one.
 async fn get_theme(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    let admin_theme = fetch_theme(&state).await;
     let theme = if is_guest_eligible_request(&state, &headers).await {
         fetch_guest_theme(&state).await
     } else {
-        fetch_theme(&state).await
+        admin_theme.clone()
     };
     let language = fetch_language(&state).await;
-    match (theme, language) {
-        (Some(theme), Some(language)) => {
-            axum::Json(json!({ "theme": theme, "language": language })).into_response()
+    match (theme, admin_theme, language) {
+        (Some(theme), Some(admin_theme), Some(language)) => {
+            axum::Json(json!({ "theme": theme, "admin_theme": admin_theme, "language": language }))
+                .into_response()
         }
         _ => error(
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -124,6 +124,16 @@ export interface Settings {
   replacetitles: boolean
 }
 
+/** `GET /theme` — public, unauthenticated theme/language endpoint. `theme` is the effective
+ * theme for the current request (the guest theme when the request is guest-eligible, otherwise
+ * the admin theme). `admin_theme` is always the administrator's own theme and is exported for
+ * screens like `/login` that should not follow the guest-theme setting. */
+export interface PublicThemeSettings {
+  theme: string
+  admin_theme: string
+  language: string
+}
+
 export interface ServerInfo {
   name: string
   motd: string

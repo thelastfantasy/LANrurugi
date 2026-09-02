@@ -54,6 +54,7 @@ import type {
   PluginOptionsUpdate,
   PluginSettings,
   PluginSettingsUpdate,
+  PublicThemeSettings,
   RandomArchivesResponse,
   SearchResponse,
   ServerInfo,
@@ -121,11 +122,14 @@ export function useSettings(options?: { enabled?: boolean }) {
   })
 }
 
-/** Unauthenticated theme/language read via public `GET /theme` (`GET /settings` 401s pre-login). */
+/** Unauthenticated theme/language read via public `GET /theme` (`GET /settings` 401s pre-login).
+ * The `with-admin-theme` suffix deliberately bumps the cache key: an older in-memory response
+ * from before the endpoint carried `admin_theme` would otherwise survive HMR/fast refresh and
+ * make `/login` fall back to the guest theme. */
 export function usePublicSettings(options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: ["theme"],
-    queryFn: () => fetchJson<{ theme: string; language: string }>("/theme"),
+    queryKey: ["theme", "with-admin-theme"],
+    queryFn: () => fetchJson<PublicThemeSettings>("/theme"),
     enabled: options?.enabled,
   })
 }

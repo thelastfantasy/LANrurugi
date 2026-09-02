@@ -602,6 +602,17 @@ async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_sessio
         "an unauthenticated request to the public /theme endpoint must never be blocked by the \
          protected router's own Casbin check"
     );
+    let theme_bytes = axum::body::to_bytes(theme_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let theme_json: serde_json::Value = serde_json::from_slice(&theme_bytes).unwrap();
+    assert!(
+        theme_json["admin_theme"].is_string(),
+        "the public /theme endpoint must expose the admin's own theme as admin_theme for /login, \
+         got: {theme_json}"
+    );
+    assert!(theme_json["theme"].is_string());
+    assert!(theme_json["language"].is_string());
 
     purge_all_refresh_and_api_tokens(&redis).await;
 }

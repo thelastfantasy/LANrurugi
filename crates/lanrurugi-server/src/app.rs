@@ -97,7 +97,8 @@ pub fn build_app(
             let state = index_state.clone();
             let dir = index_dir.clone();
             let headers = req.headers().clone();
-            async move { Ok::<_, Infallible>(serve_index(state, dir, headers).await) }
+            let path = req.uri().path().to_string();
+            async move { Ok::<_, Infallible>(serve_index(state, dir, headers, path).await) }
         });
         // `append_index_html_on_directories(false)` — without this, `ServeDir`'s own default
         // behavior resolves a directory request (including `/` itself) straight to a literal
@@ -122,12 +123,19 @@ pub fn build_app(
 /// data-theme="">`'s empty `data-theme` attribute (see that file's own docs) filled in with the
 /// real current theme — read fresh on every request (not cached at startup) so a theme change from
 /// the Settings page takes effect on the very next page load, matching every other place this app
-/// reads live settings rather than a boot-time snapshot. Falls back to serving the file
-/// byte-for-byte unmodified (the script's own client-side JS then falls back to its `localStorage`
-/// cache, then `modern.css` — see `index.html`) whenever either step can't complete: the file is
-/// missing/unreadable, or the Redis lookup fails/returns an unrecognized value. A broken index page
-/// would be far worse than one that occasionally still has to flash once.
-async fn serve_index(state: AppState, dir: PathBuf, headers: axum::http::HeaderMap) -> Response {
+/// reads live settings rather than a boot-time snapshot. `/login` always receives the admin's own
+/// theme even when guest mode is on; other SPA routes keep the guest-eligible effective theme.
+/// Falls back to serving the file byte-for-byte unmodified (the script's own client-side JS then
+/// falls back to its `localStorage` cache, then `modern.css` — see `index.html`) whenever either
+/// step can't complete: the file is missing/unreadable, or the Redis lookup fails/returns an
+/// unrecognized value. A broken index page would be far worse than one that occasionally still has
+/// to flash once.
+async fn serve_index(
+    state: AppState,
+    dir: PathBuf,
+    headers: axum::http::HeaderMap,
+    request_path: String,
+) -> Response {
     let path = dir.join("index.html");
     let html = match tokio::fs::read_to_string(&path).await {
         Ok(html) => html,
@@ -150,7 +158,7 @@ async fn serve_index(state: AppState, dir: PathBuf, headers: axum::http::HeaderM
     // unvalidated theme string — use `fetch_theme_for_html_injection`, never plain `fetch_theme`,
     // for anything that ends up here.
     let placeholder = r#"id="theme-init" data-theme="""#;
-    let html = match fetch_theme_for_html_injection(&state, &headers).await {
+    let html = match fetch_theme_for_html_injection(&state, &headers, &request_path).await {
         Some(theme) => html.replacen(
             placeholder,
             &format!(r#"id="theme-init" data-theme="{theme}""#),
