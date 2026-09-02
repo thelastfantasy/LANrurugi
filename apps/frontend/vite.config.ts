@@ -24,52 +24,61 @@ function preserveOriginalHostHeader(): NonNullable<ProxyOptions['configure']> {
   }
 }
 
-/** Fills in `index.html`'s inline anti-flash-of-default-theme script's `id="theme-init"
- * data-theme="..."` attribute (see that file's own docs) with the real current theme in `vite
- * dev` too, not just in a production build served by `lanrurugi-server::app::serve_index`. Uses
- * the `transformIndexHtml` hook — Vite's own dedicated, documented mechanism for this exact kind
- * of "adjust the HTML Vite is about to serve" task — rather than intercepting the raw HTTP
- * request/response in `configureServer` middleware: an earlier version of this fetched the
- * *entire* `index.html` from the Rust backend's own `/` response and used that as the template,
- * which seemed to work (the attribute really did come back filled in) but was actually fetching
- * `lanrurugi-server`'s production-mode response — built from `dist/index.html`, which references
- * bundled assets (`/assets/index-XXXX.js`) instead of the real dev-mode source entry
- * (`/src/main.tsx`) `vite dev` itself needs — silently producing a blank page (a 404 on the
- * bundled script vite dev never serves) confirmed live via the browser console. Only fetching the
- * *theme value itself* here (the same `GET /api/theme` the production frontend's own
- * `usePublicTheme()`/`useSettings()` already call) and substituting it into Vite's own
- * already-correct dev-mode HTML sidesteps that whole class of bug — nothing about vite dev's own
- * asset resolution is touched. */
-function injectServerTheme(): Plugin {
+/** Routes Vite dev's own HTML requests through the real Rust `serve_index` fallback first, so
+ * dev and production use the same request-time `data-theme` injection (Redis → theme resolution →
+ * `serve_index`). The Rust response is then passed through Vite's `transformIndexHtml` pipeline so
+ * the normal dev-only HMR client / React refresh preamble still gets injected. This keeps the
+ * production-safe injection logic in Rust only, without a second Vite-side theme-resolution
+ * implementation. */
+function rustHtmlMiddleware(): Plugin {
   return {
-    name: 'inject-server-theme',
-    // This hook exists for the Vite dev server's live index.html transform only. Production is
-    // served by lanrurugi-server's `serve_index`, which fills `data-theme` at request time from
-    // Redis; running this during `vite build` would bake whatever local backend happened to be
-    // running into `dist/index.html` and prevent request-time substitution.
+    name: 'rust-html-middleware',
     apply: 'serve',
-    async transformIndexHtml(html, ctx) {
+    configureServer(server) {
       const backendPort = process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'
-      try {
-        const response = await fetch(`http://127.0.0.1:${backendPort}/api/theme`)
-        if (!response.ok) return html
-        const data = (await response.json()) as { theme?: string; admin_theme?: string }
-        // The Login page is an admin surface; keep the initial paint on the admin's theme even
-        // when guest mode is on and the guest theme differs. `ctx.path` is the rewritten internal
-        // path (`/index.html` for SPA fallback); `originalUrl` is the actual browser route.
-        const requestPath = (ctx.originalUrl ?? ctx.path).split('?')[0]
-        const theme =
-          requestPath === '/login' || requestPath.startsWith('/login/')
-            ? (data.admin_theme ?? data.theme)
-            : data.theme
-        if (!theme) return html
-        return html.replace('id="theme-init" data-theme=""', `id="theme-init" data-theme="${theme}"`)
-      } catch {
-        // Backend unreachable (not started yet, crashed, etc.) — leave the placeholder empty, same
-        // as a production `serve_index` that couldn't reach Redis; the script's own client-side
-        // fallback chain (`localStorage` then `modern.css`) still applies.
-        return html
-      }
+
+      server.middlewares.use(async (req, res, next) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+
+        const accept = req.headers.accept ?? ''
+        if (!accept.includes('text/html') && !accept.includes('*/*')) return next()
+
+        const originalUrl = req.originalUrl ?? req.url ?? '/'
+        const url = new URL(originalUrl, 'http://localhost')
+        // Only SPA HTML documents go to Rust; Vite keeps handling its own assets/modules/API proxy.
+        if (
+          url.pathname.startsWith('/api/') ||
+          url.pathname.startsWith('/src/') ||
+          url.pathname.startsWith('/@') ||
+          url.pathname.startsWith('/node_modules/') ||
+          url.pathname.startsWith('/legacy/') ||
+          url.pathname === '/favicon.ico'
+        ) {
+          return next()
+        }
+
+        try {
+          const headers = new Headers()
+          if (req.headers.cookie) headers.set('cookie', String(req.headers.cookie))
+          if (req.headers.authorization) headers.set('authorization', String(req.headers.authorization))
+
+          const backendUrl = `http://127.0.0.1:${backendPort}${url.pathname}${url.search}`
+          const response = await fetch(backendUrl, { headers })
+          const contentType = response.headers.get('content-type') ?? ''
+          if (!response.ok || !contentType.includes('text/html')) return next()
+
+          const html = await response.text()
+          const transformed = await server.transformIndexHtml(url.pathname, html, originalUrl)
+
+          res.statusCode = response.status
+          res.setHeader('content-type', contentType)
+          res.end(transformed)
+        } catch {
+          // Backend unreachable or not serving HTML in this dev setup — fall through to Vite's
+          // normal SPA behaviour, which still works (it just loses the pre-paint theme injection).
+          next()
+        }
+      })
     },
   }
 }
@@ -89,7 +98,7 @@ export default defineConfig({
     // `optimizeDeps` cache didn't fix it, ruling out a stale-prebundle explanation.
     dedupe: ['react', 'react-dom'],
   },
-  plugins: [react(), tailwindcss(), injectServerTheme()],
+  plugins: [react(), tailwindcss(), rustHtmlMiddleware()],
   server: {
     port: 3000,
     fs: {

@@ -26,17 +26,11 @@ done
 # reason to know about and that vanishes on every container recreate — silently making every log
 # category permanently empty from the `/logs` page's perspective, not just on this specific run.
 #
-# No `--static-dir` here — this backend only ever needs to serve `/api/*` in dev mode (`vite dev`
-# is the container's real public frontend, per this script's own doc comment above). An earlier
-# version of this added `--static-dir` + a one-time `vite build` step so `vite.config.ts`'s own
-# theme-injection plugin could fetch a backend-rendered `index.html` to use as its dev-mode
-# template, but that template turned out to reference the *production* bundle
-# (`dist/assets/index-XXXX.js`), not the dev-mode source entry (`/src/main.tsx`) `vite dev` itself
-# needs — a real, confirmed-live blank-page regression (a 404 on the bundled script vite dev never
-# serves). The plugin now only fetches the theme *value* itself (`GET /api/theme`, no
-# `--static-dir` needed for that route) and substitutes it into Vite's own already-correct
-# dev-mode HTML, so this backend never needs to know about the frontend's static build at all.
-lanrurugi-server serve --bind 0.0.0.0:3001 --log-dir /log &
+# `--static-dir` points at the bind-mounted frontend source so Vite dev's HTML middleware can
+# fetch the exact same `serve_index`-rendered HTML a production request would get
+# (`data-theme` substitution included), then re-run Vite's own HMR transform on top of it.
+# This keeps the authoritative theme-injection logic in Rust, shared by dev and production.
+lanrurugi-server serve --bind 0.0.0.0:3001 --static-dir /workspace/apps/frontend --log-dir /log &
 APP_PID=$!
 
 # Direct `node_modules/.bin/vite` invocation, not `pnpm exec`/`pnpm --filter` — `pnpm exec` runs
