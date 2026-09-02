@@ -24,7 +24,9 @@ ARG REDIS_VERSION=7.4.9
 ARG DENO_VERSION=2.9.1
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
+ARG LANRURUGI_GIT_SHA=unknown
 WORKDIR /build
+ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
 # Same libarchive2-sys/libwebp-sys build deps as the production `Dockerfile`'s own `rust-builder`
 # stage — see that file's doc comment for the full rationale.
 RUN apt-get update && apt-get install -y --no-install-recommends \

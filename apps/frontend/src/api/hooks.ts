@@ -68,6 +68,7 @@ import type {
   TankoubonMetadata,
   TokenRole,
   UpdateQueueItemBody,
+  VersionCheckResponse,
 } from "./types"
 
 /** Shared polling cadence for background status indicators (Shinobu status, log tail). */
@@ -591,41 +592,29 @@ export function useServerInfo() {
 export interface UpdateCheckResult {
   latestVersion: string
   releaseUrl: string
+  isUpstream: boolean
+  upstreamPull: boolean
 }
 
-function extractVersionNumbers(raw: string): number[] {
-  return (raw.match(/\d+/g) ?? []).map(Number)
-}
-
-/** Numeric position-by-position comparison (`1.10.0` > `1.9.0`). */
-function compareVersions(a: number[], b: number[]): number {
-  const len = Math.max(a.length, b.length)
-  for (let i = 0; i < len; i++) {
-    const diff = (a[i] ?? 0) - (b[i] ?? 0)
-    if (diff !== 0) return diff
-  }
-  return 0
-}
-
-/** Client-side GitHub releases check; resolves `null` on any failure instead of throwing. */
-export function useUpdateCheck(currentVersion: string | undefined, debugMode: boolean) {
+/** Server-side version/update check (Zipline-style `/api/version`); resolves `null` on any
+ * failure instead of throwing, mirroring the old client-side GitHub fetch behavior. */
+export function useUpdateCheck() {
   return useQuery({
-    queryKey: ["update-check", currentVersion],
+    queryKey: ["update-check"],
     queryFn: async (): Promise<UpdateCheckResult | null> => {
-      const response = await fetch(
-        "https://api.github.com/repos/thelastfantasy/LANrurugi/releases/latest",
-      )
-      if (!response.ok) return null
-      const data = (await response.json()) as { tag_name?: string; html_url?: string }
-      if (!data.tag_name || !data.html_url) return null
-
-      const latest = extractVersionNumbers(data.tag_name)
-      const current = extractVersionNumbers(currentVersion ?? "")
-      if (compareVersions(latest, current) <= 0) return null
-
-      return { latestVersion: data.tag_name, releaseUrl: data.html_url }
+      try {
+        const result = await fetchJson<VersionCheckResponse>("/version")
+        if (!result.enabled || !result.data.latest || result.data.isLatest) return null
+        return {
+          latestVersion: result.data.latest.tag,
+          releaseUrl: result.data.latest.url,
+          isUpstream: result.data.isUpstream,
+          upstreamPull: result.data.latest.commit?.pull ?? false,
+        }
+      } catch {
+        return null
+      }
     },
-    enabled: !debugMode && !!currentVersion,
     staleTime: UPDATE_CHECK_STALE_TIME_MS,
     retry: false,
   })

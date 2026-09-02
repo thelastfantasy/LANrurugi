@@ -54,6 +54,7 @@ pub fn build_app(
     let api = lanrurugi_api::login::router()
         .merge(lanrurugi_api::settings::public_router())
         .merge(lanrurugi_api::misc::public_router())
+        .merge(lanrurugi_api::version::public_router())
         .merge(protected)
         .with_state(state.clone())
         // Outermost `/api/*` layer, before `require_api_key` — a preflight `OPTIONS` request must

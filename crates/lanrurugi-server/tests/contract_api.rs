@@ -299,6 +299,25 @@ async fn get_info_matches_recorded_serverinfo_shape() {
 }
 
 #[tokio::test]
+async fn version_endpoint_is_public_and_disabled_shape_is_stable() {
+    let Some((app, _redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+
+    // Contract tests run with `disable_update_check: true`; the endpoint must still be reachable
+    // anonymously (it is mounted in the public router group, like `/api/info`) and must not make
+    // an outbound GitHub request in that state.
+    let (status, json) = get_json(&app, "/api/version", None).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(json["enabled"], false);
+    assert!(json["details"]["version"].is_string());
+    assert!(json["details"]["sha"].is_null() || json["details"]["sha"].is_string());
+    assert!(json["data"]["isLatest"].is_boolean());
+    assert!(json["cached"].is_boolean());
+}
+
+#[tokio::test]
 async fn delete_archive_matches_recorded_response_shape() {
     let Some((app, redis)) = test_app().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");

@@ -159,7 +159,7 @@ description = "Rebuild the dev image after a *backend* source change (frontend c
 # (context `.`, `dockerfile: Dockerfile.dev`, image tag `localhost/lanrurugi-dev-full:latest`) if
 # that ever changes.
 run = """
-podman build -f Dockerfile.dev -t localhost/lanrurugi-dev-full:latest .
+podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
 # Re-tagging `latest` above orphans the previous image under this tag as a dangling `<none>`
 # layer — with no automatic GC, these silently accumulate one per rebuild (confirmed live,
 # 2026-08-28: 733 images / 41.77GB before a first manual `podman image prune` cut it to 52 / 9.8GB).

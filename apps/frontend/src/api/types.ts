@@ -144,6 +144,34 @@ export interface ServerInfo {
   excluded_namespaces: string[]
 }
 
+export interface VersionCheckResponse {
+  enabled: boolean
+  details: {
+    version: string
+    sha: string | null
+  }
+  data: {
+    isUpstream: boolean
+    isRelease: boolean
+    isLatest: boolean
+    version: {
+      tag: string
+      sha: string | null
+      url: string | null
+    } | null
+    latest: {
+      tag: string
+      url: string
+      commit?: {
+        sha: string
+        url: string
+        pull: boolean
+      }
+    } | null
+  }
+  cached: boolean
+}
+
 export interface ShinobuStatus {
   is_alive: 0 | 1
   pid: number

@@ -36,6 +36,7 @@ pub mod tag_rules;
 pub mod tankoubon_grouping;
 pub mod tankoubons;
 pub mod upload;
+pub mod version;
 
 pub use state::{AppState, AuthConfig, LibraryPaths, Repositories};
 

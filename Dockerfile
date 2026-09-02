@@ -13,6 +13,7 @@ ARG PNPM_VERSION=11.10.0
 ARG REDIS_VERSION=7.4.9
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
+ARG LANRURUGI_GIT_SHA=unknown
 WORKDIR /build
 # cmake + libclang-dev build `libarchive2-sys` (bundles libarchive's C source, built via CMake,
 # bindgen needs libclang — see `crates/lanrurugi-scanner/src/archive_format.rs`); the zlib1g-dev/
@@ -36,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
 RUN cargo build --release -p lanrurugi-server
 
 FROM node:${NODE_VERSION}-slim AS frontend-builder
