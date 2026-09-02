@@ -1,9 +1,11 @@
 //! `GET /api/version` — a Zipline-style version/update-check endpoint.
 //!
-//! Kept in the public (unauthenticated) router group so the app's own `Footer`/`UpdateBanner`
-//! can call it before a session exists, matching the existing public `/api/info` pattern
-//! (`misc::public_router` / issue #92). The payload deliberately contains no secrets and exposes
-//! no more than the already-public `/api/info` version fields plus GitHub release/commit metadata.
+//! Kept in the public `public_router()` group so the app's own `Footer`/`UpdateBanner` can call
+//! it before a session exists, matching the existing public `/api/info` pattern
+//! (`misc::public_router` / issue #92). The unified `/api` router still runs `require_api_key`,
+//! but `route_policy.csv` explicitly allows `anonymous`/`guest_visitor` to this route. The
+//! payload deliberately contains no secrets and exposes no more than the already-public
+//! `/api/info` version fields plus GitHub release/commit metadata.
 //!
 //! The backend performs the GitHub API calls (instead of the older frontend-only
 //! `useUpdateCheck`, which fetched GitHub directly from every browser) so:

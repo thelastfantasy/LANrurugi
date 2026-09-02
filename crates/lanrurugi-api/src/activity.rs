@@ -69,7 +69,7 @@ fn system_actor(subsystem: &str) -> Actor {
 /// `Option<Extension<AuthContext>>` handling of the same "no real identity" shape.
 async fn resolve_actor(state: &AppState, auth: Option<&AuthContext>) -> Actor {
     match auth.map(|a| &a.method) {
-        None | Some(AuthMethod::GuestVisitor) => Actor {
+        None | Some(AuthMethod::GuestVisitor) | Some(AuthMethod::Anonymous) => Actor {
             kind: ActorKind::Anonymous,
             id: None,
             display_name: None,

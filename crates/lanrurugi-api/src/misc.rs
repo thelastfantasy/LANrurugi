@@ -20,8 +20,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/llm/key-status", get(llm_key_status))
 }
 
-/// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s
-/// `build_app` (same pattern as `settings::public_router`/`login::router`) — issue #92:
+/// Deliberately separate from [`router`] and wired into the unified `/api` router in
+/// `lanrurugi-server`'s `build_app` (same pattern as `settings::public_router`/`login::router`),
+/// where `route_policy.csv` explicitly allows anonymous access — issue #92:
 /// `Footer.tsx` calls `useServerInfo()` and `UpdateBanner.tsx` calls the public `/api/version`
 /// endpoint unconditionally on every page, including ones that must render *before* a session
 /// exists (a visitor who isn't logged in hitting the new 404 catch-all route, or `/stats`, which
@@ -34,7 +35,8 @@ pub fn router() -> Router<AppState> {
 /// archive count/page-size settings) has no secret in it — no API key, no password hash, nothing
 /// session-scoped — so exposing it to an anonymous caller is the same class of decision
 /// `settings::public_router`'s own `/theme` already made, not a new precedent. The same reasoning
-/// applies to `version::public_router`'s `/api/version`.
+/// applies to `version::public_router`'s `/api/version`; the unified `route_policy.csv` now makes
+/// that accessibility audit-trailable instead of leaving it as an implicit router-level bypass.
 pub fn public_router() -> Router<AppState> {
     Router::new().route("/info", get(server_info))
 }

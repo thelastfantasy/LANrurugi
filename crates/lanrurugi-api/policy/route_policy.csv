@@ -1,5 +1,16 @@
 p, session, /api/*, *, allow
 
+# Public/bootstrap routes: unauthenticated callers are resolved to AuthMethod::Anonymous by
+# require_api_key and must be explicitly allowed here. This keeps every /api/* route in one
+# policy file instead of maintaining a separate bypass router for public endpoints.
+p, anonymous, /api/login, POST, allow
+p, anonymous, /api/login/status, GET, allow
+p, anonymous, /api/logout, POST, allow
+p, anonymous, /api/token/refresh, POST, allow
+p, anonymous, /api/theme, GET, allow
+p, anonymous, /api/info, GET, allow
+p, anonymous, /api/version, GET, allow
+
 p, token_admin, /api/*, GET, allow
 p, token_admin, /api/*, POST, allow
 p, token_admin, /api/*, PUT, allow
@@ -18,6 +29,16 @@ p, token_guest, /api/*, GET, allow
 # code instead (`SearchParams.restrict_to_archive_ids`, `archives.rs`'s own guest-scope membership
 # checks), same architectural split this file's own two-Enforcer design already documents.
 #
+# Public/bootstrap routes must also be reachable when guest mode resolves an unauthenticated
+# caller to guest_visitor instead of anonymous.
+p, guest_visitor, /api/login, POST, allow
+p, guest_visitor, /api/login/status, GET, allow
+p, guest_visitor, /api/logout, POST, allow
+p, guest_visitor, /api/token/refresh, POST, allow
+p, guest_visitor, /api/theme, GET, allow
+p, guest_visitor, /api/info, GET, allow
+p, guest_visitor, /api/version, GET, allow
+
 # Explicit whitelist, not `/api/*` GET-allow + deny-list — the previous blanket-allow shape
 # (`token_guest`'s own, copied verbatim for the initial 007 pass) meant every *new* admin-only GET
 # endpoint added anywhere in the app was silently guest-reachable by default unless someone

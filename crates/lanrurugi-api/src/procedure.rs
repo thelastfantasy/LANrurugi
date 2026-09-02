@@ -2,12 +2,12 @@
 //! authentication, authorization, and request-level tracing together, rather than scattering
 //! those three concerns across separate files.
 //!
-//! [`require_api_key`] is the single gate, `.layer()`-ed on the whole protected router
-//! (`lanrurugi-server`'s `app.rs`). Resolves *who* is making this request (a real session, a
-//! first-party API token with a role, or — 007-guest-restricted-access — an unauthenticated
-//! caller eligible for scoped guest access), rejects outright if none of those apply, records one
-//! structured trace event (`operator`, `client_ip`), inserts [`crate::auth_context::AuthContext`]
-//! into the
+//! [`require_api_key`] is the single gate, `.layer()`-ed across the whole `/api/*` router
+//! (`lanrurugi-server`'s `app.rs`), including the public bootstrap routes. Resolves *who* is
+//! making this request (a real session, a first-party API token with a role, —
+//! 007-guest-restricted-access — an unauthenticated caller eligible for scoped guest access, or
+//! an anonymous caller to a route explicitly allowed by policy), records one structured trace
+//! event (`operator`, `client_ip`), inserts [`crate::auth_context::AuthContext`] into the
 //! request's extensions, and — via [`crate::authz::check_route`] against `policy/route_policy.csv`
 //! — rejects any request the resolved role isn't allowed to make against the actual matched route
 //! (`axum::extract::MatchedPath`) and method, covering both a `Guest`-role token's blanket
@@ -139,7 +139,7 @@ pub async fn require_api_key(
                 request.extensions_mut().insert(auth);
                 return next.run(request).await;
             }
-            Ok(false) => {} // guest mode on, but zero archives actually visible — fall through to 401
+            Ok(false) => {} // guest mode on, but zero archives actually visible — fall through to anonymous
             Err(e) => {
                 tracing::warn!(error = %e, "failed to check guest-visible archives");
                 // Fails closed: a Redis hiccup here must not silently grant guest access.
@@ -147,7 +147,22 @@ pub async fn require_api_key(
         }
     }
 
-    (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+    // Public bootstrap routes (login, theme, info, version, ...) are now expressed in the same
+    // `route_policy.csv` as everything else. An unauthenticated caller that is not eligible for
+    // guest-mode scoping is therefore resolved to `AuthMethod::Anonymous` and passed through the
+    // normal policy check; routes without an explicit anonymous allow stay deny-by-default and get
+    // the same 401 they always did.
+    let auth = AuthContext {
+        method: AuthMethod::Anonymous,
+        client_ip,
+    };
+    if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
+        trace_request(&request, &auth, false);
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    trace_request(&request, &auth, true);
+    request.extensions_mut().insert(auth);
+    next.run(request).await
 }
 
 /// Shared by both the `Token` and `Session` branches of [`require_api_key`] — see that function's

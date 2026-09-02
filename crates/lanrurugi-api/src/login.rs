@@ -7,8 +7,9 @@
 //!
 //! Deliberately **not** merged into [`crate::router`] — these routes must stay reachable without
 //! a valid access token (otherwise nobody could ever log in, or silently refresh an expired one),
-//! so the server wires them into a separate, unprotected router (see
-//! `lanrurugi-server/src/app.rs`).
+//! so the server wires them into the unified `/api` router alongside the protected routes. They
+//! still go through `require_api_key`, but `route_policy.csv` explicitly allows `anonymous` /
+//! `guest_visitor` to reach them.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

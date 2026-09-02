@@ -21,6 +21,11 @@ pub enum AuthMethod {
     /// identity (no id, no role), unlike `Token`, since a guest visitor is re-evaluated fresh on
     /// every single request against current config rather than representing a stored credential.
     GuestVisitor,
+    /// A completely unauthenticated caller to a route the policy explicitly allows for
+    /// `anonymous` (e.g. `/api/login`, `/api/info`, `/api/version`). Unlike `GuestVisitor`, this
+    /// carries no guest-mode/library scoping whatsoever; it only exists so public routes can be
+    /// expressed in the same Casbin `route_policy.csv` as every other route.
+    Anonymous,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +63,7 @@ impl AuthContext {
             AuthMethod::Session => "session".to_string(),
             AuthMethod::Token { id, .. } => format!("token:{id}"),
             AuthMethod::GuestVisitor => "guest_visitor".to_string(),
+            AuthMethod::Anonymous => "anonymous".to_string(),
         }
     }
 }

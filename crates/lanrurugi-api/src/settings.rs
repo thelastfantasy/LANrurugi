@@ -51,11 +51,12 @@ pub fn router() -> Router<AppState> {
         .route("/settings/password", post(change_password))
 }
 
-/// Deliberately separate from [`router`] and merged unprotected in `lanrurugi-server`'s
-/// `build_app` (same pattern as `lanrurugi_api::login::router()`) — the Login page needs the
-/// saved theme to render itself correctly, but it runs before any session exists, so it can't go
-/// through the auth-gated `/settings` the rest of the Settings page uses. Exposes only `theme`,
-/// not the full settings payload (which includes things like `apikey`).
+/// Deliberately separate from [`router`] and exposed via the unified `/api` router in
+/// `lanrurugi-server`'s `build_app` (same pattern as `lanrurugi_api::login::router()`) — the
+/// Login page needs the saved theme to render itself correctly, but it runs before any session
+/// exists, so `route_policy.csv` allows `anonymous`/`guest_visitor` to this route while the rest
+/// of `/settings` stays auth-gated. Exposes only `theme`, not the full settings payload (which
+/// includes things like `apikey`).
 pub fn public_router() -> Router<AppState> {
     Router::new().route("/theme", get(get_theme))
 }
@@ -170,9 +171,10 @@ async fn get_theme(State(state): State<AppState>, headers: axum::http::HeaderMap
 
 /// Mirrors `procedure::require_api_key`'s own "is this request eligible for `AuthMethod::
 /// GuestVisitor`" branch (session invalid, `guestmode` on, at least one archive actually guest-
-/// visible), but standalone — `GET /theme` sits in `public_router()`, entirely outside that
-/// middleware (it must work with no session at all, e.g. on the Login page itself), so it can't
-/// read an `AuthContext` the middleware never ran to produce. A request carrying *any* bearer
+/// visible), but standalone — `GET /theme` sits in `public_router()` and, while it now passes
+/// through the same unified `require_api_key` middleware, it is allowed for anonymous callers by
+/// `route_policy.csv` (it must work with no session at all, e.g. on the Login page itself), so
+/// this helper still cannot rely on an `AuthContext` being present. A request carrying *any* bearer
 /// token is treated as non-guest without validating the token itself: a soon-to-be-authenticated
 /// client asking "what theme should I render right now" should see the admin theme it's about to
 /// actually use, not flicker through the guest one first, and an invalid token is about to 401 on

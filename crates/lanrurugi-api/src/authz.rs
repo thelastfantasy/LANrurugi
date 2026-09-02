@@ -50,8 +50,10 @@ const ACTIVITY_POLICY: &str = include_str!("../policy/activity_policy.csv");
 /// unauthenticated-but-guest-eligible request is now `AuthMethod::GuestVisitor`, a real
 /// `AuthContext`, not the absence of one; `require_api_key` never reaches `check_route` at all for
 /// a request that is neither authenticated nor guest-eligible (it rejects with `401` first). The
-/// `"anonymous"` Casbin subject this function used to be able to produce is removed from
-/// `route_policy.csv` for the same reason — nothing constructs it anymore.
+/// `"anonymous"` Casbin subject is reintroduced for public bootstrap routes (login/theme/info/
+/// version): `require_api_key` now resolves an unauthenticated caller to `AuthMethod::Anonymous`
+/// when guest-mode eligibility does not apply, and lets `route_policy.csv` decide whether that is
+/// allowed. Protected routes stay deny-by-default for this subject.
 fn subject_role(auth: Option<&AuthContext>) -> &'static str {
     match auth.map(|a| &a.method) {
         None => unreachable!(
@@ -69,6 +71,7 @@ fn subject_role(auth: Option<&AuthContext>) -> &'static str {
             ..
         }) => "token_guest",
         Some(AuthMethod::GuestVisitor) => "guest_visitor",
+        Some(AuthMethod::Anonymous) => "anonymous",
     }
 }
 
@@ -312,6 +315,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn anonymous_may_reach_only_public_bootstrap_routes() {
+        let e = route_enforcer().await;
+        let anon = anonymous_auth();
+        assert!(check_route(&e, Some(&anon), "/api/login", "POST"));
+        assert!(check_route(&e, Some(&anon), "/api/login/status", "GET"));
+        assert!(check_route(&e, Some(&anon), "/api/logout", "POST"));
+        assert!(check_route(&e, Some(&anon), "/api/token/refresh", "POST"));
+        assert!(check_route(&e, Some(&anon), "/api/theme", "GET"));
+        assert!(check_route(&e, Some(&anon), "/api/info", "GET"));
+        assert!(check_route(&e, Some(&anon), "/api/version", "GET"));
+        assert!(!check_route(&e, Some(&anon), "/api/archives", "GET"));
+        assert!(!check_route(&e, Some(&anon), "/api/settings", "GET"));
+        assert!(!check_route(&e, Some(&anon), "/api/activity", "GET"));
+    }
+
+    #[tokio::test]
     async fn admin_token_may_not_call_any_session_only_route() {
         let e = route_enforcer().await;
         let admin = token_auth(TokenRole::Admin);
@@ -433,6 +452,13 @@ mod tests {
     fn guest_visitor_auth() -> AuthContext {
         AuthContext {
             method: AuthMethod::GuestVisitor,
+            client_ip: None,
+        }
+    }
+
+    fn anonymous_auth() -> AuthContext {
+        AuthContext {
+            method: AuthMethod::Anonymous,
             client_ip: None,
         }
     }

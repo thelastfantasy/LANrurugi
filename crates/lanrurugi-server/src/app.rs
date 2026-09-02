@@ -40,10 +40,6 @@ pub fn build_app(
     static_dir: Option<PathBuf>,
     docs_dir: Option<PathBuf>,
 ) -> Router {
-    let protected = lanrurugi_api::router().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        require_api_key,
-    ));
     // Cloned before `.with_state` moves the original — `serve_index`'s own closure below (registered
     // well after `state` would otherwise be gone) needs its own copy of the same shared `AppState`.
     let index_state = state.clone();
@@ -51,11 +47,19 @@ pub fn build_app(
     // copy, mounted at the bare (non-`/api`-nested) top level (see that module's own docs on why
     // it must be reachable without going through `require_api_key` at all).
     let opensearch_state = state.clone();
+    // Every `/api/*` route — including the ones previously merged as "public" routers (login,
+    // theme, info, version) — now goes through the same `require_api_key` middleware and the same
+    // Casbin `route_policy.csv`. Public bootstrap routes are allowed by explicit `anonymous` /
+    // `guest_visitor` policy rules; protected routes remain deny-by-default for those subjects.
     let api = lanrurugi_api::login::router()
         .merge(lanrurugi_api::settings::public_router())
         .merge(lanrurugi_api::misc::public_router())
         .merge(lanrurugi_api::version::public_router())
-        .merge(protected)
+        .merge(lanrurugi_api::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
         .with_state(state.clone())
         // Outermost `/api/*` layer, before `require_api_key` — a preflight `OPTIONS` request must
         // never reach the auth check (see `cors::apply_cors`'s own docs).
