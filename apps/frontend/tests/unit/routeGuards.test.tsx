@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { LoginStatus } from "@/api/types"
-import { AllowGuest } from "@/RouteGuards"
+import { AllowGuest, RequireAuth } from "@/RouteGuards"
 
 // `AllowGuest` (007-guest-restricted-access) reads `useLoginStatus()` directly — mocking the
 // whole `@/api/hooks` module (rather than standing up a real TanStack Query provider + MSW
@@ -12,8 +12,12 @@ import { AllowGuest } from "@/RouteGuards"
 const { useLoginStatusMock } = vi.hoisted(() => ({ useLoginStatusMock: vi.fn() }))
 vi.mock("@/api/hooks", () => ({ useLoginStatus: useLoginStatusMock }))
 
-function mockLoginStatus(data: Partial<LoginStatus> | undefined, isSuccess: boolean) {
-  useLoginStatusMock.mockReturnValue({ data, isSuccess })
+function mockLoginStatus(
+  data: Partial<LoginStatus> | undefined,
+  isSuccess: boolean,
+  isError = false,
+) {
+  useLoginStatusMock.mockReturnValue({ data, isSuccess, isError })
 }
 
 function renderAllowGuest(initialPath = "/") {
@@ -29,12 +33,26 @@ function renderAllowGuest(initialPath = "/") {
   )
 }
 
+
+function renderRequireAuth(initialPath = "/") {
+  return render(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route element={<RequireAuth />}>
+          <Route path="/" element={<div>admin content</div>} />
+        </Route>
+        <Route path="/login" element={<div>login page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 describe("AllowGuest", () => {
   beforeEach(() => {
     useLoginStatusMock.mockReset()
   })
 
-  it("renders children when the login-status query is still resolving (optimistic render, matching RequireAuth's own default)", () => {
+  it("renders children when the login-status query is still resolving (optimistic render for guest pages)", () => {
     mockLoginStatus(undefined, false)
     renderAllowGuest()
     expect(screen.getByText("protected content")).toBeInTheDocument()
@@ -57,5 +75,38 @@ describe("AllowGuest", () => {
     renderAllowGuest()
     expect(screen.getByText("login page")).toBeInTheDocument()
     expect(screen.queryByText("protected content")).not.toBeInTheDocument()
+  })
+})
+
+
+describe("RequireAuth", () => {
+  beforeEach(() => {
+    useLoginStatusMock.mockReset()
+  })
+
+  it("does not render admin content while login-status is still resolving", () => {
+    mockLoginStatus(undefined, false)
+    renderRequireAuth()
+    expect(screen.queryByText("admin content")).not.toBeInTheDocument()
+  })
+
+  it("redirects to /login when login-status fails so admin content cannot leak", () => {
+    mockLoginStatus(undefined, false, true)
+    renderRequireAuth()
+    expect(screen.getByText("login page")).toBeInTheDocument()
+    expect(screen.queryByText("admin content")).not.toBeInTheDocument()
+  })
+
+  it("renders admin content for a real logged-in session", () => {
+    mockLoginStatus({ logged_in: true, guest_mode_enabled: false } as LoginStatus, true)
+    renderRequireAuth()
+    expect(screen.getByText("admin content")).toBeInTheDocument()
+  })
+
+  it("redirects to /login when login-status reports logged out", () => {
+    mockLoginStatus({ logged_in: false, guest_mode_enabled: true } as LoginStatus, true)
+    renderRequireAuth()
+    expect(screen.getByText("login page")).toBeInTheDocument()
+    expect(screen.queryByText("admin content")).not.toBeInTheDocument()
   })
 })

@@ -153,6 +153,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         new_archive_tx,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,

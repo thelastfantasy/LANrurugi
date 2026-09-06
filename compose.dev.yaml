@@ -44,6 +44,12 @@ services:
       - lrr-dev-cargo-target:/build/target
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

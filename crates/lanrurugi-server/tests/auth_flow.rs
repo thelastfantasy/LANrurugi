@@ -148,6 +148,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -719,6 +720,42 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
         "an eligible guest_visitor must reach an ordinary read route"
     );
 
+    // `"a"` is outside the id ranges both this file and `settings_toggles.rs` already use, so this
+    // fixture cannot collide with a concurrently-running test's archive in the shared Redis.
+    let out_of_scope_id = "a".repeat(40);
+    repos
+        .archives
+        .save(&test_archive(&out_of_scope_id, "Admin Only Archive"))
+        .await
+        .unwrap();
+
+    // The aggregate bookmark listing backs the admin-only `/bookmarks` page; it must not be
+    // reachable by an unauthenticated guest_visitor even though the Reader's per-archive bookmark
+    // GET is whitelisted.
+    let bookmarks_resp = request(&app, "GET", "/api/bookmarks", None, None).await;
+    assert_eq!(
+        bookmarks_resp.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "a guest_visitor must not enumerate admin bookmarks via the aggregate /api/bookmarks endpoint"
+    );
+
+    // Thumbnail URLs are exposed by that same admin bookmarks page; even if a guest obtains the URL
+    // (e.g. from browser history/cache), the resource-level guest scope check must apply just like
+    // metadata/files/page.
+    let out_of_scope_thumb_resp = request(
+        &app,
+        "GET",
+        &format!("/api/archives/{out_of_scope_id}/thumbnail"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        out_of_scope_thumb_resp.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "a guest_visitor must receive the same 404 as a nonexistent archive for an out-of-scope thumbnail"
+    );
+
     let drop_resp = request(&app, "POST", "/api/database/drop", None, None).await;
     assert_eq!(
         drop_resp.status(),
@@ -727,6 +764,11 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     );
 
     repos.categories.delete(&category.catid).await.unwrap();
+    repos
+        .archives
+        .delete(&lanrurugi_core::ids::ArchiveId(out_of_scope_id))
+        .await
+        .unwrap();
     repos
         .archives
         .delete(&lanrurugi_core::ids::ArchiveId(archive_id))

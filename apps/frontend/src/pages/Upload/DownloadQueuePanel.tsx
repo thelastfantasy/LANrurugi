@@ -75,9 +75,20 @@ export function DownloadQueuePanel({
   }, [items])
 
   const itemIds = useMemo(() => new Set(items.map((i) => i.id)), [items])
+  // Excludes ids whose item has since moved out of a selectable state (e.g. an auto-selected
+  // fresh upload that finished before the user unchecked it) — selection must track live state,
+  // not just queue membership, or a "done" item can stay selected with no way to uncheck it since
+  // its checkbox is disabled.
+  const selectableItemIds = useMemo(
+    () =>
+      new Set(
+        items.filter((i) => i.state === "queued" || i.state === "error" || i.state === "cancelled").map((i) => i.id),
+      ),
+    [items],
+  )
   const effectiveSelected = useMemo(
-    () => new Set([...selected].filter((id) => itemIds.has(id))),
-    [selected, itemIds],
+    () => new Set([...selected].filter((id) => itemIds.has(id) && selectableItemIds.has(id))),
+    [selected, itemIds, selectableItemIds],
   )
 
   const triggeredRef = useRef<Set<string>>(new Set())
@@ -126,9 +137,7 @@ export function DownloadQueuePanel({
 
   if (items.length === 0) return null
 
-  const selectableIds = items
-    .filter((i) => i.state === "queued" || i.state === "error" || i.state === "cancelled")
-    .map((i) => i.id)
+  const selectableIds = [...selectableItemIds]
   const cleared = items.filter((i) => i.state === "done").length
 
   function selectAll() {

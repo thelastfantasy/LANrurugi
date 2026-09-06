@@ -190,6 +190,22 @@ impl BookmarksRepository {
         Ok(())
     }
 
+    /// Bumps `UPDATED_AT_HASH_KEY` for an archive that's already bookmarked, without touching
+    /// `HASH_KEY` (no bookmark is added/removed/moved) — for the stamp↔bookmark linkage
+    /// (`stamps.rs::add_stamp`) adding a stamp to a page that's *already* bookmarked: the page's
+    /// own bookmark state doesn't change, but with the linkage setting on the two are meant to
+    /// read as one combined "this page has activity" concept, so the archive's `/bookmarks` sort
+    /// position should still move the same way a fresh stamp-triggered `add` would have. A no-op
+    /// if the archive has no bookmark at all yet (nothing to bump) — the caller is expected to
+    /// have already confirmed at least one bookmark exists on this archive.
+    pub async fn touch_updated_at(&self, archive_id: &str, at: u64) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = conn
+            .hset(UPDATED_AT_HASH_KEY, archive_id, at.to_string())
+            .await?;
+        Ok(())
+    }
+
     /// Sets or clears this bookmark's own name — `name: None` (or an empty/whitespace-only
     /// string, already trimmed by the caller, `bookmarks.rs` in `lanrurugi-api`) deletes the
     /// field from `NAMES_HASH_KEY` entirely rather than storing an empty string there, keeping

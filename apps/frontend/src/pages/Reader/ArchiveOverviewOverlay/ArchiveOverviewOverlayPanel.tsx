@@ -2,33 +2,46 @@ import { useQueryClient } from "@tanstack/react-query"
 import type { MouseEvent } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { FaFileArchive, FaPlus } from "react-icons/fa"
 import { useNavigate } from "react-router-dom"
 
 import {
   useAddTocEntry,
   useAddTocEntryForId,
+  useAnalyzeArchiveSplit,
   useArchivePages,
+  useArchiveSplitSuggestion,
+  useArchiveSplitTree,
   useCreateCategory,
   useDeletePatch,
   useDeleteTankoubon,
+  useExecuteArchiveSplit,
   useRemoveTocEntry,
   useRemoveTocEntryForId,
   useSetArchiveThumbnail,
   useSetTankoubonThumbnail,
+  useSettings,
   useStampedPages,
   useStampedPagesForArchives,
   useUpdateTankoubon,
 } from "@/api/hooks"
-import type { ArchiveMetadata, ArchivePage, CategoryMetadata } from "@/api/types"
-import { Tooltip } from "@/components/common-ui/Display"
-import { RatingWidget } from "@/components/common-ui/Form"
+import type {
+  ArchiveEntryInfo,
+  ArchiveMetadata,
+  ArchivePage,
+  CategoryMetadata,
+} from "@/api/types"
+import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { Button, IconButton, RatingWidget, Select } from "@/components/common-ui/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
+import { useSupportsHover } from "@/hooks/useSupportsHover"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { displayTocName, isReservedTocIdentifier } from "@/lib/utils/tocValidation"
+import { EntryTreePopover } from "@/pages/Upload/EntryTreePopover"
 import { toast } from "@/toast"
 
 import { PageGridCell } from "./PageGridCell"
@@ -151,6 +164,19 @@ function DeletePatchButton({ archiveId, patchPageSet }: { archiveId: string; pat
 
 /** Mirrors legacy's `#archivePagesOverlay` — thumbnail/admin options/categories/rating,
  * the tags table, then a thumbnail grid scoped to the current chapter (or the whole archive). */
+function countSplitGroupFiles(
+  entries: ArchiveEntryInfo[],
+  sourceDirs: string[],
+  sourceFiles: string[],
+): number {
+  const dirs = sourceDirs.map((d) => d.replace(/\/+$/, "")).filter(Boolean)
+  return entries.filter(
+    (e) =>
+      e.is_regular_file &&
+      (sourceFiles.includes(e.name) || dirs.some((d) => e.name.startsWith(`${d}/`))),
+  ).length
+}
+
 export function ArchiveOverviewOverlay({
   archive,
   categories,
@@ -162,6 +188,8 @@ export function ArchiveOverviewOverlay({
   resolvePage,
   tankChapters,
   tankPages,
+  hasTankSplitCandidates,
+  onOpenTankSplit,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -179,6 +207,10 @@ export function ArchiveOverviewOverlay({
   tankChapters?: TankoubonChapter[]
   /** Tankoubon mode only: the concatenated multi-archive page list, passed to `PageLightbox`. */
   tankPages?: ArchivePage[]
+  /** Tankoubon mode only: whether at least one member archive has a split suggestion. */
+  hasTankSplitCandidates?: boolean
+  /** Opens the Tankoubon batch split modal. */
+  onOpenTankSplit?: () => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -187,6 +219,7 @@ export function ArchiveOverviewOverlay({
   const staticCategories = sortCategories((categories ?? []).filter((c) => !c.search))
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
   const isTank = isTankoubonId(archive.arcid)
+  const supportsHover = useSupportsHover()
 
   function resolve(page: number): { arcId: string; localPage: number } | null {
     return resolvePage ? resolvePage(page) : { arcId: archive.arcid, localPage: page }
@@ -221,6 +254,16 @@ export function ArchiveOverviewOverlay({
   const addTocEntryForId = useAddTocEntryForId()
   const removeTocEntryForId = useRemoveTocEntryForId()
   const deleteTankoubon = useDeleteTankoubon()
+  const splitSuggestion = useArchiveSplitSuggestion(!isTank ? archive.arcid : null)
+  const analyzeSplit = useAnalyzeArchiveSplit()
+  const executeSplit = useExecuteArchiveSplit()
+  const settings = useSettings()
+  const [showSplitPanel, setShowSplitPanel] = useState(false)
+  const splitTree = useArchiveSplitTree(!isTank && showSplitPanel ? archive.arcid : null)
+  const [splitDeleteOriginal, setSplitDeleteOriginal] = useState(
+    settings.data?.archive_split_delete_original_enabled ?? false,
+  )
+  const [splitStatus, setSplitStatus] = useState<string | null>(null)
   const updateTankoubon = useUpdateTankoubon(archive.arcid)
 
   const [thumbnailVersion, setThumbnailVersion] = useState(0)
@@ -445,23 +488,274 @@ export function ArchiveOverviewOverlay({
               <div style={{ display: "inline-block", verticalAlign: "middle" }}>
                 <h2>{t("reader.adminOptions")}</h2>
 
-                <input
-                  className="stdbtn"
-                  type="button"
-                  style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
-                  value={(isTank ? t("common.editTankoubon") : t("reader.editArchiveMetadata")) ?? undefined}
-                  onClick={() => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))}
-                />
-                <input
-                  className="stdbtn"
-                  type="button"
-                  style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
-                  value={(isTank ? t("common.deleteTankoubon") : t("common.deleteArchive")) ?? undefined}
-                  onClick={() => void deleteArchive()}
-                />
-                {!isTank && archive.has_patch && <DeletePatchButton archiveId={archive.arcid} patchPageSet={patchPageSet} />}
+                <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                  <Button
+                    variant="stdbtn"
+                    style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
+                    onClick={() => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid))}
+                  >
+                    {isTank ? t("common.editTankoubon") : t("reader.editArchiveMetadata")}
+                  </Button>
+                  <Button
+                    variant="stdbtn"
+                    style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
+                    onClick={() => void deleteArchive()}
+                  >
+                    {isTank ? t("common.deleteTankoubon") : t("common.deleteArchive")}
+                  </Button>
+                  {!isTank && archive.has_patch && <DeletePatchButton archiveId={archive.arcid} patchPageSet={patchPageSet} />}
+                  {isTank && hasTankSplitCandidates && onOpenTankSplit && (
+                    supportsHover ? (
+                      <Tooltip
+                        label={
+                          <div>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                              {t("reader.archiveSplit")}
+                            </div>
+                            <div style={{ opacity: 0.8 }}>
+                              {t("reader.archiveSplitTooltipDescription")}
+                            </div>
+                          </div>
+                        }
+                        anchor="element"
+                        closeDelay={0}
+                        wrapperStyle={{ display: "inline-flex", alignItems: "center", verticalAlign: "middle" }}
+                      >
+                        <Button
+                          variant="stdbtn"
+                          style={{ width: "auto", minWidth: 110 }}
+                          onClick={onOpenTankSplit}
+                        >
+                          <FaFileArchive /> {t("reader.archiveSplit")}
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        variant="stdbtn"
+                        style={{ width: "auto", minWidth: 110 }}
+                        onClick={onOpenTankSplit}
+                      >
+                        <FaFileArchive /> {t("reader.archiveSplit")}
+                      </Button>
+                    )
+                  )}
+                  {!isTank && !archive.has_split_suggestion && (
+                    supportsHover ? (
+                      <Tooltip
+                        label={
+                          <div>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                              {t("reader.analyzeArchiveSplit")}
+                            </div>
+                            <div style={{ opacity: 0.8 }}>
+                              {t("reader.analyzeArchiveSplitDescription")}
+                            </div>
+                          </div>
+                        }
+                        anchor="element"
+                        closeDelay={0}
+                        wrapperStyle={{ display: "inline-flex", alignItems: "center", verticalAlign: "middle" }}
+                      >
+                        <Button
+                          variant="stdbtn"
+                          style={{ width: "auto", minWidth: 140 }}
+                          disabled={analyzeSplit.isPending}
+                          onClick={() => {
+                            analyzeSplit.mutate(archive.arcid, {
+                              onSuccess: (data) => {
+                                if (data.suggestion) {
+                                  queryClient.invalidateQueries({ queryKey: ["archive", archive.arcid] })
+                                  queryClient.invalidateQueries({ queryKey: ["archives"] })
+                                  queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion", archive.arcid] })
+                                  setShowSplitPanel(true)
+                                } else {
+                                  setSplitStatus(t("reader.noArchiveSplitSuggestion") ?? "")
+                                }
+                              },
+                              onError: (e) => {
+                                toast({
+                                  heading: t("reader.analyzeArchiveSplit") ?? undefined,
+                                  text: String(e),
+                                  icon: "error",
+                                })
+                              },
+                            })
+                          }}
+                        >
+                          {analyzeSplit.isPending ? (t("reader.running") ?? "…") : t("reader.analyzeArchiveSplit")}
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        variant="stdbtn"
+                        style={{ width: "auto", minWidth: 140 }}
+                        disabled={analyzeSplit.isPending}
+                        onClick={() => {
+                          analyzeSplit.mutate(archive.arcid, {
+                            onSuccess: (data) => {
+                              if (data.suggestion) {
+                                queryClient.invalidateQueries({ queryKey: ["archive", archive.arcid] })
+                                queryClient.invalidateQueries({ queryKey: ["archives"] })
+                                queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion", archive.arcid] })
+                                setShowSplitPanel(true)
+                              } else {
+                                setSplitStatus(t("reader.noArchiveSplitSuggestion") ?? "")
+                              }
+                            },
+                            onError: (e) => {
+                              toast({
+                                heading: t("reader.analyzeArchiveSplit") ?? undefined,
+                                text: String(e),
+                                icon: "error",
+                              })
+                            },
+                          })
+                        }}
+                      >
+                        {analyzeSplit.isPending ? (t("reader.running") ?? "…") : t("reader.analyzeArchiveSplit")}
+                      </Button>
+                    )
+                  )}
+                  {!isTank && archive.has_split_suggestion && (
+                    supportsHover ? (
+                      <Tooltip
+                        label={
+                          <div>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                              {t("reader.archiveSplit")}
+                            </div>
+                            <div style={{ opacity: 0.8 }}>
+                              {t("reader.archiveSplitTooltipDescription")}
+                            </div>
+                          </div>
+                        }
+                        anchor="element"
+                        closeDelay={0}
+                        wrapperStyle={{ display: "inline-flex", alignItems: "center", verticalAlign: "middle" }}
+                      >
+                        <Button
+                          variant="stdbtn"
+                          style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                          onClick={() => setShowSplitPanel(true)}
+                          aria-label={t("reader.archiveSplit") ?? undefined}
+                        >
+                          <FaFileArchive />
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        variant="stdbtn"
+                        style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        onClick={() => setShowSplitPanel(true)}
+                        aria-label={t("reader.archiveSplit") ?? undefined}
+                      >
+                        <FaFileArchive />
+                      </Button>
+                    )
+                  )}
+                </div>
                 <br />
 
+                {!isTank && showSplitPanel && (
+                  <Modal onClose={() => setShowSplitPanel(false)} width={720} textAlign="left">
+                    <h2 style={{ textAlign: "center" }}>{t("reader.archiveSplit")}</h2>
+                    <div style={{ textAlign: "right", marginBottom: 4 }}>
+                      <EntryTreePopover entries={splitTree.data?.entries ?? []} />
+                    </div>
+                    {splitSuggestion.data?.suggestion ? (
+                      <>
+                        <div style={{ margin: "8px 0", fontWeight: 600 }}>
+                          {t("reader.archiveSplitSuggestionFound")}
+                        </div>
+                        <table className="itg" style={{ width: "100%", tableLayout: "auto" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ padding: "6px 8px", textAlign: "left" }}>{t("reader.splitOutputFile")}</th>
+                              <th style={{ padding: "6px 8px", textAlign: "left", whiteSpace: "nowrap" }}>{t("reader.splitDescription")}</th>
+                              <th style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" }}>{t("reader.splitItemCount")}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {splitSuggestion.data.suggestion.split_groups.map((g) => (
+                              <tr key={g.zip_name}>
+                                <td style={{ padding: "6px 8px", textAlign: "left" }}>{g.zip_name}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "left", opacity: 0.8, whiteSpace: "nowrap" }}>{g.description}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                                  {splitTree.data
+                                    ? `${countSplitGroupFiles(splitTree.data.entries, g.source_dirs, g.source_files)} ${t("reader.splitItemsSuffix")}`
+                                    : "…"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <label style={{ marginTop: 12, display: "block", textAlign: "center", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={splitDeleteOriginal}
+                            onChange={(e) => setSplitDeleteOriginal(e.target.checked)}
+                          />{" "}
+                          {t("reader.splitDeleteOriginalCheckbox")}
+                        </label>
+                        {splitDeleteOriginal && (
+                          <div style={{ marginTop: 4, textAlign: "center", color: "red", fontWeight: 600 }}>
+                            {t("reader.splitDeleteWarning")}
+                          </div>
+                        )}
+                        <div style={{ marginTop: 16, textAlign: "center" }}>
+                          <input
+                            className="stdbtn"
+                            type="button"
+                            style={{ width: "auto", minWidth: 110 }}
+                            value={(executeSplit.isPending ? t("reader.running") : t("reader.executeSplit")) ?? undefined}
+                            disabled={executeSplit.isPending}
+                            onClick={() => {
+                              void executeSplit
+                                .mutateAsync({ id: archive.arcid, deleteOriginal: splitDeleteOriginal })
+                                .then((r) => {
+                                setSplitStatus(`${t("reader.splitJobStarted")}: ${r.job_id}`)
+                                const source = new EventSource(`/api/archives/${archive.arcid}/split/stream`)
+                                source.onmessage = (e) => {
+                                  try {
+                                    const data = JSON.parse(e.data) as { progress?: number; message?: string }
+                                    setSplitStatus(`${data.message ?? ""} ${Math.round((data.progress ?? 0) * 100)}%`)
+                                    if ((data.progress ?? 0) >= 1) {
+                                    source.close()
+                                    if (splitDeleteOriginal) {
+                                      navigate(routes.library())
+                                      toast({
+                                        heading: t("reader.splitCompleteWithDelete") ?? undefined,
+                                        text: t("reader.splitCompleteWithDeleteDescription", {
+                                          count: splitSuggestion.data?.suggestion.split_groups.length ?? 0,
+                                        }) ?? undefined,
+                                        icon: "success",
+                                      })
+                                    }
+                                  }
+                                  } catch {
+                                    setSplitStatus(e.data)
+                                  }
+                                }
+                                source.onerror = () => {
+                                  source.close()
+                                  setSplitStatus(t("reader.splitFinishedOrNotFound") ?? "")
+                                }
+                              })
+                            }}
+                          />
+                        </div>
+                        {splitStatus && <div style={{ marginTop: 8, textAlign: "center" }}>{splitStatus}</div>}
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ textAlign: "center" }}>{t("reader.noArchiveSplitSuggestion")}</div>
+                        <div style={{ marginTop: 4, opacity: 0.7, textAlign: "center" }}>
+                          {t("reader.archiveSplitAutoAnalyzed")}
+                        </div>
+                      </>
+                    )}
+                  </Modal>
+                )}
                 <h2>{t("categories.categories")}</h2>
                 <style>{`
                   .category-chip {
@@ -538,34 +832,31 @@ export function ArchiveOverviewOverlay({
 
                 <br />
                 <span>{t("reader.addTo")}</span>
-                <select
-                  id="category"
-                  className="favtag-btn"
-                  style={{ width: 200 }}
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) void addToCategory(e.target.value)
-                  }}
-                >
-                  <option value="">{t("common.NoCategory")}</option>
-                  {staticCategories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                <Tooltip label={t("common.newCategory") ?? undefined}>
-                  <a
-                    href="#"
-                    style={{ marginLeft: 6 }}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      void handleNewCategory()
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Select
+                    id="category"
+                    value=""
+                    onValueChange={(v) => {
+                      if (v) void addToCategory(v)
                     }}
-                  >
-                    <i className="fas fa-plus" />
-                  </a>
-                </Tooltip>
+                    items={[
+                      { value: "", label: t("common.NoCategory") },
+                      ...staticCategories.map((c) => ({ value: c.id, label: c.name })),
+                    ]}
+                    size="md"
+                    style={{ width: 200, marginTop: 0, marginBottom: 0 }}
+                  />
+                  <Tooltip label={t("common.newCategory") ?? undefined}>
+                    <IconButton
+                      variant="favtag-btn"
+                      icon={<FaPlus />}
+                      size={25}
+                      style={{ margin: 0 }}
+                      onClick={() => void handleNewCategory()}
+                      aria-label={t("common.newCategory") ?? undefined}
+                    />
+                  </Tooltip>
+                </div>
 
                 <h2>{t("reader.rating")}</h2>
                 <RatingWidget

@@ -100,6 +100,7 @@ export function IconButtonWithTooltip({
   style,
   anchor = "cursor",
   wrapperStyle,
+  closeDelay,
   ...props
 }: {
   variant?: ButtonVariant
@@ -113,6 +114,8 @@ export function IconButtonWithTooltip({
   /** Forwarded to `Tooltip`'s `wrapperStyle` — its hover-trigger span defaults to
    * `alignItems: stretch`, overriding a caller's outer `alignItems: center`. */
   wrapperStyle?: React.CSSProperties
+  /** Forwarded to `Tooltip`; set 0 to hide immediately on mouse leave. */
+  closeDelay?: number
 } & Omit<ComponentProps<typeof BaseButton>, "className" | "children" | "title">) {
   return (
     <Tooltip
@@ -124,6 +127,7 @@ export function IconButtonWithTooltip({
       }
       anchor={anchor}
       wrapperStyle={wrapperStyle}
+      closeDelay={closeDelay}
     >
       <IconButton variant={variant} className={className} icon={icon} size={size} style={style} aria-label={typeof title === "string" ? title : undefined} {...props} />
     </Tooltip>

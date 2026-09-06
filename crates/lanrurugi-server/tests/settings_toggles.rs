@@ -118,6 +118,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,

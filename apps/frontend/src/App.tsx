@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
 import { NotFoundPage } from "./components/Display/NotFoundPage"
@@ -24,6 +24,14 @@ import { TankoubonEdit } from "./pages/TankoubonEdit"
 import { Upload } from "./pages/Upload"
 import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
 
+/** Forces Reader to remount when the archive id changes, so per-archive in-memory image/blob
+ * state (including the displayed fallback bitmap and progress-derived current page) never leaks
+ * from one manga into the next. */
+function ReaderWithKey() {
+  const { archiveId } = useParams()
+  return <Reader key={archiveId ?? "new"} />
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -42,7 +50,7 @@ export function App() {
           path="/reader/:archiveId"
           element={
             <AllowGuest>
-              <Reader />
+              <ReaderWithKey />
             </AllowGuest>
           }
         />

@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use lanrurugi_llm::{tool_chat, Message, ToolChatResponse};
+use lanrurugi_llm::{LlmClient, Message, ToolChatResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -76,22 +76,6 @@ pub(super) async fn analyze_login(
     }
 }
 
-fn system_prompt() -> String {
-    "你是 LANrurugi 项目的插件开发助手，现在的任务不是生成代码，而是判断一个网站的真实登录机制需要\
-     哪些凭据字段。请调用 fetch_page 工具抓取用户提供的登录页或 API 文档地址（可以多次调用、可以跟踪\
-     其中出现的其他相关链接），根据真实页面/文档内容判断该网站实际支持的登录方式：\n\
-     - 如果同时支持多种方式（例如既有账号密码表单登录接口，也有 API key/token 认证接口），\
-       优先选择 token/API key 方式，其次才是 cookie 值，账号密码登录的优先级最低——因为 token/API key \
-       通常更稳定、不易触发人机验证或风控。\n\
-     - 只有明确判断该网站只支持账号密码登录，才应该输出账号+密码两个字段。\n\
-     - 只有明确判断该网站是纯 cookie 认证（例如需要用户从浏览器手动复制一个 session cookie 值）时，\
-       才输出一个 cookie 字段。\n\n\
-     最终只输出一个 JSON 数组本身（不要用 markdown 代码块包裹，不要任何解释性文字），数组每一项形如 \
-     {\"name\": \"字段标识符（英文小写下划线命名，如 api_key/account/secret/cookie）\", \
-     \"description\": \"给用户看的字段说明（用中文）\", \"required\": true}。字段数量应该精简，\
-     只包含真正需要用户填写的凭据本身，不要包含额外的可选配置项。".to_string()
-}
-
 fn user_prompt(req: &AnalyzeLoginRequest) -> String {
     format!(
         "登录页或 API 文档地址（请先用 fetch_page 抓取查看真实内容）：{}",
@@ -112,7 +96,7 @@ async fn run_analysis(
     req: &AnalyzeLoginRequest,
 ) -> Result<Vec<LoginParameter>, AnalyzeError> {
     let mut messages = vec![
-        Message::system(system_prompt()),
+        Message::system(crate::llm_prompts::plugin_wizard_analyze_login_system()),
         Message::user(user_prompt(req)),
     ];
     let tools = vec![fetch_page_tool()];
@@ -122,7 +106,10 @@ async fn run_analysis(
         // `response_format: json_object` and `tools` as mutually exclusive on the same request —
         // the hard JSON guarantee only kicks in once the model has stopped requesting fetch_page
         // (see the reformat fallback below).
-        let response = tool_chat(&state.redis.config, &messages, &tools, 0.2, 1000, false)
+        let response = state
+            .redis
+            .config
+            .tool_chat(&messages, &tools, 0.2, 1000, false)
             .await
             .map_err(AnalyzeError::LlmUnavailable)?;
 
@@ -141,7 +128,10 @@ async fn run_analysis(
                 // low risk of semantic drift since no new information enters the conversation.
                 messages.push(Message::assistant(content));
                 messages.push(Message::user(REFORMAT_AS_JSON_PROMPT.to_string()));
-                let reformatted = tool_chat(&state.redis.config, &messages, &[], 0.0, 1000, true)
+                let reformatted = state
+                    .redis
+                    .config
+                    .tool_chat(&messages, &[], 0.0, 1000, true)
                     .await
                     .map_err(AnalyzeError::LlmUnavailable)?;
                 return match reformatted {

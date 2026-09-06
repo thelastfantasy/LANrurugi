@@ -27,6 +27,8 @@ export interface ArchiveMetadata {
   archive_count: number | null
   /** Whether a sidecar `.patch.zip` exists; not present on a synthetic Tankoubon entry. */
   has_patch?: boolean
+  /** LANrurugi-only: whether an Archive split suggestion exists for this archive. */
+  has_split_suggestion?: boolean
 }
 
 /** `DELETE /archives` — per-id outcome of a batch delete. */
@@ -112,6 +114,12 @@ export interface Settings {
   stampautobookmark: boolean
   /** Removing a page's last stamp also removes its bookmark (only while `stampautobookmark` is on). */
   stampautounbookmark: boolean
+  /** Master switch for the native "Subfolders to Tankoubons" maintenance action. */
+  subfolders_to_tankoubons: boolean
+  /** Master switch for archive split suggestions; disabled in the UI without an LLM key. */
+  archive_split_suggestions_enabled: boolean
+  /** Whether a successful split deletes the original archive/record. */
+  archive_split_delete_original_enabled: boolean
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   enableresize: boolean
@@ -400,6 +408,15 @@ export interface ArchiveEntryInfo {
   name: string
   is_regular_file: boolean
   is_page: boolean
+}
+
+
+/** `GET /archives/{id}/split-tree` — viewer-only recursive archive tree. Nested archives are
+ * expanded into synthetic directories, so the returned `entries` can be rendered by the same
+ * tree component used by the comparison UI. */
+export interface ArchiveSplitTreeResponse {
+  archive_name: string
+  entries: ArchiveEntryInfo[]
 }
 
 /** One page with no counterpart on the other side, plus a default anchor for where a patch

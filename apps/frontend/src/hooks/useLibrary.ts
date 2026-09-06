@@ -63,7 +63,9 @@ export function useLibrary() {
   const settings = useSettings();
   const stats = useStats(2);
   const queryClient = useQueryClient();
-  const loggedIn = loginStatus.data?.logged_in ?? true;
+  // Same strict gate as `Layout`: while login status is unresolved/errored the page must not
+  // render admin-only library chrome on top of guest-scoped content.
+  const loggedIn = loginStatus.data?.logged_in === true;
 
   const urlParams = useMemo(
     () => new URLSearchParams(location.search),

@@ -174,6 +174,16 @@ input[type="checkbox"]:disabled {
   100% { background-position: 0 50%; }
 }
 
+/* Reader page transitions: when the paginator has already moved to the next page but its image is
+ * still downloading, the previous page's bitmap would otherwise sit there fully sharp while the
+ * page number claims a different page has loaded. Blur it slightly for the short loading window so
+ * the UI reads as "transitioning" rather than "the new page is broken/identical". */
+#i3.loading #img,
+#i3.loading #img_doublepage {
+  filter: blur(8px);
+  transition: filter 150ms ease;
+}
+
 /* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
  * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
 @keyframes lrr-indeterminate-bar {

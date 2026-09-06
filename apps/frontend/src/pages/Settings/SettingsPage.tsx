@@ -76,10 +76,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [authprogress, setAuthprogress] = useState(settings.authprogress)
   const [stampautobookmark, setStampautobookmark] = useState(settings.stampautobookmark)
   const [stampautounbookmark, setStampautounbookmark] = useState(settings.stampautounbookmark)
+  const [subfoldersToTankoubons, setSubfoldersToTankoubons] = useState(settings.subfolders_to_tankoubons)
+  const [archiveSplitSuggestionsEnabled, setArchiveSplitSuggestionsEnabled] = useState(settings.archive_split_suggestions_enabled)
+  const [archiveSplitDeleteOriginalEnabled, setArchiveSplitDeleteOriginalEnabled] = useState(settings.archive_split_delete_original_enabled)
   const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
-  const [saveTick, setSaveTick] = useState(0)
   const [keyInput, setKeyInput] = useState("")
 
   const [newPassword, setNewPassword] = useState("")
@@ -116,6 +118,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       authprogress !== settings.authprogress ||
       stampautobookmark !== settings.stampautobookmark ||
       stampautounbookmark !== settings.stampautounbookmark ||
+      subfoldersToTankoubons !== settings.subfolders_to_tankoubons ||
+      archiveSplitSuggestionsEnabled !== settings.archive_split_suggestions_enabled ||
+      archiveSplitDeleteOriginalEnabled !== settings.archive_split_delete_original_enabled ||
       guestmode !== settings.guestmode ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
       refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
@@ -135,7 +140,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recommendprecision !== settings.recommendprecision,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
-      localprogress, authprogress, stampautobookmark, stampautounbookmark, guestmode, accessTokenLifetimeSecs,
+      localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
+      archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
+      guestmode, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
@@ -166,6 +173,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       authprogress,
       stampautobookmark,
       stampautounbookmark,
+      subfolders_to_tankoubons: subfoldersToTankoubons,
+      archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
+      archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
       guestmode,
       access_token_lifetime_secs: accessTokenLifetimeSecs,
       refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
@@ -186,7 +196,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
     setKeyInput("")
-    setSaveTick((n) => n + 1)
     toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
   }
 
@@ -244,7 +253,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       >
         <ul className="collapsible extensible with-right-caret">
           <GlobalSection
-            key={saveTick}
             htmltitle={htmltitle}
             setHtmltitle={setHtmltitle}
             motd={motd}
@@ -267,6 +275,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setStampautobookmark={setStampautobookmark}
             stampautounbookmark={stampautounbookmark}
             setStampautounbookmark={setStampautounbookmark}
+            subfoldersToTankoubons={subfoldersToTankoubons}
+            setSubfoldersToTankoubons={setSubfoldersToTankoubons}
+            archiveSplitSuggestionsEnabled={archiveSplitSuggestionsEnabled}
+            setArchiveSplitSuggestionsEnabled={setArchiveSplitSuggestionsEnabled}
+            archiveSplitDeleteOriginalEnabled={archiveSplitDeleteOriginalEnabled}
+            setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
             guestmode={guestmode}
             setGuestmode={setGuestmode}
             newbadgemode={newbadgemode}

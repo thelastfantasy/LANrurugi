@@ -16,6 +16,7 @@ import {
   ApiError,
   clearLastRefreshTimestamp,
   fetchJson,
+  fetchLoginStatusWithRefresh,
   fetchText,
   sendForm,
   sendJson,
@@ -32,6 +33,7 @@ import type {
   ApiTokenCreateResponse,
   ArchiveFilesResponse,
   ArchiveMetadata,
+  ArchiveSplitTreeResponse,
   BatchDeleteArchivesResponse,
   BookmarkedPageResponse,
   BookmarkSort,
@@ -348,6 +350,72 @@ export function useSetArchiveThumbnail(id: string) {
 }
 
 /** Deletes the sidecar `.patch.zip` and clears the archive's `has_patch` flag. */
+export interface ArchiveSplitSuggestionGroup {
+  zip_name: string
+  description: string
+  source_dirs: string[]
+  source_files: string[]
+}
+
+export interface ArchiveSplitSuggestion {
+  archive_id: string
+  suggestion_version: number
+  created_at: number
+  split_groups: ArchiveSplitSuggestionGroup[]
+  warnings: string[]
+}
+
+export function useArchiveSplitSuggestion(id: string | null) {
+  return useQuery({
+    queryKey: ["archive-split-suggestion", id],
+    queryFn: () => fetchJson<{ suggestion: ArchiveSplitSuggestion }>(`/archives/${id}/split-suggestion`),
+    enabled: id !== null,
+    retry: false,
+  })
+}
+
+export function useArchiveSplitTree(id: string | null) {
+  return useQuery({
+    queryKey: ["archive-split-tree", id],
+    queryFn: () => fetchJson<ArchiveSplitTreeResponse>(`/archives/${id}/split-tree`),
+    enabled: id !== null,
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
+export function useAnalyzeArchiveSplit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => sendJson<{ operation: string; success: number; suggestion: ArchiveSplitSuggestion | null }>(
+      "POST",
+      `/archives/${id}/split-suggestion`,
+    ),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion", id] })
+      queryClient.invalidateQueries({ queryKey: ["archive", id] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
+    },
+  })
+}
+
+export function useExecuteArchiveSplit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, deleteOriginal }: { id: string; deleteOriginal?: boolean }) =>
+      sendJson<{ job_id: string; success: number }>(
+        "POST",
+        `/archives/${id}/split/execute${deleteOriginal !== undefined ? `?delete_original=${deleteOriginal}` : ""}`,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
+      queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion"] })
+    },
+  })
+}
+
 export function useDeletePatch(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -656,7 +724,7 @@ export function useLogout() {
 export function useLoginStatus() {
   return useQuery({
     queryKey: ["login-status"],
-    queryFn: () => fetchJson<LoginStatus>("/login/status"),
+    queryFn: () => fetchLoginStatusWithRefresh<LoginStatus>(),
   })
 }
 
@@ -923,8 +991,10 @@ export function useBookmarksForTankoubon(tankId: string | null) {
 }
 
 /** Paginated `/bookmarks` listing; `sort`/`q` are in the query key. Caller must debounce `q` —
- * this hook does not. */
-export function useInfiniteBookmarks(sort: BookmarkSort, q?: string) {
+ * this hook does not. `enabled` lets guest-visible pages avoid fetching the admin-only aggregate
+ * endpoint (the homepage carousel used to call it even for guests, which paired with the admin
+ * nav shown during a slow login-status lookup to expose bookmarks to non-admin callers). */
+export function useInfiniteBookmarks(sort: BookmarkSort, q?: string, enabled = true) {
   return useInfiniteQuery({
     queryKey: ["bookmarks", "page", sort, q ?? ""],
     queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
@@ -935,6 +1005,7 @@ export function useInfiniteBookmarks(sort: BookmarkSort, q?: string) {
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: BookmarksPageResponse) => last.next_cursor ?? undefined,
+    enabled,
   })
 }
 

@@ -1,3 +1,5 @@
+import axios from "axios"
+
 import { ApiError, ValidationError } from "./apiError"
 import { queryClient } from "./queryClient"
 import type { JobStatus } from "./types"
@@ -36,30 +38,38 @@ export function clearLastRefreshTimestamp() {
 /** Backend rotates the refresh cookie on every use (single-use + reuse detection) — two tabs
  * presenting the *same* stale cookie is forgiven server-side within a short grace window, but two
  * tabs still don't need to both hit the network. `navigator.locks` serializes actual refresh
- * attempts across every same-origin tab; browsers without it (none in this project's target set)
- * would just fall back to each tab refreshing independently, same as before this existed. */
+ * attempts across every same-origin tab; browsers/WebViews without it (some mobile WebViews — the
+ * live symptom reported from a phone, 2026-09-04) must not make the whole login-status query
+ * reject, so this falls back to each tab refreshing independently, the same pre-locks behavior. */
 async function tryRefreshOnce(): Promise<RefreshOutcome> {
   if (refreshInFlight) return refreshInFlight
 
   const startedAt = Date.now()
-  refreshInFlight = navigator.locks
-    .request("lanrurugi-token-refresh", async (): Promise<RefreshOutcome> => {
-      // Another tab may have already refreshed while this one was waiting for the lock — if so,
-      // its result covers this request too, and presenting the now-rotated-out cookie again would
-      // just burn a grace-window slot for nothing.
-      const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
-      if (lastRefreshAt > startedAt) return "ok"
+  const attemptRefresh = async (): Promise<RefreshOutcome> => {
+    // Another tab may have already refreshed while this one was waiting for the lock — if so,
+    // its result covers this request too, and presenting the now-rotated-out cookie again would
+    // just burn a grace-window slot for nothing.
+    const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
+    if (lastRefreshAt > startedAt) return "ok"
 
-      return fetch("/api/token/refresh", { method: "POST" })
-        .then((r): RefreshOutcome => {
-          if (r.ok) localStorage.setItem(LAST_REFRESH_AT_KEY, String(Date.now()))
-          return r.ok ? "ok" : "rejected"
-        })
-        .catch((): RefreshOutcome => "network-error")
-    })
-    .finally(() => {
-      refreshInFlight = null
-    })
+    return fetch("/api/token/refresh", { method: "POST" })
+      .then((r): RefreshOutcome => {
+        if (r.ok) localStorage.setItem(LAST_REFRESH_AT_KEY, String(Date.now()))
+        return r.ok ? "ok" : "rejected"
+      })
+      .catch((): RefreshOutcome => "network-error")
+  }
+
+  const withLock = typeof navigator !== "undefined" && typeof navigator.locks?.request === "function"
+  const run =
+    withLock
+      ? Promise.resolve()
+          .then(() => navigator.locks.request("lanrurugi-token-refresh", attemptRefresh))
+          .catch(() => attemptRefresh())
+      : attemptRefresh()
+  refreshInFlight = run.finally(() => {
+    refreshInFlight = null
+  })
   return refreshInFlight
 }
 
@@ -136,6 +146,50 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
   }
 
   return (await response.json()) as T
+}
+
+/** `GET /login/status` itself is on every role's allow-list (including `guest_visitor` and
+ * `anonymous`) so `RequireAuth`/`RequireGuest`/`AllowGuest` can resolve *before* any protected
+ * route is ever hit — which means an expired admin's access token cookie produces a plain 200
+ * `{logged_in: false}` here, never a 401. The 401-only refresh path above (`fetchJson` etc.) is
+ * consequently never reached for this specific request, and `RequireAuth` would otherwise bounce
+ * a still-has-a-valid-refresh-token admin straight to `/login` — confirmed live via issue #99's
+ * own repro (guest mode on, access token expired, refresh token still valid: `/login/status`
+ * returned `logged_in:false` directly, no 401/403 ever crossed this function). Only worth
+ * attempting when `guest_mode_enabled` is true — with guest mode off, an unauthenticated caller is
+ * unambiguously logged out and a refresh attempt would just be a wasted round trip. */
+export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean; guest_mode_enabled: boolean }>(): Promise<T> {
+  const status = await fetchJson<T>("/login/status")
+  if (status.logged_in || !status.guest_mode_enabled) return status
+  // A refresh failure must never make the login-status query itself reject. A rejected query turns
+  // `RequireAuth` into an optimistic "keep showing admin UI" forever on browsers where the refresh
+  // path can throw (e.g. a mobile WebView without `navigator.locks`). Returning the already-known
+  // `logged_in: false` lets the normal route guards treat the caller as the guest they currently
+  // appear to be, while a supported browser still silently refreshes a valid session below.
+  let outcome: RefreshOutcome
+  try {
+    outcome = await tryRefreshWithRetry()
+  } catch {
+    return status
+  }
+  if (outcome !== "ok") return status
+  const refreshed = await fetchJson<T>("/login/status")
+  // The identity this tab was rendering as just changed from guest to admin. Every other query
+  // already in the cache (search results, categories, jobs, ...) may have been fetched *while*
+  // this tab still looked like a guest — e.g. `search` scoped to guest-visible archives only —
+  // and none of them depend on `login-status` in their own `queryKey`, so nothing else would
+  // otherwise notice this transition and refetch. Left alone, the UI tears: an admin-only nav
+  // (driven by this query) over guest-scoped content (driven by those stale ones) — confirmed
+  // live via issue #99's own repro. Not scoped to specific keys since the set of queries whose
+  // results vary by caller identity isn't closed (a plugin can add new admin-only ones); a full
+  // invalidation is the only invariant that can't silently rot as more queries are added.
+  // Fire-and-forget: awaiting the full invalidation here makes `login-status` itself wait for every
+  // identity-dependent query (search, settings, bookmarks, ...) to refetch before the admin UI is
+  // allowed to render, which is far too slow on mobile. The strict `RequireAuth`/`Layout` changes
+  // already stop the admin chrome from appearing before login-status settles; the invalidation
+  // then brings the remaining queries over to the admin view asynchronously.
+  if (refreshed.logged_in) void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "login-status" })
+  return refreshed
 }
 
 export async function fetchText(path: string, retried = false): Promise<string> {
@@ -250,6 +304,50 @@ export async function sendForm<T>(
   }
 
   return (await response.json()) as T
+}
+
+/** Multipart upload with byte-level progress — `fetch` has no upload-progress event at all, so
+ * this is the one client function backed by axios (`XMLHttpRequest` under the hood) instead.
+ * Same 401-refresh-then-retry-once shape as {@link sendForm}. */
+export async function sendFormDataWithProgress<T>(
+  method: "PUT" | "POST",
+  path: string,
+  formData: FormData,
+  onProgress?: (loaded: number, total: number) => void,
+  retried = false,
+): Promise<T> {
+  try {
+    const response = await axios.request<T>({
+      url: `/api${path}`,
+      method,
+      data: formData,
+      onUploadProgress: (event) => {
+        if (onProgress && event.total !== undefined) onProgress(event.loaded, event.total)
+      },
+      validateStatus: () => true,
+    })
+
+    if (response.status < 200 || response.status >= 300) {
+      if (response.status === 401) {
+        if (shouldAttemptRefresh(path, retried)) {
+          const outcome = await tryRefreshWithRetry()
+          if (outcome === "ok") return sendFormDataWithProgress<T>(method, path, formData, onProgress, true)
+          if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
+        } else {
+          invalidateLoginStatus()
+        }
+      }
+      const body = response.data as { error?: string; detail?: string; raw_output?: string } | undefined
+      const extra = body?.detail ?? body?.raw_output
+      const message = body?.error ? (extra ? `${body.error}: ${extra}` : body.error) : `Request to ${path} failed with ${response.status}`
+      throw new ApiError(response.status, message)
+    }
+
+    return response.data
+  } catch (err) {
+    if (err instanceof ApiError) throw err
+    throw new ApiError(0, `Request to ${path} failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 export async function pollJob(jobId: string): Promise<JobStatus> {

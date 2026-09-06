@@ -35,6 +35,67 @@ import { CarouselCard } from "./CarouselCard";
 import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
 import { type CarouselMode } from "./types";
 
+/** A `Lenis` instance mirrored into both a ref (for event handlers — `onClick`'s own `scrollTo`
+ * calls need a value that's always current without re-subscribing) and state (a plain ref write
+ * doesn't trigger a re-render, but `useCarouselOverflow` needs to know exactly when this component
+ * gets a new instance, or loses one, so it can (re)subscribe its own resize/scroll listeners).
+ * Returns `[ref, instance, setter]` — pass `setter` to whatever creates/destroys the real `Lenis`
+ * (a callback ref, or `SortableList`'s own `onScroller`). */
+function useLenisMirror(): [React.RefObject<Lenis | null>, Lenis | null, (lenis: Lenis | null) => void] {
+  const ref = useRef<Lenis | null>(null);
+  const [instance, setInstance] = useState<Lenis | null>(null);
+  const set = useCallback((lenis: Lenis | null) => {
+    ref.current = lenis;
+    setInstance(lenis);
+  }, []);
+  return [ref, instance, set];
+}
+
+/** Whether a horizontally-scrolling container can currently scroll left/right — re-measured on
+ * every resize of either the container itself or its content (`ResizeObserver`, not a fixed
+ * item-count threshold), so a narrow phone viewport shows the arrows past 2 cards while a wide
+ * desktop one only shows them past 5+, and rotating/resizing the window re-evaluates live rather
+ * than needing a reload. Also tracks the live scroll position so, e.g., the left arrow disappears
+ * once already scrolled all the way there instead of staying visible but inert.
+ *
+ * Takes the `Lenis` instance rather than a raw element ref: both carousels already expose theirs
+ * (`lenisRef`/`scrollerRef`) for the arrow buttons' own `scrollTo` calls, and `lenis.options.wrapper`
+ * is guaranteed to be *whatever node Lenis is currently actually bound to* — reusing it here means
+ * this hook can never independently drift out of sync with the scroll behavior it's describing. */
+const NO_OVERFLOW = { canScrollLeft: false, canScrollRight: false };
+
+/** `itemsSignal` is only ever read for its identity, never its contents — it exists purely to
+ * force this effect to re-run (and thus re-`observe` the container's *current* children) when the
+ * item set changes without `el` itself changing, e.g. switching carousel modes in place. Without
+ * it, children added after first mount are never individually observed, so a resize caused purely
+ * by items being added/removed (as opposed to an existing child's own box changing) can be missed. */
+function useCarouselOverflow(lenis: Lenis | null, itemsSignal: unknown) {
+  const [state, setState] = useState(NO_OVERFLOW);
+  const el = lenis?.options.wrapper instanceof HTMLElement ? lenis.options.wrapper : null;
+
+  useEffect(() => {
+    if (!el) return;
+    const EPSILON = 1; // sub-pixel rounding shouldn't flicker the arrows in and out
+    const measure = () => {
+      setState({
+        canScrollLeft: el.scrollLeft > EPSILON,
+        canScrollRight: el.scrollLeft + el.clientWidth < el.scrollWidth - EPSILON,
+      });
+    };
+    measure();
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(el);
+    for (const child of el.children) resizeObserver.observe(child);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      resizeObserver.disconnect();
+      el.removeEventListener("scroll", measure);
+    };
+  }, [el, itemsSignal]);
+
+  return el ? state : NO_OVERFLOW;
+}
+
 /** One icon component per `CarouselMode` — moved out of `lib/constants.ts` (a plain `.ts` file,
  * can't hold JSX) since this is the only consumer. Was previously a `Record<CarouselMode,
  * string>` of literal emoji characters fed into `` `fa ${...}` `` — a real, previously-unnoticed
@@ -104,11 +165,49 @@ export function RecentlyAddedCarousel({
       "ondeck",
   );
   const mode = !loggedIn && storedMode === "bookmark" ? "ondeck" : storedMode;
-  const carouselRef = useRef<HTMLDivElement>(null);
-  const lenisRef = useRef<Lenis | null>(null);
+  const carouselRef = useRef<HTMLDivElement | null>(null);
+  const [lenisRef, lenisInstance, setLenisInstance] = useLenisMirror();
+  // A callback ref (not a plain `useRef` + `useEffect([items])`) because this div's own mount
+  // state doesn't track `items` at all — switching into/out of selection mode (`multiSelect`)
+  // unmounts and remounts this exact div without `items` ever changing, which previously left
+  // `lenisRef.current` bound to a detached, since-orphaned node while the real one went
+  // unbound — every arrow click was silently clamped to a stale `limit: 0`. A callback ref fires
+  // exactly on this node's own mount/unmount, whatever the reason, so it can never miss one.
+  const carouselCallbackRef = useCallback((el: HTMLDivElement | null) => {
+    lenisRef.current?.destroy();
+    carouselRef.current = el;
+    if (!el) {
+      setLenisInstance(null);
+      return;
+    }
+    setLenisInstance(
+      new Lenis({
+        wrapper: el,
+        content: el,
+        orientation: "horizontal",
+        gestureOrientation: "both",
+        wheelMultiplier: 4.5,
+        lerp: 0.1,
+        autoRaf: true,
+      }),
+    );
+  }, [lenisRef, setLenisInstance]);
   const stepSlide = useCallback(() => {
     const firstChild = carouselRef.current
       ?.firstElementChild as HTMLElement | null;
+    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236;
+  }, []);
+  // Selection mode renders its own scroll container inside `SortableList` rather than the
+  // `carouselRef` div above, so prev/next arrows there need their own ref pair.
+  const selectionListRef = useRef<HTMLDivElement>(null);
+  const [selectionLenisRef, selectionLenisInstance, setSelectionLenisInstance] = useLenisMirror();
+  const selectionOverflow = useCarouselOverflow(selectionLenisInstance, selectedIds);
+  const stepSelectionSlide = useCallback(() => {
+    // `selectionListRef` > `SortableList`'s own scroll container > one `SortableRow` wrapper
+    // div > the `.carousel-slide` this component's own `renderItem` returns.
+    const firstChild = selectionListRef.current?.querySelector(
+      ":scope > div > div > .carousel-slide",
+    ) as HTMLElement | null;
     return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236;
   }, []);
   const handleBookmarkWheelPassthrough = useCallback(
@@ -187,7 +286,7 @@ export function RecentlyAddedCarousel({
     queryFn: () => fetchJson<SearchResponse>(path),
     enabled: isOpen && !multiSelect && !isBookmarkMode,
   });
-  const bookmarksQuery = useInfiniteBookmarks("bookmarked_at");
+  const bookmarksQuery = useInfiniteBookmarks("bookmarked_at", undefined, loggedIn);
   const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? [];
   const items: ArchiveMetadata[] = useMemo(
     () =>
@@ -201,27 +300,24 @@ export function RecentlyAddedCarousel({
   const loading = isBookmarkMode
     ? bookmarksQuery.isLoading
     : carouselQuery.isLoading;
+  const carouselOverflow = useCarouselOverflow(lenisInstance, items);
 
   // Lenis drives real `scrollLeft` on `el` (not a `transform`), so native `scroll` events still
-  // fire — `BookmarkedArchiveHoverCard`'s `[data-scroll-container]` listener relies on this.
+  // fire — `BookmarkedArchiveHoverCard`'s `[data-scroll-container]` listener relies on this. Its
+  // actual creation/teardown lives in `carouselCallbackRef` above, not a `useEffect` here — see
+  // that ref's own comment for why.
+
+  // Lenis's own `ResizeObserver` watches `wrapper`/`content`'s *own* border-box — here they're
+  // the same flex element, whose own size never changes as children come and go (`overflow:
+  // auto` keeps its box fixed size; only its *scrollWidth* grows). Switching carousel modes
+  // (e.g. "新档案", 5 items → "展板", 45 items) without this div ever unmounting therefore left
+  // Lenis's cached `dimensions.scrollWidth`/`limit` stuck at the old, smaller mode's value —
+  // confirmed live: `lenis.limit` stayed `21` (the 5-item mode's real max-scroll) after switching
+  // back to a 45-item mode whose real `scrollWidth - clientWidth` was `9461`. Lenis does expose a
+  // manual `resize()` for exactly this gap; call it whenever the actual item set changes.
   useEffect(() => {
-    const el = carouselRef.current;
-    if (!el || lenisRef.current) return;
-    const lenis = new Lenis({
-      wrapper: el,
-      content: el,
-      orientation: "horizontal",
-      gestureOrientation: "both",
-      wheelMultiplier: 4.5,
-      lerp: 0.1,
-      autoRaf: true,
-    });
-    lenisRef.current = lenis;
-    return () => {
-      lenis.destroy();
-      lenisRef.current = null;
-    };
-  }, [items]);
+    lenisRef.current?.resize();
+  }, [items, lenisRef]);
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t("library.onDeck"),
@@ -390,12 +486,13 @@ export function RecentlyAddedCarousel({
                 </div>
               </div>
             ) : (
-              <div style={{ padding: "8px 0" }}>
+              <div style={{ padding: "8px 0", position: "relative" }} ref={selectionListRef}>
                 <SortableList
                   items={selectedIds}
                   getId={(id) => id}
                   direction="horizontal"
                   onReorder={onReorderSelection}
+                  onScroller={setSelectionLenisInstance}
                   renderItem={(id, dragHandleProps) => (
                     <div
                       {...dragHandleProps.attributes}
@@ -419,6 +516,51 @@ export function RecentlyAddedCarousel({
                     </div>
                   )}
                 />
+                {selectionOverflow.canScrollLeft && (
+                  <IconButton
+                    className="carousel-prev"
+                    icon={<FaChevronLeft size={24} />}
+                    size={32}
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      zIndex: 20,
+                    }}
+                    onClick={() => {
+                      const lenis = selectionLenisRef.current;
+                      if (!lenis) return;
+                      // Re-measure right before scrolling — Lenis's own `ResizeObserver`-driven
+                      // remeasure can still be pending (see `SortableList`'s own `resize()` call
+                      // for the full story) in the narrow window right after this arrow first
+                      // appears, so a `scrollTo` immediately after selecting items could otherwise
+                      // clamp against a stale, too-small `limit`.
+                      lenis.resize();
+                      lenis.scrollTo(lenis.targetScroll - stepSelectionSlide());
+                    }}
+                  />
+                )}
+                {selectionOverflow.canScrollRight && (
+                  <IconButton
+                    className="carousel-next"
+                    icon={<FaChevronRight size={24} />}
+                    size={32}
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      zIndex: 20,
+                    }}
+                    onClick={() => {
+                      const lenis = selectionLenisRef.current;
+                      if (!lenis) return;
+                      lenis.resize();
+                      lenis.scrollTo(lenis.targetScroll + stepSelectionSlide());
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -460,7 +602,7 @@ export function RecentlyAddedCarousel({
             ) : (
               <div style={{ position: "relative" }}>
                 <div
-                  ref={carouselRef}
+                  ref={carouselCallbackRef}
                   className="hide-scrollbar"
                   data-scroll-container
                   style={{
@@ -503,38 +645,48 @@ export function RecentlyAddedCarousel({
                         </div>
                       ))}
                 </div>
-                <IconButton
-                  className="carousel-prev"
-                  icon={<FaChevronLeft size={24} />}
-                  size={32}
-                  style={{
-                    position: "absolute",
-                    left: 0,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    zIndex: 20,
-                  }}
-                  onClick={() => {
-                    const lenis = lenisRef.current;
-                    if (lenis) lenis.scrollTo(lenis.targetScroll - stepSlide());
-                  }}
-                />
-                <IconButton
-                  className="carousel-next"
-                  icon={<FaChevronRight size={24} />}
-                  size={32}
-                  style={{
-                    position: "absolute",
-                    right: 0,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    zIndex: 20,
-                  }}
-                  onClick={() => {
-                    const lenis = lenisRef.current;
-                    if (lenis) lenis.scrollTo(lenis.targetScroll + stepSlide());
-                  }}
-                />
+                {carouselOverflow.canScrollLeft && (
+                  <IconButton
+                    className="carousel-prev"
+                    icon={<FaChevronLeft size={24} />}
+                    size={32}
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      zIndex: 20,
+                    }}
+                    onClick={() => {
+                      const lenis = lenisRef.current;
+                      if (!lenis) return;
+                      // Re-measure right before scrolling — see the selection-mode arrows' own
+                      // comment (identical race, same fix) for why this can't be skipped.
+                      lenis.resize();
+                      lenis.scrollTo(lenis.targetScroll - stepSlide());
+                    }}
+                  />
+                )}
+                {carouselOverflow.canScrollRight && (
+                  <IconButton
+                    className="carousel-next"
+                    icon={<FaChevronRight size={24} />}
+                    size={32}
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      zIndex: 20,
+                    }}
+                    onClick={() => {
+                      const lenis = lenisRef.current;
+                      if (!lenis) return;
+                      lenis.resize();
+                      lenis.scrollTo(lenis.targetScroll + stepSlide());
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>

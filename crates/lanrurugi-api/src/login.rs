@@ -13,18 +13,22 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use lanrurugi_core::{password, session};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::refresh_tokens::RotateOutcome;
 use serde::Deserialize;
 
+use crate::activity::record_manual;
 use crate::auth::load as load_auth_config;
 use crate::auth::LiveAuthConfig;
+use crate::auth_context::{AuthContext, AuthMethod};
 use crate::common::error;
+use crate::procedure::client_ip;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -127,13 +131,41 @@ fn cookie_headers(cookies: [String; 2]) -> axum::http::HeaderMap {
     headers
 }
 
-async fn login(State(state): State<AppState>, axum::Form(form): axum::Form<LoginForm>) -> Response {
+async fn login(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::Form(form): axum::Form<LoginForm>,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
     let auth = match load_auth_config(&state).await {
         Ok(a) => a,
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "login", e.to_string()),
     };
 
     if !password::verify_password(&form.password, &auth.password_hash) {
+        // Recorded as `Anonymous` — no session exists yet at this point, which is exactly the
+        // fact worth capturing: a run of these against one IP is a brute-force signal an operator
+        // would otherwise only see by trawling the raw request log.
+        record_manual(
+            &state,
+            Some(&AuthContext {
+                method: AuthMethod::Anonymous,
+                client_ip: ip,
+            }),
+            action_types::SESSION_LOGIN_FAILED,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("session".to_string()),
+            },
+            Outcome::Failure {
+                reason: "Wrong password.".to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return error(StatusCode::UNAUTHORIZED, "login", "Wrong password.");
     }
 
@@ -155,6 +187,28 @@ async fn login(State(state): State<AppState>, axum::Form(form): axum::Form<Login
     let refresh_cookie_value = format!("{}.{}", issued.record.token_id, issued.secret);
     let cookies = auth_cookies(&auth, &access_token, &refresh_cookie_value);
 
+    // `Session`, not the `Anonymous` context `require_api_key` actually attached to this request
+    // (this route is on `anonymous`'s own allow-list in `route_policy.csv`, since nobody could
+    // ever log in otherwise) — the password just verified above is exactly what makes this
+    // record's subject a real admin session, not the anonymous caller who made the request.
+    record_manual(
+        &state,
+        Some(&AuthContext {
+            method: AuthMethod::Session,
+            client_ip: ip,
+        }),
+        action_types::SESSION_LOGIN,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("session".to_string()),
+        },
+        Outcome::Success,
+        None,
+        None,
+    )
+    .await;
+
     (
         StatusCode::OK,
         cookie_headers(cookies),
@@ -167,7 +221,12 @@ async fn login(State(state): State<AppState>, axum::Form(form): axum::Form<Login
 /// token + rotated refresh cookie (see `lanrurugi_storage::refresh_tokens::rotate`'s own docs for
 /// the rotation/reuse-detection semantics). The frontend calls this transparently on a 401 from
 /// any other endpoint (`apps/frontend/src/api/client.ts`), before ever redirecting to `/login`.
-async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn refresh(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
     let auth = match load_auth_config(&state).await {
         Ok(a) => a,
         Err(e) => {
@@ -225,6 +284,29 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
             "Invalid or expired refresh token.",
         ),
         RotateOutcome::ReuseDetected => {
+            // A real security event, unlike a routine successful refresh (never recorded — see
+            // `action_types::SESSION_LOGIN`'s own docs on why) — an already-rotated-out refresh
+            // token being presented again means the family's credentials leaked somewhere, and
+            // `rotate` has already responded by burning every session derived from that login.
+            record_manual(
+                &state,
+                Some(&AuthContext {
+                    method: AuthMethod::Anonymous,
+                    client_ip: ip,
+                }),
+                action_types::SESSION_REFRESH_REUSE_DETECTED,
+                ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("session".to_string()),
+                },
+                Outcome::Failure {
+                    reason: "Refresh token reuse detected.".to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
             // The whole family was just burned by `rotate` itself — clear both cookies so the
             // browser doesn't keep presenting now-dead credentials on its next request.
             let cookies = cleared_auth_cookies(auth.force_secure_cookies);
@@ -316,7 +398,12 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
 /// would have triggered a silent refresh yet) must still get their refresh-token family actually
 /// revoked — an already-expired access token still proves genuine origin via its signature, which
 /// is all this needs.
-async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn logout(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
     let auth = load_auth_config(&state).await.ok();
     // Falls back to non-`Secure` clearing cookies if config couldn't even be loaded — an already
     //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
@@ -330,8 +417,32 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
             if let Some(family_id) =
                 session::family_id_ignoring_expiry(&auth.session_secret, &access_token)
             {
-                if let Err(e) = state.refresh_tokens.burn_family(&family_id).await {
-                    tracing::warn!(error = %e, "logout: failed to burn refresh-token family");
+                match state.refresh_tokens.burn_family(&family_id).await {
+                    // Only recorded once a real, resolvable session was actually torn down —
+                    // not for a bare `POST /logout` with no cookie or an unparseable one, which
+                    // never had a session to end in the first place.
+                    Ok(()) => {
+                        record_manual(
+                            &state,
+                            Some(&AuthContext {
+                                method: AuthMethod::Session,
+                                client_ip: ip,
+                            }),
+                            action_types::SESSION_LOGOUT,
+                            ActivityTarget {
+                                id: None,
+                                label: None,
+                                kind: Some("session".to_string()),
+                            },
+                            Outcome::Success,
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "logout: failed to burn refresh-token family")
+                    }
                 }
             }
         }

@@ -53,6 +53,8 @@ export function Plugins() {
       setResult(JSON.stringify(data, null, 2))
       await queryClient.invalidateQueries({ queryKey: ["archives"] })
       await queryClient.invalidateQueries({ queryKey: ["categories"] })
+      await queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+      await queryClient.invalidateQueries({ queryKey: ["search"] })
     } finally {
       setRunning(null)
     }
@@ -140,6 +142,21 @@ export function Plugins() {
                   className="stdbtn"
                   disabled={running === "subfolders-to-categories"}
                   onClick={() => void runScript("subfolders-to-categories")}
+                  value={t("plugins.run") ?? undefined}
+                />
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
+                <span>
+                  <b>{t("plugins.subfoldersToTankoubons")}</b>
+                  <br />
+                  {t("plugins.scanYourContentFolderToTankoubons")}
+                </span>
+                <input
+                  type="button"
+                  className="stdbtn"
+                  disabled={running === "subfolders-to-tankoubons" || settings.data?.subfolders_to_tankoubons === false}
+                  onClick={() => void runScript("subfolders-to-tankoubons")}
                   value={t("plugins.run") ?? undefined}
                 />
               </div>

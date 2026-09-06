@@ -13,12 +13,22 @@ set -e
 redis-server /etc/lanrurugi/redis.conf &
 REDIS_PID=$!
 
+redis_ready=false
 for i in $(seq 1 50); do
-  if redis-cli -p 16379 PING >/dev/null 2>&1; then
+  if [ "$(redis-cli -p 16379 PING 2>/dev/null)" = "PONG" ]; then
+    redis_ready=true
     break
   fi
   sleep 0.1
 done
+if [ "$redis_ready" != "true" ]; then
+  echo "Redis did not become ready in time" >&2
+  exit 1
+fi
+# Give Redis a moment to finish any post-load readiness work before the app connects. Without
+# this short pause the app's deadpool PING can race Redis's AOF/RDB load and exit with
+# "Redis PING did not return PONG" (observed on a dev-container recreate).
+sleep 0.2
 
 # `--log-dir /log` matches `compose.dev.yaml`'s own named volume mount at that exact path — left
 # unset, this falls back to `--log-dir`'s own default of `./log` (relative to `WORKDIR /workspace`,
@@ -57,7 +67,16 @@ trap shutdown TERM INT
 while kill -0 "$VITE_PID" 2>/dev/null && kill -0 "$APP_PID" 2>/dev/null && kill -0 "$REDIS_PID" 2>/dev/null; do
   sleep 1
 done
-wait "$VITE_PID" 2>/dev/null
+# A died child should end the container (so `restart: unless-stopped` can bring it back), not
+# leave Vite/Redis running forever while the healthcheck repeatedly reports unhealthy. Wait on the
+# specific PID that died so the container's exit status reflects the real failure.
+if ! kill -0 "$VITE_PID" 2>/dev/null; then
+  wait "$VITE_PID" 2>/dev/null
+elif ! kill -0 "$APP_PID" 2>/dev/null; then
+  wait "$APP_PID" 2>/dev/null
+else
+  wait "$REDIS_PID" 2>/dev/null
+fi
 EXIT_CODE=$?
 shutdown
 exit "$EXIT_CODE"

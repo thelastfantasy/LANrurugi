@@ -9,10 +9,11 @@
 //! implements what the verified contract actually has rather than inventing new GET methods.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
 use axum::Router;
@@ -38,6 +39,18 @@ const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
 /// (not a raster format) so it stays crisp at any page/viewport size without needing its own
 /// resize handling.
 const CORRUPTED_PAGE_PLACEHOLDER: &[u8] = include_bytes!("../assets/corrupted_page.svg");
+
+/// A small global gate for speculative reader-page requests (`priority=prefetch`). It does not
+/// replace `page_singleflight`'s own concurrency cap; it only reserves the majority of that
+/// capacity for real on-screen pages, so a prefetch burst cannot occupy every page-read worker and
+/// make the user's current page wait behind pages they have already paged past.
+static LOW_PRIORITY_PAGE_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn low_priority_page_semaphore() -> Arc<tokio::sync::Semaphore> {
+    LOW_PRIORITY_PAGE_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(8)))
+        .clone()
+}
 
 /// Computes whether an archive's "new" badge should be *shown*, applying `LRR_CONFIG`'s
 /// `newbadgemode` setting (see `settings::STRING_FIELDS`'s `newbadgemode` doc): `until_opened`
@@ -108,6 +121,9 @@ pub struct ArchiveMetadataJson {
     pub lastreadtime: u64,
     pub size: u64,
     pub toc: Vec<TocJson>,
+    /// LANrurugi-only: whether an Archive split suggestion exists for this archive.
+    #[serde(default)]
+    pub has_split_suggestion: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +146,7 @@ impl From<&Archive> for ArchiveMetadataJson {
             pagecount: a.pagecount,
             lastreadtime: a.lastreadtime,
             size: a.arcsize,
+            has_split_suggestion: false,
             toc: a
                 .toc
                 .iter()
@@ -155,6 +172,7 @@ impl From<Archive> for ArchiveMetadataJson {
             pagecount: a.pagecount,
             lastreadtime: a.lastreadtime,
             size: a.arcsize,
+            has_split_suggestion: false,
             summary: (!a.summary.is_empty()).then_some(a.summary),
             title: a.title,
             filename: a.name,
@@ -314,7 +332,7 @@ fn has_meaningful_tags(tags: &str) -> bool {
 /// this shared helper avoids by construction. A non-`GuestVisitor` caller (or no auth at all —
 /// `require_api_key` never actually calls a handler with `auth: None` today, but this stays
 /// permissive rather than assuming that invariant) is never denied here.
-async fn guest_scope_denies(
+pub(crate) async fn guest_scope_denies(
     state: &AppState,
     auth: Option<&crate::auth_context::AuthContext>,
     id: &lanrurugi_core::ids::ArchiveId,
@@ -401,7 +419,11 @@ async fn delete_one_archive(
                 },
                 lanrurugi_storage::activity::Outcome::Success,
                 None,
-                None,
+                // `label` above is just the archive's display title — the on-disk path is the
+                // one piece of information a "was this really deleted, and from where" audit
+                // actually needs, and it's gone from `state.repos.archives` the moment this
+                // delete commits, so this is its only surviving record.
+                Some(json!({ "file": archive.file })),
             )
             .await;
             // Best-effort, matching every other indexer call site in this file (`update_title_index`/
@@ -507,7 +529,7 @@ async fn delete_one_archive(
                     reason: e.to_string(),
                 },
                 None,
-                None,
+                Some(json!({ "file": archive.file })),
             )
             .await;
             DeleteOneOutcome::Error(e.to_string())
@@ -1324,6 +1346,7 @@ pub struct GetThumbnailParams {
 
 async fn get_archive_thumbnail(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<GetThumbnailParams>,
 ) -> Response {
@@ -1334,16 +1357,44 @@ async fn get_archive_thumbnail(
     if !is_valid_archive_id(id.as_str()) {
         return not_found("serve_thumbnail", "No archive ID specified.");
     }
+    // The same resource-level guest check every other per-archive read uses. Without this, an
+    // out-of-scope archive's cover/per-page thumbnail (whose URL is exposed by the admin-only
+    // bookmarks page and can be persisted in browser/image caches) remains reachable by a guest.
+    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+        return not_found("serve_thumbnail", format!("{id} does not exist."));
+    }
     let page = params.page.unwrap_or(0);
+    const THUMB_CACHE: &str = "private, max-age=3600";
     if let Some((content_type, bytes)) = read_thumbnail_from_disk(&state, id.as_str(), page).await {
-        return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+        return (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, THUMB_CACHE),
+            ],
+            bytes,
+        )
+            .into_response();
     }
     if let Some((content_type, bytes)) =
         regenerate_thumbnail_on_demand(&state, id.as_str(), page).await
     {
-        return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+        return (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, THUMB_CACHE),
+            ],
+            bytes,
+        )
+            .into_response();
     }
-    ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, THUMB_CACHE),
+        ],
+        PLACEHOLDER_THUMBNAIL,
+    )
+        .into_response()
 }
 
 fn thumbnail_disk_path(
@@ -1956,6 +2007,20 @@ pub struct PageParams {
     /// "serve the original bytes" (reader "view original" affordances and non-reader callers).
     #[serde(default)]
     optimize: Option<String>,
+    /// Frontend hint for the server-side reader page queue: `"1"`/`"current"` means this is the
+    /// page the reader is showing now (jump ahead), `"prefetch"`/`"0"` means it is only a
+    /// speculative preload (go behind real page requests). Absent means normal/default handling.
+    #[serde(default)]
+    priority: Option<String>,
+    /// `"tiny"`/`"preview"` asks for a much smaller WebP preview of this page. It is not used for
+    /// final display metadata (the UI deliberately does not show its size/dimensions); when the
+    /// full-resolution blob finishes loading, the reader swaps it in seamlessly.
+    #[serde(default)]
+    variant: Option<String>,
+    /// Optional device-derived short-edge cap for the full WebP variant (clamped server-side).
+    /// Lets a phone send its actual DPR/viewport-derived target instead of relying on UA alone.
+    #[serde(default)]
+    max_short_edge: Option<u32>,
 }
 
 /// `<temp_dir>/resize_page/<id>/<sha1(path)>_<threshold>_<quality>.webp` — matches legacy's own
@@ -1969,15 +2034,17 @@ fn resize_cache_path(
     id: &str,
     path: &str,
     threshold: i64,
+    max_short_edge: u32,
     quality: i64,
+    preview_upscale: bool,
 ) -> std::path::PathBuf {
     let mut hasher = Sha1::new();
     hasher.update(path.as_bytes());
     let path_hash = hex_encode(&hasher.finalize());
-    temp_dir
-        .join("resize_page")
-        .join(id)
-        .join(format!("{path_hash}_{threshold}_{quality}.webp"))
+    let suffix = if preview_upscale { "_up" } else { "" };
+    temp_dir.join("resize_page").join(id).join(format!(
+        "{path_hash}_{threshold}_{max_short_edge}_{quality}{suffix}.webp"
+    ))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -2008,6 +2075,7 @@ async fn get_page(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageParams>,
+    headers: HeaderMap,
 ) -> Response {
     if guest_scope_denies(&state, auth.as_deref(), &id).await {
         return not_found("serve_page", format!("{id} does not exist."));
@@ -2026,14 +2094,83 @@ async fn get_page(
 
     let is_patch = params.source.as_deref() == Some("patch");
     let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
+    // Mobile user-agents get an aggressive resize threshold so reader pages are transferred as
+    // compact WebP instead of multi-hundred-KB originals. On a phone over WiFi this is usually the
+    // dominant factor in "images load one by one / slowly" — the LAN itself is not the bottleneck.
+    let mobile = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .contains("mobile")
+        || headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains("android");
+    let prefetch = headers
+        .get("x-lrr-priority")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("prefetch"))
+        || matches!(params.priority.as_deref(), Some("0" | "prefetch" | "low"));
+    let preview_variant = matches!(params.variant.as_deref(), Some("tiny" | "preview"));
+    let preview_request = headers
+        .get("x-lrr-priority")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("preview"));
+    // Device-requested full-res cap. 800 is a sane floor and 1600 a generous ceiling; values
+    // outside that range are ignored so a malicious client cannot force huge server-side encodes.
+    let requested_short_edge = params.max_short_edge.filter(|v| (800..=1600).contains(v));
+    tracing::info!(
+        %id,
+        path = %params.path,
+        priority = if preview_variant || preview_request {
+            "preview"
+        } else if prefetch {
+            "prefetch"
+        } else {
+            "current"
+        },
+        "reader page request"
+    );
+    // A prefetch request is held back by this separate gate *before* it can occupy one of
+    // `page_singleflight`'s workers. Real current-page requests (priority=1 or absent) skip the
+    // gate, so they can "jump the queue" ahead of speculative preloads already in flight.
+    let low_priority_permit = if prefetch {
+        let low_semaphore = low_priority_page_semaphore();
+        match low_semaphore.acquire_owned().await {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "serve_page",
+                    "page low-priority semaphore closed".to_string(),
+                )
+            }
+        }
+    } else {
+        None
+    };
     // Singleflight key includes the `patch:`/`orig:` prefix and the optimize flag — a patch page
     // and an original page can legitimately share the same entry *name* (they live in two separate
-    // zips), and the optimized variant is a distinct resource from the original bytes.
+    // zips), and the optimized variant is a distinct resource from the original bytes. The mobile
+    // variant is also separated so a desktop request never waits on a mobile-tuned conversion.
+    // The preview/tiny variant and the device-derived `max_short_edge` must also be part of the key:
+    // they change the encoded dimensions/quality, and collapsing a preview request together with a
+    // full-resolution request would let one caller receive the other caller's image bytes (the
+    // reader deliberately fetches both for the same page nearly simultaneously).
+    let short_edge_key = requested_short_edge
+        .map(|n| format!(":short{n}"))
+        .unwrap_or_default();
     let cache_key_path = format!(
-        "{}:{}{}",
+        "{}:{}{}{}{}{}",
         if is_patch { "patch" } else { "orig" },
         params.path,
         if optimize { ":opt" } else { "" },
+        if mobile { ":mob" } else { "" },
+        if preview_variant { ":preview" } else { "" },
+        short_edge_key,
     );
     let result = state
         .page_singleflight
@@ -2052,11 +2189,15 @@ async fn get_page(
                     &corrupted_pages,
                     is_patch,
                     optimize,
+                    mobile,
+                    preview_variant,
+                    requested_short_edge,
                 )
                 .await
             }
         })
         .await;
+    drop(low_priority_permit);
 
     match result {
         Ok(page) => {
@@ -2065,6 +2206,23 @@ async fn get_page(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static(page.content_type),
             );
+            header_map.insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("private, no-cache"),
+            );
+            if let Some(etag) = &page.etag {
+                header_map.insert(
+                    header::ETAG,
+                    header::HeaderValue::from_str(etag)
+                        .unwrap_or(header::HeaderValue::from_static("")),
+                );
+                let if_none_match = headers
+                    .get(header::IF_NONE_MATCH)
+                    .and_then(|v| v.to_str().ok());
+                if if_none_match.is_some_and(|v| v.trim() == etag) {
+                    return (header_map, StatusCode::NOT_MODIFIED).into_response();
+                }
+            }
             if page.resized {
                 // Lets the reader's file-info bar show "converted WebP" vs the original entry
                 // (the URL's own `path` still carries the original name — e.g. `foo.png` — which
@@ -2087,10 +2245,53 @@ async fn get_page(
                     .unwrap_or(header::HeaderValue::from_static("0x0")),
                 );
             }
+            if preview_variant {
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-preview"),
+                    header::HeaderValue::from_static("1"),
+                );
+                let full_short_edge = requested_short_edge.unwrap_or(if mobile {
+                    lanrurugi_scanner::resize::MAX_SHORT_EDGE_MOBILE
+                } else {
+                    lanrurugi_scanner::resize::MAX_SHORT_EDGE_DESKTOP
+                });
+                let short = page.orig_width.min(page.orig_height);
+                let scale = if short > 0 {
+                    (full_short_edge as f64 / short as f64).min(1.0)
+                } else {
+                    1.0
+                };
+                let full_width = (page.orig_width as f64 * scale).round() as u32;
+                let full_height = (page.orig_height as f64 * scale).round() as u32;
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-preview-width"),
+                    header::HeaderValue::from_str(&full_width.to_string())
+                        .unwrap_or(header::HeaderValue::from_static("0")),
+                );
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-preview-height"),
+                    header::HeaderValue::from_str(&full_height.to_string())
+                        .unwrap_or(header::HeaderValue::from_static("0")),
+                );
+            }
             (header_map, page.bytes).into_response()
         }
         Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, "serve_page", msg),
     }
+}
+
+/// Generates a stable weak ETag from a file's size + mtime + a discriminator key. Since the
+/// content comes from either the original archive or the on-disk resize cache, this is cheap and
+/// lets the browser revalidate with 304 instead of re-downloading unchanged WebP/original pages.
+async fn page_file_etag(path: &str, key: &str) -> Option<String> {
+    let meta = tokio::fs::metadata(path).await.ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format!("W/\"{}-{}-{}\"", meta.len(), mtime, key))
 }
 
 /// The actual per-`(archive, entry path)` work [`AppState::page_singleflight`] collapses
@@ -2101,6 +2302,7 @@ async fn get_page(
 /// entries inside the archive file itself, and a patch page is a different file's content
 /// (`lanrurugi_scanner::patch::read_page` reads it from the sidecar `.patch.zip`, not
 /// `archive_file`) that neither of those apply to.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_page(
     state: &AppState,
     id: &str,
@@ -2109,6 +2311,9 @@ async fn fetch_page(
     corrupted_pages: &[String],
     is_patch: bool,
     optimize: bool,
+    mobile: bool,
+    preview: bool,
+    requested_short_edge: Option<u32>,
 ) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
@@ -2131,6 +2336,7 @@ async fn fetch_page(
             orig_size,
             orig_width: 0,
             orig_height: 0,
+            etag: None,
         });
     }
 
@@ -2147,6 +2353,7 @@ async fn fetch_page(
             orig_size: 0,
             orig_width: 0,
             orig_height: 0,
+            etag: None,
         });
     }
 
@@ -2180,6 +2387,35 @@ async fn fetch_page(
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
 
+    // Mobile pages use a much lower threshold, and a smaller pixel dimension cap. Quality is
+    // intentionally NOT lowered: 85 is the user-accepted minimum and the visual difference on a
+    // phone screen is not worth lowering it. Reducing dimensions is where the bandwidth win is.
+    // Preview/tiny variants always force re-encode and use an even smaller cap; they are only a
+    // transient placeholder, so the UI never reports their size/dimensions as final.
+    let effective_threshold = if preview {
+        0
+    } else if mobile {
+        threshold.min(150)
+    } else {
+        threshold
+    };
+    let effective_max_short_edge = if preview {
+        lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW
+    } else if let Some(requested) = requested_short_edge {
+        requested
+    } else if mobile {
+        lanrurugi_scanner::resize::MAX_SHORT_EDGE_MOBILE
+    } else {
+        lanrurugi_scanner::resize::MAX_SHORT_EDGE_DESKTOP
+    };
+    // Preview quality can be lower than the final 85: it is only a transient fast placeholder, so
+    // a small, quick file matters more than preserving every detail. The final page still uses 85.
+    let effective_quality = if preview { quality.min(35) } else { quality };
+    // Tiny preview is NOT upscaled server-side: the small file stays small. Instead the response
+    // carries the full WebP's target dimensions so the frontend can keep the img element's box
+    // identical during the seamless swap.
+    let preview_full_short_edge = None;
+
     let content_type = image_content_type(&raw);
     // Formats browsers render natively — BMP included (Chrome/Firefox/Edge all decode it; it just
     // wastes bandwidth, so it still goes through the *threshold-based* resize path like any other
@@ -2203,6 +2439,7 @@ async fn fetch_page(
     // serve the original bytes. A renderable page with resize disabled also passes through.
     if !optimize || (!enable_resize && renderable) {
         let orig_size = raw.len() as u64;
+        let etag = page_file_etag(archive_file, path).await;
         return Ok(FetchedPage {
             content_type,
             bytes: bytes::Bytes::from(raw),
@@ -2210,13 +2447,15 @@ async fn fetch_page(
             orig_size,
             orig_width: 0,
             orig_height: 0,
+            etag,
         });
     }
 
     // Byte-size check first (no decode needed) — under-threshold *renderable* pages pass through
     // untouched; a forced conversion skips this gate entirely.
-    if !force_convert && (raw.len() / 1024) as i64 <= threshold {
+    if !force_convert && (raw.len() / 1024) as i64 <= effective_threshold {
         let orig_size = raw.len() as u64;
+        let etag = page_file_etag(archive_file, path).await;
         return Ok(FetchedPage {
             content_type,
             bytes: bytes::Bytes::from(raw),
@@ -2224,10 +2463,19 @@ async fn fetch_page(
             orig_size,
             orig_width: 0,
             orig_height: 0,
+            etag,
         });
     }
 
-    let cache_path = resize_cache_path(&state.library.temp_dir, id, path, threshold, quality);
+    let cache_path = resize_cache_path(
+        &state.library.temp_dir,
+        id,
+        path,
+        effective_threshold,
+        effective_max_short_edge,
+        effective_quality,
+        false,
+    );
     // Cache hit: the webp bytes plus the `.dims` sidecar (original "WxH") written at encode
     // time — no re-decode of the original needed. A missing sidecar (older cache entry) just
     // degrades to zero dims in the headers.
@@ -2239,6 +2487,7 @@ async fn fetch_page(
                 let (w, h) = s.trim().split_once('x')?;
                 Some((w.parse().ok()?, h.parse().ok()?))
             });
+        let etag = page_file_etag(&cache_path.to_string_lossy(), "webp").await;
         return Ok(FetchedPage {
             content_type: "image/webp",
             bytes: bytes::Bytes::from(cached),
@@ -2246,6 +2495,7 @@ async fn fetch_page(
             orig_size: raw.len() as u64,
             orig_width: dims.map(|d| d.0).unwrap_or(0),
             orig_height: dims.map(|d| d.1).unwrap_or(0),
+            etag,
         });
     }
 
@@ -2257,12 +2507,33 @@ async fn fetch_page(
     // out directly instead of cloning it a second time.
     let orig_size = raw.len() as u64;
     let converted = if force_convert {
-        lanrurugi_scanner::resize::convert_to_webp(raw.clone(), quality as u8)
-            .await
-            .map(Some)
+        lanrurugi_scanner::resize::convert_to_webp(
+            raw.clone(),
+            effective_quality as u8,
+            effective_max_short_edge,
+            if preview {
+                Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
+            } else {
+                None
+            },
+            preview_full_short_edge,
+        )
+        .await
+        .map(Some)
     } else {
-        lanrurugi_scanner::resize::resize_if_over_threshold(raw.clone(), quality as u8, threshold)
-            .await
+        lanrurugi_scanner::resize::resize_if_over_threshold(
+            raw.clone(),
+            effective_quality as u8,
+            effective_threshold,
+            effective_max_short_edge,
+            if preview {
+                Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
+            } else {
+                None
+            },
+            preview_full_short_edge,
+        )
+        .await
     };
     match converted {
         Ok(Some((resized, orig_width, orig_height))) => {
@@ -2275,6 +2546,7 @@ async fn fetch_page(
                 format!("{orig_width}x{orig_height}"),
             )
             .await;
+            let etag = page_file_etag(&cache_path.to_string_lossy(), "webp").await;
             Ok(FetchedPage {
                 content_type: "image/webp",
                 bytes: bytes::Bytes::from(resized),
@@ -2282,10 +2554,12 @@ async fn fetch_page(
                 orig_size,
                 orig_width,
                 orig_height,
+                etag,
             })
         }
         Ok(None) => {
             let content_type = image_content_type(&raw);
+            let etag = page_file_etag(archive_file, path).await;
             Ok(FetchedPage {
                 content_type,
                 bytes: bytes::Bytes::from(raw),
@@ -2293,6 +2567,7 @@ async fn fetch_page(
                 orig_size,
                 orig_width: 0,
                 orig_height: 0,
+                etag,
             })
         }
         Err(e) => Err(e.to_string()),
@@ -2596,6 +2871,7 @@ struct PageThumbnailsQuery {
 
 async fn get_page_thumbnails(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<String>,
     Query(q): Query<PageThumbnailsQuery>,
 ) -> Response {
@@ -2620,6 +2896,11 @@ async fn get_page_thumbnails(
         let mut total = 0u32;
         let mut member_page_counts: Vec<(ArchiveId, u32)> = Vec::new();
         for member_id in &tank.archives {
+            // A Tankoubon can contain a mix of guest-visible and admin-only members; a guest must
+            // not get thumbnails (or even a page-count contribution) for the hidden ones.
+            if guest_scope_denies(&state, auth.as_deref(), member_id).await {
+                continue;
+            }
             if let Ok(Some(archive)) = state.repos.archives.get(member_id).await {
                 let pc = archive.pagecount;
                 member_page_counts.push((member_id.clone(), pc));
@@ -2661,6 +2942,12 @@ async fn get_page_thumbnails(
 
     // Regular archive
     let archive_id = ArchiveId(id);
+    if guest_scope_denies(&state, auth.as_deref(), &archive_id).await {
+        return not_found(
+            "get_page_thumbnails",
+            format!("{archive_id} does not exist."),
+        );
+    }
     let archive = match state.repos.archives.get(&archive_id).await {
         Ok(Some(a)) => a,
         Ok(None) => {

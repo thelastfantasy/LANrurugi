@@ -32,6 +32,7 @@ use serde_json::json;
 use crate::download_manager::settings::{merge, EffectivePluginOptions};
 use crate::plugins::{with_login_cookies, CUSTOM_PLUGIN_DIR};
 use crate::AppState;
+use lanrurugi_llm::LlmClient;
 
 /// Subdirectory of `custom/` reserved for trial-run staging — distinct from `upload_plugin`'s own
 /// direct use of `custom/` so a crashed/killed request's leftover file (if T025's cleanup somehow
@@ -422,11 +423,7 @@ async fn classify_login_relevance(
         return json!({ "relevant": false, "reasoning": "No failures to classify." });
     }
 
-    let system = "You judge whether a plugin trial-run failure indicates the target page \
-        requires a login (access denied, redirected to a login/signin page, 401/403 status, a \
-        paywall-like response) as opposed to an unrelated cause (404, network timeout, a plugin \
-        logic bug). Respond with strictly this JSON shape: \
-        {\"relevant\": boolean, \"reasoning\": string}.";
+    let system = crate::llm_prompts::plugin_wizard_trial_run_classify_system();
     let user = format!(
         "Trial-run error(s) from the failed link(s):\n\n{}",
         failures.join("\n---\n")
@@ -438,7 +435,10 @@ async fn classify_login_relevance(
         reasoning: String,
     }
 
-    match lanrurugi_llm::json_chat::<Classification>(&state.redis.config, system, &user, 0.3, 500)
+    match state
+        .redis
+        .config
+        .json_chat::<Classification>(&system, &user, 0.3, 500)
         .await
     {
         Ok(c) => json!({ "relevant": c.relevant, "reasoning": c.reasoning }),

@@ -284,6 +284,47 @@ export function QueueItemRow({
                   )}
                 </a>
               </div>
+            ) : isLocalUpload && item.state === "queued" ? (
+              <>
+                <span
+                  style={{
+                    fontSize: FONT_SIZE_SM,
+                    wordBreak: "break-all",
+                    display: "block",
+                    ...(!item.title && { userSelect: "all" }),
+                  }}
+                  title={item.metadata_preview ? undefined : item.url}
+                >
+                  <TruncatedFilename
+                    text={item.title ?? item.url}
+                    isFilename={!item.title}
+                  />
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      height: 8,
+                      background: "rgba(128,128,128,0.25)",
+                      borderRadius: 4,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "30%",
+                        height: "100%",
+                        background: STATE_COLOR.active,
+                        borderRadius: 4,
+                        animation: "lrr-indeterminate-bar 1.2s ease-in-out infinite",
+                      }}
+                    />
+                  </div>
+                  <span style={{ fontSize: FONT_SIZE_XS, whiteSpace: "nowrap" }}>
+                    {t("upload.processing")}
+                  </span>
+                </div>
+              </>
             ) : (
               <span
                 style={{

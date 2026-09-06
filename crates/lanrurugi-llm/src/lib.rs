@@ -10,6 +10,8 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// The one model name every `lanrurugi-llm` call site uses. `-pro`'s reasoning could exhaust the
@@ -40,6 +42,205 @@ pub async fn resolve_api_key(redis_config: &Pool) -> Option<String> {
     })
 }
 
+/// How long a successful DeepSeek balance check is trusted before re-checking. Keeps the
+/// pre-flight from doubling every LLM request's latency on chat-heavy flows (e.g. the plugin
+/// wizard's multi-round agentic loop).
+const BALANCE_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// Last successful `{key} -> checked_at` pair. Only successes are cached; an account that just
+/// ran out of balance must be re-checked on the very next call.
+static BALANCE_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+fn deepseek_base_url() -> String {
+    std::env::var("LANRURUGI_DEEPSEEK_BASE_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com".to_string())
+}
+
+/// Checks the DeepSeek account's own `/user/balance` endpoint before an LLM call. For the
+/// official DeepSeek API this is the authoritative "is the key both valid and funded" signal;
+/// custom/mock base URLs that do not implement the endpoint are allowed to fall through (404 is
+/// treated as "balance checking not supported", not as a hard failure).
+async fn check_balance(key: &str) -> Result<(), String> {
+    let base_url = deepseek_base_url();
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{base_url}/user/balance"))
+        .header("Authorization", format!("Bearer {key}"))
+        .send()
+        .await
+        .map_err(|e| format!("LLM: 余额检查请求失败: {e}"))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // A non-official/custom endpoint may simply not expose `/user/balance`.
+        if status.as_u16() == 404 {
+            return Ok(());
+        }
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| text.clone());
+        let detail = match status.as_u16() {
+            401 => format!("LLM: API Key 无效 (401) — {msg}"),
+            402 => format!("LLM: 账户余额不足 (402) — {msg}"),
+            _ => format!("LLM: 余额检查失败 ({}) — {msg}", status.as_u16()),
+        };
+        return Err(detail);
+    }
+
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    if let Some(available) = body["is_available"].as_bool() {
+        if !available {
+            return Err("LLM: DeepSeek 账户余额不足或账户不可用".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Single availability gate used by every LLM call site: verifies that a key is configured and,
+/// for the official DeepSeek API, that the account currently has enough balance to make requests.
+/// Success is cached briefly for the same key to avoid a `/user/balance` round-trip on every
+/// model call.
+pub async fn ensure_available(redis_config: &Pool) -> Result<(), String> {
+    let key = resolve_api_key(redis_config)
+        .await
+        .ok_or_else(|| "DeepSeek API key not configured".to_string())?;
+
+    {
+        let cache = BALANCE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_key, checked_at)) = cache.as_ref() {
+            if cached_key == &key && checked_at.elapsed() < BALANCE_CACHE_TTL {
+                return Ok(());
+            }
+        }
+    }
+
+    check_balance(&key).await?;
+
+    let mut cache = BALANCE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *cache = Some((key, Instant::now()));
+    Ok(())
+}
+
+/// `LlmClient` is the single trait through which every LANrurugi feature should talk to the
+/// LLM. It deliberately bundles availability pre-flight (key + balance) with the actual call
+/// methods, so call sites do not have to remember whether this particular feature checks
+/// `resolve_api_key()` itself or relies on the underlying HTTP helper.
+#[allow(async_fn_in_trait)]
+pub trait LlmClient: Send + Sync {
+    /// Verifies key/balance before any model call. All trait methods call this internally.
+    async fn ensure_available(&self) -> Result<(), String>;
+    async fn chat(
+        &self,
+        system: &str,
+        user: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<String, String>;
+    async fn json_chat<T: serde::de::DeserializeOwned>(
+        &self,
+        system: &str,
+        user: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<T, String>;
+    async fn tool_chat(
+        &self,
+        messages: &[Message],
+        tools: &[Tool],
+        temperature: f32,
+        max_tokens: u32,
+        force_json_content: bool,
+    ) -> Result<ToolChatResponse, String>;
+    async fn tool_chat_streaming<F>(
+        &self,
+        messages: &[Message],
+        tools: &[Tool],
+        temperature: f32,
+        max_tokens: u32,
+        force_json_content: bool,
+        on_content_delta: F,
+    ) -> Result<ToolChatResponse, String>
+    where
+        F: FnMut(&str) + Send;
+}
+
+/// The canonical backend is the Redis config pool itself; every `AppState.redis.config` Pool can
+/// therefore be used directly as an `LlmClient`.
+impl LlmClient for Pool {
+    async fn ensure_available(&self) -> Result<(), String> {
+        ensure_available(self).await
+    }
+
+    async fn chat(
+        &self,
+        system: &str,
+        user: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<String, String> {
+        self.ensure_available().await?;
+        chat(self, system, user, temperature, max_tokens).await
+    }
+
+    async fn json_chat<T: serde::de::DeserializeOwned>(
+        &self,
+        system: &str,
+        user: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<T, String> {
+        self.ensure_available().await?;
+        json_chat(self, system, user, temperature, max_tokens).await
+    }
+
+    async fn tool_chat(
+        &self,
+        messages: &[Message],
+        tools: &[Tool],
+        temperature: f32,
+        max_tokens: u32,
+        force_json_content: bool,
+    ) -> Result<ToolChatResponse, String> {
+        self.ensure_available().await?;
+        tool_chat(
+            self,
+            messages,
+            tools,
+            temperature,
+            max_tokens,
+            force_json_content,
+        )
+        .await
+    }
+
+    async fn tool_chat_streaming<F>(
+        &self,
+        messages: &[Message],
+        tools: &[Tool],
+        temperature: f32,
+        max_tokens: u32,
+        force_json_content: bool,
+        mut on_content_delta: F,
+    ) -> Result<ToolChatResponse, String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        self.ensure_available().await?;
+        tool_chat_streaming(
+            self,
+            messages,
+            tools,
+            temperature,
+            max_tokens,
+            force_json_content,
+            &mut on_content_delta,
+        )
+        .await
+    }
+}
+
 /// Posts a chat-completions request body to DeepSeek and returns the parsed JSON response, or a
 /// human-readable error — the HTTP call/status-code-error-translation logic shared by [`chat`]
 /// and [`tool_chat`], factored out per constitution's "near-identical logic... factored into a
@@ -55,9 +256,7 @@ async fn post_chat_completion(
     // Overridable to point at a local mock responder instead of the real DeepSeek API (e.g. for
     // manual testing without a live LLM key); unset in every real deployment, where it's always
     // the real endpoint.
-    let base_url = std::env::var("LANRURUGI_DEEPSEEK_BASE_URL")
-        .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
-
+    let base_url = deepseek_base_url();
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("{base_url}/chat/completions"))

@@ -3,11 +3,11 @@ import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { fetchJson } from "@/api/client"
+import { fetchJson, sendFormDataWithProgress } from "@/api/client"
 import { useAddToQueue, useCategories, useCreateCategory, useDownloadQueue, usePlugins } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { STATE_COLOR } from "@/components/Display"
+import { formatBytes, STATE_COLOR } from "@/components/Display"
 import { newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -34,18 +34,22 @@ export function Upload() {
   const [urls, setUrls] = useState("")
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
+  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null)
   useApplyTheme()
   useDocumentTitle(t("upload.uploadCenter") ?? undefined)
 
   async function handleUpload(toUpload: File) {
     setUploadingCount((n) => n + 1)
+    setUploadProgress({ loaded: 0, total: toUpload.size })
     try {
       const formData = new FormData()
       formData.append("file", toUpload)
       if (category) formData.append("catid", category)
 
       // The queue item's own outcome is the source of truth, not this response; refetch surfaces it.
-      await fetch("/api/archives/upload", { method: "PUT", body: formData }).catch(() => null)
+      await sendFormDataWithProgress("PUT", "/archives/upload", formData, (loaded, total) =>
+        setUploadProgress({ loaded, total }),
+      ).catch(() => null)
       await Promise.all([
         downloadQueue.refetch(),
         queryClient.invalidateQueries({ queryKey: ["archives"] }),
@@ -53,6 +57,7 @@ export function Upload() {
       ])
     } finally {
       setUploadingCount((n) => n - 1)
+      setUploadProgress(null)
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }
@@ -192,6 +197,24 @@ export function Upload() {
               }}
             />
           </span>
+
+          {uploadProgress && uploadProgress.total > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
+              <div style={{ flex: 1, height: 8, background: "rgba(128,128,128,0.25)", borderRadius: 4, overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${Math.min(100, (uploadProgress.loaded / uploadProgress.total) * 100)}%`,
+                    height: "100%",
+                    background: STATE_COLOR.active,
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: FONT_SIZE_XS, whiteSpace: "nowrap" }}>
+                {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)} (
+                {Math.round((uploadProgress.loaded / uploadProgress.total) * 100)}%)
+              </span>
+            </div>
+          )}
 
           <br />
           <br />

@@ -15,7 +15,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use lanrurugi_api::{settings::fetch_theme_for_html_injection, AppState};
-use tower::service_fn;
+use tower::{service_fn, Service};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
@@ -47,6 +47,10 @@ pub fn build_app(
     // copy, mounted at the bare (non-`/api`-nested) top level (see that module's own docs on why
     // it must be reachable without going through `require_api_key` at all).
     let opensearch_state = state.clone();
+    // Health is a top-level, unauthenticated endpoint; it needs its own state copy for the same
+    // reason as opensearch/index above, and it must be cloned before `state` is moved into the
+    // API auth/cors layers.
+    let health_state = state.clone();
     // Every `/api/*` route — including the ones previously merged as "public" routers (login,
     // theme, info, version) — now goes through the same `require_api_key` middleware and the same
     // Casbin `route_policy.csv`. Public bootstrap routes are allowed by explicit `anonymous` /
@@ -67,6 +71,7 @@ pub fn build_app(
 
     let mut router = Router::new()
         .nest("/api", api)
+        .merge(lanrurugi_api::health::router().with_state(health_state))
         .merge(lanrurugi_api::opensearch::router().with_state(opensearch_state));
 
     if let Some(dir) = docs_dir {
@@ -113,11 +118,64 @@ pub fn build_app(
         // (which `ServeDir` has no literal file for) worked correctly. Turning this off makes every
         // directory request 404 out of `ServeDir` the same way a missing file does, so `/` gets the
         // same `serve_index` treatment as any other unmatched route.
-        router = router.fallback_service(
-            ServeDir::new(dir)
-                .append_index_html_on_directories(false)
-                .fallback(fallback),
-        );
+        let static_service = ServeDir::new(dir.clone())
+            .append_index_html_on_directories(false)
+            .fallback(fallback);
+        router = router.fallback_service(tower::service_fn(move |req: Request| {
+            let path = req.uri().path().to_owned();
+            let mut service = static_service.clone();
+            async move {
+                let if_none_match = req
+                    .headers()
+                    .get(axum::http::header::IF_NONE_MATCH)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.trim().to_owned());
+                let response = service.call(req).await?;
+                // Convert to axum's `Response<Body>` so we can conditionally empty the body for
+                // ETag revalidation 304s and still keep one return type.
+                let mut response = response.map(axum::body::Body::new);
+                // Hashed production assets can be cached almost forever; legacy themes/CSS are
+                // versioned by filename in this codebase's own release cycle, so a much shorter
+                // cache is still safe and makes mobile page loads noticeably snappier.
+                let cache = if path.starts_with("/assets/") {
+                    "public, max-age=31536000, immutable"
+                } else if path.starts_with("/legacy/") || path == "/favicon.svg" {
+                    // These files are not content-hashed, so a browser-facing max-age would show
+                    // stale CSS/themes after an upgrade. Let the browser cache only as a
+                    // revalidation hint (`Last-Modified` from ServeDir, 304 on unchanged files).
+                    "no-cache"
+                } else {
+                    "no-cache"
+                };
+                response.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static(cache),
+                );
+                // Static files get a weak ETag based on ServeDir's Last-Modified. This lets the
+                // browser revalidate with If-None-Match and receive 304 instead of re-downloading
+                // unchanged CSS/JS/theme assets.
+                if response.status().is_success() {
+                    let last_modified = response
+                        .headers()
+                        .get(axum::http::header::LAST_MODIFIED)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.to_owned());
+                    if let Some(last_modified) = last_modified {
+                        let etag = format!("W/\"{last_modified}\"");
+                        response.headers_mut().insert(
+                            axum::http::header::ETAG,
+                            axum::http::HeaderValue::from_str(&etag)
+                                .unwrap_or(axum::http::HeaderValue::from_static("")),
+                        );
+                        if if_none_match.as_deref() == Some(etag.as_str()) {
+                            *response.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
+                            *response.body_mut() = axum::body::Body::empty();
+                        }
+                    }
+                }
+                Ok::<_, Infallible>(response)
+            }
+        }));
     }
 
     router.layer(TraceLayer::new_for_http())

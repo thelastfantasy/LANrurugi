@@ -21,6 +21,7 @@ export function Tooltip({
   wrapperStyle,
   maxWidth = 320,
   zIndex = Z_OVERLAY_TOOLTIP,
+  closeDelay = CLOSE_DELAY_MS,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -33,6 +34,9 @@ export function Tooltip({
   /** Overrides the default `Z_OVERLAY_TOOLTIP` — needed when the trigger lives inside something
    * with an even higher z-index (e.g. `Modal.tsx`'s 9001), or the portaled bubble renders behind it. */
   zIndex?: number
+  /** How long the tooltip stays open after the pointer leaves the trigger, in ms. Set to 0 for
+   * immediate close. */
+  closeDelay?: number
 }) {
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: -9999, left: -9999, visibility: "hidden" })
@@ -50,7 +54,7 @@ export function Tooltip({
 
   function scheduleClose() {
     cancelClose()
-    closeTimer.current = setTimeout(() => setVisible(false), CLOSE_DELAY_MS)
+    closeTimer.current = setTimeout(() => setVisible(false), closeDelay)
   }
 
   function open() {
@@ -167,12 +171,20 @@ export function Tooltip({
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
               }}
             >
-              {/* marginRight/paddingRight claw back most of the parent's padding so the
-                  scrollbar sits close to the popup's edge like elsewhere in the app. */}
+              {/* Only claw back the parent's right padding when the bubble is actually
+                  height-capped/scrollable; otherwise the 10px outer padding should stay
+                  symmetric on both sides (the old unconditional -8/+2 made every short
+                  tooltip's right padding 4px while the left stayed 10px). */}
               <div
                 ref={bubbleRef}
                 className="thin-scrollbar"
-                style={{ maxHeight: style.maxHeight, overflowY: style.overflowY, marginRight: -8, paddingRight: 2 }}
+                style={{
+                  maxHeight: style.maxHeight,
+                  overflowY: style.overflowY,
+                  ...(style.maxHeight !== undefined
+                    ? { marginRight: -8, paddingRight: 2 }
+                    : {}),
+                }}
               >
                 {label}
               </div>

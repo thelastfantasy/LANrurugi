@@ -228,44 +228,54 @@ async fn add_stamp(
             // issue #97: a fresh stamp on a not-yet-bookmarked page also bookmarks that page,
             // when enabled — merged into one activity record, never a separate one for the stamp
             // itself (stamps.rs has no activity trail of its own outside this linkage).
-            if crate::settings::read_stamp_autobookmark(&state).await
-                && !state
+            if crate::settings::read_stamp_autobookmark(&state).await {
+                let already_bookmarked = state
                     .bookmarks
                     .is_bookmarked(id.as_str(), index)
                     .await
-                    .unwrap_or(true)
-            {
+                    .unwrap_or(true);
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                match state.bookmarks.add(id.as_str(), index, now).await {
-                    Ok(()) => {
-                        record_manual(
-                            &state,
-                            auth.as_ref().map(|e| &e.0),
-                            action_types::STAMP_BOOKMARK_SYNC,
-                            ActivityTarget {
-                                id: Some(id.0.clone()),
-                                label: Some(archive.title.clone()),
-                                kind: Some("archive".to_string()),
-                            },
-                            Outcome::Success,
-                            None,
-                            Some(json!({
-                                "stamp": { "stamp_id": stamp_id, "page": index },
-                                "bookmark": { "action": "add", "page": index },
-                            })),
-                        )
-                        .await;
+                if !already_bookmarked {
+                    match state.bookmarks.add(id.as_str(), index, now).await {
+                        Ok(()) => {
+                            record_manual(
+                                &state,
+                                auth.as_ref().map(|e| &e.0),
+                                action_types::STAMP_BOOKMARK_SYNC,
+                                ActivityTarget {
+                                    id: Some(id.0.clone()),
+                                    label: Some(archive.title.clone()),
+                                    kind: Some("archive".to_string()),
+                                },
+                                Outcome::Success,
+                                None,
+                                Some(json!({
+                                    "stamp": { "stamp_id": stamp_id, "page": index },
+                                    "bookmark": { "action": "add", "page": index },
+                                })),
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            // The stamp itself was created successfully — a failure to also bookmark
+                            // the page is a secondary-effect failure, not a reason to fail this
+                            // request (same posture `record_manual` itself already takes toward its
+                            // own write failures).
+                            tracing::warn!(%id, page = index, error = %e, "failed to auto-bookmark page after adding a stamp");
+                        }
                     }
-                    Err(e) => {
-                        // The stamp itself was created successfully — a failure to also bookmark
-                        // the page is a secondary-effect failure, not a reason to fail this
-                        // request (same posture `record_manual` itself already takes toward its
-                        // own write failures).
-                        tracing::warn!(%id, page = index, error = %e, "failed to auto-bookmark page after adding a stamp");
-                    }
+                } else if let Err(e) = state.bookmarks.touch_updated_at(id.as_str(), now).await {
+                    // The page was already bookmarked, so there's no bookmark add/remove to log —
+                    // just the archive's `/bookmarks` sort position following this stamp the same
+                    // way it would have followed a fresh auto-bookmark, per direct feedback that
+                    // with the linkage on, a stamp and its page's bookmark read as one combined
+                    // "this page has activity" concept rather than two independent things whose
+                    // sort-relevant timestamp only one of them can move. No activity record here
+                    // either, for the same reason: nothing about the bookmark itself changed.
+                    tracing::warn!(%id, page = index, error = %e, "failed to bump bookmark timestamp after adding a stamp to an already-bookmarked page");
                 }
             }
             axum::Json(json!({

@@ -15,9 +15,10 @@ export function Layout() {
   useApplyTheme()
   useApplySettingsLanguage()
   const loginStatus = useLoginStatus()
-  // Defaults to the logged-in link set while the status query is still in flight, to avoid
-  // flashing the reduced anonymous nav for a moment.
-  const loggedIn = loginStatus.data?.logged_in ?? true
+  // Do not default to the logged-in link set while the status query is still in flight: the
+  // mobile report showed a slow/errored `/login/status` holding the admin nav open over guest
+  // content. A brief guest-looking nav is safer than the reverse flash.
+  const loggedIn = loginStatus.data?.logged_in === true
 
   const links: Array<{ to: string; label: string; end?: boolean }> = loggedIn
     ? [

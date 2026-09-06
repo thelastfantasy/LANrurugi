@@ -1,4 +1,7 @@
 target/
+.cargo-target/
+.cargo-registry/
+.pnpm-store/
 node_modules/
 apps/frontend/dist/
 apps/frontend/node_modules/

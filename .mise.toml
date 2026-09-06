@@ -173,6 +173,26 @@ podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --
 podman image prune -f
 """
 
+[tasks.dev-rebuild-auto]
+description = "One-shot backend dev rebuild: rebuild image, replace the running dev container, and prune dangling images automatically"
+# Same direct `podman build` rationale as `dev-rebuild` (not `podman compose build`). Unlike
+# `dev-rebuild`, this task does not prune before replacing the container: the old image is still
+# referenced by the existing `lrr-dev` container, so `podman image prune -f` would fail with
+# "image is in use by a container". The safe one-shot order is therefore:
+#   build -> remove old container -> prune dangling images -> start new container.
+run = """
+set -euo pipefail
+# 1. Rebuild the dev image (direct podman build so Dockerfile.dev cache mounts work).
+podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
+# 2. Remove the existing dev container (not just stop it) so the old image reference is released.
+podman compose -f compose.dev.yaml down
+# 3. Now the old image is no longer referenced by a container; clean dangling images.
+#    Scoped to dangling images only, never `system prune` (would sweep named volumes/build caches).
+podman image prune -f
+# 4. Start the dev environment from the freshly built image.
+podman compose -f compose.dev.yaml up -d
+"""
+
 [tasks.dev-logs]
 description = "Follow the local dev container's logs"
 run = "podman logs -f lrr-dev"

@@ -100,6 +100,16 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
     // follow-on design — the library-grid patch badge) goes here instead, same pattern
     // `archive_count` above already established for a LANrurugi-only addition.
     obj.insert("has_patch".into(), json!(a.has_patch));
+    let has_split_suggestion =
+        lanrurugi_storage::archive_split_suggestions::ArchiveSplitSuggestionsRepository::new(
+            state.redis.config.clone(),
+        )
+        .get(id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    obj.insert("has_split_suggestion".into(), json!(has_split_suggestion));
     Some(json)
 }
 

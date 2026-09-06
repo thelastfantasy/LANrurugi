@@ -22,6 +22,7 @@ use crate::archives::ArchiveMetadataJson;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
+use lanrurugi_llm::LlmClient;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 /// Matches legacy's default `archives_per_page` (verified: `ServerInfo` example in
@@ -371,7 +372,20 @@ async fn get_tankoubon_full(
     let mut full_data = Vec::with_capacity(page_ids.len());
     for id in &page_ids {
         if let Ok(Some(a)) = state.repos.archives.get(id).await {
-            full_data.push(ArchiveMetadataJson::from(a));
+            let mut value = serde_json::to_value(ArchiveMetadataJson::from(a))
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = value.as_object_mut() {
+                let has_split_suggestion = lanrurugi_storage::archive_split_suggestions::ArchiveSplitSuggestionsRepository::new(
+                    state.redis.config.clone(),
+                )
+                .get(id.as_str())
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+                obj.insert("has_split_suggestion".into(), json!(has_split_suggestion));
+            }
+            full_data.push(value);
         }
     }
     let filtered = page_ids.len();
@@ -554,7 +568,7 @@ async fn regenerate_tankoubon_thumbnail_on_demand(
 /// via [`force_apply_first_archive_cover`], not the `old_first`-gated helper, since a stale-manual
 /// reset landing on a tank that's *still* empty (its last member was removed at the same time the
 /// stale source was noticed) must not be skipped just because "no first archive" didn't change.
-async fn sync_tankoubon_thumbnail_with_first_archive(
+pub(crate) async fn sync_tankoubon_thumbnail_with_first_archive(
     state: &AppState,
     grouping: &Grouping,
     old_first: Option<&ArchiveId>,
@@ -1468,26 +1482,7 @@ async fn ai_rename_suggestions(
         .map(|(i, (_id, title))| format!("{}. {}", i + 1, title))
         .collect();
 
-    let system = "你是一个漫画/同人志系列的命名助手。给定一个编号的档案列表，你需要：\n\
-         1. 根据标题中的卷号/话数信息（日文「巻の壱」「巻の弐」、中文「第一卷」、英文 Vol.1 等）分析正确的阅读顺序\n\
-         2. 为这个系列提供至少 2 个候选名称\n\
-         3. 为每个档案建议一个章节标题\n\n\
-         只输出符合以下 TypeScript 类型的 JSON 对象，不要输出任何其它文字：\n\n\
-         ```typescript\n\
-         interface AiResponse {\n\
-           suggestions: {\n\
-             tank_name: string\n\
-             // chapter entries — one per input archive, reordered by correct reading order\n\
-             chapters: {\n\
-               original_index: number  // matches the input list number (1-based)\n\
-               sorted_index: number    // position in correct reading order (1-based)\n\
-               name: string            // suggested chapter title, preserve volume/chapter numbers\n\
-             }[]\n\
-           }[]\n\
-         }\n\
-         ```\n\n\
-         示例输出（json）：\n\
-         {\"suggestions\":[{\"tank_name\":\"系列名\",\"chapters\":[{\"original_index\":3,\"sorted_index\":1,\"name\":\"卷一\"},{\"original_index\":1,\"sorted_index\":2,\"name\":\"卷二\"}]},{\"tank_name\":\"系列名 完全版\",\"chapters\":[{\"original_index\":1,\"sorted_index\":1,\"name\":\"第一章\"},{\"original_index\":3,\"sorted_index\":2,\"name\":\"第二章\"}]}]}".to_string();
+    let system = crate::llm_prompts::tankoubon_rename_system();
     let user = format!(
         "当前单行本名称：{}
 
@@ -1520,8 +1515,7 @@ async fn ai_rename_suggestions(
         name: String,
     }
 
-    match lanrurugi_llm::json_chat::<AiResponse>(
-        &state.redis.config,
+    match state.redis.config.json_chat::<AiResponse>(
         &system,
         &user,
         0.7,
@@ -1621,7 +1615,7 @@ async fn ai_rename_chapter(
         context.push_str(&format!("{}. {}{}\n", i + 1, title, cn));
     }
 
-    let system = "你是一个漫画/同人志系列的章节命名助手。你会收到系列名称、一个目标档案的标题、以及所有成员档案的上下文（编号从 1 开始，已命名的章节会以 → 显示）。请为目标档案建议一个合适的章节标题，保留卷号/话数信息。只输出 json：\n\n```typescript\ntype RenameChapter = { name: string }\n```\n\n示例输出（json）：\n{\"name\":\"第壱巻\"}".to_string();
+    let system = crate::llm_prompts::tankoubon_chapter_rename_system();
     let user = format!(
         "单行本：{}
 
@@ -1637,14 +1631,11 @@ async fn ai_rename_chapter(
         name: String,
     }
 
-    match lanrurugi_llm::json_chat::<ChapterSuggestion>(
-        &state.redis.config,
-        &system,
-        &user,
-        0.5,
-        200,
-    )
-    .await
+    match state
+        .redis
+        .config
+        .json_chat::<ChapterSuggestion>(&system, &user, 0.5, 200)
+        .await
     {
         Ok(suggestion) => {
             axum::Json(serde_json::json!({ "name": suggestion.name })).into_response()

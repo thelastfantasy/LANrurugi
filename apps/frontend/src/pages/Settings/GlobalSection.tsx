@@ -34,6 +34,12 @@ export function GlobalSection({
   setStampautobookmark,
   stampautounbookmark,
   setStampautounbookmark,
+  subfoldersToTankoubons,
+  setSubfoldersToTankoubons,
+  archiveSplitSuggestionsEnabled,
+  setArchiveSplitSuggestionsEnabled,
+  archiveSplitDeleteOriginalEnabled,
+  setArchiveSplitDeleteOriginalEnabled,
   guestmode,
   setGuestmode,
   newbadgemode,
@@ -67,6 +73,12 @@ export function GlobalSection({
   setStampautobookmark: (v: boolean) => void
   stampautounbookmark: boolean
   setStampautounbookmark: (v: boolean) => void
+  subfoldersToTankoubons: boolean
+  setSubfoldersToTankoubons: (v: boolean) => void
+  archiveSplitSuggestionsEnabled: boolean
+  setArchiveSplitSuggestionsEnabled: (v: boolean) => void
+  archiveSplitDeleteOriginalEnabled: boolean
+  setArchiveSplitDeleteOriginalEnabled: (v: boolean) => void
   guestmode: boolean
   setGuestmode: (v: boolean) => void
   newbadgemode: string
@@ -262,6 +274,36 @@ export function GlobalSection({
             label={t("settings.autoUnbookmarkOnLastStampRemoved")}
           >
             {t("settings.autoUnbookmarkOnLastStampRemovedDescription")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="subfolders_to_tankoubons"
+            checked={subfoldersToTankoubons}
+            onChange={setSubfoldersToTankoubons}
+            label={t("settings.subfoldersToTankoubons")}
+          >
+            {t("settings.subfoldersToTankoubonsDescription")}
+            <br />
+            {t("settings.subfoldersToTankoubonsLlmHint")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="archive_split_suggestions_enabled"
+            checked={archiveSplitSuggestionsEnabled}
+            onChange={setArchiveSplitSuggestionsEnabled}
+            disabled={!llmApiKeySet}
+            label={t("settings.archiveSplitSuggestions")}
+          >
+            {t("settings.archiveSplitSuggestionsDescription")}
+            <br />
+            {t("settings.archiveSplitSuggestionsLlmHint")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="archive_split_delete_original_enabled"
+            checked={archiveSplitDeleteOriginalEnabled}
+            onChange={setArchiveSplitDeleteOriginalEnabled}
+            disabled={!archiveSplitSuggestionsEnabled || !llmApiKeySet}
+            label={t("settings.archiveSplitDeleteOriginal")}
+          >
+            {t("settings.archiveSplitDeleteOriginalDescription")}
           </CheckboxRow>
           {/* Site-wide guest-mode switch (FR-003) — grants nothing alone; also needs a category
               marked visible to guests (Categories.tsx) to actually route guests in. */}

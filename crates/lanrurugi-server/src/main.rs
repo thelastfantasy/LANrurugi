@@ -424,6 +424,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
         refresh_tokens,
@@ -632,6 +633,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 // inside this call itself (once, after every enabled plugin has run) — see its
                 // own doc comment.
                 lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+
+                lanrurugi_api::archive_split::maybe_auto_analyze(state.clone(), id.clone()).await;
 
                 lanrurugi_api::activity::record_automatic(
                     &state,

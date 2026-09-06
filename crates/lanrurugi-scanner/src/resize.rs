@@ -25,7 +25,13 @@ use thiserror::Error;
 /// Cap applied to an image's shorter dimension (see module docs for why this isn't legacy's
 /// width-only check). Same numeric value as legacy's fixed 1064px cap — only which dimension it's
 /// measured against has changed.
-const MAX_SHORT_EDGE: u32 = 1064;
+pub const MAX_SHORT_EDGE_DESKTOP: u32 = 1064;
+/// Mobile pages get a more aggressive dimension cap. Quality is unchanged; this only lowers the
+/// pixel dimensions before re-encoding, which is usually the cheapest bandwidth win on a phone.
+pub const MAX_SHORT_EDGE_MOBILE: u32 = 960;
+/// Preview/tiny images cap the *longest* edge at this value. They are intentionally upscaled by the
+/// browser/frontend to the full page size for a seamless swap, so a low resolution is acceptable.
+pub const MAX_LONG_EDGE_PREVIEW: u32 = 600;
 
 #[derive(Debug, Error)]
 pub enum ResizeError {
@@ -45,6 +51,9 @@ pub async fn resize_if_over_threshold(
     content: Vec<u8>,
     quality: u8,
     threshold_kb: i64,
+    max_short_edge: u32,
+    max_long_edge: Option<u32>,
+    preview_full_short_edge: Option<u32>,
 ) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
     run_blocking(move || {
         let size_kb = (content.len() / 1024) as i64;
@@ -53,7 +62,13 @@ pub async fn resize_if_over_threshold(
         }
         let img = image::load_from_memory(&content)?;
         let (orig_width, orig_height) = (img.width(), img.height());
-        let out = resize_sync(&img, quality)?;
+        let out = resize_sync(
+            &img,
+            quality,
+            max_short_edge,
+            max_long_edge,
+            preview_full_short_edge,
+        )?;
         Ok(Some((out, orig_width, orig_height)))
     })
     .await?
@@ -65,20 +80,45 @@ pub async fn resize_if_over_threshold(
 pub async fn convert_to_webp(
     content: Vec<u8>,
     quality: u8,
+    max_short_edge: u32,
+    max_long_edge: Option<u32>,
+    preview_full_short_edge: Option<u32>,
 ) -> Result<(Vec<u8>, u32, u32), ResizeError> {
     run_blocking(move || {
         let img = image::load_from_memory(&content)?;
         let (orig_width, orig_height) = (img.width(), img.height());
-        let out = resize_sync(&img, quality)?;
+        let out = resize_sync(
+            &img,
+            quality,
+            max_short_edge,
+            max_long_edge,
+            preview_full_short_edge,
+        )?;
         Ok((out, orig_width, orig_height))
     })
     .await?
 }
 
-fn resize_sync(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, ResizeError> {
+fn resize_sync(
+    img: &image::DynamicImage,
+    quality: u8,
+    max_short_edge: u32,
+    max_long_edge: Option<u32>,
+    preview_full_short_edge: Option<u32>,
+) -> Result<Vec<u8>, ResizeError> {
     let short_edge = img.width().min(img.height());
-    let resized = if short_edge > MAX_SHORT_EDGE {
-        let ratio = MAX_SHORT_EDGE as f64 / short_edge as f64;
+    let long_edge = img.width().max(img.height());
+    let resized = if let Some(max_long) = max_long_edge {
+        let ratio = (max_long as f64 / long_edge as f64).min(1.0);
+        let target_width = (img.width() as f64 * ratio).round() as u32;
+        let target_height = (img.height() as f64 * ratio).round() as u32;
+        img.resize(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else if short_edge > max_short_edge {
+        let ratio = max_short_edge as f64 / short_edge as f64;
         let target_width = (img.width() as f64 * ratio).round() as u32;
         let target_height = (img.height() as f64 * ratio).round() as u32;
         img.resize(
@@ -93,7 +133,25 @@ fn resize_sync(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, Resize
         img.clone()
     };
 
-    let rgb = resized.to_rgb8();
+    // Preview: after reducing content to ~600px long edge, force the output canvas to the same
+    // pixel dimensions as the full WebP version. The content is not improved—this is a cheap
+    // upscale—but both variants now share the exact same dimensions, so the seamless swap needs
+    // no frontend layout adaptation.
+    let final_image = if let Some(full_short) = preview_full_short_edge {
+        let short_edge = img.width().min(img.height());
+        let ratio = (full_short as f64 / short_edge as f64).min(1.0);
+        let target_width = (img.width() as f64 * ratio).round() as u32;
+        let target_height = (img.height() as f64 * ratio).round() as u32;
+        resized.resize(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        resized
+    };
+
+    let rgb = final_image.to_rgb8();
     let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
     let encoded = encoder
         .encode_simple(false, quality as f32)
@@ -119,9 +177,16 @@ mod tests {
     #[tokio::test]
     async fn under_threshold_returns_none() {
         let content = make_test_jpeg(50, 50);
-        let result = resize_if_over_threshold(content.clone(), 50, 1_000_000)
-            .await
-            .unwrap();
+        let result = resize_if_over_threshold(
+            content.clone(),
+            50,
+            1_000_000,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(result.is_none());
     }
 
@@ -130,10 +195,12 @@ mod tests {
         // Portrait page: short edge is width (2000 > 1064), so it drives the resize; height
         // scales down proportionally rather than being clamped directly.
         let content = make_test_jpeg(2000, 3000);
-        let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
+        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
+            .await
+            .unwrap();
         let (resized, ..) = result.expect("over threshold must resize");
         let decoded = image::load_from_memory(&resized).unwrap();
-        assert_eq!(decoded.width(), MAX_SHORT_EDGE);
+        assert_eq!(decoded.width(), MAX_SHORT_EDGE_DESKTOP);
         assert_eq!(decoded.height(), 1596); // round(3000 * 1064 / 2000)
     }
 
@@ -148,7 +215,9 @@ mod tests {
         // above and the wide-webtoon test below. This test pins the still-correct "well within
         // bounds" case so a regression can't sneak in via the short-edge computation itself.
         let content = make_test_jpeg(800, 8000);
-        let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
+        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
+            .await
+            .unwrap();
         let (resized, ..) = result.expect("over byte threshold must still re-encode");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(
@@ -166,17 +235,21 @@ mod tests {
         // the short edge's ratio (preserving aspect ratio, not distorting) rather than crushing
         // width to exactly 1064 regardless of which edge that constrains.
         let content = make_test_jpeg(1200, 12000);
-        let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
+        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
+            .await
+            .unwrap();
         let (resized, ..) = result.expect("over threshold must resize");
         let decoded = image::load_from_memory(&resized).unwrap();
-        assert_eq!(decoded.width(), MAX_SHORT_EDGE);
-        assert_eq!(decoded.height(), MAX_SHORT_EDGE * 12000 / 1200);
+        assert_eq!(decoded.width(), MAX_SHORT_EDGE_DESKTOP);
+        assert_eq!(decoded.height(), MAX_SHORT_EDGE_DESKTOP * 12000 / 1200);
     }
 
     #[tokio::test]
     async fn over_threshold_but_under_short_edge_still_reencodes() {
         let content = make_test_jpeg(500, 500);
-        let result = resize_if_over_threshold(content, 50, 0).await.unwrap();
+        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
+            .await
+            .unwrap();
         let (resized, ..) = result.expect("over threshold must re-encode even without downscaling");
         let decoded = image::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), 500);

@@ -1,3 +1,4 @@
+import http from 'node:http'
 import path from 'node:path'
 
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
@@ -83,6 +84,14 @@ function rustHtmlMiddleware(): Plugin {
   }
 }
 
+// Vite's default `http-proxy` agent does not enable keep-alive for the backend socket, and with
+// that Vite closes the client-facing connection after every proxied response. That is harmless for
+// a handful of API calls, but the reader loads dozens of archive page images: on a phone over WiFi
+// every image then pays a fresh TCP handshake on top of the actual transfer, which shows up as
+// "LAN is fast but images feel slow". Reuse the backend socket; the client-side keep-alive is
+// handled by Vite itself for non-proxied assets, and this restores the same behavior for `/api`.
+const keepAliveAgent = new http.Agent({ keepAlive: true, maxSockets: 32 })
+
 // https://vite.dev/config/
 export default defineConfig({
   resolve: {
@@ -122,6 +131,15 @@ export default defineConfig({
       // also bind 3000 in that case; run it with `--port <other>` alongside this override).
       '/api': {
         target: `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+        agent: keepAliveAgent,
+        configure: preserveOriginalHostHeader(),
+      },
+      // `/health` is outside `/api` on purpose (it is unauthenticated and used by container
+      // healthchecks), but proxying it through Vite makes the same endpoint reachable at the
+      // browser-visible dev URL as well.
+      '/health': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+        agent: keepAliveAgent,
         configure: preserveOriginalHostHeader(),
       },
       // `/opensearch.xml` (issue #90) lives outside `/api` on purpose — `lanrurugi_api::opensearch`'s
@@ -134,6 +152,7 @@ export default defineConfig({
       // nothing to do with login state, which this path never required in the first place).
       '/opensearch.xml': {
         target: `http://127.0.0.1:${process.env.LANRURUGI_DEV_BACKEND_PORT ?? '3001'}`,
+        agent: keepAliveAgent,
         configure: preserveOriginalHostHeader(),
       },
     },
@@ -146,6 +165,10 @@ export default defineConfig({
   preview: {
     proxy: {
       '/api': {
+        target: `http://127.0.0.1:${process.env.LANRURUGI_E2E_BACKEND_PORT ?? '3000'}`,
+        configure: preserveOriginalHostHeader(),
+      },
+      '/health': {
         target: `http://127.0.0.1:${process.env.LANRURUGI_E2E_BACKEND_PORT ?? '3000'}`,
         configure: preserveOriginalHostHeader(),
       },

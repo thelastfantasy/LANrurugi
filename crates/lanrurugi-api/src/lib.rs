@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod api_tokens;
+pub mod archive_split;
 pub mod archives;
 pub mod artist_backfill;
 pub mod auth;
@@ -14,7 +15,9 @@ pub mod database;
 pub mod download_manager;
 pub mod download_queue;
 pub mod duplicates;
+pub mod health;
 pub mod jobs;
+pub mod llm_prompts;
 pub mod login;
 pub mod logs;
 pub mod misc;
@@ -53,6 +56,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(activity::router())
         .merge(api_tokens::router())
+        .merge(archive_split::router())
         .merge(archives::router())
         .merge(bench::router())
         .merge(bookmarks::router())

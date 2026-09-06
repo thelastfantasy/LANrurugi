@@ -23,7 +23,8 @@ export function fileInfoText(
   const leftSize = pageSizesKb[spread.left]
 
   if (spread.right === null) {
-    if (!leftDim || leftSize === undefined) return leftName
+    if (leftSize === undefined) return leftName
+    if (!leftDim) return `${leftName} :: ${leftSize} KB`
     return `${leftName} :: ${leftDim.width} x ${leftDim.height} :: ${leftSize} KB`
   }
 
@@ -31,8 +32,11 @@ export function fileInfoText(
   const rightName = nameFromUrl(rightUrl)
   const rightDim = pageDimensions[spread.right]
   const rightSize = pageSizesKb[spread.right]
-  if (!leftDim || !rightDim || leftSize === undefined || rightSize === undefined) {
+  if (leftSize === undefined || rightSize === undefined) {
     return `${leftName} - ${rightName}`
+  }
+  if (!leftDim || !rightDim) {
+    return `${leftName} - ${rightName} :: ${leftSize + rightSize} KB`
   }
   return `${leftName} - ${rightName} :: ${leftDim.width + rightDim.width} x ${leftDim.height} :: ${leftSize + rightSize} KB`
 }

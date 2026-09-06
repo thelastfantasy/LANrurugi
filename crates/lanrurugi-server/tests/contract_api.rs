@@ -100,6 +100,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -460,6 +461,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -618,6 +620,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -868,6 +871,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
@@ -919,4 +923,270 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         .delete(&lanrurugi_core::ids::ArchiveId(id))
         .await
         .unwrap();
+}
+
+/// Native `subfolders-to-tankoubons` integration test: each subfolder with archives becomes one
+/// Tankoubon, and the created Tankoubons are visible through the normal listing endpoint.
+#[tokio::test]
+async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
+    let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
+        return;
+    };
+    seed_guestmode(&redis).await;
+    let repos = Repositories::new(&redis);
+    let plugin_options = std::sync::Arc::new(
+        lanrurugi_storage::plugin_options::PluginOptionsRepository::new(redis.config.clone()),
+    );
+    let download_queue = std::sync::Arc::new(
+        lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
+    let recommend_cache = std::sync::Arc::new(
+        lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
+    );
+    let ignored_group_suggestions = std::sync::Arc::new(
+        lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
+            redis.config.clone(),
+        ),
+    );
+    let compare_cache = std::sync::Arc::new(
+        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
+    );
+    let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
+        redis.config.clone(),
+    ));
+    let refresh_tokens = std::sync::Arc::new(
+        lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(redis.config.clone()),
+    );
+    let api_tokens = std::sync::Arc::new(lanrurugi_storage::api_tokens::ApiTokenRepository::new(
+        redis.config.clone(),
+    ));
+    let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+        redis.config.clone(),
+    ));
+    let import_snapshots = std::sync::Arc::new(
+        lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
+    );
+
+    let library_dir = tempfile::tempdir().unwrap();
+    let series_dir = library_dir.path().join("My Series");
+    let another_dir = library_dir.path().join("Another Series");
+    let nested_dir = series_dir.join("nested");
+    std::fs::create_dir_all(&series_dir).unwrap();
+    std::fs::create_dir_all(&another_dir).unwrap();
+    std::fs::create_dir_all(&nested_dir).unwrap();
+    let path_a = series_dir.join("Volume 1.zip");
+    let path_b = series_dir.join("Volume 2.zip");
+    let path_c = another_dir.join("Volume 1.cbz");
+    let path_d = nested_dir.join("Volume 0.zip");
+    for path in [&path_a, &path_b, &path_c, &path_d] {
+        std::fs::write(path, b"fake archive bytes").unwrap();
+    }
+
+    let id_a = "a".repeat(40);
+    let id_b = "b".repeat(40);
+    let id_c = "c".repeat(40);
+    let id_d = "d".repeat(40);
+    let archive_repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
+    for (id, path, title) in [
+        (id_a.clone(), path_a, "Volume 1"),
+        (id_b.clone(), path_b, "Volume 2"),
+        (id_c.clone(), path_c, "Volume 1"),
+        (id_d.clone(), path_d, "Volume 0"),
+    ] {
+        archive_repo
+            .save(&Archive {
+                id: lanrurugi_core::ids::ArchiveId(id.clone()),
+                name: title.to_string(),
+                title: title.to_string(),
+                file: path.to_string_lossy().to_string(),
+                tags: String::new(),
+                summary: String::new(),
+                arcsize: 1,
+                pagecount: 1,
+                isnew: false,
+                lastreadpage: 0,
+                lastreadtime: 0,
+                thumbhash: None,
+                toc: vec![],
+                stamp_ids: vec![],
+                heal_failed_at: None,
+                corrupted_pages: vec![],
+                has_patch: false,
+            })
+            .await
+            .unwrap();
+    }
+
+    let state = AppState {
+        redis: redis.clone(),
+        repos,
+        jobs: JobRegistry::new(),
+        auth: AuthConfig {
+            force_secure_cookies: false,
+        },
+        disable_update_check: true,
+        library: LibraryPaths {
+            archive_dir: library_dir.path().to_path_buf(),
+            thumb_dir: PathBuf::from("/tmp"),
+            temp_dir: PathBuf::from("/tmp"),
+            log_dir: None,
+        },
+        scanner: ScannerHandle::new(),
+        plugins: Arc::new(PluginPool::new(
+            "deno",
+            PathBuf::from("/tmp/dispatcher.ts"),
+            PathBuf::from("/tmp/plugins"),
+        )),
+        plugins_dir: PathBuf::from("/tmp/plugins"),
+        download_managers: Default::default(),
+        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )),
+        plugin_options: plugin_options.clone(),
+        plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        download_queue: download_queue.clone(),
+        recommend_cache: recommend_cache.clone(),
+        ignored_group_suggestions: ignored_group_suggestions.clone(),
+        compare_cache: compare_cache.clone(),
+        bookmarks: bookmarks.clone(),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
+        download_cancellations: Default::default(),
+        pending_generate_requests: Default::default(),
+        split_progress_tx: Default::default(),
+        filename_locks: Default::default(),
+        download_queue_tx: None,
+        refresh_tokens,
+        api_tokens,
+        api_token_last_touch: Default::default(),
+        activity,
+        import_snapshots,
+    };
+    let app = lanrurugi_server::app::build_app(state, None, None).layer(
+        axum::extract::connect_info::MockConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))),
+    );
+
+    let cookie = login_cookie(&app).await;
+    let mut config_conn = redis.config.get().await.unwrap();
+    use deadpool_redis::redis::AsyncCommands;
+    let _: () = config_conn
+        .hset("LRR_CONFIG", "subfolders_to_tankoubons", "0")
+        .await
+        .unwrap();
+
+    // When the setting is off, the endpoint is a non-destructive no-op.
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/database/scripts/subfolders-to-tankoubons")
+                .header("cookie", &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let disabled: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(disabled["enabled"], false);
+    assert_eq!(disabled["created_tankoubons"].as_array().unwrap().len(), 0);
+
+    let _: () = config_conn
+        .hset("LRR_CONFIG", "subfolders_to_tankoubons", "1")
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/database/scripts/subfolders-to-tankoubons")
+                .header("cookie", &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["enabled"], true);
+    let created_tanks = created["created_tankoubons"].as_array().unwrap();
+    assert_eq!(
+        created_tanks.len(),
+        2,
+        "two subfolders should produce two Tankoubons"
+    );
+
+    let (status, tanks) = get_json(&app, "/api/tankoubons?page=-1", Some(&cookie)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tanks = tanks["result"].as_array().unwrap();
+    assert!(tanks.len() >= 2);
+
+    let my_series = tanks
+        .iter()
+        .find(|t| {
+            let archives = t["archives"].as_array().unwrap();
+            archives.iter().any(|a| a.as_str() == Some(id_a.as_str()))
+                && archives.iter().any(|a| a.as_str() == Some(id_b.as_str()))
+                && archives.iter().any(|a| a.as_str() == Some(id_d.as_str()))
+        })
+        .expect(
+            "a Tankoubon containing all 'My Series' archives, including nested ones, should exist",
+        );
+    let my_archives = my_series["archives"].as_array().unwrap();
+    assert!(my_archives
+        .iter()
+        .any(|a| a.as_str() == Some(id_a.as_str())));
+    assert!(my_archives
+        .iter()
+        .any(|a| a.as_str() == Some(id_b.as_str())));
+    assert!(my_archives
+        .iter()
+        .any(|a| a.as_str() == Some(id_d.as_str())));
+
+    let another = tanks
+        .iter()
+        .find(|t| {
+            let archives = t["archives"].as_array().unwrap();
+            archives.len() == 1 && archives.iter().any(|a| a.as_str() == Some(id_c.as_str()))
+        })
+        .expect("a Tankoubon containing the 'Another Series' archive should exist");
+    let another_archives = another["archives"].as_array().unwrap();
+    assert!(another_archives
+        .iter()
+        .any(|a| a.as_str() == Some(id_c.as_str())));
+
+    let tank_repo = lanrurugi_storage::repository::GroupingRepository::new(redis.archive.clone());
+    for tank_id in created_tanks.iter() {
+        tank_repo
+            .delete(&lanrurugi_core::ids::TankId(
+                tank_id.as_str().unwrap().to_string(),
+            ))
+            .await
+            .unwrap();
+    }
+    for id in [id_a, id_b, id_c, id_d] {
+        archive_repo
+            .delete(&lanrurugi_core::ids::ArchiveId(id))
+            .await
+            .unwrap();
+    }
 }

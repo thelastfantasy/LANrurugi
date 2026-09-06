@@ -214,6 +214,51 @@ pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     }
 }
 
+/// Whether the native "Subfolders to Tankoubons" maintenance feature is enabled.
+/// Defaults to `true`; when disabled, `scripts::subfolders_to_tankoubons` returns an empty,
+/// non-destructive no-op.
+pub(crate) async fn read_subfolders_to_tankoubons_enabled(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "subfolders_to_tankoubons")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+/// Whether the archive-split-suggestion feature is enabled. Defaults to `true`; the UI disables
+/// the switch when no LLM key is configured.
+pub(crate) async fn read_archive_split_suggestions_enabled(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "archive_split_suggestions_enabled")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+/// Whether a successful manual split should delete the original archive/record. Defaults to `false`.
+pub(crate) async fn read_archive_split_delete_original_enabled(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "archive_split_delete_original_enabled")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// issue #97: whether placing a stamp on a not-yet-bookmarked page should also bookmark it —
 /// read by `stamps.rs::add_stamp`. Same shape as [`read_new_badge_mode`] above.
 pub(crate) async fn read_stamp_autobookmark(state: &AppState) -> bool {
@@ -355,6 +400,17 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // it's stored in the same `LRR_CONFIG` hash — `Controller/Plugins.pm:31,101-102` reads/writes
     // it directly rather than going through `Config.pm`'s settings-page field list.
     ("replacetitles", true),
+    // "Subfolders to Tankoubons" master switch. Defaults to on so users get the new maintenance
+    // capability immediately; turning it off disables the endpoint/button while leaving the actual
+    // grouping action non-destructive. Having a DeepSeek key configured further enables the
+    // best-effort LLM naming/author-tag enrichment.
+    ("subfolders_to_tankoubons", true),
+    // Archive split suggestions. Defaults to on; the UI disables the parent switch when no
+    // DeepSeek/LLM key is configured because the feature cannot generate suggestions without it.
+    ("archive_split_suggestions_enabled", true),
+    // Whether a successful manual split deletes the original archive/record. Defaults to false:
+    // by default keep the original and also create the split ZIPs.
+    ("archive_split_delete_original_enabled", false),
 ];
 
 /// Checks a single `PUT /settings` field against the `STRING_FIELDS`/`NUMBER_FIELDS`/
@@ -858,6 +914,21 @@ mod validate_setting_field_tests {
         );
         assert_eq!(
             validate_setting_field("enablecors", &json!(false)).unwrap(),
+            "0"
+        );
+    }
+
+    #[test]
+    fn accepts_the_subfolders_to_tankoubons_switch() {
+        assert!(BOOL_FIELDS
+            .iter()
+            .any(|(k, default)| *k == "subfolders_to_tankoubons" && *default));
+        assert_eq!(
+            validate_setting_field("subfolders_to_tankoubons", &json!(true)).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            validate_setting_field("subfolders_to_tankoubons", &json!(false)).unwrap(),
             "0"
         );
     }

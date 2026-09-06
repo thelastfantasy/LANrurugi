@@ -154,9 +154,15 @@ ENV LANRURUGI_PLUGINS_DIR=/usr/local/share/lanrurugi/plugins
 ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
 ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
+# `LANRURUGI_HEALTHCHECK_FRONTEND_URL` makes `/health` probe Vite as well as the backend's own
+# Redis pools. It is only set for the dev image; the production image serves the frontend from the
+# same backend process and intentionally leaves this unset.
+ENV LANRURUGI_HEALTHCHECK_FRONTEND_URL=http://127.0.0.1:3000
 # No `LANRURUGI_STATIC_DIR` set — this backend never serves the frontend itself in dev mode, Vite
 # does (see docker-entrypoint.dev.sh: the backend binds an *internal* port, Vite is the
 # container's actual public-facing port, proxying `/api/*` through to the backend).
 WORKDIR /workspace
 EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:3001/health || exit 1
 ENTRYPOINT ["docker-entrypoint.dev.sh"]

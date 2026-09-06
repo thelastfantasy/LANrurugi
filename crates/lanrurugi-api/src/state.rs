@@ -228,6 +228,12 @@ pub struct AppState {
     /// `serde_json::Value` (not `plugin_wizard::generate::GenerateRequest` directly) so this field
     /// doesn't need that submodule-private type to become crate-visible just for this.
     pub pending_generate_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// Per-job SSE broadcast for archive split progress. A job sends every progress update here;
+    /// `GET /archives/{id}/split/stream` subscribes while the reader page is open. Job results are
+    /// also persisted in the normal `JobRegistry`, so a user who leaves the page can still retrieve
+    /// the final result later.
+    pub split_progress_tx:
+        Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<serde_json::Value>>>>,
 }
 
 impl AppState {
@@ -254,6 +260,8 @@ pub struct FetchedPage {
     pub orig_size: u64,
     pub orig_width: u32,
     pub orig_height: u32,
+    /// Weak ETag for this exact rendered variant, used for `If-None-Match`/304 revalidation.
+    pub etag: Option<String>,
 }
 
 /// See [`AppState::page_singleflight`].

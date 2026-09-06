@@ -63,6 +63,7 @@
 use serde::Deserialize;
 
 use crate::AppState;
+use lanrurugi_llm::LlmClient;
 
 /// Trims delimiter noise (brackets, underscores, dashes, whitespace) the LLM sometimes copies
 /// verbatim off a bracketed/underscore-padded title fragment (e.g. `"叉子宝宝_"` from a title
@@ -172,23 +173,13 @@ async fn resolve_tags_for_known_kind(
 ) -> Result<Vec<String>, String> {
     match target {
         BackfillTarget::Cosplayer => {
-            let system = "你是一个从中文/日文/英文标题中识别コスプレイヤー（coser）网名的助手。\
-                标题的常见格式是「<coser网名> - <拍摄主题>」，coser网名通常在标题最前面，用 - 或空格分隔。\
-                如果标题里明显包含一个coser网名，原样输出（不翻译、不音译，保持原始大小写/文字）；\
-                如果无法确信地识别出网名，输出 null。\n\n\
-                只输出符合以下 TypeScript 类型的 JSON 对象，不要输出任何其它文字：\n\n\
-                ```typescript\n\
-                interface Response { cosplayer: string | null }\n\
-                ```";
+            let system = crate::llm_prompts::artist_backfill_cosplayer_system();
             let user = format!("标题：{title}");
-            let response = lanrurugi_llm::json_chat::<CosplayerBackfillResponse>(
-                &state.redis.config,
-                system,
-                &user,
-                0.2,
-                200,
-            )
-            .await?;
+            let response = state
+                .redis
+                .config
+                .json_chat::<CosplayerBackfillResponse>(&system, &user, 0.2, 200)
+                .await?;
             Ok(response
                 .cosplayer
                 .map(|s| clean_llm_name(&s))
@@ -198,24 +189,13 @@ async fn resolve_tags_for_known_kind(
                 .collect())
         }
         BackfillTarget::ArtistOrCircle => {
-            let system = "你是一个从中文/日文/英文的漫画/同人志标题中识别作者或社团名的助手。\
-                标题中可能包含个人作者名（通常用方括号标出，如「[作者名]」）或社团名（同人志社团），\
-                请判断这是个人创作还是社团作品，只填其中一个字段。\
-                原样输出识别到的名字（不翻译、不音译，保持原始文字）；\
-                如果无法确信地识别出作者或社团名，两个字段都输出 null。\n\n\
-                只输出符合以下 TypeScript 类型的 JSON 对象，不要输出任何其它文字：\n\n\
-                ```typescript\n\
-                interface Response { artist: string | null; circle: string | null }\n\
-                ```";
+            let system = crate::llm_prompts::artist_backfill_artist_or_circle_system();
             let user = format!("标题：{title}");
-            let response = lanrurugi_llm::json_chat::<ArtistBackfillResponse>(
-                &state.redis.config,
-                system,
-                &user,
-                0.2,
-                200,
-            )
-            .await?;
+            let response = state
+                .redis
+                .config
+                .json_chat::<ArtistBackfillResponse>(&system, &user, 0.2, 200)
+                .await?;
             let mut tags = Vec::new();
             if let Some(artist) = response
                 .artist
@@ -245,36 +225,16 @@ async fn resolve_tags_by_classifying(
     title: &str,
     category_name_hint: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    let system = "你是一个漫画/同人志/cosplay作品的分类与信息提取助手。\
-        给定一个档案标题（可能还附带一个用户自定义的分类名称作为参考线索，该线索不一定准确），\
-        请判断这个作品属于以下哪种类型：cosplay（角色扮演摄影）、doujinshi（同人志）、manga（漫画）、\
-        anthology（多作者合集）、unknown（无法判断）。\n\
-        判断类型后：\n\
-        - 如果是 cosplay，尝试从标题中识别coser网名，填入 cosplayer 字段\n\
-        - 如果是 doujinshi 或 manga，尝试识别个人作者名或社团名，只填 artist 或 circle 其中一个\n\
-        - 如果是 anthology 或 unknown，或者无法确信地识别出对应名字，相应字段留 null\n\
-        名字原样输出（不翻译、不音译，保持原始文字）。\n\n\
-        只输出符合以下 TypeScript 类型的 JSON 对象，不要输出任何其它文字：\n\n\
-        ```typescript\n\
-        interface Response {\n\
-          kind: \"cosplay\" | \"doujinshi\" | \"manga\" | \"anthology\" | \"unknown\"\n\
-          cosplayer: string | null\n\
-          artist: string | null\n\
-          circle: string | null\n\
-        }\n\
-        ```";
+    let system = crate::llm_prompts::artist_backfill_classify_system();
     let user = match category_name_hint {
         Some(name) => format!("标题：{title}\n用户自定义分类名称（参考线索，不一定准确）：{name}"),
         None => format!("标题：{title}"),
     };
-    let response = lanrurugi_llm::json_chat::<ClassifyAndBackfillResponse>(
-        &state.redis.config,
-        system,
-        &user,
-        0.2,
-        250,
-    )
-    .await?;
+    let response = state
+        .redis
+        .config
+        .json_chat::<ClassifyAndBackfillResponse>(&system, &user, 0.2, 250)
+        .await?;
 
     let mut tags = Vec::new();
     match response.kind.as_str() {
@@ -330,10 +290,7 @@ async fn find_category_name_hint(state: &AppState, archive_id: &str) -> Option<S
 /// LLM call itself fails — this is best-effort enrichment layered on top of ingestion, never a
 /// blocking step.
 pub async fn backfill_artist_tag(state: &AppState, archive_id: &str, title: &str, tags: &str) {
-    if lanrurugi_llm::resolve_api_key(&state.redis.config)
-        .await
-        .is_none()
-    {
+    if state.redis.config.ensure_available().await.is_err() {
         return;
     }
 

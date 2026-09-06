@@ -28,7 +28,7 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use lanrurugi_llm::{tool_chat_streaming, Message, ToolChatResponse};
+use lanrurugi_llm::{LlmClient, Message, ToolChatResponse};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
@@ -326,185 +326,15 @@ async fn resolve_credentials(
 }
 
 fn system_prompt(req: &GenerateRequest, deno_version: Option<&str>) -> String {
-    let (sample, sample_is_same_domain) = match &req.reference_sample_code {
-        Some(code) => (code.as_str(), true),
-        None => (
-            if req.plugin_type == "download" {
-                SAMPLE_DOWNLOAD
-            } else {
-                SAMPLE_METADATA
-            },
-            false,
-        ),
-    };
-    // FR-009: a same-domain sample can be a *different* plugin type than the one being generated
-    // now (the target type, by definition, never has an existing sample — FR-004 only lets the
-    // user select types the domain lookup found missing) — e.g. generating "download" for a
-    // domain whose "login" plugin already exists reuses that login plugin's source, even though
-    // its execLogin/credential-handling shape has nothing to do with execDownload's own contract.
-    // The wording below must say so explicitly: URL-matching/cookie/page-parsing conventions
-    // transfer across types on the same domain (genuinely useful), but the entry-function
-    // signature/return shape do NOT (must come from the SDK doc above instead) — an earlier
-    // version of this text claimed the sample was "同类型" (same-type) unconditionally, which
-    // could mislead the model into copying a structurally unrelated entry function.
-    let sample_note = if sample_is_same_domain {
-        "以下是该域名下已存在的插件代码（注意：类型可能与你现在要生成的不同，因为同一个域名下\
-        目标类型本身从不会已经存在插件——你现在要生成的类型是上面缺失的那个）。它的 URL 匹配方式、\
-        cookie/登录状态处理、页面解析思路仍然值得参考，但入口函数签名和返回值结构是每种类型各自\
-        独有的，不要因为看到这份样例就照抄其入口函数形状——具体以上面 SDK 文档里你现在要生成的\
-        类型的真实接口定义为准："
-    } else {
-        "该域名下没有可参考的现存插件；以下是一个通用教学样例（结构参考，不是同域名插件）："
-    };
-
-    let configurable_options_note = "此外，请结合你观察到的真实页面内容，主动判断该网站是否存在值得让\
-        用户自己选择的可配置项——例如页面同时提供多语种标题/描述、有多种可选的标签命名风格、同一资源有\
-        多种画质/分辨率可选等（多语种标题只是一个例子，不要局限于这一种情况，具体以你实际抓到的页面内容\
-        为准；如果页面结构简单、没有这类可选项，就不必强行发明一个）。发现这类可配置项时，把它们声明为 \
-        pluginInfo() 的 parameters（每项包含 name/description/required，required 通常为 false，因为\
-        这类选项一般有合理的默认行为），并在入口函数里从 hostArgs.customargs 按声明顺序读取对应的值—— \
-        这与已安装插件的设置页使用的是同一套机制，用户保存插件后可以在插件设置页里随时修改这些选项，\
-        不需要重新生成代码。";
-
-    let login_cookie_note = if req.login_association.is_some() {
-        "\n\n认证方式的优先级（这个插件已经关联了一个登录插件，见下方\"登录字段列表\"/\"配套登录插件\"\
-         说明）：真正的认证凭证在运行时通过 hostArgs.user_agent_cookies（cookie 认证站点）和/或 \
-         hostArgs.user_agent_headers（header/token 认证站点，例如 Authorization: Key <api_key> 这种）\
-         传入（宿主在每次调用前先跑一遍关联的登录插件，把它 execLogin 返回值里的 cookies/headers 两个\
-         字段分别注入到这里——具体两者哪个有值，取决于关联的登录插件本身是走 cookie 还是走 header 认证，\
-         你无法预先假设，必须两者都兼容处理），入口函数必须像这样消费——\
-         `const ua = legacyCompat.userAgent(); \
-         for (const c of (hostArgs.user_agent_cookies ?? [])) ua.cookie_jar.add(c); \
-         const headers = hostArgs.user_agent_headers ?? {}; \
-         if (Object.keys(headers).length > 0) ua.on(\"start\", (_ua, tx) => { for (const [k, v] of Object.entries(headers)) tx.req.headers.header(k, v); });` \
-         然后用这个已经带上认证态的 ua 发起请求。绝对不要在这个插件自己的 pluginInfo().parameters / \
-         customargs 里再重复声明一份账号/密码/API Key/Token 之类的凭证字段——凭证只应该在登录插件那一侧\
-         声明和填写一次，下载/元数据插件这一侧只管消费 user_agent_cookies/user_agent_headers，不能形成\
-         两条平行、互不相干的认证路径（这是一个已经在真实生成结果中出现过的错误：生成的下载插件声明了 \
-         login_from 却完全没用上 user_agent_cookies，反而自己又加了一个重复的凭证参数；另一个已经在真实\
-         代码库中发现过的错误是关联的登录插件本身走 header 认证却只返回了裸的 ua 对象而不声明 headers 字段\
-         ——ua 上通过 on(\"start\", ...) 设置的 header 是闭包函数，跨进程 JSON 序列化时会被静默丢弃，\
-         execLogin 必须显式在返回值里写 headers: {{ ... }} 才能让这个凭证真正传出去，见下方登录类型的\
-         专门说明）。下面提到的\"把 Auth 信息声明为 configurable option 从 customargs 读取\"的建议，只\
-         适用于**没有关联登录插件**、需要独立认证的情况，这里不适用。"
-    } else {
-        ""
-    };
-
-    let args_shape_note = match req.plugin_type.as_str() {
-        "metadata" => {
-            format!(
-                "重要：execMetadata(hostArgs) 的 hostArgs 实际结构为 \
-                 {{ url: string; arg: string; customargs: string[]; existing_tags: string; \
-                 archive_title: string; thumbnail_hash: string; user_agent_cookies?: {{name,value,domain,path}}[]; \
-                 user_agent_headers?: Record<string, string> }}。\
-                 目标页面地址在 hostArgs.url（与 hostArgs.arg 相同），不是 oneshot_arg，也不是 archive_id —— \
-                 插件 SDK 文档里的示例样例代码使用的是插件正式安装后、真实扫描归档时的参数形状，与向导试运行时\
-                 传入的参数形状不同，请以这里给出的真实结构为准。{login_cookie_note}\n\n{configurable_options_note}"
-            )
-        }
-        "download" => {
-            format!(
-                "重要：execDownload(hostArgs) 的 hostArgs 实际结构为 \
-                 {{ url: string; category: string; customargs: string[]; user_agent_cookies?: {{name,value,domain,path}}[]; \
-                 user_agent_headers?: Record<string, string> }}。\
-                 目标页面地址在 hostArgs.url，不是 oneshot_arg，也不是 archive_id —— 插件 SDK 文档里的示例样例\
-                 代码使用的是插件正式安装后、真实场景下的参数形状，与向导试运行时传入的参数形状不同，请以这里\
-                 给出的真实结构为准。\n\n\
-                 定位真实下载地址时：如果接口文档里已经存在一个明确标注为下载/获取文件相关的端点\
-                 （通常会标注 Auth 方式、Rate limit、需要的参数等），优先直接采用文档给出的这个端点，\
-                 不要舍近求远去猜测拼接未文档化的 CDN/图片地址——文档化的官方接口更稳定，不容易因为站点\
-                 改版而失效。扫描文档罗列的多个端点时，路径或名称里带 download、archive、file 这类字样的\
-                 端点应优先尝试。如果该端点标注需要 Auth（token/API key/cookie 等），把它作为一个\
-                 configurable option 声明（见下方说明），从 hostArgs.customargs 读取，不要假设一定有\
-                 免登录的下载方式。{login_cookie_note}\n\n{configurable_options_note}"
-            )
-        }
-        _ => {
-            "重要：execLogin(hostArgs) 的 hostArgs 实际结构为 { customargs: string[] }。customargs \
-             数组按下面给出的\"登录字段列表\"顺序对应传入——你必须把这个字段列表原样声明为 pluginInfo() \
-             的 parameters（name/description/required 三个字段照抄，不要自己另外发明字段名或增减字段），\
-             并在 execLogin 里按声明顺序从 customargs[0]、customargs[1]... 依次读取，不能假设一定是账号\
-             密码两个字段——具体是账号密码、还是单个 token/API key、还是 cookie 值，以字段列表的实际\
-             内容为准。\n\n\
-             execLogin 的返回值必须能真正让下游元数据/下载插件用上这次登录得到的凭证，返回值形状为 \
-             LoginResult = {{ cookies?: {{name,value,domain,path}}[]; headers?: Record<string, string>; \
-             error?: {{...}} }}——按目标站点的真实认证方式二选一（也可以两者都填）：\
-             (1) 如果站点用 Set-Cookie/session cookie 认证，用 legacyCompat.userAgent() 构造 ua、通过 \
-             ua.cookie_jar.add(...) 添加 cookie，最后 return ua（宿主只读取其中的 cookies 字段，其余属性\
-             会在跨进程传输时被丢弃，这是预期行为）；\
-             (2) 如果站点用 Authorization/自定义 header 或裸 token 认证（例如 API Key），绝对不要指望通过\
-             ua.on(\"start\", ...) 设置的 header 能传出去——那是一个闭包函数，会在跨进程 JSON 序列化时被\
-             静默丢弃，下游插件永远收不到。正确做法是直接在返回值里显式声明 \
-             `return {{ headers: {{ Authorization: `Key ${{apiKey}}` }} }};`（字段名和值按目标站点真实\
-             要求的 header 名/格式来定，不必是 Authorization），完全不需要用到 legacyCompat.userAgent()。\
-             不确定目标站点是 cookie 认证还是 header 认证时，以你在 fetch_page 里观察到的真实响应头/请求\
-             要求为准，不要凭经验猜测。"
-                .to_string()
-        }
-    };
-
-    let runtime_note = match deno_version {
-        Some(v) => format!(
-            "运行环境：这份代码最终会被 Deno（{v}）作为 ES 模块直接执行，不是 Node.js——没有 \
-            require/module.exports，全局已经有标准 fetch/URL/TextEncoder 等 Web API 可用，不需要\
-            额外 import 它们；文件扩展名是 .ts，但 Deno 运行 .ts 时只是把类型注解剥离后当 ES 模块\
-            执行，并不做独立的类型检查。"
-        ),
-        None => "运行环境：这份代码最终会被 Deno 作为 ES 模块直接执行，不是 Node.js——没有 require/\
-            module.exports，全局已经有标准 fetch/URL/TextEncoder 等 Web API 可用。"
-            .to_string(),
-    };
-
-    format!(
-        "你是 LANrurugi 项目的插件开发助手。{runtime_note}\n\n以下是插件 SDK 的完整类型/接口定义：\n\n```ts\n{PLUGIN_SDK}\n```\n\n\
-        {sample_note}\n\n```ts\n{sample}\n```\n\n\
-        {args_shape_note}\n\n\
-        请生成一个类型为 \"{}\" 的插件代码，遵循 SDK 约定导出 pluginInfo() 和对应的入口函数。\
-        pluginInfo() 的返回值必须包含 generated_by_wizard: true（这是本向导生成的插件的持久化标记，\
-        必须原样保留，不得省略）。\n\n\
-        pluginInfo() 的返回值还必须包含 domain_match 字段——一个字符串数组，列出这个插件真正处理的\
-        每一个裸域名（不带协议前缀、不带路径，例如 [\"nhentai.net\"]，而不是 \"nhentai.net/g/\" 这种\
-        带路径的写法）。domain_match 和 url_pattern 用途完全不同，不要混淆：url_pattern 仍按你平时的\
-        写法来，是判断一个具体 URL 是否该触发这个插件真正抓取/下载的精确正则，可以包含路径/参数等\
-        限制条件；domain_match 只用于回答\"这个域名是否已经有插件在处理\"这种更宽松的归属判断，只列\
-        域名本身，不要写正则或路径片段。如果这个插件对应多个等价域名（如同一站点的桌面版/移动版域名），\
-        把它们都列进 domain_match 数组。\n\n\
-        用户没有提供页面结构描述——你必须主动调用 fetch_page 工具抓取下面\
-        提供的真实链接，根据真实返回的内容自行判断目标字段（标题/标签/下载地址等）在页面中的选择器或\
-        提取方式，不要凭空猜测选择器。\n\n\
-        提供的链接里如果同时包含接口文档类地址（能看出是 API 文档/OpenAPI 规范的链接，或者抓回来的\
-        内容本身就是接口说明文本而不是一个具体资源页）和具体资源样例页面（比如某个画廊/条目的详情\
-        页），两者的分析价值不对等：文档类链接应该优先、完整地抓取，它直接给出数据结构、字段名、\
-        接口路径这些真正需要的信息；具体资源样例页面主要用于核对你从文档里理解的结构是否与真实返回\
-        一致，抓 1-2 个核对即可，不需要为了互相印证而把每一个样例链接都抓一遍——尤其是文档已经把\
-        结构讲清楚时，继续逐个抓取样例链接不会带来新的结构性信息，只会浪费时间、增加超时风险。\n\n\
-        格式要求（严格遵守，不要模仿上方 SDK 类型定义文件开头可能出现的写法）：\n\
-        - 绝对不要输出 /// <reference types=\"...\" /> 这类三斜线指令。上面贴出的 SDK 类型定义文件\
-        自己开头有一行这样的指令，那是那个文件自己在仓库目录结构里的相对路径引用，只对它自己有意义；\
-        你生成的插件文件路径和用途都完全不同，机械照抄这一行只会产生一个指向错误路径、毫无意义的引用，\
-        必须整行省略。\n\
-        - 使用标准的 2 空格缩进，同一层级的代码保持相同缩进量，进入代码块（{{、(、[）缩进只增加一级、\
-        退出代码块缩进立即恢复到该级别原来的宽度——不要出现缩进随行数递增、只增不减的情况。\n\
-        - 不要重复声明上方 SDK 类型定义文件里已经给出的接口本身（如 PluginInfoResult、\
-        DeclaredPermissions、MetadataResult、DownloadResult 等——这些类型已经在上面完整给出，直接\
-        引用/复用它们描述的形状即可，不需要在你自己的文件里重新写一遍 interface/type 声明）。\
-        但这**不代表**整份代码可以退化成不带类型的纯 JavaScript——这仍然是一份 .ts \
-        文件，你自己声明的辅助函数、局部变量、返回值该标类型就要标类型，正常写地道的 TypeScript；\
-        只省略重新声明一遍 SDK 已经给出的接口这一件具体的事，不要把这条理解成整个文件都不用写\
-        类型注解。把篇幅留给真正的业务逻辑（页面抓取、字段提取），不要为了看起来更规范而重复抄写\
-        已经在 SDK 文档里出现过的接口定义。\n\n\
-        最终按以下格式输出，分两部分，不要用 markdown 代码块包裹任何一部分：\n\
-        第一部分是完整的 .ts 源代码本身；紧接着另起一行，写上分隔符 {EXPLANATION_MARKER}；分隔符之后，\
-        用中文简要说明这段代码具体做了什么——它依赖哪些真实页面/接口结构、从中提取了哪些字段、有没有做\
-        容错或多种情况的回退处理，让用户不用读代码就能大致判断这个插件是否符合预期、有没有遗漏明显应该\
-        支持的情况。这段说明是给最终用户看的产品说明，不是代码注释，不需要逐行讲解实现细节。\n\n\
-        重要：这个最终答案的**第一个字符**就必须是代码本身（比如 export function pluginInfo()），\
-        前面不能有任何导言、总结陈述或类似我已经分析完毕、关键发现是这类过渡性文字——如果你想\
-        描述分析过程或思路，只能放在分隔符 {EXPLANATION_MARKER} 之后的说明部分，绝不能出现在代码\
-        前面，哪怕只有一行。代码前面一旦出现任何非代码文本，整个文件就不再是合法的 TypeScript，会\
-        直接导致格式化和加载失败。",
-        req.plugin_type,
+    crate::llm_prompts::plugin_generation_system_prompt(
+        &req.plugin_type,
+        req.reference_sample_code.as_deref(),
+        req.login_association.is_some(),
+        deno_version,
+        SAMPLE_METADATA,
+        SAMPLE_DOWNLOAD,
+        PLUGIN_SDK,
+        EXPLANATION_MARKER,
     )
 }
 
@@ -825,23 +655,18 @@ async fn run_generation(
         // that case), so this one call site correctly covers both round shapes without needing to
         // know in advance which one a given round will turn out to be.
         let event_tx_for_delta = event_tx.clone();
-        let response = tool_chat_streaming(
-            &state.redis.config,
-            &messages,
-            &tools,
-            0.3,
-            16000,
-            false,
-            move |delta| {
+        let response = state
+            .redis
+            .config
+            .tool_chat_streaming(&messages, &tools, 0.3, 16000, false, move |delta| {
                 let _ = event_tx_for_delta.send(
                     Event::default()
                         .event("content_delta")
                         .data(json!({ "text": delta }).to_string()),
                 );
-            },
-        )
-        .await
-        .map_err(GenerateError::LlmUnavailable)?;
+            })
+            .await
+            .map_err(GenerateError::LlmUnavailable)?;
 
         match response {
             ToolChatResponse::Content(content) => {

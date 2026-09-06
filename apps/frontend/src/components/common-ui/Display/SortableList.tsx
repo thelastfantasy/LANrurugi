@@ -63,6 +63,7 @@ export function SortableList<T>({
   onReorder,
   renderItem,
   direction = "vertical",
+  onScroller,
 }: {
   items: T[]
   getId: (item: T) => string
@@ -71,6 +72,11 @@ export function SortableList<T>({
   renderItem: (item: T, dragHandleProps: DragHandleProps) => React.ReactNode
   /** `'horizontal'` reorders left/right in a scrolling flex row instead of vertically. */
   direction?: "vertical" | "horizontal"
+  /** Exposes the internal Lenis instance (horizontal mode only) so a caller can drive prev/next-
+   * arrow buttons the same way `RecentlyAddedCarousel`'s own carousel does — a callback, not a
+   * plain `RefObject`, so the caller can mirror it into its own state and actually re-render (a
+   * ref write alone wouldn't) when this list's own scroll container is created or torn down. */
+  onScroller?: (lenis: Lenis | null) => void
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const byId = new Map(items.map((item) => [getId(item), item]))
@@ -92,8 +98,22 @@ export function SortableList<T>({
       autoRaf: true,
     })
     lenisRef.current = lenis
-    return () => { lenis.destroy(); lenisRef.current = null }
-  }, [direction])
+    onScroller?.(lenis)
+    return () => {
+      lenis.destroy()
+      lenisRef.current = null
+      onScroller?.(null)
+    }
+  }, [direction, onScroller])
+
+  // Lenis's own `ResizeObserver` watches `wrapper`/`content`'s own border-box, which here is the
+  // same fixed-size flex element for both — it never fires just because the item count (and thus
+  // `scrollWidth`) changed underneath it. Force a re-measure whenever the actual list changes so
+  // e.g. selecting/deselecting archives on the Library page doesn't leave the arrow buttons'
+  // `scrollTo` calls clamped to a stale, smaller `limit`.
+  useEffect(() => {
+    lenisRef.current?.resize()
+  }, [items])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),

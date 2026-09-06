@@ -111,6 +111,10 @@ pub mod action_types {
     /// "only the real mutating action, not every intermediate step" convention as everywhere else
     /// in this module).
     pub const PLUGIN_WIZARD_SAVE: &str = "plugin_wizard.save";
+    /// Manual/background split execution: one record per user-initiated split operation.
+    pub const ARCHIVE_SPLIT_EXECUTE: &str = "archive.split_execute";
+    /// One record per successfully created split ZIP archive.
+    pub const ARCHIVE_SPLIT_ZIP_CREATED: &str = "archive.split_zip_created";
     /// Automatic: the file watcher/scanner catalogued a new archive on its own.
     pub const SCANNER_INGEST: &str = "scanner.ingest";
     /// Automatic: metadata plugins ran without being tied to a manual upload/download that
@@ -131,6 +135,25 @@ pub mod action_types {
     /// Never written when the linkage didn't actually fire (setting off, page already in the
     /// target state, or other stamps remain on the page).
     pub const STAMP_BOOKMARK_SYNC: &str = "stamp.bookmark_sync";
+    /// `POST /login` succeeding — the SPA session's own sign-in, not a legacy-mimicking API-token
+    /// auth. Deliberately does NOT have a counterpart for a successful `POST /token/refresh`: a
+    /// refresh happens silently every `access_token_lifetime_secs` (default 4h) for as long as a
+    /// tab stays open, and on every 401 any protected endpoint returns — recording each one would
+    /// bury genuinely actionable entries (deletes, settings changes, ...) under routine background
+    /// noise. `SESSION_LOGIN`/`SESSION_LOGIN_FAILED`/`SESSION_LOGOUT` mark real session
+    /// boundaries; only `RotateOutcome::ReuseDetected` on the refresh path is exceptional enough
+    /// to warrant its own record (see `SESSION_REFRESH_REUSE_DETECTED`).
+    pub const SESSION_LOGIN: &str = "session.login";
+    /// A wrong password at `POST /login` — the one login-related event worth recording even though
+    /// it isn't a mutation, since a run of these is a brute-force signal an operator would want to
+    /// see in the activity log rather than only in the raw request log.
+    pub const SESSION_LOGIN_FAILED: &str = "session.login_failed";
+    pub const SESSION_LOGOUT: &str = "session.logout";
+    /// `POST /token/refresh` detecting reuse of an already-rotated-out refresh token — the entire
+    /// token family is burned in response (every session derived from that original login is force-
+    /// logged-out). Unlike a routine successful refresh, this is a real security-relevant event an
+    /// operator should see, not background noise.
+    pub const SESSION_REFRESH_REUSE_DETECTED: &str = "session.refresh_reuse_detected";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -703,6 +703,65 @@ export function MarkerLayer({
 
             const iconPos = rect ? anchorOnRect(rect) : (drag?.stampId === stamp.id ? drag : stored)
 
+            const markerEl = (
+              <div
+                className="marker"
+                style={{
+                  left: `${iconPos.x}%`,
+                  top: `${iconPos.y}%`,
+                  cursor: rect ? (isSelected ? "grab" : "pointer") : isDragging ? "grabbing" : "grab",
+                  pointerEvents: "auto",
+                  touchAction: "none",
+                  ...(stamp.icon && { backgroundImage: "none" }),
+                }}
+                onMouseEnter={() => rect && setHoveredStampId(stamp.id)}
+                onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
+                onPointerDown={(e) => {
+                  if (!loggedIn) return
+                  if (rect) {
+                    rectEditedRef.current = false
+                    if (isSelected) handleIconAnchorDragPointerDown(e, stamp.id, rect)
+                    return
+                  }
+                  draggedRef.current = false
+                  handleMarkerPointerDown(e, stamp.id, iconPos.x, iconPos.y)
+                }}
+                onClick={(e) => {
+                  if (draggedRef.current || rectEditedRef.current || !loggedIn) {
+                    e.preventDefault()
+                    return
+                  }
+                  setSelectedStampId(stamp.id)
+                }}
+                onDoubleClick={() => {
+                  if (!loggedIn) return
+                  void openEditorForExisting(stamp.id)
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  if (!loggedIn) return
+                  setMenu({ stampId: stamp.id, x: e.clientX, y: e.clientY })
+                }}
+              >
+                {stamp.icon && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 20,
+                      lineHeight: 1,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {renderStampIcon(stamp.icon)}
+                  </span>
+                )}
+              </div>
+            )
+
             return (
               <div key={stamp.id} data-stamp-id={stamp.id}>
                 {rect && (rect.display === "always" || isHovered || isSelected) && (
@@ -762,64 +821,19 @@ export function MarkerLayer({
                       })}
                   </div>
                 )}
-                <Tooltip label={stamp.content} wrapperStyle={{ position: "static" }} anchor="cursor">
-                  <div
-                    className="marker"
-                    style={{
-                      left: `${iconPos.x}%`,
-                      top: `${iconPos.y}%`,
-                      cursor: rect ? (isSelected ? "grab" : "pointer") : isDragging ? "grabbing" : "grab",
-                      pointerEvents: "auto",
-                      touchAction: "none",
-                      ...(stamp.icon && { backgroundImage: "none" }),
-                    }}
-                    onMouseEnter={() => rect && setHoveredStampId(stamp.id)}
-                    onMouseLeave={() => !isRectEditing && setHoveredStampId(null)}
-                    onPointerDown={(e) => {
-                      if (!loggedIn) return
-                      if (rect) {
-                        rectEditedRef.current = false
-                        if (isSelected) handleIconAnchorDragPointerDown(e, stamp.id, rect)
-                        return
-                      }
-                      draggedRef.current = false
-                      handleMarkerPointerDown(e, stamp.id, iconPos.x, iconPos.y)
-                    }}
-                    onClick={(e) => {
-                      if (draggedRef.current || rectEditedRef.current || !loggedIn) {
-                        e.preventDefault()
-                        return
-                      }
-                      setSelectedStampId(stamp.id)
-                    }}
-                    onDoubleClick={() => {
-                      if (!loggedIn) return
-                      void openEditorForExisting(stamp.id)
-                    }}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      if (!loggedIn) return
-                      setMenu({ stampId: stamp.id, x: e.clientX, y: e.clientY })
-                    }}
-                  >
-                    {stamp.icon && (
-                      <span
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 20,
-                          lineHeight: 1,
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {renderStampIcon(stamp.icon)}
-                      </span>
-                    )}
-                  </div>
-                </Tooltip>
+                {/* On a touch-only device, a tap synthesizes `mouseenter` too
+                    (`useSupportsHover`'s own docs: "fire on tap"), so wrapping in the
+                    hover-triggered `Tooltip` here would pop that bubble open right on top of the
+                    always-on `StaticTooltip` below — two labels for the same stamp. Hover and
+                    "always visible" are mutually exclusive by device capability, not something a
+                    user can have both of. */}
+                {supportsHover ? (
+                  <Tooltip label={stamp.content} wrapperStyle={{ position: "static" }} anchor="cursor">
+                    {markerEl}
+                  </Tooltip>
+                ) : (
+                  markerEl
+                )}
                 {!supportsHover && (
                   <StaticTooltip
                     xPercent={iconPos.x}

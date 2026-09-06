@@ -478,8 +478,18 @@ struct BookmarkedPageJson {
 /// has no bookmarks to report (and no filenames to resolve).
 async fn list_bookmarks_for_archive(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
     Path(archive_id): Path<ArchiveId>,
 ) -> Response {
+    // Guest scoping is a resource-level concern (FR-011): a guest must not be able to read
+    // bookmarks for an archive outside the guest-visible set, even though `GET
+    // /archives/:id/bookmarks` is on guest_visitor's route whitelist for the Reader.
+    if crate::archives::guest_scope_denies(&state, auth.as_deref(), &archive_id).await {
+        return not_found(
+            "list_bookmarks_for_archive",
+            format!("{archive_id} does not exist."),
+        );
+    }
     let bookmarks = match state.bookmarks.list_for_archive(archive_id.as_str()).await {
         Ok(bookmarks) => bookmarks,
         Err(e) => {

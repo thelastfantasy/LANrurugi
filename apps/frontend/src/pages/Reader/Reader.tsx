@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -20,6 +20,7 @@ import {
   usePageDimensions,
   useRemoveBookmark,
   useSettings,
+  useTankoubonFull,
   useUpdateProgress,
   useUpdateSettings,
   useUpdateTankoubonProgress,
@@ -64,12 +65,32 @@ import {
 } from "./crossArchiveNav";
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
+import { TankoubonSplitModal } from "./TankoubonSplitModal";
 
 // Port of legacy's reader page (`reader.html.tt2` + `reader.js`) — real DOM structure
 // (`#i1`-`#i7`) and CSS classnames from `/legacy/lrr.css`, not Tailwind.
 
 /** Uniform icon size (rem, not em) for every paginator nav link. */
 const PAGINATOR_ICON_FONT_SIZE = "1.75rem";
+/** How many prefetched/current Blob URLs to keep in memory. Beyond this the oldest non-current
+ * page blob is revoked, keeping repeated paging fast without holding an entire archive in RAM. */
+const MAX_PAGE_BLOB_CACHE = 8;
+
+/** Device-derived short-edge cap for the full WebP. Uses DPR and viewport width so a phone can ask
+ * for a sharper full image now that tiny handles the first paint, while still bounding the server
+ * encode size. Values are clamped server-side too. */
+function readerFullShortEdge(): number {
+  if (typeof window === "undefined") return 960;
+  const dpr = window.devicePixelRatio || 1;
+  // Use the larger of viewport-derived and screen-reported width. On some Android Firefox
+  // configurations `devicePixelRatio` is reported as 1 while `screen.width` still carries the real
+  // physical width; max() avoids falling back to the old 960 default in that case.
+  const viewportWidth = window.innerWidth || 0;
+  const physicalFromViewport = Math.round(viewportWidth * dpr);
+  const physicalFromScreen = Math.max(window.screen.width || 0, window.screen.availWidth || 0);
+  const physical = Math.max(physicalFromViewport, physicalFromScreen);
+  return Math.max(960, Math.min(1440, physical || 960));
+}
 /** `.pagecount`'s font-size, scaled up alongside the paginator icons above. */
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
@@ -136,7 +157,9 @@ export function Reader() {
   const singleMetadata = useArchiveMetadata(isTank ? null : archiveId);
   const singlePages = useArchivePages(isTank ? null : archiveId);
   const tankReading = useTankoubonReading(isTank ? archiveId : null);
+  const tankFull = useTankoubonFull(isTank ? archiveId : null);
   const metadata = isTank ? tankReading.metadata : singleMetadata;
+  const tankSplitCandidates = tankFull.data?.result.full_data.filter((m) => m.has_split_suggestion) ?? []
   const pages = isTank ? tankReading.pages : singlePages;
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
@@ -179,6 +202,7 @@ export function Reader() {
   const openedByDefaultSetting = useRef(
     readerSettings.showOverlayByDefault || startWithOverview,
   );
+  const [showTankSplit, setShowTankSplit] = useState(false)
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   );
@@ -237,6 +261,27 @@ export function Reader() {
   const imageAreaRef = useRef<HTMLDivElement>(null);
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
+  // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
+  // part of the file-info bar while the actual image is still transferring (it used to wait for
+  // `img.onload`, then issue a HEAD request on top of that — on mobile that made the text below a
+  // page appear only after the whole large image had finished downloading).
+  const prefetchedPageSizesRef = useRef<Set<number>>(new Set());
+  const [pageBlobUrls, setPageBlobUrls] = useState<Record<number, string>>({});
+  const [pageImageError, setPageImageError] = useState<Record<number, boolean>>({});
+  const [pageTinyBlobs, setPageTinyBlobs] = useState<Record<number, string>>({});
+  const [pageTinyDims, setPageTinyDims] = useState<
+    Record<number, { width: number; height: number }>
+  >({});
+  const displayedLeftSrcRef = useRef<string | undefined>(undefined);
+  const displayedRightSrcRef = useRef<string | undefined>(undefined);
+  const pageBlobUrlsRef = useRef<Map<number, string>>(new Map());
+  const pageImageFetchesRef = useRef<
+    Map<number, { controller: AbortController; priority: "current" | "prefetch" }>
+  >(new Map());
+  const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
+  const pageTinyDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
+  const pageTinyFetchesRef = useRef<Map<number, AbortController>>(new Map());
+  const currentPageNumbersRef = useRef<number[]>([]);
 
   const localReaderProgress =
     archiveId && usesLocalReaderProgress(loggedIn, settings.data)
@@ -277,13 +322,128 @@ export function Reader() {
       );
 
   const currentSpreadLoaded =
-    pageDimensions[spread.left] !== undefined &&
-    (spread.right === null || pageDimensions[spread.right] !== undefined);
+    (pageDimensions[spread.left] !== undefined &&
+      (spread.right === null || pageDimensions[spread.right] !== undefined)) ||
+    (spread.right === null
+      ? !!pageTinyBlobs[spread.left]
+      : !!pageTinyBlobs[spread.left] && !!pageTinyBlobs[spread.right]);
 
   const infiniteScrollResumeReady =
     infiniteScrollResumePageRef.current === null ||
     infiniteScrollResumePageRef.current <= 1 ||
     infiniteScrollResumeDimensions.isSuccess;
+
+  // Fetch page images via `fetch()` with an explicit `X-LRR-Priority` header instead of relying on
+  // `<img src>` alone. This is what makes the Rust-side priority queue actually effective: the
+  // server can tell a current-page request (`current`) from a speculative preload (`prefetch`),
+  // which `<img>`/`<link rel=preload>` cannot express portably across browsers. Displaying the
+  // result as a Blob URL also lets Firefox/Android use the same source regardless of its weaker
+  // `fetchpriority` support.
+  const fetchPageImage = useCallback(
+    (page: number, priority: "current" | "prefetch") => {
+      const url = pages.data?.pages[page - 1]?.url;
+      if (!url) return;
+      if (pageBlobUrlsRef.current.has(page)) return;
+      const existing = pageImageFetchesRef.current.get(page);
+      if (existing && existing.priority === priority) return;
+      existing?.controller.abort();
+      const controller = new AbortController();
+      pageImageFetchesRef.current.set(page, { controller, priority });
+      const fullUrl = new URL(url, window.location.origin);
+      fullUrl.searchParams.set("max_short_edge", String(readerFullShortEdge()));
+      fetch(fullUrl.toString(), {
+        headers: { "X-LRR-Priority": priority },
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`page fetch failed: ${res.status}`);
+          return res.blob();
+        })
+        .then((blob) => {
+          if (pageImageFetchesRef.current.get(page)?.controller !== controller) return;
+          const blobUrl = URL.createObjectURL(blob);
+          const map = pageBlobUrlsRef.current;
+          const old = map.get(page);
+          if (old) URL.revokeObjectURL(old);
+          map.delete(page);
+          map.set(page, blobUrl);
+          while (map.size > MAX_PAGE_BLOB_CACHE) {
+            const oldest = map.keys().next().value;
+            if (oldest === undefined || currentPageNumbersRef.current.includes(oldest)) break;
+            const victimUrl = map.get(oldest);
+            if (
+              victimUrl === displayedLeftSrcRef.current ||
+              victimUrl === displayedRightSrcRef.current
+            ) {
+              // This blob is the stale image still shown (and blurred) while the next page loads;
+              // revoking it now would make the reader flash blank instead of keeping the transition.
+              break;
+            }
+            map.delete(oldest);
+            if (victimUrl) URL.revokeObjectURL(victimUrl);
+          }
+          setPageBlobUrls(Object.fromEntries(map));
+          const tinyUrl = pageTinyBlobsRef.current.get(page);
+          if (tinyUrl) {
+            URL.revokeObjectURL(tinyUrl);
+            pageTinyBlobsRef.current.delete(page);
+            setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+          }
+          setPageImageError((prev) => ({ ...prev, [page]: false }));
+          pageImageFetchesRef.current.delete(page);
+        })
+        .catch((err: unknown) => {
+          if (pageImageFetchesRef.current.get(page)?.controller !== controller) return;
+          pageImageFetchesRef.current.delete(page);
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setPageImageError((prev) => ({ ...prev, [page]: true }));
+        });
+    },
+    [pages.data, setPageBlobUrls, setPageImageError, setPageTinyBlobs],
+  );
+
+  // Fetches a much smaller WebP preview for the current page only. It is shown immediately so the
+  // reader never stares at a blank/old page even on slow connections; when the full-resolution blob
+  // arrives, the UI swaps it in. The preview is intentionally excluded from file-info metadata.
+  const fetchTinyPreview = useCallback(
+    (page: number) => {
+      const url = pages.data?.pages[page - 1]?.url;
+      if (!url) return;
+      if (pageBlobUrlsRef.current.has(page) || pageTinyBlobsRef.current.has(page)) return;
+      const existing = pageTinyFetchesRef.current.get(page);
+      if (existing) return;
+      const controller = new AbortController();
+      pageTinyFetchesRef.current.set(page, controller);
+      const tinyUrl = new URL(url, window.location.origin);
+      tinyUrl.searchParams.set("variant", "tiny");
+      fetch(tinyUrl.toString(), {
+        headers: { "X-LRR-Priority": "preview" },
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`preview fetch failed: ${res.status}`);
+          const width = Number(res.headers.get("x-lrr-preview-width"));
+          const height = Number(res.headers.get("x-lrr-preview-height"));
+          if (width > 0 && height > 0) {
+            pageTinyDimsRef.current.set(page, { width, height });
+            setPageTinyDims(Object.fromEntries(pageTinyDimsRef.current));
+          }
+          return res.blob();
+        })
+        .then((blob) => {
+          if (pageTinyFetchesRef.current.get(page) !== controller) return;
+          pageTinyFetchesRef.current.delete(page);
+          const blobUrl = URL.createObjectURL(blob);
+          pageTinyBlobsRef.current.set(page, blobUrl);
+          setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+        })
+        .catch(() => {
+          if (pageTinyFetchesRef.current.get(page) !== controller) return;
+          pageTinyFetchesRef.current.delete(page);
+        });
+    },
+    [pages.data, setPageTinyBlobs, setPageTinyDims],
+  );
 
   useEffect(() => {
     document.body.classList.toggle(
@@ -292,6 +452,83 @@ export function Reader() {
     );
     return () => document.body.classList.remove("infinite-scroll");
   }, [readerSettings.infiniteScroll]);
+
+  // Always (re)fetch the currently visible page(s) as high-priority `current` requests. If a
+  // prefetch was already in flight for the same page, it is upgraded/cancelled and replaced by the
+  // high-priority request, which is what makes rapid multi-page jumps reach the final page first.
+  useEffect(() => {
+    if (readerSettings.infiniteScroll) return;
+    const pageNumbers =
+      spread.right === null ? [spread.left] : [spread.left, spread.right];
+    currentPageNumbersRef.current = pageNumbers;
+    // First page of a fresh archive: there is no previous bitmap to keep visible, so waiting for
+    // the 300ms settle would leave a blank img. Start preview+full immediately for the initial page.
+    if (displayedLeftSrcRef.current === undefined && pageNumbers.length > 0) {
+      for (const page of pageNumbers) {
+        if (page < 1) continue;
+        fetchTinyPreview(page);
+        fetchPageImage(page, "current");
+      }
+    }
+    // Abort any still-in-flight request for a page that is no longer on screen. Under a slow/throttled
+    // network these stale downloads otherwise keep occupying browser connections and make the newest
+    // current page wait behind pages the user already flipped past.
+    for (const [page, fetch] of [...pageImageFetchesRef.current]) {
+      if (!pageNumbers.includes(page)) {
+        fetch.controller.abort();
+      }
+    }
+  }, [spread.left, spread.right, fetchPageImage, fetchTinyPreview, readerSettings.infiniteScroll]);
+
+  // Tiny previews are only for the page the user actually stops on. Starting one on every
+  // intermediate page during a rapid flip would add extra small requests that are almost always
+  // wasted. Wait for the current page to settle before creating it.
+  useEffect(() => {
+    if (readerSettings.infiniteScroll) return;
+    const timer = window.setTimeout(() => {
+      const pageNumbers =
+        spread.right === null ? [spread.left] : [spread.left, spread.right];
+      for (const page of pageNumbers) {
+        if (page < 1) continue;
+        // Tiny first: the reader gets a small preview as soon as the user stops. Full starts right
+        // after so the seamless high-quality replacement follows in the background.
+        fetchTinyPreview(page);
+        fetchPageImage(page, "current");
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [spread.left, spread.right, readerSettings.infiniteScroll, fetchTinyPreview, fetchPageImage]);
+
+  // Start the file-size HEAD requests as soon as the page URLs are known, instead of only after
+  // each `<img>` finishes loading. The file-info bar can then render `name :: size KB` while the
+  // image itself is still being downloaded; dimensions fill in later when `onImageLoad` fires.
+  useEffect(() => {
+    if (!pages.data || !pages.data.pages.length) return
+    const pageNumbers =
+      spread.right === null ? [spread.left] : [spread.left, spread.right]
+    for (const page of pageNumbers) {
+      if (page < 1 || page > pages.data.pages.length) continue
+      if (prefetchedPageSizesRef.current.has(page)) continue
+      const url = pages.data.pages[page - 1]?.url
+      if (!url) continue
+      prefetchedPageSizesRef.current.add(page)
+      const absoluteUrl = new URL(url, window.location.origin).toString()
+      void fetchContentLengthKb(absoluteUrl).then((kb) => {
+        if (kb !== null) {
+          setPageSizesKb((prev) =>
+            prev[page] !== undefined ? prev : { ...prev, [page]: kb },
+          )
+        }
+      })
+      void fetchResizedPageInfo(absoluteUrl).then((info) => {
+        if (info !== null) {
+          setResizedPageInfo((prev) =>
+            prev[page] !== undefined ? prev : { ...prev, [page]: info },
+          )
+        }
+      })
+    }
+  }, [pages.data, spread.left, spread.right]);
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
@@ -313,23 +550,47 @@ export function Reader() {
   }, [archiveId, isTank, totalPages, currentPage, newBadgeMode]);
 
   useEffect(() => {
+    if (readerSettings.infiniteScroll) return;
     if (!pages.data || readerSettings.preloadCount <= 0) return;
-    const urls: string[] = [];
-    for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
-      const page = currentPage + offset;
-      if (page > totalPages) break;
-      const url = pages.data.pages[page - 1]?.url;
-      if (url) urls.push(url);
-    }
-    const preloaded = urls.map((url) => {
-      const img = new Image();
-      img.src = url;
-      return img;
-    });
-    return () => {
-      preloaded.length = 0;
-    };
-  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount]);
+    const pageList = pages.data;
+    // Debounce prefetching: while the user is rapidly clicking next/prev, speculative requests for
+    // every intermediate page (5, 6, 7, ...) only queue up behind the page the reader actually
+    // needs to show right now. Waiting until the current page settles means those low-priority
+    // prefetch images are only requested once the user has stopped flipping, so the final page gets
+    // the full queue of browser/network capacity in the meantime.
+    const timer = window.setTimeout(() => {
+      const prefetchPages: number[] = [];
+      for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
+        const nextPage = currentPage + offset;
+        if (nextPage <= totalPages) {
+          const url = pageList.pages[nextPage - 1]?.url;
+          if (url) prefetchPages.push(nextPage);
+        }
+        const prevPage = currentPage - offset;
+        if (prevPage >= 1) {
+          const url = pageList.pages[prevPage - 1]?.url;
+          if (url) prefetchPages.push(prevPage);
+        }
+      }
+      for (const page of prefetchPages) {
+        fetchPageImage(page, "prefetch");
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount, readerSettings.infiniteScroll, fetchPageImage]);
+
+  // Revoke all Blob URLs and abort in-flight fetches when the reader unmounts.
+  useEffect(() => {
+    const fetches = [...pageImageFetchesRef.current.values()];
+    for (const fetch of fetches) fetch.controller.abort();
+    pageImageFetchesRef.current.clear();
+    const blobUrls = [...pageBlobUrlsRef.current.values()];
+    for (const url of blobUrls) URL.revokeObjectURL(url);
+    pageBlobUrlsRef.current.clear();
+    const tinyUrls = [...pageTinyBlobsRef.current.values()];
+    for (const url of tinyUrls) URL.revokeObjectURL(url);
+    pageTinyBlobsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!archiveId) return;
@@ -536,20 +797,33 @@ export function Reader() {
   ) {
     const img = e.currentTarget;
     const isWide = img.naturalWidth > img.naturalHeight;
+    const isPreview = pageTinyBlobsRef.current.get(page) === img.src;
+    // Preview/tiny images share the page's aspect ratio, so they may drive the spread layout, but
+    // they must never be reported as the final file info (user requirement: no preview dimensions
+    // or size in the UI). The full image's own onLoad later fills in dimensions/size.
     setWidespreads((prev) =>
       prev[page] === isWide ? prev : { ...prev, [page]: isWide },
     );
+    if (isPreview) return;
     setPageDimensions((prev) => ({
       ...prev,
       [page]: { width: img.naturalWidth, height: img.naturalHeight },
     }));
+    // Remember what bitmap is currently on screen. When the reader flips to a new page before its
+    // Blob is ready, this keeps the old image visible (and blurred by `#i3.loading`) instead of
+    // clearing `src` and showing a blank flash.
+    if (page === spread.left) displayedLeftSrcRef.current = img.src;
+    if (page === spread.right) displayedRightSrcRef.current = img.src;
+    // `img.src` may be a Blob URL now (fetch-based reader images), so the file-info HEADs must
+    // always use the original server URL to keep Content-Length/resize metadata working.
+    const originalUrl = pages.data?.pages[page - 1]?.url ?? img.src;
     if (pageSizesKb[page] === undefined) {
-      void fetchContentLengthKb(img.src).then((kb) => {
+      void fetchContentLengthKb(originalUrl).then((kb) => {
         if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }));
       });
     }
     if (resizedPageInfo[page] === undefined) {
-      void fetchResizedPageInfo(img.src).then((info) => {
+      void fetchResizedPageInfo(originalUrl).then((info) => {
         setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
       });
     }
@@ -1016,6 +1290,14 @@ export function Reader() {
   const leftUrl = pages.data.pages[spread.left - 1]?.url;
   const rightUrl =
     spread.right !== null ? pages.data.pages[spread.right - 1]?.url : null;
+  // “查看全尺寸图像” should open the raw entry (no optimize=1), not the reader's resized WebP.
+  const originalLeftUrl = leftUrl
+    ? (() => {
+        const u = new URL(leftUrl, window.location.origin);
+        u.searchParams.delete("optimize");
+        return u.toString();
+      })()
+    : undefined;
 
   const markerTarget = archiveId ? { arcId: archiveId, localPage: spread.left } : null;
 
@@ -1132,15 +1414,13 @@ export function Reader() {
           }}
         />
         {!supportsHover && !readerSettings.infiniteScroll && loggedIn && (
-          <a
-            className="fas fa-stamp fa-2x"
-            href="#"
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-stamp fa-2x"
             title={t("reader.placeStamp") ?? undefined}
-            style={{ marginRight: 3, opacity: markerPlacementMode ? 1 : 0.55 }}
-            onClick={(e) => {
-              e.preventDefault();
-              setMarkerPlacementMode((prev) => !prev);
-            }}
+            size={32}
+            style={{ marginRight: 13, borderRadius: "50%", opacity: markerPlacementMode ? 1 : 0.55 }}
+            onClick={() => setMarkerPlacementMode((prev) => !prev)}
           />
         )}
         {loggedIn && archiveId && (
@@ -1304,11 +1584,8 @@ export function Reader() {
     : "";
   const isFileInfoReady =
     spread.right === null
-      ? pageDimensions[spread.left] !== undefined &&
-        pageSizesKb[spread.left] !== undefined
-      : pageDimensions[spread.left] !== undefined &&
-        pageDimensions[spread.right] !== undefined &&
-        pageSizesKb[spread.left] !== undefined &&
+      ? pageSizesKb[spread.left] !== undefined
+      : pageSizesKb[spread.left] !== undefined &&
         pageSizesKb[spread.right] !== undefined;
   if (isFileInfoReady) lastFileInfoRef.current = currentFileInfo;
   const displayedFileInfo = isFileInfoReady
@@ -1326,7 +1603,12 @@ export function Reader() {
   const leftDims =
     spread.right === null ? pageDimensions[spread.left] : undefined;
   let resizedFileInfo: React.ReactNode | null = null;
-  if (leftResizeInfo && servedKb !== undefined && leftDims) {
+  const resizedDims =
+    leftDims ??
+    (leftResizeInfo && leftResizeInfo.origWidth > 0 && leftResizeInfo.origHeight > 0
+      ? { width: leftResizeInfo.origWidth, height: leftResizeInfo.origHeight }
+      : null);
+  if (leftResizeInfo && servedKb !== undefined && resizedDims) {
     const origKb = leftResizeInfo.origSizeBytes / 1024;
     const origSizeText =
       origKb >= 1024
@@ -1339,7 +1621,7 @@ export function Reader() {
     resizedFileInfo = (
       <>
         <span className="file-info-opt">
-          {pageEntryName} → WebP :: {leftDims.width} x {leftDims.height} ::{" "}
+          {pageEntryName} → WebP :: {resizedDims.width} x {resizedDims.height} ::{" "}
           {servedKb} KB
         </span>
         {" · "}
@@ -1453,7 +1735,9 @@ export function Reader() {
                   id="img"
                   ref={leftImgRef}
                   className="reader-image"
-                  src={leftUrl}
+                  src={pageBlobUrls[spread.left] ?? (pageImageError[spread.left] ? leftUrl : (pageTinyBlobs[spread.left] ?? displayedLeftSrcRef.current))}
+                  width={pageTinyDims[spread.left]?.width}
+                  height={pageTinyDims[spread.left]?.height}
                   alt={`${t("reader.page")} ${spread.left}`}
                   fetchPriority="high"
                   onLoad={(e) => onImageLoad(spread.left, e)}
@@ -1465,7 +1749,9 @@ export function Reader() {
                   <img
                     id="img_doublepage"
                     className="reader-image"
-                    src={rightUrl}
+                    src={rightUrl ? (pageBlobUrls[spread.right ?? 0] ?? (pageImageError[spread.right ?? 0] ? rightUrl : (pageTinyBlobs[spread.right ?? 0] ?? displayedRightSrcRef.current))) : undefined}
+                    width={pageTinyDims[spread.right ?? 0]?.width}
+                    height={pageTinyDims[spread.right ?? 0]?.height}
                     alt={`${t("reader.page")} ${spread.right}`}
                     fetchPriority="high"
                     onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
@@ -1511,7 +1797,7 @@ export function Reader() {
 
         <div id="i7" className="if">
           <i className="fas fa-caret-right fa-lg"></i>
-          <a href={leftUrl} target="_blank" rel="noreferrer">
+          <a href={originalLeftUrl} target="_blank" rel="noreferrer">
             {t("reader.viewFullsizeImage")}
           </a>
           <i className="fas fa-caret-right fa-lg"></i>
@@ -1528,6 +1814,12 @@ export function Reader() {
           )}
         </div>
 
+        {showTankSplit && archiveId && isTank && (
+          <TankoubonSplitModal
+            tankId={archiveId}
+            onClose={() => setShowTankSplit(false)}
+          />
+        )}
         {overlay === "archive" && (
           <ArchiveOverviewOverlay
             archive={metadata.data}
@@ -1540,6 +1832,8 @@ export function Reader() {
             resolvePage={isTank ? tankReading.getArchiveForPage : undefined}
             tankChapters={isTank ? tankReading.chapters : undefined}
             tankPages={isTank ? pages.data.pages : undefined}
+            hasTankSplitCandidates={tankSplitCandidates.length > 0}
+            onOpenTankSplit={() => setShowTankSplit(true)}
           />
         )}
 

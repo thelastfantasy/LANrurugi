@@ -57,7 +57,10 @@ p, guest_visitor, /api/version, GET, allow
 # string anywhere in the frontend — it's only reached indirectly via the URLs `GET
 # /archives/:id/files` returns — and `/api/database/stats` (not `/api/stats`, which doesn't exist
 # as a route at all; the old `/api/stats` deny line below was a dead rule that never matched
-# anything) backs the tag-autocomplete suggestions FR-012 requires.
+# anything) backs the tag-autocomplete suggestions FR-012 requires. `GET /api/bookmarks` is
+# deliberately absent: it backs the admin-only `/bookmarks` page, not the guest Reader's own
+# per-archive bookmark reads, and a guest must not be able to enumerate an admin's bookmarks even
+# if a frontend route guard is ever bypassed.
 p, guest_visitor, /api/categories, GET, allow
 p, guest_visitor, /api/tankoubons, GET, allow
 p, guest_visitor, /api/tankoubons/:id/full, GET, allow
@@ -67,7 +70,6 @@ p, guest_visitor, /api/database/stats, GET, allow
 p, guest_visitor, /api/search, GET, allow
 p, guest_visitor, /api/search/ids, GET, allow
 p, guest_visitor, /api/search/random, GET, allow
-p, guest_visitor, /api/bookmarks, GET, allow
 p, guest_visitor, /api/archives/:id/metadata, GET, allow
 p, guest_visitor, /api/archives/:id/files, GET, allow
 p, guest_visitor, /api/archives/:id/page, GET, allow
