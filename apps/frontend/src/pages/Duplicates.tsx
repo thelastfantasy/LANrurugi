@@ -1,0 +1,138 @@
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
+
+import { waitForJob } from "@/api/client"
+import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from "@/api/hooks"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { routes } from "@/lib/routes"
+import { useApplyTheme } from "@/theme"
+
+/** Mirrors legacy's `duplicates.html.tt2` as a plain static table — no DataTables sorting/paging
+ * or Tippy.js tooltips, still fully functional for scan/clear/delete. */
+export function Duplicates() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const duplicates = useDuplicates()
+  const scanDuplicates = useScanDuplicates()
+  const clearDuplicates = useClearDuplicates()
+  const deleteArchive = useDeleteArchive()
+  useApplyTheme()
+  useDocumentTitle(t("app.duplicateDetection") ?? undefined)
+
+  const [threshold, setThreshold] = useState(5)
+  const [scanning, setScanning] = useState(false)
+
+  async function handleScan() {
+    setScanning(true)
+    try {
+      const { job } = await scanDuplicates.mutateAsync(threshold)
+      await waitForJob(job)
+      await duplicates.refetch()
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  async function handleDelete(arcid: string) {
+    await deleteArchive.mutateAsync(arcid)
+    await duplicates.refetch()
+  }
+
+  const hasResults = duplicates.data && duplicates.data.length > 0
+
+  return (
+    <div className="ido">
+      <h1 className="ih">{t("app.duplicateDetection")}</h1>
+      <p>
+        {t(
+          "duplicates.thisFeatureLooksAtArchives",
+        )}
+      </p>
+
+      {duplicates.isLoading && (
+        <div id="processing">
+          <i className="fa fa-3x fa-compact-disc fa-spin"></i>
+        </div>
+      )}
+
+      {!hasResults && !duplicates.isLoading && (
+        <div id="nodupes">
+          <i className="fa fa-3x fa-check-circle"></i>
+          <p>{t("duplicates.noDuplicatesFound")}</p>
+        </div>
+      )}
+
+      <div className="control-btn-group">
+        <label>
+          {t("duplicates.threshold")}
+          <input
+            type="number"
+            min={0}
+            max={40}
+            value={threshold}
+            onChange={(e) => setThreshold(Number(e.target.value))}
+            className="stdinput"
+            style={{ width: 60 }}
+          />
+        </label>
+        <button type="button" className="stdbtn find-duplicates" disabled={scanning} onClick={() => void handleScan()}>
+          {scanning ? t("duplicates.rescanning") : t("duplicates.searchForDuplicates")}
+        </button>
+        <button type="button" className="stdbtn clear-duplicates" onClick={() => clearDuplicates.mutate()}>
+          {t("duplicates.clearResults")}
+        </button>
+      </div>
+
+      {hasResults && (
+        <table id="ds" className="ds itg">
+          <thead>
+            <tr>
+              <th>{t("common.title")}</th>
+              <th>{t("duplicates.filesize")}</th>
+              <th>{t("duplicates.action")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(duplicates.data ?? []).map((group, index) =>
+              group.map((archive, i) => (
+                <tr key={archive.arcid} className={i === 0 ? "duplicate-group" : undefined}>
+                  <td>
+                    <div className="thumbnail-wrapper" style={{ display: "inline-block", marginRight: 8 }}>
+                      <a href={routes.edit(archive.arcid)} onClick={(e) => { e.preventDefault(); navigate(routes.edit(archive.arcid)) }}>
+                        <img
+                          src={`/api/archives/${archive.arcid}/thumbnail`}
+                          alt={archive.title}
+                          style={{ height: 60 }}
+                        />
+                      </a>
+                    </div>
+                    <a href={routes.edit(archive.arcid)} onClick={(e) => { e.preventDefault(); navigate(routes.edit(archive.arcid)) }}>
+                      {archive.title}
+                    </a>
+                  </td>
+                  <td>{(archive.size / 1e6).toFixed(1)} MB</td>
+                  <td>
+                    <button type="button" className="stdbtn delete-archive action-button" onClick={() => void handleDelete(archive.arcid)}>
+                      {t("common.delete")}
+                    </button>
+                  </td>
+                </tr>
+              )).concat(
+                index < (duplicates.data?.length ?? 0) - 1
+                  ? [
+                      <tr key={`sep-${group[0]?.group_key ?? index}`}>
+                        <td colSpan={3}>&nbsp;</td>
+                      </tr>,
+                    ]
+                  : [],
+              ),
+            )}
+          </tbody>
+        </table>
+      )}
+
+      <input type="button" id="goback" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
+    </div>
+  )
+}

@@ -1,0 +1,32 @@
+[package]
+name = "lanrurugi-scanner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lanrurugi-core.workspace = true
+lanrurugi-storage.workspace = true
+lanrurugi-search.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crc32fast.workspace = true
+tokio.workspace = true
+rayon.workspace = true
+notify.workspace = true
+zip.workspace = true
+libarchive2-sys.workspace = true
+chardetng.workspace = true
+encoding_rs.workspace = true
+libc.workspace = true
+image.workspace = true
+webp.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+deadpool-redis.workspace = true
+sha1.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

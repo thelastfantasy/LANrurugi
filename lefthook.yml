@@ -1,0 +1,35 @@
+# Adapted from ~/jellyfin-suite/lefthook.yml (memory: jellyfin-suite-tooling-reference), with a
+# Rust check/fmt command added per constitution Engineering Workflow & Quality Gates ("Automated,
+# non-bypassable local quality gates" — cargo check + cargo fmt --check on every commit).
+#
+# Routed through `mise run clippy`/`fmt-check` (which run inside the `lanrurugi-dev` container —
+# see `.mise.toml`), not a bare `cargo ...` here, for the same reason those tasks exist at all:
+# `lanrurugi-scanner` depends on `libarchive2-sys`, which needs `cmake` + `libclang` (bindgen) to
+# build, and this repo's own convention (constitution + `.mise.toml`'s own task comments) is to
+# keep that dependency out of the host and build inside the container instead. A bare `cargo
+# check` here would fail on any contributor machine missing those, even with `cargo` itself
+# reachable via mise's shims — this isn't a PATH problem, it's a "the build genuinely can't
+# complete on a bare host" problem. `clippy` is used instead of `check` since it's a strict
+# superset (also catches everything a plain `check` would).
+pre-commit:
+  parallel: true
+  commands:
+    rust-check:
+      glob: "crates/**/*.rs"
+      run: mise run clippy && mise run fmt-check
+    frontend-lint:
+      glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
+      root: "apps/frontend"
+      run: npx tsc -b --force && npx eslint --fix {staged_files}
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    rust-check:
+      glob: "crates/**/*.rs"
+      run: mise run clippy && mise run fmt-check
+    frontend-lint:
+      glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
+      root: "apps/frontend"
+      run: npx tsc -b --force && npx eslint --fix src/ tests/ --ext .tsx,.ts

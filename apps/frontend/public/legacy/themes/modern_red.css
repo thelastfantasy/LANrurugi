@@ -1,0 +1,1075 @@
+p {
+  margin: 0;
+  padding: 3px 1px;
+}
+
+img {
+  border: 0 none;
+}
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 400;
+  src: url(../webfonts/Geist-Regular.woff2) format("woff2");
+}
+
+body {
+  background-color: #E9BBC5;
+  color: #EFEAEA;
+  font-family: "Geist", arial, sans-serif;
+  font-size: 8pt;
+  height: 100%;
+  margin: 0;
+  padding: 2px;
+  text-align: center;
+}
+
+.logo-container {
+  background-color: #EFEAEA;
+}
+
+a {
+  color: #EFEAEA;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #D7D4C5;
+  text-decoration: none;
+}
+
+.sorting_asc>a,
+.sorting_desc>a {
+  color: #D7D4C5 !important;
+}
+
+.sorting_asc>a:hover,
+.sorting_desc>a:hover {
+  color: #EFEAEA !important;
+}
+
+p.ip {
+  clear: both;
+  margin: -3px auto;
+  padding: 10px 5px 5px;
+  text-align: center;
+  color: #414135
+}
+
+img.mr {
+  border: 0 none;
+  height: 7px;
+  margin-left: 10px;
+  width: 5px;
+}
+
+h1.ih {
+  font-size: 10pt;
+  font-weight: bold;
+  margin: 2px auto;
+  padding-bottom: 6px;
+  text-align: center;
+}
+
+div.ido {
+  background-color: #D83B66;
+  box-shadow: 0 5px 15px 0 rgba(0, 0, 0, 0.16), 0 2px 15px 0 rgba(0, 0, 0, 0.12);
+  clear: both;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 10px;
+  max-width: 90%;
+  padding-bottom: 10px;
+  padding-top: 10px;
+  position: relative;
+  width: 99%;
+}
+
+/* Tags */
+div.gt {
+  background: none repeat scroll 0 0 #D83B66;
+  float: left;
+  font-weight: bold;
+  margin: 0 2px 5px;
+  padding: 1px 4px;
+  position: relative;
+  white-space: nowrap;
+  color: #EFEAEA !important;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+div.gt>a {
+  color: #EFEAEA !important;
+}
+
+.tagger>ul>li:not(.tagger-new)>a,
+.tagger li:not(.tagger-new)>span,
+.tagger .tagger-new ul {
+  background: none repeat scroll 0 0 #4F535B;
+  border-radius: 3px;
+}
+
+.tagger>ul>li:not(.tagger-new) a,
+.tagger>ul>li:not(.tagger-new) a:visited,
+.tagger-new ul a,
+.tagger-new ul a:visited {
+  color: #EFEAEA !important;
+}
+
+div.gt>a:hover,
+.tagger>ul>li:not(.tagger-new) a:hover {
+  color: #D7D4C5 !important;
+}
+
+p#nb {
+  margin: 2px auto;
+  text-align: center;
+}
+
+p#nb img {
+  border: 0 none;
+  height: 7px;
+  margin-left: 10px;
+  width: 5px;
+}
+
+p#nb a {
+  color: #414135;
+  font-weight: bold;
+}
+
+p.ip a {
+  color: #34495E;
+}
+
+p.ip a:hover {
+  color: #00BCD4;
+}
+
+table.itg {
+  border: 0 none;
+  border-collapse: collapse;
+  border-radius: 9px 9px 9px 9px;
+  box-shadow: 0 5px 15px 0 rgba(0, 0, 0, 0.16), 0 2px 15px 0 rgba(0, 0, 0, 0.12);
+  color: #414135;
+  font-size: 9pt;
+  margin: 0 auto;
+  max-width: 90%;
+  padding: 3px;
+  width: 99% !important;
+}
+
+table.itg th {
+  background: none repeat scroll 0 0 #D7D4C5;
+  border-bottom: 2px solid #414135;
+  font-weight: bold;
+  padding: 3px 4px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tippy-content {
+  border: 2px dotted #414135;
+}
+
+.tippy-arrow {
+  display: none !important;
+}
+
+/* favtags */
+table.itc {
+  margin: auto;
+}
+
+.favtag-btn {
+  font-size: 10pt;
+  min-width: 50px;
+  height: 25px;
+  background-color: #BE234B;
+  border: 0 none;
+  border-radius: 3px 3px 3px 3px;
+  color: #F1F1F1;
+  font-family: "Geist", arial, sans-serif;
+  margin: 1px;
+  outline: 0 none;
+  padding: 0 4px 1px;
+  cursor: pointer;
+
+}
+
+.favtag-btn:hover,
+.toggled {
+  background: #E9A53A !important;
+}
+
+.toggled:hover {
+  color: #BE234B !important;
+}
+
+.searchbtn.toggled {
+  background-color: #BE234B !important;
+}
+
+.searchbtn.toggled:hover {
+  color: #E9A53A !important;
+}
+
+/* options flyout menus */
+.option-flyout {
+  background: #D7D4C5;
+  color: #414135;
+  padding: 3px 4px 3px 4px;
+  margin: 10px;
+  border-bottom: 2px solid #414135;
+}
+
+.option-flyout>.collapsible-body>table {
+  border-top: 2px dashed #414135;
+  color: #414135;
+}
+
+.caret::before {
+  color: #D7D4C5 !important;
+}
+
+tr.gtr {
+  background: none repeat scroll 0 0 #40454B;
+}
+
+tr.gtr0 {
+  background: none repeat scroll 0 0 #DCDDCB;
+}
+
+tr.gtr1 {
+  background: none repeat scroll 0 0 #D7D4C5;
+}
+
+.stdbtn {
+  background-color: #E9A53A;
+  border: 0 none;
+  border-radius: 3px;
+  color: #F1F1F1;
+  cursor: pointer;
+  font-family: "Geist", arial, sans-serif;
+  font-size: 9pt;
+  height: 28px;
+  margin: 1px;
+  min-width: 150px;
+  outline: 0 none;
+  padding: 0 4px 1px;
+}
+
+.swal2-actions>.stdbtn {
+  background-color: #E9A53A;
+}
+
+.stdbtn:hover {
+  background-color: #BE234B;
+}
+
+#search-input {
+  height: 26px;
+  width: 100vw;
+}
+
+.stdinput {
+  background: none repeat scroll 0 0 #FCFCFC;
+  border: medium none;
+  color: #ED2553;
+  font-family: "Geist", arial, sans-serif;
+  font-size: 9pt;
+  height: 21px;
+  margin: 4px 1px 0;
+  max-width: 450px;
+  padding: 2px 3px;
+  width: 80%;
+  box-sizing: border-box;
+}
+
+.tagger {
+  background: none repeat scroll 0 0 #FCFCFC;
+  border: medium none;
+  color: #ED2553;
+  font-family: "Geist", arial, sans-serif;
+  max-width: 768px;
+  margin: 4px 4px 0;
+  font-size: 9pt;
+}
+
+.searchbtn {
+  min-width: 100px !important;
+}
+
+td.itd {
+  border-right: 2px dotted #414135;
+  padding: 3px 4px;
+  text-align: left;
+}
+
+td.itd a {
+  text-decoration: none;
+}
+
+td.itu {
+  border-right: 1px solid #B84B55;
+  padding: 3px 4px;
+  text-align: left;
+}
+
+td.itu a {
+  text-decoration: none;
+}
+
+td.itdc {
+  border-right: 2px dotted #414135;
+  margin: 0;
+  padding: 0 1px 0 2px;
+  text-align: center;
+}
+
+.paginate_button {
+  cursor: pointer;
+  display: inline-block;
+  font-size: 2em;
+  height: 30px;
+  text-align: center;
+  width: 31px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  margin-left: 0.5vw;
+}
+
+.paginate_button:hover {
+  background-color: #BE234B;
+  border-radius: 100%;
+}
+
+.paginate_button.current {
+  background-color: #E9A53A;
+  border-radius: 100%;
+  font-weight: bold;
+}
+
+.ellipsis {
+  font-size: 20px;
+  margin-right: 3px;
+}
+
+.table-options {
+  margin-right: 4%;
+  margin-left: 4%;
+  margin-bottom: -60px;
+}
+
+.table-option {
+  margin-bottom: 3px;
+}
+
+.carousel-prev {
+  padding: 4px;
+  background-color: #d7d4c5;
+  color: #414135;
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+}
+
+.carousel-next {
+  padding: 4px;
+  background-color: #d7d4c5;
+  color: #414135;
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+}
+
+.carousel-prev:hover,
+.carousel-next:hover {
+  color: #ed2553;
+}
+
+.carousel-icon {
+  color: #414135;
+}
+
+.carousel-icon:hover {
+  color: #ed2553;
+}
+
+div.sni {
+  background-color: #D83B66;
+  box-shadow: 0 5px 15px 0 rgba(0, 0, 0, 0.16), 0 2px 15px 0 rgba(0, 0, 0, 0.12);
+  clear: both;
+  color: #EFEAEA;
+  display: block;
+  margin: 2px auto 6px;
+  padding: 5px 10px 10px;
+  position: relative;
+  text-align: center;
+  width: 98%;
+  z-index: 1;
+}
+
+div.sni h1 {
+  font-size: 12pt;
+  font-weight: bold;
+  text-align: center;
+}
+
+div.sni img {
+  border: 0 none;
+  box-shadow: 0 5px 15px 0 rgba(0, 0, 0, 0.16), 0 2px 15px 0 rgba(0, 0, 0, 0.12);
+  clear: both;
+  margin: 1px;
+  vertical-align: middle;
+}
+
+div.if {
+  margin: -5px auto 5px;
+}
+
+div.sn {
+  font-size: 15pt;
+  height: 32px;
+  margin: 10px auto;
+  z-index: 1;
+}
+
+div.sn div {
+  display: inline;
+  margin: 2px 25px 0;
+  padding-bottom: 15px;
+  vertical-align: middle;
+}
+
+div.pagecount {
+  position: relative;
+}
+
+div.sn span {
+  font-weight: bold;
+}
+
+div.sn img {
+  height: 30px;
+  padding: 0 2px;
+  width: 30px;
+}
+
+div.sn a,
+div.if a,
+div.sb a {
+  color: #EFEAEA;
+}
+
+div.sn a:hover,
+div.if a:hover,
+div.sb a:hover {
+  color: #E9A53A;
+}
+
+div.sb {
+  margin-top: -10px;
+  position: relative;
+  z-index: 2;
+}
+
+div.sb img {
+  border: 0 none;
+}
+
+div.idi {
+  border: medium none;
+  border-collapse: collapse;
+  border-radius: 9px;
+  margin: 0 auto 25px;
+  padding: 8px;
+  text-align: center;
+}
+
+div#toppane {
+  margin: auto;
+  width: 99%;
+}
+
+.caption,
+.context-menu-list {
+  background-color: #DCDDCB;
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+}
+
+.caption-reader {
+  box-shadow: none;
+  border: 2px dashed #414135;
+}
+
+.context-menu-item {
+  color: #414135;
+  padding: .6em 3em;
+  text-align: left;
+  font-weight: bold;
+}
+
+.context-menu-separator {
+  padding: 0 !important;
+  margin: .35em 0;
+  border-bottom: 2px dashed #414135;
+}
+
+.context-menu-item.context-menu-hover,
+.context-menu-icon.context-menu-icon--fa5.context-menu-hover>i {
+  background-color: #E9A53A !important;
+  color: #F1F1F1;
+}
+
+.context-menu-icon.context-menu-icon--fa5 i {
+  font-size: 1.5em;
+  color: inherit;
+}
+
+.context-menu-submenu::after {
+  border-color: transparent transparent transparent #414135;
+}
+
+table.itg a,
+.collapsible-title a {
+  color: #414135;
+}
+
+table.itg a:hover,
+.collapsible-title a:hover,
+p#nb a:hover {
+  color: #BE234B;
+}
+
+input[type='checkbox']:checked::after,
+input[type='checkbox']:checked::before {
+  color: #BE234B;
+}
+
+/* File upload bar */
+.bar {
+  height: 18px;
+  background: #D7D4C5;
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+}
+
+.indeterminate {
+  width: 90%;
+}
+
+/* Toasts */
+.jq-toast-single,
+.jq-toast-single h2 {
+  font-family: "Geist", arial, sans-serif !important;
+}
+
+/* Tag Cloud */
+div.jqcloud {
+  font-family: "Geist", arial, sans-serif !important;
+}
+
+div.jqcloud span.w1 {
+  color: #b29999 !important;
+}
+
+div.jqcloud span.w2,
+div.jqcloud span.w3,
+div.jqcloud span.w4 {
+  color: #c8b6b6 !important;
+}
+
+div.jqcloud span.w5,
+div.jqcloud span.w6,
+div.jqcloud span.w7 {
+  color: #ded3d3 !important;
+}
+
+div.jqcloud span.w8,
+div.jqcloud span.w9,
+div.jqcloud span.w10 {
+  color: #EFEAEA !important;
+}
+
+/* Thumbnail View container divs*/
+div.id1 {
+  background: none repeat scroll 0 0 #DCDDCB;
+  color: #414135;
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+  display: inline-block;
+  margin: 3px 5px 5px 3px;
+  padding-top: 3px;
+  vertical-align: top;
+  /* min-height: 335px; */
+}
+
+div.id2 {
+  border-bottom: 2px dotted #414135;
+  min-height: 20px;
+  margin: auto auto 10px;
+  text-align: center;
+  width: 97%;
+}
+
+div.id2 a {
+  font-weight: bold;
+  text-decoration: none;
+  overflow: hidden;
+  color: #414135;
+  font-size: 12px;
+
+  /* Multi-line title support */
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+div.id2 a:hover {
+  color: #BE2348;
+}
+
+div.id3 {
+  margin: auto;
+  overflow: hidden;
+  position: relative;
+  text-align: center;
+  height: 280px;
+}
+
+div.id3 img {
+  box-shadow: 0 2px 5px 0 rgba(0, 0, 0, 0.16), 0 2px 10px 0 rgba(0, 0, 0, 0.12);
+}
+
+div.id4 {
+  height: 20px;
+  margin: auto;
+  position: relative;
+  text-align: center;
+  padding: 0 4px;
+}
+
+div.id4 a {
+  color: #414135;
+
+}
+
+div.id4 a:hover {
+  color: #BE2348;
+
+}
+
+/* awesomplete */
+.awesomplete>ul {
+  color: #414135;
+  background: #DCDDCB;
+  border: 2px dotted #414135;
+}
+
+.awesomplete>ul:before {
+  display: none;
+}
+
+.awesomplete>ul>li:hover,
+.awesomplete>ul>li[aria-selected="true"] {
+  color: #EFEAEA;
+  background: #D83B66;
+}
+
+.awesomplete mark,
+.awesomplete li:hover mark,
+.awesomplete li[aria-selected="true"] mark {
+  background: #E9A53A;
+  color: #F1F1F1;
+}
+
+/** Toasts **/
+.Toastify {
+  --toastify-font-family: "Geist", arial, sans-serif;
+  --toastify-text-color-light: #414135;
+  --toastify-color-light: #d7d4c5;
+}
+
+.Toastify__toast {
+  box-shadow: 0 5px 15px 0 rgba(0, 0, 0, 0.16), 0 2px 15px 0 rgba(0, 0, 0, 0.12);
+  border-radius: 0;
+}
+
+.Toastify__toast-body a {
+  color: #414135;
+}
+
+/** Popups **/
+.swal2-popup {
+  background: #D7D4C5;
+  border-radius: 0;
+  color: #414135;
+}
+
+.swal2-icon.swal2-warning {
+  border-color: #D83B66;
+  color: #BE234B;
+}
+
+.archive-summary {
+  border-top: 2px dotted;
+}
+
+/** Archive selection highlight **/
+#thumbs_container .id1.msm-selected {
+  outline: 3px solid #E9A53A;
+  outline-offset: -3px;
+}
+
+.datatables tbody tr.msm-selected td {
+  background-color: rgba(216, 59, 102, 0.2) !important;
+}
+/* Additive — no legacy equivalent (this port's own Categories page, "this archive is also a
+   Tankoubon member" checklist-row highlight). Reuses this theme's own accent hue, same value as
+   .msm-selected above, for visual consistency with this theme's existing "this row is special"
+   language rather than a hardcoded color that wouldn't adapt across themes. */
+.tankoubon-member-row {
+  background-color: rgba(216, 59, 102, 0.2);
+}
+
+/* Fixed bottom save bar on the Settings page (see `Settings/index.tsx`) — shown only while
+   there are unsaved changes. Background uses this theme's own accent hue (the same color as
+   `#thumbs_container .id1.msm-selected`'s outline), per the project's custom-color rule. */
+.settings-save-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 12px;
+    text-align: center;
+  background-color: rgba(233, 165, 58, 0.85);
+}
+
+/* Recommendation card container on the reader's boundary overlay (see Reader.tsx's
+   archiveTransition panel) — gives each thumbnail+title a visible card on top of the shade,
+   using this theme's own card background/border (same colors as div.id1). */
+.rec-card {
+    border-radius: 6px;
+    padding: 6px;
+    text-align: center;
+    /* content-box would add padding+border on top of the inline 152px width (166px actual),
+       breaking the 5-per-row math in Reader.tsx's flex row */
+    box-sizing: border-box;
+    background-color: #DCDDCB;
+    border: 1px solid #C6C7B4;
+}
+
+/* Round modal close button (`components/Display/Modal.tsx`) — reuses this theme's own accent hue
+   (same value as `#thumbs_container .id1.msm-selected`'s outline), per the project's custom-color
+   rule, as a solid background with a white icon and a 1px border in this theme's own `div.id1`
+   background color (the modal box's own background, so the button reads as separated from the
+   box rather than blending straight into it at the corner where they overlap) — distinct from the
+   bordered/tinted `.stdbtn` look every other button on this theme uses, since this one floats
+   outside the modal box itself and needs to read as a separate "close" affordance, not just
+   another button. */
+.modal-close-btn {
+    background-color: #E9A53A;
+    color: #FFFFFF;
+    border: none;
+    box-shadow: 0 0 0 1.5px #DCDDCB, 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.modal-close-btn:hover {
+    background-color: #EFB65C;
+    color: #FFFFFF;
+    border: none;
+    box-shadow: 0 0 0 1.5px #DCDDCB, 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Destructive-action button (`components/Display/Confirm.tsx`'s `danger` prop) — a real class,
+   not an inline hardcoded color (see g.css's own comment on this class for why inline defeats
+   `.stdbtn:hover` entirely). Reuses this theme's own existing warning colors
+   (`.swal2-icon.swal2-warning`'s #D83B66/#BE234B, already real warning-semantic colors in this
+   theme) rather than inventing a third red. */
+.stdbtn-danger {
+    background-color: #BE234B;
+    border: 0 none;
+    color: #FFFFFF;
+}
+
+.stdbtn-danger:hover {
+    background-color: #D83B66;
+}
+
+/* Warning-triangle icon on Confirm.tsx's `danger` dialogs — same red as .stdbtn-danger's own
+   resting background, for visual consistency between the icon and the confirm button below it. */
+.confirm-danger-icon {
+    color: #BE234B;
+}
+
+/* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button's circular icon-toggle — reuses
+   this theme's own accent color (same value as .modal-close-btn's own background, per the
+   project's custom-color rule) for both the unchecked ring outline and the checked fill, so the
+   toggle reads as belonging to this theme rather than a generic gray control. */
+.ai-checkable-btn-toggle-circle {
+    border: 1.5px solid #E9A53A;
+    background-color: transparent;
+}
+
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle {
+    background-color: #E9A53A;
+    border-color: #E9A53A;
+}
+
+.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle .fa-check {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* AiSmartTankoubonModal.tsx's suggestion-card kind coloring — blue for "add to an existing
+   Tankoubon", green for "create a new one" (see index.css's own shared border-width rule for why
+   only the colors live here). Tuned per-theme for contrast against this theme's own background,
+   not a literal reused value from elsewhere in this file (no existing blue/green accent to borrow
+   from the way .modal-close-btn borrows the theme's own single accent hue). */
+.ai-suggestion-card-add {
+    border-color: #5B9BD5;
+}
+.ai-suggestion-card-add .ai-suggestion-card-header {
+    background: rgba(91, 155, 213, 0.14);
+    border-bottom-color: rgba(91, 155, 213, 0.28);
+}
+.ai-suggestion-card-new {
+    border-color: #5FBE8C;
+}
+.ai-suggestion-card-new .ai-suggestion-card-header {
+    background: rgba(95, 190, 140, 0.14);
+    border-bottom-color: rgba(95, 190, 140, 0.28);
+}
+
+/* Unchecked-state AI robot icon on the same toggle — colored with this theme's own accent too,
+   so the icon reads as "this theme's AI control" even before it's filled in. */
+.ai-checkable-btn-toggle .fa-robot {
+    color: #E9A53A;
+}
+
+/* Background for the filename/sharpness caption under each sample thumbnail in the AI quality-
+   comparison modal (`ComparisonResultModal.tsx`'s own `OverlayPage`) — that caption text has no
+   `color` of its own (deliberately: per this project's own rule, custom colors must be theme-
+   aware, but the caption *text* color here is a plain inherited value from the page's own default
+   text color, not something this feature set explicitly). A light neutral background, not a dark
+   one, is what actually works against an unknown/inherited text color — a dark tint (an earlier
+   version of this rule) assumed the text would be white, but it isn't guaranteed to be depending
+   on the active theme's own global text color, and a dark-on-dark pairing was confirmed live to be
+   unreadable. Same light value across all 5 themes rather than a per-theme accent tint, since the
+   goal here is guaranteed contrast against unknown text, not matching each theme's own palette. */
+.ai-compare-caption-bg {
+    background: #e8e8e8;
+}
+
+/* Color source for the AI quality-comparison modal's synthetic-border stripe pattern
+   (`AlignmentBandOverlay.tsx` draws onto a `<canvas>`, which can't be colored by CSS directly —
+   this class exists purely so that component's draw effect can read `background-color`/
+   `border-color` off it via `getComputedStyle` and reuse them as fill colors), per this project's
+   own custom-color rule. `background-color` (the stripe itself) is a LIGHTENED variant of
+   `#thumbs_container .id1.msm-selected`'s own outline hue (`#E9A53A` raised to ~62% lightness),
+   not that raw accent value — confirmed live that the raw accent (this theme's own, and
+   especially `g.css`'s very dark `#5C0D11`, which this theme family's own body text/link color
+   convention assumes sits against a LIGHT page background, not black) read as muddy/low-contrast
+   against a near-black backdrop. `border-color` (the backdrop between stripes) is this theme's own
+   real `body` background (`#E9BBC5`) — confirmed live: the user explicitly prioritized matching
+   each theme's own palette over matching the comparison modal's own dark overlay background, so
+   this theme's own light/pink backdrop is deliberately allowed to look different from the
+   surrounding modal chrome here. */
+.ai-compare-stripe-source {
+  background-color: rgba(247, 177, 69, 0.7);
+  border-color: #e9bbc5;
+}
+
+/* Patched-page thumbnail — green-tinted background (same tint across themes: patched = added content). */
+.quick-thumbnail.patch {
+  background: rgba(46, 125, 50, 0.35);
+  border-radius: 4px;
+}
+
+/* Reader file-info bar: served-optimized segment (this theme's "good" green) */
+.file-info-opt {
+  color: #2e7d32;
+}
+/* ... and the original-entry segment (warning red) */
+.file-info-orig {
+  color: #c62828;
+}
+
+/* Additive — no legacy equivalent (issue #87's Activity page). Reuses this theme's own accent hue
+   (same value as .tankoubon-member-row above) for visual consistency with this theme's existing
+   "this row/item is special" convention, per the project's custom-color rule.
+   `.activity-row-automatic`: background for a scanner/metadata-plugin-triggered row, distinct from
+   a human-triggered one at a glance — a lower alpha than `.tankoubon-member-row`'s own since this
+   paints potentially many rows across a whole page rather than highlighting one.
+   `.activity-combobox-item-highlighted`: the filter Combobox's own keyboard/pointer-highlighted
+   item state (Base UI's `data-highlighted` attribute).
+   `.activity-chip-danger`: the database.* action-type chip/badge — reuses `.stdbtn-danger`'s own
+   colors verbatim rather than a new value, since it's the same "this indicates something
+   destructive" semantic this theme already has a color for. */
+.activity-row-automatic {
+  background-color: rgba(216, 59, 102, 0.12);
+}
+
+.activity-combobox-item-highlighted[data-highlighted] {
+  background-color: rgba(216, 59, 102, 0.18);
+}
+
+.activity-chip-danger {
+  background-color: #BE234B;
+  color: #FFFFFF;
+}
+
+.activity-chip-danger:hover {
+  background-color: #D83B66;
+}
+
+.activity-chip-danger-icon {
+  color: #BE234B;
+}
+
+/* See modern.css's own docs on this block (whole-row/content-cell hover highlight + delete-button
+   reveal-on-row-hover) — same accent hue as this theme's own `.activity-row-automatic` above. */
+.activity-row:hover > * {
+  background-color: rgba(216, 59, 102, 0.2);
+}
+
+.activity-row:hover > .activity-row-content:hover {
+  background-color: rgba(216, 59, 102, 0.45);
+}
+
+.activity-row-delete-btn {
+  visibility: hidden;
+}
+
+.activity-row:hover .activity-row-delete-btn {
+  visibility: visible;
+}
+
+/* TagCloud.tsx's 3D word cloud (issue #89) — see modern.css's own matching block for the full
+   design rationale. Ten-step gradient from this theme's own real body text color (#EFEAEA, level
+   1) to its own accent hue (#D83B66, same value already used by .tankoubon-member-row above,
+   level 10), linearly interpolated in RGB. */
+.tag-cloud-3d {
+  --tag-cloud-level-1: #efeaea;
+  --tag-cloud-level-2: #ecd7db;
+  --tag-cloud-level-3: #eac3cd;
+  --tag-cloud-level-4: #e7b0be;
+  --tag-cloud-level-5: #e59caf;
+  --tag-cloud-level-6: #e289a1;
+  --tag-cloud-level-7: #e07592;
+  --tag-cloud-level-8: #dd6283;
+  --tag-cloud-level-9: #db4e75;
+  --tag-cloud-level-10: #d83b66;
+}
+
+/* Additive — no legacy equivalent. See g.css's own identical block for the full rationale (legacy's
+   own `.paginate_button.current` background reads as nearly unhighlighted against the page/button
+   backgrounds it sits between). Overrides the background with a solid fill in this theme's own
+   accent hue — same value as `#thumbs_container .id1.msm-selected`'s outline above — winning the
+   cascade by appearing later in the file rather than editing legacy's own declaration. White text
+   for contrast against the now-orange fill. */
+.paginate_button.current {
+  background: #E9A53A;
+  color: #FFFFFF;
+  font-weight: bold;
+}
+
+
+
+/* Additive — no legacy equivalent (legacy has no Select-style dropdown of its own to derive from).
+   Reuses `MENU_PALETTE["modern_red.css"]`'s own hoverBg/hoverText (`useMenuPalette.ts`) — the same
+   source `common-ui/Display/PopupMenu.tsx` already draws its own hover colors from, for visual
+   consistency across every floating menu/select popup in this theme. Base UI's own
+   `data-highlighted` attribute (keyboard/pointer-highlighted item state) drives this directly via
+   CSS rather than a JS-computed inline style — same convention as this same file's own
+   `.activity-combobox-item-highlighted[data-highlighted]` rule above. */
+.select-item-highlighted[data-highlighted] {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}
+
+/* Additive — no legacy equivalent as a real component (legacy's own "switch" look is a CSS hack
+   turning a native <input type="checkbox"> into an icon-swap via ::before/::after content, not a
+   real element this rule can target the same way). Reused colors, not new ones: unchecked matches
+   this theme's own base body text color (config.css's real `input[type='checkbox']` rule sets
+   `color: inherit`, so this is just that inherited value made explicit), checked matches this
+   theme's own `input[type='checkbox']:checked::after`/`::before` accent color. */
+.lrr-switch {
+  color: #EFEAEA;
+}
+
+.lrr-switch[data-checked] {
+  color: #BE234B;
+}
+
+/* Additive — no legacy equivalent (legacy has no reusable "form control background" concept of
+   its own to stay diffable against; this is a new class for a concept legacy doesn't have,
+   appended rather than modifying anything legacy actually wrote). Backs `common-ui/Form/
+   Checkbox.tsx`/`Radio.tsx`, both previously fully transparent (`bg-transparent`) — reported live,
+   2026-08-28, as blending into the page background on some themes. Neutral mid-gray, not an
+   accent color — the accent-color and white/near-white attempts before it both failed live
+   verification because this class's border/checkmark stay `currentColor` (this theme's own body
+   text color, #EFEAEA, a near-white light gray), and a white/near-white background would put that
+   light currentColor right back on top of a background of nearly the same lightness. A fixed
+   neutral gray, tuned per-theme to sit roughly opposite this theme's own body text lightness,
+   guarantees contrast against currentColor regardless of whether that text color is itself light
+   or dark. */
+.common-form-control-bg {
+  background: #4A4A4A;
+}
+
+/* Checked-state override — plain class-selector specificity ties with Tailwind's own
+   `data-checked:bg-[...]` utility (both are one class-level selector), and this theme file's
+   `<link>` loads after the bundled Tailwind stylesheet, so without this the theme rule above always
+   won on source order alone regardless of `data-checked`. `[data-checked]` attribute selector adds
+   real specificity so this rule wins unconditionally. `color` override needed too — the checkmark
+   SVG reads `currentColor`, and without this it stays this theme's dark body text color, invisible
+   against the blue fill below. */
+.common-form-control-bg[data-checked] {
+  background: #1a73e8;
+  color: #fff;
+}
+
+/* Radio-only override — see g.css's own docs on this rule (native-radio-style ring look,
+   confirmed live 2026-08-29). This theme's unchecked `common-form-control-bg` background
+   (#4A4A4A) is what shows through as the ring instead of the shared blue fill. */
+.common-form-control-bg.common-radio-bg[data-checked] {
+  background: #4A4A4A;
+}
+
+/* Additive — no legacy equivalent. Sets `Select.tsx`'s own `--select-item-bg` custom property
+   (see that file's own docs on why a background can't just be a plain inline style there) so a
+   `common-ui/Form/Select` popup item can be marked "this option is special" the same way
+   `.tankoubon-member-row` already marks a checklist row — reuses that exact same color rather
+   than inventing a new one, for visual consistency between the two "this thing is guest-visible /
+   a tankoubon member" highlight concepts. First use: Categories.tsx's category picker marking
+   guest-visible categories. */
+.select-item-guest-visible {
+  --select-item-bg: rgba(216, 59, 102, 0.2);
+}
+
+/* Additive — no legacy equivalent. See g.css's own identical rule for the full reasoning
+   (`.menu-item-highlighted` mirrors `.select-item-highlighted`'s own colors, kept as a separate
+   class per component). */
+.menu-item-highlighted[data-highlighted] {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}
+
+/* Additive — no legacy equivalent (a transparent/borderless button for an icon inside an
+   already-chromed container, e.g. a popover bubble, where `.stdbtn`'s own background/border
+   would double up against the container's). Hover color reuses this theme's own
+   `.menu-item-highlighted` accent, not a new one. */
+.ghost-btn {
+  background: transparent;
+  border: 0 none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  background-color: #E9A53A;
+  color: #F1F1F1;
+}
