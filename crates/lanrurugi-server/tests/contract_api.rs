@@ -983,10 +983,14 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         std::fs::write(path, b"fake archive bytes").unwrap();
     }
 
-    let id_a = "a".repeat(40);
-    let id_b = "b".repeat(40);
-    let id_c = "c".repeat(40);
-    let id_d = "d".repeat(40);
+    // These IDs must not collide with the singleton "a"/"b"/"c"/"d"/"f" archive IDs used by
+    // other tests in this same binary: `cargo test` runs tests in parallel against one shared
+    // Redis, so a same-ID deletion/rewrite from another test can make this test's `id_by_path`
+    // miss a path and silently skip a first-level subfolder.
+    let id_a = "e".repeat(40);
+    let id_b = "g".repeat(40);
+    let id_c = "h".repeat(40);
+    let id_d = "i".repeat(40);
     let archive_repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
     for (id, path, title) in [
         (id_a.clone(), path_a, "Volume 1"),
