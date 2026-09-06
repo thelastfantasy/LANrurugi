@@ -14,6 +14,21 @@ only on this shape, never on a provider-specific one directly.
 }
 ```
 
+`context` (spec.md FR-007b/c/e, research.md §14) is assembled server-side before the adapter call,
+never left empty-by-omission when material exists — composed of, in order:
+1. Any Terminology Glossary entries whose source term is an exact substring of `source_text`
+   (source term → chosen translation pairs) — the deterministic fast-path reuse (FR-007b).
+2. The volume's other known Terminology Glossary source names (names only, not their
+   translations) — lets the backend itself recognize a nickname/initialism variant not caught by
+   (1) and reuse that name's established translation (FR-007c).
+3. The current page's other already-translated text blocks (source text + chosen translation) —
+   advisory tone/style reference only; LANrurugi performs no tone classification of its own
+   (FR-007e).
+Each of these three is independently optional (e.g. the first block translated on a page has
+nothing yet for (3)); the adapter contract's `context` field itself doesn't change shape from a
+caller's perspective — assembly happens once, in `lanrurugi-translate`, before any adapter sees
+the request.
+
 ## Normalized response (adapter output)
 
 ```json

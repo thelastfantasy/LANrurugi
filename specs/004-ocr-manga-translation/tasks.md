@@ -29,6 +29,78 @@ instruction, never as a build dependency). This added one Foundational task (rec
 inference) and adjusted T002–T004/T006–T007's content. Task IDs were renumbered accordingly
 (previous T001–T064 → current T001–T065); this is the authoritative numbering.
 
+**Revision note (2026-09-06, `/speckit-clarify`)**: A per-block visual-attribute-fidelity gap was
+identified — the original design only matched font *family* at the volume level (T011–T014), with
+no per-block color/boldness fidelity to the original text at all. Researched against
+`zyddnys/manga-image-translator` (GPL-3.0, cloned locally to `~/manga-image-translator` for
+architecture reference only, same Koharu-precedent handling as above) — see spec.md Clarifications
+Session 2026-09-06 and research.md §13 for the full finding, including that even that project's
+own `bold` field is never actually computed by any of its code. Added T010a (heuristic color/
+boldness estimation, Foundational) and updated T034/T035/T050 (server compositing, text-regions
+endpoint, client compositing) to consume and apply the three new independently-nullable
+`Detected Text Region` attributes. Added spec.md FR-008a and SC-003a. No existing task ID was
+renumbered — T010a is inserted between T010 and T011 without shifting T011 onward, consistent with
+this project's task-ID stability convention.
+
+**Revision note (2026-09-06, second `/speckit-clarify` pass, same day)**: A translation-*content*
+consistency gap was identified — every text block's translation request was fully independent, so
+the same character name/term could render with a different translation each time it recurred
+across a volume, and per-block requests had no visibility into surrounding dialogue for
+tone/style consistency either. Addressed via spec.md FR-007a–e (Terminology Glossary +
+advisory context assembly) and SC-003b — see spec.md Clarifications (Session 2026-09-06, the two
+entries after the visual-fidelity one above) and research.md §14 for the full reasoning, including
+why tone consistency is handled as advisory context rather than a cacheable entity like the
+glossary. Added T019a (glossary entity/storage), T019b (context assembly: exact-match lookup,
+variant-recognition name list, same-page tone reference), T032a (glossary management endpoints),
+and T032b (glossary UI); updated T028's description to route through T019b. No existing task ID
+was renumbered.
+
+A follow-up cross-path gap was then caught during self-review: the locally-hosted-backend path
+(US4) never routes its translation call through the server at all (constitution Principle V), so
+without deliberate wiring it would receive none of FR-007a–e's consistency benefit, and any
+name/term it discovered would never reach the shared, server-stored glossary. Fixed by updating
+T035/T049 to carry `context` to/from the local-backend path and adding T049a (a lightweight
+"record this translation" endpoint, no LLM call) and T049b (wiring the local path to call it) —
+see `contracts/client-compositing-cache.md` and `contracts/translation-api.md`'s
+`/translation/record` entry for the full shape.
+
+**Revision note (2026-09-06, third `/speckit-clarify` pass, same day)**: Three further gaps
+surfaced through direct user questioning about prefetch/batching/caching mechanics and cross-cutting
+integration:
+1. **Request batching + prompt-cache alignment (research.md §15)**: the original one-request-
+   per-block design was superseded by small-fixed-batch translation (2–4 pages, mirroring T009's
+   OCR batch size), with request content ordered stable-prefix-first so Terminology Glossary
+   content is cacheable across requests. An append-only per-volume session (modeled on
+   `deepseek-ai/deepseek-harness`, cloned locally for reference) was investigated and rejected —
+   its precondition (a long-running sequence of repeated LLM calls to amortize a growing prefix
+   over) doesn't hold here once §16 below is accounted for. Added T015 batched-shape update,
+   T016/T017 cache-ordering notes, and **T017a** (a third adapter: DeepSeek, whose caching is
+   automatic/disk-backed and needs no explicit marker, unlike Anthropic's `cache_control`).
+2. **Persistence reversal (research.md §16)**: `Detected Text Region` (text + resolved style,
+   including a new `font` field) is now the authoritative, long-term-persisted record; the
+   rendered/composited page image (`Translation Cache Entry`) becomes a re-derivable performance
+   cache instead of the durable artifact this document originally assumed. Updated T028 (checks
+   persisted `translated_text` before sending a block in a batch) and T029/T034 (compositing reads
+   from and writes resolved style back onto the persisted record, rather than being the only place
+   translation output exists).
+3. **Cross-cutting integration (research.md §17)**: this feature's new Redis entities were
+   entirely absent from Phase 1's existing backup/export and Activity audit mechanisms — a real
+   data-loss/auditability gap, not a stylistic one, per constitution Principle I. Added spec.md
+   FR-022/FR-023 and Polish-phase tasks **T064a** (backup/restore enumeration), **T064b** (Activity
+   `action_type` write-site wiring), **T064c** (Activity page's namespace-table entries). LLM-call-
+   specific audit fields (token usage, cache-hit rate, estimated cost) were identified as a
+   cross-project gap beyond this feature's own scope and tracked in GitHub issue #100 instead of
+   being designed here.
+4. **Disk-cache quota correction (research.md §18)**: a direct follow-up question about whether
+   the server-composited `Translation Cache Entry` image cache shares quota with an existing Phase
+   1 cache surfaced that this document's own earlier wording ("alongside Phase 1's existing
+   thumbnail cache") was never actually verified against the code and is wrong — the thumbnail
+   cache (`thumb_dir`) has no size quota or eviction at all; the mechanism that actually has one is
+   the reader's resize-page cache (`tempmaxsize`). Corrected T020's description and research.md §6
+   accordingly; no new task, no FR change — a factual correction to an implementation detail, not
+   a new requirement.
+No existing task ID was renumbered in any of the four.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies on incomplete tasks)
@@ -89,11 +161,20 @@ depends on.
       manga/vertical-Japanese accuracy over generic recognition; written independently, not
       derived from Koharu's GPL-licensed wrapper code — see Notes) in
       `crates/lanrurugi-ocr/src/recognize.rs`
-- [ ] T009 [P] Implement rayon-batched OCR inference (detection + recognition, batch size 4–8,
-      bridged via `tokio::task::spawn_blocking` reusing `crates/lanrurugi-core/src/concurrency.rs`
-      from Phase 1) in `crates/lanrurugi-ocr/src/batch.rs`
+- [ ] T009 [P] Implement rayon-batched OCR inference (detection + recognition, batch size 4–8) —
+      the whole batch MUST be dispatched through a single `rayon`-parallel call (e.g. this
+      codebase's own `parallel_map` helper) bridged via one `tokio::task::spawn_blocking`
+      (reusing `crates/lanrurugi-core/src/concurrency.rs` from Phase 1), never a `for` loop issuing
+      one `spawn_blocking` call per page — that shape is the exact anti-pattern constitution
+      Principle III names and forbids (previously shipped once in this codebase as a thumbnail-
+      regeneration bug) — in `crates/lanrurugi-ocr/src/batch.rs`
 - [ ] T010 Implement IoU/geometric line-paragraph merging producing `Detected Text Region`
       records in `crates/lanrurugi-ocr/src/merge.rs`
+- [ ] T010a [P] Implement the per-region `fg_color`/`bg_color`/`is_bold` heuristic estimation pass
+      (FR-008a, research.md §13 — KMeans-style clustering over each region's cropped pixels for
+      color, stroke-width-to-glyph-height ratio for boldness; each of the three attributes
+      independently nullable on low confidence, folded into the same rayon batch as T009, not a
+      separate sequential stage) in `crates/lanrurugi-ocr/src/style_estimate.rs`
 - [ ] T011 [P] Define the `Volume Font Pattern` entity and Redis schema (`vote_pool`,
       `golden_set`, `meltdown_tally`, `is_locked`) in `crates/lanrurugi-fontcache/src/entities.rs`
 - [ ] T012 Implement cover-excluded `vote_pool` accumulation (voting stage, FR-008) — this runs
@@ -108,20 +189,37 @@ depends on.
       feeds `vote_pool` (research.md §4, the resolved review concern); like T012, this re-runs
       the full classifier and MUST use the same `spawn_blocking` bridge — in
       `crates/lanrurugi-fontcache/src/meltdown.rs`
-- [ ] T015 [P] Define the normalized LLM provider adapter trait
-      (`contracts/llm-provider-adapter.md`) in `crates/lanrurugi-translate/src/adapter.rs`
+- [ ] T015 [P] Define the normalized LLM provider adapter trait — batched request/response shape
+      (array of `block_id`-tagged blocks, research.md §15) — in
+      `crates/lanrurugi-translate/src/adapter.rs`
 - [ ] T016 Implement the OpenAI-compatible adapter (covers OpenAI-compatible providers and the
-      Ollama preset) in `crates/lanrurugi-translate/src/openai_compat.rs`
+      Ollama preset); no explicit cache marker needed, relies on stable-prefix ordering
+      (research.md §15) in `crates/lanrurugi-translate/src/openai_compat.rs`
 - [ ] T017 Implement the Anthropic adapter (`system` field, content-block array,
-      `x-api-key`/`anthropic-version`, mandatory `max_tokens`) in
+      `x-api-key`/`anthropic-version`, mandatory `max_tokens`), marking a `cache_control`
+      breakpoint after the stable Terminology-Glossary-derived prefix (research.md §15) in
       `crates/lanrurugi-translate/src/anthropic.rs`
+- [ ] T017a [P] Implement the DeepSeek adapter (OpenAI-Chat-Completions-shaped wire format, no
+      explicit cache opt-in — its context caching is automatic and disk-backed, research.md §15)
+      in `crates/lanrurugi-translate/src/deepseek.rs`
 - [ ] T018 Implement server-side `credential_ref` resolution so a secret is never logged or
       returned in any response (constitution Principle V) in
       `crates/lanrurugi-translate/src/credentials.rs`
 - [ ] T019 Implement server-side Translation Backend Selection + Target Language Preference
       Redis storage in `crates/lanrurugi-translate/src/settings.rs`
+- [ ] T019a [P] Define the `Terminology Glossary` entity and Redis schema (`entries: map<source_term,
+      translation>`, scoped per volume/per-archive-if-ungrouped like Volume Font Pattern) in
+      `crates/lanrurugi-translate/src/glossary.rs`
+- [ ] T019b Implement `context` assembly (FR-007b/c/e, `contracts/llm-provider-adapter.md`,
+      research.md §14) — exact-substring glossary lookup against a block's `source_text` (FR-007b),
+      the volume's other known glossary source-term names for variant recognition (FR-007c), and the
+      current page's other already-translated blocks for tone reference (FR-007e); a name/term not
+      resolved by exact match becomes a new `entries` record after translation (FR-007a) — in
+      `crates/lanrurugi-translate/src/context_assembly.rs`
 - [ ] T020 Implement the server-composited `Translation Cache Entry` variant (Redis metadata +
-      image cache alongside Phase 1's existing thumbnail cache) in
+      on-disk image cache sharing the reader resize-page cache's `tempmaxsize` quota and periodic
+      sweep, research.md §18 — reuses `crates/lanrurugi-api/src/download_manager/ingest.rs`'s
+      existing sweep mechanism rather than introducing a new one) in
       `crates/lanrurugi-translate/src/cache.rs`
 - [ ] T021 Implement Usage Budget tracking at page/archive/day/week granularity (FR-014) in
       `crates/lanrurugi-translate/src/budget.rs`
@@ -152,17 +250,26 @@ page, confirm translated text renders and no credential reaches the browser.
 - [ ] T027 [US1] Implement the target-language selection UI with browser-language fallback
       (FR-004) in `apps/frontend/src/components/TranslationSettings.tsx`
 - [ ] T028 [US1] Implement `GET /archives/{id}/page/{page}/translation`, orchestrating OCR +
-      translate + composite + cache for the cloud-backend path (`contracts/translation-api.md`)
-      in `crates/lanrurugi-api/src/translation.rs`
+      context assembly (T019b) + batched translate (research.md §15 — checks each block's
+      `Detected Text Region.translated_text` first per §16 and only sends still-untranslated
+      blocks in the batch) + composite + cache for the cloud-backend path
+      (`contracts/translation-api.md`) in `crates/lanrurugi-api/src/translation.rs`
 - [ ] T029 [US1] Implement server-side compositing (draw translated text over the original page
-      image) in `crates/lanrurugi-translate/src/composite.rs`
+      image) reading from the persisted `Detected Text Region.translated_text`/style fields
+      (research.md §16 — compositing is a re-derivable step over already-persisted data, not the
+      point where translation happens) in `crates/lanrurugi-translate/src/composite.rs`
 - [ ] T030 [US1] Audit that no code path logs, returns, or otherwise exposes a cloud credential
       to the browser (FR-006) across `crates/lanrurugi-translate/`
 - [ ] T031 [US1] Ensure translation-disabled reading takes zero extra code paths or latency
       (FR-007) in `crates/lanrurugi-api/src/translation.rs`
 - [ ] T032 [US1] Wire the reader to request and display the translated overlay when enabled in
       `apps/frontend/src/pages/Reader.tsx`
-- [ ] T033 [US1] Run `quickstart.md` §1 and confirm SC-001/SC-002
+- [ ] T032a [P] [US1] Implement `GET`/`PUT`/`DELETE /volumes/{id}/terminology-glossary[/{term}]`
+      (FR-007d, `contracts/translation-api.md`) in
+      `crates/lanrurugi-api/src/terminology_glossary.rs`
+- [ ] T032b [US1] Implement the terminology glossary view/edit/delete UI in
+      `apps/frontend/src/components/TerminologyGlossaryControl.tsx`
+- [ ] T033 [US1] Run `quickstart.md` §1 and confirm SC-001/SC-002/SC-003b
 
 **Checkpoint**: A user can enable translation, pick a cloud backend, and read a translated page —
 demoable MVP for this feature.
@@ -177,16 +284,21 @@ demoable MVP for this feature.
 consistent set of matched fonts is used once the pattern locks.
 
 - [ ] T034 [US2] Wire `lanrurugi-fontcache`'s routing (T013/T014) into server-side compositing
-      (T029) so translated text draws in the matched golden-set font in
+      (T029) so translated text draws in the matched golden-set font, persisting the resolved
+      `font` onto the `Detected Text Region` record (data-model.md, research.md §16) rather than
+      recomputing it on every render, and applying each region's own `fg_color`/`bg_color`/
+      `is_bold` from T010a with independent per-attribute fallback (FR-008a) in
       `crates/lanrurugi-translate/src/composite.rs`
 - [ ] T035 [P] [US2] Implement `GET /archives/{id}/page/{page}/text-regions`, exposing detected
-      regions and the volume's current golden font set (`contracts/translation-api.md`) in
+      regions (including each region's `fg_color`/`bg_color`/`is_bold` from T010a), the volume's
+      current golden font set, and the same `context` assembly from T019b (so the local-backend
+      path gets FR-007a–e's consistency benefit, `contracts/client-compositing-cache.md`) in
       `crates/lanrurugi-api/src/text_regions.rs`
 - [ ] T036 [US2] Implement `POST /volumes/{id}/font-pattern/reset` (FR-010) in
       `crates/lanrurugi-api/src/font_pattern.rs`
 - [ ] T037 [P] [US2] Implement a "reset font pattern" UI control in
       `apps/frontend/src/components/VolumeFontPatternControl.tsx`
-- [ ] T038 [US2] Run `quickstart.md` §2 and confirm SC-003
+- [ ] T038 [US2] Run `quickstart.md` §2 and confirm SC-003/SC-003a
 
 **Checkpoint**: Font matching is visibly consistent within a volume and resettable if wrong.
 
@@ -234,10 +346,20 @@ a real (not just designed) not-ready-to-ready transition.
 **Independent Test**: `quickstart.md` §4 — configure a locally-hosted backend per the documented
 path, confirm pages translate, then confirm blocked connections show guided fallback.
 
-- [ ] T049 [US4] Implement the browser-side direct call to the locally-hosted backend in
+- [ ] T049 [US4] Implement the browser-side direct call to the locally-hosted backend, including
+      the `context` received from `text-regions` (T035) in the direct call the same way the server
+      includes it for the cloud path (FR-007b/c/e, `contracts/client-compositing-cache.md`) in
       `apps/frontend/src/translation/localBackend.ts`
+- [ ] T049a [P] [US4] Implement `POST /archives/{id}/page/{page}/translation/record` — records a
+      locally-hosted-backend translation result into the shared, server-stored Terminology
+      Glossary (FR-007a, `contracts/translation-api.md`) — no LLM call, a lightweight write only —
+      in `crates/lanrurugi-api/src/translation.rs`
+- [ ] T049b [US4] Wire T049's local-backend translation result to call T049a's record endpoint
+      after each successful local translation in `apps/frontend/src/translation/localBackend.ts`
 - [ ] T050 [US4] Implement client-side Canvas/OffscreenCanvas compositing (no WASM, research.md
-      §7), consuming `text-regions` (T035) in `apps/frontend/src/translation/composite.ts`
+      §7), consuming `text-regions` (T035) including each region's `fg_color`/`bg_color`/`is_bold`
+      with independent per-attribute fallback (FR-008a, `contracts/client-compositing-cache.md`)
+      in `apps/frontend/src/translation/composite.ts`
 - [ ] T051 [P] [US4] Wire the client-composited result into the IndexedDB/Cache API wrapper
       (T023) in `apps/frontend/src/translation/localCache.ts`
 - [ ] T052 [US4] Implement Private-Network-Access failure detection and guided fallback UI
@@ -290,6 +412,17 @@ paths; reading is never blocked.
 - [ ] T064 [P] Security hardening pass — credential handling audit
       (`crates/lanrurugi-translate/src/credentials.rs`), CORS/PNA review for the local-backend
       endpoints
+- [ ] T064a [P] Add Terminology Glossary, translated `Detected Text Region`, and Volume Font
+      Pattern to `lanrurugi-backup`'s existing per-entity backup/restore enumeration (FR-022,
+      research.md §17) in `crates/lanrurugi-backup/src/build.rs`
+- [ ] T064b [P] Wire glossary entry capture/edit/delete (FR-007a/d), Volume Font Pattern reset
+      (FR-010), and backend/target-language selection changes (FR-002/003/004) into a new
+      `translation.*` Activity `action_type` namespace at each write site (FR-023, research.md
+      §17), following the existing per-namespace call pattern in
+      `crates/lanrurugi-storage/src/activity.rs`
+- [ ] T064c [P] Add the new `translation.*` namespace's ordering/label/target-link entries to
+      `apps/frontend/src/pages/Activity/activityTarget.ts` so T064b's events render correctly on
+      the existing Activity page with no page-specific changes
 - [ ] T065 Run the full `quickstart.md` end-to-end across all 5 user stories on a clean checkout
 
 ---
@@ -396,3 +529,21 @@ US1's endpoint/compositing exist, US2 and US3 can proceed in parallel; US4 waits
 - T012 and T014 (font classification during voting and meltdown) both run the full, heavy font
   classifier and both MUST use the same `spawn_blocking` bridge as T009 — this was inconsistently
   stated before the 2026-07-06 `/speckit-analyze` remediation and is now explicit on all three.
+
+**Revision note (2026-09-06, `/speckit-analyze` re-run against constitution 1.8.0)**: The
+constitution advanced from the version current at this document's 2026-07-06 authoring to 1.8.0
+(ratified 2026-08-03) — adding Principle VII (frontend engineering discipline) in full, a new
+Principle III anti-pattern bullet (a loop of single-item `spawn_blocking` calls is not real
+parallelization), and two new Technology Stack Constraints bullets (shared-helper extraction,
+domain-entity-ID newtypes) — none of which this document had been checked against until now.
+Re-analysis found two real gaps, both now addressed: (1) T009's wording was ambiguous enough to be
+implemented as the newly-forbidden loop-of-single-item-`spawn_blocking` anti-pattern — reworded to
+require one batch-wide `rayon` dispatch, matching T012/T014's already-explicit wording for the same
+concern. (2) `data-model.md`'s `archive_id`/`volume_id` fields were typed as raw `string`, conflicting
+with the newtype-ID constraint — `data-model.md` now carries a note requiring the newtype at
+implementation time. No task numbering changed. Principle VII's frontend-file-organization and
+verification-discipline bullets were checked against this document's frontend tasks (T024–T027,
+T032, T037, T041–T042, T045, T049–T054, T059) and found already compliant: no task here defines a
+second component/hook inline in a page's own `index.tsx`, and T033/T038/T048/T055/T060/T065 already
+require running real `quickstart.md` browser scenarios rather than accepting a pure-function unit
+test as verification.

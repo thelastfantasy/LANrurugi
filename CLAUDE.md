@@ -38,8 +38,13 @@ or be blocked by it — constitution Principle VI): plan at
 user-selectable translation backend (cloud, proxied server-side, vs. locally-hosted, browser-
 originated), volume-level font-matching cache, sliding-window prefetch with cost-aware budgeting.
 Design artifacts:
-`specs/004-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md}` (no
-`tasks.md` yet).
+`specs/004-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}` —
+tasks.md exists (65 tasks, none yet checked off — implementation has not started). A 2026-09-06
+`/speckit-analyze` re-check against constitution 1.8.0 (ratified 2026-08-03, after this spec's
+2026-07-06 authoring) found and fixed two real gaps: `data-model.md`'s ID fields needed a note
+requiring the newtype-ID constraint added by that constitution version, and tasks.md's T009 needed
+its `rayon`-batching wording tightened against that same version's new loop-of-single-item-
+`spawn_blocking` anti-pattern bullet — see tasks.md's own 2026-09-06 revision note for detail.
 
 **Phase 1 addendum — `005-download-plugin-progress`** (additive to Phase 1, planned but not yet
 implemented): plan at `specs/005-download-plugin-progress/plan.md`. Moves the download-plugin

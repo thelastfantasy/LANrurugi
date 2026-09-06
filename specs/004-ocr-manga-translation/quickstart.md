@@ -16,6 +16,14 @@ translation and confirm reading behaves identically to a build without this feat
 Inspect network traffic to confirm no provider credential is ever sent to or stored in the
 browser (FR-006).
 
+Read several pages containing a recurring character name/term, including at least one nickname or
+abbreviated-name occurrence if the sample material has one (FR-007a–c).
+
+**Expected**: the name/term renders with the same translation every time it recurs (SC-003b).
+Open `GET /volumes/{id}/terminology-glossary` and confirm the recurring name appears with its
+captured translation (FR-007d); edit or delete the entry and confirm the change is reflected on
+the next translation of that page.
+
 ## 2. Font fidelity (US2)
 
 Read several consecutive pages of the same volume with translation enabled.
@@ -24,6 +32,14 @@ Read several consecutive pages of the same volume with translation enabled.
 use a small, consistent set of matched fonts (SC-003), not one generic font. Include a
 deliberately different-looking page (e.g. a flashback) and confirm it doesn't visibly disturb the
 matched pattern on later, normal pages (research.md §4's separate meltdown tally).
+
+Separately, inspect several rendered text blocks against their original (untranslated) appearance
+for color/boldness fidelity (FR-008a).
+
+**Expected**: rendered color/boldness is not visibly wrong for the large majority of blocks
+(SC-003a); a block the heuristic couldn't estimate confidently falls back to a safe default rather
+than an obviously-incorrect value — this is a lower bar than font-family matching (research.md
+§13), so occasional misses are expected, not a failure of the quickstart.
 
 ## 3. Prefetch responsiveness (US3)
 
@@ -43,6 +59,15 @@ option 1). Enable translation with it selected.
 **Expected**: pages translate using the local model, composited client-side (SC-006;
 `contracts/client-compositing-cache.md`). Then block the connection (e.g. via browser devtools)
 and confirm the FR-018 guided-fallback message appears rather than a generic error.
+
+Read a page containing a name/term the cloud path (§1) already captured into the volume's
+Terminology Glossary, using the local backend this time.
+
+**Expected**: the name/term renders with the same translation the cloud path used (FR-007a–c
+apply across backends, not just within one). Then read a page with a name/term not seen before,
+still using the local backend, and confirm `GET /volumes/{id}/terminology-glossary` (§1) shows the
+new entry afterward — the local-backend path's discoveries reach the shared glossary too
+(`contracts/translation-api.md`'s `/translation/record`), not just the cloud path's.
 
 ## 5. Resilience (US5)
 

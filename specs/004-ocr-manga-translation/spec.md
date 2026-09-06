@@ -63,6 +63,72 @@ Prior exploratory technical thinking that informed this spec lives in
   Right-to-left (RTL) language layout (e.g. Arabic, Hebrew) is explicitly out of scope and MAY be
   added later without being a breaking change to this spec.
 
+### Session 2026-09-06
+
+- Q: Should rendered translated text preserve the *original* text block's own visual
+  attributes (font size, color, weight/boldness), rather than only the volume-level font-family
+  matching User Story 2 already covers? → A: Yes — per-block visual-attribute fidelity is a
+  distinct, additional requirement on top of the existing volume-level font-family matching, not a
+  replacement for it. Researched against the most prominent open-source prior art in this space
+  (`zyddnys/manga-image-translator`, GPL-3.0 — cloned locally for architecture reference only, per
+  this project's existing Koharu precedent, never as a dependency or copied code): that project
+  extracts per-character foreground/background color via a dedicated model output head trained
+  alongside text recognition, but even it has never actually implemented automatic bold/weight
+  detection — the field exists in its data model but is always left at its default. Given
+  `manga-ocr` (this project's chosen recognition model, unlike that project's own) has no such
+  color-output head and retraining/fine-tuning it is out of scope for this phase, LANrurugi
+  estimates both color and boldness via a lightweight heuristic pass over each detected region's
+  cropped pixels (not a full retrained model): dominant foreground/background color via clustering
+  over the region's pixels (informed by `sift-ocr`'s published KMeans-based bubble/text color
+  approach), and boldness via a stroke-width-to-glyph-height heuristic ratio. Per FR-008a below,
+  any attribute the heuristic cannot estimate with confidence falls back independently — it does
+  not block rendering of the other, successfully-estimated attributes for that same block.
+- Q: Each text block's translation request is currently independent — no shared state carries a
+  character name or term's translation from one block/page to the next, so the same name could be
+  rendered differently across a volume. How should this be addressed? → A: A per-volume
+  **Terminology Glossary** — a name/term → chosen-translation mapping maintained per volume (or
+  per-archive if ungrouped, mirroring Volume Font Pattern's own scoping). The first time the LLM
+  translates a given name/term, its output is captured into the glossary automatically and used
+  immediately for subsequent requests — no user confirmation gate before a glossary entry takes
+  effect, consistent with this feature's existing low-friction posture (FR-007). A user can edit or
+  delete an individual glossary entry (to correct a wrong auto-captured translation) from the
+  settings screen at any time, taking effect on the next translation request; no bulk/whole-glossary
+  reset is provided (unlike Volume Font Pattern's FR-010) since a wrong entry is independent of the
+  others and a bulk reset would needlessly discard already-correct entries.
+- Q: Names/terms don't only recur verbatim — a character's given name (e.g. さゆき) may later be
+  referred to by a nickname (e.g. さっちゃん) with no substring relationship to the original, and a
+  Western-style full name introduced once (e.g. "Axxx Bxxx Cxxx") is often abbreviated later
+  (initials "A.B.C." or "ABC") — while an unrelated all-caps acronym that was never introduced as a
+  name at all shouldn't be force-matched into the glossary just because it looks similar. Can the
+  glossary catch these variant forms too? → A: Plain substring matching alone cannot — nickname
+  formation and initialism are semantic/contextual judgments, not something a fixed string rule can
+  reliably generalize, and blindly matching on shape would also risk misfiring on real acronyms that
+  were never a name. This is addressed as a hybrid, not by trying to extend the substring rule with
+  more cases: (1) exact substring hits against known glossary source terms remain a fast, free,
+  zero-LLM-judgment path used as-is when they occur; (2) additionally, the request's `context`
+  includes the lightweight list of character/term names already known for that volume (names only,
+  not full source→translation pairs) so the LLM itself can recognize a nickname or initialism as
+  referring to an already-known name and reuse its established translation, rather than coining a
+  new one — this leverages the LLM's own language understanding for exactly the judgment call
+  substring matching cannot make, at the cost of one small, bounded (name-list-sized, not
+  full-glossary-sized) context addition per request. A name/term genuinely not recognized as
+  matching anything known (including a real, unrelated acronym) is still added to the glossary as a
+  new entry, same as before.
+- Q: Dialogue/narration tone (playful, serious, formal, etc.) is often distinct per character or
+  per scene, and matters for translation quality just as much as name consistency — but unlike a
+  name, tone isn't a discrete value that can be cached in a lookup table; the same character can
+  shift tone scene to scene. Should this phase address tone consistency, and if so how? → A: Yes,
+  as a further extension of the same `context` mechanism FR-007c already introduces, not a
+  separate cacheable entity like the glossary. A translation request's `context` MUST also include
+  the other already-translated text blocks on the same page (their source text and chosen
+  translation) as reference material, giving the backend enough surrounding dialogue/narration to
+  infer tone from — this is deliberately a *hint*, not a rule or a stored preference: there is no
+  per-character "tone table" to maintain (tone is scene-dependent, not a fixed character
+  attribute), no automatic detection of "this is playful vs. serious" is performed by LANrurugi
+  itself, and no success criterion enforces a specific tonal outcome — that judgment is left
+  entirely to the translation backend's own language understanding, the same way FR-007c already
+  leaves name-variant recognition to it rather than encoding a matching rule.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Read a page with on-page translation (Priority: P1)
@@ -262,6 +328,37 @@ per-page error indicator, and that reading other pages/archives is unaffected.
 - **FR-007**: Disabling translation MUST fully restore the reading experience to its
   pre-translation behavior and performance, with no residual latency or resource cost.
 
+**Translation consistency (extends User Story 1 — no dedicated user story; a cross-cutting
+correctness requirement on the translation output itself)**
+
+- **FR-007a**: System MUST maintain a per-volume (or per-archive if ungrouped) Terminology
+  Glossary mapping recognized character names/terms to a chosen translation. The first time a
+  name/term is translated, its translation MUST be captured into the glossary automatically, with
+  no user confirmation gate before that entry takes effect for subsequent translation requests in
+  the same volume.
+- **FR-007b**: A subsequent translation request whose source text contains an exact-substring
+  match against a known glossary source term MUST reuse that term's established translation
+  rather than requesting a new translation for it.
+- **FR-007c**: To catch name/term variants that are not exact substrings (nicknames, e.g. さゆき
+  later referred to as さっちゃん; initialisms/abbreviations of a previously-introduced full name,
+  e.g. "Axxx Bxxx Cxxx" later abbreviated "A.B.C."/"ABC"), a translation request MUST include the
+  volume's already-known character/term names (names only, not their full translations) as
+  context, so the translation backend can itself recognize such a variant as referring to an
+  already-known name and reuse its established translation instead of coining a new one. A
+  name/term not recognized as matching any known entry (including a genuine, unrelated acronym
+  that coincidentally resembles an initialism) MUST still be added to the glossary as its own new
+  entry, same as any other first-seen term.
+- **FR-007d**: Users MUST be able to view, edit, and delete individual Terminology Glossary
+  entries from the settings screen at any time; an edit or deletion MUST take effect starting with
+  the next translation request. No bulk/whole-glossary reset is required (unlike Volume Font
+  Pattern's FR-010), since an incorrect entry is independent of the others.
+- **FR-007e**: A translation request MUST include the page's other already-translated text
+  blocks (source text and chosen translation) as context, so the translation backend has enough
+  surrounding dialogue/narration to infer and preserve tone (playful, serious, formal, etc.)
+  consistent with the rest of the page. This is advisory context only — LANrurugi itself performs
+  no tone classification, maintains no per-character tone preference, and enforces no specific
+  tonal outcome; tone inference is left entirely to the translation backend's own judgment.
+
 **Visual/font fidelity (supports User Story 2)**
 
 - **FR-008**: System MUST render translated text using a font drawn from a small set matched to
@@ -274,6 +371,17 @@ per-page error indicator, and that reading other pages/archives is unaffected.
   outlier from the volume's established pattern and handle them without allowing that occurrence
   to degrade the established pattern's accuracy for subsequent, normal text blocks in the same
   volume.
+- **FR-008a**: In addition to the volume-level font-family matching of FR-008, the system MUST
+  estimate each detected text block's own foreground color, background color, and boldness from
+  its cropped pixels via a lightweight heuristic pass (not a retrained/fine-tuned recognition
+  model — see Clarifications, Session 2026-09-06), and render the translated text using those
+  per-block estimated attributes. Estimation of each of the three attributes (color, background
+  color, boldness) is independent: if the heuristic cannot estimate one attribute for a given block
+  with confidence, that attribute alone falls back to a safe default (the volume's established
+  golden-set font's own default weight for boldness; a legible default color/background,
+  e.g. matching the reader's existing untranslated-page contrast convention) — a low-confidence
+  result on one attribute MUST NOT block rendering of the other, successfully-estimated attributes
+  for that same block, and MUST NOT be treated as a translation failure (FR-019).
 - **FR-010**: Users MUST be able to reset a volume's established font pattern and have it be
   re-established from scratch, in case it was set incorrectly.
 
@@ -318,6 +426,25 @@ per-page error indicator, and that reading other pages/archives is unaffected.
 - **FR-021**: System MUST allow a user to enable translation without having pre-configured a
   backend, and MUST guide the user to configuration rather than silently failing in that state.
 
+**Cross-cutting integration (no dedicated user story — extends Phase 1's existing backup/export
+and Activity audit mechanisms, per constitution Principle I's data-loss-is-a-bug stance)**
+
+- **FR-022**: The Terminology Glossary, translated `Detected Text Region` records, and Volume Font
+  Pattern MUST be included in the library backup/export produced by Phase 1's existing backup
+  mechanism (`specs/001-lanrurugi-full-rewrite`'s FR-008/FR-009), and MUST be restorable from it,
+  so this data is not silently lost on a restore-from-backup. The re-derivable rendered-page cache
+  (Translation Cache Entry) and point-in-time Usage Budget consumption counters are not required
+  in the backup, since neither represents durable user-authored state.
+- **FR-023**: User-initiated changes to the Terminology Glossary (entry capture, edit, deletion),
+  Volume Font Pattern resets, and translation backend/target-language selection changes MUST be
+  recorded in Phase 1's existing Activity audit log, using the same mechanism every other mutable
+  entity in this project already uses, so a user can see what changed and when for this feature's
+  data the same way they already can for archives, categories, and plugins. This feature's own LLM
+  translation calls, and their token-usage/cache-hit/estimated-cost metrics specifically, are out
+  of scope for FR-023 itself — that is a cross-project Activity capability gap tracked in GitHub
+  issue #100 (LLM-call-specific audit fields, depends on #87's general audit log system), not
+  something this spec defines its own parallel mechanism for.
+
 ### Key Entities
 
 - **Translation Backend Selection**: A user's choice of translation provider category (cloud vs.
@@ -331,10 +458,18 @@ per-page error indicator, and that reading other pages/archives is unaffected.
   language setting; distinct from Phase 1's interface-language setting even though configured from
   the same settings screen (FR-004).
 - **Detected Text Region**: A recognized, merged block of text on a page, with its position and
-  the text it contains, used as the unit of translation and of font-style matching.
+  the text it contains, used as the unit of translation and of font-style matching. Also carries
+  the block's own heuristically-estimated foreground color, background color, and boldness
+  (FR-008a) — each independently nullable when the heuristic couldn't estimate it with confidence,
+  distinct from and in addition to the volume-level font-family matched via Volume Font Pattern.
 - **Volume Font Pattern**: The established, small set of body-text fonts associated with a given
   volume once enough non-cover pages have been processed with confidence, plus the ability to
   reset it (FR-008, FR-010). Cover page(s) are excluded from the sample that establishes it.
+- **Terminology Glossary**: A per-volume (or per-archive if ungrouped) name/term → chosen
+  translation mapping, auto-populated on first translation of each name/term and reused for
+  exact-substring matches on subsequent requests; individually user-editable/deletable (FR-007a–d).
+  Distinct from Volume Font Pattern (visual style) and Translation Cache Entry (page-level output
+  cache) — this entity concerns translation *content* consistency, not rendering.
 - **Translation Cache Entry**: A cached translation result for a specific (page, target language,
   backend) combination — potentially a fully pre-rendered image with the translation burned in —
   populated by background look-ahead prefetching while the user reads, and reused on subsequent
@@ -355,6 +490,19 @@ per-page error indicator, and that reading other pages/archives is unaffected.
 - **SC-003**: Across a representative volume, translated text uses a small, consistent set of
   matched fonts for at least 90% of text blocks after the volume's font pattern has been
   established, rather than one generic font applied everywhere.
+- **SC-003a**: Across a representative sample of text blocks, the heuristic color estimate
+  (FR-008a) is not visibly wrong (a human reviewer would not describe the rendered color as
+  mismatched against the original block) for at least 80% of blocks; blocks where color/boldness
+  couldn't be estimated with confidence fall back per FR-008a rather than rendering an
+  obviously-incorrect value. This is a lower confidence bar than SC-003's 90% deliberately — per
+  research.md §13, this heuristic (unlike the font-family matching SC-003 measures) has no adopted
+  external prior art to validate its accuracy against ahead of real usage.
+- **SC-003b**: Across a representative volume containing at least one recurring character
+  name/term, a name/term already present in the glossary (whether via exact match or a
+  nickname/abbreviation the backend recognized per FR-007c) renders with the same translation
+  every time it recurs, for at least 95% of recurrences — the higher confidence bar reflects that
+  exact-substring reuse (FR-007b) is deterministic; the remaining tolerance accounts for
+  variant-recognition (FR-007c) being a backend judgment call, not a guaranteed match.
 - **SC-004**: With look-ahead enabled, at least the configured look-ahead window of upcoming pages
   is translated and ready before the user reaches them, in at least 95% of ordinary forward-reading
   sessions.

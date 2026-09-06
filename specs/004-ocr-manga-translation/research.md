@@ -194,7 +194,9 @@ happens in different places depending on which backend produced the translation:
 - **Cloud-hosted backend**: composited **server-side**. The server already holds the translated
   text immediately after proxying the LLM call (constitution Principle V), so it composites and
   writes the result to the server-side `Translation Cache Entry` (Redis metadata + an image cache
-  alongside Phase 1's existing thumbnail cache) with no extra round-trip.
+  on disk) with no extra round-trip. See §18 for which existing Phase 1 disk-cache mechanism this
+  image cache shares quota with (not the thumbnail cache, despite this document's earlier wording
+  — thumbnails are permanent, unquota'd generated content, a different case entirely).
 - **Locally-hosted backend**: composited **client-side**, using Canvas/OffscreenCanvas. The
   translated text only exists in the browser after the direct call to the local model
   (Principle V — the server cannot reach the user's loopback device), so requiring it to be sent
@@ -308,3 +310,384 @@ would violate this requirement if implemented naively.
 
 **Alternatives considered**: A blocking full-page loading state — rejected, spec explicitly
 requires the original content to remain visible and usable while waiting.
+
+## 13. Per-block color/boldness estimation (added 2026-09-06, `/speckit-clarify`)
+
+**Decision**: Estimate each `Detected Text Region`'s own foreground color, background color, and
+boldness via a lightweight heuristic pass over its cropped pixels — run once per region alongside
+the existing rayon-batched OCR pass (§2), not as a separately-scheduled step — rather than
+retraining or fine-tuning `manga-ocr` to output these attributes directly. Each of the three
+attributes is estimated and stored independently; a low-confidence result on any one does not
+block the others (spec.md FR-008a).
+
+**Rationale**: Researched against `zyddnys/manga-image-translator`
+(GPL-3.0 — cloned locally to `~/manga-image-translator` for architecture reference only, following
+this project's existing Koharu precedent from §1; never a dependency, no code reused) — the most
+prominent open-source prior art for this exact problem:
+
+- That project's own OCR recognition model (`model_48px_ctc.py`) is a **multi-head** architecture:
+  a shared backbone feeds both a `char_pred` head (text recognition) and a `color_pred1` head
+  (per-character foreground+background RGB, 6 float outputs per timestep) in a single forward
+  pass — genuinely zero extra inference cost, because color comes from the same model call as
+  recognition. This is the ideal architecture, but requires a model trained with that second head
+  from the start.
+- `manga-ocr` (kha-white, this project's chosen recognition model per §1) has no such color-output
+  head, and retraining/fine-tuning it to add one is out of scope for this phase (would require
+  assembling a labeled color-annotated manga-text training set, well beyond "use an existing
+  Apache-2.0 model" per this project's original §1 scoping). A separate lightweight heuristic pass
+  over each region's cropped pixels — informed by `sift-ocr`'s published approach (KMeans
+  clustering over pixels sampled from the region to find dominant foreground/background color) —
+  gets most of the same practical benefit without a training investment, at the cost of one small
+  additional per-region computation (folded into the existing rayon batch, §2, not a new
+  sequential stage).
+- **Boldness has no working automatic-detection precedent to adopt.** `manga-image-translator`'s
+  own data model (`utils/textblock.py`) carries a `bold: bool` field, but grep across its entire
+  OCR/text-line-merge pipeline confirms it is never actually computed anywhere — it exists as a
+  constructor parameter, always left at its default. No open-source manga-translation project
+  found during this research implements real bold detection. Given no working prior art exists to
+  adopt, LANrurugi uses its own simple heuristic (stroke-width-to-glyph-height ratio, computed from
+  the same cropped-pixel pass as color) rather than leaving the field entirely unaddressed — this
+  is explicitly a first attempt with no external validation, more likely to need revision later
+  than the color estimation (which has real prior art behind its approach) — see spec.md FR-008a's
+  independent-fallback design, which exists specifically so a wrong/low-confidence boldness guess
+  never blocks the (better-grounded) color estimate for the same block.
+
+**Alternatives considered**:
+- Retraining/fine-tuning `manga-ocr` with an added color-output head, matching
+  `manga-image-translator`'s architecture exactly — rejected for this phase on scope grounds (see
+  Rationale); worth revisiting if a pre-trained Apache-2.0/MIT recognition model with a built-in
+  color head is ever identified, which would obsolete this heuristic pass entirely.
+- Treating boldness as out of scope entirely (leaving `is_bold` always absent) — considered and
+  rejected in favor of a first-attempt heuristic, since spec.md FR-008a's independent-fallback
+  design already absorbs the cost of that heuristic being wrong without harming the other two
+  attributes.
+- A generic per-pixel color histogram without clustering — rejected in favor of the KMeans-based
+  approach `sift-ocr` publishes, since a histogram alone doesn't cleanly separate foreground
+  (glyph) pixels from background (bubble) pixels the way clustering on spatially-sampled pixels
+  does.
+
+## 14. Translation consistency: Terminology Glossary + advisory context, not a bigger cache
+
+**Decision**: Two related but distinct gaps — name/term consistency and tone/style
+consistency — are both addressed by populating the previously-defined-but-never-populated
+`context` field on the LLM provider adapter's normalized request (`contracts/llm-provider-
+adapter.md`), assembled server-side from three independently-optional sources, in order:
+(1) exact-substring Terminology Glossary hits (deterministic, free, no LLM judgment involved),
+(2) the volume's other known glossary names (names only) so the backend can itself recognize a
+nickname/initialism variant, and (3) the current page's other already-translated blocks (source +
+translation) as tone/style reference. See spec.md FR-007a–e and Clarifications (Session
+2026-09-06) for the full requirement text and the reasoning behind each.
+
+**Rationale**:
+
+*Why a hybrid (exact match + LLM judgment) for names, not either alone*: A first pass at this
+design considered only exact-substring matching against a glossary — cheap, deterministic, and
+sufficient for a name/term that recurs verbatim. But real manga text doesn't only recur verbatim:
+a character introduced as さゆき may later be called さっちゃん (a nickname with no substring
+relationship to the original — Japanese nickname formation from a given name is a
+cultural/contextual convention, not a derivable string transform), and a Western full name
+introduced once ("Axxx Bxxx Cxxx") is often abbreviated later ("A.B.C."/"ABC"). Extending the
+substring rule to also catch these would require guessing at nickname-formation patterns or
+initialism rules — and worse, a purely shape-based initialism rule risks false-positive matching
+against a genuine, unrelated all-caps acronym that was never introduced as a name at all (the user
+explicitly flagged this exact failure mode during spec review). Recognizing "this is the same
+entity, referred to differently" is fundamentally a semantic/contextual judgment, which is exactly
+what an LLM is well-suited for and a fixed string rule is not — so the design keeps the free
+deterministic path for the case it actually handles well (exact recurrence) and defers the harder
+case (variant recognition) to the backend's own language understanding, rather than trying to
+encode ad-hoc pattern rules for an open-ended set of natural-language nickname/abbreviation
+conventions.
+
+*Why tone/style consistency reuses the same `context` mechanism instead of its own cache*: Unlike
+a name (a discrete value with one correct answer per entity, cacheable in a lookup table), tone is
+continuous and scene-dependent — the same character can be playful in one scene and serious in
+another, so there is no fixed "this character's tone" value to store the way Volume Font Pattern
+stores a fixed font. Attempting to build a tone-classification/caching system would require
+LANrurugi to itself perform tone classification (out of scope — this project has no NLP
+sentiment/register-classification component and adding one is a much larger undertaking than this
+consistency gap warrants) and would still need per-scene overrides, defeating the purpose of
+caching. Supplying the page's other already-translated blocks as advisory reference material lets
+the backend infer tone from real surrounding context on every request, at a bounded cost (one
+page's worth of text, not the volume's), without LANrurugi needing to model tone as a first-class
+concept at all.
+
+*Why the glossary is scoped per-volume (or per-archive if ungrouped), mirroring Volume Font
+Pattern*: Character names and established terminology are volume-level facts (a series' cast list
+doesn't reset per page), and this project already has a working precedent for volume-scoped state
+that accumulates during reading and persists in Redis (Volume Font Pattern, §4) — reusing that
+scoping keeps the two entities' lifecycle/reset semantics easy to reason about together, even
+though (per spec.md FR-007d) the glossary deliberately does *not* copy Volume Font Pattern's
+bulk-reset affordance (FR-010), since an individual wrong glossary entry is independent of the
+others and a bulk reset would discard already-correct entries for no benefit.
+
+**Alternatives considered**:
+- Sending the LLM the entire glossary on every request, letting it figure out relevance itself —
+  rejected; grows unboundedly as a volume's glossary accumulates entries, directly conflicting
+  with this feature's existing cost-aware/budget-visible design (FR-013/FR-014) for what would
+  often be a majority-irrelevant context payload (most text blocks don't mention most characters).
+- A per-character tone/style preference the user or system maintains explicitly (e.g. "Character X
+  = playful") — rejected; scene-dependent tone shifts would make any fixed per-character value
+  wrong some of the time by design, and authoring such preferences manually is exactly the kind of
+  added friction this feature's existing low-friction posture (FR-007) argues against.
+- Requiring user confirmation before a new glossary entry takes effect — rejected; consistent with
+  the same FR-007 low-friction reasoning already applied to Volume Font Pattern's own auto-voting
+  design (no confirmation gate there either), and a wrong auto-captured entry is correctable after
+  the fact (FR-007d) rather than needing to be prevented up front.
+- Sending each text block as its own fully independent LLM request, with no batching at all —
+  superseded; see §15 (revised after initial design discussion — batching by small fixed group is
+  the final decision, not per-block requests).
+
+## 15. Translation request batching, prefetch integration, and prompt-cache alignment
+
+**Decision**: A translation request batches a **small, fixed-size group of pages** (2–4 pages,
+matching the OCR batching group size already established in T009, for design consistency between
+the two pipeline stages) into one LLM call, rather than one call per text block. Look-ahead
+prefetch (US3) drives this batching directly — as pages enter the look-ahead window, they're
+grouped into fixed-size batches and each batch becomes one translation request — rather than
+prefetch and request-granularity being decoupled. Every request's content is still ordered
+stable-content-first, dynamic-content-last (`contracts/llm-provider-adapter.md`): Terminology
+Glossary matches/names first, then same-page/same-batch tone-reference material, then the
+batch's own text blocks (each tagged with a `block_id`) last. The normalized request/response
+shapes become arrays of tagged blocks rather than single strings (see the updated contract). A
+third adapter, DeepSeek, is added alongside the existing OpenAI-compatible and Anthropic adapters,
+since DeepSeek's own caching behavior (see Rationale) is distinct enough to document explicitly
+even though it's also OpenAI-Chat-Completions-shaped at the wire level.
+
+**Rationale**:
+
+*Why batching won out over one-request-per-block*: The original per-block design (§5) was
+correctness-first (simple response parsing, no ID-mapping bugs possible, and a failure only ever
+loses one block, keeping FR-019/FR-020's failure isolation trivial) but pays a fixed per-request
+overhead (HTTP round-trip, and every request repeating the same Terminology-Glossary-derived
+prefix content) once per text block — often 3-8+ times per page. Batching a small fixed group
+amortizes that fixed overhead across several blocks/pages per call, at the cost of the response
+now needing real `block_id` tags to map translations back to their originating block (unlike the
+single-string shape, which relied entirely on "the caller knows which block it asked about because
+it made the call"), and of a failure now needing to be handled at *batch* granularity for
+FR-019/FR-020 (a whole batch's pages show the original-page fallback if the batch's LLM call
+fails, not just one page) — accepted as a reasonable, bounded cost given the batch size is
+deliberately small and capped, not unbounded.
+
+*Why the batch size mirrors T009's OCR batch size (2–4, within T009's already-established 4–8
+range)*: Reusing an already-decided, already-justified batch-size range keeps this pipeline
+internally consistent rather than introducing a second, independently-tuned constant for the same
+general "how many pages of look-ahead work to group together" question; the exact value within
+that range is a tasks-phase tuning parameter, not fixed here.
+
+*Why stable-prefix ordering and prompt caching still apply, and still don't rescue an unbounded/
+sliding-everything design*: All three adapters' underlying providers cache via **exact-prefix
+matching**, not similarity or semantic matching — confirmed directly against each provider's
+current documentation, not assumed, including a live fetch of DeepSeek's own official docs
+(`api-docs.deepseek.com`) specifically because this project's actual configured/tested provider
+(the `deepseek-recommend-architecture` memory) is DeepSeek, not a hypothetical. DeepSeek's own
+worked example states explicitly that a request with prefix `A+B` and a request with prefix `A+C`
+cannot hit each other's cache — only a byte/token-identical shared prefix (`A`) is reusable.
+Anthropic's `cache_control` and OpenAI's automatic caching work the same way (research.md's
+earlier per-provider findings, unchanged by this revision). What batching changes is only *how
+much* content sits after the stable prefix on each call, not whether the prefix itself needs to be
+identical to hit — the Terminology Glossary content, being genuinely stable across many
+consecutive requests for the same volume (only grows, rarely edited — FR-007d), remains the right
+thing to keep first regardless of batch size, and remains cacheable at that position.
+
+*Why DeepSeek gets called out as its own adapter documentation, not folded silently into the
+"OpenAI-compatible" adapter's existing entry*: DeepSeek's context caching is meaningfully
+different from the other two providers in ways worth documenting explicitly rather than assuming
+"OpenAI-compatible wire shape" implies "same caching characteristics": (1) it requires **zero
+opt-in** — no `cache_control` field, no request parameter, fully automatic and disk-backed, unlike
+Anthropic's explicit breakpoints; (2) its cache-hit discount is substantially larger than either
+other provider's (~31x cheaper on a hit vs. a miss for `deepseek-v4-flash`, vs. Anthropic/OpenAI's
+~90% (~10x) discount) — verified against DeepSeek's current pricing, not the deprecated
+`deepseek-chat`/`deepseek-reasoner` names (already known stale per the `006-ai-plugin-wizard`
+research this project's constitution work already flagged); (3) it creates cache units at
+specific points (end of user input, end of model output, detected common prefixes, and fixed
+token-interval cut points in long content) rather than only at explicit user-placed breakpoints,
+which doesn't change what this project needs to do (still: put stable content first) but is worth
+recording since it means DeepSeek may cache *more* opportunistically than Anthropic's
+explicit-breakpoint-only model without any extra work on LANrurugi's part.
+
+**Alternatives considered**:
+- Keeping one-request-per-block (the original §5/§14 design) — superseded per Rationale above;
+  not wrong, just a different point on the correctness-simplicity-vs-cost tradeoff that this
+  revision moves along after weighing the fixed-overhead cost more heavily.
+- Batching an entire look-ahead window (however large the user configures it) into one request,
+  rather than a small fixed group — rejected; unbounded batch size means unbounded failure blast
+  radius (FR-019/FR-020) and unbounded Usage Budget "pre-spend" risk (FR-013/FR-014) against pages
+  the user may never reach, for a diminishing marginal fixed-cost-amortization return past a few
+  pages.
+- Putting `source_text`/batch content first and glossary/context last (i.e. not reordering
+  anything) — rejected; this is the shape that fails to cache at all, since the one thing that's
+  actually stable (glossary) would sit after the one thing that changes every request (batch
+  content), so no usable prefix would ever repeat.
+- Treating DeepSeek as just another instance of the OpenAI-compatible adapter with no dedicated
+  documentation — rejected; its caching behavior differs enough (automatic, no opt-in, much larger
+  discount) that a future maintainer reading only the OpenAI-compatible adapter's Anthropic-style
+  "needs explicit breakpoints" framing would draw the wrong conclusion about what DeepSeek actually
+  needs (nothing extra).
+- Explicit application-level caching of LLM responses beyond what `Translation Cache Entry`
+  (data-model.md) already does — rejected as redundant; `Translation Cache Entry` already caches
+  the *final rendered output* per (page, target language, backend), which is a stronger guarantee
+  than provider-side prompt caching (zero LLM call at all on a hit, vs. a cheaper-but-still-billed
+  call) — provider prompt caching is a cost optimization for the calls `Translation Cache Entry`
+  doesn't already avoid (i.e. genuinely new page/language/backend combinations), not a replacement
+  for it.
+- An **append-only, per-volume translation session** modeled directly on `deepseek-ai/deepseek-
+  harness`'s own session architecture (MIT-licensed; cloned locally to `~/deepseek-harness` for
+  architecture reference only, same reference-clone handling as `manga-image-translator` in §13) —
+  investigated in depth, then rejected once its actual precondition was checked against this
+  feature's own design rather than assumed to transfer. `dsh`'s ~99% cache-hit rate
+  (`packages/compaction/compaction-basic/src/region.ts`'s own doc comment: each request replays
+  "the last routed request's cacheable prefix... so the call is a genuine prefix of the
+  conversation and reuses the provider's KV cache") works because a long-running agent session
+  keeps calling the LLM repeatedly against a continuously-growing history — exactly the shape
+  where an ever-growing, never-reordered prefix pays off, and `dsh`'s `compaction` mechanism exists
+  specifically to keep that history from growing unbounded over a long session (summarizing old
+  turns, never applicable to translation text anyway, since summarizing would destroy the
+  verbatim source/translation correspondence future pages' variant-recognition (FR-007c) and tone
+  reference (FR-007e) depend on). But this feature's actual call pattern doesn't have a long-
+  running-session shape at all: `Translation Cache Entry`/`Detected Text Region` (data-model.md,
+  revised per §16) mean a given page is translated by an LLM call **at most once** — every
+  subsequent view of that page, however many times the user re-reads it or across however many
+  devices, is served from the persisted result with zero LLM call. There is no repeated,
+  long-running sequence of calls against the same volume for an append-only session to amortize
+  a prefix over in the first place — the "session" that would exist is, at most, as long as a
+  single first-read-through of one volume, after which it simply stops accumulating further calls
+  entirely. Introducing session state, history-window truncation, and the associated failure/
+  resume semantics purely for a session shape this feature doesn't actually have was judged not
+  worth the added complexity — see §14/§15's actual solution to the same underlying goal (name/
+  tone consistency): a stable Terminology-Glossary-derived prefix reused across the batch-level
+  requests already scoped in §15, without needing a modeled "session" at all.
+
+## 16. Translation result persistence: `Detected Text Region` is authoritative, rendered image is a re-derivable cache
+
+**Decision**: Reversing this document's original position, `Detected Text Region` — including its
+`translated_text` and resolved `font`/`fg_color`/`bg_color`/`is_bold` once translated
+(data-model.md) — is now the long-term-persisted, authoritative Redis record. `Translation Cache
+Entry` (the rendered/composited page image) becomes a re-derivable performance cache: it MAY be
+evicted or expired at any time without data loss, regenerated by re-running compositing (not OCR,
+not translation) against the already-persisted `Detected Text Region` records for that page.
+
+**Rationale**: Raised directly during spec review as a storage-footprint concern — a rendered page
+image (even compressed) is orders of magnitude larger than the text/position/style data needed to
+reproduce it, so keeping every translated page's *image* around indefinitely (the original design)
+wastes far more space than keeping the underlying text+style data around indefinitely and treating
+the image as disposable. This also happens to compose cleanly with the rest of this feature's
+design: `Detected Text Region`'s per-region style attributes (FR-008a) and the Terminology
+Glossary's translations (FR-007a) are exactly the data compositing needs to reproduce an
+identical rendered result, so nothing new needs to be computed to regenerate a cache-evicted page
+— only the same server-side (T029) or client-side (T050) compositing step this feature already
+implements, run again against data that was never thrown away.
+
+**Alternatives considered**:
+- Keeping the original design (rendered image is authoritative, text/style data is disposable) —
+  rejected per the storage-footprint concern above; also the less resilient choice, since losing
+  the rendered image cache trivially costs one compositing pass to regenerate, while losing the
+  text/style data would require re-running OCR and re-paying for a fresh LLM translation call.
+- Persisting both the image and the text/style data as equally-authoritative, neither disposable —
+  rejected as the worst of both options: still incurs the original image storage cost, with no
+  compensating benefit over making the image properly disposable.
+
+## 17. Cross-cutting integration: backup/export and Activity audit log
+
+**Decision**: Two of Phase 1's existing cross-cutting mechanisms are extended to cover this
+feature's new Redis-persisted entities, as additive calls into already-shipped Phase 1
+infrastructure (not edits to `specs/001-lanrurugi-full-rewrite`'s own spec/plan/tasks — permitted
+under constitution Principle VI, which prohibits altering Phase 1's planning documents or gating
+Phase 1 delivery, not calling Phase 1's already-implemented code from Phase 2):
+
+1. **Backup/export** (`crates/lanrurugi-backup/src/build.rs`): `Terminology Glossary`,
+   `Detected Text Region` (per §16, now the authoritative translation record), and `Volume Font
+   Pattern` are added to `build()`'s existing explicit per-entity enumeration (alongside its
+   current `ArchiveRepository`/`CategoryRepository`/`GroupingRepository`/`StampRepository`/
+   `BookmarksRepository` calls) and to `BackupDocument`'s field set, each with its own
+   `to_backup_*` conversion function following the existing per-entity pattern. `Translation Cache
+   Entry` and `Usage Budget` are deliberately excluded — the former is a re-derivable rendering
+   cache (§16) with nothing lost by omitting it from a backup, and the latter is a
+   point-in-time consumption counter, not durable user-authored state (mirroring why Phase 1's own
+   backup doesn't capture e.g. in-flight job status).
+2. **Activity audit log** (`crates/lanrurugi-storage/src/activity.rs`): a new `translation.*`
+   `action_type` namespace records this feature's user-initiated writes — glossary entry
+   auto-capture and user edit/delete (FR-007a/d), Volume Font Pattern reset (FR-010), and backend/
+   target-language selection changes (FR-002/003/004) — following the same call-a-shared-recording-
+   function-at-the-write-site pattern every existing namespace (`archive.*`, `plugin.*`,
+   `tankoubon.*`, etc.) already uses, so these actions appear in the existing Activity page
+   (`apps/frontend/src/pages/Activity/`) without that page needing feature-specific changes (per
+   `activityTarget.ts`'s existing genericism — a new namespace just needs its own entries in that
+   file's namespace-order/label/target-link tables, the same onboarding step every prior namespace
+   went through).
+
+**Rationale**: This project's constitution Principle I treats user data loss as a correctness bug,
+not an inconvenience — a user's accumulated Terminology Glossary (potentially dozens of manually-
+corrected character names across a long-running series) and the OCR/translation results
+(`Detected Text Region`, now authoritative per §16) represent real, hard-to-reproduce user
+investment (the glossary) and real spent cost (paid-backend LLM calls already made) respectively;
+omitting them from backup/restore would silently discard both on any restore-from-backup, directly
+matching the kind of data-loss risk Principle I already treats as unacceptable for Phase 1's own
+entities. Activity coverage follows the same "this project already has a general mechanism for
+this concern, extend it rather than inventing a parallel one" reasoning this feature's plan.md
+already applies to concurrency (Principle III's rayon/spawn_blocking bridge) and secrets
+(Principle V) — a user correcting a wrong glossary entry, for instance, is exactly the kind of
+"what changed and when" question Activity already answers for every other mutable entity in this
+project.
+
+**Alternatives considered**:
+- Leaving Phase 2 data out of backup/export entirely, documenting it as a known limitation —
+  rejected; the data in question (glossary corrections, paid translation results) is exactly the
+  kind of user investment Principle I's rationale already argues must not be silently lost.
+- A separate, Phase-2-only backup mechanism instead of extending Phase 1's existing one — rejected;
+  would give users two different backup artifacts/flows to manage for what should be one coherent
+  library snapshot, and duplicates infrastructure (snapshot consistency under concurrent
+  modification, FR-010 of Phase 1) that `lanrurugi-backup` already solves correctly.
+- Skipping Activity integration since it's "just" a nice-to-have visibility feature, not a
+  correctness one — rejected; the cost of following the existing per-write-site call pattern is
+  small and consistent with how every other Phase 1 feature already integrated with Activity, and
+  skipping it would make this feature's mutations the one silent, unaudited exception in an
+  otherwise fully-covered system.
+
+## 18. Server-side rendered-image cache quota: shares the reader's resize cache, not the thumbnail cache
+
+**Decision**: The server-composited `Translation Cache Entry` image cache (data-model.md, the
+re-derivable rendering cache per §16) shares the existing reader page **resize cache**'s quota
+(`tempmaxsize`, a Redis-`LRR_CONFIG`-stored, user-configurable setting — default 500MB — enforced
+by a periodic sweep that deletes oldest-`modified`-first once the total exceeds it,
+`crates/lanrurugi-api/src/download_manager/ingest.rs`/`crates/lanrurugi-server/src/main.rs`), not
+the thumbnail cache — no new setting is introduced.
+
+**Rationale**: This document's earlier wording (§6, before this correction) called the server-side
+translated-image cache a sibling of "Phase 1's existing thumbnail cache," without having actually
+verified what that mechanism is or whether it has a quota at all. Checked directly against the
+running code, not assumed: Phase 1 has **two** separate, unrelated disk-cache mechanisms, not one
+generic "image cache" concept —
+- **Thumbnail cache** (`state.library.thumb_dir`, generated by `lanrurugi-scanner/src/
+  thumbnail.rs`): permanent generated content (a cover/page thumbnail is generated once and kept
+  indefinitely, overwritten only by an explicit regen). No sweep, no eviction, no size quota exists
+  for it anywhere in the codebase — it is conceptually closer to "part of the archive's own
+  metadata" than to a cache with a hit/miss/eviction lifecycle.
+- **Reader resize cache** (`<temp_dir>/resize_page/...`, WebP-resized page images the reader
+  requests on demand): explicitly quota-managed and evictable — governed by `tempmaxsize`, swept
+  every 15 minutes, oldest-first eviction once over budget.
+`Translation Cache Entry`'s server-side image is the correct match for the **second** case, not
+the first: per §16, it is explicitly re-derivable at any time (re-run compositing against the
+persisted `Detected Text Region`), the exact same "safe to evict, regenerate on next miss"
+property the resize cache already has and the thumbnail cache does not. Reusing `tempmaxsize`
+rather than introducing a dedicated new quota setting also avoids asking a user to reason about
+and configure two separate "how much disk space can ephemeral page-rendering cache use" numbers
+for what is, from the user's perspective, the same kind of thing (temporary, regenerable,
+page-rendering-related disk usage) — one budget, one sweep mechanism, one setting to understand.
+
+**Alternatives considered**:
+- Treating it as a thumbnail-cache sibling, per this document's own original (now-corrected)
+  wording — rejected once actually verified; thumbnails have no quota/eviction lifecycle at all,
+  so there was nothing to actually "share" in the first place, making the original wording not
+  just imprecise but not implementable as stated.
+- A dedicated new `translation_cache_max_size_mb`-style setting, quota-managed independently of
+  `tempmaxsize` — rejected; both caches hold the same *kind* of thing from a user's perspective
+  (disposable, regenerable, page-image-shaped disk usage attached to reading), so splitting them
+  into two independently-sized budgets adds a setting for a distinction a user has no real reason
+  to care about, without a corresponding benefit (no scenario was identified where a user would
+  want translation image cache to have a meaningfully different size policy from resize cache).
+- Making `Translation Cache Entry` unbounded/unmanaged (no quota at all) — rejected; unlike the
+  thumbnail cache's one-per-page-ever footprint, a translated page's cache entry is keyed by
+  (page, target language, backend) per data-model.md, so switching target language or backend
+  repeatedly could accumulate multiple cached renders per page — an unbounded-growth risk the
+  thumbnail cache's simpler "one thumbnail per page" shape doesn't share, making some quota
+  mechanism actually necessary here, not just a nice-to-have consistency choice.

@@ -37,13 +37,30 @@ the same API-key scheme Phase 1 already established.
 
 ## Detected text + font metadata (local-backend path — client composites itself)
 
-- `GET /archives/{id}/page/{page}/text-regions` — returns `Detected Text Region` records (position
-  + source text, no translation) and the volume's current `Volume Font Pattern` golden set. The
-  browser uses this, together with a translation it obtains directly from its own locally-hosted
-  backend (never proxied through this server, per constitution Principle V), to composite the
-  page client-side (research.md §6/§7).
+- `GET /archives/{id}/page/{page}/text-regions` — returns `Detected Text Region` records (position,
+  source text, and each region's independently-nullable `fg_color`/`bg_color`/`is_bold` per
+  FR-008a/research.md §13 — no translation), the volume's current `Volume Font Pattern` golden
+  set, and the same `context` (Terminology Glossary matches/names, same-page tone reference) the
+  cloud path receives via T019b, so the local-backend path gets FR-007a–e's consistency benefit
+  too (`contracts/client-compositing-cache.md`). The browser uses this, together with a translation
+  it obtains directly from its own locally-hosted backend (never proxied through this server, per
+  constitution Principle V), to composite the page client-side (research.md §6/§7), applying each
+  region's own estimated attributes per `contracts/client-compositing-cache.md`.
+- `POST /archives/{id}/page/{page}/translation/record` — the locally-hosted-backend path reports
+  a translation it obtained directly (never proxied) back to the server so any new name/term it
+  discovers is captured into the shared, server-stored Terminology Glossary (FR-007a); this is a
+  lightweight "record the result," not a translation call — the server performs no LLM call here.
 
 ## Font pattern management
 
 - `POST /volumes/{id}/font-pattern/reset` — clears a volume's `Volume Font Pattern` (`vote_pool`,
   `golden_set`, `meltdown_tally`) back to `unlocked` (FR-010).
+
+## Terminology glossary management
+
+- `GET /volumes/{id}/terminology-glossary` — returns the volume's `Terminology Glossary` entries
+  (source term → translation) for display in settings (FR-007d).
+- `PUT /volumes/{id}/terminology-glossary/{term}` — edits a single entry's translation (FR-007d).
+- `DELETE /volumes/{id}/terminology-glossary/{term}` — removes a single entry (FR-007d). No
+  bulk-clear endpoint, unlike font-pattern reset above — see data-model.md's Terminology Glossary
+  section and research.md §14 for why.
