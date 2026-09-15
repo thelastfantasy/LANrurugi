@@ -22,6 +22,7 @@ import {
   sendJson,
   sendJsonForBlob,
 } from "./client"
+import { collectClientReportedInfo } from "./clientReportedInfo"
 import type {
   ActivityFacets,
   ActivityFilter,
@@ -694,7 +695,8 @@ export function useUpdateCheck() {
 
 export function useLogin() {
   return useMutation({
-    mutationFn: (password: string) => sendForm("POST", "/login", { password }),
+    mutationFn: async (password: string) =>
+      sendForm("POST", "/login", { password, ...(await collectClientReportedInfo()) }),
   })
 }
 
@@ -710,7 +712,7 @@ export function useLogin() {
 export function useLogout() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => sendJson("POST", "/logout"),
+    mutationFn: async () => sendForm("POST", "/logout", { ...(await collectClientReportedInfo()) }),
     onSuccess: () => {
       queryClient.clear()
       clearSearchNavigationState()

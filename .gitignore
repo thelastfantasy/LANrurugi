@@ -61,3 +61,7 @@ dump.rdb
 # The backend's own default `--log-directory` (`./log`) — real runtime logs from manually running
 # `lanrurugi-server` in the repo root during local debugging, never committed.
 /log/
+
+# Ad-hoc debug scratch space for manual investigation (e.g. dumping a real page image to feed
+# a standalone debug example against) — never committed, may contain copyrighted manga content.
+/.debug-scratch/

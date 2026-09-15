@@ -436,6 +436,8 @@ mod tests {
         AuthContext {
             method: AuthMethod::Session,
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         }
     }
 
@@ -446,6 +448,8 @@ mod tests {
                 role,
             },
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         }
     }
 
@@ -453,6 +457,8 @@ mod tests {
         AuthContext {
             method: AuthMethod::GuestVisitor,
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         }
     }
 
@@ -460,6 +466,8 @@ mod tests {
         AuthContext {
             method: AuthMethod::Anonymous,
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         }
     }
 

@@ -12,6 +12,8 @@ export * from "./ActivityPage"
 
 export * from "./ActivityRow"
 
+export * from "./DownloadActivityDetails"
+
 export * from "./MetadataDiff"
 
 export * from "./OperationDescription"

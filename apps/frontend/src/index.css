@@ -481,6 +481,16 @@ input[type="checkbox"]:disabled {
   align-items: start;
 }
 
+/* A row whose `.config-td` is only ever a single control with no helper text below it — `start`
+   alignment (the default above) leaves the label sitting visibly above such a short control, since
+   it assumes every row's value column is tall enough (control + helper text) to align against.
+   Opt in per-row via `Row`'s own `noHelp` prop rather than flipping the shared default, since most
+   rows do have helper text and centering those would misalign the label against the control instead
+   of the whole value block. */
+.settings-row--no-help {
+  align-items: center;
+}
+
 .settings-row .option-td {
   box-sizing: border-box;
   width: auto;
@@ -774,5 +784,134 @@ input[type="checkbox"]:disabled {
     width: 100%;
     justify-content: center;
   }
+}
+
+/* common-ui/Form/NumberInput.tsx's own custom up/down stepper replaces the browser's native
+ * `type="number"` spin button — not just visually alongside it, but instead of it. The native
+ * control is a `::-webkit-inner-spin-button` pseudo-element in Chrome/WebKit, which an inline
+ * `style={{ appearance: "textfield" }}` on the `<input>` itself cannot reach at all (pseudo-element
+ * selectors only exist in real stylesheet rules); the previous attempt to hide it that way left
+ * both the native spinner and this component's own custom one visible side by side (reported live,
+ * 2026-09-07). `-webkit-appearance: none` on the pseudo-element itself is what actually removes it;
+ * `appearance: textfield` on the input covers Firefox's equivalent (which has no separate
+ * pseudo-element to target). Also applied to `UsagePanel.tsx`'s/`PluginOptionsForm.tsx`'s number
+ * fields, which keep native `defaultValue`/free-text-draft semantics (empty string, decimals) that
+ * don't fit `NumberInput`'s controlled-number contract, but still shouldn't show a second,
+ * uncoordinated spinner next to hand-rolled UI. */
+input[type="number"].number-input-no-native-spinner {
+  appearance: textfield;
+}
+input[type="number"].number-input-no-native-spinner::-webkit-inner-spin-button,
+input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* `NumberInput`'s custom stepper (see that component's own docs for why it isn't built on
+ * `InputGroup`): absolutely positioned against the `<input>`'s own visible box, not the wrapper's
+ * full border-box — `.stdinput` (legacy CSS) carries a non-zero `margin-top` (4px) with no
+ * matching `margin-bottom`, so the input's rendered box sits offset within `.number-input-wrapper`
+ * itself; aligning the stepper to the wrapper's own `top: 0`/`bottom: 0` left it taller than, and
+ * shifted above, the input's actual visible box, reading as "the up arrow sits too high" (reported
+ * live, 2026-09-07, confirmed via `getBoundingClientRect` — the stepper's box didn't match the
+ * input's, not an icon-glyph offset). `top: 4px` matches `.stdinput`'s own `margin-top`; `bottom: 0`
+ * matches its zero `margin-bottom`. Each button is exactly half that height via `flex: 1 1 50%`.
+ *
+ * Hidden until hover/focus-within, matching the native `::-webkit-inner-spin-button`'s own
+ * hover-to-reveal behaviour — permanently overlaying two extra buttons on every number field on
+ * screen doesn't match that, and was called out as inconsistent (reported live, 2026-09-07). */
+.number-input-stepper {
+  position: absolute;
+  top: 4px;
+  right: 1px;
+  bottom: 0;
+  width: 14px;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+.number-input-wrapper:hover .number-input-stepper,
+.number-input-wrapper:focus-within .number-input-stepper {
+  opacity: 1;
+  pointer-events: auto;
+}
+.number-input-stepper__btn {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.6rem;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.7;
+}
+.number-input-stepper__btn:hover {
+  opacity: 1;
+}
+/* Pulls each button's own icon glyph closer to the shared centreline between the two buttons —
+ * flush-centred in each half read as too far apart relative to how tight the native spinner's own
+ * two arrows sit (reported live, 2026-09-07; tuned to 2px after an initial 1px pass still read as
+ * too far apart). */
+.number-input-stepper__btn--up i {
+  transform: translateY(2px);
+}
+.number-input-stepper__btn--down i {
+  transform: translateY(-2px);
+}
+
+/* Reader.tsx's mobile bottom toolbar (`mobileToolbar`, `<= 768px` — matches the breakpoint
+ * `lrr.css`'s own now-superseded `.absolute-options` mobile rule used) — replaces what used to be
+ * two separately `position: fixed` icon pills (left/right) plus a plain in-document-flow paginator
+ * strip between them. That paginator wasn't fixed like the pills were, so depending on page height/
+ * scroll position it could end up off-screen while the pills stayed put — reported live, 2026-09-07,
+ * as "the toolbar sometimes disappears." Everything here lives inside one fixed container instead,
+ * so nothing in it can scroll away independently of the rest. No legacy equivalent (legacy's own
+ * reader has no merged mobile bar at all), so this is new additive CSS here rather than a change to
+ * the copied `lrr.css` (which stays diffable against real legacy) — same reasoning as this file's
+ * other additive, no-legacy-equivalent rules above.
+ *
+ * The dark semi-transparent scrim (not a per-theme accent) mirrors `lrr.css`'s own former mobile
+ * `.absolute-options` treatment: this bar floats over the reader's own page image, whose colours
+ * vary per-archive far more than any single theme's palette does, so there's no "matches this
+ * theme" colour to pick — reliable contrast against arbitrary page content is the actual goal, not
+ * theming.
+ *
+ * `!important` on the paginator's margins overrides `arrows`'s own inline `marginTop`/`marginBottom`
+ * (10px, sized for its old in-flow position) — inline styles otherwise beat any class selector. */
+.mobile-reader-toolbar {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 20px;
+  padding: 6px 14px;
+  max-width: calc(100vw - 24px);
+}
+.mobile-reader-toolbar .sn.paginator {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+.mobile-reader-toolbar-icons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mobile-reader-toolbar a,
+.mobile-reader-toolbar .pagecount,
+.mobile-reader-toolbar-icons button,
+.mobile-reader-toolbar-icons button i {
+  color: #fff;
 }
 

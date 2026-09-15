@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { LOG_CATEGORIES, type LogCategory, useLogLines } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { useApplyTheme } from "@/theme"
@@ -73,13 +74,7 @@ export function Logs() {
           <i style={{ paddingRight: 10 }} className="fa fa-sync-alt fa-2x"></i>
         </a>
         {t("logs.lines")}{" "}
-        <input
-          type="number"
-          min={0}
-          value={lines}
-          onChange={(e) => setLines(Math.max(0, Number(e.target.value) || 0))}
-          style={{ width: 60 }}
-        />
+        <NumberInput min={0} value={lines} onValueChange={(v) => setLines(Math.max(0, v))} style={{ width: 60 }} />
       </div>
       <div style={{ clear: "both" }} />
 

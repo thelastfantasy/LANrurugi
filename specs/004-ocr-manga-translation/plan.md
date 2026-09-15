@@ -26,8 +26,9 @@ frontend app — this feature adds to that codebase rather than starting a new o
 **Primary Dependencies**:
 - OCR text **detection**: `oar-ocr` (Apache-2.0, PP-OCR-based), which fetches and manages its own
   detection model — no custom acquisition/inference code needed for this half of OCR.
-- OCR text **recognition**: a custom `ort` (ONNX Runtime's Rust bindings, CPU execution provider
-  only — see research.md §1 for why GPU is out of scope this phase) integration against
+- OCR text **recognition**: a custom `ort` (ONNX Runtime's Rust bindings; CPU execution provider
+  always available as the explicit fallback, CUDA added as of issue #103 — see research.md §1's
+  2026-09-12 update; OpenVINO/DirectML remain out of scope) integration against
   kha-white's Apache-2.0 `manga-ocr` model, chosen over generic recognition specifically for its
   accuracy on manga/vertical-Japanese text. Written independently — not a dependency on, or code
   derived from, Koharu (mayocream/koharu), a similar Rust manga-translation project that was

@@ -369,6 +369,11 @@ pub async fn import_from_legacy(
         tankoubons: Vec::new(),
         stamps: Vec::new(),
         bookmarks: Vec::new(),
+        // A legacy LANraragi backup predates this project entirely, so it can never carry Phase 2
+        // translation state (`specs/004-ocr-manga-translation` FR-022).
+        terminology_glossaries: Vec::new(),
+        volume_font_patterns: Vec::new(),
+        text_regions: Vec::new(),
     };
 
     match import_from_legacy_inner(

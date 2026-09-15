@@ -12,14 +12,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::Router;
 use futures_util::StreamExt;
+use lanrurugi_plugin::protocol::PluginInfo;
 use lanrurugi_storage::download_queue::{DownloadQueueState, QueueItemOrigin};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
+use crate::plugins::{get_plugin_customargs, named_plugin_parameters, plugin_activity_fields};
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
@@ -188,6 +190,61 @@ struct AddQueueBody {
     items: Vec<AddQueueItem>,
 }
 
+/// Builds the `after` payload shared by `download_queue.add` and `download_queue.start` — the
+/// download plugin that owns the URL plus every execution/queue setting actually chosen for it, so
+/// the Activity detail view can show *which plugin with which settings* rather than a bare URL.
+/// `plugin` is `None` for the start-request side (querying `plugin_info` there would spawn a
+/// throwaway Deno subprocess just to enrich an audit entry — `plugins::start_download` patches the
+/// resolved name/namespace/type onto the same entry moments later); `plugin_parameters` is likewise
+/// `None` until those customargs have actually been resolved. Optional fields are omitted rather
+/// than written as `null`, so the detail view can tell "not known yet" apart from "known empty".
+#[allow(clippy::too_many_arguments)]
+fn download_activity_payload(
+    url: &str,
+    plugin_namespace: &str,
+    plugin: Option<&PluginInfo>,
+    plugin_parameters: Option<Value>,
+    category: Option<&str>,
+    auto_fetch_metadata: bool,
+    overwrite_on_duplicate: bool,
+    title: Option<&str>,
+    metadata: Option<&Value>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("url".to_string(), json!(url));
+    payload.insert(
+        "plugin".to_string(),
+        plugin
+            .map(plugin_activity_fields)
+            .unwrap_or_else(|| json!({ "namespace": plugin_namespace })),
+    );
+    payload.insert("plugin_namespace".to_string(), json!(plugin_namespace));
+    let mut parameters = serde_json::Map::new();
+    parameters.insert("category".to_string(), json!(category));
+    if let Some(plugin_parameters) = plugin_parameters {
+        parameters.insert("plugin_parameters".to_string(), plugin_parameters);
+    }
+    payload.insert(
+        "execution_parameters".to_string(),
+        Value::Object(parameters),
+    );
+    payload.insert(
+        "auto_fetch_metadata".to_string(),
+        json!(auto_fetch_metadata),
+    );
+    payload.insert(
+        "overwrite_on_duplicate".to_string(),
+        json!(overwrite_on_duplicate),
+    );
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
+        payload.insert("title".to_string(), json!(title));
+    }
+    if let Some(metadata) = metadata {
+        payload.insert("metadata".to_string(), metadata.clone());
+    }
+    Value::Object(payload)
+}
+
 /// `POST /download_queue` — bulk add. The client has already resolved which download plugin's
 /// `url_pattern` matched each URL and computed the two checkbox defaults; this handler's only
 /// validation is that `plugin_namespace` actually resolves to an installed plugin — invalid
@@ -202,72 +259,100 @@ async fn add_to_queue(
     let mut rejected = Vec::new();
 
     for item in &body.items {
-        match state.plugins.plugin_info(&item.plugin_namespace).await {
-            Ok(_) => match state
-                .download_queue
-                .add(lanrurugi_storage::download_queue::NewQueueItem {
-                    origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
-                    url: item.url.clone(),
-                    plugin_namespace: item.plugin_namespace.clone(),
-                    file_size: None,
-                    category: item.category.clone(),
-                    auto_fetch_metadata: item.auto_fetch_metadata,
-                    overwrite_on_duplicate: item.overwrite_on_duplicate,
-                    state: DownloadQueueState::Queued,
-                })
-                .await
-            {
-                Ok(saved) => {
-                    if let Some(tx) = &state.download_queue_tx {
-                        let _ = tx.send(serde_json::json!({ "kind": "add", "item": saved }));
-                    }
-                    // `title` is always `None` this early (no metadata fetched yet at add time),
-                    // so `label` is just the url — but `after.url` is still set for consistency
-                    // with `start_queue_item`'s own shape, so the frontend can render every
-                    // `download_queue.*` entry's operation content the same way regardless of
-                    // which point in the item's lifecycle wrote it.
-                    record_manual(
-                        &state,
-                        auth.as_ref().map(|e| &e.0),
-                        action_types::DOWNLOAD_QUEUE_ADD,
-                        ActivityTarget {
-                            id: Some(saved.id.clone()),
-                            label: Some(saved.url.clone()),
-                            kind: Some("download_queue_item".to_string()),
-                        },
-                        Outcome::Success,
-                        None,
-                        Some(json!({ "url": saved.url.clone() })),
-                    )
-                    .await;
-                    added.push(saved);
-                }
-                Err(e) => {
-                    // A real attempted-and-failed add (Redis write error), not a precondition
-                    // rejection — the plugin_namespace already resolved fine above.
-                    record_manual(
-                        &state,
-                        auth.as_ref().map(|e| &e.0),
-                        action_types::DOWNLOAD_QUEUE_ADD,
-                        ActivityTarget {
-                            id: None,
-                            label: Some(item.url.clone()),
-                            kind: Some("download_queue_item".to_string()),
-                        },
-                        Outcome::Failure {
-                            reason: e.to_string(),
-                        },
-                        None,
-                        None,
-                    )
-                    .await;
-                    rejected.push(json!({ "url": item.url, "reason": e.to_string() }));
-                }
-            },
-            Err(_) => rejected.push(json!({
+        let Ok(info) = state.plugins.plugin_info(&item.plugin_namespace).await else {
+            rejected.push(json!({
                 "url": item.url,
                 "reason": format!("no installed plugin under namespace {:?}", item.plugin_namespace),
-            })),
+            }));
+            continue;
+        };
+        // Resolved once, up front, so both arms below record it: the plugin's declared parameter
+        // names paired with the user's saved values are this download's real execution parameters,
+        // and they're identical regardless of whether the Redis write that follows succeeds.
+        let plugin_parameters = named_plugin_parameters(
+            &info,
+            &get_plugin_customargs(&state, &item.plugin_namespace, &info.parameters).await,
+        );
+        match state
+            .download_queue
+            .add(lanrurugi_storage::download_queue::NewQueueItem {
+                origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                url: item.url.clone(),
+                plugin_namespace: item.plugin_namespace.clone(),
+                file_size: None,
+                category: item.category.clone(),
+                auto_fetch_metadata: item.auto_fetch_metadata,
+                overwrite_on_duplicate: item.overwrite_on_duplicate,
+                state: DownloadQueueState::Queued,
+            })
+            .await
+        {
+            Ok(saved) => {
+                if let Some(tx) = &state.download_queue_tx {
+                    let _ = tx.send(serde_json::json!({ "kind": "add", "item": saved }));
+                }
+                // `title`/`metadata` are always absent this early (no metadata fetched yet at
+                // add time), so `label` is just the url — but `after` still carries the plugin
+                // and every execution/queue setting so the record is useful on its own, and the
+                // frontend renders every `download_queue.*` entry the same way regardless of
+                // which point in the item's lifecycle wrote it.
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::DOWNLOAD_QUEUE_ADD,
+                    ActivityTarget {
+                        id: Some(saved.id.clone()),
+                        label: Some(saved.url.clone()),
+                        kind: Some("download_queue_item".to_string()),
+                    },
+                    Outcome::Success,
+                    None,
+                    Some(download_activity_payload(
+                        &saved.url,
+                        &saved.plugin_namespace,
+                        Some(&info),
+                        Some(plugin_parameters.clone()),
+                        saved.category.as_deref(),
+                        saved.auto_fetch_metadata,
+                        saved.overwrite_on_duplicate,
+                        saved.title.as_deref(),
+                        saved.metadata_preview.as_ref(),
+                    )),
+                )
+                .await;
+                added.push(saved);
+            }
+            Err(e) => {
+                // A real attempted-and-failed add (Redis write error), not a precondition
+                // rejection — the plugin_namespace already resolved fine above.
+                record_manual(
+                    &state,
+                    auth.as_ref().map(|e| &e.0),
+                    action_types::DOWNLOAD_QUEUE_ADD,
+                    ActivityTarget {
+                        id: None,
+                        label: Some(item.url.clone()),
+                        kind: Some("download_queue_item".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    Some(download_activity_payload(
+                        &item.url,
+                        &item.plugin_namespace,
+                        Some(&info),
+                        Some(plugin_parameters),
+                        item.category.as_deref(),
+                        item.auto_fetch_metadata,
+                        item.overwrite_on_duplicate,
+                        None,
+                        None,
+                    )),
+                )
+                .await;
+                rejected.push(json!({ "url": item.url, "reason": e.to_string() }));
+            }
         }
     }
 
@@ -466,9 +551,10 @@ async fn start_queue_item(
     // the frontend can always show the real source link even when a title is also present
     // (`OperationDescription.tsx`'s own docs).
     let item = state.download_queue.get(&id).await.ok().flatten();
-    let (label, url) = item
-        .map(|i| (i.title.clone().unwrap_or_else(|| i.url.clone()), i.url))
-        .unzip();
+    let item_for_activity = item.clone();
+    let label = item
+        .as_ref()
+        .map(|i| i.title.clone().unwrap_or_else(|| i.url.clone()));
     let activity_entry_id = record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -480,13 +566,36 @@ async fn start_queue_item(
         },
         // Written before the attempt runs, same as `patch_after` can only enrich `after` later,
         // not flip this to `Failure` — the real download outcome (network/plugin/ingest failure
-        // inside the background task `start_one` spawns) isn't observable from here yet.
+        // inside the background task `start_one` spawns) isn't observable from here yet. The
+        // plugin's resolved name and actual execution parameters (customargs) are patched onto
+        // this same entry by `plugins::start_download` once it has them; see
+        // `download_activity_payload`'s own docs.
         Outcome::Success,
         None,
-        url.map(|u| json!({ "url": u })),
+        item_for_activity.as_ref().map(|i| {
+            // A retry (`state != Queued`) clears the previous run's title/metadata preview inside
+            // `start_one` before this attempt begins — recording those stale values here would
+            // say the new run is using metadata it has actually already discarded.
+            let cached = i.state == DownloadQueueState::Queued;
+            download_activity_payload(
+                &i.url,
+                &i.plugin_namespace,
+                None,
+                None,
+                i.category.as_deref(),
+                i.auto_fetch_metadata,
+                i.overwrite_on_duplicate,
+                if cached { i.title.as_deref() } else { None },
+                if cached {
+                    i.metadata_preview.as_ref()
+                } else {
+                    None
+                },
+            )
+        }),
     )
     .await;
-    match start_one(&state, &id, activity_entry_id).await {
+    match start_one(&state, auth.as_ref().map(|e| &e.0), &id, activity_entry_id).await {
         Ok(job_id) => axum::Json(
             json!({ "operation": "start_download_queue_item", "success": 1, "job": job_id }),
         )
@@ -590,9 +699,9 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
         // row in the download queue, not a `bulk_start`-only summary a user can't click into for
         // any *one* item's own eventual result.
         let item = state.download_queue.get(&id).await.ok().flatten();
-        let (label, url) = item
-            .map(|i| (i.title.clone().unwrap_or_else(|| i.url.clone()), i.url))
-            .unzip();
+        let label = item
+            .as_ref()
+            .map(|i| i.title.clone().unwrap_or_else(|| i.url.clone()));
         let activity_entry_id = record_manual(
             state,
             auth,
@@ -605,10 +714,28 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
             // Same "written before the attempt runs" reasoning as `start_queue_item`'s own entry.
             Outcome::Success,
             None,
-            url.map(|u| json!({ "url": u })),
+            item.as_ref().map(|i| {
+                // Same retry-staleness reasoning as `start_queue_item`'s own record.
+                let cached = i.state == DownloadQueueState::Queued;
+                download_activity_payload(
+                    &i.url,
+                    &i.plugin_namespace,
+                    None,
+                    None,
+                    i.category.as_deref(),
+                    i.auto_fetch_metadata,
+                    i.overwrite_on_duplicate,
+                    if cached { i.title.as_deref() } else { None },
+                    if cached {
+                        i.metadata_preview.as_ref()
+                    } else {
+                        None
+                    },
+                )
+            }),
         )
         .await;
-        match start_one(state, &id, activity_entry_id).await {
+        match start_one(state, auth, &id, activity_entry_id).await {
             Ok(job_id) => started.push(json!({ "id": id, "job": job_id })),
             Err(StartError::NotQueued) => {} // silent no-op, per contract
             Err(StartError::Storage(e)) => {
@@ -735,6 +862,7 @@ fn start_error_message(e: &StartError) -> String {
 
 async fn start_one(
     state: &AppState,
+    auth: Option<&AuthContext>,
     id: &str,
     activity_entry_id: Option<String>,
 ) -> Result<String, StartError> {
@@ -826,6 +954,7 @@ async fn start_one(
         item.overwrite_on_duplicate,
         Some((state.download_queue.clone(), item.id.clone())),
         activity_entry_id,
+        auth.cloned(),
     )
     .await;
 
@@ -2621,6 +2750,58 @@ mod tests {
             pending_filename_conflict: None,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn download_activity_payload_omits_unknown_optional_fields() {
+        let payload = download_activity_payload(
+            "https://example.com/gallery/1",
+            "download/ehentai",
+            None,
+            None,
+            Some("manga"),
+            true,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(payload["url"], "https://example.com/gallery/1");
+        // No resolved `plugin_info` yet — the start-request side records just the namespace; the
+        // full name/type are patched in later.
+        assert_eq!(payload["plugin"]["namespace"], "download/ehentai");
+        assert_eq!(payload["plugin_namespace"], "download/ehentai");
+        assert_eq!(payload["execution_parameters"]["category"], "manga");
+        assert_eq!(payload["auto_fetch_metadata"], true);
+        assert_eq!(payload["overwrite_on_duplicate"], false);
+        assert!(payload.get("title").is_none());
+        assert!(payload.get("metadata").is_none());
+        assert!(payload["execution_parameters"]
+            .get("plugin_parameters")
+            .is_none());
+    }
+
+    #[test]
+    fn download_activity_payload_carries_title_metadata_and_named_parameters() {
+        let metadata = json!({ "title": "Example", "tags": "artist: someone" });
+        let parameters = json!({ "forceresampled": false });
+        let payload = download_activity_payload(
+            "https://example.com/gallery/1",
+            "download/ehentai",
+            None,
+            Some(parameters.clone()),
+            None,
+            false,
+            true,
+            Some("Example"),
+            Some(&metadata),
+        );
+        assert_eq!(payload["title"], "Example");
+        assert_eq!(payload["metadata"], metadata);
+        assert_eq!(
+            payload["execution_parameters"]["plugin_parameters"],
+            parameters
+        );
+        assert_eq!(payload["overwrite_on_duplicate"], true);
     }
 
     #[test]

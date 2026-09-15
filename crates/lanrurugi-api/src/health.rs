@@ -28,11 +28,30 @@ use serde_json::json;
 
 use crate::AppState;
 
+/// How long a single Redis `PING` gets before that pool is reported as `"timeout"` rather than
+/// left to hang the whole `/health` response. Without this, a pool whose connection is slow (or
+/// whose async task is delayed getting scheduled — see this module's own top-level doc comment on
+/// the real incident that motivated this) could block `/health` indefinitely, which is exactly the
+/// case a Docker healthcheck exists to catch, not get stuck behind.
+const PING_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/health", get(health))
 }
 
-async fn ping_pool(pool: &deadpool_redis::Pool) -> bool {
+/// `"ok"` / `"failed"` (the pool answered, PING failed or errored) / `"timeout"` (no answer within
+/// [`PING_TIMEOUT`] — treated the same as `"failed"` for the overall `healthy` verdict, but
+/// reported distinctly since it points at a different failure mode: the pool/connection itself
+/// vs. this process being too busy to get an answer in time).
+async fn ping_pool(pool: &deadpool_redis::Pool) -> &'static str {
+    match tokio::time::timeout(PING_TIMEOUT, ping_pool_inner(pool)).await {
+        Ok(true) => "ok",
+        Ok(false) => "failed",
+        Err(_) => "timeout",
+    }
+}
+
+async fn ping_pool_inner(pool: &deadpool_redis::Pool) -> bool {
     let Ok(mut conn) = pool.get().await else {
         return false;
     };
@@ -43,7 +62,7 @@ async fn ping_pool(pool: &deadpool_redis::Pool) -> bool {
 }
 
 async fn health(State(state): State<AppState>) -> Response {
-    let redis_checks: Vec<(&str, bool)> = vec![
+    let redis_checks: Vec<(&str, &str)> = vec![
         ("archive", ping_pool(&state.redis.archive).await),
         ("minion", ping_pool(&state.redis.minion).await),
         ("config", ping_pool(&state.redis.config).await),
@@ -74,7 +93,7 @@ async fn health(State(state): State<AppState>) -> Response {
         None => None,
     };
 
-    let redis_ok = redis_checks.iter().all(|(_, ok)| *ok);
+    let redis_ok = redis_checks.iter().all(|(_, status)| *status == "ok");
     let frontend_ok_required = frontend_ok.unwrap_or(true);
     let healthy = redis_ok && frontend_ok_required;
 
@@ -84,9 +103,7 @@ async fn health(State(state): State<AppState>) -> Response {
         "status": status,
         "checks": {
             "redis": serde_json::Map::from_iter(
-                redis_checks.into_iter().map(|(name, ok)| {
-                    (name.to_string(), json!(if ok { "ok" } else { "failed" }))
-                })
+                redis_checks.into_iter().map(|(name, status)| (name.to_string(), json!(status)))
             ),
             "frontend": frontend_ok.map(|ok| if ok { "ok" } else { "failed" }).unwrap_or("skipped"),
             "recommender": if state.recommender.ready() { "ready" } else { "loading" },

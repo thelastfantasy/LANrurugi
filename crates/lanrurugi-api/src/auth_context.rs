@@ -35,6 +35,17 @@ pub struct AuthContext {
     /// display/diagnostic-only, never a security control) — carried here so request tracing can
     /// log it without re-deriving it from headers a second time.
     pub client_ip: Option<String>,
+    /// This request's raw `User-Agent` header, verbatim — parsed into a
+    /// `lanrurugi_storage::device_info::UserAgentInfo` only at the point an activity entry /
+    /// refresh token record is actually written (`crate::device_info::build`), not here, so a
+    /// caller that never needs the parsed form doesn't pay for it. `None` if the header was
+    /// absent.
+    pub user_agent: Option<String>,
+    /// Client-reported screen/language/timezone/etc. facts (`lanrurugi_storage::device_info::
+    /// ClientReportedInfo`) — only ever `Some` for `login`/`refresh`, which accept these as
+    /// optional form fields (see `crate::login::ClientReportedFields`); every other request shape,
+    /// `GuestVisitor` included, has no body of this shape to carry them and stays `None`.
+    pub client_reported: Option<lanrurugi_storage::device_info::ClientReportedInfo>,
 }
 
 impl AuthContext {

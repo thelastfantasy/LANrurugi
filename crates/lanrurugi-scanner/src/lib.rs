@@ -1,4 +1,5 @@
 pub mod archive_format;
+pub mod events;
 pub mod full_scan;
 pub mod handle;
 pub mod hashing;

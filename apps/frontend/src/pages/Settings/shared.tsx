@@ -2,9 +2,20 @@ import type { ReactNode } from "react"
 
 import { Switch } from "@/components/common-ui/Form/Switch"
 
-export function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({
+  label,
+  children,
+  noHelp,
+}: {
+  label: string
+  children: ReactNode
+  /** This row's `.config-td` is only the control itself, with no helper text below it — vertically
+   * centers the label against it instead of top-aligning (the default, which assumes every row is
+   * tall enough to align against). */
+  noHelp?: boolean
+}) {
   return (
-    <div className="settings-row">
+    <div className={noHelp ? "settings-row settings-row--no-help" : "settings-row"}>
       <div className="option-td">
         {/* Legacy's `c.lh()` emits raw HTML — a few real labels embed their own `<br>` (e.g.
             "Maximum <br>Cache Size"), so this has to render as HTML, not escaped text. */}
@@ -53,17 +64,19 @@ export function ActionRow({
   id,
   label,
   onClick,
+  disabled,
   children,
 }: {
   id: string
   label: string
   onClick: () => void
+  disabled?: boolean
   children: ReactNode
 }) {
   return (
     <div className="settings-row">
       <div className="option-td">
-        <input id={id} className="stdbtn" type="button" value={label} onClick={onClick} />
+        <input id={id} className="stdbtn" type="button" disabled={disabled} value={label} onClick={onClick} />
       </div>
       <div className="config-td">{children}</div>
     </div>

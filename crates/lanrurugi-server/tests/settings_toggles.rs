@@ -80,6 +80,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = Arc::new(lanrurugi_storage::activity_dedup::ActivityDedupGate::new(
+        redis.config.clone(),
+    ));
     let import_snapshots = Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -119,12 +122,16 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
 

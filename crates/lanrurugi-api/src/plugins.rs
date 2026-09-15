@@ -129,6 +129,42 @@ pub(crate) async fn get_plugin_customargs(
     args
 }
 
+/// Turns a plugin's positional `customargs` values into a *named* map for the activity log's
+/// `execution_parameters` field — `get_plugin_customargs` returns a plain `[false, 0, ""]` array
+/// (exactly what `exec_download` itself receives), which is unreadable in an audit record without
+/// knowing the plugin's declaration order. Pairing each slot with its declared parameter name keeps
+/// the same values while saying which setting each one actually is; a plugin that declares no
+/// parameters (or leaves a name blank) falls back to the raw array or its positional index, so a
+/// configured value is never silently dropped from the record.
+pub(crate) fn named_plugin_parameters(info: &PluginInfo, values: &[Value]) -> Value {
+    if info.parameters.is_empty() {
+        return Value::Array(values.to_vec());
+    }
+    let mut map = serde_json::Map::new();
+    for (i, value) in values.iter().enumerate() {
+        let key = info
+            .parameters
+            .get(i)
+            .map(|p| p.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("arg{i}"));
+        map.insert(key, value.clone());
+    }
+    Value::Object(map)
+}
+
+/// Shared `plugin` object embedded in `download_queue.add`/`download_queue.start` activity
+/// records — the real display name/namespace/type, not just the raw namespace string, so the
+/// Activity detail view doesn't have to resolve it against a live plugin list that may since have
+/// changed (or no longer carry the plugin at all).
+pub(crate) fn plugin_activity_fields(info: &PluginInfo) -> Value {
+    json!({
+        "namespace": info.namespace,
+        "name": info.name,
+        "type": info.kind,
+    })
+}
+
 fn default_customarg(param_type: Option<&str>) -> Value {
     match param_type {
         Some("bool") => Value::Bool(false),
@@ -1821,6 +1857,7 @@ async fn download_url(
         false,
         None,
         None,
+        auth.as_ref().map(|e| e.0.clone()),
     )
     .await;
 
@@ -1862,6 +1899,11 @@ pub(crate) async fn start_download(
     // to record a result before the work has even started. `None` for the `/download_url` path
     // (out of scope for now — see that call site's own comment).
     activity_entry_id: Option<String>,
+    // The launching request's own identity, captured before this function spawns its background
+    // task (there's no `AuthContext` available inside that task) so each `archive.ingest`
+    // record written once ingress finishes is attributed to the operator who started the download
+    // — not a generic `System` actor. Cheap to clone (two small `String`s at most).
+    auth: Option<crate::auth_context::AuthContext>,
 ) -> String {
     let job_id = state.jobs.create("download_url").await;
     let jobs = state.jobs.clone();
@@ -1948,6 +1990,30 @@ pub(crate) async fn start_download(
             // `ingest_downloaded_file`'s own docs), which must be the URL the *user* gave, not
             // whatever internal link the plugin's own `exec_download` result later resolves to.
             let source_url = url.clone();
+            // Enrich this download's own `download_queue.start` entry now that the *real*
+            // execution parameters are known: `customargs` are resolved here (not at
+            // start-request time), and `named_plugin_parameters` pairs each positional value with
+            // its declared parameter name so the audit record reads as settings rather than a bare
+            // `[false, 0]` array. `title`/`metadata` are already on the entry from the
+            // start-request side; `archive_ids` are patched later, once ingestion finishes (see
+            // this task's own success branch). Skipped entirely for a caller with no start entry
+            // (the `/download_url` path, which records its own `plugin.url_download_trigger`).
+            if let Some(entry_id) = &activity_entry_id {
+                crate::activity::patch_after(
+                    &state_for_task,
+                    entry_id,
+                    json!({
+                        "plugin": plugin_activity_fields(&info),
+                        "plugin_namespace": plugin_namespace_for_task.clone(),
+                        "execution_parameters": {
+                            "url": source_url.clone(),
+                            "category": category.clone(),
+                            "plugin_parameters": named_plugin_parameters(&info, &customargs),
+                        },
+                    }),
+                )
+                .await;
+            }
             let args = json!({ "url": url, "category": category, "customargs": customargs });
             let args = with_login_cookies(&state_for_task, &info, args).await;
             // Diagnostic only: this call covers the whole `Starting` phase (the plugin's own
@@ -2049,16 +2115,25 @@ pub(crate) async fn start_download(
                     &cancel_for_task,
                     queue_item_id_for_task.as_deref(),
                     queue_link.clone(),
+                    auth,
                 )
                 .await
                 {
                     Ok(ids) => {
+                        // The item's own freshest title/metadata preview (if any), patched onto
+                        // the start entry alongside `archive_ids` below — the start-request side
+                        // could only snapshot whatever existed back then, while
+                        // `ensure_metadata_cached` just below may have populated both.
+                        let mut activity_title: Option<String> = None;
+                        let mut activity_metadata: Option<Value> = None;
                         if let Some((repo, item_id)) = &queue_link {
                             // Fetch/cache metadata before Done so the frontend sees it.
                             if let Ok(Some(mut item)) = repo.get(item_id).await {
                                 if item.auto_fetch_metadata || item.title.is_none() {
                                     ensure_metadata_cached(&state_for_task, &mut item).await;
                                 }
+                                activity_title = item.title.clone();
+                                activity_metadata = item.metadata_preview.clone();
                             }
                             update_queue_item_state(
                                 repo,
@@ -2077,12 +2152,14 @@ pub(crate) async fn start_download(
                         // download's own activity record show *which archive(s)* it became,
                         // rather than only ever showing the pre-download intent.
                         if let Some(entry_id) = &activity_entry_id {
-                            crate::activity::patch_after(
-                                &state_for_task,
-                                entry_id,
-                                json!({ "archive_ids": ids }),
-                            )
-                            .await;
+                            let mut patch = json!({ "archive_ids": ids });
+                            if let Some(title) = activity_title {
+                                patch["title"] = Value::String(title);
+                            }
+                            if let Some(metadata) = activity_metadata {
+                                patch["metadata"] = metadata;
+                            }
+                            crate::activity::patch_after(&state_for_task, entry_id, patch).await;
                         }
                         jobs.finish(&job_id_for_task, json!({ "archive_ids": ids }))
                             .await
@@ -2603,6 +2680,11 @@ async fn run_managed_downloads(
         Arc<lanrurugi_storage::download_queue::DownloadQueueRepository>,
         String,
     )>,
+    // The launching request's identity, threaded down from `start_download` so every
+    // `archive.ingest` record written once a resource is actually cataloged is attributed
+    // to the operator who started the download (`None` only for callers with no request identity
+    // — the `/download_url` path passes its own, and the direct-call unit test passes `None`).
+    auth: Option<crate::auth_context::AuthContext>,
 ) -> Result<Vec<String>, lanrurugi_core::queue_error::QueueError> {
     let manager = download_manager_for(&state, &plugin_namespace).await;
     let declared = fetch_declared_options(&state, &plugin_namespace)
@@ -2847,10 +2929,21 @@ async fn run_managed_downloads(
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
-        let ingested =
+        let ingested = crate::download_manager::ingest::record_ingest_result(
+            &state,
+            auth.as_ref(),
+            "download",
+            &bundled.filename,
+            json!({
+                "plugin_namespace": plugin_namespace,
+                "source_url": source_url,
+                "queue_item_id": queue_item_id,
+            }),
             ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
-                .await
-                .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
+                .await,
+        )
+        .await
+        .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
         if let Some(catid) = &category {
             let _ = crate::categories::add_archive_to_category(&state, catid, &ingested.archive_id)
                 .await;
@@ -2858,12 +2951,24 @@ async fn run_managed_downloads(
         archive_ids.push(ingested.archive_id);
     } else {
         for downloaded_result in downloaded_files {
-            let ingested = ingest_downloaded_file(
+            let ingested = crate::download_manager::ingest::record_ingest_result(
                 &state,
-                &downloaded_result,
-                overwrite,
-                Some(source_url),
-                queue_item_id,
+                auth.as_ref(),
+                "download",
+                &downloaded_result.filename,
+                json!({
+                    "plugin_namespace": plugin_namespace,
+                    "source_url": source_url,
+                    "queue_item_id": queue_item_id,
+                }),
+                ingest_downloaded_file(
+                    &state,
+                    &downloaded_result,
+                    overwrite,
+                    Some(source_url),
+                    queue_item_id,
+                )
+                .await,
             )
             .await
             .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
@@ -3115,7 +3220,126 @@ async fn upload_plugin(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use lanrurugi_plugin::protocol::PluginParameter;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
+
+    fn plugin_info_with_parameters(parameters: Vec<PluginParameter>) -> PluginInfo {
+        PluginInfo {
+            namespace: "download/ehentai".to_string(),
+            kind: "download".to_string(),
+            parameters,
+            declared_permissions: lanrurugi_plugin::protocol::DeclaredPermissions {
+                net: Vec::new(),
+                read: false,
+                write: false,
+            },
+            login_from: None,
+            name: "E-Hentai".to_string(),
+            author: String::new(),
+            description: String::new(),
+            version: String::new(),
+            icon: None,
+            oneshot_arg: None,
+            url_pattern: None,
+            domain_match: Vec::new(),
+            generated_by_wizard: false,
+            sidecar_files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn named_plugin_parameters_pairs_each_value_with_its_declared_name() {
+        let info = plugin_info_with_parameters(vec![
+            PluginParameter {
+                name: "forceresampled".to_string(),
+                description: String::new(),
+                required: false,
+                param_type: Some("bool".to_string()),
+            },
+            PluginParameter {
+                name: "quality".to_string(),
+                description: String::new(),
+                required: false,
+                param_type: Some("int".to_string()),
+            },
+        ]);
+        let named = named_plugin_parameters(&info, &[Value::Bool(false), Value::Number(5.into())]);
+        assert_eq!(named["forceresampled"], Value::Bool(false));
+        assert_eq!(named["quality"], Value::Number(5.into()));
+    }
+
+    #[test]
+    fn named_plugin_parameters_falls_back_to_the_raw_array_when_nothing_is_declared() {
+        let info = plugin_info_with_parameters(Vec::new());
+        let values = vec![Value::Bool(true), Value::String("x".to_string())];
+        assert_eq!(
+            named_plugin_parameters(&info, &values),
+            Value::Array(values)
+        );
+    }
+
+    #[test]
+    fn plugin_activity_fields_carries_name_namespace_and_type() {
+        let fields = plugin_activity_fields(&plugin_info_with_parameters(Vec::new()));
+        assert_eq!(fields["namespace"], "download/ehentai");
+        assert_eq!(fields["name"], "E-Hentai");
+        assert_eq!(fields["type"], "download");
+    }
+
+    /// The user-upload path funnels through the exact same shared `record_ingest_result` helper as
+    /// the download pipeline, so this asserts the unified `archive.ingest` record it writes carries
+    /// the `"upload"` source and that source's own extra context, not just an archive id.
+    #[tokio::test]
+    async fn upload_ingest_result_writes_a_unified_archive_ingest_record() {
+        let Some(state) = test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archive_id = format!("upload-ingest-{}", uuid::Uuid::new_v4());
+        crate::download_manager::ingest::record_ingest_result(
+            &state,
+            None,
+            "upload",
+            "upload.zip",
+            json!({ "category": "manga" }),
+            Ok(crate::download_manager::ingest::IngestedDownload {
+                archive_id: archive_id.clone(),
+                is_new: true,
+            }),
+        )
+        .await
+        .expect("a successful helper call hands the same Ok result straight back");
+
+        let page = state
+            .activity
+            .list_page(
+                &lanrurugi_storage::activity::ActivityFilter {
+                    action_types: vec![
+                        lanrurugi_storage::activity::action_types::ARCHIVE_INGEST.to_string()
+                    ],
+                    ..Default::default()
+                },
+                None,
+                100,
+            )
+            .await
+            .expect("activity list_page failed");
+        let entry = page
+            .entries
+            .iter()
+            .find(|entry| entry.target.id.as_deref() == Some(archive_id.as_str()))
+            .expect("expected an archive.ingest record for the upload's archive id");
+        let after = entry
+            .after
+            .as_ref()
+            .expect("an ingest record must carry its `after` payload");
+        assert_eq!(after["source"], "upload");
+        assert_eq!(after["category"], "manga");
+        assert!(matches!(
+            entry.outcome,
+            lanrurugi_storage::activity::Outcome::Success
+        ));
+    }
 
     #[test]
     fn trim_url_strips_scheme_www_query_and_trailing_slash() {
@@ -3244,6 +3468,9 @@ pub(crate) mod tests {
             download_cancellations: Default::default(),
             pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
             filename_locks: Default::default(),
             download_queue_tx: None,
             refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
@@ -3254,6 +3481,9 @@ pub(crate) mod tests {
             )),
             api_token_last_touch: Default::default(),
             activity: Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
+                redis.config.clone(),
+            )),
+            activity_dedup: Arc::new(lanrurugi_storage::activity_dedup::ActivityDedupGate::new(
                 redis.config.clone(),
             )),
             import_snapshots: Arc::new(
@@ -3437,6 +3667,9 @@ pub(crate) mod tests {
                     &cancel,
                     Some(item_id.as_str()),
                     queue_link,
+                    // No `AuthContext` in this direct-call test — it drives
+                    // `run_managed_downloads` without a real HTTP request.
+                    None,
                 )
                 .await
             })
@@ -3507,6 +3740,34 @@ pub(crate) mod tests {
             .expect("second resource must download successfully, now that the permit is free");
         assert_eq!(first_ids.len(), 1);
         assert_eq!(second_ids.len(), 1);
+
+        // `run_managed_downloads` just cataloged two real archives through
+        // `ingest_downloaded_file` — each must have left its own unified `archive.ingest` Success
+        // record pointing at the archive it became (previously the only trace of a completed
+        // download was `start_download`'s own start entry).
+        let ingest_page = state
+            .activity
+            .list_page(
+                &lanrurugi_storage::activity::ActivityFilter {
+                    action_types: vec![
+                        lanrurugi_storage::activity::action_types::ARCHIVE_INGEST.to_string()
+                    ],
+                    ..Default::default()
+                },
+                None,
+                100,
+            )
+            .await
+            .expect("activity list_page failed");
+        for archive_id in [&first_ids[0], &second_ids[0]] {
+            assert!(
+                ingest_page.entries.iter().any(|entry| {
+                    entry.target.id.as_deref() == Some(archive_id.as_str())
+                        && matches!(entry.outcome, lanrurugi_storage::activity::Outcome::Success)
+                }),
+                "expected an archive.ingest success record for archive {archive_id}"
+            );
+        }
 
         let second_done = state
             .download_queue

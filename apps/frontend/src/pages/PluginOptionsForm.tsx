@@ -145,7 +145,7 @@ function PluginOptionsFormBody({
               </td>
               <td>
                 <input
-                  className="stdinput"
+                  className="stdinput number-input-no-native-spinner"
                   type="number"
                   min={1}
                   value={row.max_concurrent}
@@ -154,7 +154,7 @@ function PluginOptionsFormBody({
               </td>
               <td>
                 <input
-                  className="stdinput"
+                  className="stdinput number-input-no-native-spinner"
                   type="number"
                   min={0}
                   step="any"

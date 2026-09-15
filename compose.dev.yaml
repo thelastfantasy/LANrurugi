@@ -1,8 +1,19 @@
 # Local full-stack dev environment — separate from `compose.yaml` (the production-image compose
-# file) so that one stays untouched by anything dev-only. Bring up with
-# `podman compose -f compose.dev.yaml up -d` (rebuild after a *backend* source change with
-# `podman compose -f compose.dev.yaml build`; frontend changes need no rebuild at all — Vite's
-# own file watcher picks them up live through the bind mount below).
+# file) so that one stays untouched by anything dev-only.
+#
+# NOT actually brought up via `podman compose` — `mise run dev-up`/`dev-down`/`dev-rebuild-auto`
+# call `scripts/dev-container-run.sh` (a direct `podman run`) / `podman stop` / `podman rm`
+# instead (see that script's own header for why: GPU device passthrough, needed since issue #103's
+# CUDA EP integration, does not survive translation through this host's `docker-compose` fallback
+# binary — confirmed live, both the standard `deploy.resources.reservations.devices` syntax and the
+# newer top-level `gpus:` field get parsed without error but produce a container with zero devices
+# actually attached, while a direct `podman run --device nvidia.com/gpu=all` on the same host
+# attaches them correctly).
+# `dev-rebuild`'s image build step (`podman build -f Dockerfile.dev`, unaffected by this — building
+# an image has no GPU-device concept) still matches this file's `build:` section below, which
+# exists for that reason and as human-readable documentation of the full container shape; the
+# `services.lanrurugi-dev` fields other than `build:` are not read by any task, kept in sync with
+# `scripts/dev-container-run.sh`'s flags by hand.
 #
 # One container (`Dockerfile.dev`): Redis + a compiled `lanrurugi-server` (internal port 3001,
 # not published) + `vite dev` (the container's actual public port, 3000 — same port number as
@@ -25,6 +36,11 @@ services:
       - ./data/models:/home/koyomi/lanrurugi/models
       - lrr-dev-log:/log
       - lrr-dev-temp:/temp
+      # MaxMind GeoLite2-City database — `docker-entrypoint.dev.sh` runs `geoipupdate` into this
+      # path on every container start (best-effort, skipped if LANRURUGI_GEOIP_ACCOUNT_ID/
+      # LANRURUGI_GEOIP_LICENSE_KEY below aren't set); persisting it means a restart doesn't force
+      # a redundant re-download of the same day's database.
+      - lrr-dev-geoip:/var/lib/GeoIP
       # Frontend source, bind-mounted live (this is what makes hot-reload actually reflect host
       # edits) — the named volume right after it "pokes a hole" back through this bind mount so
       # the image's own baked-in, lockfile-installed `node_modules` isn't shadowed by whatever
@@ -44,16 +60,48 @@ services:
       - lrr-dev-cargo-target:/build/target
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      # `scripts/fetch-ocr-model.sh` downloads into the already-mounted `./data/models` host
+      # directory (shared with the recommender's own embedding model, see the mount above); this
+      # points `lanrurugi-ocr`'s model-discovery at the same place rather than one of its
+      # production-image search paths (`/usr/local/bin/models`, `/var/lib/lanrurugi/models`,
+      # `/app/models`), none of which exist in this dev container.
+      - LANRURUGI_MANGA_OCR_MODEL_DIR=/home/koyomi/lanrurugi/models/manga-ocr
+      # Same reasoning as LANRURUGI_MANGA_OCR_MODEL_DIR above, for `scripts/fetch-inpaint-model.sh`'s
+      # LaMa model (`lanrurugi-inpaint`) — optional (missing = compositing falls back to flat-fill/
+      # outline-stroke, see that crate's own README), not fetched automatically.
+      - LANRURUGI_INPAINT_MODEL_DIR=/home/koyomi/lanrurugi/models/inpaint
+      # Same reasoning again, for `scripts/fetch-bubble-seg-model.sh`'s bubble segmentation model
+      # (`lanrurugi-ocr::bubble_segment`) — optional (missing = erasure stays rectangular instead
+      # of bubble-shaped, only relevant when LANRURUGI_INPAINT_MODEL_DIR is also set).
+      - LANRURUGI_BUBBLE_SEG_MODEL_DIR=/home/koyomi/lanrurugi/models/bubble-seg
+      # Optional — a free MaxMind account's own credentials (https://www.maxmind.com/en/geolite2/signup),
+      # used only by `docker-entrypoint.dev.sh`'s `geoipupdate` call to fetch/refresh the
+      # GeoLite2-City database `lanrurugi_api::geoip` reads for activity-log geo data. Unset =
+      # no geo data recorded, everything else in the server works unaffected.
+      - LANRURUGI_GEOIP_ACCOUNT_ID=${LANRURUGI_GEOIP_ACCOUNT_ID}
+      - LANRURUGI_GEOIP_LICENSE_KEY=${LANRURUGI_GEOIP_LICENSE_KEY}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
       interval: 15s
-      timeout: 5s
+      # 30s, not 5s (2026-09-15) — see dev-container-run.sh's own comment on this same flag: a
+      # GPU-inference-heavy request briefly blocking the health endpoint's own response hit a 5s
+      # timeout and got the container killed mid-translation by `restart: unless-stopped` below.
+      timeout: 30s
       retries: 3
       start_period: 30s
     restart: unless-stopped
+    # GPU device passthrough is NOT configured here — see the file-level comment above. The
+    # `deploy.resources.reservations.devices` block that used to live here (and, before that, a
+    # top-level `gpus: all` field tried as an alternative) both parsed successfully under
+    # `docker-compose config` but produced zero actual devices on the running container
+    # (`podman inspect` showed `Devices: []` either way) — this host's `docker-compose` fallback
+    # binary does not translate either Compose GPU syntax into a real podman device attachment.
+    # The real flag (`--device nvidia.com/gpu=all`) is passed directly in `.mise.toml`'s `dev-up`/
+    # `dev-rebuild-auto` `podman run` invocation instead.
 
 volumes:
   lrr-dev-log:
   lrr-dev-temp:
   lrr-dev-cargo-target:
   lrr-dev-frontend-node-modules:
+  lrr-dev-geoip:

@@ -218,7 +218,20 @@ async fn upload_archive(
     // `None` — a local upload has no real external source URL to stamp a `source:` tag with (see
     // `ingest_downloaded_file`'s own docs); `file_name` here is just the uploaded file's name, not
     // a URL, and was previously being written into `source:` verbatim as if it were one.
-    match ingest_downloaded_file(&state, &downloaded, false, None, Some(&queue_item.id)).await {
+    // The unified `archive.ingest` record is written around the same call — see
+    // `download_manager::ingest::record_ingest_result`'s own docs. The separate `archive.upload`
+    // record below still captures the user-supplied title/tags and metadata-plugin summary this
+    // path has that the download/scanner sources don't.
+    let ingest_result = crate::download_manager::ingest::record_ingest_result(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        "upload",
+        &file_name,
+        json!({ "category": category.clone() }),
+        ingest_downloaded_file(&state, &downloaded, false, None, Some(&queue_item.id)).await,
+    )
+    .await;
+    match ingest_result {
         Ok(ingested) => {
             if let Some(catid) = &category {
                 let _ =

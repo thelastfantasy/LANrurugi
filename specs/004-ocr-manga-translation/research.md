@@ -17,8 +17,9 @@ decisions.
   already vetted and running in the user's own `~/jellyfin-suite` project's `frame-forge` crate,
   subject to revalidation at implementation time) integration against kha-white's **Apache-2.0**
   [`manga-ocr`](https://github.com/kha-white/manga-ocr) model weights (ONNX-exported), written
-  independently by this project. **CPU execution provider only for this phase** — no
-  CUDA/DirectML/OpenVINO GPU acceleration in the initial scope (see Rationale).
+  independently by this project. **CPU execution provider always available as the explicit
+  fallback; CUDA added as of issue #103 (see 2026-09-12 update at the end of this section) — no
+  DirectML/OpenVINO GPU acceleration** (see Rationale).
 
 **Rationale**:
 
@@ -78,7 +79,7 @@ project writes (verified by reading `dl_match.rs`/`gpu_compat.rs` directly, not 
 - Given LANrurugi has no equivalent plugin-host service to run that kind of hardware-acceleration
   asset acquisition, and manga-page OCR recognition is a much lighter workload than frame-forge's
   video/image super-resolution use case (the reason it needed GPU acceleration at all),
-  **CPU-only via `ort`'s default execution provider is the correct initial scope** — it avoids
+  **CPU-only via `ort`'s default execution provider was the correct initial scope** — it avoided
   inheriting the EP-hang risk class entirely rather than partially mitigating it. `ort`'s own
   `download-binaries` feature (used as-is in jellyfin-suite, not a custom acquisition service)
   fetches a working standard CPU/CUDA12 build automatically, with no manual ONNX Runtime install
@@ -87,6 +88,20 @@ project writes (verified by reading `dl_match.rs`/`gpu_compat.rs` directly, not 
   real performance data shows CPU is insufficient at the target library scale — at that point,
   reuse jellyfin-suite's asset-key-gating pattern for OpenVINO specifically (never attempt it
   without a verified-compatible asset active), not a "try and catch" approach.
+
+**2026-09-12 update (issue #103) — CUDA added, this section's OpenVINO/DirectML judgment
+unchanged**: The paragraph above about "CPU-only initial scope" described the very first cut of
+this feature. Issue #103 later added NVIDIA CUDA specifically (not OpenVINO, not DirectML) as an
+optional per-session accelerator, with CPU kept as the always-available explicit fallback — this
+is exactly the class of EP this section already called safe two paragraphs up ("CUDA and DirectML
+fail cleanly when unavailable... a clean CPU fallback works"), not a reversal of the OpenVINO-hang
+finding. Full design + a real hardware spike (including a since-fixed CUDA-session-`Drop` crash
+unrelated to the EP-hang risk this section discusses — root-caused to NVIDIA's own driver
+userspace component, not to this project, `ort`, or ONNX Runtime) live in
+`.debug-scratch/GPU_EP_INTEGRATION_PLAN.md` and `GPU_EP_FINAL_SUMMARY.md`; the real code lives in
+`lanrurugi-ocr::recognize`/`bubble_segment` and `lanrurugi-inpaint`'s
+`build_session_with_gpu_fallback` functions. OpenVINO/DirectML remain out of scope, unchanged from
+the original decision above — this update only concerns CUDA.
 
 **Alternatives considered/rejected**:
 - Full or hybrid adoption of Koharu's crates — rejected; see Rationale (GPL-3.0, `publish = false`,
@@ -103,7 +118,9 @@ project writes (verified by reading `dl_match.rs`/`gpu_compat.rs` directly, not 
 - A Python sidecar process for either step — rejected, reintroduces the multi-process complexity
   Principle III moved away from.
 - Shipping GPU execution providers in the initial scope — rejected per the OpenVINO-hang finding
-  above; CPU-only is both simpler and safer to ship first.
+  above; CPU-only was both simpler and safer to ship first. (CUDA specifically was added later,
+  issue #103 — see the 2026-09-12 update above; this bullet describes the initial-scope decision,
+  not the current state.)
 - This keeps LANrurugi's own font-matching cache (research.md §4) and server/client compositing
   split (research.md §6/§7) exactly as already designed — those were built around this project's
   own server/local-backend trust-boundary split (Principle V), which a single-user desktop app

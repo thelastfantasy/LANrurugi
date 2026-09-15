@@ -29,6 +29,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 
 use crate::archive_format;
+use crate::events::IngestEvent;
 use crate::watcher::wait_until_stable;
 
 /// New in Phase 1 (research.md §6) — legacy has no equivalent per-file timeout.
@@ -107,14 +108,14 @@ impl From<DuplicateReason> for lanrurugi_core::queue_error::DuplicateReasonKind 
 /// Runs the watcher-driven ingestion loop: pulls paths off `rx` and ingests them one at a time
 /// until the channel closes. Bulk/initial scans use `hashing::hash_batch` directly instead (they
 /// parallelize hashing itself rather than serializing through this channel).
-/// `new_archive_tx`, when given, receives the id of every genuinely brand-new archive this loop
-/// catalogues (`IngestOutcome::Catalogued` only — never `Rekeyed`, matching legacy's own
+/// `new_archive_tx`, when given, receives one [`IngestEvent`] per ingest attempt: `Catalogued` for
+/// every genuinely brand-new archive this loop catalogues (never `Rekeyed`, matching legacy's own
 /// `Shinobu.pm::update_filemap_entry`, whose rekey branch explicitly preserves old metadata and
 /// returns without calling `exec_enabled_plugins_on_file`; only its "brand-new file" fallthrough,
-/// `add_new_file`, does). This crate has no access to `AppState`/plugin execution (avoiding a
-/// circular dependency on `lanrurugi-api`), so the actual "run every enabled metadata plugin on
-/// this id" work happens on the *other* end of this channel, in the API crate — this loop only
-/// ever reports which ids are eligible.
+/// `add_new_file`, does), and `Failed` for every error/timeout. This crate has no access to
+/// `AppState`/activity recording (avoiding a circular dependency on `lanrurugi-api`), so the
+/// actual "record the unified `archive.ingest` activity + run every enabled metadata plugin on
+/// this id" work happens on the *other* end of this channel, in the API crate.
 ///
 /// `locks` is the *same* `FilenameLocks` instance `lanrurugi-api`'s download-ingest path
 /// (`download_manager::ingest::catalogue_staged_file`) reserves a filename in around its own
@@ -133,7 +134,7 @@ pub async fn run(
     config_pool: Pool,
     search_pool: Pool,
     thumb_dir: PathBuf,
-    new_archive_tx: Option<mpsc::UnboundedSender<String>>,
+    new_archive_tx: Option<mpsc::UnboundedSender<IngestEvent>>,
     locks: FilenameLocks,
 ) {
     while let Some(path) = rx.recv().await {
@@ -154,12 +155,28 @@ pub async fn run(
         {
             Ok(Ok(outcome)) => {
                 if let (IngestOutcome::Catalogued { id }, Some(tx)) = (&outcome, &new_archive_tx) {
-                    let _ = tx.send(id.to_string());
+                    let _ = tx.send(IngestEvent::Catalogued { id: id.to_string() });
                 }
                 tracing::info!(?path, ?outcome, "ingested file")
             }
-            Ok(Err(e)) => tracing::warn!(?path, error = %e, "failed to ingest file"),
-            Err(_) => tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out"),
+            Ok(Err(e)) => {
+                if let Some(tx) = &new_archive_tx {
+                    let _ = tx.send(IngestEvent::Failed {
+                        path: Some(path.to_string_lossy().to_string()),
+                        reason: e.to_string(),
+                    });
+                }
+                tracing::warn!(?path, error = %e, "failed to ingest file");
+            }
+            Err(_) => {
+                if let Some(tx) = &new_archive_tx {
+                    let _ = tx.send(IngestEvent::Failed {
+                        path: Some(path.to_string_lossy().to_string()),
+                        reason: format!("ingestion timed out after {INGEST_TIMEOUT:?}"),
+                    });
+                }
+                tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out");
+            }
         }
     }
 }
@@ -1047,6 +1064,67 @@ mod tests {
         archives.delete(&ArchiveId(id.unwrap())).await.unwrap();
         let _: () = conn
             .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+    }
+
+    /// The unified `archive.ingest` work in `lanrurugi-server` depends on `run()` reporting
+    /// *both* outcomes across `new_archive_tx`, not just catalogued ids (the pre-change channel
+    /// carried only `String`s, so a failed file was visible only in tracing logs). Drives one
+    /// valid archive and one nonexistent path through the real loop and asserts the exact events
+    /// the server consumes.
+    #[tokio::test]
+    async fn run_reports_catalogued_and_failed_ingest_events() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(26).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        let good = make_zip_with_pages(dir.path(), "good-event.zip", 2);
+        let missing = dir.path().join("missing-event.zip");
+
+        let (path_tx, path_rx) = mpsc::unbounded_channel();
+        path_tx.send(good.clone()).unwrap();
+        path_tx.send(missing.clone()).unwrap();
+        drop(path_tx);
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        run(
+            path_rx,
+            archives.clone(),
+            config_pool.clone(),
+            search_pool,
+            thumb_dir.path().to_path_buf(),
+            Some(event_tx),
+            lanrurugi_core::filename_lock::FilenameLocks::new(),
+        )
+        .await;
+
+        // The channel's only sender is dropped when `run` returns, so this drains every buffered
+        // event and then ends — no need to race a timeout.
+        let mut catalogued = None;
+        let mut failed = None;
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                IngestEvent::Catalogued { id } => catalogued = Some(id),
+                IngestEvent::Failed { path, reason } => failed = Some((path, reason)),
+            }
+        }
+
+        let id = catalogued.expect("the valid archive must produce a Catalogued event");
+        let (failed_path, reason) = failed.expect("the missing file must produce a Failed event");
+        assert_eq!(
+            failed_path.as_deref(),
+            Some(missing.to_string_lossy().as_ref())
+        );
+        assert!(!reason.is_empty());
+
+        archives.delete(&ArchiveId(id)).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel(FILEMAP_KEY, good.to_string_lossy().to_string())
             .await
             .unwrap();
     }

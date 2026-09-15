@@ -1,9 +1,11 @@
 pub mod activity;
+pub mod activity_dedup;
 pub mod api_tokens;
 pub mod archive_split_suggestions;
 pub mod bookmarks;
 pub mod bootstrap;
 pub mod compare_cache;
+pub mod device_info;
 pub mod download_queue;
 pub mod id;
 pub mod ignored_group_suggestions;

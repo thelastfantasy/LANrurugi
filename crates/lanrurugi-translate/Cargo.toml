@@ -1,0 +1,30 @@
+[package]
+name = "lanrurugi-translate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lanrurugi-core.workspace = true
+lanrurugi-ocr.workspace = true
+lanrurugi-inpaint.workspace = true
+lanrurugi-fontcache.workspace = true
+lanrurugi-storage.workspace = true
+lanrurugi-llm.workspace = true
+ab_glyph.workspace = true
+harfrust.workspace = true
+icu_segmenter.workspace = true
+deadpool-redis.workspace = true
+image.workspace = true
+webp.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

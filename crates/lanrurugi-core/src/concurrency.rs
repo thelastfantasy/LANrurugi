@@ -21,8 +21,27 @@ where
     tokio::task::spawn_blocking(f).await.map_err(Into::into)
 }
 
-/// Runs a rayon parallel operation over `items`, off the async reactor. `work` executes once per
-/// item on rayon's global thread pool; results are collected in input order.
+/// Thread budget for CPU-bound `rayon` work — roughly 30% of available cores, matching
+/// `lanrurugi-api::recommend_precompute::precompute_worker_budget`'s own formula (duplicated here
+/// per that crate's own doc comment, since this crate can't depend on `lanrurugi-api`). Callers
+/// whose `work` closure blocks on an external, effectively single-threaded resource (e.g. `parallel_map`
+/// below, when `work` is a GPU-worker IPC round trip) especially need this: without a cap, rayon's
+/// uncapped global pool (one thread per core) spins up one OS thread per item that all sit blocked
+/// waiting on that same serial resource, starving the host's other threads — including the server's
+/// own Tokio runtime workers — of CPU scheduling time (issue #103: this starved `/health` itself
+/// during concurrent translation).
+fn worker_budget() -> usize {
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        * 3
+        / 10)
+        .max(1)
+}
+
+/// Runs a rayon parallel operation over `items`, off the async reactor, on a dedicated pool capped
+/// to `worker_budget()` threads (not rayon's uncapped global pool — see that function's doc
+/// comment for why).  `work` executes once per item; results are collected in input order.
 pub async fn parallel_map<T, R, F>(items: Vec<T>, work: F) -> Result<Vec<R>, BlockingTaskError>
 where
     T: Send + 'static,
@@ -31,7 +50,11 @@ where
 {
     run_blocking(move || {
         use rayon::prelude::*;
-        items.into_par_iter().map(work).collect()
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(worker_budget())
+            .build()
+            .expect("rayon pool build");
+        pool.install(|| items.into_par_iter().map(work).collect())
     })
     .await
 }

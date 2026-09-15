@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom"
 import { ApiError, sendJson, sleep } from "@/api/client"
 import { useArchives, useBatchDeleteArchives, useCategories, usePlugins, useSettings } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
+import { NumberInput } from "@/components/common-ui/Form"
 import { ArchiveChecklistItem } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -261,12 +262,11 @@ export function Batch() {
                     <tr>
                       <td>{t("batch.timeoutMax20s")}</td>
                       <td>
-                        <input
-                          type="number"
+                        <NumberInput
                           min={0}
                           max={20}
                           value={pluginTimeout}
-                          onChange={(e) => setPluginTimeout(Math.min(20, Math.max(0, Number(e.target.value) || 0)))}
+                          onValueChange={(v) => setPluginTimeout(Math.min(20, Math.max(0, v)))}
                         />{" "}
                         seconds
                       </td>

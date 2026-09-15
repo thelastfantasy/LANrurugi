@@ -1,0 +1,23 @@
+[package]
+name = "lanrurugi-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lanrurugi-core.workspace = true
+image.workspace = true
+ndarray.workspace = true
+oar-ocr.workspace = true
+ort.workspace = true
+kmeans_colors.workspace = true
+palette.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

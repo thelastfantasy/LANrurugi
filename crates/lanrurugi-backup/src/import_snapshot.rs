@@ -208,6 +208,9 @@ mod tests {
             tankoubons: Vec::new(),
             stamps: Vec::new(),
             bookmarks: Vec::new(),
+            terminology_glossaries: Vec::new(),
+            volume_font_patterns: Vec::new(),
+            text_regions: Vec::new(),
         }
     }
 

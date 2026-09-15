@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { SUPPORTED_LANGUAGES } from "@/i18n"
@@ -122,7 +123,7 @@ export function GlobalSection({
             {t("settings.selectTheLanguageForThe")}
           </Row>
           <Row label={t("settings.archivesPerPage")}>
-            <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={pagesize} onChange={(e) => setPagesize(Number(e.target.value))} type="number" />
+            <NumberInput style={{ width: "100%" }} value={pagesize} onValueChange={setPagesize} />
             <br />
             {t("settings.numberOfArchivesShownOn")}
           </Row>
@@ -208,27 +209,17 @@ export function GlobalSection({
           {enableresize && (
             <>
               <Row label={t("settings.imageSizeThreshold")}>
-                <input
-                  className="stdinput"
-                  type="number"
-                  style={{ width: "100%" }}
-                  maxLength={255}
-                  value={sizethreshold}
-                  onChange={(e) => setSizethreshold(Number(e.target.value))}
-                />
+                <NumberInput style={{ width: "100%" }} value={sizethreshold} onValueChange={setSizethreshold} />
                 <br />
                 {t("settings.inKbsMaximumRawSize")}
               </Row>
               <Row label={t("settings.resizeQuality")}>
-                <input
-                  className="stdinput"
-                  type="number"
+                <NumberInput
+                  style={{ width: "100%" }}
                   min={0}
                   max={100}
-                  style={{ width: "100%" }}
-                  maxLength={255}
                   value={readerquality}
-                  onChange={(e) => setReaderquality(Number(e.target.value))}
+                  onValueChange={setReaderquality}
                 />
                 <br />
                 {t("settings.webpQualityOfTheReencoded")}

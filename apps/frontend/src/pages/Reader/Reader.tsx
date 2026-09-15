@@ -25,12 +25,13 @@ import {
   useUpdateSettings,
   useUpdateTankoubonProgress,
 } from "@/api/hooks";
-import { Tooltip } from "@/components/common-ui/Display";
-import { IconButton } from "@/components/common-ui/Form";
+import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
+import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { ForbiddenPage, NotFoundPage } from "@/components/Display";
 import { Footer } from "@/components/Layout";
 import { confirmDialog, promptDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import {
   clamp,
   computeNextPage,
@@ -55,6 +56,11 @@ import {
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
+import { TranslationOverlay } from "@/translation/components/TranslationOverlay";
+import { TRANSLATION_TARGET_LANGUAGES } from "@/translation/settings";
+// Phase 2 on-page translation (`specs/004-ocr-manga-translation`). Rendered as an overlay layer so
+// the reader's own image pipeline below is untouched — with translation off, this renders nothing.
+import { useTranslationSettings } from "@/translation/useTranslationSettings";
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay";
 import { BookmarkButton } from "./BookmarkButton";
@@ -181,6 +187,74 @@ export function Reader() {
   );
   const generateThumbnailsForArchives = useGenerateThumbnailsForArchives();
   const [readerSettings, updateReaderSettings] = useReaderSettings();
+  const loggedIn = loginStatus.data?.logged_in ?? false;
+  const totalPages = pages.data?.pages.length ?? 0;
+  // `startPage`/`startWithOverview` are also read further down (query-string cleanup effect,
+  // overlay initial state) — declared here, ahead of everything below that needs `currentPage`,
+  // rather than duplicated, since JS scoping only requires the declaration precede every use, not
+  // that every use sit immediately after it.
+  const params = new URLSearchParams(window.location.search);
+  const startPage = Number(params.get("p")) || null;
+  const startWithOverview = params.get("overview") === "1";
+  const [pageOverride, setPageOverride] = useState<number | null>(startPage);
+  const localReaderProgress =
+    archiveId && usesLocalReaderProgress(loggedIn, settings.data)
+      ? Number(localStorage.getItem(`${archiveId}-reader`))
+      : 0;
+  // Moved ahead of `useTranslationSettings` below specifically so the Tankoubon case (next) can
+  // resolve the real archive a page belongs to synchronously, during render, rather than needing
+  // an effect to sync it a render late (react-hooks' `set-state-in-effect` correctly flags that
+  // pattern when the value is actually available synchronously, as it is here).
+  const currentPage = clamp(
+    pageOverride ??
+      (readerSettings.ignoreProgress
+        ? 1
+        : Math.max(localReaderProgress || metadata.data?.progress || 1, 1)),
+    1,
+    totalPages || 1,
+  );
+  // The archive the currently-displayed left page actually belongs to, for scoping the translation
+  // enabled switch. A single-archive read is immediate (`archiveId` already *is* the real archive).
+  // Tankoubon reading resolves through `getArchiveForPage` (global page → real member archive) —
+  // see `markerTarget`'s own note further down for why the route's `archiveId` itself (a tank id
+  // while reading a Tankoubon) can't be used directly for translation.
+  const translationArchiveId = isTank
+    ? tankReading.getArchiveForPage(currentPage)?.arcId ?? null
+    : archiveId;
+  // `null` whenever translation is off, unconfigured, or the settings fetch failed — the overlay
+  // renders nothing in all three cases (`specs/004-ocr-manga-translation` FR-007).
+  const [translationSettings, translationScope, toggleTranslationEnabled, setTranslationTargetLanguage] =
+    useTranslationSettings(translationArchiveId);
+  // These two `useCallback`s MUST live before any of this component's early `return`s below
+  // (Rules of Hooks — every hook must run unconditionally on every render). The URLs they need
+  // are only computable once `pages.data` exists, which is exactly what the early-return guards
+  // wait for — so the values live in a ref, kept in sync (a plain assignment, not a hook) from
+  // wherever they're actually computed further down, rather than being passed as `useCallback`
+  // dependencies the way an earlier version of this code did (that version was reachable only
+  // sometimes, which is what made React see a different hook count between renders and crash the
+  // whole page — see the fix note near `originalLeftUrl`/`originalRightUrl` below).
+  const originalPageUrlsRef = useRef<{ left?: string; right: string | null }>({
+    left: undefined,
+    right: null,
+  });
+  const loadLeftPageImage = useCallback(async () => {
+    const url = originalPageUrlsRef.current.left;
+    if (!url) throw new Error("left page image is not available");
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    await img.decode();
+    return img;
+  }, []);
+  const loadRightPageImage = useCallback(async () => {
+    const url = originalPageUrlsRef.current.right;
+    if (!url) throw new Error("right page image is not available");
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    await img.decode();
+    return img;
+  }, []);
 
   const clearArchiveNew = useClearArchiveNew();
   const clearArchiveNewRef = useRef(clearArchiveNew.mutate);
@@ -191,14 +265,6 @@ export function Reader() {
     if (newBadgeMode === "until_opened") clearArchiveNewRef.current(archiveId);
   }, [archiveId, isTank, newBadgeMode]);
 
-  const totalPages = pages.data?.pages.length ?? 0;
-  const loggedIn = loginStatus.data?.logged_in ?? false;
-
-  const params = new URLSearchParams(window.location.search);
-  const startPage = Number(params.get("p")) || null;
-  const startWithOverview = params.get("overview") === "1";
-
-  const [pageOverride, setPageOverride] = useState<number | null>(startPage);
   const openedByDefaultSetting = useRef(
     readerSettings.showOverlayByDefault || startWithOverview,
   );
@@ -226,6 +292,7 @@ export function Reader() {
   >({});
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
   const supportsHover = useSupportsHover();
+  const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
   const [navState, setNavState] = useState<ArchiveNavState>({
     ids: [],
     index: -1,
@@ -282,20 +349,6 @@ export function Reader() {
   const pageTinyDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
   const pageTinyFetchesRef = useRef<Map<number, AbortController>>(new Map());
   const currentPageNumbersRef = useRef<number[]>([]);
-
-  const localReaderProgress =
-    archiveId && usesLocalReaderProgress(loggedIn, settings.data)
-      ? Number(localStorage.getItem(`${archiveId}-reader`))
-      : 0;
-
-  const currentPage = clamp(
-    pageOverride ??
-      (readerSettings.ignoreProgress
-        ? 1
-        : Math.max(localReaderProgress || metadata.data?.progress || 1, 1)),
-    1,
-    totalPages || 1,
-  );
 
   if (
     infiniteScrollResumePageRef.current === null &&
@@ -1298,8 +1351,41 @@ export function Reader() {
         return u.toString();
       })()
     : undefined;
+  const originalRightUrl = rightUrl
+    ? (() => {
+        const u = new URL(rightUrl, window.location.origin);
+        u.searchParams.delete("optimize");
+        return u.toString();
+      })()
+    : null;
 
-  const markerTarget = archiveId ? { arcId: archiveId, localPage: spread.left } : null;
+  // In Tankoubon reading, `archiveId` from the route is the tank id (`TANK_xxx`), not a real
+  // archive — every displayed page actually belongs to one of the tank's member archives, so
+  // marker/translation targets must resolve through `getArchiveForPage` (global page → real
+  // member archive + that archive's own local page number), not use the route param directly.
+  // Confirmed live: before this, translation silently never worked while reading a Tankoubon,
+  // because the server was asked to translate a page of an archive whose id was actually a tank id.
+  const markerTarget = isTank
+    ? tankReading.getArchiveForPage(spread.left)
+    : archiveId
+      ? { arcId: archiveId, localPage: spread.left }
+      : null;
+  const markerTargetRight =
+    spread.right === null
+      ? null
+      : isTank
+        ? tankReading.getArchiveForPage(spread.right)
+        : archiveId
+          ? { arcId: archiveId, localPage: spread.right }
+          : null;
+
+  // Local-backend compositing happens in the browser, and OCR coordinates are relative to the
+  // original archive page — not the reader's optimize=1 WebP. `loadLeftPageImage`/
+  // `loadRightPageImage` (defined near the top of the component, before any early `return`) read
+  // these off `originalPageUrlsRef` rather than closing over them directly — this assignment can
+  // safely live here, after the early-return guards that make `pages.data` safe to index, without
+  // it affecting how many hooks this component calls on any given render.
+  originalPageUrlsRef.current = { left: originalLeftUrl, right: originalRightUrl };
 
   const isSpreadShowing = spread.right !== null;
   const imageStyle: React.CSSProperties = {};
@@ -1413,6 +1499,37 @@ export function Reader() {
             setOverlay((prev) => (prev === "settings" ? null : "settings"));
           }}
         />
+        {translationSettings && translationScope && (
+          <ToggleButtonMenu
+            icon="fas fa-language fa-2x"
+            title={t("reader.toggleTranslation") ?? undefined}
+            active={translationScope.enabled}
+            onClick={toggleTranslationEnabled}
+            menuTrigger={t("reader.chooseTranslationLanguage") ?? "Choose translation language"}
+            menuTitle={t("reader.chooseTranslationLanguage") ?? undefined}
+            menuSide="bottom"
+            menuAlign="start"
+            size={32}
+            style={{ marginRight: 13 }}
+            menuChildren={
+              <>
+                <MenuItem
+                  onClick={() => setTranslationTargetLanguage(null)}
+                >
+                  {translationSettings.targetLanguage === null && <i className="fas fa-check" style={{ marginRight: 8 }} />}
+                  {t("reader.translationLanguageBrowserDefault") ?? "Browser default"}
+                </MenuItem>
+                <MenuSeparator />
+                {TRANSLATION_TARGET_LANGUAGES.map(({ code, nativeName }) => (
+                  <MenuItem key={code} onClick={() => setTranslationTargetLanguage(code)}>
+                    {translationSettings.targetLanguage === code && <i className="fas fa-check" style={{ marginRight: 8 }} />}
+                    {nativeName}
+                  </MenuItem>
+                ))}
+              </>
+            }
+          />
+        )}
         {!supportsHover && !readerSettings.infiniteScroll && loggedIn && (
           <IconButton
             variant="ghost-btn"
@@ -1570,6 +1687,136 @@ export function Reader() {
         }}
         onClick={() => void readAdjacentArchive("next")}
       />
+    </div>
+  );
+
+  // Single fixed bottom bar for narrow viewports, replacing `pagesel` + `arrows` (which mobile CSS
+  // used to render as two separate floating icon pills plus an in-document-flow paginator strip —
+  // real user report, 2026-09-07: the paginator isn't `position: fixed` like the icon pills are, so
+  // it could scroll out of view/end up hidden depending on page height, reading as "the toolbar
+  // sometimes disappears"). Everything here lives inside one `position: fixed` container instead, so
+  // nothing in it can be scrolled away. Infrequently-used controls (reading direction, auto-advance,
+  // reader options) collapse into a `moreMenu` overflow menu per the user's own triage of what
+  // deserves to stay one tap away vs. what doesn't.
+  const moreMenuTrigger = (
+    <IconButton
+      variant="ghost-btn"
+      icon="fas fa-ellipsis-h fa-2x"
+      title={t("reader.moreOptions") ?? undefined}
+      size={32}
+      style={{ borderRadius: "50%" }}
+    />
+  );
+  const moreMenu = (
+    <Menu trigger={moreMenuTrigger} side="top" align="end">
+      <MenuItem onClick={() => updateReaderSettings({ mangaMode: !readerSettings.mangaMode })}>
+        <i className={`fas ${readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"}`} style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+        {t("reader.readingDirection")}
+      </MenuItem>
+      <MenuItem onClick={() => toggleAutoNextPage()} closeOnClick={false}>
+        <i className="fas fa-stopwatch" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+        {t("reader.autoNextPage")}
+        {autoNextActive ? ` (${autoNextCountdown})` : ""}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onClick={() => setOverlay((prev) => (prev === "settings" ? null : "settings"))}>
+        <i className="fas fa-cog" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+        {t("reader.readerOptions")}
+      </MenuItem>
+    </Menu>
+  );
+  const mobileToolbar = !readerSettings.infiniteScroll && (
+    <div className="mobile-reader-toolbar">
+      {arrows}
+      <div className="mobile-reader-toolbar-icons">
+        {translationSettings && translationScope && (
+          <ToggleButtonMenu
+            icon="fas fa-language fa-2x"
+            title={t("reader.toggleTranslation") ?? undefined}
+            active={translationScope.enabled}
+            onClick={toggleTranslationEnabled}
+            menuTrigger={t("reader.chooseTranslationLanguage") ?? "Choose translation language"}
+            menuTitle={t("reader.chooseTranslationLanguage") ?? undefined}
+            menuSide="top"
+            menuAlign="end"
+            size={32}
+            menuChildren={
+              <>
+                <MenuItem onClick={() => setTranslationTargetLanguage(null)}>
+                  {translationSettings.targetLanguage === null && <i className="fas fa-check" style={{ marginRight: 8 }} />}
+                  {t("reader.translationLanguageBrowserDefault") ?? "Browser default"}
+                </MenuItem>
+                <MenuSeparator />
+                {TRANSLATION_TARGET_LANGUAGES.map(({ code, nativeName }) => (
+                  <MenuItem key={code} onClick={() => setTranslationTargetLanguage(code)}>
+                    {translationSettings.targetLanguage === code && <i className="fas fa-check" style={{ marginRight: 8 }} />}
+                    {nativeName}
+                  </MenuItem>
+                ))}
+              </>
+            }
+          />
+        )}
+        {!supportsHover && loggedIn && (
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-stamp fa-2x"
+            title={t("reader.placeStamp") ?? undefined}
+            size={32}
+            style={{ borderRadius: "50%", opacity: markerPlacementMode ? 1 : 0.55 }}
+            onClick={() => setMarkerPlacementMode((prev) => !prev)}
+          />
+        )}
+        {loggedIn && archiveId && (
+          <BookmarkButton
+            archiveId={archiveId}
+            page={currentPage}
+            bookmarked={isPageBookmarked}
+            name={currentBookmark?.name}
+            loggedIn={loggedIn}
+            onRequireLogin={() => {
+              const template = t("reader.aHrefUrlLogin") ?? "";
+              toast({
+                text: template.replace("${url}", "/login"),
+                html: true,
+                icon: "warning",
+                hideAfter: TOAST_DURATION_MS,
+              });
+            }}
+          />
+        )}
+        <Tooltip label={helpContent} maxWidth={420}>
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
+            title={t("reader.help") ?? undefined}
+            size={32}
+            style={{ borderRadius: "50%" }}
+          />
+        </Tooltip>
+        <IconButton
+          variant="ghost-btn"
+          icon="fas fa-th fa-2x"
+          title={t("reader.archiveOverview") ?? undefined}
+          size={32}
+          style={{ borderRadius: "50%" }}
+          onClick={() => {
+            openedByDefaultSetting.current = false;
+            setOverlay((prev) => (prev === "archive" ? null : "archive"));
+          }}
+        />
+        <IconButton
+          variant="ghost-btn"
+          icon={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
+          title={t("reader.fullscreen") ?? undefined}
+          size={32}
+          style={{ borderRadius: "50%" }}
+          onClick={() => {
+            toggleFullScreen();
+          }}
+        />
+        {moreMenu}
+      </div>
     </div>
   );
 
@@ -1731,34 +1978,61 @@ export function Reader() {
                 }}
                 style={{ position: "relative", display: "inline-flex" }}
               >
-                <img
-                  id="img"
-                  ref={leftImgRef}
-                  className="reader-image"
-                  src={pageBlobUrls[spread.left] ?? (pageImageError[spread.left] ? leftUrl : (pageTinyBlobs[spread.left] ?? displayedLeftSrcRef.current))}
-                  width={pageTinyDims[spread.left]?.width}
-                  height={pageTinyDims[spread.left]?.height}
-                  alt={`${t("reader.page")} ${spread.left}`}
-                  fetchPriority="high"
-                  onLoad={(e) => onImageLoad(spread.left, e)}
-                  onError={onImageError}
-                  draggable={false}
-                  style={placementImageStyle}
-                />
-                {rightUrl && (
+                <span style={{ position: "relative", display: "inline-flex" }}>
                   <img
-                    id="img_doublepage"
+                    id="img"
+                    ref={leftImgRef}
                     className="reader-image"
-                    src={rightUrl ? (pageBlobUrls[spread.right ?? 0] ?? (pageImageError[spread.right ?? 0] ? rightUrl : (pageTinyBlobs[spread.right ?? 0] ?? displayedRightSrcRef.current))) : undefined}
-                    width={pageTinyDims[spread.right ?? 0]?.width}
-                    height={pageTinyDims[spread.right ?? 0]?.height}
-                    alt={`${t("reader.page")} ${spread.right}`}
+                    src={pageBlobUrls[spread.left] ?? (pageImageError[spread.left] ? leftUrl : (pageTinyBlobs[spread.left] ?? displayedLeftSrcRef.current))}
+                    width={pageTinyDims[spread.left]?.width}
+                    height={pageTinyDims[spread.left]?.height}
+                    alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
-                    onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
+                    onLoad={(e) => onImageLoad(spread.left, e)}
                     onError={onImageError}
                     draggable={false}
-                    style={imageStyle}
+                    style={placementImageStyle}
                   />
+                  {/* Phase 2 on-page translation. Absolutely positioned over the page above (the
+                      wrapper is `position: relative`), so the original image's own load/error
+                      pipeline is completely unaffected. Renders nothing when translation is off.
+                      Also kept per page rather than across the whole spread: an overlay spanning
+                      both pages would stretch one page's rendering over a double-page spread. */}
+                  {markerTarget && (
+                    <TranslationOverlay
+                      archiveId={markerTarget.arcId}
+                      page={markerTarget.localPage}
+                      settings={translationSettings}
+                      enabled={translationScope?.enabled ?? false}
+                      loadPageImage={loadLeftPageImage}
+                    />
+                  )}
+                </span>
+                {rightUrl && (
+                  <span style={{ position: "relative", display: "inline-flex" }}>
+                    <img
+                      id="img_doublepage"
+                      className="reader-image"
+                      src={rightUrl ? (pageBlobUrls[spread.right ?? 0] ?? (pageImageError[spread.right ?? 0] ? rightUrl : (pageTinyBlobs[spread.right ?? 0] ?? displayedRightSrcRef.current))) : undefined}
+                      width={pageTinyDims[spread.right ?? 0]?.width}
+                      height={pageTinyDims[spread.right ?? 0]?.height}
+                      alt={`${t("reader.page")} ${spread.right}`}
+                      fetchPriority="high"
+                      onLoad={(e) => onImageLoad(spread.right ?? 0, e)}
+                      onError={onImageError}
+                      draggable={false}
+                      style={imageStyle}
+                    />
+                    {markerTargetRight && (
+                      <TranslationOverlay
+                        archiveId={markerTargetRight.arcId}
+                        page={markerTargetRight.localPage}
+                        settings={translationSettings}
+                        enabled={translationScope?.enabled ?? false}
+                        loadPageImage={loadRightPageImage}
+                      />
+                    )}
+                  </span>
                 )}
               </a>
               {markerTarget && (
@@ -1778,8 +2052,14 @@ export function Reader() {
 
         <div id="i4">
           {fileinfo}
-          {pagesel}
-          {arrows}
+          {isMobileToolbarViewport ? (
+            mobileToolbar
+          ) : (
+            <>
+              {pagesel}
+              {arrows}
+            </>
+          )}
         </div>
 
         <div id="i5">

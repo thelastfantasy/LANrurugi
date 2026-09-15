@@ -38,7 +38,7 @@ impl ScannerHandle {
         config_pool: Pool,
         search_pool: Pool,
         archives: ArchiveRepository,
-        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
         locks: FilenameLocks,
     ) -> Result<(), crate::watcher::WatcherError> {
         let mut guard = self.running.lock().await;
@@ -77,7 +77,7 @@ impl ScannerHandle {
         config_pool: Pool,
         search_pool: Pool,
         archives: ArchiveRepository,
-        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
         locks: FilenameLocks,
     ) -> Result<(), crate::watcher::WatcherError> {
         self.stop().await;

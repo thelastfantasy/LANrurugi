@@ -7,6 +7,10 @@ license.workspace = true
 [dependencies]
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
+# Phase 2 translation entities in backup/export (FR-022, research.md §17).
+lanrurugi-fontcache.workspace = true
+lanrurugi-ocr.workspace = true
+lanrurugi-translate.workspace = true
 deadpool-redis.workspace = true
 serde.workspace = true
 serde_json.workspace = true

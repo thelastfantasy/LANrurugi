@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom"
 
 import { waitForJob } from "@/api/client"
 import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { useApplyTheme } from "@/theme"
@@ -66,15 +67,7 @@ export function Duplicates() {
       <div className="control-btn-group">
         <label>
           {t("duplicates.threshold")}
-          <input
-            type="number"
-            min={0}
-            max={40}
-            value={threshold}
-            onChange={(e) => setThreshold(Number(e.target.value))}
-            className="stdinput"
-            style={{ width: 60 }}
-          />
+          <NumberInput min={0} max={40} value={threshold} onValueChange={setThreshold} style={{ width: 60 }} />
         </label>
         <button type="button" className="stdbtn find-duplicates" disabled={scanning} onClick={() => void handleScan()}>
           {scanning ? t("duplicates.rescanning") : t("duplicates.searchForDuplicates")}

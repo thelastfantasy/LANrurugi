@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
@@ -14,12 +14,16 @@ import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
 import { DEFAULT_THEME_ID, FONT_SIZE_SM, THEMES, useApplyTheme, useLegacyConfigCss } from "@/theme"
 import { toast } from "@/toast"
+import { fetchTranslationSettings, updateTranslationSettings } from "@/translation/api"
+import { setLocalBackend } from "@/translation/settings"
 
 import { ApiTokensSection } from "./ApiTokensSection"
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { SecuritySection } from "./SecuritySection"
 import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
+import { TranslationSection } from "./TranslationSection"
+import { useTranslationSectionState } from "./useTranslationSectionState"
 import { WorkersSection } from "./WorkersSection"
 
 export function Settings() {
@@ -105,6 +109,39 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
   const [status, setStatus] = useState("")
 
+  const [translation, dispatchTranslation] = useTranslationSectionState()
+  useEffect(() => {
+    // Independent of the main `/api/settings` fetch this whole page already waited on — a load
+    // failure here just leaves the section collapsed/empty rather than breaking the page.
+    let cancelled = false
+    void fetchTranslationSettings()
+      .then((loaded) => {
+        if (!cancelled) dispatchTranslation({ kind: "loaded", settings: loaded })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [dispatchTranslation])
+  // FR-021: a reader turning translation on for a book with nothing configured here is a guidance
+  // state, never a silent failure — surfaced next to the save button since saving is now this
+  // page's single shared action, not a translation-specific one.
+  const translationNeedsConfiguration =
+    !!translation.settings &&
+    ((translation.category === "cloud" && !translation.settings.provider) ||
+      (translation.category === "local" && !translation.local.endpoint.trim()))
+  const translationIsDirty =
+    !!translation.settings &&
+    !!translation.serverSettings &&
+    (translation.settings.provider !== translation.serverSettings.provider ||
+      translation.settings.endpoint !== translation.serverSettings.endpoint ||
+      translation.settings.model !== translation.serverSettings.model ||
+      translation.settings.lookaheadPages !== translation.serverSettings.lookaheadPages ||
+      !!translation.apiKey.trim() ||
+      translation.category !== translation.initialCategory ||
+      translation.local.endpoint !== translation.initialLocal.endpoint ||
+      translation.local.model !== translation.initialLocal.model)
+
   const isDirty = useMemo(
     () =>
       htmltitle !== settings.htmltitle ||
@@ -137,7 +174,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       usedatemodified !== settings.usedatemodified ||
       timezone !== settings.timezone ||
       newbadgemode !== settings.newbadgemode ||
-      recommendprecision !== settings.recommendprecision,
+      recommendprecision !== settings.recommendprecision ||
+      translationIsDirty,
     [
       htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
@@ -146,7 +184,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       refreshTokenLifetimeSecs, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
-      settings,
+      settings, translationIsDirty,
     ],
   )
 
@@ -196,6 +234,26 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
     setKeyInput("")
+
+    if (translationIsDirty && translation.settings) {
+      const usesGlobalKey =
+        translation.category === "cloud" &&
+        translation.settings.provider === "deepseek" &&
+        translation.settings.globalDeepseekKeySet
+      setLocalBackend(
+        translation.category === "local" && translation.local.endpoint.trim() ? { ...translation.local } : null,
+      )
+      const saved = await updateTranslationSettings({
+        provider: translation.category === "cloud" ? translation.settings.provider : null,
+        endpoint: translation.settings.endpoint,
+        model: translation.settings.model,
+        targetLanguage: translation.settings.targetLanguage,
+        lookaheadPages: translation.settings.lookaheadPages,
+        ...(translation.apiKey.trim() && !usesGlobalKey ? { apiKey: translation.apiKey.trim() } : {}),
+      })
+      dispatchTranslation({ kind: "saved", settings: saved })
+    }
+
     toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
   }
 
@@ -413,11 +471,16 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             onStatus={setStatus}
           />
 
+          <TranslationSection state={translation} dispatch={dispatchTranslation} />
+
           <WorkersSection onStatus={setStatus} />
         </ul>
       </form>
 
       <div className="settings-save-bar" style={isDirty ? undefined : { display: "none" }}>
+        {translationNeedsConfiguration && (
+          <span style={{ marginRight: 8, fontSize: FONT_SIZE_SM }}>{t("translation.notConfigured")}</span>
+        )}
         <input id="save" className="stdbtn" type="button" value={t("pluginOptions.saveSettings") ?? undefined} onClick={() => void handleSave()} />
       </div>
     </div>

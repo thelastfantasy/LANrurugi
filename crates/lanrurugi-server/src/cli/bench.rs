@@ -102,6 +102,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = Arc::new(lanrurugi_storage::activity_dedup::ActivityDedupGate::new(
+        redis.config.clone(),
+    ));
     let import_snapshots = Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -112,7 +115,8 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     // `state.new_archive_tx`, and legacy's own real deployment also runs auto-plugins during
     // ingestion, so silently skipping that here would make this comparison less representative,
     // not more.
-    let (new_archive_tx, mut new_archive_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (new_archive_tx, mut new_archive_rx) =
+        tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
 
     let state = AppState {
         redis,
@@ -154,20 +158,27 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
 
     {
         let state = state.clone();
         tokio::spawn(async move {
-            while let Some(id) = new_archive_rx.recv().await {
-                lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+            while let Some(event) = new_archive_rx.recv().await {
+                if let lanrurugi_scanner::events::IngestEvent::Catalogued { id } = event {
+                    lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id)
+                        .await;
+                }
             }
         });
     }

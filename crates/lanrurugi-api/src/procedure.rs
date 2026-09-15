@@ -62,6 +62,7 @@ pub async fn require_api_key(
     };
 
     let client_ip = client_ip(request.headers(), peer_addr);
+    let user_agent = user_agent(request.headers());
 
     if let Some(bearer_token) = bearer_token(request.headers()) {
         if lanrurugi_storage::api_tokens::looks_like_api_token(bearer_token) {
@@ -74,6 +75,8 @@ pub async fn require_api_key(
                             role: record.role,
                         },
                         client_ip,
+                        user_agent,
+                        client_reported: None,
                     };
                     if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
                         trace_request(&request, &auth, false);
@@ -97,6 +100,8 @@ pub async fn require_api_key(
         let auth = AuthContext {
             method: AuthMethod::Session,
             client_ip,
+            user_agent,
+            client_reported: None,
         };
         // Always allowed today (`route_policy.csv`'s own `p, session, /*, *, allow` has no
         // exceptions), but still routed through the same `authorize_route` check as the `Token`
@@ -129,13 +134,16 @@ pub async fn require_api_key(
             Ok(true) => {
                 let auth = AuthContext {
                     method: AuthMethod::GuestVisitor,
-                    client_ip,
+                    client_ip: client_ip.clone(),
+                    user_agent: user_agent.clone(),
+                    client_reported: None,
                 };
                 if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
                     trace_request(&request, &auth, false);
                     return route_forbidden_response();
                 }
                 trace_request(&request, &auth, true);
+                record_guest_access(&state, &auth).await;
                 request.extensions_mut().insert(auth);
                 return next.run(request).await;
             }
@@ -155,6 +163,8 @@ pub async fn require_api_key(
     let auth = AuthContext {
         method: AuthMethod::Anonymous,
         client_ip,
+        user_agent,
+        client_reported: None,
     };
     if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
         trace_request(&request, &auth, false);
@@ -261,6 +271,55 @@ pub(crate) fn client_ip(
         }
     }
     Some(peer_addr.ip().to_string())
+}
+
+/// This request's raw `User-Agent` header, verbatim — not parsed here (`crate::device_info::parse`
+/// does that only at the point something is actually persisted), matching `client_ip`'s own
+/// "extract once, let callers decide what to do with it" shape.
+pub(crate) fn user_agent(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string())
+}
+
+/// 007-guest-restricted-access: records a `guest.access` activity entry for this request, deduped
+/// per `(client_ip, device fingerprint)` over [`GUEST_DEDUP_WINDOW_SECS`] — see
+/// `lanrurugi_storage::activity_dedup` module docs for why a guest's normal browsing needs this
+/// rather than writing one entry per request. Best-effort: a dedup-gate or write failure only
+/// `tracing::warn!`s, same posture as every other activity write site (`crate::activity::
+/// record_manual`'s own docs) — never blocks or fails the real guest request behind it.
+const GUEST_DEDUP_WINDOW_SECS: u64 = 30 * 60;
+
+async fn record_guest_access(state: &AppState, auth: &AuthContext) {
+    let identity = auth.client_ip.as_deref().unwrap_or("unknown");
+    let fp = lanrurugi_storage::activity_dedup::fingerprint(identity, auth.user_agent.as_deref());
+    match state
+        .activity_dedup
+        .should_record("guest", &fp, GUEST_DEDUP_WINDOW_SECS)
+        .await
+    {
+        Ok(true) => {
+            crate::activity::record_manual(
+                state,
+                Some(auth),
+                lanrurugi_storage::activity::action_types::GUEST_ACCESS,
+                lanrurugi_storage::activity::ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("session".to_string()),
+                },
+                lanrurugi_storage::activity::Outcome::Success,
+                None,
+                None,
+            )
+            .await;
+        }
+        Ok(false) => {} // already recorded recently for this (ip, device) pair
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to check guest-access dedup gate");
+        }
+    }
 }
 
 /// Write-behind throttle for `ApiTokenRepository::touch_last_used` — see
@@ -382,6 +441,8 @@ mod tests {
                 role: lanrurugi_storage::api_tokens::TokenRole::Guest,
             },
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         };
         assert!(guest.is_token());
         assert!(guest.is_guest_token());
@@ -393,6 +454,8 @@ mod tests {
                 role: lanrurugi_storage::api_tokens::TokenRole::Admin,
             },
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         };
         assert!(admin.is_token());
         assert!(!admin.is_guest_token());
@@ -400,6 +463,8 @@ mod tests {
         let session = AuthContext {
             method: AuthMethod::Session,
             client_ip: None,
+            user_agent: None,
+            client_reported: None,
         };
         assert!(!session.is_token());
         assert!(!session.is_guest_token());

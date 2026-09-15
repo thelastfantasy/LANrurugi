@@ -246,6 +246,9 @@ mod tests {
             tankoubons: vec![],
             stamps: vec![],
             bookmarks: vec![],
+            terminology_glossaries: vec![],
+            volume_font_patterns: vec![],
+            text_regions: vec![],
         };
 
         let summary = restore(
@@ -295,6 +298,9 @@ mod tests {
             tankoubons: vec![],
             stamps: vec![],
             bookmarks: vec![],
+            terminology_glossaries: vec![],
+            volume_font_patterns: vec![],
+            text_regions: vec![],
         };
 
         let summary = restore(
@@ -310,4 +316,99 @@ mod tests {
         assert_eq!(summary.archives_updated, 0);
         assert_eq!(summary.archives_skipped_missing, 1);
     }
+}
+
+/// Restores Phase 2 translation state from a backup (FR-022, research.md §17).
+///
+/// A separate entry point from [`restore`] for the same reason `collect_translation_state` is
+/// separate from `build`: an instance that never enabled translation shouldn't need this feature's
+/// repositories just to restore a library, and a backup taken before the feature existed simply
+/// carries empty vectors here.
+///
+/// Individual failures are logged and skipped rather than aborting the restore — one malformed
+/// record must not cost the user everything else in the backup.
+pub async fn restore_translation_state(
+    doc: &BackupDocument,
+    glossaries: &lanrurugi_translate::glossary::GlossaryRepository,
+    font_patterns: &lanrurugi_fontcache::FontPatternRepository,
+    regions: &lanrurugi_translate::regions::RegionRepository,
+) -> TranslationRestoreSummary {
+    use lanrurugi_ocr::entities::VolumeId;
+
+    let mut summary = TranslationRestoreSummary::default();
+
+    for backup in &doc.terminology_glossaries {
+        let glossary = lanrurugi_translate::glossary::TerminologyGlossary {
+            volume_id: backup.volume_id.clone(),
+            entries: backup.entries.clone(),
+        };
+        match glossaries.save(&glossary).await {
+            Ok(()) => summary.glossaries_restored += 1,
+            Err(e) => tracing::warn!(
+                volume_id = %backup.volume_id,
+                error = %e,
+                "failed to restore terminology glossary"
+            ),
+        }
+    }
+
+    for backup in &doc.volume_font_patterns {
+        let pattern = lanrurugi_fontcache::VolumeFontPattern {
+            volume_id: backup.volume_id.clone(),
+            is_locked: backup.is_locked,
+            vote_pool: backup
+                .vote_pool
+                .iter()
+                .map(|(font, count)| (lanrurugi_fontcache::FontId(font.clone()), *count))
+                .collect(),
+            golden_set: backup
+                .golden_set
+                .iter()
+                .map(|f| lanrurugi_fontcache::FontId(f.clone()))
+                .collect(),
+            meltdown_tally: backup
+                .meltdown_tally
+                .iter()
+                .map(|(font, count)| (lanrurugi_fontcache::FontId(font.clone()), *count))
+                .collect(),
+        };
+        let _ = VolumeId::from(backup.volume_id.clone());
+        match font_patterns.save(&pattern).await {
+            Ok(()) => summary.font_patterns_restored += 1,
+            Err(e) => tracing::warn!(
+                volume_id = %backup.volume_id,
+                error = %e,
+                "failed to restore volume font pattern"
+            ),
+        }
+    }
+
+    for backup in &doc.text_regions {
+        let parsed: Result<Vec<lanrurugi_ocr::entities::DetectedTextRegion>, _> =
+            serde_json::from_value(backup.regions.clone());
+        match parsed {
+            Ok(records) => match regions.restore_raw(&backup.key, &records).await {
+                Ok(()) => summary.text_region_sets_restored += 1,
+                Err(e) => tracing::warn!(
+                    key = %backup.key,
+                    error = %e,
+                    "failed to restore translated text regions"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                key = %backup.key,
+                error = %e,
+                "skipping malformed translated text regions in backup"
+            ),
+        }
+    }
+
+    summary
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TranslationRestoreSummary {
+    pub glossaries_restored: usize,
+    pub font_patterns_restored: usize,
+    pub text_region_sets_restored: usize,
 }

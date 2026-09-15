@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { useRegenThumbnails } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
@@ -93,15 +94,12 @@ export function TagsThumbnailsSection({
           </CheckboxRow>
           {enablewebp && (
             <Row label={t("settings.webpQuality")}>
-              <input
-                className="stdinput"
-                type="number"
+              <NumberInput
+                style={{ width: "100%" }}
                 min={0}
                 max={100}
-                style={{ width: "100%" }}
-                maxLength={255}
                 value={webpquality}
-                onChange={(e) => setWebpquality(Number(e.target.value))}
+                onValueChange={setWebpquality}
               />
               <br />
               {t("settings.qualityOfGeneratedWebpThumbnails")}

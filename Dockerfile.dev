@@ -53,8 +53,9 @@ COPY crates ./crates
 # to find it.
 RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lrr-cargo-target,target=/build/target \
-    cargo build --release -p lanrurugi-server && \
-    cp /build/target/release/lanrurugi-server /build/lanrurugi-server
+    cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker && \
+    cp /build/target/release/lanrurugi-server /build/lanrurugi-server && \
+    cp /build/target/release/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
@@ -78,7 +79,18 @@ FROM docker.io/library/redis:${REDIS_VERSION}-bookworm AS redis-bin
 # (verified the hard way — plugin calls would have failed outright with no `deno` binary present).
 FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
 
-FROM debian:bookworm-slim AS runtime
+# GPU EP integration (issue #103): base is NVIDIA's official CUDA13 runtime image, not
+# `debian:bookworm-slim`, so this dev container can actually load CUDA/cuDNN — no Debian-based
+# NVIDIA CUDA image exists at all (only Ubuntu/RHEL UBI/Rocky/Oracle Linux/openSUSE; verified
+# against Docker Hub's real tag listing), so this same distro swap is what production's own GPU
+# Dockerfile needs too, not a dev-only shortcut. `cudnn-runtime` (not plain `cuda-runtime`) because
+# ORT's CUDA EP needs cuDNN for convolution ops — see `cuda.rs`'s own `CUDNN_DYLIBS` list.
+FROM docker.io/nvidia/cuda:13.3.1-cudnn-runtime-ubuntu24.04 AS runtime
+# Ubuntu 24.04 (noble) renamed several t64-transition packages — verified against a real
+# `ubuntu:24.04` container's own `apt-cache`/`apt list`, not assumed: only `libssl3` actually
+# changed (-> `libssl3t64`) of everything in this list; `libstdc++6` and the rest are unchanged
+# (a first check of `libstdc++6` looked "missing" but was a broken `+`-unescaped regex in the
+# verification script, not a real absence — confirmed present and already preinstalled by base).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -91,26 +103,112 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblz4-1 \
         libxml2 \
         libacl1 \
-        libssl3 \
+        libssl3t64 \
+        geoipupdate \
+        unzip \
+        pciutils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=rust-builder /build/lanrurugi-server /usr/local/bin/lanrurugi-server
+# GPU EP integration plan v9 (issue #103): `lanrurugi-gpu-worker` is a separate subprocess binary
+# `lanrurugi-server` spawns next to itself (`gpu_worker_client::GpuWorkerClient::worker_binary_path`
+# looks for it in the same directory as `std::env::current_exe()`) — same `/usr/local/bin` this
+# stage already puts `lanrurugi-server` in, no separate location to configure.
+COPY --from=rust-builder /build/lanrurugi-gpu-worker /usr/local/bin/lanrurugi-gpu-worker
 
-# ONNX Runtime CPU (`libonnxruntime.so`) — `lanrurugi-recommend`'s embedding model loads it via
-# `ort`'s `load-dynamic` feature (dlopen at runtime). Pinned to the same 1.26.0 version
-# jellyfin-suite's frame-forge validates against; CPU flavor from the official GitHub release
-# tarball. Extracted as the real `.so.1.26.0` file (the tarball's `libonnxruntime.so` is a
-# symlink) with the two symlinks recreated, then `ldconfig` for the soname.
+# GPU EP integration plan v9 (issue #103): TWO separate ONNX Runtime builds are needed now, not
+# one — `lanrurugi-server` itself no longer touches CUDA at all (every CUDA session moved into the
+# `lanrurugi-gpu-worker` subprocess below), but it still needs a *CPU* `libonnxruntime.so` for
+# `lanrurugi-recommend`'s embedding model (a separate, unrelated `ort` integration, pinned to a
+# different `ort` version — `2.0.0-rc.12` vs this project's `2.0.0-rc.13` elsewhere — see that
+# crate's own `Cargo.toml`). `ort`'s `load-dynamic` feature defaults to a bare `dlopen
+# ("libonnxruntime.so")` (no `ORT_DYLIB_PATH` set) that walks the standard system library search
+# path — if both builds installed a same-named `.so` into the same directory, whichever copied
+# last would silently win for *both* processes, handing `lanrurugi-server` a GPU-flavored library
+# it has no CUDA use for and (worse) no guarantee the copy order stays that way across a future
+# edit. Each build instead lives in its own directory, and each binary gets its own explicit
+# `ORT_DYLIB_PATH` (see `ENV` block near the bottom of this file) — no reliance on whichever
+# happened to be `ldconfig`'d most recently.
+#
+# CPU build: same official GitHub release tarball layout `lanrurugi-recommend` has always used.
 ARG ORT_VERSION=1.27.0
-RUN curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
-    && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
-    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
-    && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/libonnxruntime.so.1 \
-    && ln -sf libonnxruntime.so.1 /usr/local/lib/libonnxruntime.so \
-    && ldconfig \
-    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
+RUN mkdir -p /usr/local/lib/ort-cpu \
+    && curl -fsSL -o /tmp/ort-cpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
+    && tar xzf /tmp/ort-cpu.tgz -C /tmp onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-cpu/ \
+    && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-cpu/libonnxruntime.so.1 \
+    && ln -sf libonnxruntime.so.1 /usr/local/lib/ort-cpu/libonnxruntime.so \
+    && rm -rf /tmp/ort-cpu.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
+#
+# GPU (CUDA13) build, for `lanrurugi-gpu-worker` only — Microsoft's official `gpu_cuda13` release
+# asset, same pinned `ORT_VERSION`. `gpu_cuda13` specifically (not `gpu_cuda12`, which this same
+# release also publishes) because RTX 5060 is Blackwell (`sm_120`) — frame-forge's own
+# `gpu_compat.rs` module comment documents that the standard CUDA12 ORT asset has no SASS/PTX
+# kernels for `sm_120` at all, only the CUDA13 asset does.
+#
+# This is a genuine dynamic-`.so` build (`libonnxruntime.so.${ORT_VERSION}` + symlinks, same shape
+# as the CPU build above) — verified by actually downloading and listing this exact tarball's
+# contents before writing this step, not assumed. This matters because it's NOT true of every
+# CUDA-capable ORT source: pyke's own CDN-hosted `cuda13,tensorrt,nvrtx` build turned out, on
+# actual extraction, to ship a *static* `libonnxruntime.a` instead of a shared `.so` —
+# fundamentally incompatible with `ort`'s `load-dynamic` feature this whole project is built around
+# (that feature `dlopen`s a single `.so` at `ORT_DYLIB_PATH`; a `.a` needs compile-time static
+# linking instead, a different architecture entirely). Microsoft's official asset avoids that
+# mismatch, so this project doesn't need to move away from `load-dynamic`.
+#
+# `libonnxruntime_providers_cuda.so`/`_shared.so` also extracted alongside the core `.so` — ORT's
+# CUDA EP is a separate plugin the core library dlopens by name from the same directory at runtime
+# when a session actually registers CUDA (standard ORT provider-plugin architecture), not something
+# baked into the core `.so` itself. `_tensorrt.so` (also in this tarball) is NOT extracted — this
+# phase is explicitly CUDA-only, TensorRT is out of scope.
+RUN mkdir -p /usr/local/lib/ort-gpu \
+    && curl -fsSL -o /tmp/ort-gpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}.tgz \
+    && tar xzf /tmp/ort-gpu.tgz -C /tmp \
+        onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+        onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime_providers_cuda.so \
+        onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime_providers_shared.so \
+    && cp /tmp/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-gpu/ \
+    && cp /tmp/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime_providers_cuda.so /usr/local/lib/ort-gpu/ \
+    && cp /tmp/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime_providers_shared.so /usr/local/lib/ort-gpu/ \
+    && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-gpu/libonnxruntime.so.1 \
+    && ln -sf libonnxruntime.so.1 /usr/local/lib/ort-gpu/libonnxruntime.so \
+    && rm -rf /tmp/ort-gpu.tgz /tmp/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION} \
+    && ldconfig
+
+# OpenVINO build, for `lanrurugi-gpu-worker` only, Intel GPUs (Arc etc.) — see `gpu_worker_client`'s
+# own module doc for why this exists at all (issue #103's OpenVINO-EP-hang finding: Microsoft's
+# official Linux ORT release tarballs — the CPU and CUDA13 ones fetched above — have NEVER had
+# OpenVINO provider code compiled in at all, not even as a missing-dependency gap; registering
+# `OpenVINOExecutionProvider` against either one is undefined behavior that hangs indefinitely
+# inside `session.run()` rather than failing cleanly, verified against a real prior incident this
+# project's own history recorded). Intel's own `onnxruntime-openvino` PyPI wheel is the only
+# official prebuilt artifact anywhere that actually contains `libonnxruntime_providers_openvino.so`
+# — verified by downloading and listing this exact wheel's contents before writing this step, same
+# discipline as the CUDA13 tarball comment above. A `.whl` is just a zip file; `unzip` (installed
+# above) extracts it directly, no `pip`/Python environment needed at all — this project never runs
+# Python, only reuses PyPI as a distribution channel for Intel's prebuilt `.so` files.
+#
+# `cp312` tag is arbitrary — every cp3xx variant of this wheel ships byte-identical native `.so`
+# files; the Python version only affects `onnxruntime_pybind11_state*.so` (the pybind11 extension
+# module), which is deliberately NOT extracted below since this project only ever uses the C API.
+# Pinned URL + SHA-256, not resolved against PyPI's JSON API at build time — same reasoning as
+# `ORT_VERSION` being an explicit `ARG` rather than "whatever's latest": an upstream wheel bump is
+# a reviewed code change here, not something that should silently change on the next `docker build`.
+ARG ORT_OPENVINO_VERSION=1.24.1
+ARG ORT_OPENVINO_WHEEL_URL=https://files.pythonhosted.org/packages/50/cf/17ba72de2df0fcba349937d2788f154397bbc2d1a2d67772a97e26f6bc5f/onnxruntime_openvino-1.24.1-cp312-cp312-manylinux_2_28_x86_64.whl
+ARG ORT_OPENVINO_WHEEL_SHA256=d617fac2f59a6ab5ea59a788c3e1592240a129642519aaeaa774761dfe35150e
+RUN mkdir -p /usr/local/lib/ort-openvino \
+    && curl -fsSL -o /tmp/ort-openvino.whl "${ORT_OPENVINO_WHEEL_URL}" \
+    && echo "${ORT_OPENVINO_WHEEL_SHA256}  /tmp/ort-openvino.whl" | sha256sum -c - \
+    && unzip -q /tmp/ort-openvino.whl -d /tmp/ort-openvino-extract "onnxruntime/capi/*.so*" \
+    && rm -f /tmp/ort-openvino-extract/onnxruntime/capi/onnxruntime_pybind11_state*.so \
+    && cp /tmp/ort-openvino-extract/onnxruntime/capi/*.so* /usr/local/lib/ort-openvino/ \
+    && ln -sf libonnxruntime.so.${ORT_OPENVINO_VERSION} /usr/local/lib/ort-openvino/libonnxruntime.so.1 \
+    && ln -sf libonnxruntime.so.1 /usr/local/lib/ort-openvino/libonnxruntime.so \
+    && rm -rf /tmp/ort-openvino.whl /tmp/ort-openvino-extract \
+    && ldconfig
 
 # Node itself — `node:${NODE_VERSION}-slim` is Debian bookworm/glibc underneath (verified), same
 # as this `runtime` base, so its binary links cleanly here without reinstalling from scratch.
@@ -154,6 +252,12 @@ ENV LANRURUGI_PLUGINS_DIR=/usr/local/share/lanrurugi/plugins
 ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
 ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
+# Explicit, not left to `ort`'s own default `dlopen("libonnxruntime.so")` system-path search — see
+# the ORT-setup comment near this file's CPU/GPU tarball extraction steps for why `lanrurugi-server`
+# and `lanrurugi-gpu-worker` each need their own separate build/path (this one's for
+# `lanrurugi-recommend`'s CPU-only embedding model; the worker sets its own GPU path explicitly on
+# spawn, in `gpu_worker_client.rs`, rather than inheriting this one).
+ENV ORT_DYLIB_PATH=/usr/local/lib/ort-cpu/libonnxruntime.so
 # `LANRURUGI_HEALTHCHECK_FRONTEND_URL` makes `/health` probe Vite as well as the backend's own
 # Redis pools. It is only set for the dev image; the production image serves the frontend from the
 # same backend process and intentionally leaves this unset.
@@ -163,6 +267,6 @@ ENV LANRURUGI_HEALTHCHECK_FRONTEND_URL=http://127.0.0.1:3000
 # container's actual public-facing port, proxying `/api/*` through to the backend).
 WORKDIR /workspace
 EXPOSE 3000
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=30s --start-period=30s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3001/health || exit 1
 ENTRYPOINT ["docker-entrypoint.dev.sh"]

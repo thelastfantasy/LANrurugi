@@ -14,6 +14,12 @@ members = [
     "crates/lanrurugi-recommend",
     "crates/lanrurugi-llm",
     "crates/lanrurugi-imgcompare",
+    "crates/lanrurugi-ocr",
+    "crates/lanrurugi-fontcache",
+    "crates/lanrurugi-translate",
+    "crates/lanrurugi-inpaint",
+    "crates/lanrurugi-gpu-ipc",
+    "crates/lanrurugi-gpu-worker",
 ]
 
 [workspace.package]
@@ -34,7 +40,14 @@ lanrurugi-llm = { path = "crates/lanrurugi-llm" }
 lanrurugi-backup = { path = "crates/lanrurugi-backup" }
 lanrurugi-bench = { path = "crates/lanrurugi-bench" }
 lanrurugi-imgcompare = { path = "crates/lanrurugi-imgcompare" }
+lanrurugi-ocr = { path = "crates/lanrurugi-ocr" }
+lanrurugi-fontcache = { path = "crates/lanrurugi-fontcache" }
+lanrurugi-translate = { path = "crates/lanrurugi-translate" }
+lanrurugi-inpaint = { path = "crates/lanrurugi-inpaint" }
+lanrurugi-gpu-ipc = { path = "crates/lanrurugi-gpu-ipc" }
 
+tarpc = { version = "0.38.0", features = ["serde-transport", "serde-transport-bincode", "unix", "tokio1"] }
+futures = "0.3.34"
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
@@ -59,7 +72,38 @@ webp = "0.3"
 clap = { version = "4.6", features = ["derive", "env"] }
 criterion = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart", "stream"] }
-ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+# `=2.0.0-rc.13` precise-pinned (not a range) — GPU EP integration plan v8 §2.2: `Cargo.lock`
+# already resolves rc.13 even under the old `"2.0.0-rc.12"` range constraint, and rc.12->rc.13 had
+# a real breaking change (deprecated `*ExecutionProvider` aliases removed, `CUDA`/`OpenVINO` gained
+# feature gates) — pinning precisely stops a future `cargo update` from silently repeating that.
+# `cuda` feature (SPIKE, issue #103) — required for `ort::ep::CUDA` to exist at all; `tracing`
+# (used for EP-registration success/failure logging) needs no separate feature, already in `ort`'s
+# own default set, confirmed via this project's real `Cargo.lock` before relying on it.
+ort = { version = "=2.0.0-rc.13", features = ["load-dynamic", "cuda", "openvino"] }
+# Phase 2 OCR (`specs/004-ocr-manga-translation` research.md §1): `oar-ocr` supplies PP-OCR text
+# *detection* only; recognition is this project's own `ort` integration against kha-white's
+# Apache-2.0 `manga-ocr` weights, since general-purpose PP-OCR recognition is weak on manga's
+# vertical/stylized Japanese lettering. CPU execution provider only — see research.md §1's
+# OpenVINO-EP-hang finding for why no GPU EP is registered this phase.
+oar-ocr = "0.9.2"
+ndarray = "0.17"
+# Per-region dominant foreground/background colour estimation (FR-008a, research.md §13) — the
+# KMeans-over-sampled-pixels approach, rather than a plain histogram which can't separate glyph
+# pixels from bubble pixels.
+kmeans_colors = { version = "0.7", default-features = false }
+palette = { version = "0.7", default-features = false, features = ["std"] }
+# Server-side compositing of translated text onto a page image. Glyph rasterization; shaping and
+# line-breaking now go through `harfrust`/`icu_segmenter` below (research.md §11 update — vertical
+# CJK layout is in scope; `ab_glyph` alone can position glyphs at arbitrary coordinates but has no
+# shaping/bidi/script logic of its own).
+ab_glyph = "0.2"
+# HarfBuzz's Rust port — shaping (glyph advances/offsets), including vertical (`Direction::
+# TopToBottom`) text runs for CJK compositing. Chosen over hand-rolling vertical-CJK punctuation
+# rules because it already implements the OpenType `vert`/`vrt2` vertical-alternate lookup.
+harfrust = "0.13"
+# Unicode UAX#14 line-breaking (`icu_segmenter`) — CJK text wraps without whitespace, which the
+# prior hand-written `wrap_text`'s `split_whitespace` couldn't do at all.
+icu_segmenter = "2.3"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 governor = "0.10"
 futures-util = "0.3"
@@ -67,6 +111,7 @@ casbin = { version = "2.20", default-features = false, features = ["runtime-toki
 url = "2.5"
 percent-encoding = "2.3"
 image = "0.25"
+imageproc = "0.27"
 thiserror = "2.0"
 anyhow = "1.0"
 uuid = { version = "1.23", features = ["v4", "serde"] }
@@ -74,6 +119,8 @@ rand = "0.10"
 bcrypt = "0.19"
 hmac = "0.13"
 sha2 = "0.11"
+woothee = "0.13"
+maxminddb = "0.32"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"

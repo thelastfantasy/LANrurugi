@@ -20,6 +20,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use lanrurugi_core::{password, session};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
+use lanrurugi_storage::device_info::ClientReportedInfo;
 use lanrurugi_storage::refresh_tokens::RotateOutcome;
 use serde::Deserialize;
 
@@ -28,7 +29,7 @@ use crate::auth::load as load_auth_config;
 use crate::auth::LiveAuthConfig;
 use crate::auth_context::{AuthContext, AuthMethod};
 use crate::common::error;
-use crate::procedure::client_ip;
+use crate::procedure::{client_ip, user_agent};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -39,9 +40,32 @@ pub fn router() -> Router<AppState> {
         .route("/token/refresh", post(refresh))
 }
 
+/// `true` if every field is `None` — a client-reported form that carried literally nothing (an
+/// old frontend build, or a hand-crafted request) should store as `client_reported: None`, not
+/// `Some(ClientReportedInfo::default())`, matching `DeviceInfo::is_empty`'s own "an empty part is
+/// the same as an absent part" convention.
+fn non_empty_client_reported(info: ClientReportedInfo) -> Option<ClientReportedInfo> {
+    if info.is_empty() {
+        None
+    } else {
+        Some(info)
+    }
+}
+
 #[derive(Deserialize)]
 struct LoginForm {
     password: String,
+    /// Every field the frontend can read straight off `window`/`navigator`/`Intl` and no HTTP
+    /// header carries — see `ClientReportedInfo`'s own docs for the full rationale. Flattened
+    /// onto each endpoint's own form body (`#[serde(flatten)]`) rather than a nested JSON object,
+    /// since both `login` and `logout`/`refresh` are plain `application/x-www-form-urlencoded`
+    /// bodies today (`login`'s own `password` field), not JSON — matching the existing wire shape
+    /// rather than introducing a second content type for these two routes alone. Every field on
+    /// `ClientReportedInfo` is `Option` with its own `#[serde(default)]`, so an older cached
+    /// frontend build, or a request crafted by hand/a script, simply omits all of them and gets a
+    /// `ClientReportedInfo::default()` (all-`None`), never a 422.
+    #[serde(flatten)]
+    client_reported: ClientReportedInfo,
 }
 
 fn now_secs() -> u64 {
@@ -61,6 +85,12 @@ fn now_secs() -> u64 {
 /// removing this one (RFC 6265's own per-`(name, domain, path)` cookie identity), leaking a
 /// zombie cookie that never actually gets cleared.
 const REFRESH_COOKIE_PATH: &str = "/api/token/refresh";
+
+/// How long a `(family_id, device fingerprint)` pair's routine successful refresh stays deduped —
+/// see `action_types::SESSION_REFRESH`'s own docs. Shorter than the guest dedup window
+/// (`procedure::GUEST_DEDUP_WINDOW_SECS`) is unnecessary here since a refresh already only happens
+/// once per `access_token_lifetime_secs`, far less often than a guest's per-request browsing.
+const SESSION_REFRESH_DEDUP_WINDOW_SECS: u64 = 30 * 60;
 
 /// Builds both `Set-Cookie` header values for a freshly-issued (or rotated) token pair. `Secure`
 /// is appended only when `cfg.force_secure_cookies` is set (see that field's own docs on why it's
@@ -138,6 +168,8 @@ async fn login(
     axum::Form(form): axum::Form<LoginForm>,
 ) -> Response {
     let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    let client_reported = non_empty_client_reported(form.client_reported);
     let auth = match load_auth_config(&state).await {
         Ok(a) => a,
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "login", e.to_string()),
@@ -152,6 +184,8 @@ async fn login(
             Some(&AuthContext {
                 method: AuthMethod::Anonymous,
                 client_ip: ip,
+                user_agent: ua,
+                client_reported,
             }),
             action_types::SESSION_LOGIN_FAILED,
             ActivityTarget {
@@ -170,9 +204,15 @@ async fn login(
     }
 
     let now = now_secs();
+    let device_info =
+        crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
     let issued = match state
         .refresh_tokens
-        .issue_new_family(now as i64, auth.refresh_token_lifetime_secs as i64)
+        .issue_new_family(
+            now as i64,
+            auth.refresh_token_lifetime_secs as i64,
+            device_info,
+        )
         .await
     {
         Ok(issued) => issued,
@@ -196,6 +236,8 @@ async fn login(
         Some(&AuthContext {
             method: AuthMethod::Session,
             client_ip: ip,
+            user_agent: ua,
+            client_reported,
         }),
         action_types::SESSION_LOGIN,
         ActivityTarget {
@@ -225,8 +267,16 @@ async fn refresh(
     State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    form: axum::Form<ClientReportedInfo>,
 ) -> Response {
     let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    // A request with a genuinely empty body (an older cached frontend build, or a bare
+    // `curl -X POST` with no body at all) still decodes successfully here — every field on
+    // `ClientReportedInfo` is `Option` with its own `#[serde(default)]`, so `serde_urlencoded`
+    // parsing an empty byte string just produces every field as `None`, not a rejection. Only a
+    // genuinely malformed (non-empty, non-form) body would 400.
+    let client_reported = non_empty_client_reported(form.0);
     let auth = match load_auth_config(&state).await {
         Ok(a) => a,
         Err(e) => {
@@ -293,6 +343,8 @@ async fn refresh(
                 Some(&AuthContext {
                     method: AuthMethod::Anonymous,
                     client_ip: ip,
+                    user_agent: ua,
+                    client_reported,
                 }),
                 action_types::SESSION_REFRESH_REUSE_DETECTED,
                 ActivityTarget {
@@ -330,6 +382,79 @@ async fn refresh(
             );
             let refresh_cookie_value = format!("{}.{}", record.token_id, secret);
             let cookies = auth_cookies(&auth, &access_token, &refresh_cookie_value);
+
+            let refresh_auth = AuthContext {
+                method: AuthMethod::Session,
+                client_ip: ip,
+                user_agent: ua.clone(),
+                client_reported: client_reported.clone(),
+            };
+            // Routine, successful refresh — deduplicated per `(family_id, device fingerprint)`, not
+            // written on every single rotation (see `action_types::SESSION_REFRESH`'s own docs on
+            // why: this happens silently every `access_token_lifetime_secs` for as long as a tab
+            // stays open).
+            let identity = format!("family:{}", record.family_id);
+            let fp = lanrurugi_storage::activity_dedup::fingerprint(&identity, ua.as_deref());
+            match state
+                .activity_dedup
+                .should_record("session_refresh", &fp, SESSION_REFRESH_DEDUP_WINDOW_SECS)
+                .await
+            {
+                Ok(true) => {
+                    record_manual(
+                        &state,
+                        Some(&refresh_auth),
+                        action_types::SESSION_REFRESH,
+                        ActivityTarget {
+                            id: None,
+                            label: None,
+                            kind: Some("session".to_string()),
+                        },
+                        Outcome::Success,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+                Ok(false) => {} // already recorded recently for this (family, device) pair
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to check session-refresh dedup gate");
+                }
+            }
+
+            // The family's device baseline (captured once at login, never re-derived by `rotate`
+            // itself — see `RefreshTokenRecord::device_info`'s own docs) disagreeing with this
+            // rotation's actual presenting device is a visible flag for an operator, not proof of
+            // theft — recorded once per occurrence (not gated by the dedup check above, since a
+            // real device change is itself the noteworthy event, not routine background noise).
+            // Compared on `user_agent` alone (not the whole `DeviceInfo`, which also carries
+            // geo/client-reported facts that legitimately vary refresh-to-refresh — a phone moving
+            // between WiFi networks changes its IP, and a browser window being resized changes
+            // `screen_width`/`screen_height`, neither of which is a device change worth flagging).
+            let current_ua_info = crate::device_info::parse_user_agent(ua.as_deref());
+            let baseline_ua_info = record
+                .device_info
+                .as_ref()
+                .and_then(|d| d.user_agent.as_ref());
+            if let Some(baseline) = baseline_ua_info {
+                if current_ua_info.as_ref() != Some(baseline) {
+                    record_manual(
+                        &state,
+                        Some(&refresh_auth),
+                        action_types::SESSION_DEVICE_CHANGED,
+                        ActivityTarget {
+                            id: None,
+                            label: None,
+                            kind: Some("session".to_string()),
+                        },
+                        Outcome::Success,
+                        Some(serde_json::json!({ "user_agent": baseline })),
+                        Some(serde_json::json!({ "user_agent": current_ua_info })),
+                    )
+                    .await;
+                }
+            }
+
             (
                 StatusCode::OK,
                 cookie_headers(cookies),
@@ -402,8 +527,13 @@ async fn logout(
     State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    form: axum::Form<ClientReportedInfo>,
 ) -> Response {
     let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    // See `refresh`'s own comment on this same pattern — an empty body decodes to every field
+    // `None`, not a rejection.
+    let client_reported = non_empty_client_reported(form.0);
     let auth = load_auth_config(&state).await.ok();
     // Falls back to non-`Secure` clearing cookies if config couldn't even be loaded — an already
     //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
@@ -427,6 +557,8 @@ async fn logout(
                             Some(&AuthContext {
                                 method: AuthMethod::Session,
                                 client_ip: ip,
+                                user_agent: ua,
+                                client_reported,
                             }),
                             action_types::SESSION_LOGOUT,
                             ActivityTarget {

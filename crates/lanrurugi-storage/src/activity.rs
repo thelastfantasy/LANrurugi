@@ -17,6 +17,8 @@ use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::device_info::DeviceInfo;
+
 #[derive(Debug, Error)]
 pub enum ActivityStorageError {
     #[error("Redis error: {0}")]
@@ -66,6 +68,22 @@ pub mod action_types {
     pub const TOKEN_RENAME: &str = "token.rename";
     pub const DOWNLOAD_QUEUE_ADD: &str = "download_queue.add";
     pub const DOWNLOAD_QUEUE_START: &str = "download_queue.start";
+    /// One archive genuinely entering the library — the single, unified "入库" action every
+    /// ingestion source funnels through, with `after.source` (`"download"` | `"upload"` |
+    /// `"scanner"`) recording *how* it got there:
+    ///
+    /// - `"download"`: `lanrurugi_api::plugins::run_managed_downloads` catalogs a downloaded file
+    ///   (written separately from [`DOWNLOAD_QUEUE_START`] because the two can genuinely disagree
+    ///   — launching the download can succeed while cataloging fails; a multi-resource/bundled
+    ///   download writes one per archive).
+    /// - `"upload"`: the web UI's `PUT /archives/upload` catalogs a user-supplied file.
+    /// - `"scanner"`: the file watcher / a full scan catalogs a file that appeared on disk, with no
+    ///   HTTP request behind it (written with a `System` actor).
+    ///
+    /// Both success and failure are recorded; each source-specific path still keeps its own
+    /// initiating action (`download_queue.start`, `archive.upload`) where that carries extra
+    /// context, but this is the one type a user filters by to see everything that was ingested.
+    pub const ARCHIVE_INGEST: &str = "archive.ingest";
     pub const DOWNLOAD_QUEUE_STOP: &str = "download_queue.stop";
     pub const DOWNLOAD_QUEUE_OVERWRITE: &str = "download_queue.overwrite";
     pub const DOWNLOAD_QUEUE_RENAME: &str = "download_queue.rename";
@@ -115,7 +133,10 @@ pub mod action_types {
     pub const ARCHIVE_SPLIT_EXECUTE: &str = "archive.split_execute";
     /// One record per successfully created split ZIP archive.
     pub const ARCHIVE_SPLIT_ZIP_CREATED: &str = "archive.split_zip_created";
-    /// Automatic: the file watcher/scanner catalogued a new archive on its own.
+    /// Historical only: the scanner's own ingest record before it was folded into the unified
+    /// [`ARCHIVE_INGEST`]. Nothing writes this anymore — kept as a named constant (and its
+    /// frontend translation) purely so entries already stored under this action type keep
+    /// rendering correctly.
     pub const SCANNER_INGEST: &str = "scanner.ingest";
     /// Automatic: metadata plugins ran without being tied to a manual upload/download that
     /// already has its own record — see `lanrurugi_api::activity`'s own docs on why this is only
@@ -154,6 +175,50 @@ pub mod action_types {
     /// logged-out). Unlike a routine successful refresh, this is a real security-relevant event an
     /// operator should see, not background noise.
     pub const SESSION_REFRESH_REUSE_DETECTED: &str = "session.refresh_reuse_detected";
+    /// A routine, successful `POST /token/refresh` — deduplicated per `(actor_key, device
+    /// fingerprint)` by the caller (`lanrurugi_api::login::refresh`) rather than written on every
+    /// single rotation, so this doesn't reintroduce the "routine noise buries real events" problem
+    /// `SESSION_LOGIN`'s own doc comment above describes; see that call site for the actual
+    /// dedup/TTL mechanism.
+    pub const SESSION_REFRESH: &str = "session.refresh";
+    /// A rotation whose device fingerprint (`DeviceInfo`, from the presented request's own
+    /// `User-Agent`) disagrees with the one recorded on this family's original `session.login` —
+    /// e.g. the family's refresh cookie is now being presented from a different browser/OS than it
+    /// was issued to. Not proof of theft on its own (a real user's browser update, or switching
+    /// devices while still logged in, produces the same signal) — recorded as a visible flag for an
+    /// operator to notice, same posture as `SESSION_REFRESH_REUSE_DETECTED` but without burning the
+    /// family (rotation still succeeds normally either way).
+    pub const SESSION_DEVICE_CHANGED: &str = "session.device_changed";
+    /// A `GuestVisitor`-authenticated request (007-guest-restricted-access) reaching a route it's
+    /// allowed to — deduplicated per `(client_ip, device fingerprint)` by the caller
+    /// (`lanrurugi_api::procedure::require_api_key`) over a short TTL window, since a guest's normal
+    /// browsing (reader page-turns, prefetch, thumbnails) would otherwise write one entry per
+    /// request; see that call site for the actual dedup mechanism.
+    pub const GUEST_ACCESS: &str = "guest.access";
+
+    // `specs/004-ocr-manga-translation` (FR-023, research.md §17): user-initiated changes to
+    // Phase 2's own translation state, recorded through this same shared mechanism rather than a
+    // parallel one, so they appear on the existing Activity page like every other mutable entity.
+    /// A term auto-captured into a volume's Terminology Glossary on first translation (FR-007a).
+    pub const TRANSLATION_GLOSSARY_CAPTURE: &str = "translation.glossary_capture";
+    /// A user correcting a glossary entry's translation (FR-007d).
+    pub const TRANSLATION_GLOSSARY_EDIT: &str = "translation.glossary_edit";
+    /// A user deleting a single glossary entry (FR-007d).
+    pub const TRANSLATION_GLOSSARY_DELETE: &str = "translation.glossary_delete";
+    /// A volume's Volume Font Pattern reset back to unlocked (FR-010).
+    pub const TRANSLATION_FONT_PATTERN_RESET: &str = "translation.font_pattern_reset";
+    /// Backend and/or target-language selection changed (FR-002/003/004). The stored credential
+    /// itself is never included in the recorded before/after (FR-006).
+    pub const TRANSLATION_SETTINGS_UPDATE: &str = "translation.settings_update";
+    /// One real LLM call that translated a page's text (issue #100) — the provider/token-usage/
+    /// estimated-cost telemetry that record couldn't express. Written once per real provider call
+    /// (never per page-view — a page whose translation was already persisted, or already fully
+    /// cached in-memory, reuses that without ever reaching the LLM again, see
+    /// `lanrurugi_translate::pipeline::translate_batch`'s own "everything already translated: no
+    /// provider call at all" early return), so this is not routine per-request noise the way a
+    /// naive "log every reader page view" would be — it fires exactly as often as a real,
+    /// billable API call actually happens.
+    pub const TRANSLATION_LLM_CALL: &str = "translation.llm_call";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +350,11 @@ pub struct ActivityEntry {
     /// (there's no HTTP request to derive an IP from).
     #[serde(default)]
     pub client_ip: Option<String>,
+    /// Parsed from this request's own `User-Agent` header (`lanrurugi_api::device_info::parse`) —
+    /// `None` for `System`-actor entries (no HTTP request behind them) and for any entry written
+    /// before this field existed (`#[serde(default)]`), never backfilled retroactively.
+    #[serde(default)]
+    pub device_info: Option<DeviceInfo>,
     /// Populated only for "update"-shaped actions (settings.update, archive.metadata_update,
     /// token.rename, ...) — a `serde_json::Value` rather than a per-action-type Rust type because
     /// the shape genuinely differs per `action_type` and nothing ever filters a query by the
@@ -795,6 +865,7 @@ mod tests {
             },
             outcome: Outcome::Success,
             client_ip: Some("127.0.0.1".to_string()),
+            device_info: None,
             before: None,
             after: None,
             caused_by: None,

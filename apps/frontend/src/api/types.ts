@@ -682,6 +682,74 @@ export interface ActivityCausedBy {
 /** A discriminated union on `status` — `reason` is only reachable after narrowing to `"failure"`. */
 export type ActivityOutcome = { status: "success" } | { status: "failure"; reason: string }
 
+/** Parsed from the request's own `User-Agent` header (`woothee`) — `category` is e.g. "pc" /
+ * "smartphone" / "tablet" / "crawler", not a closed set the frontend should switch on exhaustively. */
+export interface ActivityUserAgentInfo {
+  category: string
+  os: string
+  os_version: string
+  browser: string
+  browser_version: string
+  browser_type: string
+  vendor: string
+}
+
+/** MaxMind GeoLite2-City lookup of `client_ip` — every field `null` if the database isn't
+ * installed server-side, or has no coverage for this specific IP (private/reserved ranges). */
+export interface ActivityGeoInfo {
+  country_code: string | null
+  country_name: string | null
+  city_name: string | null
+  subdivision_name: string | null
+}
+
+/** Client-reported browser/environment facts — `login`/`refresh`'s optional form fields
+ * (`collectClientReportedInfo`). `null` for any request shape that doesn't carry these (every
+ * `guest_visitor` request, or a pre-upgrade frontend build's login/refresh call). */
+export interface ActivityClientReportedInfo {
+  screen_width: number | null
+  screen_height: number | null
+  screen_avail_width: number | null
+  screen_avail_height: number | null
+  window_outer_width: number | null
+  window_outer_height: number | null
+  window_inner_width: number | null
+  window_inner_height: number | null
+  device_pixel_ratio: number | null
+  color_depth: number | null
+  pixel_depth: number | null
+  screen_orientation: string | null
+  language: string | null
+  languages: string | null
+  timezone: string | null
+  timezone_offset_minutes: number | null
+  platform: string | null
+  uach_platform: string | null
+  uach_platform_version: string | null
+  uach_brands: string | null
+  uach_full_version_list: string | null
+  uach_mobile: boolean | null
+  hardware_concurrency: number | null
+  device_memory_gib: number | null
+  touch_support: boolean | null
+  max_touch_points: number | null
+  connection_type: string | null
+  connection_downlink_mbps: number | null
+  connection_rtt_ms: number | null
+  connection_save_data: boolean | null
+  cookie_enabled: boolean | null
+  pdf_viewer_enabled: boolean | null
+  prefers_dark_color_scheme: boolean | null
+  prefers_reduced_motion: boolean | null
+  probably_incognito: boolean | null
+}
+
+export interface ActivityDeviceInfo {
+  user_agent: ActivityUserAgentInfo | null
+  geo: ActivityGeoInfo | null
+  client_reported: ActivityClientReportedInfo | null
+}
+
 export interface ActivityEntry {
   id: string
   timestamp: number
@@ -691,6 +759,7 @@ export interface ActivityEntry {
   target: ActivityTarget
   outcome: ActivityOutcome
   client_ip: string | null
+  device_info: ActivityDeviceInfo | null
   before: unknown | null
   after: unknown | null
   caused_by: ActivityCausedBy | null

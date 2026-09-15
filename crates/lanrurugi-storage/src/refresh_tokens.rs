@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::device_info::DeviceInfo;
+
 #[derive(Debug, Error)]
 pub enum RefreshTokenStorageError {
     #[error("Redis error: {0}")]
@@ -77,6 +79,15 @@ pub struct RefreshTokenRecord {
     /// live sibling tokens from one forgiven presentation.
     #[serde(default)]
     pub grace_reuse_count: u32,
+    /// The device that first logged in to start this family — captured once at
+    /// [`RefreshTokenRepository::issue_new_family`] and copied forward unchanged on every
+    /// [`RefreshTokenRepository::rotate`] (never re-derived from the rotating request's own
+    /// User-Agent), so it stays a stable "who this family belongs to" baseline a caller can diff a
+    /// rotation's *actual* presenting device against (see
+    /// `lanrurugi_storage::activity::action_types::SESSION_DEVICE_CHANGED`). `None` for a
+    /// pre-migration record predating this field, or if `User-Agent` parsing failed.
+    #[serde(default)]
+    pub device_info: Option<DeviceInfo>,
 }
 
 /// A newly-issued token pair as returned to a caller — the record persisted server-side, plus the
@@ -143,14 +154,17 @@ impl RefreshTokenRepository {
 
     /// Mints a brand-new `family_id` and its first token — the *only* place a new family is
     /// created; every other issuance in a login's lifetime goes through [`rotate`] instead. Called
-    /// once, from `login.rs`'s `login` handler, on successful password verification.
+    /// once, from `login.rs`'s `login` handler, on successful password verification. `device_info`
+    /// is this family's baseline device, parsed from the login request's own `User-Agent`.
     pub async fn issue_new_family(
         &self,
         now: i64,
         lifetime_secs: i64,
+        device_info: Option<DeviceInfo>,
     ) -> Result<IssuedRefreshToken> {
         let family_id = uuid::Uuid::new_v4().to_string();
-        self.issue_in_family(&family_id, now, lifetime_secs).await
+        self.issue_in_family(&family_id, now, lifetime_secs, device_info)
+            .await
     }
 
     async fn issue_in_family(
@@ -158,6 +172,7 @@ impl RefreshTokenRepository {
         family_id: &str,
         now: i64,
         lifetime_secs: i64,
+        device_info: Option<DeviceInfo>,
     ) -> Result<IssuedRefreshToken> {
         let token_id = uuid::Uuid::new_v4().to_string();
         let secret = random_hex();
@@ -170,6 +185,7 @@ impl RefreshTokenRepository {
             used: false,
             used_at: None,
             grace_reuse_count: 0,
+            device_info,
         };
         let mut conn = self.pool.get().await?;
         let key = token_key(&token_id);
@@ -252,6 +268,9 @@ impl RefreshTokenRepository {
             used: false,
             used_at: None,
             grace_reuse_count: 0,
+            // Copied forward from the parent, never re-derived from this rotation's own request —
+            // see this field's own docs on why it must stay the family's stable original baseline.
+            device_info: record.device_info.clone(),
         };
         let new_key = token_key(&new_token_id);
         let new_raw = serde_json::to_string(&new_record)
@@ -333,7 +352,7 @@ impl RefreshTokenRepository {
                 Ok(RotateOutcome::NotFound)
             }
             Ok(_) => Ok(RotateOutcome::Rotated {
-                record: new_record,
+                record: Box::new(new_record),
                 secret: new_secret,
             }),
             Err(e) => Err(e.into()),
@@ -365,7 +384,11 @@ pub enum RotateOutcome {
     /// call; the caller should respond 401 and clear both cookies.
     ReuseDetected,
     Rotated {
-        record: RefreshTokenRecord,
+        // Boxed — `RefreshTokenRecord` grew past clippy's `large_enum_variant` threshold once
+        // `device_info` (three `String`s) was added, and `NotFound`/`ReuseDetected` are
+        // zero-sized, so leaving it unboxed would pad every `RotateOutcome` (including those two
+        // common variants) out to this one variant's much larger size.
+        record: Box<RefreshTokenRecord>,
         secret: String,
     },
 }
@@ -386,7 +409,7 @@ mod tests {
         };
         let repo = RefreshTokenRepository::new(pool);
 
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
         let fetched = repo.get(&issued.record.token_id).await.unwrap().unwrap();
         assert_eq!(fetched, issued.record);
         assert!(!fetched.used);
@@ -402,7 +425,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         let outcome = repo
             .rotate(&issued.record.token_id, &issued.secret, 1_100)
@@ -441,7 +464,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool.clone());
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
             .await
@@ -467,7 +490,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         let first = repo
             .rotate(&issued.record.token_id, &issued.secret, 1_100)
@@ -500,7 +523,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         let outcome = repo
             .rotate(&issued.record.token_id, "wrong-secret", 1_100)
@@ -523,7 +546,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         let repo_a = repo.clone();
         let repo_b = repo.clone();
@@ -567,7 +590,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         let first = repo
             .rotate(&issued.record.token_id, &issued.secret, 1_100)
@@ -614,7 +637,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
             .await
@@ -638,7 +661,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool);
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
             .await
@@ -670,7 +693,7 @@ mod tests {
             return;
         };
         let repo = RefreshTokenRepository::new(pool.clone());
-        let issued = repo.issue_new_family(1_000, 604_800).await.unwrap();
+        let issued = repo.issue_new_family(1_000, 604_800, None).await.unwrap();
 
         repo.rotate(&issued.record.token_id, &issued.secret, 1_100)
             .await

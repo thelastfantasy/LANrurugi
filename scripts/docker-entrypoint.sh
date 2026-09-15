@@ -30,6 +30,32 @@ fi
 # "Redis PING did not return PONG" (observed on a dev-container recreate).
 sleep 0.2
 
+# Best-effort MaxMind GeoLite2-City download/refresh — additive to the activity-log device-info
+# feature (`lanrurugi_api::geoip`'s own docs), never required for the rest of the server to start.
+# `geoipupdate` itself only reads its account/license key from /etc/GeoIP.conf, not environment
+# variables directly, so this writes that file from LANRURUGI_GEOIP_ACCOUNT_ID/
+# LANRURUGI_GEOIP_LICENSE_KEY (a free MaxMind account's own credentials — see
+# https://www.maxmind.com/en/geolite2/signup) each container start, then runs it once. Silently
+# skipped (not a fatal error) when either variable is unset — a deployment that never opted into
+# geo data gets a server with no geo lookups, not a boot failure. `/var/lib/GeoIP` is a real
+# directory in the image (created below), not required to be a mounted volume — an operator who
+# wants the database to survive a container recreate without re-downloading it can mount one there,
+# but it isn't required for this to work at all.
+if [ -n "$LANRURUGI_GEOIP_ACCOUNT_ID" ] && [ -n "$LANRURUGI_GEOIP_LICENSE_KEY" ]; then
+  cat > /etc/GeoIP.conf <<EOF
+AccountID $LANRURUGI_GEOIP_ACCOUNT_ID
+LicenseKey $LANRURUGI_GEOIP_LICENSE_KEY
+EditionIDs GeoLite2-City
+EOF
+  if geoipupdate -d /var/lib/GeoIP; then
+    echo "geoip: GeoLite2-City database ready"
+  else
+    echo "geoip: geoipupdate failed — continuing without geo data" >&2
+  fi
+else
+  echo "geoip: LANRURUGI_GEOIP_ACCOUNT_ID/LANRURUGI_GEOIP_LICENSE_KEY not set — skipping, no geo data will be recorded"
+fi
+
 lanrurugi-server "$@" &
 APP_PID=$!
 

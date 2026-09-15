@@ -7,6 +7,7 @@ use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
 use lanrurugi_storage::activity::ActivityRepository;
+use lanrurugi_storage::activity_dedup::ActivityDedupGate;
 use lanrurugi_storage::api_tokens::ApiTokenRepository;
 use lanrurugi_storage::bookmarks::BookmarksRepository;
 use lanrurugi_storage::compare_cache::CompareCacheRepository;
@@ -153,13 +154,14 @@ pub struct AppState {
     /// just the one that ran `work` — can reconstruct an error response).
     pub page_singleflight: Arc<PageSingleflight>,
     /// Sender half of the channel a long-lived task (spawned once in `lanrurugi-server::main`)
-    /// drains to run every "自动运行"/enabled metadata plugin on each newly-catalogued archive id
-    /// it receives (matching legacy's own `Shinobu.pm::add_new_file` →
-    /// `exec_enabled_plugins_on_file`) — carried on `AppState` itself so every call site that
-    /// starts/restarts the watcher or a full scan (`shinobu.rs`, `database.rs::rebuild_index`,
-    /// `main.rs`'s own startup scan) can hand the *same* long-lived consumer a clone of this one
-    /// sender, rather than each spawning its own short-lived, redundant consumer task.
-    pub new_archive_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    /// drains to record the unified `archive.ingest` activity for each scanner outcome and run
+    /// every "自动运行"/enabled metadata plugin on each newly-catalogued archive id (matching
+    /// legacy's own `Shinobu.pm::add_new_file` → `exec_enabled_plugins_on_file`) — carried on
+    /// `AppState` itself so every call site that starts/restarts the watcher or a full scan
+    /// (`shinobu.rs`, `database.rs::rebuild_index`, `main.rs`'s own startup scan) can hand the
+    /// *same* long-lived consumer a clone of this one sender, rather than each spawning its own
+    /// short-lived, redundant consumer task.
+    pub new_archive_tx: tokio::sync::mpsc::UnboundedSender<lanrurugi_scanner::events::IngestEvent>,
     /// One [`CancellationToken`] per in-flight download-queue item (keyed by queue item ID, not
     /// job ID — the queue item is the stable, user-facing identity a "stop" button acts on).
     /// Cooperative rather than `AbortHandle`-based: the download loop
@@ -214,6 +216,11 @@ pub struct AppState {
     /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
     /// docs for the full data model/retention/query design.
     pub activity: Arc<ActivityRepository>,
+    /// Short-TTL `(actor/caller, device)` dedup gate shared by `guest.access` and
+    /// `session.refresh`'s routine-write sites — see `lanrurugi_storage::activity_dedup` module
+    /// docs for why those two need this and no other activity write site does. Same `config`
+    /// logical-DB placement as `activity` itself.
+    pub activity_dedup: Arc<ActivityDedupGate>,
     /// Time-Machine-style rollback snapshots [`lanrurugi_backup::import_legacy::
     /// import_from_legacy`] captures per LANraragi import — also on the `config` logical DB, same
     /// placement as `api_tokens`/`activity`. See `lanrurugi_backup::import_snapshot` module docs.
@@ -234,6 +241,16 @@ pub struct AppState {
     /// the final result later.
     pub split_progress_tx:
         Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<serde_json::Value>>>>,
+    /// Phase 2 (`specs/004-ocr-manga-translation`) OCR models plus compositing fonts, loaded on
+    /// first actual use rather than at startup — translation is off by default (FR-007), and a
+    /// deployment with no model files installed must still boot normally.
+    pub translation_runtime: Arc<crate::translation_pipeline::TranslationRuntime>,
+    /// Drives `lanrurugi_translate::prefetch::PrefetchScheduler` (T039): the reader's page requests
+    /// feed it their position, and it spawns the per-page OCR/translate/composite work whose
+    /// results later requests read out of the rendered-page cache.
+    pub translation_scheduler: Arc<crate::translation_pipeline::TranslationScheduler>,
+    /// Process-wide SC-003/SC-004 counters (font-match rate, look-ahead readiness rate).
+    pub translation_telemetry: Arc<lanrurugi_translate::TranslationTelemetry>,
 }
 
 impl AppState {

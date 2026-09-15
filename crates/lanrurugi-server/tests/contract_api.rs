@@ -54,6 +54,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = std::sync::Arc::new(
+        lanrurugi_storage::activity_dedup::ActivityDedupGate::new(redis.config.clone()),
+    );
     let import_snapshots = std::sync::Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -101,12 +104,16 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
     // `MockConnectInfo` — `require_api_key` extracts `ConnectInfo<SocketAddr>` unconditionally (for
@@ -415,6 +422,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = std::sync::Arc::new(
+        lanrurugi_storage::activity_dedup::ActivityDedupGate::new(redis.config.clone()),
+    );
     let import_snapshots = std::sync::Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -462,12 +472,16 @@ async fn static_frontend_is_served_with_spa_fallback() {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
 
@@ -574,6 +588,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = std::sync::Arc::new(
+        lanrurugi_storage::activity_dedup::ActivityDedupGate::new(redis.config.clone()),
+    );
     let import_snapshots = std::sync::Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -621,12 +638,16 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
 
@@ -793,6 +814,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = std::sync::Arc::new(
+        lanrurugi_storage::activity_dedup::ActivityDedupGate::new(redis.config.clone()),
+    );
     let import_snapshots = std::sync::Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -872,12 +896,16 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
     let app = lanrurugi_server::app::build_app(state, None, None).layer(
@@ -964,6 +992,9 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
     let activity = std::sync::Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = std::sync::Arc::new(
+        lanrurugi_storage::activity_dedup::ActivityDedupGate::new(redis.config.clone()),
+    );
     let import_snapshots = std::sync::Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -1066,12 +1097,16 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
     let app = lanrurugi_server::app::build_app(state, None, None).layer(

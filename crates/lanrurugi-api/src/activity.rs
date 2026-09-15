@@ -49,6 +49,7 @@ fn system_actor(subsystem: &str) -> Actor {
     let display_name = match subsystem {
         "scanner" => "Scanner (File Watcher)",
         "metadata_plugin" => "Metadata Plugin (auto)",
+        "translation" => "Translation Pipeline (auto)",
         _ => subsystem,
     };
     Actor {
@@ -116,6 +117,13 @@ pub async fn record_manual(
 ) -> Option<String> {
     let actor = resolve_actor(state, auth).await;
     let client_ip = auth.and_then(|a| a.client_ip.clone());
+    let device_info = auth.and_then(|a| {
+        crate::device_info::build(
+            a.user_agent.as_deref(),
+            a.client_ip.as_deref(),
+            a.client_reported.clone(),
+        )
+    });
     let id = uuid::Uuid::new_v4().to_string();
     let entry = ActivityEntry {
         id: id.clone(),
@@ -126,6 +134,7 @@ pub async fn record_manual(
         target,
         outcome,
         client_ip,
+        device_info,
         before,
         after,
         caused_by: None,
@@ -170,19 +179,88 @@ pub async fn patch_after(state: &AppState, id: &str, patch: Value) {
     }
 }
 
-/// Records a system-triggered action (`action_types::SCANNER_INGEST`/
+/// Who is attributed with a [`record_archive_ingest`] record. `Manual` mirrors every other
+/// `record_manual` write site (an HTTP request's `AuthContext`, or `None` for the rare
+/// request-less manual caller); `Automatic` mirrors [`record_automatic`] (a fixed subsystem tag
+/// such as `"scanner"`).
+pub enum IngestActor<'a> {
+    Manual(Option<&'a AuthContext>),
+    Automatic(&'a str),
+}
+
+/// Writes one unified "入库" record — see [`action_types::ARCHIVE_INGEST`]'s own docs. `source`
+/// (`"download"` | `"upload"` | `"scanner"`) is merged into `after` so the Activity detail view
+/// can distinguish the three ingestion paths without three near-identical action types. `label`
+/// is the target's human-readable name (a resolved archive title once known, else the
+/// filename/path); `target_id` is the resulting archive id on success and `None` on failure.
+/// Returns the written entry's id (`None` on a write failure) — the scanner consumer uses it as
+/// the `caused_by` link for the `metadata_plugin.autorun` entry it writes right after.
+pub async fn record_archive_ingest(
+    state: &AppState,
+    actor: IngestActor<'_>,
+    source: &str,
+    label: &str,
+    outcome: Outcome,
+    target_id: Option<&str>,
+    after: Value,
+) -> Option<String> {
+    let mut after = match after {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("details".to_string(), other);
+            map
+        }
+    };
+    after.insert("source".to_string(), json!(source));
+    let after = Value::Object(after);
+    let target = ActivityTarget {
+        id: target_id.map(str::to_string),
+        label: Some(label.to_string()),
+        kind: Some("archive".to_string()),
+    };
+    match actor {
+        IngestActor::Manual(auth) => {
+            record_manual(
+                state,
+                auth,
+                lanrurugi_storage::activity::action_types::ARCHIVE_INGEST,
+                target,
+                outcome,
+                None,
+                Some(after),
+            )
+            .await
+        }
+        IngestActor::Automatic(subsystem) => {
+            record_automatic(
+                state,
+                subsystem,
+                lanrurugi_storage::activity::action_types::ARCHIVE_INGEST,
+                target,
+                outcome,
+                Some(after),
+                None,
+            )
+            .await
+        }
+    }
+}
+
+/// Records a system-triggered action (`action_types::ARCHIVE_INGEST`/
 /// `action_types::METADATA_PLUGIN_AUTORUN`, and eventually issue #55's auto-download). `subsystem`
 /// becomes both the `Actor::id` and (via [`system_actor`]) its fixed `display_name` — currently
 /// `"scanner"` or `"metadata_plugin"`. Returns the written entry's own id (`None` on a write
 /// failure) so a *causally dependent* second call — currently only
 /// `metadata_plugin.autorun`'s own `caused_by.source_entry_id` pointing back at the
-/// `scanner.ingest` entry that triggered it — has something to link to.
+/// `archive.ingest` entry that triggered it — has something to link to.
 pub async fn record_automatic(
     state: &AppState,
     subsystem: &str,
     action_type: &str,
     target: ActivityTarget,
     outcome: Outcome,
+    after: Option<Value>,
     caused_by: Option<CausedBy>,
 ) -> Option<String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -195,8 +273,9 @@ pub async fn record_automatic(
         target,
         outcome,
         client_ip: None,
+        device_info: None,
         before: None,
-        after: None,
+        after,
         caused_by,
     };
     let ttl = state.activity.retention_secs().await.unwrap_or(None);
@@ -637,6 +716,198 @@ async fn put_retention(
                 "put_activity_retention",
                 e.to_string(),
             )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// `specs/004-ocr-manga-translation` (FR-023, research.md §17) — Phase 2 translation write sites.
+//
+// Each helper wraps `record_manual` with this feature's own `translation.*` action type, following
+// the same call-a-shared-recording-function-at-the-write-site pattern every existing namespace
+// uses. Recording is best-effort: an activity-log failure must never fail the user's actual
+// operation, which is why these return `()` and swallow the id.
+// ---------------------------------------------------------------------------------------------
+
+/// Backend/target-language selection change (FR-002/003/004).
+///
+/// The recorded `after` deliberately carries no credential material — only whether a provider is
+/// configured, never the key itself (FR-006).
+pub async fn record_translation_settings_change(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    settings: &lanrurugi_translate::settings::TranslationSettings,
+) {
+    record_manual(
+        state,
+        auth,
+        lanrurugi_storage::activity::action_types::TRANSLATION_SETTINGS_UPDATE,
+        ActivityTarget {
+            id: None,
+            label: Some("translation".to_string()),
+            kind: Some("settings".to_string()),
+        },
+        Outcome::Success,
+        None,
+        Some(serde_json::json!({
+            "provider": settings.provider.map(|p| p.as_str()),
+            "targetLanguage": settings.target_language,
+            "lookaheadPages": settings.lookahead_pages,
+        })),
+    )
+    .await;
+}
+
+/// A volume's font pattern reset back to unlocked (FR-010).
+pub async fn record_font_pattern_reset(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    volume_id: &str,
+) {
+    record_manual(
+        state,
+        auth,
+        lanrurugi_storage::activity::action_types::TRANSLATION_FONT_PATTERN_RESET,
+        ActivityTarget {
+            id: Some(volume_id.to_string()),
+            label: Some(volume_id.to_string()),
+            kind: Some("translation_volume".to_string()),
+        },
+        Outcome::Success,
+        None,
+        None,
+    )
+    .await;
+}
+
+/// One real LLM call that translated a page's text (issue #100) — provider/model/token-usage/
+/// estimated-cost telemetry, written once per real provider call (see
+/// `action_types::TRANSLATION_LLM_CALL`'s own docs on why this isn't per-page-view noise).
+///
+/// Cost estimation is best-effort: `lanrurugi_translate::pricing::get` degrades to `Err` if no
+/// price table (fresh or last-known-good) exists at all for this provider — the call is still
+/// recorded either way, just with `after.estimated_cost_usd: null` rather than losing the token
+/// counts over a pricing-side-channel failure.
+pub async fn record_llm_call(
+    state: &AppState,
+    archive_id: &str,
+    page: u32,
+    target_language: &str,
+    usage: &lanrurugi_translate::UsageInfo,
+) {
+    let cost_usd = match lanrurugi_translate::pricing::get(&state.redis.config, &usage.provider_id)
+        .await
+    {
+        Ok(pricing) => {
+            let model_pricing = usage.model.as_deref().and_then(|m| pricing.model(m));
+            if model_pricing.is_none() {
+                tracing::warn!(
+                    provider = %usage.provider_id,
+                    model = ?usage.model,
+                    known_models = ?pricing.models.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
+                    "llm call activity: price table has no entry for this model, recording token usage without a cost estimate"
+                );
+            }
+            model_pricing.map(|model_pricing| {
+                lanrurugi_translate::estimate_cost_usd(
+                    model_pricing,
+                    chrono::Utc::now(),
+                    usage.prompt_tokens,
+                    usage.cached_prompt_tokens,
+                    usage.cache_creation_tokens,
+                    usage.completion_tokens,
+                )
+            })
+        }
+        Err(e) => {
+            tracing::warn!(provider = %usage.provider_id, error = %e, "llm call activity: no price table available, recording token usage without a cost estimate");
+            None
+        }
+    };
+
+    record_automatic(
+        state,
+        "translation",
+        lanrurugi_storage::activity::action_types::TRANSLATION_LLM_CALL,
+        ActivityTarget {
+            id: Some(archive_id.to_string()),
+            label: Some(format!("{archive_id} p{page}")),
+            kind: Some("archive".to_string()),
+        },
+        Outcome::Success,
+        Some(serde_json::json!({
+            "provider": usage.provider_id,
+            "model": usage.model,
+            "page": page,
+            "targetLanguage": target_language,
+            "promptTokens": usage.prompt_tokens,
+            "cachedPromptTokens": usage.cached_prompt_tokens,
+            "cacheCreationTokens": usage.cache_creation_tokens,
+            "completionTokens": usage.completion_tokens,
+            "totalTokens": usage.total_tokens,
+            "providerLatencyMs": usage.provider_latency_ms,
+            "estimatedCostUsd": cost_usd,
+        })),
+        None,
+    )
+    .await;
+}
+
+/// Who is attributed with a [`record_glossary_change`] record — same reasoning as
+/// [`IngestActor`]: `Manual` for a real admin edit/delete through the glossary UI (an HTTP
+/// request's `AuthContext`), `Automatic` for a term captured by the translation pipeline itself
+/// (no request behind it at all, not a human editing anything).
+pub enum GlossaryActor<'a> {
+    Manual(Option<&'a AuthContext>),
+    Automatic(&'a str),
+}
+
+/// A glossary entry captured automatically, edited, or deleted (FR-007a/d).
+///
+/// One helper for all three because they differ only in action type and payload — three
+/// near-identical wrappers would be exactly the duplication the constitution's shared-helper rule
+/// exists to prevent.
+pub async fn record_glossary_change(
+    state: &AppState,
+    actor: GlossaryActor<'_>,
+    action_type: &str,
+    volume_id: &str,
+    source_term: &str,
+    translation: Option<&str>,
+) {
+    let target = ActivityTarget {
+        id: Some(volume_id.to_string()),
+        label: Some(format!("{volume_id}: {source_term}")),
+        kind: Some("translation_volume".to_string()),
+    };
+    let after = Some(serde_json::json!({
+        "sourceTerm": source_term,
+        "translation": translation,
+    }));
+    match actor {
+        GlossaryActor::Manual(auth) => {
+            record_manual(
+                state,
+                auth,
+                action_type,
+                target,
+                Outcome::Success,
+                None,
+                after,
+            )
+            .await;
+        }
+        GlossaryActor::Automatic(subsystem) => {
+            record_automatic(
+                state,
+                subsystem,
+                action_type,
+                target,
+                Outcome::Success,
+                after,
+                None,
+            )
+            .await;
         }
     }
 }

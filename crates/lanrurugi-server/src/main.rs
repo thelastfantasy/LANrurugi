@@ -319,6 +319,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let activity = Arc::new(lanrurugi_storage::activity::ActivityRepository::new(
         redis.config.clone(),
     ));
+    let activity_dedup = Arc::new(lanrurugi_storage::activity_dedup::ActivityDedupGate::new(
+        redis.config.clone(),
+    ));
     let import_snapshots = Arc::new(
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
@@ -342,7 +345,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // The channel's sender lives on `AppState` itself (`new_archive_tx`) so every other call site
     // that starts/restarts the watcher or a full scan (`shinobu.rs`, `database.rs::rebuild_index`)
     // can hand this same long-lived consumer a clone, instead of each spawning its own.
-    let (new_archive_tx, mut new_archive_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (new_archive_tx, mut new_archive_rx) =
+        tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
     // Reader recommendation engine: the model downloads in the background (ETag-cached, see
     // `lanrurugi_recommend::model_download`) and `install_embedder` flips the service ready once
     // loaded; until then the recommendations endpoint returns 503 `model_not_ready`. The models
@@ -425,12 +429,16 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
+        translation_runtime: Default::default(),
+        translation_scheduler: Default::default(),
+        translation_telemetry: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
         activity,
+        activity_dedup,
         import_snapshots,
     };
 
@@ -605,50 +613,96 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     {
         let state = state.clone();
         tokio::spawn(async move {
-            while let Some(id) = new_archive_rx.recv().await {
-                let label = state
-                    .repos
-                    .archives
-                    .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|a| a.title);
-                let target = lanrurugi_storage::activity::ActivityTarget {
-                    id: Some(id.clone()),
-                    label: label.clone(),
-                    kind: Some("archive".to_string()),
-                };
-                let scanner_entry_id = lanrurugi_api::activity::record_automatic(
-                    &state,
-                    "scanner",
-                    lanrurugi_storage::activity::action_types::SCANNER_INGEST,
-                    target.clone(),
-                    lanrurugi_storage::activity::Outcome::Success,
-                    None,
-                )
-                .await;
+            while let Some(event) = new_archive_rx.recv().await {
+                match event {
+                    lanrurugi_scanner::events::IngestEvent::Catalogued { id } => {
+                        // Fetched once for both the activity target's label and the `after`
+                        // payload's filename/path — the consumer previously only needed the title.
+                        let archive = state
+                            .repos
+                            .archives
+                            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+                            .await
+                            .ok()
+                            .flatten();
+                        let label = archive
+                            .as_ref()
+                            .map(|a| a.title.clone())
+                            .filter(|title| !title.is_empty())
+                            .unwrap_or_else(|| id.clone());
+                        let filename = archive
+                            .as_ref()
+                            .and_then(|a| std::path::Path::new(&a.file).file_name())
+                            .map(|name| name.to_string_lossy().to_string());
+                        let target = lanrurugi_storage::activity::ActivityTarget {
+                            id: Some(id.clone()),
+                            label: Some(label.clone()),
+                            kind: Some("archive".to_string()),
+                        };
+                        // The unified `archive.ingest` record (source "scanner"), with
+                        // `metadata_plugin.autorun` below linking back to it causally.
+                        let ingest_entry_id = lanrurugi_api::activity::record_archive_ingest(
+                            &state,
+                            lanrurugi_api::activity::IngestActor::Automatic("scanner"),
+                            "scanner",
+                            &label,
+                            lanrurugi_storage::activity::Outcome::Success,
+                            Some(&id),
+                            serde_json::json!({
+                                "archive_id": id,
+                                "is_new": true,
+                                "filename": filename,
+                                "path": archive.as_ref().map(|a| a.file.clone()),
+                            }),
+                        )
+                        .await;
 
-                // Recommendation-cache precompute for the final, plugin-enriched title happens
-                // inside this call itself (once, after every enabled plugin has run) — see its
-                // own doc comment.
-                lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id).await;
+                        // Recommendation-cache precompute for the final, plugin-enriched title
+                        // happens inside this call itself (once, after every enabled plugin has
+                        // run) — see its own doc comment.
+                        lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(
+                            &state, &id,
+                        )
+                        .await;
 
-                lanrurugi_api::archive_split::maybe_auto_analyze(state.clone(), id.clone()).await;
+                        lanrurugi_api::archive_split::maybe_auto_analyze(state.clone(), id.clone())
+                            .await;
 
-                lanrurugi_api::activity::record_automatic(
-                    &state,
-                    "metadata_plugin",
-                    lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
-                    target,
-                    lanrurugi_storage::activity::Outcome::Success,
-                    Some(lanrurugi_storage::activity::CausedBy {
-                        reason: "scanner_ingest".to_string(),
-                        source_entry_id: scanner_entry_id,
-                        description: "Ran automatically after scanner ingestion".to_string(),
-                    }),
-                )
-                .await;
+                        lanrurugi_api::activity::record_automatic(
+                            &state,
+                            "metadata_plugin",
+                            lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
+                            target,
+                            lanrurugi_storage::activity::Outcome::Success,
+                            None,
+                            Some(lanrurugi_storage::activity::CausedBy {
+                                reason: "archive_ingest".to_string(),
+                                source_entry_id: ingest_entry_id,
+                                description: "Ran automatically after scanner ingestion"
+                                    .to_string(),
+                            }),
+                        )
+                        .await;
+                    }
+                    lanrurugi_scanner::events::IngestEvent::Failed { path, reason } => {
+                        let label = path
+                            .as_deref()
+                            .and_then(|p| std::path::Path::new(p).file_name())
+                            .map(|name| name.to_string_lossy().to_string())
+                            .or_else(|| path.clone())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        lanrurugi_api::activity::record_archive_ingest(
+                            &state,
+                            lanrurugi_api::activity::IngestActor::Automatic("scanner"),
+                            "scanner",
+                            &label,
+                            lanrurugi_storage::activity::Outcome::Failure { reason },
+                            None,
+                            serde_json::json!({ "path": path }),
+                        )
+                        .await;
+                    }
+                }
             }
         });
     }
@@ -694,6 +748,26 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 lanrurugi_api::download_manager::ingest::sweep_resize_cache_size(&state).await;
+            }
+        });
+    }
+
+    // Every 5 minutes — drop Phase 2 translation look-ahead sessions with nothing left in flight
+    // (`specs/004-ocr-manga-translation` T039/FR-015). The scheduler itself is driven by the
+    // reader's own page requests (`translation_pipeline::TranslationScheduler::on_reader_at`,
+    // called from `GET /archives/{id}/page/{page}/translation` on every cache miss) rather than by
+    // a periodic scan — a look-ahead window only means anything relative to where a reader
+    // actually is. This task exists purely so an abandoned session's state doesn't accumulate for
+    // the process's whole uptime. A shorter interval than the other sweeps because a session entry
+    // is tiny and readers open archives far more often than downloads go stale.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+            loop {
+                interval.tick().await;
+                lanrurugi_api::translation_pipeline::sweep_finished_translation_sessions(&state)
+                    .await;
             }
         });
     }

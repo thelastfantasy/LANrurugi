@@ -23,6 +23,10 @@ const ACTION_TYPE_NAMESPACE_ORDER = [
   "scanner",
   "metadata_plugin",
   "auto_download",
+  // `specs/004-ocr-manga-translation` (FR-023): glossary capture/edit/delete, font-pattern reset,
+  // and backend/target-language changes. Placed last as an optional feature's own namespace —
+  // a user who never enables translation never sees these at all.
+  "translation",
 ]
 
 /** Sort comparator for a list of `action_type` strings — namespace order first
@@ -151,6 +155,12 @@ export function targetLink(
       if (typeof type === "string" && PLUGIN_TYPE_TO_SECTION.has(type)) return routes.pluginSection(type)
       return routes.pluginSettings()
     }
+    // A volume-scoped translation target (glossary entry, font pattern). The id is a volume scope
+    // — a Tankoubon id when the archive is grouped, else the archive's own id — so it can't be
+    // linked to a single canonical page; the translation settings section is where every one of
+    // these is actually managed.
+    case "translation_volume":
+      return routes.settings("translation")
     default:
       return undefined
   }

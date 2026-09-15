@@ -12,9 +12,13 @@ pub mod categories;
 pub mod common;
 pub mod cors;
 pub mod database;
+pub mod device_info;
 pub mod download_manager;
 pub mod download_queue;
 pub mod duplicates;
+pub mod font_pattern;
+pub mod geoip;
+pub mod gpu_worker_client;
 pub mod health;
 pub mod jobs;
 pub mod llm_prompts;
@@ -38,6 +42,10 @@ pub mod state;
 pub mod tag_rules;
 pub mod tankoubon_grouping;
 pub mod tankoubons;
+pub mod terminology_glossary;
+pub mod translation;
+pub mod translation_pipeline;
+pub mod translation_settings;
 pub mod upload;
 pub mod version;
 
@@ -79,4 +87,9 @@ pub fn router() -> Router<AppState> {
         .merge(scripts::router())
         .merge(logs::router())
         .merge(recommend::router())
+        // `specs/004-ocr-manga-translation` — all new, additive paths (Principle II).
+        .merge(translation::router())
+        .merge(translation_settings::router())
+        .merge(terminology_glossary::router())
+        .merge(font_pattern::router())
 }

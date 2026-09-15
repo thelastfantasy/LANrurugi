@@ -96,6 +96,14 @@ run = "npx lefthook run pre-push"
 description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo build --workspace"
 
+[tasks.debug-erase-page]
+description = "Run erase_page against a real full page image with lanrurugi-ocr's own detected regions, for manual before/after inspection — usage: mise run debug-erase-page -- <page.jpg> <out.png> (LANRURUGI_INPAINT_MODEL_DIR must be set; PAGE_102_REGIONS in the example itself is currently hardcoded to one real captured page's regions, see that file's own doc comment)"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example debug_erase_page -- \"$@\""
+
+[tasks.debug-stroke-mask]
+description = "Visualise local_background_stroke_mask's real pixel classification against a real crop (stroke pixels painted red) — usage: mise run debug-stroke-mask -- <crop.png> <out.png>"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example debug_stroke_mask -- \"$@\""
+
 [tasks.convert-plugins]
 description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
 run = "scripts/convert-plugins.sh \"$@\""
@@ -139,11 +147,14 @@ pnpm -C apps/frontend run test:e2e
 # Deliberately separate from the production `compose.yaml`/`Dockerfile` (never touched by these).
 [tasks.dev-up]
 description = "Build (if needed) and start the local full-stack dev container — frontend hot-reloads, backend/Redis are the same as production"
-run = "podman compose -f compose.dev.yaml up -d"
+# See scripts/dev-container-run.sh's own header for why this isn't `podman compose up -d`
+# (GPU device passthrough, needed since issue #103's CUDA EP integration, doesn't survive this
+# host's `docker-compose` fallback binary).
+run = "scripts/dev-container-run.sh"
 
 [tasks.dev-down]
 description = "Stop the local full-stack dev container"
-run = "podman compose -f compose.dev.yaml stop"
+run = "podman stop lrr-dev"
 
 [tasks.dev-rebuild]
 description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
@@ -175,22 +186,23 @@ podman image prune -f
 
 [tasks.dev-rebuild-auto]
 description = "One-shot backend dev rebuild: rebuild image, replace the running dev container, and prune dangling images automatically"
-# Same direct `podman build` rationale as `dev-rebuild` (not `podman compose build`). Unlike
-# `dev-rebuild`, this task does not prune before replacing the container: the old image is still
-# referenced by the existing `lrr-dev` container, so `podman image prune -f` would fail with
-# "image is in use by a container". The safe one-shot order is therefore:
-#   build -> remove old container -> prune dangling images -> start new container.
+# Same direct `podman build` rationale as `dev-rebuild` (not `podman compose build`), and same
+# direct `podman run` rationale as `dev-up` (not `podman compose up` — see
+# scripts/dev-container-run.sh's own header). Unlike `dev-rebuild`, this task does not prune before
+# replacing the container: the old image is still referenced by the existing `lrr-dev` container,
+# so `podman image prune -f` would fail with "image is in use by a container". The safe one-shot
+# order is therefore: build -> remove old container -> prune dangling images -> start new container.
 run = """
 set -euo pipefail
 # 1. Rebuild the dev image (direct podman build so Dockerfile.dev cache mounts work).
 podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
 # 2. Remove the existing dev container (not just stop it) so the old image reference is released.
-podman compose -f compose.dev.yaml down
+podman rm -f lrr-dev
 # 3. Now the old image is no longer referenced by a container; clean dangling images.
 #    Scoped to dangling images only, never `system prune` (would sweep named volumes/build caches).
 podman image prune -f
 # 4. Start the dev environment from the freshly built image.
-podman compose -f compose.dev.yaml up -d
+scripts/dev-container-run.sh
 """
 
 [tasks.dev-logs]

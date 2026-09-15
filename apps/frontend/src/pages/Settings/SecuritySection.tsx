@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next"
 
+import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
@@ -63,26 +64,22 @@ export function SecuritySection({
             {t("settings.theOneAlreadyStoredWill")}
           </Row>
           <Row label={t("settings.loginSessionLifetime")}>
-            <input
-              className="stdinput"
+            <NumberInput
               style={{ width: 80 }}
-              type="number"
               min={1}
               value={Math.round(accessTokenLifetimeSecs / SECS_PER_HOUR)}
-              onChange={(e) => setAccessTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_HOUR)}
+              onValueChange={(v) => setAccessTokenLifetimeSecs(Math.max(1, v) * SECS_PER_HOUR)}
             />{" "}
             {t("settings.hours")}
             <br />
             {t("settings.howLongYouStayLogged")}
           </Row>
           <Row label={t("settings.sessionRefreshWindow")}>
-            <input
-              className="stdinput"
+            <NumberInput
               style={{ width: 80 }}
-              type="number"
               min={1}
               value={Math.round(refreshTokenLifetimeSecs / SECS_PER_DAY)}
-              onChange={(e) => setRefreshTokenLifetimeSecs(Math.max(1, Number(e.target.value)) * SECS_PER_DAY)}
+              onValueChange={(v) => setRefreshTokenLifetimeSecs(Math.max(1, v) * SECS_PER_DAY)}
             />{" "}
             {t("settings.days")}
             <br />

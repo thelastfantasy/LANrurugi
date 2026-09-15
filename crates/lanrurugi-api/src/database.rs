@@ -155,7 +155,7 @@ async fn stats(
 }
 
 async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Response> {
-    lanrurugi_backup::build::build(
+    let mut doc = lanrurugi_backup::build::build(
         &state.repos.archives,
         &state.repos.categories,
         &state.repos.groupings,
@@ -169,7 +169,24 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
             "serve_backup",
             e.to_string(),
         )
-    })
+    })?;
+
+    add_translation_state(state, &mut doc).await;
+    Ok(doc)
+}
+
+/// Adds Phase 2 translation state to a backup document (FR-022, research.md §17).
+///
+/// Shared by both the synchronous and queued backup paths so the two can't drift on what a backup
+/// actually contains — the near-duplicate-logic case the constitution's shared-helper rule names.
+async fn add_translation_state(state: &AppState, doc: &mut BackupDocument) {
+    lanrurugi_backup::build::collect_translation_state(
+        doc,
+        &lanrurugi_translate::glossary::GlossaryRepository::new(state.redis.config.clone()),
+        &lanrurugi_fontcache::FontPatternRepository::new(state.redis.config.clone()),
+        &lanrurugi_translate::regions::RegionRepository::new(state.redis.config.clone()),
+    )
+    .await;
 }
 
 async fn get_backup(State(state): State<AppState>) -> Response {
@@ -185,6 +202,7 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
     let repos = state.repos.clone();
     let bookmarks = state.bookmarks.clone();
     let job_id_for_task = job_id.clone();
+    let state_for_task = state.clone();
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
@@ -197,7 +215,8 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
         )
         .await
         {
-            Ok(doc) => {
+            Ok(mut doc) => {
+                add_translation_state(&state_for_task, &mut doc).await;
                 let value = serde_json::to_value(doc).unwrap_or(serde_json::Value::Null);
                 jobs.finish(&job_id_for_task, value).await;
             }
@@ -294,6 +313,23 @@ async fn queue_restore(
         match result {
             Ok(summary) => {
                 let _ = lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await;
+
+                // Phase 2 translation state (FR-022). A backup taken before this feature existed
+                // simply carries none, restoring zero of each rather than failing.
+                let translation = lanrurugi_backup::restore::restore_translation_state(
+                    &doc,
+                    &lanrurugi_translate::glossary::GlossaryRepository::new(
+                        state_for_task.redis.config.clone(),
+                    ),
+                    &lanrurugi_fontcache::FontPatternRepository::new(
+                        state_for_task.redis.config.clone(),
+                    ),
+                    &lanrurugi_translate::regions::RegionRepository::new(
+                        state_for_task.redis.config.clone(),
+                    ),
+                )
+                .await;
+
                 jobs.finish(
                     &job_id_for_task,
                     json!({
@@ -303,6 +339,9 @@ async fn queue_restore(
                         "tankoubons_restored": summary.tankoubons_restored,
                         "stamps_restored": summary.stamps_restored,
                         "bookmarks_restored": summary.bookmarks_restored,
+                        "glossaries_restored": translation.glossaries_restored,
+                        "font_patterns_restored": translation.font_patterns_restored,
+                        "text_region_sets_restored": translation.text_region_sets_restored,
                     }),
                 )
                 .await;

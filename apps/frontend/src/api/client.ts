@@ -1,6 +1,7 @@
 import axios from "axios"
 
 import { ApiError, ValidationError } from "./apiError"
+import { collectClientReportedInfo } from "./clientReportedInfo"
 import { queryClient } from "./queryClient"
 import type { JobStatus } from "./types"
 
@@ -52,7 +53,8 @@ async function tryRefreshOnce(): Promise<RefreshOutcome> {
     const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
     if (lastRefreshAt > startedAt) return "ok"
 
-    return fetch("/api/token/refresh", { method: "POST" })
+    const body = new URLSearchParams(await collectClientReportedInfo())
+    return fetch("/api/token/refresh", { method: "POST", body })
       .then((r): RefreshOutcome => {
         if (r.ok) localStorage.setItem(LAST_REFRESH_AT_KEY, String(Date.now()))
         return r.ok ? "ok" : "rejected"

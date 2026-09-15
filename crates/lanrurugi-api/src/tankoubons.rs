@@ -1168,6 +1168,16 @@ async fn delete_tankoubon(
     let old_name = old.as_ref().map(|g| g.name.clone()).unwrap_or_default();
     match state.repos.groupings.delete(&id).await {
         Ok(()) => {
+            // Push this Tankoubon's translation switch down onto each former member's own key
+            // before it's gone — otherwise every member would silently revert to "off" the instant
+            // it loses the collection it inherited its setting from.
+            let scope_repo = lanrurugi_translate::settings::TranslationScopeRepository::new(
+                state.redis.config.clone(),
+            );
+            if let Err(e) = scope_repo.inherit_from_tankoubon(&id, &old_archives).await {
+                tracing::warn!(%id, error = %e, "failed to push translation scope down to former tankoubon members");
+            }
+
             let others = other_groupings(&state, &id).await;
             let (_, left) = tank_membership_delta(&old_archives, &[], &others);
             if let Err(e) =

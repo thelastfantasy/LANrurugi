@@ -67,6 +67,55 @@ pub struct BackupBookmark {
     pub name: Option<String>,
 }
 
+// ---------------------------------------------------------------------------------------------
+// `specs/004-ocr-manga-translation` (FR-022, research.md §17) — Phase 2 translation entities.
+//
+// Included because they represent real, hard-to-reproduce user investment: a Terminology Glossary
+// may hold dozens of hand-corrected character names, and translated regions represent LLM calls
+// that were already paid for. Losing either on a restore is exactly the silent data loss
+// constitution Principle I treats as a correctness bug.
+//
+// Deliberately NOT included: the rendered-page cache (re-derivable from the regions below by
+// re-running compositing alone — research.md §16) and Usage Budget counters (a point-in-time
+// consumption figure, not durable user-authored state — the same reasoning that keeps in-flight
+// job status out of Phase 1's own backup).
+//
+// Every field is a plain `String`, not a domain newtype: these are external wire-format DTOs, which
+// the constitution's newtype rule explicitly exempts.
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackupTerminologyGlossary {
+    pub volume_id: String,
+    /// source term → every (archive, chapter)-scoped translation candidate for it (issue #105) —
+    /// mirrors `TerminologyGlossary::entries`'s own shape exactly, not re-flattened, since a
+    /// backup/restore round trip must not silently lose the disambiguation a cross-archive/chapter
+    /// name collision depends on.
+    pub entries:
+        std::collections::BTreeMap<String, Vec<lanrurugi_translate::glossary::GlossaryEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackupVolumeFontPattern {
+    pub volume_id: String,
+    pub is_locked: bool,
+    pub vote_pool: std::collections::BTreeMap<String, u32>,
+    pub golden_set: Vec<String>,
+    pub meltdown_tally: std::collections::BTreeMap<String, u32>,
+}
+
+/// Translated regions for one (archive, page, language, provider) combination.
+///
+/// Stored under its original Redis key so a restore puts it back exactly where it was, without this
+/// DTO needing to re-derive the key from its four components.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackupTextRegions {
+    pub key: String,
+    /// Serialized `DetectedTextRegion` records, kept opaque here so this crate doesn't need a
+    /// dependency on `lanrurugi-ocr` purely to re-declare a shape it only passes through.
+    pub regions: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupDocument {
     pub archives: Vec<BackupArchive>,
@@ -79,6 +128,15 @@ pub struct BackupDocument {
     /// old backup simply restores with zero bookmarks, not a hard parse error).
     #[serde(default)]
     pub bookmarks: Vec<BackupBookmark>,
+    /// Phase 2 translation state (FR-022). `#[serde(default)]` for the same reason `bookmarks`
+    /// carries it: a backup exported before this feature existed must still restore cleanly, with
+    /// simply no translation data, rather than failing to parse.
+    #[serde(default)]
+    pub terminology_glossaries: Vec<BackupTerminologyGlossary>,
+    #[serde(default)]
+    pub volume_font_patterns: Vec<BackupVolumeFontPattern>,
+    #[serde(default)]
+    pub text_regions: Vec<BackupTextRegions>,
 }
 
 pub async fn build(
@@ -121,7 +179,77 @@ pub async fn build(
         tankoubons: grouping_list.into_iter().map(to_backup_tankoubon).collect(),
         stamps: stamp_docs,
         bookmarks: bookmark_list.into_iter().map(to_backup_bookmark).collect(),
+        // Populated separately by `collect_translation_state` — see `build`'s own doc comment.
+        terminology_glossaries: Vec::new(),
+        volume_font_patterns: Vec::new(),
+        text_regions: Vec::new(),
     })
+}
+
+/// Adds Phase 2 translation state to an already-built document (FR-022, research.md §17).
+///
+/// A separate function rather than extra parameters on [`build`] so that this feature's repositories
+/// aren't a hard requirement of taking a backup — an instance that has never enabled translation
+/// simply produces empty vectors here, and `build`'s existing callers keep working unchanged.
+///
+/// Failures are logged and skipped rather than aborting: a malformed translation record must not
+/// cost the user the rest of an otherwise-good library backup.
+pub async fn collect_translation_state(
+    doc: &mut BackupDocument,
+    glossaries: &lanrurugi_translate::glossary::GlossaryRepository,
+    font_patterns: &lanrurugi_fontcache::FontPatternRepository,
+    regions: &lanrurugi_translate::regions::RegionRepository,
+) {
+    match glossaries.list_all().await {
+        Ok(list) => {
+            doc.terminology_glossaries = list
+                .into_iter()
+                .map(|g| BackupTerminologyGlossary {
+                    volume_id: g.volume_id,
+                    entries: g.entries,
+                })
+                .collect()
+        }
+        Err(e) => tracing::warn!(error = %e, "skipping terminology glossaries in backup"),
+    }
+
+    match font_patterns.list_all().await {
+        Ok(list) => {
+            doc.volume_font_patterns = list
+                .into_iter()
+                .map(|p| BackupVolumeFontPattern {
+                    volume_id: p.volume_id,
+                    is_locked: p.is_locked,
+                    vote_pool: p
+                        .vote_pool
+                        .into_iter()
+                        .map(|(font, count)| (font.0, count))
+                        .collect(),
+                    golden_set: p.golden_set.into_iter().map(|f| f.0).collect(),
+                    meltdown_tally: p
+                        .meltdown_tally
+                        .into_iter()
+                        .map(|(font, count)| (font.0, count))
+                        .collect(),
+                })
+                .collect()
+        }
+        Err(e) => tracing::warn!(error = %e, "skipping volume font patterns in backup"),
+    }
+
+    match regions.list_all_translated().await {
+        Ok(list) => {
+            doc.text_regions = list
+                .into_iter()
+                .filter_map(|(key, regions)| {
+                    serde_json::to_value(regions)
+                        .ok()
+                        .map(|regions| BackupTextRegions { key, regions })
+                })
+                .collect()
+        }
+        Err(e) => tracing::warn!(error = %e, "skipping translated text regions in backup"),
+    }
 }
 
 pub(crate) fn to_backup_bookmark(b: Bookmark) -> BackupBookmark {

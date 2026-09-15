@@ -248,7 +248,7 @@ export function SettingsOverlay({
               >
                 <input
                   id="preload-input"
-                  className="stdinput"
+                  className="stdinput number-input-no-native-spinner"
                   style={{
                     width: "4em",
                     height: CONTROL_HEIGHT,
@@ -410,7 +410,7 @@ export function SettingsOverlay({
             </select>
             <input
               id="j-scroll-amount-input"
-              className="stdinput"
+              className="stdinput number-input-no-native-spinner"
               type="number"
               style={{
                 width: "6em",

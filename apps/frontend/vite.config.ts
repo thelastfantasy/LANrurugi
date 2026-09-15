@@ -14,13 +14,28 @@ import tailwindcss from '@tailwindcss/vite'
  * `X-Forwarded-Host`/`X-Forwarded-Proto` from the *inbound* request (which still has the real
  * values at this point) — `resolve_base_url` already prefers those over the bare `Host` header,
  * matching this app's own documented reverse-proxy deployment convention, so dev mode now takes
- * exactly the same code path a real production reverse proxy would. */
+ * exactly the same code path a real production reverse proxy would.
+ *
+ * Also sets `X-Forwarded-For` to the real inbound socket's remote address — `http-proxy` opens a
+ * brand new outbound TCP connection to the Rust backend from the Node process itself, so without
+ * this the backend's own `peer_addr` (what `lanrurugi_api::procedure::client_ip` falls back to
+ * when this header is absent) is always `127.0.0.1`, no matter what LAN/remote address the actual
+ * browser connected from — confirmed live: a phone on the same LAN opening `192.168.x.x:3000`
+ * showed every one of its own activity-log entries with IP `127.0.0.1`. Appends onto any existing
+ * value (multi-hop convention, same as a real reverse proxy would) rather than overwriting, though
+ * in this single-hop dev setup there's never already one present. */
 function preserveOriginalHostHeader(): NonNullable<ProxyOptions['configure']> {
   return (proxy) => {
     proxy.on('proxyReq', (proxyReq, req) => {
       const host = req.headers.host
       if (host) proxyReq.setHeader('X-Forwarded-Host', host)
       proxyReq.setHeader('X-Forwarded-Proto', 'http')
+      const remoteAddr = req.socket.remoteAddress
+      if (remoteAddr) {
+        const existing = req.headers['x-forwarded-for']
+        const forwardedFor = existing ? `${existing}, ${remoteAddr}` : remoteAddr
+        proxyReq.setHeader('X-Forwarded-For', forwardedFor)
+      }
     })
   }
 }

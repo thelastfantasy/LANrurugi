@@ -38,6 +38,8 @@ use lanrurugi_storage::repository::ArchiveRepository;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
+use crate::events::IngestEvent;
+
 use crate::pipeline::{ingest_file, IngestOutcome, FILEMAP_KEY};
 use crate::watcher::is_watched_archive_path;
 
@@ -80,9 +82,10 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `new_archive_tx`, when given, receives the id of every genuinely brand-new archive this scan
-/// catalogues — same semantics as `pipeline::run`'s own parameter of the same name (only
-/// `Catalogued`, never `Rekeyed`/`Unchanged`/`Rejected`; see that function's own docs for why).
+/// `new_archive_tx`, when given, receives one [`IngestEvent`] per ingest attempt — same semantics
+/// as `pipeline::run`'s own parameter of the same name: `Catalogued` for a genuinely brand-new
+/// archive (never `Rekeyed`/`Unchanged`/`Rejected`; see that function's own docs for why), and
+/// `Failed` for a real error/timeout (or a panicked task, where the path is unknown).
 #[allow(clippy::too_many_arguments)]
 pub async fn full_scan(
     library_path: &Path,
@@ -92,7 +95,7 @@ pub async fn full_scan(
     thumb_dir: &Path,
     jobs: &JobRegistry,
     job_id: &str,
-    new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<IngestEvent>>,
 ) -> ScanSummary {
     let mut paths = Vec::new();
     walk(library_path, &mut paths);
@@ -166,6 +169,12 @@ pub async fn full_scan(
             Err(join_err) => {
                 tracing::warn!(error = %join_err, "full_scan: an ingest task panicked or was cancelled");
                 summary.errors += 1;
+                if let Some(tx) = &new_archive_tx {
+                    let _ = tx.send(IngestEvent::Failed {
+                        path: None,
+                        reason: format!("ingest task panicked or was cancelled: {join_err}"),
+                    });
+                }
                 continue;
             }
         };
@@ -173,7 +182,7 @@ pub async fn full_scan(
             Ok(IngestOutcome::Catalogued { id }) => {
                 summary.catalogued += 1;
                 if let Some(tx) = &new_archive_tx {
-                    let _ = tx.send(id.to_string());
+                    let _ = tx.send(IngestEvent::Catalogued { id: id.to_string() });
                 }
             }
             Ok(IngestOutcome::Rekeyed { .. }) => summary.rekeyed += 1,
@@ -188,6 +197,12 @@ pub async fn full_scan(
             Err(e) => {
                 tracing::warn!(?path, error = %e, "full_scan: failed to ingest file");
                 summary.errors += 1;
+                if let Some(tx) = &new_archive_tx {
+                    let _ = tx.send(IngestEvent::Failed {
+                        path: Some(path.to_string_lossy().to_string()),
+                        reason: e.to_string(),
+                    });
+                }
             }
         }
     }

@@ -36,6 +36,21 @@ function readUrl(value: unknown): string | undefined {
 
 const DOWNLOAD_QUEUE_URL_ACTION_TYPES = new Set(["download_queue.add", "download_queue.start"])
 
+/** `download_queue.add`/`download_queue.start`'s own plugin identity — the human-readable
+ * `after.plugin.name` when the record carries it (always for an add; patched onto a start once
+ * `start_download` has resolved the plugin), falling back to the raw namespace so even a
+ * mid-download entry still says which plugin will handle it. */
+function readPluginLabel(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const record = value as { plugin?: unknown; plugin_namespace?: unknown }
+  if (record.plugin && typeof record.plugin === "object") {
+    const plugin = record.plugin as { name?: unknown; namespace?: unknown }
+    if (typeof plugin.name === "string" && plugin.name) return plugin.name
+    if (typeof plugin.namespace === "string" && plugin.namespace) return plugin.namespace
+  }
+  return typeof record.plugin_namespace === "string" && record.plugin_namespace ? record.plugin_namespace : undefined
+}
+
 /** `bookmark.add`/`bookmark.remove`'s own `after.page` — which specific page the bookmark was on. */
 function readPage(value: unknown): number | undefined {
   if (value && typeof value === "object" && "page" in value) {
@@ -46,6 +61,71 @@ function readPage(value: unknown): number | undefined {
 }
 
 const BOOKMARK_ACTION_TYPES = new Set(["bookmark.add", "bookmark.remove"])
+
+/** `translation.settings_update`'s own `after.{provider,targetLanguage,lookaheadPages}` — never
+ * the stored credential itself (FR-006), just the non-secret fields worth surfacing. */
+function readTranslationSettingsSummary(
+  t: (key: string, opts?: Record<string, unknown>) => string | null,
+  value: unknown,
+): string | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const a = value as { provider?: unknown; targetLanguage?: unknown; lookaheadPages?: unknown }
+  const parts: string[] = []
+  if (typeof a.provider === "string" && a.provider) parts.push(a.provider)
+  if (typeof a.targetLanguage === "string" && a.targetLanguage) parts.push(a.targetLanguage)
+  if (typeof a.lookaheadPages === "number") {
+    parts.push(t("activity.translationLookaheadPages", { count: a.lookaheadPages }) ?? `预取 ${a.lookaheadPages} 页`)
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined
+}
+
+/** `translation.glossary_capture`/`glossary_edit`'s own `after.{sourceTerm,translation}`. */
+function readGlossaryTranslation(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const translation = (value as { translation?: unknown }).translation
+  return typeof translation === "string" && translation ? translation : undefined
+}
+
+/** `translation.llm_call`'s own `after` (issue #100) — provider/model/page/token-usage/estimated
+ * cost, everything `record_llm_call` (Rust) writes. */
+export interface LlmCallAfter {
+  provider?: string
+  model?: string
+  page?: number
+  targetLanguage?: string
+  promptTokens?: number
+  cachedPromptTokens?: number
+  cacheCreationTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  providerLatencyMs?: number
+  estimatedCostUsd?: number
+}
+
+export function readLlmCallAfter(value: unknown): LlmCallAfter | undefined {
+  if (!value || typeof value !== "object") return undefined
+  return value as LlmCallAfter
+}
+
+/** "deepseek · deepseek-v4-flash · en · 1,240 tokens (860 cached) · $0.0012" — every part is
+ * independently optional since not every provider reports every field (see
+ * `ActivityClientReportedInfo`'s own "not every provider reports the same shape" precedent). */
+function llmCallSummary(t: (key: string, opts?: Record<string, unknown>) => string | null, after: LlmCallAfter): string {
+  const parts: string[] = []
+  if (after.provider) parts.push(after.model ? `${after.provider} · ${after.model}` : after.provider)
+  if (after.targetLanguage) parts.push(after.targetLanguage)
+  if (typeof after.totalTokens === "number") {
+    const cachedSuffix =
+      typeof after.cachedPromptTokens === "number" && after.cachedPromptTokens > 0
+        ? ` (${t("activity.llmCallCachedTokens", { count: after.cachedPromptTokens }) ?? `${after.cachedPromptTokens} 缓存`})`
+        : ""
+    parts.push(`${after.totalTokens.toLocaleString()} tokens${cachedSuffix}`)
+  }
+  if (typeof after.estimatedCostUsd === "number") {
+    parts.push(`$${after.estimatedCostUsd.toFixed(4)}`)
+  }
+  return parts.join(" · ")
+}
 
 /** `archive.rating_update`'s own `before.rating`/`after.rating` — a bare `"rating:X"` tag string
  * or `null` (cleared/absent). */
@@ -155,6 +235,8 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
 
   if (DOWNLOAD_QUEUE_URL_ACTION_TYPES.has(entry.action_type)) {
     const url = readUrl(entry.after)
+    const pluginLabel = readPluginLabel(entry.after)
+    const pluginSuffix = pluginLabel ? <span style={{ opacity: 0.55 }}> · {pluginLabel}</span> : null
     if (url && url !== title) {
       return (
         <>
@@ -162,6 +244,15 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
           <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ opacity: 0.65 }}>
             ({url})
           </a>
+          {pluginSuffix}
+        </>
+      )
+    }
+    if (pluginSuffix) {
+      return (
+        <>
+          <TargetTitle entry={entry} title={title} />
+          {pluginSuffix}
         </>
       )
     }
@@ -214,6 +305,42 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
           <TargetTitle entry={entry} title={title} />
           {" — "}
           {t("bookmarks.pageLabel", { page })}
+        </>
+      )
+    }
+  }
+
+  if (entry.action_type === "translation.settings_update") {
+    const summary = readTranslationSettingsSummary(t, entry.after)
+    if (summary) return <>{summary}</>
+  }
+
+  if (entry.action_type === "translation.llm_call") {
+    const after = readLlmCallAfter(entry.after)
+    if (after) {
+      const pageTitle =
+        typeof after.page === "number" ? t("bookmarks.pageLabel", { page: after.page }) : title
+      return (
+        <>
+          <TargetTitle entry={entry} title={pageTitle ?? title} />
+          {" — "}
+          {llmCallSummary(t, after)}
+        </>
+      )
+    }
+  }
+
+  if (
+    entry.action_type === "translation.glossary_capture" ||
+    entry.action_type === "translation.glossary_edit"
+  ) {
+    const translation = readGlossaryTranslation(entry.after)
+    if (translation) {
+      return (
+        <>
+          <TargetTitle entry={entry} title={title} />
+          {" → "}
+          {translation}
         </>
       )
     }

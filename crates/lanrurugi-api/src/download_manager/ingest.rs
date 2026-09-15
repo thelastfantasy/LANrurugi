@@ -11,11 +11,14 @@ use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_scanner::pipeline::{
     ingest_file_with_policy, DuplicatePolicy, DuplicateReason, IngestOptions, IngestOutcome,
 };
+use lanrurugi_storage::activity::Outcome;
 use lanrurugi_storage::download_queue::PendingFilenameConflict;
 use lanrurugi_storage::keys::CONFIG_KEY;
+use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 
+use crate::auth_context::AuthContext;
 use crate::AppState;
 
 use super::stream::DownloadedFile;
@@ -101,6 +104,65 @@ pub struct IngestedDownload {
     /// `true` if this was a brand-new or re-keyed archive; `false` if the content was already
     /// tracked under an existing ID (the staged file was removed, not moved into the library).
     pub is_new: bool,
+}
+
+/// Wraps one `ingest_downloaded_file` result with the unified `archive.ingest` activity record —
+/// shared by the download pipeline (`plugins::run_managed_downloads`) and the web UI's user upload
+/// (`upload.rs::upload_archive`), both of which funnel through `ingest_downloaded_file` but carry
+/// different actors/context. `source` is `"download"` or `"upload"`; `extra` carries that source's
+/// own fields (plugin/url/queue item, or the upload's category/origin). `PendingRename` is
+/// deliberately not recorded as a failure — the bytes are safely staged awaiting the user's own
+/// overwrite/rename decision, the same "not a genuine failure" distinction `upload.rs` already
+/// draws for its own `archive.upload` record.
+pub(crate) async fn record_ingest_result(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    source: &str,
+    filename: &str,
+    extra: Value,
+    result: Result<IngestedDownload, IngestDownloadError>,
+) -> Result<IngestedDownload, IngestDownloadError> {
+    let mut base = match extra {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("details".to_string(), other);
+            map
+        }
+    };
+    base.insert("filename".to_string(), json!(filename));
+    match &result {
+        Ok(ingested) => {
+            base.insert("archive_id".to_string(), json!(ingested.archive_id));
+            base.insert("is_new".to_string(), json!(ingested.is_new));
+            crate::activity::record_archive_ingest(
+                state,
+                crate::activity::IngestActor::Manual(auth),
+                source,
+                filename,
+                Outcome::Success,
+                Some(&ingested.archive_id),
+                Value::Object(base),
+            )
+            .await;
+        }
+        Err(IngestDownloadError::PendingRename(_)) => {}
+        Err(e) => {
+            crate::activity::record_archive_ingest(
+                state,
+                crate::activity::IngestActor::Manual(auth),
+                source,
+                filename,
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                Value::Object(base),
+            )
+            .await;
+        }
+    }
+    result
 }
 
 /// `overwrite: false` preserves this function's original behavior for a `ContentHash` collision

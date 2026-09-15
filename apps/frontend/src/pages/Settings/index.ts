@@ -13,3 +13,5 @@ export * from "./shared"
 export * from "./TagsThumbnailsSection"
 
 export * from "./WorkersSection"
+
+export * from "./TranslationSection"
