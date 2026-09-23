@@ -176,10 +176,29 @@ mod tests {
     use super::*;
     use lanrurugi_core::entities::{Archive, Category, Grouping};
 
+    /// This module's backfill tests scan *every* category/grouping in the DB, so they must not
+    /// share a Redis logical DB with any concurrently-running test in this binary: `repository.rs`'s
+    /// own category/grouping tests write overlapping archive ids into the very keys
+    /// `backfill_reverse_indexes` re-adds, which surfaced as an intermittent CI failure (one
+    /// test's concurrent membership made another's backfilled `for_archive` count 2 instead of 1).
+    /// DB 0 is left to the crate's other tests, 1..=3 rotate here, 4..=5 are `compare_cache`'s and
+    /// 6..=15 `refresh_tokens::dual_window_tests`'. Flushed first; same convention as that module.
+    const FIRST_TEST_DB: u8 = 1;
+    const TEST_DB_COUNT: u8 = 3;
+    static NEXT_TEST_DB: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
     async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
-        let url = format!("{}/0", base.trim_end_matches('/'));
-        crate::test_support::test_pool_for_url(&url).await
+        let offset =
+            NEXT_TEST_DB.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % TEST_DB_COUNT;
+        let url = format!("{}/{}", base.trim_end_matches('/'), FIRST_TEST_DB + offset);
+        let pool = crate::test_support::test_pool_for_url(&url).await?;
+        let mut conn = pool.get().await.ok()?;
+        let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+            .query_async(&mut conn)
+            .await
+            .ok()?;
+        Some(pool)
     }
 
     #[tokio::test]

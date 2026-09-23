@@ -171,8 +171,26 @@ impl CompareCacheRepository {
 mod tests {
     use super::*;
 
+    /// Both tests write the same global `ORDER_KEY` ZSET, so they can't share a Redis logical DB
+    /// under cargo's default parallel test threads (one's `ZADD`/eviction could evict the other's
+    /// entry mid-assertion). DB 0 is left to the crate's id-keyed tests, 1..=3 to `rebuild`'s,
+    /// 6..=15 to `refresh_tokens`'s; rotate through 4..=5 here, flushed first.
+    const FIRST_TEST_DB: u8 = 4;
+    const TEST_DB_COUNT: u8 = 2;
+    static NEXT_TEST_DB: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
     async fn test_pool() -> Option<Pool> {
-        crate::test_support::test_pool().await
+        let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
+        let offset =
+            NEXT_TEST_DB.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % TEST_DB_COUNT;
+        let url = format!("{}/{}", base.trim_end_matches('/'), FIRST_TEST_DB + offset);
+        let pool = crate::test_support::test_pool_for_url(&url).await?;
+        let mut conn = pool.get().await.ok()?;
+        let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+            .query_async(&mut conn)
+            .await
+            .ok()?;
+        Some(pool)
     }
 
     #[tokio::test]

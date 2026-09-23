@@ -1363,9 +1363,9 @@ mod dual_window_tests {
     /// These tests exercise the global device index/limit, so each must not share a Redis
     /// logical DB with another concurrently-running test in this same test binary. Each gets its
     /// own DB from a small rotating pool (Redis's default 16 DBs: 0 is left for the older tests,
-    /// 5..=14 are ours) and flushes it first; this keeps the tests deterministic under cargo's
-    /// default parallel test-thread execution.
-    const FIRST_TEST_DB: u8 = 5;
+    /// 1..=3 are `rebuild`'s, 4..=5 `compare_cache`'s and 6..=15 ours) and flushes it first; this
+    /// keeps the tests deterministic under cargo's default parallel test-thread execution.
+    const FIRST_TEST_DB: u8 = 6;
     const TEST_DB_COUNT: u8 = 10;
     static NEXT_TEST_DB: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
