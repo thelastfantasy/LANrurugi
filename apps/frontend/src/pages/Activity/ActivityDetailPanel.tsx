@@ -202,6 +202,13 @@ export function ActivityDetailPanel({
           </>
         )}
 
+        {entry.actor.kind === "session" && entry.device_name && (
+          <>
+            <dt style={{ opacity: 0.65 }}>{t("activity.deviceName")}</dt>
+            <dd style={{ margin: 0 }}>{entry.device_name}</dd>
+          </>
+        )}
+
         {entry.client_ip && (
           <>
             <dt style={{ opacity: 0.65 }}>{t("activity.ipAddress")}</dt>

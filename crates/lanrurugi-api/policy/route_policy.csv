@@ -102,6 +102,9 @@ p, token_admin, /api/database/import-snapshots, GET, deny
 p, token_admin, /api/database/import-snapshots/:id, GET, deny
 p, token_admin, /api/database/import-snapshots/:id, DELETE, deny
 p, token_admin, /api/settings/password, POST, deny
+p, token_admin, /api/sessions, GET, deny
+p, token_admin, /api/sessions/:family_id, PATCH, deny
+p, token_admin, /api/sessions/:family_id, DELETE, deny
 p, token_admin, /api/tokens, GET, deny
 p, token_admin, /api/tokens, POST, deny
 p, token_admin, /api/tokens/:id, PATCH, deny
@@ -124,6 +127,9 @@ p, token_guest, /api/database/import-snapshots, GET, deny
 p, token_guest, /api/database/import-snapshots/:id, GET, deny
 p, token_guest, /api/database/import-snapshots/:id, DELETE, deny
 p, token_guest, /api/settings/password, POST, deny
+p, token_guest, /api/sessions, GET, deny
+p, token_guest, /api/sessions/:family_id, PATCH, deny
+p, token_guest, /api/sessions/:family_id, DELETE, deny
 p, token_guest, /api/tokens, GET, deny
 p, token_guest, /api/tokens, POST, deny
 p, token_guest, /api/tokens/:id, PATCH, deny

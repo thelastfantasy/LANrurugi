@@ -312,6 +312,24 @@ mod tests {
             "/api/tokens/abc",
             "DELETE"
         ));
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/sessions",
+            "GET"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/sessions/abc",
+            "PATCH"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/sessions/abc",
+            "DELETE"
+        ));
     }
 
     #[tokio::test]
@@ -358,6 +376,14 @@ mod tests {
         assert!(!check_route(&e, Some(&admin), "/api/tokens", "POST"));
         assert!(!check_route(&e, Some(&admin), "/api/tokens/abc", "PATCH"));
         assert!(!check_route(&e, Some(&admin), "/api/tokens/abc", "DELETE"));
+        assert!(!check_route(&e, Some(&admin), "/api/sessions", "GET"));
+        assert!(!check_route(&e, Some(&admin), "/api/sessions/abc", "PATCH"));
+        assert!(!check_route(
+            &e,
+            Some(&admin),
+            "/api/sessions/abc",
+            "DELETE"
+        ));
     }
 
     #[tokio::test]
@@ -429,6 +455,7 @@ mod tests {
             "DELETE"
         ));
         assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
+        assert!(!check_route(&e, Some(&guest), "/api/sessions", "GET"));
         assert!(!check_route(&e, Some(&guest), "/api/database/drop", "POST"));
     }
 
@@ -438,6 +465,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         }
     }
 
@@ -450,6 +478,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         }
     }
 
@@ -459,6 +488,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         }
     }
 
@@ -468,6 +498,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         }
     }
 

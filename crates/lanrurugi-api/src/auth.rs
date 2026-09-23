@@ -62,6 +62,13 @@ pub struct LiveAuthConfig {
     /// Overridable via the `refresh_token_lifetime_secs` setting, same pattern as above — falls
     /// back to `lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS`.
     pub refresh_token_lifetime_secs: u64,
+    /// Sliding idle window for refresh-token rotation, capped by `refresh_token_lifetime_secs`.
+    /// Falls back to `lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS`; setting
+    /// it equal to the absolute lifetime reproduces the old absolute-only behavior.
+    pub refresh_token_idle_lifetime_secs: u64,
+    /// Maximum number of simultaneously active login families (devices). `0` means unlimited.
+    /// Falls back to `lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES`.
+    pub max_login_devices: u64,
     pub force_secure_cookies: bool,
 }
 
@@ -89,6 +96,14 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         .get("refresh_token_lifetime_secs")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS);
+    let refresh_token_idle_lifetime_secs = fields
+        .get("refresh_token_idle_lifetime_secs")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS);
+    let max_login_devices = fields
+        .get("max_login_devices")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES);
 
     let session_secret = match fields.get(SESSION_SECRET_FIELD) {
         Some(hex) if !hex.is_empty() => hex_decode(hex),
@@ -107,8 +122,22 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         session_secret,
         access_token_lifetime_secs,
         refresh_token_lifetime_secs,
+        refresh_token_idle_lifetime_secs,
+        max_login_devices,
         force_secure_cookies: state.auth.force_secure_cookies,
     })
+}
+
+/// Extracts the `fid` claim from a valid-signature access cookie, ignoring expiry — the same
+/// narrow use `session::family_id_ignoring_expiry` documents for logout/activity attribution. Used
+/// by request auth to remember *which* login family a session request belongs to, so activity
+/// writes can snapshot the current custom device name without re-reading the header later.
+pub fn session_family_id(cfg: &LiveAuthConfig, headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())?;
+    let token = find_cookie(cookie_header, lanrurugi_core::session::COOKIE_NAME)?;
+    lanrurugi_core::session::family_id_ignoring_expiry(&cfg.session_secret, &token)
 }
 
 /// Whether `headers` carries a currently-valid session cookie (the SPA's own login, not a

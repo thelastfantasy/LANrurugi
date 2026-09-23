@@ -16,6 +16,7 @@ pub mod device_info;
 pub mod download_manager;
 pub mod download_queue;
 pub mod duplicates;
+pub mod embed_worker_client;
 pub mod font_pattern;
 pub mod geoip;
 pub mod gpu_worker_client;
@@ -35,6 +36,7 @@ pub mod recommend_llm;
 pub mod recommend_precompute;
 pub mod scripts;
 pub mod search;
+pub mod sessions;
 pub mod settings;
 pub mod shinobu;
 pub mod stamps;
@@ -85,6 +87,7 @@ pub fn router() -> Router<AppState> {
         .merge(jobs::router())
         .merge(settings::router())
         .merge(scripts::router())
+        .merge(sessions::router())
         .merge(logs::router())
         .merge(recommend::router())
         // `specs/004-ocr-manga-translation` — all new, additive paths (Principle II).

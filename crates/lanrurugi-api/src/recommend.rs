@@ -2,15 +2,18 @@
 //!
 //! Backed by `lanrurugi-recommend` (ONNX embedding of titles via
 //! `paraphrase-multilingual-MiniLM-L12-v2`; series recognition is embedding similarity, see that
-//! crate's own docs). This module owns the process-lifetime state: the loaded [`Embedder`] (set
-//! once the startup model download+load completes, see `lanrurugi-server`'s main) and a per-id
-//! vector cache keyed by title — re-embedding only happens when an archive's title changed since
-//! it was cached, so the common case (recommend against an already-embedded library) is pure
-//! cosine math.
+//! crate's own docs). This module owns the process-lifetime state: a client handle to the
+//! `lanrurugi-embed-worker` subprocess that actually holds the loaded model (see
+//! `crate::embed_worker_client`'s own doc comment for why the model moved out of this process) and
+//! a per-id vector cache keyed by title — re-embedding only happens when an archive's title
+//! changed since it was cached, so the common case (recommend against an already-embedded library)
+//! is pure cosine math.
 //!
-//! Until the model is ready the endpoint returns `503` with a machine-readable `code`
+//! Until the worker's own model is ready the endpoint returns `503` with a machine-readable `code`
 //! (`model_not_ready`); the frontend shows the panel disabled / a spinner. This keeps the reader
-//! fully functional on an offline or first-boot server while the 118MB model downloads.
+//! fully functional on an offline or first-boot server while the 118MB model downloads —
+//! `ready()`'s own meaning shifted slightly with the worker split (see that method's own doc
+//! comment) but the observable behavior at this boundary is unchanged.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,10 +28,10 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 
-use lanrurugi_recommend::embedding::Embedder;
 use lanrurugi_recommend::recommend::{ArchiveMeta, Recommendation};
 
 use crate::common::{error, not_found};
+use crate::embed_worker_client::EmbedWorkerClient;
 use crate::AppState;
 
 #[derive(Debug, Error)]
@@ -38,7 +41,7 @@ pub enum RecommendServiceError {
     #[error("archive {0} not found")]
     ArchiveNotFound(String),
     #[error("embedding failed: {0}")]
-    Embedding(#[from] lanrurugi_recommend::embedding::EmbeddingError),
+    Embedding(#[from] crate::embed_worker_client::EmbedWorkerError),
 }
 
 /// `archive id → (title it was embedded from, vector)`.
@@ -46,38 +49,45 @@ type VectorCache = HashMap<String, (String, Arc<Vec<f32>>)>;
 
 /// Process-lifetime recommender state. Cheap to clone (`Arc`-backed) and shared through
 /// `AppState`.
-#[derive(Default)]
 pub struct RecommendService {
-    /// `None` until the startup model download+load finishes (`install_embedder`).
-    embedder: Mutex<Option<Arc<Embedder>>>,
+    embedder: EmbedWorkerClient,
     /// Re-embed only when the title changed, so a steady library is recommended against with
     /// zero inference.
     vectors: Mutex<VectorCache>,
 }
 
 impl RecommendService {
-    pub fn new() -> Self {
-        Self::default()
+    /// `models_dir` is threaded straight through to the worker at spawn time — see
+    /// `EmbedWorkerClient::new`'s own doc comment.
+    pub fn new(models_dir: std::path::PathBuf) -> Self {
+        Self {
+            embedder: EmbedWorkerClient::new(models_dir),
+            vectors: Mutex::new(HashMap::new()),
+        }
     }
 
-    /// Called once by `lanrurugi-server`'s startup task after the model files are acquired and
-    /// loaded. Not behind a lock-and-replace race: this runs exactly once, before any request
-    /// can meaningfully use it (the server hasn't bound its listener until main has run).
-    pub fn install_embedder(&self, embedder: Embedder) {
-        *self.embedder.lock().unwrap() = Some(Arc::new(embedder));
+    /// Whether the embed worker currently has a live, connected session — informational only
+    /// (`health.rs`'s own reporting), same role the pre-refactor `Embedder::is_some()` check
+    /// played. Unlike that check, `false` here does *not* mean recommendations are unavailable —
+    /// the worker is spawned on demand by the very first `embed()` call, same as every other
+    /// on-demand subprocess in this codebase (`gpu_worker_client`'s own workers) — it only means
+    /// no request has needed the worker yet, or it was reclaimed after being idle. There is no
+    /// longer an "acquiring/loading" state a request must wait out before recommendations work at
+    /// all (unlike the old in-process startup task, which raced every early request against a
+    /// background model download+load): the very first real request simply pays that same one-time
+    /// cost itself, inside its own call to `recommendations()` below, and every request after that
+    /// hits an already-warm worker.
+    pub async fn ready(&self) -> bool {
+        self.embedder.is_connected().await
     }
 
-    pub fn ready(&self) -> bool {
-        self.embedder.lock().unwrap().is_some()
-    }
-
-    /// Shares the one process-lifetime [`Embedder`] with `recommend_precompute.rs` — there is
-    /// deliberately no second `Embedder::load` for the batch precompute job. The session inside
-    /// is `Mutex`-wrapped either way, so a second loaded copy would only double the ~118MB model's
-    /// resident memory for zero extra parallelism; the *actual* precompute throughput knob is the
-    /// `intra_threads` value this single instance was loaded with (`main.rs`'s startup task).
-    pub fn embedder(&self) -> Option<Arc<Embedder>> {
-        self.embedder.lock().unwrap().clone()
+    /// Spawned once at server startup (`lib.rs`'s own build-app wiring, mirroring
+    /// `gpu_worker_client::GpuWorkerClient::run_idle_reaper`'s own call site) — reclaims the embed
+    /// worker's memory after a real idle period. Returns the same `Arc` clone of the underlying
+    /// client `run_idle_reaper` needs to run against, since `RecommendService` itself owns the
+    /// only `EmbedWorkerClient` instance in the process.
+    pub fn embed_worker_client(&self) -> EmbedWorkerClient {
+        self.embedder.clone()
     }
 
     /// Ranks the whole library by embedding similarity to `archive_id`'s title. Prefers the
@@ -98,12 +108,6 @@ impl RecommendService {
         limit: usize,
         exclude_ids: &[String],
     ) -> Result<Vec<Recommendation>, RecommendServiceError> {
-        let embedder = self
-            .embedder
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or(RecommendServiceError::ModelNotReady)?;
         let current = state
             .repos
             .archives
@@ -136,11 +140,14 @@ impl RecommendService {
             })
             .collect();
 
-        // Embed everything not yet cached (or whose title changed) on a blocking thread — the
-        // session mutex + ONNX inference are synchronous CPU work. The cache lock is NOT held
-        // across the `await` (a `std::sync::MutexGuard` isn't `Send`, which would break the
-        // handler future) — collect the missing ids under the lock, release it, await the
-        // blocking embed, then re-lock to insert.
+        // Embed everything not yet cached (or whose title changed) — each `embed()` call is now an
+        // IPC round trip to `lanrurugi-embed-worker` rather than in-process ONNX inference, so
+        // there's no longer a `spawn_blocking` to bounce onto (the call is already async and
+        // doesn't block this handler's own thread). The cache lock is NOT held across the `await`
+        // (a `std::sync::MutexGuard` isn't `Send`, which would break the handler future) —
+        // collect the missing ids under the lock, release it, await each embed call in turn, then
+        // re-lock to insert. A failed individual embed (`.ok()`) is skipped rather than failing
+        // the whole request — same degrade-gracefully behavior the pre-refactor `filter_map` had.
         let missing: Vec<(String, String)> = {
             let cache = self.vectors.lock().unwrap();
             candidates
@@ -150,22 +157,13 @@ impl RecommendService {
                 .collect()
         };
         if !missing.is_empty() {
-            let missing_for_blocking = missing.clone();
-            let embedder_for_blocking = embedder.clone();
-            let embedded: Vec<(String, String, Arc<Vec<f32>>)> =
-                tokio::task::spawn_blocking(move || {
-                    missing_for_blocking
-                        .iter()
-                        .filter_map(|(id, title)| {
-                            embedder_for_blocking
-                                .embed(title)
-                                .ok()
-                                .map(|v| (id.clone(), title.clone(), Arc::new(v)))
-                        })
-                        .collect()
-                })
-                .await
-                .map_err(|e| RecommendServiceError::Embedding(embed_err_from_join(e)))?;
+            let mut embedded: Vec<(String, String, Arc<Vec<f32>>)> =
+                Vec::with_capacity(missing.len());
+            for (id, title) in &missing {
+                if let Ok(v) = self.embedder.embed(title).await {
+                    embedded.push((id.clone(), title.clone(), Arc::new(v)));
+                }
+            }
             let mut cache = self.vectors.lock().unwrap();
             for (id, title, vec) in embedded {
                 cache.insert(id, (title, vec));
@@ -202,10 +200,12 @@ impl RecommendService {
             .cloned()
             .chain([archive_id.to_string()])
             .collect();
-        let embedder_for_blocking = embedder.clone();
-        let current_vec = embedder_for_blocking.embed(
-            &lanrurugi_recommend::recommend::normalize_title(&current_title),
-        )?;
+        let current_vec = self
+            .embedder
+            .embed(&lanrurugi_recommend::recommend::normalize_title(
+                &current_title,
+            ))
+            .await?;
         // Two-tier: the embedding order above IS the pre-filter. If an LLM API key is
         // configured, hand the top shortlist to the LLM for the "next volume first" rerank (the
         // one thing embedding can't do); any LLM failure falls back to this embedding order.
@@ -322,17 +322,14 @@ impl RecommendService {
             .chain([archive_id.to_string()])
             .collect();
 
-        let embedder = self.embedder()?;
         let current_title = current.title.clone();
-        let embedder_for_blocking = embedder.clone();
-        let current_vec = tokio::task::spawn_blocking(move || {
-            embedder_for_blocking.embed(&lanrurugi_recommend::recommend::normalize_title(
+        let current_vec = self
+            .embedder
+            .embed(&lanrurugi_recommend::recommend::normalize_title(
                 &current_title,
             ))
-        })
-        .await
-        .ok()?
-        .ok()?;
+            .await
+            .ok()?;
 
         // Hydrate each cached id into an ArchiveMeta + its persisted vector in one pass, skipping
         // any id that's since been deleted (a dangling reference `recommend_cache::delete_for`
@@ -421,16 +418,12 @@ impl RecommendService {
     }
 }
 
-fn embed_err_from_repo(
-    e: impl std::fmt::Display,
-) -> lanrurugi_recommend::embedding::EmbeddingError {
-    lanrurugi_recommend::embedding::EmbeddingError::BadOutput(e.to_string())
+fn embed_err_from_repo(e: impl std::fmt::Display) -> crate::embed_worker_client::EmbedWorkerError {
+    crate::embed_worker_client::EmbedWorkerError::Worker(e.to_string())
 }
 
-fn embed_err_from_join(
-    e: tokio::task::JoinError,
-) -> lanrurugi_recommend::embedding::EmbeddingError {
-    lanrurugi_recommend::embedding::EmbeddingError::BadOutput(format!("blocking task failed: {e}"))
+fn embed_err_from_join(e: tokio::task::JoinError) -> crate::embed_worker_client::EmbedWorkerError {
+    crate::embed_worker_client::EmbedWorkerError::Worker(format!("blocking task failed: {e}"))
 }
 
 pub fn router() -> Router<AppState> {

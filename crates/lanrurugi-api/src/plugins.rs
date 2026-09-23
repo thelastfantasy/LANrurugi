@@ -3463,7 +3463,9 @@ pub(crate) mod tests {
             bookmarks: Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
                 redis.config.clone(),
             )),
-            recommender: Arc::new(crate::recommend::RecommendService::new()),
+            recommender: Arc::new(crate::recommend::RecommendService::new(
+                std::env::temp_dir().join("lanrurugi-test-models"),
+            )),
             new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_cancellations: Default::default(),
             pending_generate_requests: Default::default(),

@@ -582,16 +582,13 @@ async fn ai_group_suggestions(
     State(state): State<AppState>,
     Query(query): Query<AiGroupSuggestionsQuery>,
 ) -> Response {
-    if !state.recommender.ready() {
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(json!({
-                "error": "model_not_ready",
-                "message": "The recommendation model is still downloading or loading — try again shortly.",
-            })),
-        )
-            .into_response();
-    }
+    // No upfront "is the model ready" gate here anymore — `lanrurugi-embed-worker` (see
+    // `crate::embed_worker_client`'s own doc comment) is spawned on demand by the very first
+    // `embed()` call below, same as every other on-demand subprocess in this codebase
+    // (`gpu_worker_client`'s own workers); there is no longer a background "still downloading the
+    // model" state a request could be rejected for arriving during. A genuinely failed embed
+    // still degrades this endpoint's own results per-candidate (see the `embed()` call sites
+    // below), it just never blocks the whole request up front on a state that no longer exists.
 
     // "Not currently a member of any Tankoubon" is exactly `LRR_TANKGROUPED` membership (despite
     // the legacy-inherited name — see that key's own doc comment in lanrurugi-search::keys) minus
@@ -702,12 +699,14 @@ async fn ai_group_suggestions(
                     member_vectors.push(vector);
                 }
                 _ => {
-                    let Some(embedder) = state.recommender.embedder() else {
-                        continue;
-                    };
                     let normalized =
                         lanrurugi_recommend::recommend::normalize_title(&archive.title);
-                    if let Ok(vector) = embedder.embed(&normalized) {
+                    if let Ok(vector) = state
+                        .recommender
+                        .embed_worker_client()
+                        .embed(&normalized)
+                        .await
+                    {
                         let _ = state
                             .recommend_cache
                             .put_vector(member_id.as_str(), &archive.title, &vector)
@@ -743,41 +742,20 @@ async fn ai_group_suggestions(
     }
 
     if !missing_titles.is_empty() {
-        let Some(embedder) = state.recommender.embedder() else {
-            return (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                axum::Json(json!({
-                    "error": "model_not_ready",
-                    "message": "The recommendation model is still downloading or loading — try again shortly.",
-                })),
-            )
-                .into_response();
-        };
-        let embedder_for_blocking = embedder.clone();
-        let computed: Vec<(String, String, Vec<f32>)> =
-            match tokio::task::spawn_blocking(move || {
-                missing_titles
-                    .into_iter()
-                    .filter_map(|(id, title)| {
-                        let normalized = lanrurugi_recommend::recommend::normalize_title(&title);
-                        embedder_for_blocking
-                            .embed(&normalized)
-                            .ok()
-                            .map(|v| (id, title, v))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    return error(
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "ai_group_suggestions",
-                        e.to_string(),
-                    )
-                }
-            };
+        let embedder = state.recommender.embed_worker_client();
+        // Sequential, not `spawn_blocking`+parallel — same reasoning as
+        // `recommend_precompute.rs`'s own batch-embed loop: `embed()` is now an IPC round trip to
+        // `lanrurugi-embed-worker`'s single serialized session, not in-process ONNX inference, so
+        // there's no local blocking work to bounce off this handler's thread and no real
+        // parallelism to gain from fanning these out.
+        let mut computed: Vec<(String, String, Vec<f32>)> =
+            Vec::with_capacity(missing_titles.len());
+        for (id, title) in missing_titles {
+            let normalized = lanrurugi_recommend::recommend::normalize_title(&title);
+            if let Ok(v) = embedder.embed(&normalized).await {
+                computed.push((id, title, v));
+            }
+        }
         for (id, title, vector) in computed {
             // Best-effort cache the freshly-computed vector for next time — same reasoning as
             // `recommend.rs`'s own miss-path fire-and-forget `precompute_one`, but done inline

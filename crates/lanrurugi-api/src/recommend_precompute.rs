@@ -174,23 +174,18 @@ const BACKFILL_SIMILARITY_THRESHOLD: f32 = 0.5;
 /// aren't already cached — those get their own entry the next time *they're* the one being
 /// (re)computed, or during a full rebuild.
 pub async fn precompute_one(state: &AppState, archive_id: &str, title: &str) {
-    let Some(embedder) = state.recommender.embedder() else {
-        return; // Model not loaded yet — nothing to do; the ingest/rename call sites don't retry.
-    };
     let cache = state.recommend_cache.clone();
     let normalized = lanrurugi_recommend::recommend::normalize_title(title);
 
-    let embedder_for_blocking = embedder.clone();
-    let vector = match tokio::task::spawn_blocking(move || embedder_for_blocking.embed(&normalized))
+    let vector = match state
+        .recommender
+        .embed_worker_client()
+        .embed(&normalized)
         .await
     {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => {
-            tracing::debug!(archive_id, error = %e, "precompute_one: embedding failed");
-            return;
-        }
+        Ok(v) => v,
         Err(e) => {
-            tracing::debug!(archive_id, error = %e, "precompute_one: blocking task join failed");
+            tracing::debug!(archive_id, error = %e, "precompute_one: embedding failed");
             return;
         }
     };
@@ -292,11 +287,7 @@ pub async fn spawn_full_precompute_job(state: &AppState, reason: &str) -> String
         jobs.mark_active(&job_id_for_task).await;
         tracing::info!(reason, "recommend_precompute: full rebuild starting");
 
-        let Some(embedder) = state.recommender.embedder() else {
-            jobs.fail(&job_id_for_task, "embedding model not ready")
-                .await;
-            return;
-        };
+        let embedder = state.recommender.embed_worker_client();
         let archives = match state.repos.archives.list_all().await {
             Ok(a) => a,
             Err(e) => {
@@ -339,36 +330,22 @@ pub async fn spawn_full_precompute_job(state: &AppState, reason: &str) -> String
             };
 
             if !to_embed.is_empty() {
-                let embedder = embedder.clone();
-                let normalized: Vec<(String, String, String)> = to_embed
-                    .iter()
-                    .map(|(id, title)| {
-                        (
-                            id.clone(),
-                            title.clone(),
-                            lanrurugi_recommend::recommend::normalize_title(title),
-                        )
-                    })
-                    .collect();
-                let cores = precompute_worker_budget();
-                let embedded: Vec<(String, String, Vec<f32>)> =
-                    tokio::task::spawn_blocking(move || {
-                        let pool = rayon::ThreadPoolBuilder::new()
-                            .num_threads(cores)
-                            .build()
-                            .expect("rayon pool build");
-                        pool.install(|| {
-                            use rayon::prelude::*;
-                            normalized
-                                .into_par_iter()
-                                .filter_map(|(id, title, norm)| {
-                                    embedder.embed(&norm).ok().map(|v| (id, title, v))
-                                })
-                                .collect()
-                        })
-                    })
-                    .await
-                    .unwrap_or_default();
+                // Sequential, not `rayon`-parallelized — unlike the pre-refactor in-process
+                // `Embedder` (a real ONNX session this crate could fan multiple calls into via a
+                // worker thread pool, `precompute_worker_budget()`'s own original reason for
+                // existing), `embed()` is now one IPC round trip to `lanrurugi-embed-worker` per
+                // title. That worker only ever runs one inference at a time on its own single
+                // `Embedder` session either way (both `Embedder`'s own internal `Mutex` and this
+                // client's own `call_lock` serialize it), so fanning these out across a `rayon`
+                // pool would only add blocked-on-IPC rayon threads, not real parallelism.
+                let mut embedded: Vec<(String, String, Vec<f32>)> =
+                    Vec::with_capacity(to_embed.len());
+                for (id, title) in &to_embed {
+                    let norm = lanrurugi_recommend::recommend::normalize_title(title);
+                    if let Ok(v) = embedder.embed(&norm).await {
+                        embedded.push((id.clone(), title.clone(), v));
+                    }
+                }
 
                 for (id, title, vector) in embedded {
                     if let Err(e) = state.recommend_cache.put_vector(&id, &title, &vector).await {

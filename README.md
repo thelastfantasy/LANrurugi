@@ -13,9 +13,124 @@ Rust + React 重写版本。目标是与现有 LANraragi 部署实现功能对�
 Playwright 前端测试覆盖）、`specs/005-download-plugin-progress/`（真实的字节级下载进度、按域名的并发/
 限速），以及 `specs/007-guest-restricted-access/`（受限访客访问模式，取代旧版"全开/全锁"式密码开关）——
 后者的完整 `specs/007-guest-restricted-access/quickstart.md` 11 项场景真机验证仍待跑一遍
-（`tasks.md` T053），代码本身已完成并通过全部自动化测试。只有 Phase 2（`specs/004-ocr-manga-translation/`，
-页面内漫画翻译）仍停留在计划阶段、尚未实现，按照章程（constitution）原则 VI 被刻意保持独立，使其永远不会
-阻塞 Phase 1，也不会被 Phase 1 阻塞。
+（`tasks.md` T053），代码本身已完成并通过全部自动化测试。Phase 2（`specs/004-ocr-manga-translation/`，页面内漫画翻译）代码也已实现并接入阅读器：检测/识别、
+翻译后端、本卷字体缓存、擦除与排版渲染均已可用；其 `quickstart.md` 的五项真机场景仍建议在准备真实
+OCR 模型文件后逐一复核。当前工作区另有一批尚未提交的 OCR/擦除/嵌入模型进程隔离/设备会话/前端收尾
+改动，逐项记录见下方“当前工作区增量（2026-09-22）”。
+
+
+## 当前工作区增量（2026-09-22）
+
+> 本节记录截至 2026-09-22 工作区中尚未提交的一大批实现与收尾改动。它专门覆盖多条彼此独立但
+> 共享同一轮真机调试上下文的工作线：OCR 阅读方向与翻译候选、DenseCRF 字形掩膜擦除、嵌入模型子进程隔离、
+> 双窗口刷新令牌/设备管理、原始档案搜索，以及配套前端与构建收尾。提交后本节即这批改动的仓库内说明。
+
+### OCR 阅读方向 / 旋转候选 / LLM 二选一
+
+- **方向字段进入持久化数据模型。** `DetectedTextRegion` 新增 `writing_direction: Option<WritingDirection>`
+  与 `alternate_source_text: Option<String>`，两者 `#[serde(default, skip_serializing_if = "Option::is_none")]`，
+  保证 Redis 中旧版 JSON 可继续反序列化；`WritingDirection` 为 `Vertical | Horizontal` 封闭枚举。
+- **新增纯函数 `rotate_cw` 与投影方向判据 `reading_axis`。** 对检测框内墨迹做 x/y 投影，按“单个方向存在
+  周期性窄条/间隔、另一方向没有同样强的多段结构”区分竖排、横排与 `Ambiguous`；含糊时不在原始识别路径里
+  猜方向。
+- **歧义方向串行补识别。** 主识别成功后，对 `Ambiguous` 且**不与其他检测框相邻/重叠**的孤立框，串行执行
+  一次 `recognize(rotate_cw(crop))` 作为候选 B；候选 B 与 A 不同且仍像日文时写入
+  `alternate_source_text`。串行执行是为了避免高负载时把 GPU worker 并发打崩；相邻框则留给下面的整块 union
+  路径处理，避免把碎片逐个旋转识别。
+- **检测碎片整块复识别。** 检测模型经常把一块竖排/多列文字拆成多个重叠框，逐框识别会把字符交错。新增
+  后处理：当最终 region 由两个以上原始检测框构成时，对这些框的并集 crop 再识别一次，结果写入候选 B。
+  page 15 的三个标签正是这样修复的：`娘士`/`ーッ娘スー母猫`/`エ、ルフ母娘` 最终分别选中
+  `戦士母娘` / `スーツ母娘` / `エルフ母娘`。
+- **合并后的方向/候选元数据贯通。** `DetectedLine` 携带方向和候选 B；`merge_lines` 按阅读顺序拼接候选 B，
+  并采用保守方向投票——只有所有成员都有相同且非歧义的方向时才把方向写入最终 region，否则留 `None`
+  交给合成层的兜底逻辑。
+- **LLM 二选一与写回。** 翻译请求构造时，如果存在 `alternate_source_text`，user message 会把 A/B 两个
+  OCR 候选及“先判断哪个更像合理日文，再只输出中文译文”的指令一起发给模型；结构化输出新增
+  `selected_source_text`，模型回传后把选中的候选写回 `region.source_text`，再持久化到
+  `LRR_TRANSLATION_TEXT_*`。漏字段/空字段时默认选候选 B，避免已知有问题的旧 A 读数继续固化。
+- **合成方向以测量值为先。** `composite::is_vertical_bubble` 现在优先读取 `writing_direction`，框宽高比
+  与目标文字脚本只作旧数据/真歧义时的兜底；原文竖排 → 译文竖排、原文横排 → 译文横排不再被“目标文字是否
+  CJK”误判。
+- **去重与碎片保护。** `translation_pipeline` 的重叠 region 去重现在会同时比较 A/B 候选、使用字符多重集
+  包含判断，并把小写假名折叠后比较（如 `ッ`/`ツ`），因此 page 15 的 `ーッ` 碎片不会另起一块重复绘制；
+  `LRR_TRANSLATION_REGIONS` 仍保留检测层候选，实际“翻译了哪一条”记录在 `LRR_TRANSLATION_TEXT_*`。
+- **同一轮 OCR 稳健性加固。** 识别新增最差 token 置信度门槛（默认 0.5），低置信度解码走可复现的内容失败
+  路径而不是缓存坏结果；检测异常大框比例阈值从 0.05 放宽到 0.08 以保留真实的大型标题/印章框；
+  `recognize.rs` 继续清理多余标点分隔符（`エ、ルフ母娘` → `エルフ母娘`）。
+
+### DenseCRF 字形掩膜与擦除
+
+- **新增 `lanrurugi-inpaint::densecrf` 与 `permutohedral`。** 这是 `philkr/densecrf`
+  （`pydensecrf` 的底层 C++ 实现）标量路径的逐行 Rust 移植，只保留
+  `zyddnys/manga-image-translator::mask_refinement` 实际使用的 `DenseCRF2D`、Gaussian/Bilateral pairwise、
+  Potts compatibility 与 mean-field inference，学习/梯度/SSE 路径明确不移植。
+- **`densecrf_stroke_mask` 成为真正的细化路径。** `stroke_mask.rs` 先用连通域把粗掩膜拆成单个文字组件，
+  再对每个组件做位置+颜色双边 DenseCRF 细化；细化后的组件若仍几乎覆盖整块 crop 则丢弃，避免“整块糊掉”；
+  失败时回退到已有的 `local_background_stroke_mask`。这套路径的动机与 page 13 真机测量都写进了模块注释。
+- **擦除不再只依赖粗掩膜。** 合成/擦除侧现在可以用细化掩膜判断“哪些是字形像素”，减少整块气泡填充误擦、
+  也减少 DenseCRF prior 覆盖不足导致的原文残留；诊断任务 `mise run debug-densecrf-prior` 与
+  `mise run diag-probmap` 保留为真机调参入口。
+
+### 嵌入模型子进程隔离（embed worker）
+
+- **新增 `lanrurugi-embed-ipc` + `lanrurugi-embed-worker` 两个 workspace crate。**
+  `lanrurugi-server` 不再在自身进程里长期持有 `lanrurugi-recommend` 的 ONNX 嵌入 session；模型被移入独立
+  `lanrurugi-embed-worker`，由 `lanrurugi-api::embed_worker_client::EmbedWorkerClient` 按需 spawn、通过
+  tarpc/Unix socket 调用，并在空闲后回收。目标是修复真机上报的“无请求时 server RSS 仍约 732MB”的内存
+  基线问题。
+- **调用侧全部异步化、串行化。** `recommend.rs`、`recommend_precompute.rs`、`tankoubon_grouping.rs`
+  的嵌入调用改为 `embed().await`，内部由 worker 的单 session 串行处理；启动时不再有“等待模型下载/加载”
+  的 gate，首个真实请求自行支付冷启动成本，之后走已热 worker。
+- **部署同步。** `Dockerfile.dev` 构建并复制 `lanrurugi-embed-worker`，`Dockerfile.build` 增加
+  `fonts-noto-cjk` 以满足中日文字体渲染/测试环境；`main.rs` 只负责创建 `RecommendService` 并启动
+  worker 空闲回收任务。
+
+### 双窗口刷新令牌 / 登录设备管理
+
+- **有状态 refresh token 落地。** `lanrurugi-storage::refresh_tokens` 新增完整仓库：只存
+  `sha256(secret)`，记录 `family_id`、`expires_at`（绝对上限）与 `idle_expires_at`（滑动空闲窗口），
+  使用 Redis `WATCH`/`MULTI` 乐观锁完成轮换，旧 token 复用检测会一次性烧掉整个 family。
+- **OAuth 2.1 风格轮换体验。** 新增 5 秒 reuse grace 与最多 3 次同 family 并发宽容，避免多标签页同时
+  刷新误伤；grace 不延长绝对过期。默认绝对 7 天、空闲 14 天可由设置调整；默认最多 5 台登录设备，
+  超过时登录侧淘汰最久未活跃的 family。
+- **设备信息与审计。** `device_info.rs` 汇总 `woothee` UA 解析、MaxMind GeoLite2 城市信息与客户端
+  Client Hints/屏幕/内存等表单字段；登录、刷新、设备改名/撤销都会写入结构化活动记录。
+- **`/api/sessions` 管理界面。** 新增 `sessions.rs` 路由（Session cookie only，Admin/Guest Token 均
+  明确 deny）：列出活跃登录 family、当前设备标记、自定义命名、撤销；设置页 `SecuritySection` 增加
+  “活跃设备”列表、空闲/绝对刷新窗口、最大登录设备数等输入项。
+- **认证边界同步收紧。** `route_policy.csv`/`authz.rs` 为 `/api/sessions` 加 Session-only 规则；
+  `AuthContext` 增加 `session_family_id`，活动记录可关联到产生它的登录 family；服务端测试补充
+  auth_flow / contract_api 覆盖。
+
+### 搜索 / API 增量
+
+- **新增 `GET /api/search/archives`。** 复用 `/search` 的查询语法、过滤、排序与分页，但**不**把
+  Tankoubon 成员折叠成 `TANK_` 聚合；每个结果额外返回 `tankid`、`archive_index`、`tank_sequence`
+  与嵌套的 `tankoubon` 元数据，便于重复检测/入库去重按原始档案检索。Tankoubon 归属走反向索引，
+  不使用全库扫描；反向索引读取失败时保留档案本体、降级为无 Tankoubon 元数据。
+
+### 前端与交互收尾
+
+- **安全设置页接入活跃设备管理。** 改密码输入框统一为公共 `Input`；新增刷新令牌空闲窗口、绝对窗口、
+  最大登录设备数设置，以及活跃设备列表的改名/撤销/当前设备标记/toast/确认弹窗。
+- **触摸设备评分清除。** `RatingWidget` 在无 hover 设备上显示不小于 24px 的垃圾桶按钮，保留 hover
+  设备原有的右键清除与星级交互。
+- **活动记录与 i18n。** `ActivityDetailPanel`/`activityTarget` 接入 session 设备事件；三套 locale
+  补齐设备管理、刷新窗口、评分清除等文案；`index.css` 增加设备行操作样式。
+
+### 构建、工具链与验证
+
+- `.mise.toml` 增加 `debug-densecrf-prior` 与 `diag-probmap` 两个诊断任务；`Dockerfile.dev` 构建
+  server + gpu worker + embed worker；`Dockerfile.build` 增加 Noto CJK 字体。
+- 本轮验收命令：`mise run fmt`、`mise run check-crate -- lanrurugi-ocr lanrurugi-translate lanrurugi-api`、
+  `mise run clippy`、`mise run test -- -p lanrurugi-translate --lib` 均通过；workspace 测试中
+  `lanrurugi-ocr` 95、`lanrurugi-api` 275、`lanrurugi-storage` 82、`lanrurugi-translate` 158 全部通过。
+- page 15 验证：三条标签的 `source_text` 最终为 `戦士母娘` / `スーツ母娘` / `エルフ母娘`，其中第一条
+  按横排合成，后两条按原竖排方向合成；page 13 验证：整块擦除后蓝色/粉色手写像素基本与原图一致
+  （蓝 1335 vs 原 1331，粉 3102 vs 原 3009），无彩色墨迹回退。
+- 测试环境注意：`.env.test.local` 默认把 `LANRURUGI_TEST_REDIS_URL` 指向
+  `redis://host.docker.internal:16380`；若该 Redis 未运行，`lanrurugi-storage` 会出现一个
+  `bootstrap::...` 失败（82 个测试中的 1 个），这与代码无关。启动对应 Redis 后 82/82 通过。
 
 ## 技术栈
 
@@ -189,8 +304,9 @@ docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
 ```
 
 一个全新的实例（或者一个从从未修改过密码的旧版安装迁移过来的实例）启动时，仍然使用的是旧版 LANraragi
-自身的默认管理员密码。**首次登录后请立即修改密码**，通过设置页面——不要让一个使用默认密码的实例可以从
-本地网络外部访问。
+自身的默认管理员密码 `kamimamita`（`crates/lanrurugi-api/src/auth.rs::DEFAULT_PASSWORD_HASH` 的
+bcrypt 哈希对应的明文，与旧版 `Model/Config.pm::get_password` 的默认值一致）。**首次登录后请立即修改
+密码**，通过设置页面——不要让一个使用默认密码的实例可以从本地网络外部访问。
 
 ### CLI 子命令
 
@@ -203,13 +319,19 @@ docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
 ## 测试
 
 ```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-LANRURUGI_TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --workspace
+mise run fmt
+mise run clippy
+mise run test -- -p lanrurugi-translate --lib   # 实际会跑完 workspace；见 .mise.toml 的 --no-fail-fast 说明
 ```
 
-如果未设置 `LANRURUGI_TEST_REDIS_URL`，依赖 Redis 的测试会被优雅地跳过；将其指向一个临时的 Redis 实例
-（例如 `docker run -d --rm -p 16379:6379 redis:7-alpine`）以运行这些测试。
+`scripts/cargo-container-run.sh` 会在 `127.0.0.1:6379` 没有 Redis 时自动起一个临时实例；**但仓库当前的
+`.env.test.local` 会把 `LANRURUGI_TEST_REDIS_URL` 覆盖为 `redis://host.docker.internal:16380`**。如果
+`16380` 上没有 Redis，`lanrurugi-storage` 的 `bootstrap::...` 测试会失败，表现为该测试二进制
+`81 passed; 1 failed`——这是测试环境缺少 16380 Redis，而不是代码失败。启动一个监听 16380 的 Redis 后
+即可得到 82/82。
+
+若走裸 `cargo test`，不要设置 `LANRURUGI_TEST_REDIS_URL`，依赖 Redis 的测试会被优雅跳过；设置时请确保
+它指向真实可连的 Redis，而不是照抄 README 旧示例里的端口。
 
 ### 前端测试（`specs/003-ui-test-automation/`）
 

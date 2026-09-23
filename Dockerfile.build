@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblz4-dev \
         libxml2-dev \
         libacl1-dev \
+        fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # Same rootless-tar ownership workaround as the module install itself needs when run inside a

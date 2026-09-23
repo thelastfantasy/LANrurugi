@@ -55,6 +55,41 @@ const MAX_DECODE_TOKENS: usize = 300;
 /// `lanrurugi_ocr::batch::run_batch`'s own per-region isolation already handles that).
 const REPEATED_TOKEN_STOP: usize = 4;
 
+/// Minimum per-token softmax confidence (the chosen token's own probability mass, not the full
+/// distribution) a decode must clear at *every* step to be trusted at all — checked against the
+/// single worst step, not an average across the whole decode.
+///
+/// A real live incident (2026-09-16): a stylised, angled title/stamp ("不採用", three large
+/// characters printed across a whole sheet of paper rather than ordinary panel dialogue) was
+/// misread as three entirely different, but still individually valid, kanji ("大林用"). Neither
+/// existing safety net catches this: `MAX_DECODE_TOKENS`/`REPEATED_TOKEN_STOP` only guard against a
+/// decode that never terminates, and `looks_like_japanese` only rejects output that *isn't* real
+/// Japanese script at all — a wrong-but-real kanji string sails through both, gets treated as
+/// ordinary source text, and an LLM has no way to know it's looking at a transcription error rather
+/// than genuine (if unusual) text. The chosen-token's own softmax probability is a signal neither
+/// existing check has any access to: a misread step is exactly where the model's own confidence in
+/// its top pick tends to collapse, even though *some* token still has to win the argmax. Checking
+/// the single worst step (not an average) is deliberate — one badly-misread character in an
+/// otherwise-confident decode is enough to make the whole transcription wrong, and averaging would
+/// let that one weak step hide behind several strong ones. `0.5` is a first cut, not independently
+/// tuned against a labelled dataset of correct-vs-misread crops — see this constant's own call site
+/// for how a rejected decode degrades (same "skip this region" path recognition errors already use,
+/// not a hard failure).
+const MIN_DECODE_CONFIDENCE: f32 = 0.5;
+
+/// The chosen token's own softmax probability mass, computed without materialising the full
+/// softmax distribution (this crate only ever needs the winning class's probability, not the
+/// others) — numerically stable via the standard max-subtraction trick (avoids overflow in `exp`
+/// for large logits) applied only to the running max/sum, not a second full pass over `logits`.
+fn softmax_confidence(logits: &[f32], chosen_index: usize) -> f32 {
+    let max_logit = logits.iter().copied().fold(f32::MIN, f32::max);
+    let sum: f32 = logits.iter().map(|&l| (l - max_logit).exp()).sum();
+    if sum <= 0.0 {
+        return 0.0;
+    }
+    (logits[chosen_index] - max_logit).exp() / sum
+}
+
 // GPU EP integration plan v9 (issue #103): per-session CUDA memory cap used to be a fixed
 // constant here (384MiB, tuned against one specific 8GB card). Now resolved dynamically at
 // startup instead — see `lanrurugi-gpu-worker::vram_budget` (the crate that actually calls
@@ -233,9 +268,9 @@ impl TextRecognizer {
         // The whole encoder call + decode loop runs inside one `with_locked` closure — its
         // `SessionOutputs`/extracted tensor slices borrow from the `&mut Sessions` `with_locked`
         // hands in, and that borrow can't outlive the closure itself, so this only ever returns
-        // `tokens` (a real owned `Vec<i64>`), never anything still borrowing a session.
-        let tokens: Vec<i64> = self.sessions.with_locked(
-            |sessions| -> Result<Vec<i64>, RecognitionError> {
+        // `(tokens, min_confidence)` (real owned values), never anything still borrowing a session.
+        let tokens: (Vec<i64>, f32) = self.sessions.with_locked(
+            |sessions| -> Result<(Vec<i64>, f32), RecognitionError> {
                 // --- Encoder: image -> hidden states -----------------------------------------
                 // Scoped so the borrow of `sessions.encoder` (held by `SessionOutputs`) ends
                 // before the decode loop borrows `sessions.decoder`.
@@ -258,6 +293,10 @@ impl TextRecognizer {
                 // `manga-ocr` itself is evaluated with, and beam search would multiply decode
                 // cost for a marginal gain on this input length.
                 let mut tokens: Vec<i64> = vec![special.cls];
+                // Tracks the single worst per-token confidence seen so far — see
+                // `MIN_DECODE_CONFIDENCE`'s own doc comment for why the worst step, not an average,
+                // is what actually catches a real misread.
+                let mut min_confidence = 1.0f32;
 
                 for _ in 0..MAX_DECODE_TOKENS {
                     // The next token id is computed inside this scope so every borrow of
@@ -292,13 +331,17 @@ impl TextRecognizer {
                             return Err(RecognitionError::BadOutput("empty decoder output".into()));
                         }
                         let last_offset = (seq_len - 1) * vocab_size;
+                        let last_logits = &logits[last_offset..last_offset + vocab_size];
 
-                        logits[last_offset..last_offset + vocab_size]
+                        let chosen = last_logits
                             .iter()
                             .enumerate()
                             .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                            .map(|(i, _)| i as i64)
-                            .ok_or_else(|| RecognitionError::BadOutput("empty logit row".into()))?
+                            .map(|(i, _)| i)
+                            .ok_or_else(|| RecognitionError::BadOutput("empty logit row".into()))?;
+                        min_confidence =
+                            min_confidence.min(softmax_confidence(last_logits, chosen));
+                        chosen as i64
                     };
 
                     if next == special.sep || next == special.pad {
@@ -313,11 +356,25 @@ impl TextRecognizer {
                     }
                 }
 
-                Ok(tokens)
+                Ok((tokens, min_confidence))
             },
         )??;
+        let (tokens, min_confidence) = tokens;
 
-        Ok(decode_tokens(&self.vocab, &tokens[1..]))
+        // See `MIN_DECODE_CONFIDENCE`'s own doc comment — a low-confidence decode is treated the
+        // same way a garbled-non-Japanese result already is (`batch.rs`'s own `looks_like_japanese`
+        // check): the region is dropped rather than translating a transcription this model itself
+        // wasn't sure about.
+        if min_confidence < MIN_DECODE_CONFIDENCE {
+            return Err(RecognitionError::BadOutput(format!(
+                "decode confidence {min_confidence:.3} below minimum {MIN_DECODE_CONFIDENCE}"
+            )));
+        }
+
+        Ok(strip_inserted_separators(&decode_tokens(
+            &self.vocab,
+            &tokens[1..],
+        )))
     }
 }
 
@@ -353,6 +410,51 @@ fn decode_tokens(vocab: &[String], tokens: &[i64]) -> String {
     out.trim().to_string()
 }
 
+/// Removes OCR-inserted separators that cannot be legitimate Japanese punctuation.
+///
+/// A `、`/`，`/`,` sitting *between two characters of the same word-like class* (katakana↔katakana,
+/// Latin↔Latin, digit↔digit) is an artefact of the recogniser reading a multi-line label as though
+/// it were one column — real page-15 case: 「エルフ母娘」 came back as `エ、ルフ母娘`, and that comma
+/// then went into the translator as if it were source text.
+///
+/// Deliberately narrow, because the same characters are perfectly legitimate elsewhere:
+/// * `・` is never removed — it really is used between katakana (「ジョン・スミス」);
+/// * a separator touching kanji or hiragana is left alone — Japanese uses `、` in ordinary prose
+///   (「そして、」), and telling an inserted comma from a real one there needs semantics, not
+///   character classes.
+pub fn strip_inserted_separators(text: &str) -> String {
+    /// 1 = katakana (including the prolonged-sound mark), 2 = ASCII alphanumeric, 0 = anything else.
+    fn word_class(ch: char) -> u8 {
+        let code = ch as u32;
+        if (0x30A1..=0x30FA).contains(&code) || code == 0x30FC {
+            1
+        } else if ch.is_ascii_alphanumeric() {
+            2
+        } else {
+            0
+        }
+    }
+    fn is_separator(ch: char) -> bool {
+        matches!(ch, '、' | '，' | ',' | '､')
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut previous_kept: Option<char> = None;
+    for (index, &ch) in chars.iter().enumerate() {
+        if is_separator(ch) {
+            let before = previous_kept.map(word_class).unwrap_or(0);
+            let after = chars.get(index + 1).copied().map(word_class).unwrap_or(0);
+            if before != 0 && before == after {
+                continue;
+            }
+        }
+        out.push(ch);
+        previous_kept = Some(ch);
+    }
+    out
+}
+
 /// Rejects a `recognize()` result that doesn't look like real Japanese text — the sanity check
 /// `manga-ocr`'s own architecture has no equivalent of (it's greedy-decoded with no per-token
 /// confidence exposed here, research.md's decode loop always emits *some* string). Highly
@@ -373,8 +475,21 @@ pub fn looks_like_japanese(text: &str) -> bool {
         if c.is_whitespace() {
             continue;
         }
-        total += 1;
         let cp = c as u32;
+        // Real reported incident (2026-09-18): a correctly-transcribed line containing an ASCII
+        // digit and a run of ASCII dots for an ellipsis ("美女3人...." — a perfectly legitimate
+        // Japanese sentence with an embedded half-width number and ellipsis, both common in manga
+        // lettering) was rejected outright, because ASCII digits/punctuation counted toward
+        // `total` but never toward `japanese`, dragging the ratio below half for an otherwise
+        // all-Kanji/Kana line. These characters carry no script information either way (a real
+        // garbled OCR result can just as easily contain ASCII digits/punctuation as a legitimate
+        // one), so they're excluded from both counts instead of counting against the line.
+        let is_script_neutral =
+            c.is_ascii_digit() || matches!(c, '.' | '!' | '?' | '-' | ',' | ':' | ';' | '\'' | '"');
+        if is_script_neutral {
+            continue;
+        }
+        total += 1;
         let is_japanese_script = matches!(cp,
             0x3040..=0x309F // Hiragana
             | 0x30A0..=0x30FF // Katakana
@@ -600,6 +715,28 @@ mod tests {
     use image::Rgb as ImageRgb;
 
     #[test]
+    fn looks_like_japanese_accepts_embedded_ascii_digits_and_ellipsis() {
+        // Real reported incident (2026-09-18): "見知らぬ美女3人...." — a legitimate, correctly
+        // transcribed Japanese sentence with a half-width digit and an ASCII ellipsis — was
+        // rejected outright because those characters counted toward the total but never toward
+        // the Japanese-script count, dragging the ratio below half.
+        assert!(crate::recognize::looks_like_japanese("見知らぬ美女3人...."));
+    }
+
+    #[test]
+    fn looks_like_japanese_still_rejects_real_garbage() {
+        // The original failure mode this function exists for must still be caught: a garbled
+        // transcription of deformed SFX lettering, dominated by Latin letters/symbols with no
+        // real Japanese script content.
+        assert!(!crate::recognize::looks_like_japanese("N-b!\u{bb}7/26:8"));
+    }
+
+    #[test]
+    fn looks_like_japanese_rejects_empty_string() {
+        assert!(!crate::recognize::looks_like_japanese(""));
+    }
+
+    #[test]
     fn preprocess_produces_normalized_chw_layout() {
         let img = RgbImage::from_pixel(10, 10, ImageRgb([255, 255, 255]));
         let out = preprocess(&img);
@@ -690,5 +827,49 @@ mod tests {
             &[7, 7, 7, 7, 5, 6],
             REPEATED_TOKEN_STOP
         ));
+    }
+
+    #[test]
+    fn softmax_confidence_of_a_dominant_logit_is_close_to_one() {
+        // One logit far ahead of the rest — the model is essentially certain.
+        let logits = [1.0, 0.0, 10.0, 0.0];
+        let confidence = softmax_confidence(&logits, 2);
+        assert!(
+            confidence > 0.999,
+            "expected near-certain confidence, got {confidence}"
+        );
+    }
+
+    #[test]
+    fn softmax_confidence_of_a_tied_logit_is_close_to_uniform() {
+        // Four equal logits — genuinely undecided, confidence should sit near 1/4.
+        let logits = [1.0, 1.0, 1.0, 1.0];
+        let confidence = softmax_confidence(&logits, 0);
+        assert!(
+            (confidence - 0.25).abs() < 1e-4,
+            "expected ~0.25, got {confidence}"
+        );
+    }
+
+    #[test]
+    fn softmax_confidence_of_a_barely_winning_logit_is_low() {
+        // The "chosen" logit only barely edges out a close rival — a real misread's own signature
+        // (see `MIN_DECODE_CONFIDENCE`'s own doc comment): *something* still has to win the argmax,
+        // but the model's own confidence in that pick is low.
+        let logits = [5.0, 5.01, 0.0, 0.0];
+        let confidence = softmax_confidence(&logits, 1);
+        assert!(
+            confidence < 0.6,
+            "expected low confidence for a near-tied top pick, got {confidence}"
+        );
+    }
+
+    #[test]
+    fn softmax_confidence_handles_large_logits_without_overflow() {
+        // The max-subtraction trick must keep this finite and sane even with logits large enough
+        // that a naive `exp()` would overflow `f32`.
+        let logits = [1000.0, 999.0, 998.0];
+        let confidence = softmax_confidence(&logits, 0);
+        assert!(confidence.is_finite() && confidence > 0.5);
     }
 }

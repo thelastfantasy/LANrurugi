@@ -2393,6 +2393,7 @@ dependencies = [
  "lanrurugi-backup",
  "lanrurugi-bench",
  "lanrurugi-core",
+ "lanrurugi-embed-ipc",
  "lanrurugi-fontcache",
  "lanrurugi-gpu-ipc",
  "lanrurugi-imgcompare",
@@ -2492,6 +2493,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-embed-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tarpc",
+ "tokio",
+]
+
+[[package]]
+name = "lanrurugi-embed-worker"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lanrurugi-embed-ipc",
+ "lanrurugi-recommend",
+ "tarpc",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lanrurugi-fontcache"
 version = "0.1.0"
 dependencies = [
@@ -2574,6 +2598,7 @@ name = "lanrurugi-ocr"
 version = "0.1.0"
 dependencies = [
  "image",
+ "imageproc",
  "kmeans_colors",
  "lanrurugi-core",
  "ndarray",

@@ -384,4 +384,128 @@ impl DeviceInfo {
     pub fn is_empty(&self) -> bool {
         self.user_agent.is_none() && self.geo.is_none() && self.client_reported.is_none()
     }
+
+    /// Human-readable default label for the login-device list, e.g.
+    /// `"Linux x86_64 Chrome 152 + zh-CN"` or `"Windows 10 Firefox 149 + ja"`.
+    ///
+    /// Deliberately best-effort and lossy: it is only the *initial* name. The active-session API
+    /// lets an administrator rename any family, and a stored custom name always wins over this.
+    /// The format groups the stable identity (OS/platform, browser) separately from the language
+    /// so two different login sessions from the same machine but different browser-language
+    /// settings are still distinguishable.
+    pub fn display_name(&self) -> String {
+        let Some(ua) = self.user_agent.as_ref() else {
+            return "Unknown device".to_string();
+        };
+        let client = self.client_reported.as_ref();
+
+        let mut os = if ua.os.is_empty() || ua.os == "UNKNOWN" {
+            client
+                .and_then(|c| c.platform.clone().or_else(|| c.uach_platform.clone()))
+                .unwrap_or_else(|| "Unknown OS".to_string())
+        } else {
+            ua.os.clone()
+        };
+        // The UA string commonly reports Linux with an UNKNOWN version while the client-reported
+        // platform carries the useful architecture, e.g. "Linux x86_64". Windows' UA version is
+        // "NT 10.0", which just duplicates "Windows 10" if appended verbatim, so omit those
+        // noisy-but-redundant forms rather than rendering "Windows 10 NT 10.0".
+        if os.eq_ignore_ascii_case("Linux") {
+            if let Some(platform) =
+                client.and_then(|c| c.platform.clone().or_else(|| c.uach_platform.clone()))
+            {
+                os = platform;
+            }
+        }
+        let os_version = ua.os_version.trim();
+        let os = if os_version.is_empty()
+            || os_version == "UNKNOWN"
+            || os_version.starts_with("NT ")
+            || os.contains(os_version)
+        {
+            os
+        } else {
+            format!("{os} {os_version}")
+        };
+
+        let browser_version = ua.browser_version.trim();
+        let browser = if ua.browser.is_empty() || ua.browser == "UNKNOWN" {
+            "Unknown browser".to_string()
+        } else if browser_version.is_empty() || browser_version == "UNKNOWN" {
+            ua.browser.clone()
+        } else {
+            format!(
+                "{} {}",
+                ua.browser,
+                browser_version.split('.').next().unwrap_or(browser_version)
+            )
+        };
+
+        let language = client
+            .and_then(|c| {
+                c.language
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        c.languages
+                            .as_deref()
+                            .and_then(|languages| languages.split(',').next())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    })
+            })
+            .unwrap_or_else(|| "unknown language".to_string());
+
+        format!("{os} {browser} + {language}")
+    }
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    use super::*;
+
+    fn ua(os: &str, os_version: &str, browser: &str, browser_version: &str) -> UserAgentInfo {
+        UserAgentInfo {
+            category: "pc".to_string(),
+            os: os.to_string(),
+            os_version: os_version.to_string(),
+            browser: browser.to_string(),
+            browser_version: browser_version.to_string(),
+            browser_type: "browser".to_string(),
+            vendor: "Google".to_string(),
+        }
+    }
+
+    #[test]
+    fn linux_name_uses_platform_and_language() {
+        let device = DeviceInfo {
+            user_agent: Some(ua("Linux", "UNKNOWN", "Chrome", "152.0.7977.82")),
+            geo: None,
+            client_reported: Some(ClientReportedInfo {
+                platform: Some("Linux x86_64".to_string()),
+                language: Some("zh-CN".to_string()),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(device.display_name(), "Linux x86_64 Chrome 152 + zh-CN");
+    }
+
+    #[test]
+    fn windows_name_omits_redundant_nt_version() {
+        let device = DeviceInfo {
+            user_agent: Some(ua("Windows 10", "NT 10.0", "Firefox", "149.0")),
+            geo: None,
+            client_reported: Some(ClientReportedInfo {
+                language: Some("ja".to_string()),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(device.display_name(), "Windows 10 Firefox 149 + ja");
+    }
+
+    #[test]
+    fn missing_user_agent_falls_back_to_unknown_device() {
+        assert_eq!(DeviceInfo::default().display_name(), "Unknown device");
+    }
 }

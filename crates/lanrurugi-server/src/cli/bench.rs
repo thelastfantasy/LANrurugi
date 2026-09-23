@@ -48,6 +48,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
     })?;
 
     let thumb_dir = args.library_dir.join(".lanrurugi-bench-thumb");
+    let models_dir = args.library_dir.join(".lanrurugi-bench-models");
     let temp_dir = args.library_dir.join(".lanrurugi-bench-temp");
     let plugins_dir = args.library_dir.join(".lanrurugi-bench-plugins");
     std::fs::create_dir_all(&thumb_dir)?;
@@ -153,7 +154,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         ignored_group_suggestions,
         compare_cache,
         bookmarks,
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(models_dir)),
         new_archive_tx,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),

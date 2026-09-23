@@ -104,6 +104,14 @@ run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example d
 description = "Visualise local_background_stroke_mask's real pixel classification against a real crop (stroke pixels painted red) — usage: mise run debug-stroke-mask -- <crop.png> <out.png>"
 run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example debug_stroke_mask -- \"$@\""
 
+[tasks.debug-densecrf-prior]
+description = "TEMPORARY diagnostic: compare DenseCRF refinement under the detector's raw_text_mask prior vs a coarse-prior ∪ local-background union seed on a real region crop — usage: mise run debug-densecrf-prior -- <crop.png> <prior.raw> <out_prefix>"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --release --example debug_densecrf_prior -- \"$@\""
+
+[tasks.diag-probmap]
+description = "TEMPORARY diagnostic: dump the raw DB text-probability map over specific page regions — usage: mise run diag-probmap -- <model.onnx> <page.png>"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-ocr --release --example diag_probmap -- \"$@\""
+
 [tasks.convert-plugins]
 description = "Convert legacy LANraragi Perl plugins into plugins/<category>/*.ts — usage: mise run convert-plugins -- <path-to-legacy-LANraragi-checkout> [--force] [category ...]"
 run = "scripts/convert-plugins.sh \"$@\""

@@ -92,6 +92,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [newPassword2, setNewPassword2] = useState("")
   const [accessTokenLifetimeSecs, setAccessTokenLifetimeSecs] = useState(settings.access_token_lifetime_secs)
   const [refreshTokenLifetimeSecs, setRefreshTokenLifetimeSecs] = useState(settings.refresh_token_lifetime_secs)
+  const [refreshTokenIdleLifetimeSecs, setRefreshTokenIdleLifetimeSecs] = useState(settings.refresh_token_idle_lifetime_secs)
+  const [maxLoginDevices, setMaxLoginDevices] = useState(settings.max_login_devices)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
@@ -161,6 +163,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       guestmode !== settings.guestmode ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
       refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
+      refreshTokenIdleLifetimeSecs !== settings.refresh_token_idle_lifetime_secs ||
+      maxLoginDevices !== settings.max_login_devices ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
       replacedupe !== settings.replacedupe ||
@@ -181,7 +185,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
       archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
       guestmode, accessTokenLifetimeSecs,
-      refreshTokenLifetimeSecs, enablecors, tempmaxsize,
+      refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings, translationIsDirty,
@@ -217,6 +221,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       guestmode,
       access_token_lifetime_secs: accessTokenLifetimeSecs,
       refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
+      refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
+      max_login_devices: maxLoginDevices,
       enablecors,
       tempmaxsize,
       replacedupe,
@@ -435,6 +441,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setAccessTokenLifetimeSecs={setAccessTokenLifetimeSecs}
             refreshTokenLifetimeSecs={refreshTokenLifetimeSecs}
             setRefreshTokenLifetimeSecs={setRefreshTokenLifetimeSecs}
+            refreshTokenIdleLifetimeSecs={refreshTokenIdleLifetimeSecs}
+            setRefreshTokenIdleLifetimeSecs={setRefreshTokenIdleLifetimeSecs}
+            maxLoginDevices={maxLoginDevices}
+            setMaxLoginDevices={setMaxLoginDevices}
             enablecors={enablecors}
             setEnablecors={setEnablecors}
           />

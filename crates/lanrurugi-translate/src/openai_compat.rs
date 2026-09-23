@@ -253,6 +253,7 @@ mod tests {
             vec![TranslationBlock {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
+                alternate_source_text: None,
             }],
             "en",
         ));

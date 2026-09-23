@@ -37,7 +37,7 @@ use lanrurugi_fontcache::entities::VolumeFontPattern;
 use lanrurugi_fontcache::voting::VoteCandidate;
 use lanrurugi_fontcache::{routing, FontId, FontPatternRepository, RouteDecision};
 use lanrurugi_ocr::batch::{run_batch, OcrEngine, PageInput};
-use lanrurugi_ocr::entities::{DetectedTextRegion, PageNumber, VolumeId};
+use lanrurugi_ocr::entities::{BoundingBox, DetectedTextRegion, PageNumber, VolumeId};
 use lanrurugi_translate::adapter::TranslationError;
 use lanrurugi_translate::budget::BudgetRepository;
 use lanrurugi_translate::cache::{TranslationCacheKey, TranslationImageCache};
@@ -248,6 +248,31 @@ pub(crate) async fn load_page_image(
 /// This is the shared "detection must exist before anything else can happen" step: the cloud path
 /// (below) and the local-backend path (`translation::get_page_text_regions`) both need it, and
 /// neither should re-run a detection that already happened.
+///
+/// A cached result of zero regions is deliberately never trusted as a cache hit — only ever
+/// persisted below when `regions` is non-empty, and `get_detected` returning `Some(vec![])`
+/// (a pre-existing empty result from before this fix, or a race with another in-flight
+/// detection) falls through to re-running detection rather than short-circuiting. Real reported
+/// incident (2026-09-16): a page whose true content is dense with real dialogue permanently
+/// cached zero regions — almost certainly from a transient failure during a real host-level
+/// memory-pressure incident this same session hit repeatedly (GPU worker `DeadlineExceeded`
+/// kills, `whole-page inpainting failed` degradations) silently dropping every candidate region
+/// downstream of detection without `run_batch` itself returning an `Err` — and every subsequent
+/// request for that page kept returning the same empty, permanently-stuck result forever, with
+/// no retry path at all short of an operator manually deleting the Redis key. `run_batch`
+/// succeeding (`Ok`) with an empty `Vec` is inherently ambiguous at this layer (a genuinely
+/// textless page vs. every real candidate silently filtered out downstream, e.g. by
+/// `looks_like_japanese()` or a swallowed per-region recognition error) — there's no reliable way
+/// to tell those apart here, so the safe choice is to never let an empty result become permanent:
+/// re-running detection for an actually-blank page only costs one extra (cheap) inference call,
+/// while a falsely-cached empty result costs that page's translation forever.
+///
+/// The same rule extends to *partial* results (issue #101): when `run_batch` reports
+/// `degraded_by_infrastructure_failure`, at least one line box was dropped because the GPU worker
+/// RPC failed rather than because the model rejected that crop's content, so the region set is
+/// incomplete for a transient reason and is returned to the caller but never persisted. A
+/// content-level rejection (a low-confidence decode on unreadable SFX lettering, say) is the
+/// opposite case — reproducible, so it caches normally.
 pub async fn ensure_detected(
     state: &AppState,
     ctx: &TranslationContextHandles,
@@ -255,8 +280,36 @@ pub async fn ensure_detected(
     page: PageNumber,
     bubbles: Option<&[lanrurugi_ocr::bubble_segment::DetectedBubble]>,
 ) -> Result<Vec<DetectedTextRegion>, PipelineError> {
+    detect_with_degradation(state, ctx, archive_id, page, bubbles)
+        .await
+        .map(|(regions, _)| regions)
+}
+
+/// [`ensure_detected`], but also reporting whether this detection was degraded by an
+/// infrastructure failure.
+///
+/// Split out because the degradation flag has to survive past detection: the *rendered* page
+/// cache (`TranslationImageCache`, on disk) freezes a degraded result just as permanently as
+/// the Redis region cache does, so `translate_page` needs the flag to decide whether the
+/// composite it produces is safe to keep (issue #101). Callers that only ever read regions
+/// (`translation::detect_for_local_backend`) keep using the simpler wrapper above.
+async fn detect_with_degradation(
+    state: &AppState,
+    ctx: &TranslationContextHandles,
+    archive_id: &ArchiveId,
+    page: PageNumber,
+    bubbles: Option<&[lanrurugi_ocr::bubble_segment::DetectedBubble]>,
+) -> Result<(Vec<DetectedTextRegion>, bool), PipelineError> {
+    // `Some(vec![])` — an empty-but-present cached result — deliberately does NOT short-circuit
+    // here, only `Some(non_empty)` does; see this function's own doc comment for why. A stale
+    // empty entry from before this fix (or a genuinely blank page that gets re-detected as empty
+    // again below) simply falls through to a fresh detection call rather than being trusted.
+    // A cache hit is by definition not degraded: only a non-degraded detection was ever allowed
+    // to be persisted in the first place.
     if let Ok(Some(existing)) = ctx.regions.get_detected(archive_id, page).await {
-        return Ok(existing);
+        if !existing.is_empty() {
+            return Ok((existing, false));
+        }
     }
 
     let (image, is_cover, _total) = load_page_image(state, archive_id, page).await?;
@@ -287,11 +340,110 @@ pub async fn ensure_detected(
     .await
     .map_err(|e| PipelineError::Ocr(e.to_string()))?;
 
-    let mut regions = results
+    let (mut regions, mut degraded) = results
         .into_iter()
         .next()
-        .map(|r| r.regions)
+        .map(|r| (r.regions, r.degraded_by_infrastructure_failure))
         .unwrap_or_default();
+
+    // --- Bubble-guided + white-blob fallbacks ------------------------------------------------
+    // Two independent sources of "a real text block the detector never boxed":
+    //  - a bubble the segmentation model *did* detect, but no surviving region covers;
+    //  - a near-white connected component (bubble interior) found directly in the page image,
+    //    independent of the bubble model — for handwritten/coloured SFX bubbles the model misses
+    //    entirely (real page-12 incident: the purple "つけたね。" bubble was in neither the
+    //    detector's boxes nor the bubble model's output).
+    let mut candidates: Vec<BoundingBox> = Vec::new();
+    if let Some(bubbles) = bubbles {
+        for bubble in bubbles {
+            let (w, h) = (bubble.bbox.w, bubble.bbox.h);
+            let area = u64::from(w) * u64::from(h);
+            if w < 24 || h < 24 || area > 200_000 {
+                continue;
+            }
+            if regions.iter().any(|region| {
+                region_area_fraction_inside_bubble(&region.bounding_box, bubble) >= 0.5
+            }) {
+                continue;
+            }
+            candidates.push(bubble.bbox);
+        }
+    }
+    candidates.extend(white_blob_candidates(&image, &regions));
+
+    // Drop candidates that merely nest inside a larger one (bubble bbox + its own white blob would
+    // otherwise be recognized twice).
+    candidates.sort_by_key(|b| std::cmp::Reverse(u64::from(b.w) * u64::from(b.h)));
+    let mut deduped: Vec<BoundingBox> = Vec::new();
+    for candidate in candidates {
+        let nested = deduped.iter().any(|kept| {
+            kept.x <= candidate.x
+                && kept.y <= candidate.y
+                && kept.x + kept.w >= candidate.x + candidate.w
+                && kept.y + kept.h >= candidate.y + candidate.h
+        });
+        if !nested {
+            deduped.push(candidate);
+        }
+    }
+    if !deduped.is_empty() {
+        tracing::info!(
+            count = deduped.len(),
+            "translation fallback: candidate text boxes with no covering region"
+        );
+        let recognizer = ctx.engine.recognizer();
+        let crops: Vec<(usize, RgbImage)> = deduped
+            .iter()
+            .enumerate()
+            .filter_map(|(index, bbox)| {
+                lanrurugi_ocr::style_estimate::crop_region(&image, bbox).map(|crop| (index, crop))
+            })
+            .collect();
+        let outcomes = lanrurugi_core::concurrency::run_blocking(move || {
+            crops
+                .into_iter()
+                .map(|(index, crop)| (index, recognizer.recognize(&crop)))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|e| PipelineError::Ocr(e.to_string()))?;
+        for (index, outcome) in outcomes {
+            match outcome {
+                Ok(text) => {
+                    let text = text.trim();
+                    if !text.is_empty() && lanrurugi_ocr::recognize::looks_like_japanese(text) {
+                        let bbox = deduped[index];
+                        tracing::info!(
+                            ?bbox,
+                            "translation fallback recovered text the detector missed"
+                        );
+                        regions.push(DetectedTextRegion::new(
+                            archive_id.clone(),
+                            page,
+                            bbox,
+                            text.to_string(),
+                            is_cover,
+                        ));
+                    }
+                }
+                Err(lanrurugi_ocr::batch::RecognizeHandleError::Infrastructure(error)) => {
+                    tracing::warn!(
+                        %error,
+                        "translation fallback hit an infrastructure failure; page stays degraded"
+                    );
+                    degraded = true;
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
+    // Drop overlapping duplicate regions: a large bubble-level region and a narrow column region
+    // can both survive detection/fallbacks while covering the same source text, which renders the
+    // translation twice on top of itself ("double lettering"). Real reported incident (2026-09-20,
+    // page 13 left-middle bubble: `そしてこの任へ` at x=166 and `そしてこの任へ就くにあたって....`
+    // at x=28 overlapped 74%, both translated and drawn).
+    deduplicate_overlapping_regions(&mut regions);
 
     // Re-estimate fg/bg colour over each region's own *final* (possibly bubble-merged) bounding
     // box, rather than trusting whatever a pre-merge line's own narrower crop happened to estimate
@@ -320,12 +472,312 @@ pub async fn ensure_detected(
     let volume_id = resolve_volume_id(state, archive_id).await;
     resolve_fonts(ctx, &volume_id, &image, &mut regions).await;
 
-    ctx.regions
-        .save_detected(archive_id, page, &regions)
-        .await
-        .map_err(|e| PipelineError::Storage(e.to_string()))?;
+    // Only a non-empty result gets persisted — see this function's own doc comment on why an
+    // empty result is never trusted as permanent. A genuinely blank page just re-runs detection
+    // (and finds nothing again) on its next request too, which costs one cheap inference call;
+    // that's a strictly better failure mode than a real page's content getting permanently stuck
+    // behind a falsely-cached empty result with no retry path at all.
+    if degraded {
+        // Issue #101: at least one line box was dropped because the GPU worker RPC failed
+        // (timeout / not ready / connection lost / session died mid-call), not because the model
+        // judged that crop unreadable. `regions` is therefore a silently incomplete view of this
+        // page, and persisting it would freeze that specific incomplete translation in Redis
+        // forever — the same permanent-staleness failure mode the empty-result rule above already
+        // guards against, just with a partial result instead of an empty one. Returning it
+        // unpersisted still serves this request as well as we can while leaving the next request
+        // free to re-detect and (under less resource pressure) get the full page.
+        tracing::warn!(
+            %archive_id,
+            %page,
+            region_count = regions.len(),
+            "recognition hit an infrastructure failure; returning this page's regions without caching them so a later request can retry"
+        );
+    }
 
-    Ok(regions)
+    if should_persist_detection(&regions, degraded) {
+        ctx.regions
+            .save_detected(archive_id, page, &regions)
+            .await
+            .map_err(|e| PipelineError::Storage(e.to_string()))?;
+    }
+
+    Ok((regions, degraded))
+}
+
+/// Removes regions that substantially overlap a larger region *and* whose source text is
+/// contained in (or contains) the larger one's — the double-lettering failure mode where a
+/// bubble-level region and a narrow column region both survive for the same Japanese text.
+fn deduplicate_overlapping_regions(regions: &mut Vec<DetectedTextRegion>) {
+    let mut keep = vec![true; regions.len()];
+    for i in 0..regions.len() {
+        for j in (i + 1)..regions.len() {
+            if !keep[i] || !keep[j] {
+                continue;
+            }
+            let (a, b) = (&regions[i], &regions[j]);
+            let inter = bbox_intersection_area(&a.bounding_box, &b.bounding_box);
+            let area_a = u64::from(a.bounding_box.w) * u64::from(a.bounding_box.h);
+            let area_b = u64::from(b.bounding_box.w) * u64::from(b.bounding_box.h);
+            let smaller = area_a.min(area_b);
+            // 50%, not the previous 70%: a detector-fragmented block can leave one column as a
+            // separate region whose bbox only half-overlaps the merged region (real page-15
+            // `ーッ` fragment), yet the fragment still belongs to that block. The text-overlap
+            // check below prevents dropping genuinely unrelated nearby regions.
+            if smaller == 0 || inter * 10 < smaller * 5 {
+                continue;
+            }
+            if !region_texts_overlap(a, b) {
+                continue;
+            }
+            // Keep the larger region (its box already covers the shared text area); drop the other.
+            let drop_i = area_a < area_b;
+            if drop_i {
+                keep[i] = false;
+                break;
+            } else {
+                keep[j] = false;
+            }
+        }
+    }
+    let mut index = 0;
+    regions.retain(|_| {
+        let keep_this = keep[index];
+        index += 1;
+        keep_this
+    });
+}
+
+/// Whether one text's own visible characters are contained in the other's (after stripping
+/// whitespace/punctuation) — the signal that two overlapping regions describe the same lettering.
+fn regions_text_overlap(a: &str, b: &str) -> bool {
+    fn normalise(text: &str) -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace() && !"，。、！？…「」『』（）,.!?()".contains(*c))
+            // OCR routinely confuses small kana with their full-size variants (`ッ` vs `ツ` is
+            // exactly the page-15 fragment/canonical pair this overlap check exists for). Fold
+            // them together for *overlap detection only*; the actual region text is untouched.
+            .map(|c| match c {
+                'ァ' => 'ア',
+                'ィ' => 'イ',
+                'ゥ' => 'ウ',
+                'ェ' => 'エ',
+                'ォ' => 'オ',
+                'ッ' => 'ツ',
+                'ャ' => 'ヤ',
+                'ュ' => 'ユ',
+                'ョ' => 'ヨ',
+                'ヮ' => 'ワ',
+                'ヵ' => 'カ',
+                'ヶ' => 'ケ',
+                'ぁ' => 'あ',
+                'ぃ' => 'い',
+                'ぅ' => 'う',
+                'ぇ' => 'え',
+                'ぉ' => 'お',
+                'っ' => 'つ',
+                'ゃ' => 'や',
+                'ゅ' => 'ゆ',
+                'ょ' => 'よ',
+                'ゎ' => 'わ',
+                other => other,
+            })
+            .collect()
+    }
+
+    /// Whether every character in `small` occurs at least as many times in `big` (multiset
+    /// containment). Catches OCR-fragment pairs like `ーッ` / `スーツ母娘` where the characters
+    /// are a scrambled subset rather than a contiguous substring.
+    fn multiset_contains(big: &str, small: &str) -> bool {
+        let mut counts: Vec<(char, usize)> = Vec::new();
+        for ch in big.chars() {
+            match counts.iter_mut().find(|(seen, _)| *seen == ch) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((ch, 1)),
+            }
+        }
+        for ch in small.chars() {
+            match counts.iter_mut().find(|(seen, _)| *seen == ch) {
+                Some((_, count)) if *count > 0 => *count -= 1,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    let (na, nb) = (normalise(a), normalise(b));
+    if na.is_empty() || nb.is_empty() {
+        return false;
+    }
+    na.contains(&nb)
+        || nb.contains(&na)
+        || multiset_contains(&na, &nb)
+        || multiset_contains(&nb, &na)
+}
+
+/// Whether two regions describe overlapping lettering, allowing either side's alternate OCR
+/// candidate to be the one that contains the other's visible characters.
+fn region_texts_overlap(a: &DetectedTextRegion, b: &DetectedTextRegion) -> bool {
+    let a_texts: Vec<&str> = std::iter::once(a.source_text.as_str())
+        .chain(a.alternate_source_text.as_deref())
+        .collect();
+    let b_texts: Vec<&str> = std::iter::once(b.source_text.as_str())
+        .chain(b.alternate_source_text.as_deref())
+        .collect();
+    a_texts.iter().any(|a_text| {
+        b_texts
+            .iter()
+            .any(|b_text| regions_text_overlap(a_text, b_text))
+    })
+}
+
+/// Intersection area of two axis-aligned boxes in pixels (`0` when they don't overlap).
+fn bbox_intersection_area(a: &BoundingBox, b: &BoundingBox) -> u64 {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.w).min(b.x + b.w);
+    let y1 = (a.y + a.h).min(b.y + b.h);
+    if x1 <= x0 || y1 <= y0 {
+        0
+    } else {
+        u64::from(x1 - x0) * u64::from(y1 - y0)
+    }
+}
+
+/// Near-white connected components (bubble interiors) with no existing text region covering them,
+/// largest first — an image-only fallback for bubbles the segmentation model missed entirely.
+fn white_blob_candidates(page: &RgbImage, regions: &[DetectedTextRegion]) -> Vec<BoundingBox> {
+    let (pw, ph) = page.dimensions();
+    let mut visited = vec![false; (pw * ph) as usize];
+    let is_light = |x: u32, y: u32| -> bool {
+        let p = page.get_pixel(x, y).0;
+        let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
+        r.min(g).min(b) >= 200 && (r.max(g).max(b) - r.min(g).min(b)) <= 28
+    };
+    let mut out = Vec::new();
+    for y in 0..ph {
+        for x in 0..pw {
+            let start = (y * pw + x) as usize;
+            if visited[start] || !is_light(x, y) {
+                continue;
+            }
+            let mut stack = vec![(x, y)];
+            visited[start] = true;
+            let (mut min_x, mut min_y, mut max_x, mut max_y) = (x, y, x, y);
+            let mut count = 0u64;
+            while let Some((cx, cy)) = stack.pop() {
+                count += 1;
+                min_x = min_x.min(cx);
+                min_y = min_y.min(cy);
+                max_x = max_x.max(cx);
+                max_y = max_y.max(cy);
+                for (nx, ny) in [
+                    (cx.wrapping_sub(1), cy),
+                    (cx + 1, cy),
+                    (cx, cy.wrapping_sub(1)),
+                    (cx, cy + 1),
+                ] {
+                    if nx >= pw || ny >= ph {
+                        continue;
+                    }
+                    let ni = (ny * pw + nx) as usize;
+                    if !visited[ni] && is_light(nx, ny) {
+                        visited[ni] = true;
+                        stack.push((nx, ny));
+                    }
+                }
+            }
+            let (bw, bh) = (max_x - min_x + 1, max_y - min_y + 1);
+            if !(600..=120_000).contains(&count)
+                || bw < 24
+                || bh < 24
+                || (bw.max(bh) as f32 / bw.min(bh) as f32) > 8.0
+            {
+                continue;
+            }
+            let bbox = BoundingBox::new(min_x, min_y, bw, bh);
+            if !blob_covered(&bbox, regions) {
+                out.push(bbox);
+            }
+        }
+    }
+    out.sort_by_key(|b| std::cmp::Reverse(u64::from(b.w) * u64::from(b.h)));
+    out.truncate(8);
+    out
+}
+
+/// Whether an existing text region already sits (almost entirely) inside `bbox` — the signal that
+/// this white blob is a bubble whose text was detected/translated already. Deliberately measured on
+/// the *region's* own area (>=80% of the region inside the blob bbox) rather than the blob's area:
+/// a tight text-column region covers only a fraction of its bubble's white interior, so a
+/// blob-area threshold would wrongly keep the bubble as a fallback candidate and add a duplicate
+/// second translation for it (real regression caught on the 2026-09-19 page-12 run: the top-right
+/// bubble's existing region is much smaller than the bubble's white blob, and the blob fallback
+/// produced a duplicate region covering the whole bubble).
+fn blob_covered(bbox: &BoundingBox, regions: &[DetectedTextRegion]) -> bool {
+    regions.iter().any(|region| {
+        let r = &region.bounding_box;
+        let region_area = u64::from(r.w) * u64::from(r.h);
+        if region_area == 0 {
+            return false;
+        }
+        let x0 = bbox.x.max(r.x);
+        let y0 = bbox.y.max(r.y);
+        let x1 = (bbox.x + bbox.w).min(r.x + r.w);
+        let y1 = (bbox.y + bbox.h).min(r.y + r.h);
+        if x1 <= x0 || y1 <= y0 {
+            return false;
+        }
+        let inside = u64::from(x1 - x0) * u64::from(y1 - y0);
+        // 80%, not 90: a merged multi-column label's bbox can sit slightly off-centre inside its
+        // white interior (real page-15 `エルフ母娘`), and re-recognizing that interior would only
+        // pay for a duplicate the later region-dedup pass immediately throws away.
+        inside * 10 >= region_area * 8
+    })
+}
+
+/// Fraction of `region`'s own bbox area whose pixels fall inside `bubble`'s detected *mask* — the
+/// same measurement `merge_lines`'s own bubble membership uses, reused here so the bubble-guided
+/// fallback is not fooled by a neighbouring bubble's region merely overlapping this bubble's bbox.
+fn region_area_fraction_inside_bubble(
+    region: &lanrurugi_ocr::entities::BoundingBox,
+    bubble: &lanrurugi_ocr::bubble_segment::DetectedBubble,
+) -> f32 {
+    let mut inside = 0u64;
+    let mut total = 0u64;
+    for y in region.y..region.y.saturating_add(region.h) {
+        for x in region.x..region.x.saturating_add(region.w) {
+            total += 1;
+            if x < bubble.bbox.x || y < bubble.bbox.y {
+                continue;
+            }
+            let (bx, by) = (x - bubble.bbox.x, y - bubble.bbox.y);
+            if bx >= bubble.bbox.w || by >= bubble.bbox.h {
+                continue;
+            }
+            if bubble.mask[(by * bubble.bbox.w + bx) as usize] {
+                inside += 1;
+            }
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        inside as f32 / total as f32
+    }
+}
+
+/// Whether a freshly-detected region set is safe to persist as this page's authoritative record.
+///
+/// Two independent reasons not to, both about the same hazard — a result that is wrong for a
+/// *transient* reason becoming permanent, with no retry path short of an operator deleting the
+/// Redis key by hand:
+///
+/// - `degraded`: recognition hit an infrastructure failure, so regions are silently incomplete
+///   (issue #101).
+/// - empty: indistinguishable at this layer from "everything got dropped downstream", so it is
+///   never trusted — see [`ensure_detected`]'s own doc comment.
+fn should_persist_detection(regions: &[DetectedTextRegion], degraded: bool) -> bool {
+    !degraded && !regions.is_empty()
 }
 
 /// Assigns each region a golden-set font, running the voting or routing stage as appropriate
@@ -519,9 +971,26 @@ pub async fn translate_page(
     .map_err(|e| PipelineError::Ocr(e.to_string()))?;
 
     // --- 1. Detection (persisted) --------------------------------------------------------------
-    let detected = ensure_detected(state, ctx, archive_id, page, bubbles.as_deref()).await?;
+    let (detected, degraded) =
+        detect_with_degradation(state, ctx, archive_id, page, bubbles.as_deref()).await?;
 
     if detected.is_empty() {
+        if degraded {
+            // Every candidate region was lost to the same infrastructure failure, so "this page
+            // has no text" is a conclusion about the GPU worker, not about the page. Caching the
+            // untouched original here would make that conclusion permanent on disk — exactly the
+            // hazard `should_persist_detection` already blocks one layer up. Not an `Err`
+            // either: that marks the page `Failed`, which the scheduler never auto-retries, so
+            // it would trade a stuck disk cache for an equally stuck in-memory state. Leaving it
+            // un-cached and not-ready lets the next poll re-run the whole pipeline.
+            tracing::warn!(
+                %archive_id,
+                %page,
+                "recognition degraded by an infrastructure failure and left no regions; not \
+                 caching this page so a later request can retry"
+            );
+            return Ok(());
+        }
         // A page with no text is fully "translated" the moment it's detected — there is nothing to
         // draw, so the original page is already the correct rendering. Cache the original bytes so
         // the API can answer "ready" instead of staying in the 202/poll loop forever; the byte
@@ -599,7 +1068,16 @@ pub async fn translate_page(
     }
 
     // --- 5. Composite and cache ----------------------------------------------------------------
-    composite_and_cache(state, ctx, archive_id, page, &regions, bubbles.as_deref()).await
+    composite_and_cache(
+        state,
+        ctx,
+        archive_id,
+        page,
+        &regions,
+        bubbles.as_deref(),
+        degraded,
+    )
+    .await
 }
 
 /// The billed half: context-assembled batched translation, then persistence of both the glossary
@@ -719,6 +1197,15 @@ async fn translate_and_persist(
 /// function's doc comment on why this no longer runs its own segmentation RPC (issue found
 /// 2026-09-14: a second in-request `Image`-worker call here raced the `Recognize` worker over VRAM
 /// on a cache-miss page).
+///
+/// `degraded` carries detection's own infrastructure-failure verdict all the way down to the
+/// disk cache (issue #101, second half): the rendered page is only ever as complete as the
+/// regions it was drawn from, so a composite built on a degraded region set is still served to
+/// this request but never written to `TranslationImageCache`. Without that, the Redis-side fix
+/// alone just moved the permanent staleness one layer down — confirmed live by a user
+/// screenshot of a page cached on disk as the completely untranslated original after a real GPU
+/// worker failure, with no retry path short of deleting the `.webp` by hand.
+#[allow(clippy::too_many_arguments)]
 async fn composite_and_cache(
     state: &AppState,
     ctx: &TranslationContextHandles,
@@ -726,6 +1213,7 @@ async fn composite_and_cache(
     page: PageNumber,
     regions: &[DetectedTextRegion],
     bubbles: Option<&[lanrurugi_ocr::bubble_segment::DetectedBubble]>,
+    degraded: bool,
 ) -> Result<(), PipelineError> {
     if !regions.iter().any(|r| r.translated_text.is_some()) {
         return Ok(());
@@ -743,6 +1231,7 @@ async fn composite_and_cache(
 
     let font_library = Arc::clone(&ctx.font_library);
     let image_worker = Arc::clone(&ctx.image_worker);
+    let region_count = regions.len();
     let regions = regions.to_vec();
     let bubbles = bubbles.map(|b| b.to_vec());
 
@@ -768,7 +1257,15 @@ async fn composite_and_cache(
             // different signature — plain method-call syntax would otherwise be ambiguous here.
             InpainterHandle::erase_page(&*image_worker, page_ref, model_mask, paste_mask)
                 .inspect_err(|e| {
-                    tracing::warn!(error = %e, "whole-page inpainting failed; falling back to flat-fill backdrops only")
+                    // Wording matters here: this used to say "falling back to flat-fill
+                    // backdrops only", which stopped being true when that rectangle fill was
+                    // removed — a failed erase now leaves the page untouched and skips drawing
+                    // the translation entirely, so the original lettering stays readable.
+                    tracing::warn!(
+                        error = %e,
+                        "whole-page inpainting failed; leaving this page untranslated rather than \
+                         drawing over un-erased lettering"
+                    )
                 })
                 .ok()
         };
@@ -778,6 +1275,17 @@ async fn composite_and_cache(
     })
     .await
     .map_err(|e| PipelineError::Composite(e.to_string()))??;
+
+    if !should_persist_composite(degraded) {
+        tracing::warn!(
+            %archive_id,
+            %page,
+            region_count,
+            "recognition hit an infrastructure failure; serving this composite without caching it \
+             so a later request can re-render the full page"
+        );
+        return Ok(());
+    }
 
     let key = TranslationCacheKey::new(
         archive_id.clone(),
@@ -792,6 +1300,16 @@ async fn composite_and_cache(
 
     tracing::info!(%archive_id, %page, "translated page composited and cached");
     Ok(())
+}
+
+/// Whether a freshly-rendered page image is safe to keep in the on-disk cache.
+///
+/// The disk-cache counterpart of [`should_persist_detection`], and deliberately the same rule:
+/// a degraded detection produces a composite that may be missing some — or, as really happened,
+/// all — of its translations, and `translation::get_page_translation` short-circuits on a disk
+/// hit without re-running the pipeline, so caching one freezes that partial rendering forever.
+fn should_persist_composite(degraded: bool) -> bool {
+    !degraded
 }
 
 /// Encodes and caches the untouched original page image.
@@ -1318,6 +1836,77 @@ fn should_schedule_current_page(state: Option<&PageState>) -> bool {
 mod tests {
     use super::*;
 
+    fn a_region() -> DetectedTextRegion {
+        DetectedTextRegion::new(
+            ArchiveId("0".repeat(40)),
+            PageNumber(10),
+            lanrurugi_ocr::entities::BoundingBox::new(100, 100, 200, 60),
+            "こんにちは".into(),
+            false,
+        )
+    }
+
+    /// The issue #101 fix itself: a page whose recognition hit a transient GPU-worker failure is
+    /// returned to the caller but never written to Redis, so the next request re-detects instead
+    /// of replaying the same incomplete translation forever.
+    #[test]
+    fn a_degraded_result_is_never_persisted() {
+        assert!(
+            !should_persist_detection(&[a_region()], true),
+            "an infrastructure failure must keep even a non-empty result out of the cache"
+        );
+    }
+
+    /// The no-regression case: a clean, non-empty detection caches normally, so later requests hit
+    /// that cache rather than paying for detection again.
+    #[test]
+    fn a_clean_non_empty_result_is_persisted() {
+        assert!(should_persist_detection(&[a_region()], false));
+    }
+
+    /// Pre-existing rule, kept intact: an empty result is never trusted as permanent either, since
+    /// a genuinely blank page and a page whose regions all got dropped downstream look identical
+    /// here.
+    #[test]
+    fn an_empty_result_is_never_persisted() {
+        assert!(!should_persist_detection(&[], false));
+        assert!(!should_persist_detection(&[], true));
+    }
+
+    /// The second half of issue #101, found by a user's on-device screenshot after the Redis-side
+    /// fix above was already in: the rendered page goes to a *disk* cache that
+    /// `get_page_translation` reads before anything else, so a composite built from a degraded
+    /// region set froze there just as permanently. The real incident cached a page as the
+    /// completely untranslated original.
+    #[test]
+    fn a_degraded_composite_is_never_cached_on_disk() {
+        assert!(
+            !should_persist_composite(true),
+            "a composite drawn from an infrastructure-degraded region set must not reach the \
+             on-disk cache, or the next request hits it instead of re-rendering"
+        );
+    }
+
+    /// The no-regression case, and the reason this is a flag rather than a blanket rule: a clean
+    /// page must still cache, otherwise every single view re-runs the full inference pipeline.
+    #[test]
+    fn a_clean_composite_is_cached_on_disk() {
+        assert!(should_persist_composite(false));
+    }
+
+    /// Both cache layers answer the same question the same way, which is the whole point of the
+    /// follow-up fix — the disk cache was the one layer that did not.
+    #[test]
+    fn both_cache_layers_agree_on_a_degraded_result() {
+        for degraded in [true, false] {
+            assert_eq!(
+                should_persist_detection(&[a_region()], degraded),
+                should_persist_composite(degraded),
+                "detection and composite caching must not disagree about a degraded page"
+            );
+        }
+    }
+
     #[test]
     fn a_page_already_being_worked_on_is_not_rescheduled() {
         assert!(!should_schedule_current_page(Some(&PageState::Queued)));
@@ -1385,5 +1974,39 @@ mod tests {
             scheduler.lookahead_permits.available_permits() >= 1,
             "look-ahead must always get at least one permit, even on a tiny host"
         );
+    }
+    #[test]
+    fn a_fragment_region_is_dropped_when_the_alternate_candidate_contains_it() {
+        let mut merged = a_region();
+        merged.bounding_box = lanrurugi_ocr::entities::BoundingBox::new(955, 1036, 99, 86);
+        merged.source_text = "娘スー母猫".into();
+        merged.alternate_source_text = Some("スーツ母娘".into());
+
+        let mut fragment = a_region();
+        fragment.bounding_box = lanrurugi_ocr::entities::BoundingBox::new(1000, 1079, 50, 86);
+        fragment.source_text = "ーッ".into();
+
+        let mut regions = vec![merged, fragment];
+        deduplicate_overlapping_regions(&mut regions);
+        assert_eq!(regions.len(), 1, "the overlapping fragment must be dropped");
+        assert_eq!(regions[0].source_text, "娘スー母猫");
+        assert_eq!(
+            regions[0].alternate_source_text.as_deref(),
+            Some("スーツ母娘")
+        );
+    }
+
+    #[test]
+    fn overlapping_regions_with_unrelated_text_are_both_kept() {
+        let mut first = a_region();
+        first.bounding_box = lanrurugi_ocr::entities::BoundingBox::new(0, 0, 100, 100);
+        first.source_text = "こんにちは".into();
+        let mut second = a_region();
+        second.bounding_box = lanrurugi_ocr::entities::BoundingBox::new(20, 20, 100, 100);
+        second.source_text = "さようなら".into();
+
+        let mut regions = vec![first, second];
+        deduplicate_overlapping_regions(&mut regions);
+        assert_eq!(regions.len(), 2);
     }
 }

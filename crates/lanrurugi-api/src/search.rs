@@ -113,9 +113,91 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
     Some(json)
 }
 
+/// Like [`resolve_search_entry`], but for the additive raw-archive search endpoint: additionally
+/// reports the Tankoubon this archive currently belongs to — its `tankid`, its 0-based
+/// `archive_index` in that Tankoubon's volume order (plus a 1-based `tank_sequence` convenience
+/// alias), and a nested `tankoubon` object with that Tankoubon's own metadata. All four are
+/// `null` when the archive is not a member of any Tankoubon, so a caller searching an archive
+/// that is already in the library can tell both whether it exists and where it is filed.
+///
+/// Membership is reverse-index-backed (`GroupingRepository::for_archive`), not a full-library
+/// scan. An archive can technically belong to more than one Tankoubon; this picks the
+/// lexicographically smallest id so the result is deterministic across requests rather than
+/// dependent on Redis set iteration order, and reports the index within that chosen Tankoubon.
+async fn resolve_raw_search_entry(state: &AppState, id: &str) -> Option<serde_json::Value> {
+    let mut entry = resolve_search_entry(state, id).await?;
+
+    let mut tankid: Option<String> = None;
+    let mut archive_index: Option<usize> = None;
+    let mut tankoubon: Option<serde_json::Value> = None;
+    match state
+        .repos
+        .groupings
+        .for_archive(&lanrurugi_core::ids::ArchiveId(id.to_string()))
+        .await
+    {
+        Ok(mut groupings) => {
+            groupings.sort_by(|a, b| a.tankid.cmp(&b.tankid));
+            for grouping in groupings {
+                let Some(index) = grouping
+                    .archives
+                    .iter()
+                    .position(|archive_id| archive_id.as_str() == id)
+                else {
+                    continue;
+                };
+                tankid = Some(grouping.tankid.to_string());
+                archive_index = Some(index);
+                tankoubon = Some(json!({
+                    "id": grouping.tankid,
+                    "name": grouping.name,
+                    "summary": grouping.summary,
+                    "tags": grouping.tags,
+                    "progress": grouping.progress,
+                    "archive_count": grouping.archives.len(),
+                    "chapter_names": grouping.chapter_names,
+                    "archives": grouping.archives,
+                }));
+                break;
+            }
+        }
+        Err(e) => {
+            // A reverse-index read failure must not make the archive itself disappear from the
+            // result: report no Tankoubon metadata and keep the archive card, matching this
+            // endpoint's primary contract (find the archive) over its secondary metadata (where it
+            // is filed). A genuinely grouped archive keeps its standalone fallback rather than
+            // turning a transient Redis error into an unexplained empty result.
+            tracing::warn!(
+                archive_id = id,
+                error = %e,
+                "failed to resolve Tankoubon membership for raw search result"
+            );
+        }
+    }
+
+    let object = entry.as_object_mut()?;
+    object.insert("tankid".into(), json!(tankid));
+    object.insert("archive_index".into(), json!(archive_index));
+    object.insert(
+        "tank_sequence".into(),
+        json!(archive_index.map(|index| index + 1)),
+    );
+    object.insert(
+        "tankoubon".into(),
+        tankoubon.unwrap_or(serde_json::Value::Null),
+    );
+    Some(entry)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/search", get(search_archives))
+        // Additive raw-archive search: unlike `/search`, this never folds member archives behind
+        // a Tankoubon aggregate, so an archive already present inside a Tankoubon is still
+        // findable by its own title/tags. Existing `/search` behavior is deliberately unchanged
+        // (`groupby_tanks` still defaults to true there); this endpoint exists precisely because
+        // changing that default would break every existing grouped-search caller.
+        .route("/search/archives", get(search_archives_ungrouped))
         .route("/search/ids", get(search_archive_ids))
         .route("/search/random", get(search_random))
         .route("/search/cache", delete(discard_search_cache))
@@ -306,26 +388,57 @@ async fn search_archives(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(q): Query<SearchQuery>,
 ) -> Response {
-    let mut params = match build_params(&state, &q).await {
+    search_archives_with_mode(&state, auth.as_deref(), &q, false, "search").await
+}
+
+/// Additive raw-archive search endpoint (`GET /search/archives`), sharing `/search`'s query
+/// syntax, filtering, sorting, and pagination but never folding member archives behind a
+/// Tankoubon. It is intentionally a separate endpoint rather than a new default on `/search`:
+/// existing grouped-search callers keep their exact behavior, while duplicate/library-membership
+/// checks can ask for the underlying archive records instead of a `TANK_` aggregate.
+async fn search_archives_ungrouped(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
+    search_archives_with_mode(&state, auth.as_deref(), &q, true, "search_archives").await
+}
+
+async fn search_archives_with_mode(
+    state: &AppState,
+    auth: Option<&crate::auth_context::AuthContext>,
+    q: &SearchQuery,
+    force_ungrouped: bool,
+    operation: &str,
+) -> Response {
+    let mut params = match build_params(state, q).await {
         Ok(p) => p,
         Err(e) => {
             return error(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "search",
+                operation,
                 e.to_string(),
             )
         }
     };
+    if force_ungrouped {
+        // Contract guarantee for `/search/archives`: raw archive records only. Both params could
+        // otherwise reintroduce the exact behavior this endpoint exists to avoid
+        // (`groupby_tanks=true` folds members behind their Tankoubon; `tankonly=true` asks for
+        // only those aggregates), so they are forced rather than merely defaulted.
+        params.groupby_tanks = false;
+        params.tankonly = false;
+    }
     if matches!(
-        auth.as_deref().map(|a| &a.method),
+        auth.map(|a| &a.method),
         Some(crate::auth_context::AuthMethod::GuestVisitor)
     ) {
-        params.restrict_to_archive_ids = match guest_visible_archive_ids(&state).await {
+        params.restrict_to_archive_ids = match guest_visible_archive_ids(state).await {
             Ok(ids) => Some(ids),
             Err(e) => {
                 return error(
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "search",
+                    operation,
                     e.to_string(),
                 )
             }
@@ -336,7 +449,12 @@ async fn search_archives(
             let page = paginate(&result.ids, q.start);
             let mut data = Vec::with_capacity(page.len());
             for id in &page {
-                if let Some(entry) = resolve_search_entry(&state, id).await {
+                let entry = if force_ungrouped {
+                    resolve_raw_search_entry(state, id).await
+                } else {
+                    resolve_search_entry(state, id).await
+                };
+                if let Some(entry) = entry {
                     data.push(entry);
                 }
             }
@@ -349,7 +467,7 @@ async fn search_archives(
         }
         Err(e) => error(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "search",
+            operation,
             e.to_string(),
         ),
     }

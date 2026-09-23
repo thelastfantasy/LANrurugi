@@ -915,3 +915,28 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   color: #fff;
 }
 
+
+/* Settings → Security → Active Devices: rename/cancel are inline text actions, not standalone
+   buttons. `.ghost-btn`'s themed hover fill is right for square icon buttons inside a chrome
+   container, but too heavy when repeated inside a device list row; use a subtle underlined accent
+   link on hover instead. `!important` is required because legacy theme stylesheets are injected
+   at runtime after this file and would otherwise win on equal specificity. */
+.device-row-action {
+  min-width: 0 !important;
+  height: auto !important;
+  padding: 0 2px !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 none !important;
+  color: var(--theme-accent, inherit) !important;
+  font-size: inherit;
+  line-height: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.device-row-action:hover {
+  background: transparent !important;
+  color: var(--theme-accent, inherit) !important;
+  opacity: 0.72;
+}

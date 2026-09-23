@@ -185,6 +185,8 @@ const SETTINGS_FIELD_SECTIONS: Record<string, string> = {
   theme: "theme",
   access_token_lifetime_secs: "security",
   refresh_token_lifetime_secs: "security",
+  refresh_token_idle_lifetime_secs: "security",
+  max_login_devices: "security",
   enablecors: "security",
   tempmaxsize: "archive-files",
   replacedupe: "archive-files",

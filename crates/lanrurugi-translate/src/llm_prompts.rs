@@ -21,11 +21,11 @@ pub(crate) fn translation_system(target_language: &str) -> String {
     format!(
         "你正在把一页漫画上的文字翻译成{target_language}。请逐个按编号翻译每个文本块，忠实\
          传达原意，保留语气和用词的正式/随意程度。只输出一个 json 对象，包含一个\
-         \"translations\" 数组，数组每个元素包含三个字段：\"block_id\"（原样照抄输入里的编号，\
+         \"translations\" 数组，数组每个元素包含四个字段：\"block_id\"（原样照抄输入里的编号，\
          不要改动）、\"translated_text\"（该块的译文）、\"term_kind\"——如果该块的*原文*是一个\
          角色/人物的名字，填 \"person_name\"；如果是其它需要在全书保持一致的专有名称（地名、\
          组织名、作品内的专有概念等），填 \"term\"；其余情况（绝大多数文本块，包括短句、语气词、\
-         拟声词）一律填 \"none\"。不要输出任何多余的说明文字，也不要为这个任务展开长篇分步推理\
+         拟声词）一律填 \"none\"；\"selected_source_text\"——输入块给了 A/B 两种 OCR 候选时，把你实际翻译的那一条原文原样填入，单候选块填空字符串。不要输出任何多余的说明文字，也不要为这个任务展开长篇分步推理\
          ——直接判断并翻译即可。"
     )
 }
@@ -47,5 +47,10 @@ mod tests {
         assert!(prompt.contains("person_name"));
         assert!(prompt.contains("term"));
         assert!(prompt.contains("none"));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_the_selected_ocr_candidate() {
+        assert!(translation_system("English").contains("selected_source_text"));
     }
 }

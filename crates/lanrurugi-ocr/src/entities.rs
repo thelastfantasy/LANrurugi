@@ -69,6 +69,17 @@ impl From<&str> for VolumeId {
     }
 }
 
+/// The reading direction OCR actually observed for a detected text block.
+///
+/// Persisted so the compositor can honour the original lettering direction instead of guessing
+/// from the translated text / bounding-box aspect ratio — see `composite::is_vertical_bubble`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WritingDirection {
+    Vertical,
+    Horizontal,
+}
+
 /// An axis-aligned box in page pixel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BoundingBox {
@@ -289,6 +300,17 @@ pub struct DetectedTextRegion {
     /// the box-only entry point — was used instead of `detect_batch_with_raw_mask`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_text_mask: Option<RawTextMask>,
+    /// A second OCR reading of the same crop, produced by rotating an ambiguous-axis crop 90°
+    /// clockwise (and, for multi-box merged regions, by recognizing the merged union crop).
+    /// Translation sends both candidates to the LLM, which picks the more plausible Japanese
+    /// source and reports it back via `TranslatedBlock::selected_source_text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_source_text: Option<String>,
+    /// Reading direction observed by the OCR orientation pass. `None` means the detector never
+    /// produced a confident axis (vertical vs. horizontal stayed ambiguous), so compositing falls
+    /// back to its legacy aspect-ratio + target-script heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing_direction: Option<WritingDirection>,
 }
 
 impl DetectedTextRegion {
@@ -312,6 +334,8 @@ impl DetectedTextRegion {
             font: None,
             translated_text: None,
             raw_text_mask: None,
+            alternate_source_text: None,
+            writing_direction: None,
         }
     }
 }
@@ -322,6 +346,28 @@ mod tests {
 
     fn bb(x: u32, y: u32, w: u32, h: u32) -> BoundingBox {
         BoundingBox::new(x, y, w, h)
+    }
+
+    #[test]
+    fn old_persisted_json_without_new_ocr_fields_still_deserializes() {
+        // Handoff warning: Redis already contains `DetectedTextRegion` JSON written before
+        // `alternate_source_text` / `writing_direction` existed. Those fields must serde-default
+        // to `None` or every old cached page becomes unreadable after deploy.
+        let region = DetectedTextRegion::new(
+            ArchiveId("a".repeat(40)),
+            PageNumber(15),
+            bb(99, 717, 93, 48),
+            "娘士".into(),
+            false,
+        );
+        let mut value = serde_json::to_value(&region).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("alternate_source_text");
+        object.remove("writing_direction");
+        let restored: DetectedTextRegion = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.source_text, "娘士");
+        assert_eq!(restored.alternate_source_text, None);
+        assert_eq!(restored.writing_direction, None);
     }
 
     #[test]

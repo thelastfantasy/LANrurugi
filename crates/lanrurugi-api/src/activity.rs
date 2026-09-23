@@ -124,6 +124,23 @@ pub async fn record_manual(
             a.client_reported.clone(),
         )
     });
+    // Session actors get the effective login-device name (custom rename when present). Token,
+    // guest, and anonymous actors deliberately get `None` — they have no login-family identity to
+    // name. A session whose cookie lacks a verifiable `fid` still gets the auto-generated UA-based
+    // label rather than an empty row.
+    let device_name = match auth.map(|a| &a.method) {
+        Some(AuthMethod::Session) => {
+            let auto_name = device_info.as_ref().map(|info| info.display_name());
+            match auth.and_then(|a| a.session_family_id.as_deref()) {
+                Some(family_id) => match state.refresh_tokens.get_family_meta(family_id).await {
+                    Ok(Some(meta)) => Some(meta.device_name()),
+                    _ => auto_name,
+                },
+                None => auto_name,
+            }
+        }
+        _ => None,
+    };
     let id = uuid::Uuid::new_v4().to_string();
     let entry = ActivityEntry {
         id: id.clone(),
@@ -135,6 +152,7 @@ pub async fn record_manual(
         outcome,
         client_ip,
         device_info,
+        device_name,
         before,
         after,
         caused_by: None,
@@ -274,6 +292,7 @@ pub async fn record_automatic(
         outcome,
         client_ip: None,
         device_info: None,
+        device_name: None,
         before: None,
         after,
         caused_by,

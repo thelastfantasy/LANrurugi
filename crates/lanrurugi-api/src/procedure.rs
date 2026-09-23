@@ -77,6 +77,7 @@ pub async fn require_api_key(
                         client_ip,
                         user_agent,
                         client_reported: None,
+                        session_family_id: None,
                     };
                     if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
                         trace_request(&request, &auth, false);
@@ -102,6 +103,7 @@ pub async fn require_api_key(
             client_ip,
             user_agent,
             client_reported: None,
+            session_family_id: crate::auth::session_family_id(&cfg, request.headers()),
         };
         // Always allowed today (`route_policy.csv`'s own `p, session, /*, *, allow` has no
         // exceptions), but still routed through the same `authorize_route` check as the `Token`
@@ -137,6 +139,7 @@ pub async fn require_api_key(
                     client_ip: client_ip.clone(),
                     user_agent: user_agent.clone(),
                     client_reported: None,
+                    session_family_id: None,
                 };
                 if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
                     trace_request(&request, &auth, false);
@@ -165,6 +168,7 @@ pub async fn require_api_key(
         client_ip,
         user_agent,
         client_reported: None,
+        session_family_id: None,
     };
     if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
         trace_request(&request, &auth, false);
@@ -362,6 +366,8 @@ mod tests {
             session_secret: Vec::new(),
             access_token_lifetime_secs: 3_600,
             refresh_token_lifetime_secs: 604_800,
+            refresh_token_idle_lifetime_secs: 1_209_600,
+            max_login_devices: 5,
             force_secure_cookies: false,
         }
     }
@@ -443,6 +449,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         };
         assert!(guest.is_token());
         assert!(guest.is_guest_token());
@@ -456,6 +463,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         };
         assert!(admin.is_token());
         assert!(!admin.is_guest_token());
@@ -465,6 +473,7 @@ mod tests {
             client_ip: None,
             user_agent: None,
             client_reported: None,
+            session_family_id: None,
         };
         assert!(!session.is_token());
         assert!(!session.is_guest_token());

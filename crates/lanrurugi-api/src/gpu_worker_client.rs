@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use lanrurugi_gpu_ipc::{DetectedBubbleWire, GpuWorkerClient as RpcClient, RawMask, RawRgbImage};
 use tarpc::client;
 use tarpc::tokio_serde::formats::Bincode;
+use tokio::io::{AsyncBufReadExt, AsyncRead};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -103,10 +104,22 @@ impl WorkerKind {
             // outlasted the old 30s, killing the worker mid-request and making the *second* call
             // (`erase_page`) fail with "the connection to the server was already shutdown" — the
             // page's own original lettering was left undrawn-over on top of the translation instead
-            // of erased. 120s comfortably covers a realistic LLM round trip with room to spare,
-            // while still reclaiming this worker's VRAM well before `Recognize`'s own 5-minute
-            // ceiling during genuine idle periods between page requests.
-            WorkerKind::Image => Duration::from_secs(120),
+            // of erased.
+            //
+            // Raised again from 120s to 180s (2026-09-17, a second real live incident): under
+            // genuine host memory pressure (this same session's own container restarted repeatedly
+            // under it — see `CLAUDE.md`'s own guardrail notes), the real gap between
+            // `segment_bubbles` finishing and `erase_page` starting measured 148s in server logs —
+            // past even the once-already-raised 120s, since `LLM_REQUEST_TIMEOUT`'s own 90s ceiling
+            // is a *cap*, not a typical latency, and real request latency (both the LLM round trip
+            // itself and this worker's own idle-reaper polling granularity) grows under the same
+            // resource contention that makes this scenario likely to matter in the first place.
+            // 180s matches `ERASE_PAGE_TIMEOUT`'s own value (that constant's own doc comment covers
+            // why it was chosen) — consistent headroom across the whole pipeline's own worst-case
+            // timing rather than two independently-guessed numbers — while still reclaiming this
+            // worker's VRAM well before `Recognize`'s own 5-minute ceiling during genuine idle
+            // periods between page requests.
+            WorkerKind::Image => Duration::from_secs(180),
         }
     }
 }
@@ -173,10 +186,66 @@ pub enum GpuWorkerError {
     Rpc(#[from] tarpc::client::RpcError),
     #[error("RPC call to lanrurugi-gpu-worker timed out after {0:?}")]
     Timeout(Duration),
+    /// A [`lanrurugi_gpu_ipc::WorkerError::Config`] response — the worker rejected this specific
+    /// request (no model loaded, malformed input, a model-level verdict on the content) while its
+    /// own session stayed healthy. Kept separate from [`Self::WorkerFatal`] so callers can tell a
+    /// reproducible per-request verdict from a broken-session failure; issue #101 needs exactly
+    /// that distinction to decide whether a degraded OCR result is safe to cache.
     #[error("lanrurugi-gpu-worker reported an error: {0}")]
     Worker(String),
+    /// A [`lanrurugi_gpu_ipc::WorkerError::Fatal`] response — the worker's CUDA session was
+    /// (or may have been) broken and the worker process exits right after sending this. Always
+    /// transient from the caller's point of view: the next call spawns a fresh worker.
+    #[error("lanrurugi-gpu-worker reported an error: {0}")]
+    WorkerFatal(String),
     #[error("could not locate the lanrurugi-gpu-worker binary next to the running executable")]
     BinaryNotFound,
+}
+
+impl GpuWorkerError {
+    /// Maps this error onto the infrastructure-vs-content split
+    /// [`lanrurugi_ocr::batch::TextRecognizerHandle`] callers need (issue #101).
+    ///
+    /// Everything except [`Self::Worker`] is infrastructure: a spawn/connect/ready/RPC/timeout
+    /// failure means the model never judged the crop at all, and `WorkerFatal` means it was
+    /// judging it on a session that then died — both are transient and a retry could well
+    /// succeed, so a result missing that region must not be cached as final. Only `Worker`
+    /// (a `WorkerError::Config` response — the worker answered about *this crop* with its own
+    /// session intact) is a reproducible content verdict.
+    fn classify_for_recognition(&self) -> lanrurugi_ocr::batch::RecognizeHandleError {
+        match self {
+            GpuWorkerError::Worker(msg) => {
+                lanrurugi_ocr::batch::RecognizeHandleError::Content(msg.clone())
+            }
+            other => lanrurugi_ocr::batch::RecognizeHandleError::Infrastructure(other.to_string()),
+        }
+    }
+}
+
+/// Drains one of a spawned worker's output streams, re-emitting each line through this process's
+/// own `tracing` subscriber — see `spawn_and_connect`'s own comment for the real incident this
+/// exists to prevent. The continuous read is the actual fix (the worker can never block or fail
+/// on a full pipe); the re-emission is what keeps those lines visible in the server's own
+/// `general.log` rather than losing them.
+async fn forward_worker_output<R: AsyncRead + Unpin>(reader: R, stream: &'static str) {
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                tracing::info!(target: "lanrurugi_gpu_worker", stream, "{line}")
+            }
+            Ok(None) => break,
+            Err(error) => {
+                tracing::debug!(
+                    target: "lanrurugi_gpu_worker",
+                    stream,
+                    %error,
+                    "worker output stream ended with an error"
+                );
+                break;
+            }
+        }
+    }
 }
 
 struct Session {
@@ -395,7 +464,7 @@ impl GpuWorkerClient {
         let _ = std::fs::remove_file(&self.socket_path);
 
         tracing::info!(path = %self.socket_path, kind = ?self.kind, "spawning lanrurugi-gpu-worker");
-        let child = Command::new(binary)
+        let mut child = Command::new(binary)
             .env("LANRURUGI_GPU_WORKER_SOCKET", &self.socket_path)
             // Tells the worker which model(s) to load — see `WorkerKind`'s own doc comment for why
             // `Recognize`/`Image` are always separate processes, never one worker toggling groups.
@@ -419,17 +488,32 @@ impl GpuWorkerClient {
                 }),
             )
             .stdin(Stdio::null())
-            // Inherit stdout/stderr so the worker's own `tracing` output lands in the same place
-            // as the parent server's logs (both go to the same container's captured output) —
-            // there is no separate log destination configured for this subprocess.
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            // Piped, not inherited: `forward_worker_output` below drains both streams and
+            // re-emits them through this process's own `tracing`. A real 2026-09-18 incident
+            // showed why inheriting is unsafe — the container's journald-backed stdout pipe
+            // filled up under heavy ORT logging, the worker's own `tracing_subscriber` write
+            // then returned EAGAIN, and its recovery warning (`eprintln!` to the *same* broken
+            // stderr pipe) panicked the process (exit 101) before it ever bound its socket. The
+            // client saw every spawn as "did not become ready within 90s" and every page
+            // silently fell back to the untranslated original. A pipe with a reader that is
+            // always draining cannot fill up, so this class of failure can no longer take down
+            // inference. Log volume is unchanged — the same lines still reach the server's logs,
+            // just via `general.log` instead of container stdout.
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             // Linux-only: ensures the worker is killed if this parent process itself dies
             // unexpectedly (e.g. OOM-killed), rather than leaking an orphaned worker holding
             // GPU memory that nothing will ever clean up again.
             .kill_on_drop(true)
             .spawn()
             .map_err(GpuWorkerError::Spawn)?;
+
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(forward_worker_output(stdout, "stdout"));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(forward_worker_output(stderr, "stderr"));
+        }
 
         let client = Self::connect_with_retry(&self.socket_path).await?;
 
@@ -445,8 +529,23 @@ impl GpuWorkerClient {
     /// session construction — observed a few seconds cold, see `.debug-scratch/
     /// GPU_EP_FINAL_SUMMARY.md`'s own timing notes) — the socket file may not exist yet the
     /// instant after `spawn()` returns.
+    ///
+    /// `READY_TIMEOUT` was `30s` until a real reported incident (2026-09-16/17): under genuine
+    /// host memory pressure (this same session's own container restarted repeatedly under it —
+    /// see `CLAUDE.md`'s own guardrail notes on that), the `Image` worker's cold-start model load
+    /// (`lanrurugi-gpu-worker::main::load_worker`, now parallelized across both its models rather
+    /// than sequential — see that function's own doc comment on that separate fix) still routinely
+    /// took longer than 30s to become reachable at all, at which point every caller degrades to
+    /// `translation_pipeline::composite_and_cache`'s own `flat_fill_fallback` — which only ever
+    /// fills `bg_color: Some` regions, so a page whose regions are mostly `bg_color: None` (exactly
+    /// the case the DenseCRF erase path exists for) got *no* erasure at all, not merely a
+    /// lower-quality one. `90s` leaves real headroom for a genuinely slow cold start under host
+    /// pressure without masking a truly hung/crashed worker for multiple minutes — still well
+    /// under `ERASE_PAGE_TIMEOUT`'s own `180s` (that constant's own doc comment covers why *that*
+    /// value was chosen), so a worker that connects within this window still has its own full
+    /// `ERASE_PAGE_TIMEOUT` budget for the actual `erase_page` RPC call once connected.
     async fn connect_with_retry(socket_path: &str) -> Result<RpcClient, GpuWorkerError> {
-        const READY_TIMEOUT: Duration = Duration::from_secs(30);
+        const READY_TIMEOUT: Duration = Duration::from_secs(90);
         const RETRY_INTERVAL: Duration = Duration::from_millis(100);
         let deadline = Instant::now() + READY_TIMEOUT;
 
@@ -542,7 +641,7 @@ impl GpuWorkerClient {
             }
             Ok(Ok(Err(lanrurugi_gpu_ipc::WorkerError::Fatal(worker_error)))) => {
                 self.discard_session().await;
-                Err(GpuWorkerError::Worker(worker_error))
+                Err(GpuWorkerError::WorkerFatal(worker_error))
             }
             Ok(Err(rpc_error)) => {
                 self.discard_session().await;
@@ -656,12 +755,15 @@ fn raw_to_rgb_image(raw: RawRgbImage) -> Result<image::RgbImage, String> {
 /// `Handle::current()` panicked ("there is no reactor running") on every call. `Handle::block_on`
 /// only needs a valid handle to *a* runtime — it works from any thread, Tokio-owned or not.
 impl lanrurugi_ocr::batch::TextRecognizerHandle for GpuWorkerClient {
-    fn recognize(&self, crop: &image::RgbImage) -> Result<String, String> {
+    fn recognize(
+        &self,
+        crop: &image::RgbImage,
+    ) -> Result<String, lanrurugi_ocr::batch::RecognizeHandleError> {
         let raw = rgb_image_to_raw(crop);
         self.runtime
             .clone()
             .block_on(GpuWorkerClient::recognize(self, raw))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.classify_for_recognition())
     }
 }
 
@@ -718,5 +820,55 @@ impl lanrurugi_ocr::bubble_segment::BubbleSegmenterHandle for GpuWorkerClient {
                 mask: b.mask,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanrurugi_ocr::batch::RecognizeHandleError;
+
+    /// Issue #101: every transport/lifecycle failure must classify as infrastructure, because in
+    /// each of these the recognizer never reached a verdict about the crop — caching a page whose
+    /// regions are missing for one of these reasons would freeze a degraded result forever.
+    #[test]
+    fn transport_and_lifecycle_failures_are_infrastructure() {
+        let cases: Vec<GpuWorkerError> = vec![
+            GpuWorkerError::Timeout(Duration::from_secs(60)),
+            GpuWorkerError::NotReady(Duration::from_secs(30)),
+            GpuWorkerError::Spawn(std::io::Error::other("spawn failed")),
+            GpuWorkerError::Connect(std::io::Error::other("connection refused")),
+            GpuWorkerError::BinaryNotFound,
+            // The worker's CUDA session broke mid-call and the process exits right after — the
+            // next call gets a fresh worker, so this is transient, not a verdict on the crop.
+            GpuWorkerError::WorkerFatal("CUBLAS failure 3: the resource allocation failed".into()),
+        ];
+
+        for case in cases {
+            assert!(
+                matches!(
+                    case.classify_for_recognition(),
+                    RecognizeHandleError::Infrastructure(_)
+                ),
+                "{case:?} should classify as an infrastructure failure"
+            );
+        }
+    }
+
+    /// The opposite case: the worker answered about this specific crop with its own session
+    /// healthy. Re-running would reach the same conclusion, so dropping the region is correct and
+    /// the page's result stays cacheable.
+    #[test]
+    fn a_healthy_worker_verdict_is_a_content_rejection() {
+        let err = GpuWorkerError::Worker("decode confidence 0.057 below minimum 0.5".to_string());
+        match err.classify_for_recognition() {
+            RecognizeHandleError::Content(msg) => {
+                assert!(
+                    msg.contains("decode confidence"),
+                    "message preserved: {msg}"
+                );
+            }
+            other => panic!("expected a content rejection, got {other:?}"),
+        }
     }
 }

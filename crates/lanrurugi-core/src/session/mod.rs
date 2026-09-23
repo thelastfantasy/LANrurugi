@@ -30,3 +30,11 @@ pub const DEFAULT_ACCESS_TOKEN_LIFETIME_SECS: u64 = 4 * 60 * 60;
 /// on why the absolute expiry is anchored to the original login, not extended per-rotation).
 /// Overridable via the `refresh_token_lifetime_secs` setting, same pattern as the access token.
 pub const DEFAULT_REFRESH_TOKEN_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
+/// Default sliding idle window for refresh tokens, renewed on every successful rotation but never
+/// beyond `DEFAULT_REFRESH_TOKEN_LIFETIME_SECS`. Fourteen days is a common web-session idle
+/// timeout; the absolute default above is deliberately still 7 days, so a pre-dual-window install
+/// that never sets either value keeps its existing effective expiry.
+pub const DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS: u64 = 14 * 24 * 60 * 60;
+/// Default maximum simultaneously active login families (devices). `0` means unlimited; the
+/// login handler evicts the oldest-seen family when a new login would exceed this.
+pub const DEFAULT_MAX_LOGIN_DEVICES: u64 = 5;

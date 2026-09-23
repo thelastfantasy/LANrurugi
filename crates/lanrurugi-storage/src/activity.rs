@@ -181,6 +181,14 @@ pub mod action_types {
     /// `SESSION_LOGIN`'s own doc comment above describes; see that call site for the actual
     /// dedup/TTL mechanism.
     pub const SESSION_REFRESH: &str = "session.refresh";
+    /// An administrator renamed one active login device in the Settings device list. Recorded so
+    /// "who renamed this session?" is auditable even though the rename itself has no credential
+    /// effect.
+    pub const SESSION_DEVICE_RENAMED: &str = "session.device_renamed";
+    /// An administrator revoked one active login device (or the device-limit eviction path did) —
+    /// distinct from `SESSION_LOGOUT` (the current browser logging itself out) because the actor
+    /// here is usually a different, still-logged-in admin session.
+    pub const SESSION_DEVICE_REVOKED: &str = "session.device_revoked";
     /// A rotation whose device fingerprint (`DeviceInfo`, from the presented request's own
     /// `User-Agent`) disagrees with the one recorded on this family's original `session.login` —
     /// e.g. the family's refresh cookie is now being presented from a different browser/OS than it
@@ -355,6 +363,13 @@ pub struct ActivityEntry {
     /// before this field existed (`#[serde(default)]`), never backfilled retroactively.
     #[serde(default)]
     pub device_info: Option<DeviceInfo>,
+    /// Human-readable login-device label for `Session`-actor entries only (custom device name when
+    /// one is set, otherwise the auto-generated `DeviceInfo::display_name`). Deliberately absent
+    /// for token/guest/system/anonymous actors — an API token has no browser/device identity in
+    /// this sense, and showing a misleading device label next to token operations would be worse
+    /// than showing nothing. `None` for entries written before this field existed.
+    #[serde(default)]
+    pub device_name: Option<String>,
     /// Populated only for "update"-shaped actions (settings.update, archive.metadata_update,
     /// token.rename, ...) — a `serde_json::Value` rather than a per-action-type Rust type because
     /// the shape genuinely differs per `action_type` and nothing ever filters a query by the
@@ -866,6 +881,7 @@ mod tests {
             outcome: Outcome::Success,
             client_ip: Some("127.0.0.1".to_string()),
             device_info: None,
+            device_name: None,
             before: None,
             after: None,
             caused_by: None,

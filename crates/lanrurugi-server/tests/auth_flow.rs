@@ -147,7 +147,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         ignored_group_suggestions,
         compare_cache,
         bookmarks,
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
@@ -299,6 +301,14 @@ async fn request(
         );
         axum::body::Body::from(form_body.to_string())
     } else {
+        // `/token/refresh` intentionally accepts an empty body, but axum's `Form` extractor still
+        // requires the form content-type header before it will attempt to decode zero bytes.
+        if matches!(uri, "/api/token/refresh" | "/api/logout") {
+            builder = builder.header(
+                axum::http::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            );
+        }
         axum::body::Body::empty()
     };
     app.clone()
@@ -797,4 +807,93 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     .unwrap();
     purge_all_refresh_and_api_tokens(&redis).await;
     guest_lock.release().await;
+}
+
+/// Active-login-device management: the Settings UI's own endpoints must be usable by a real
+/// session, expose one row per login family with name/IP metadata, allow renaming, and revoke the
+/// family immediately. Casbin's session-only restriction is covered in `authz` unit tests; this is
+/// the end-to-end router-level counterpart.
+#[tokio::test]
+async fn active_login_devices_can_be_listed_renamed_and_revoked_by_a_session() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+
+    let login_resp = request(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some("password=kamimamita"),
+    )
+    .await;
+    assert_eq!(login_resp.status(), axum::http::StatusCode::OK);
+    let cookies = set_cookie_values(&login_resp);
+    let cookie = cookie_header(&cookies);
+
+    let list_resp = request(&app, "GET", "/api/sessions", Some(&cookie), None).await;
+    assert_eq!(list_resp.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(list_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let sessions = sessions.as_array().expect("GET /sessions returns an array");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "one login should produce one active device"
+    );
+    let family_id = sessions[0]["family_id"]
+        .as_str()
+        .expect("session row must have a family_id")
+        .to_string();
+    assert_eq!(sessions[0]["current"], true);
+    assert_eq!(sessions[0]["ip"], "127.0.0.1");
+    assert!(!sessions[0]["name"].as_str().unwrap_or_default().is_empty());
+
+    let rename_resp = request_json(
+        &app,
+        "PATCH",
+        &format!("/api/sessions/{family_id}"),
+        Some(&cookie),
+        None,
+        Some(r#"{"name":"Test workstation"}"#),
+    )
+    .await;
+    assert_eq!(rename_resp.status(), axum::http::StatusCode::OK);
+
+    let list_after_rename = request(&app, "GET", "/api/sessions", Some(&cookie), None).await;
+    let body = axum::body::to_bytes(list_after_rename.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sessions[0]["name"], "Test workstation");
+    assert_eq!(sessions[0]["custom_name"], "Test workstation");
+
+    let revoke_resp = request_json(
+        &app,
+        "DELETE",
+        &format!("/api/sessions/{family_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(revoke_resp.status(), axum::http::StatusCode::OK);
+
+    let list_after_revoke = request(&app, "GET", "/api/sessions", Some(&cookie), None).await;
+    assert_eq!(list_after_revoke.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(list_after_revoke.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        sessions.as_array().is_some_and(Vec::is_empty),
+        "revoking the only family must empty the active-device list"
+    );
+
+    purge_all_refresh_and_api_tokens(&redis).await;
 }

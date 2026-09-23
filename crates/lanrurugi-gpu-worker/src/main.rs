@@ -41,11 +41,22 @@ use tarpc::tokio_serde::formats::Bincode;
 fn classify_error(message: &str) -> WorkerError {
     const CONFIG_MARKERS: &[&str] = &[
         "no inpainting model loaded",
+        "no recognition model loaded",
         "no bubble segmentation model loaded",
         "mask length",
         "did not match expected",
         "claimed",
         "byte length didn't match",
+        // Model-level verdicts about the *content* of one crop, not GPU health — the session ran
+        // fine and reached a real conclusion. Before issue #101 these fell through to `Fatal`,
+        // so an unreadable SFX crop (a normal, expected outcome on manga pages) killed the whole
+        // worker process mid-page, which then turned every other region still in flight on that
+        // page into a genuine infrastructure failure. These strings come from
+        // `lanrurugi_ocr::recognize`'s own `RecognitionError::BadOutput` messages.
+        "decode confidence",
+        "below minimum",
+        "empty decoder output",
+        "empty logit row",
     ];
     if CONFIG_MARKERS.iter().any(|m| message.contains(m)) {
         WorkerError::Config(message.to_string())
@@ -303,46 +314,71 @@ fn load_worker(group: ModelGroup) -> Result<Worker, String> {
         vram_budget::IMAGE_WORKER_BUDGET.resolve(total_vram_bytes),
     );
 
-    let inpainter = if group == ModelGroup::Image {
-        match lanrurugi_inpaint::model_discovery::find_model_dir() {
-            Ok(dir) => {
-                let model_path = lanrurugi_inpaint::model_discovery::model_path(&dir);
-                match Inpainter::load(&model_path, INTRA_THREADS, inpainter_budget) {
-                    Ok(inpainter) => Some(Arc::new(inpainter.leak_cuda_sessions())),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "found an inpainting model directory but failed to load it");
+    // Loaded in parallel, not sequentially — each is an independent ONNX Runtime session build
+    // (disk I/O to read the model file, then CUDA execution-provider registration), and neither
+    // reads the other's output, so there's no reason to pay their cold-start cost as a sum instead
+    // of a max. Real reported incident (2026-09-16/17): under real host memory pressure (this
+    // same session hit it repeatedly), the *sequential* load of both models routinely took long
+    // enough that `gpu_worker_client::connect_with_retry`'s own 30s `READY_TIMEOUT` — sized for
+    // "a few seconds cold" per that function's own doc comment — elapsed before the `Image` worker
+    // ever became reachable at all, silently degrading every region on the page to
+    // `flat_fill_fallback` (which only ever fills `bg_color: Some` regions, so a page whose
+    // regions are mostly `bg_color: None` — exactly the case the DenseCRF fallback path exists
+    // for — got *no* erasure at all, not merely a lower-quality one). `std::thread::scope` (no new
+    // dependency; this file only ever exercises exactly two of these blocking loads at once, never
+    // an open-ended pool of them, so the full `rayon` machinery this workspace already uses
+    // elsewhere for genuine data-parallel batches would be overkill here) runs both loads on their
+    // own OS threads and joins on both finishing.
+    let (inpainter, bubble_segmenter) = if group == ModelGroup::Image {
+        std::thread::scope(|scope| {
+            let inpainter_handle = scope.spawn(|| {
+                match lanrurugi_inpaint::model_discovery::find_model_dir() {
+                    Ok(dir) => {
+                        let model_path = lanrurugi_inpaint::model_discovery::model_path(&dir);
+                        match Inpainter::load(&model_path, INTRA_THREADS, inpainter_budget) {
+                            Ok(inpainter) => Some(Arc::new(inpainter.leak_cuda_sessions())),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "found an inpainting model directory but failed to load it");
+                                None
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::info!("no inpainting model installed");
                         None
                     }
                 }
-            }
-            Err(_) => {
-                tracing::info!("no inpainting model installed");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    let bubble_segmenter = if group == ModelGroup::Image {
-        match lanrurugi_ocr::bubble_segment::model_discovery::find_model_dir() {
-            Ok(dir) => {
-                let model_path = lanrurugi_ocr::bubble_segment::model_discovery::model_path(&dir);
-                match BubbleSegmenter::load(&model_path, INTRA_THREADS, bubble_segmenter_budget) {
-                    Ok(seg) => Some(Arc::new(seg.leak_cuda_sessions())),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "found a bubble segmentation model directory but failed to load it");
+            });
+            let bubble_segmenter_handle = scope.spawn(|| {
+                match lanrurugi_ocr::bubble_segment::model_discovery::find_model_dir() {
+                    Ok(dir) => {
+                        let model_path =
+                            lanrurugi_ocr::bubble_segment::model_discovery::model_path(&dir);
+                        match BubbleSegmenter::load(&model_path, INTRA_THREADS, bubble_segmenter_budget) {
+                            Ok(seg) => Some(Arc::new(seg.leak_cuda_sessions())),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "found a bubble segmentation model directory but failed to load it");
+                                None
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::info!("no bubble segmentation model installed");
                         None
                     }
                 }
-            }
-            Err(_) => {
-                tracing::info!("no bubble segmentation model installed");
-                None
-            }
-        }
+            });
+            (
+                inpainter_handle
+                    .join()
+                    .expect("inpainter load thread panicked"),
+                bubble_segmenter_handle
+                    .join()
+                    .expect("bubble segmenter load thread panicked"),
+            )
+        })
     } else {
-        None
+        (None, None)
     };
 
     if group == ModelGroup::Recognize && recognizer.is_none() {

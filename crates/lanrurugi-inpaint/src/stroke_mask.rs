@@ -26,6 +26,7 @@
 //! estimated background colour instead of one global threshold, which remains valid regardless of
 //! how many distinct ink tones a glyph has.
 
+use crate::densecrf::DenseCrf2d;
 use image::{GrayImage, Luma, Rgb, RgbImage};
 use imageproc::filter::median_filter;
 use palette::{IntoColor, Lab, Srgb};
@@ -183,20 +184,45 @@ pub fn stroke_mask(crop: &RgbImage, fg: Rgb<u8>, bg: Rgb<u8>) -> Option<StrokeMa
 /// (see [`stroke_mask`]'s own doc comment for the real incident this fixes). Returns `None` if no
 /// pixel was classified as stroke at all.
 pub fn sample_stroke_colour(crop: &RgbImage, raw_mask: &[bool]) -> Option<Rgb<u8>> {
+    let stroke_pixels: Vec<Rgb<u8>> = crop
+        .pixels()
+        .zip(raw_mask.iter())
+        .filter(|(_, &is_stroke)| is_stroke)
+        .map(|(px, _)| *px)
+        .collect();
+    if stroke_pixels.is_empty() {
+        return None;
+    }
+
+    // Averaging every `raw`-classified pixel unweighted pulls the result toward whatever
+    // brighter, non-ink pixels the mask's own boundary happened to include — real reported
+    // incident (2026-09-16): `densecrf_stroke_mask`'s own `raw` classification (no confident
+    // fg/bg colour prior to anchor against, only the detector's coarse mask + Gaussian/bilateral
+    // smoothing — see that function's own doc comment) draws its boundary a little wide around a
+    // glyph's real dark strokes on several real regions, including enough lighter transition/
+    // outline-adjacent pixels that the plain mean came out a visibly grey `rgb(56,71,80)` instead
+    // of near-black ink — legible, but a real colour-fidelity regression from the source. Ink is
+    // reliably the *darkest* pixels within any stroke mask built by this crate (every stroke-mask
+    // constructor here classifies a pixel as "stroke" for being unusually different from its own
+    // background, and manga ink is overwhelmingly dark relative to its backdrop — the founding
+    // assumption `otsu_stroke_mask`'s own "darker cluster is the glyph" rule already relies on
+    // elsewhere in this file) — so instead of averaging every classified pixel, only the darkest
+    // half by luminance is averaged, discarding exactly the lighter fringe pixels most likely to
+    // be background bleed-through rather than real ink.
+    let luminance = |px: &Rgb<u8>| {
+        0.299 * f32::from(px.0[0]) + 0.587 * f32::from(px.0[1]) + 0.114 * f32::from(px.0[2])
+    };
+    let mut by_luminance = stroke_pixels;
+    by_luminance.sort_by(|a, b| luminance(a).partial_cmp(&luminance(b)).unwrap());
+    let keep = by_luminance.len().div_ceil(2).max(1);
+
     let mut sum = [0u64; 3];
-    let mut count = 0u64;
-    for (px, &is_stroke) in crop.pixels().zip(raw_mask.iter()) {
-        if !is_stroke {
-            continue;
-        }
+    for px in &by_luminance[..keep] {
         sum[0] += u64::from(px.0[0]);
         sum[1] += u64::from(px.0[1]);
         sum[2] += u64::from(px.0[2]);
-        count += 1;
     }
-    if count == 0 {
-        return None;
-    }
+    let count = keep as u64;
     Some(Rgb([
         (sum[0] / count) as u8,
         (sum[1] / count) as u8,
@@ -532,6 +558,247 @@ pub fn local_background_stroke_mask(
     Some(StrokeMask { raw, paste, model })
 }
 
+/// Refines a coarse, per-pixel "text is here" prior into a precise glyph-shape mask via a dense
+/// conditional random field ([`crate::densecrf::DenseCrf2d`]) — the same architecture
+/// `zyddnys/manga-image-translator`'s own `mask_refinement/text_mask_utils.py::refine_mask` uses,
+/// with identical hyperparameters (`sxy=1, compat=3` Gaussian; `sxy=23, srgb=7, compat=20`
+/// bilateral; 5 mean-field iterations), ported line-for-line rather than re-tuned — see
+/// [`crate::densecrf`]'s own module doc comment for why matching a known-correct reference exactly
+/// is the actual correctness argument for numerical code like this, not an independent guess at
+/// "reasonable" hyperparameters.
+///
+/// This exists specifically for the region this crate previously had no trustworthy mask for at
+/// all: no confident `fg`/`bg` colour pair (`style_estimate::estimate` returned `None`, so
+/// [`stroke_mask`] can't run), which `combined_erase_mask` in `lanrurugi-translate` used to treat
+/// as "skip this region's erase entirely" after `local_background_stroke_mask` was found to
+/// produce visible smudging on exactly these inputs (see this file's own history for that
+/// incident). `coarse_prior` — the detection model's own already-computed, already-thresholded
+/// per-pixel text mask (`lanrurugi_ocr::entities::RawTextMask`, via
+/// `DetectedTextRegion::raw_text_mask`) — is a real, independently-produced signal about where
+/// text actually is, not a guess; DenseCRF's whole job here is pulling that coarse box-shaped
+/// signal (a detector's own receptive field rarely traces a glyph's real edge precisely) into
+/// alignment with the crop's actual local colour/position structure, exactly the refinement
+/// `refine_mask` performs on its own detector's coarse output.
+///
+/// `coarse_prior` must be exactly `crop.width() * crop.height()` long, row-major (same contract as
+/// [`local_background_stroke_mask`]'s own `coarse_prior` parameter). Returns `None` when the prior
+/// doesn't match the crop's dimensions, or when the crop is empty — there is nothing for DenseCRF
+/// to refine without a real starting point, and it is not this function's job to invent one (that
+/// remains [`local_background_stroke_mask`]/[`kmeans_stroke_mask`]'s territory when a caller still
+/// wants a from-scratch guess instead of a refinement).
+pub fn densecrf_stroke_mask(crop: &RgbImage, coarse_prior: &[bool]) -> Option<StrokeMask> {
+    let (w, h) = crop.dimensions();
+    if w == 0 || h == 0 || coarse_prior.len() != (w * h) as usize {
+        return None;
+    }
+
+    // The detection model's own raw mask only ever marks a glyph's dark strokes (that's what it
+    // was trained to find) — it has no notion of a white/light outline stroke drawn around those
+    // strokes, common in manga SFX/caption lettering sitting directly over illustrated backdrops
+    // (real reported incident, 2026-09-16: "帰ってくる家間違えた?"'s own white outline, ~4-8px wide
+    // on a real page, was left almost entirely unerased — its pixels never had a chance to be
+    // classified as text at all, since the unary below gives them essentially zero prior
+    // probability, and the bilateral pairwise term's colour-similarity smoothing can't rescue them
+    // either: a white outline against a light backdrop has too little colour contrast for that
+    // term to pull it toward the (dark) stroke cluster). Dilating the prior *before* it becomes
+    // the unary — rather than only dilating the final `raw` classification afterward, which
+    // `StrokeMask::model`/`StrokeMask::paste` already do for anti-aliasing margins — gives DenseCRF
+    // a starting hypothesis that already covers the outline band, letting the pairwise terms then
+    // refine that wider hypothesis against the crop's real edges instead of trying to recover
+    // pixels the unary alone had already all but ruled out.
+    const PRIOR_DILATION_RADIUS: i32 = 4;
+    /// Extra margin (px) added to each component's DenseCRF *search window* beyond its own
+    /// bounding box — see the per-component loop below for why this is deliberately a window
+    /// expansion, never a prior (unary) dilation.
+    const CRF_SEARCH_MARGIN: i32 = 8;
+    let dilated_prior = dilate(coarse_prior, w, h, PRIOR_DILATION_RADIUS);
+
+    // The reference project's own `complete_mask` (`text_mask_utils.py`) never runs its DenseCRF
+    // equivalent (`refine_mask`) over a whole region in one shot — it first splits the *coarse*
+    // mask into connected components, drops any component that isn't plausibly a real textline
+    // (compared against the detector's own textline polygons there; this crate has no such
+    // polygon, only the coarse prior itself, so the same fixed-fraction area cap
+    // [`local_background_stroke_mask`] already uses stands in for that comparison), and only
+    // *then* re-crops each surviving component to its own tight bounding box and runs DenseCRF on
+    // that small crop alone. Real reported incident (2026-09-16) that this reordering fixes: an
+    // earlier revision ran DenseCRF once over the *whole* OCR bbox first and filtered by area
+    // afterward — on a busy/textured backdrop (the page's own patterned question-mark artwork),
+    // the bilateral pairwise term's colour/position smoothing (which has no notion of what text
+    // *looks like*, only "nearby similar-coloured pixels probably share a label") pulled the
+    // *entire* crop into one single connected blob of misclassified "text", so the after-the-fact
+    // area filter had only one giant component to judge and dropped the whole region outright —
+    // zero erase for a region that, cropped correctly per-component first, refines cleanly.
+    // Running DenseCRF per pre-filtered component instead keeps that failure local: a busy
+    // backdrop can still confuse the pairwise terms *within* one component's own small crop, but
+    // it can no longer swallow the rest of the region's genuinely separate text components along
+    // with it, since those never shared a DenseCRF call (or even a connected-component grouping)
+    // with the confused one in the first place.
+    // The reference implementation (`mask_refinement/text_mask_utils.py::complete_mask`) has no
+    // "component covers too much of the crop" rule at all — it validates each connected component
+    // against the *detected text-lines* (`area1 >= area2`), and its own dilation is adaptive
+    // (`dilate_size = max((int(text_size * 0.3) // 2) * 2 + 1, 3)`, plus a `0.1 * text_size` region
+    // extension before refining). A previous revision here instead dropped any component whose
+    // 4px-dilated extent covered more than **50%** of the *tight* region crop. Measured against a
+    // real page (issue #103) that drops ordinary, clean, single-line labels — e.g. the "トウカ"
+    // label's own dilated prior covers 75.5% of its crop, the "皇族ガーディアン" line 65.8% — so
+    // `densecrf_stroke_mask` returned `None`, the caller treated the region as "no precise mask",
+    // and skipped erase *and* redraw, leaving the original Japanese on the page. That is exactly
+    // the reported "检测漏检"-looking symptom, even though the detector had emitted the box.
+    //
+    // The one guard kept is the reference's own "component bigger than its text-line" rule, which
+    // in this crate's per-region crop (the crop *is* the text-line) means "covers essentially the
+    // whole crop" — kept only to reject a near-total blob, and applied to the *refined* output so
+    // a legitimate dense prior is never dropped before DenseCRF gets a chance to run.
+    const NEAR_TOTAL_COVERAGE_FRACTION: f32 = 0.98;
+    let max_component_area = ((w * h) as f32 * NEAR_TOTAL_COVERAGE_FRACTION) as usize;
+    let components: Vec<Vec<usize>> = connected_components(&dilated_prior, w, h);
+    if components.is_empty() {
+        return None;
+    }
+
+    let mut raw = vec![false; (w * h) as usize];
+    for component in &components {
+        // Tight bounding box around just this component (same "re-crop before refining" step the
+        // reference's own per-component `refine_mask` call does).
+        let (mut x0, mut y0, mut x1, mut y1) = (w as i32, h as i32, 0i32, 0i32);
+        for &i in component {
+            let (x, y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+
+        // Widen the DenseCRF *search window* by `CRF_SEARCH_MARGIN` on every side (clamped to the
+        // crop) while leaving the unary prior exactly `component`. The detection model's coarse
+        // prior systematically stops short of the real glyph at its ends/edges by several px
+        // (measured ~8px on a real label's own strokes); the previous window *was* the component's
+        // own bounding box, so those pixels were never presented to DenseCRF at all and could not
+        // be recovered no matter what it decided — not a tuning problem, a structural one.
+        // Widening only the window — never the prior/unary — lets the bilateral colour/position
+        // term pull a colour-similar stroke end back into the text label, while a
+        // differently-coloured illustrated backdrop stays background. It does NOT introduce the
+        // unconditional over-reach a larger *prior dilation* causes (the real regression that made
+        // `PRIOR_DILATION_RADIUS=6` unsafe on illustration backdrops).
+        let (wx0, wy0) = (
+            (x0 - CRF_SEARCH_MARGIN).max(0),
+            (y0 - CRF_SEARCH_MARGIN).max(0),
+        );
+        let (wx1, wy1) = (
+            (x1 + CRF_SEARCH_MARGIN).min(w as i32),
+            (y1 + CRF_SEARCH_MARGIN).min(h as i32),
+        );
+        let (cw, ch) = ((wx1 - wx0) as u32, (wy1 - wy0) as u32);
+        if cw == 0 || ch == 0 {
+            continue;
+        }
+
+        let sub_crop = image::imageops::crop_imm(crop, wx0 as u32, wy0 as u32, cw, ch).to_image();
+        let mut sub_prior = vec![false; (cw * ch) as usize];
+        for &i in component {
+            let (x, y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
+            let (sx, sy) = (x - wx0, y - wy0);
+            sub_prior[(sy as u32 * cw + sx as u32) as usize] = true;
+        }
+
+        let sub_raw = densecrf_classify(&sub_crop, &sub_prior, cw, ch);
+        // Busy-backdrop / blob guard, on the *refined* output (see `MAX_COMPONENT_AREA_FRACTION`'s
+        // own comment above for why it must not be applied to the coarse prior).
+        let refined_count = sub_raw.iter().filter(|b| **b).count();
+        if refined_count > max_component_area {
+            tracing::debug!(
+                refined_count,
+                max_component_area,
+                "densecrf_stroke_mask: refined component still covers essentially the whole crop; dropping it"
+            );
+            continue;
+        }
+        for (sub_i, &is_text) in sub_raw.iter().enumerate() {
+            if !is_text {
+                continue;
+            }
+            let (sx, sy) = ((sub_i as u32 % cw) as i32, (sub_i as u32 / cw) as i32);
+            let (x, y) = (wx0 + sx, wy0 + sy);
+            raw[(y as u32 * w + x as u32) as usize] = true;
+        }
+    }
+
+    // Every component's own refinement was rejected as a blob: treat the whole region as "no
+    // precise mask" (returns `None`) rather than handing back an empty `Some` mask, so the caller
+    // skips erase *and* redraw instead of drawing over unerased text.
+    if !raw.iter().any(|b| *b) {
+        return None;
+    }
+
+    // The detector prior alone is not a complete text signal, and DenseCRF cannot fix that by
+    // itself: its per-component window is the prior's own component bbox plus `CRF_SEARCH_MARGIN`,
+    // so anything the prior never marked more than that margin away is structurally unreachable.
+    // Measured against a real page (2026-09-18, issue #101, region `そんな三皇女様を…`):
+    // `raw_text_mask` covered 24.9% of the crop, the refined CRF mask covered only 54.7% of the
+    // pixels that stayed as visible original strokes in the final render, and 46% of those
+    // residual strokes were >8px away from any prior pixel; across five other real regions the
+    // same figure was 61-86%. Meanwhile [`local_background_stroke_mask`] — already in this module
+    // — covered 100% of those same residual pixels on that region (it classifies each pixel by
+    // distance from its own local median backdrop, so it does not need the detector's kernel to
+    // have marked the stroke) but as a *standalone* mask it was previously rejected for smudging
+    // busy backdrops.
+    //
+    // The fix is therefore a bounded supplement, not a replacement: take `local_background`'s own
+    // ink classification only where it is within `LOCAL_SUPPLEMENT_GROW_RADIUS` of the already-
+    // refined CRF mask. That closes anti-aliased stroke edges (which `model` fed to LaMa but
+    // `paste` never overwrote — `StrokeMask`'s own `paste`/`model` split leaves the 2-8px ring
+    // original) and whole nearby strokes, while a far-away backdrop false positive from the
+    // local-background estimate still cannot enter the mask on its own. Re-running DenseCRF on
+    // the *union* seed instead was measured on the same region and is explicitly rejected: the
+    // union's dense unary lets the Potts pairwise term (`compat=20`) smear to 74% of the crop,
+    // i.e. an over-erase blob, whereas this bounded supplement measured 25.7% (vs. 20.4% for the
+    // CRF alone) while covering 93.5% of those same residual strokes.
+    const LOCAL_SUPPLEMENT_GROW_RADIUS: i32 = 24;
+    if let Some(local) = local_background_stroke_mask(crop, Some(coarse_prior)) {
+        let nearby = dilate(&raw, w, h, LOCAL_SUPPLEMENT_GROW_RADIUS);
+        for i in 0..raw.len() {
+            if !raw[i] && local.raw[i] && nearby[i] {
+                raw[i] = true;
+            }
+        }
+    }
+
+    let paste = dilate(&raw, w, h, PASTE_DILATION_RADIUS);
+    let model = dilate(&raw, w, h, DILATION_RADIUS);
+    Some(StrokeMask { raw, paste, model })
+}
+
+/// The actual DenseCRF call [`densecrf_stroke_mask`] now makes once per pre-filtered connected
+/// component's own tight crop, rather than once over a whole region — factored out because that
+/// call site needs exactly this (crop, prior) -> raw classification step with no dilation/
+/// component-filtering/mask-assembly wrapped around it (all of that is already handled once at
+/// the whole-region level by its own caller).
+fn densecrf_classify(crop: &RgbImage, prior: &[bool], w: u32, h: u32) -> Vec<bool> {
+    const CLIP: f32 = 1e-5;
+    let n = (w * h) as usize;
+    // `mask_softmax = [1 - rawmask, rawmask]` in the original, both channels clipped to `[CLIP,
+    // 1]` by `unary_from_softmax` — reproduced directly here (pixel-major, 2 labels: 0 =
+    // background, 1 = text) rather than going through a literal softmax array first, since the
+    // source values are already hard 0/1.
+    let mut probs = vec![0f32; n * 2];
+    for (i, &is_text) in prior.iter().enumerate() {
+        let (bg_p, text_p) = if is_text { (CLIP, 1.0) } else { (1.0, CLIP) };
+        probs[i * 2] = bg_p;
+        probs[i * 2 + 1] = text_p;
+    }
+
+    let mut crf = DenseCrf2d::new(w as usize, h as usize, 2);
+    crf.set_unary_energy_from_softmax(&probs);
+    crf.add_pairwise_gaussian(1.0, 1.0, 3.0);
+    let rgb: Vec<u8> = crop.pixels().flat_map(|px| px.0).collect();
+    crf.add_pairwise_bilateral(23.0, 23.0, 7.0, 7.0, 7.0, &rgb, 20.0);
+    let q = crf.inference(5);
+
+    // `argmax` over the 2 labels per pixel — label 1 (text) wins when its probability exceeds
+    // label 0's, matching `np.argmax(Q, axis=0)` in the original exactly.
+    (0..n).map(|i| q[i * 2 + 1] > q[i * 2]).collect()
+}
+
 /// A from-scratch fallback stroke classification for when [`local_background_stroke_mask`]'s own
 /// coverage sanity check trips (see that function's own doc comment on the check itself and the
 /// real incident it exists for) — global k-means colour clustering (`k` = 2) over the whole crop's
@@ -766,6 +1033,43 @@ impl SummedAreaTable {
     }
 }
 
+/// Finds every 4-connected component in `mask`, returning each as its own row-major pixel-index
+/// list — the enumeration [`drop_oversized_components`] itself only needs a pass/fail decision
+/// per component for, but [`densecrf_stroke_mask`]'s own per-component DenseCRF re-crop (see that
+/// function's own doc comment) needs the actual pixel membership and bounding box of each
+/// surviving component, not just a yes/no.
+fn connected_components(mask: &[bool], w: u32, h: u32) -> Vec<Vec<usize>> {
+    let (wi, hi) = (w as i32, h as i32);
+    let mut visited = vec![false; mask.len()];
+    let mut components = Vec::new();
+    let mut stack = Vec::new();
+    for start in 0..mask.len() {
+        if !mask[start] || visited[start] {
+            continue;
+        }
+        let mut component = vec![start];
+        visited[start] = true;
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            let (x, y) = ((i as i32) % wi, (i as i32) / wi);
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || nx >= wi || ny < 0 || ny >= hi {
+                    continue;
+                }
+                let ni = (ny * wi + nx) as usize;
+                if mask[ni] && !visited[ni] {
+                    visited[ni] = true;
+                    stack.push(ni);
+                    component.push(ni);
+                }
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
 /// Zeroes out every connected component (4-connected) in `mask` whose own pixel count exceeds
 /// `max_area` — flood-fill based, no external dependency needed for this crate's own modest crop
 /// sizes (a region crop is typically well under a few hundred pixels per side).
@@ -889,13 +1193,32 @@ mod tests {
 
     #[test]
     fn sample_stroke_colour_averages_only_the_raw_stroke_pixels() {
-        // Two glyph pixels of slightly different shades of "black" plus a lot of white background
-        // — the sample must average only the two glyph pixels, not the background.
+        // Two glyph pixels of the *same* shade of "black" plus a lot of white background — the
+        // sample must average only the two glyph pixels, not the background, when there's no
+        // darkest-half selection to complicate the expected result.
+        let mut crop = solid(10, 10, [255, 255, 255]);
+        crop.put_pixel(3, 3, Rgb([10, 10, 10]));
+        crop.put_pixel(4, 3, Rgb([10, 10, 10]));
+        let mask = stroke_mask(&crop, Rgb([10, 10, 10]), Rgb([255, 255, 255])).unwrap();
+        let sampled = sample_stroke_colour(&crop, &mask.raw).expect("some stroke pixels exist");
+        assert_eq!(sampled, Rgb([10, 10, 10]));
+    }
+
+    #[test]
+    fn sample_stroke_colour_keeps_only_the_darkest_half() {
+        // Real reported incident (2026-09-16): a stroke mask built with no confident colour prior
+        // (`densecrf_stroke_mask`) can draw its boundary a little wide around a glyph's real dark
+        // strokes, pulling in enough lighter transition/outline-adjacent pixels that a plain mean
+        // comes out visibly grey rather than near-black. Four "stroke" pixels of increasing
+        // brightness — the sample must average only the darker half (10 and 30), discarding the
+        // two brighter ones (50, 70) as likely background bleed-through rather than real ink.
         let mut crop = solid(10, 10, [255, 255, 255]);
         crop.put_pixel(3, 3, Rgb([10, 10, 10]));
         crop.put_pixel(4, 3, Rgb([30, 30, 30]));
-        let mask = stroke_mask(&crop, Rgb([10, 10, 10]), Rgb([255, 255, 255])).unwrap();
-        let sampled = sample_stroke_colour(&crop, &mask.raw).expect("some stroke pixels exist");
+        crop.put_pixel(5, 3, Rgb([50, 50, 50]));
+        crop.put_pixel(6, 3, Rgb([70, 70, 70]));
+        let raw_mask: Vec<bool> = crop.pixels().map(|px| px.0 != [255, 255, 255]).collect();
+        let sampled = sample_stroke_colour(&crop, &raw_mask).expect("some stroke pixels exist");
         assert_eq!(sampled, Rgb([20, 20, 20]));
     }
 
@@ -1252,6 +1575,236 @@ mod tests {
         assert!(
             mask[45] && mask[46],
             "a small component under the cap must survive"
+        );
+    }
+
+    #[test]
+    fn densecrf_refines_a_coarse_box_prior_to_a_dark_glyph_shape() {
+        // A light background with a dark glyph block, but the coarse prior is a wider box than
+        // the real glyph — same shape a text detector's own bounding box would produce (it always
+        // over-covers the real glyph edges to some degree). DenseCRF should shrink toward the real
+        // dark pixels' own boundary rather than keeping the whole prior box.
+        //
+        // The coarse prior is deliberately one single connected component here (a solid box, no
+        // gaps) — `densecrf_stroke_mask` now re-crops to a tight bounding box around each
+        // pre-filtered component (plus a small margin) before ever calling DenseCRF, rather than
+        // running DenseCRF over the whole region once (see that function's own doc comment on why:
+        // a busy backdrop could otherwise pull one runaway DenseCRF call into misclassifying the
+        // entire region as one giant blob). That means only pixels within the prior box's own
+        // (slightly padded) extent are ever part of this call's own crop at all — a pixel well
+        // outside the prior box's own extent (like `(2,2)`, checked below) never gets a chance to
+        // be classified as text in the first place, which is a stronger and more direct guarantee
+        // than "the bilateral term pulled it back toward background" ever was.
+        let mut crop = solid(40, 40, [230, 230, 230]);
+        for y in 15..25 {
+            for x in 15..25 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        let mut coarse_prior = vec![false; 40 * 40];
+        for y in 10..30u32 {
+            for x in 10..30u32 {
+                coarse_prior[(y * 40 + x) as usize] = true;
+            }
+        }
+        let mask =
+            densecrf_stroke_mask(&crop, &coarse_prior).expect("a real crop and matching prior");
+        assert!(
+            mask.raw[(20 * 40 + 20) as usize],
+            "the real glyph centre must still classify as text"
+        );
+        assert!(
+            !mask.raw[0],
+            "a far corner, well outside both the prior box and the real glyph, must not classify \
+             as text"
+        );
+        assert!(
+            !mask.raw[(2 * 40 + 2) as usize],
+            "a background pixel well outside the coarse prior box's own (padded) extent must \
+             never be classified as text at all, since it was never part of this component's own \
+             re-cropped DenseCRF call"
+        );
+    }
+
+    #[test]
+    fn densecrf_supplements_a_whole_stroke_the_prior_never_marked() {
+        // Real-page defect (2026-09-18, issue #101): the detector's `raw_text_mask` can miss an
+        // entire column/line inside the region's own bbox. DenseCRF cannot recover it — its
+        // per-component window is the prior's own bbox plus `CRF_SEARCH_MARGIN`, so a stroke this
+        // far away is structurally unreachable — while `local_background_stroke_mask` still sees
+        // it (local contrast, no detector prior needed). The bounded supplement must pull it in.
+        let mut crop = solid(64, 64, [235, 235, 235]);
+        for y in 10..54 {
+            for x in 10..18 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+            for x in 32..40 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        // Detector prior covers only the first stroke; the second is 14px beyond it.
+        let mut coarse_prior = vec![false; 64 * 64];
+        for y in 10..54u32 {
+            for x in 10..18u32 {
+                coarse_prior[(y * 64 + x) as usize] = true;
+            }
+        }
+
+        let mask = densecrf_stroke_mask(&crop, &coarse_prior).expect("a real crop and prior");
+        assert!(
+            mask.raw[(30 * 64 + 35) as usize],
+            "the second stroke, which the coarse prior never marked and the CRF window cannot \
+             reach, must be recovered by the bounded local-background supplement"
+        );
+        assert!(
+            !mask.raw[(5 * 64 + 5) as usize],
+            "background far from any real stroke must stay background"
+        );
+    }
+
+    #[test]
+    fn densecrf_empty_crop_returns_none() {
+        let crop = RgbImage::new(0, 0);
+        assert!(densecrf_stroke_mask(&crop, &[]).is_none());
+    }
+
+    #[test]
+    fn densecrf_mismatched_prior_length_returns_none() {
+        let crop = solid(10, 10, [128, 128, 128]);
+        assert!(densecrf_stroke_mask(&crop, &[true, false]).is_none());
+    }
+
+    #[test]
+    fn densecrf_drops_a_near_total_blob_refinement() {
+        // The one guard kept (the reference's own "component bigger than its text-line" rule,
+        // https://github.com/zyddnys/manga-image-translator `complete_mask`) rejects a refinement
+        // that still covers essentially the *whole* crop. Only a near-total blob trips it; a merely
+        // dense prior over real text (see the next test) must NOT be dropped.
+        let crop = solid(40, 40, [200, 200, 200]);
+        let mut coarse_prior = vec![false; 40 * 40];
+        for y in 0..40u32 {
+            for x in 0..40u32 {
+                coarse_prior[(y * 40 + x) as usize] = true;
+            }
+        }
+        assert!(
+            densecrf_stroke_mask(&crop, &coarse_prior).is_none(),
+            "a refinement still covering essentially the whole crop must be dropped"
+        );
+    }
+
+    #[test]
+    fn densecrf_keeps_a_legitimate_dense_prior_covering_most_of_its_crop() {
+        // Issue #103: on a real page a clean single-line label's own 4px-dilated prior covers
+        // 65-76% of its tight crop; the old 50%-of-crop cap dropped those regions entirely, so
+        // they got no precise mask and were skipped (no erase, no redraw), leaving the original
+        // text on the page. A dense prior over real text must now be refined, not dropped.
+        let mut crop = solid(200, 200, [235, 235, 235]);
+        for y in 40..160u32 {
+            for x in 90..110u32 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        let mut coarse_prior = vec![false; 200 * 200];
+        for y in 20..180u32 {
+            for x in 20..180u32 {
+                coarse_prior[(y * 200 + x) as usize] = true;
+            }
+        }
+        let mask = densecrf_stroke_mask(&crop, &coarse_prior).expect(
+            "a legitimate dense prior covering most of its crop must be refined, not dropped",
+        );
+        assert!(
+            mask.raw[(100 * 200 + 100) as usize],
+            "the real dark stroke must be in the refined mask"
+        );
+    }
+
+    #[test]
+    fn densecrf_recovers_a_glyph_end_the_coarse_prior_under_covers() {
+        // Real reported bug (2026-09-18): the detection model's coarse prior stops a few px short
+        // of the real glyph at its ends/edges ("笔画末端/边角"), leaving a few px of real stroke
+        // unerased. The previous per-component crop was the *prior's own* bounding box (padded
+        // only by `PRIOR_DILATION_RADIUS`), so those px were never presented to DenseCRF at all
+        // and could not be recovered no matter what it decided. `CRF_SEARCH_MARGIN` widens the
+        // search window (never the unary) so the bilateral colour term can pull a colour-similar
+        // stroke end back in.
+        let mut crop = solid(40, 60, [235, 235, 235]);
+        // A tall dark glyph spanning y=10..50.
+        for y in 10..50 {
+            for x in 15..25 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        // The coarse prior only covers the glyph's *middle*, y=20..40 — 10px short at each end.
+        let mut coarse_prior = vec![false; 40 * 60];
+        for y in 20..40u32 {
+            for x in 15..25u32 {
+                coarse_prior[(y * 40 + x) as usize] = true;
+            }
+        }
+
+        let mask =
+            densecrf_stroke_mask(&crop, &coarse_prior).expect("a real crop and matching prior");
+
+        // The old window (prior bbox, dilated by PRIOR_DILATION_RADIUS) reached only y=16..44 —
+        // y=12 and y=48 were never classified at all. They are the glyph's own dark pixels, so the
+        // widened window must now recover them.
+        assert!(
+            mask.raw[(12 * 40 + 20) as usize],
+            "the glyph's own top end (prior under-covered by 10px) must be recovered"
+        );
+        assert!(
+            mask.raw[(48 * 40 + 20) as usize],
+            "the glyph's own bottom end (prior under-covered by 10px) must be recovered"
+        );
+        // ...but a light background pixel inside the widened window must NOT be pulled in: the
+        // wider window must not become a blanket over-erase of whatever it now sees.
+        assert!(
+            !mask.raw[(10 * 40 + 8) as usize],
+            "background well left of the glyph, now inside the widened window, must stay background"
+        );
+    }
+
+    #[test]
+    fn densecrf_widened_window_does_not_swallow_a_colour_dissimilar_backdrop() {
+        // The widened search window must not become a blanket over-erase: a busy backdrop whose
+        // colours differ from the glyph's own ink must stay background. This is the exact
+        // distinction the earlier *isotropic dilation* attempt could not make (it grew into
+        // illustration content unconditionally); here the wider window only lets the bilateral
+        // colour term pull in pixels that actually look like the strokes.
+        let mut crop = solid(52, 52, [235, 235, 235]);
+        for y in 5..47u32 {
+            for x in 5..47u32 {
+                let c = if (x / 3 + y / 3) % 2 == 0 {
+                    Rgb([200, 40, 40])
+                } else {
+                    Rgb([40, 160, 40])
+                };
+                crop.put_pixel(x, y, c);
+            }
+        }
+        // A dark glyph whose real extent (y=14..38) is under-covered by the prior (y=22..30).
+        for y in 14..38u32 {
+            for x in 22..30u32 {
+                crop.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        let mut coarse_prior = vec![false; 52 * 52];
+        for y in 22..30u32 {
+            for x in 22..30u32 {
+                coarse_prior[(y * 52 + x) as usize] = true;
+            }
+        }
+        let mask =
+            densecrf_stroke_mask(&crop, &coarse_prior).expect("a real crop and matching prior");
+        assert!(
+            mask.raw[(16 * 52 + 25) as usize],
+            "the glyph's own dark end must be recovered even on a busy backdrop"
+        );
+        assert!(
+            !mask.raw[(12 * 52 + 12) as usize],
+            "a colour-dissimilar decoration pixel inside the widened window must stay background"
         );
     }
 }

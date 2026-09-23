@@ -347,42 +347,21 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // can hand this same long-lived consumer a clone, instead of each spawning its own.
     let (new_archive_tx, mut new_archive_rx) =
         tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
-    // Reader recommendation engine: the model downloads in the background (ETag-cached, see
-    // `lanrurugi_recommend::model_download`) and `install_embedder` flips the service ready once
-    // loaded; until then the recommendations endpoint returns 503 `model_not_ready`. The models
-    // dir sits next to the thumb dir (`<lanrurugi>/models` — both compose files mount
-    // `./data/models` there).
-    let recommender = Arc::new(lanrurugi_api::recommend::RecommendService::new());
-    {
-        let recommender = recommender.clone();
-        let models_dir = args
-            .thumb_dir
-            .parent()
-            .unwrap_or(&args.thumb_dir)
-            .join("models");
-        tokio::spawn(async move {
-            match lanrurugi_recommend::model_download::acquire_models(&models_dir).await {
-                Ok((model_path, tokenizer_path)) => {
-                    match lanrurugi_recommend::embedding::Embedder::load(
-                        &model_path,
-                        &tokenizer_path,
-                        lanrurugi_api::recommend_precompute::precompute_worker_budget(),
-                    ) {
-                        Ok(embedder) => {
-                            recommender.install_embedder(embedder);
-                            tracing::info!("recommendation model ready");
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to load recommendation model — recommendations disabled")
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to acquire recommendation model — recommendations disabled")
-                }
-            }
-        });
-    }
+    // Reader recommendation engine: the embedding model now lives in its own
+    // `lanrurugi-embed-worker` subprocess (`lanrurugi_api::embed_worker_client`'s own doc comment
+    // covers why — keeping it out of this process is what got `lanrurugi-server`'s own idle RSS
+    // back under budget), spawned on demand by the first real `embed()` call rather than
+    // downloaded/loaded here at startup. The models dir sits next to the thumb dir
+    // (`<lanrurugi>/models` — both compose files mount `./data/models` there); the worker itself
+    // calls `lanrurugi_recommend::model_download::acquire_models` against it on its own first
+    // spawn, same ETag-cached download this startup task used to run inline.
+    let models_dir = args
+        .thumb_dir
+        .parent()
+        .unwrap_or(&args.thumb_dir)
+        .join("models");
+    let recommender = Arc::new(lanrurugi_api::recommend::RecommendService::new(models_dir));
+    tokio::spawn(recommender.embed_worker_client().run_idle_reaper());
 
     // Eager, not lazy-on-first-request — a malformed checked-in policy/model file (see
     // `authz::route_enforcer`'s own docs on why that `expect` is the right call there) should
@@ -536,25 +515,19 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // One-time reader-recommendation-cache backfill (issue #70) — a pre-existing library's
     // archives never trigger `precompute_one` on their own (nothing about them changes after
     // this feature ships), so without this they'd never get a cached recommendation entry at
-    // all. Polls `recommender.ready()` rather than awaiting the model-load task directly (that
-    // task is fire-and-forget above, with no handle to join) — cheap (a bool read behind a
-    // `Mutex`), and the model load itself only happens once at startup, so a short poll interval
-    // costs nothing. Guarded the same way a precision-tier change is (`settings::put_settings`):
-    // skip if a rebuild is already queued/active, so a slow model load racing a user's own tier
-    // change during the same startup window doesn't double-queue a rebuild. Only advances
-    // `backfill_version` once the job actually finishes successfully — an interrupted rebuild
-    // (process restarted mid-backfill) is retried on the next startup rather than silently
-    // skipped, since `spawn_full_precompute_job`'s own generation-tagged resumability means a
-    // retry is cheap (already-current entries are skipped).
+    // all. No more "wait for the model to finish loading" poll here — `lanrurugi-embed-worker`
+    // (see `lanrurugi_api::embed_worker_client`'s own doc comment) is spawned on demand by
+    // `spawn_full_precompute_job`'s own first `embed()` call below, not pre-loaded at startup, so
+    // there is no longer a background load task whose completion this needs to wait for. Guarded
+    // the same way a precision-tier change is (`settings::put_settings`): skip if a rebuild is
+    // already queued/active, so this startup check racing a user's own tier change doesn't
+    // double-queue a rebuild. Only advances `backfill_version` once the job actually finishes
+    // successfully — an interrupted rebuild (process restarted mid-backfill) is retried on the
+    // next startup rather than silently skipped, since `spawn_full_precompute_job`'s own
+    // generation-tagged resumability means a retry is cheap (already-current entries are skipped).
     {
         let state = state.clone();
         tokio::spawn(async move {
-            loop {
-                if state.recommender.ready() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
             let current_version = state
                 .recommend_cache
                 .get_backfill_version()

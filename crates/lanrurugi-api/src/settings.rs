@@ -364,6 +364,14 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
         "refresh_token_lifetime_secs",
         lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS as i64,
     ),
+    (
+        "refresh_token_idle_lifetime_secs",
+        lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS as i64,
+    ),
+    (
+        "max_login_devices",
+        lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES as i64,
+    ),
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
@@ -444,6 +452,27 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             return Err(format!(
                 "Invalid theme: {value}. Must be one of {KNOWN_THEME_FILES:?}."
             ));
+        }
+    }
+    if matches!(
+        key,
+        "access_token_lifetime_secs"
+            | "refresh_token_lifetime_secs"
+            | "refresh_token_idle_lifetime_secs"
+    ) {
+        let secs = value.as_i64();
+        if secs.is_none_or(|secs| secs < 60) {
+            return Err(format!(
+                "Field \"{key}\" must be a number of seconds >= 60."
+            ));
+        }
+    }
+    if key == "max_login_devices" {
+        let Some(count) = value.as_i64() else {
+            return Err("Field \"max_login_devices\" must be a number.".to_string());
+        };
+        if count < 0 {
+            return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
         }
     }
     match value {
@@ -567,6 +596,8 @@ const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
     "guestmode",
     "access_token_lifetime_secs",
     "refresh_token_lifetime_secs",
+    "refresh_token_idle_lifetime_secs",
+    "max_login_devices",
 ];
 
 async fn put_settings(

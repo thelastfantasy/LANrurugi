@@ -9,8 +9,12 @@
 //! - every logical Redis pool (archive, minion, config, search, metrics) is asked to PING;
 //! - when `LANRURUGI_HEALTHCHECK_FRONTEND_URL` is set (the dev image sets it to Vite at
 //!   `http://127.0.0.1:3000`), the Vite/static frontend is also probed;
-//! - the recommender model status is reported as informational only, because the 118MB ONNX model
-//!   may still be downloading/loading after the server has already become fully usable.
+//! - the recommender status is reported as informational only: `lanrurugi-embed-worker` (the
+//!   118MB ONNX model's own subprocess — see `crate::embed_worker_client`'s own doc comment for
+//!   why the model lives there, not in this process) is spawned on demand by the first real
+//!   recommendation request, not at server startup, so "idle" here just means no request has
+//!   needed it yet or it was reclaimed after being idle — never a precondition the server itself
+//!   must wait out.
 //!
 //! Any failed required check returns `503 Service Unavailable` with a JSON body describing which
 //! subsystem failed. All Redis pools are checked because `RedisDbs` intentionally keeps five
@@ -106,7 +110,7 @@ async fn health(State(state): State<AppState>) -> Response {
                 redis_checks.into_iter().map(|(name, status)| (name.to_string(), json!(status)))
             ),
             "frontend": frontend_ok.map(|ok| if ok { "ok" } else { "failed" }).unwrap_or("skipped"),
-            "recommender": if state.recommender.ready() { "ready" } else { "loading" },
+            "recommender": if state.recommender.ready().await { "ready" } else { "idle" },
         },
     });
 

@@ -49,6 +49,7 @@ import type {
   ImportSnapshotMetadata,
   JobRecord,
   JobsResponse,
+  LoginSession,
   LoginStatus,
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
@@ -1545,5 +1546,40 @@ export function useSetOnlyMatchingBookmarks() {
     mutationFn: (onlyMatching: boolean) =>
       sendJson("PUT", "/bookmarks/only-matching", { only_matching: onlyMatching }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bookmark-only-matching"] }),
+  })
+}
+
+
+// --- Active login-device management (session-only backend routes) ---
+
+export function useSessions() {
+  return useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => fetchJson<LoginSession[]>("/sessions"),
+  })
+}
+
+/** Rename one login device. The server stores a custom label separately, so the auto-generated
+ *  name remains available as `auto_name`. */
+export function useRenameSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ familyId, name }: { familyId: string; name: string }) =>
+      sendJson<{ data: LoginSession }>("PATCH", `/sessions/${encodeURIComponent(familyId)}`, { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+  })
+}
+
+/** Revoke one login device. When the target is the current browser, the server clears both auth
+ *  cookies, so also invalidate login status to let the route guard take over. */
+export function useRevokeSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (familyId: string) =>
+      sendJson<{ operation: string; success: number }>("DELETE", `/sessions/${encodeURIComponent(familyId)}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      void queryClient.invalidateQueries({ queryKey: ["login-status"] })
+    },
   })
 }

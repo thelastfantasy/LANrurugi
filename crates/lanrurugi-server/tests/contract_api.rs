@@ -99,7 +99,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
@@ -213,6 +215,134 @@ const ARCHIVE_METADATA_REQUIRED_FIELDS: &[&str] = &[
     "lastreadtime",
     "size",
 ];
+
+/// Additive raw-archive search (`GET /search/archives`) regression coverage: an archive that
+/// has been folded into a Tankoubon is removed from `LRR_TANKGROUPED`, so the existing grouped
+/// `/search/ids` endpoint correctly returns no standalone result for it. That is the wrong answer
+/// when a caller is checking whether the archive itself is in the library, so the new endpoint
+/// must force `groupby_tanks=false` (and ignore `tankonly`) and return the underlying archive
+/// record instead of making the member invisible.
+#[tokio::test]
+async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
+    use deadpool_redis::redis::AsyncCommands;
+    use lanrurugi_search::keys::TANKGROUPED_KEY;
+
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie(&app).await;
+
+    let id = "a1b2c3d4".repeat(5);
+    let title = "Folded Raw Search Fixture";
+    let tag = "zzrawsearchfixture:folded";
+    let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
+    repo.save(&Archive {
+        id: lanrurugi_core::ids::ArchiveId(id.clone()),
+        name: title.to_string(),
+        title: title.to_string(),
+        file: format!("/nonexistent/{id}.zip"),
+        tags: tag.to_string(),
+        summary: String::new(),
+        arcsize: 1,
+        pagecount: 1,
+        isnew: false,
+        lastreadpage: 0,
+        lastreadtime: 0,
+        thumbhash: None,
+        toc: vec![],
+        stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
+        has_patch: false,
+    })
+    .await
+    .unwrap();
+
+    lanrurugi_search::indexer::index_new_archive(&redis.search, &id, title)
+        .await
+        .unwrap();
+    lanrurugi_search::indexer::update_tag_indexes(&redis.search, &id, "", tag)
+        .await
+        .unwrap();
+
+    // A real Tankoubon whose reverse index points at the archive, so the raw endpoint can report
+    // which Tankoubon it is filed under.
+    let tankid = lanrurugi_core::ids::TankId("TANK_9170000001".to_string());
+    let grouping_repo =
+        lanrurugi_storage::repository::GroupingRepository::new(redis.archive.clone());
+    grouping_repo
+        .save(&lanrurugi_core::entities::Grouping {
+            tankid: tankid.clone(),
+            name: "Raw Search Fixture Tank".to_string(),
+            summary: String::new(),
+            tags: String::new(),
+            progress: 0,
+            archives: vec![lanrurugi_core::ids::ArchiveId(id.clone())],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Default::default(),
+            created_at: None,
+            updated_at: None,
+        })
+        .await
+        .unwrap();
+
+    // What a real Tankoubon membership change does (`indexer::sync_tank_membership`'s `joined`
+    // half): a member archive no longer appears in the grouped search candidate set.
+    let mut sconn = redis.search.get().await.unwrap();
+    let _: () = sconn.srem(TANKGROUPED_KEY, &id).await.unwrap();
+
+    let (status, grouped) = get_json(
+        &app,
+        &format!("/api/search/ids?filter={tag}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        grouped["data"].as_array().unwrap().is_empty(),
+        "the existing grouped endpoint should still hide the tank member: {grouped}"
+    );
+
+    // Even explicitly asking for grouped/tank-only results must not reintroduce the hidden member:
+    // `/search/archives` owns the raw-archive semantics, not its caller's query parameters.
+    let (status, raw) = get_json(
+        &app,
+        &format!("/api/search/archives?filter={tag}&groupby_tanks=true&tankonly=true"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let data = raw["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "new endpoint must return the raw archive: {raw}"
+    );
+    assert_eq!(data[0]["arcid"], id.as_str());
+    assert_eq!(
+        data[0]["tankid"],
+        tankid.as_str(),
+        "raw endpoint must report the Tankoubon the archive belongs to: {raw}"
+    );
+    assert_eq!(data[0]["archive_index"], 0);
+    assert_eq!(data[0]["tank_sequence"], 1);
+    assert_eq!(data[0]["tankoubon"]["id"], tankid.as_str());
+    assert_eq!(
+        data[0]["tankoubon"]["name"], "Raw Search Fixture Tank",
+        "raw endpoint must include the owning Tankoubon's own metadata: {raw}"
+    );
+
+    lanrurugi_search::indexer::remove_archive_index(&redis.search, &id, title, tag)
+        .await
+        .unwrap();
+    grouping_repo.delete(&tankid).await.unwrap();
+    repo.delete(&lanrurugi_core::ids::ArchiveId(id))
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 async fn get_archives_matches_recorded_archive_metadata_shape() {
@@ -467,7 +597,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
@@ -633,7 +765,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
@@ -891,7 +1025,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),
@@ -1092,7 +1228,9 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),

@@ -60,6 +60,12 @@ impl From<&str> for BlockId {
 pub struct TranslationBlock {
     pub block_id: BlockId,
     pub source_text: String,
+    /// A second OCR reading of the same region, when the batch recognized one. Present only for
+    /// regions whose reading axis was ambiguous or whose detector output was fragmented; the
+    /// provider sees both candidates and reports back which one it actually translated via
+    /// [`TranslatedBlock::selected_source_text`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_source_text: Option<String>,
 }
 
 /// What kind of glossary candidate a block's source text is, per the backend's own judgment
@@ -90,6 +96,10 @@ pub enum TermKind {
 pub struct TranslatedBlock {
     pub block_id: BlockId,
     pub translated_text: String,
+    /// For a block that offered A/B OCR candidates, the exact source string the model translated
+    /// (`source_text` or `alternate_source_text`). `None` for ordinary single-candidate blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_source_text: Option<String>,
     /// `TermKind::None` for ordinary dialogue/narration (the common case). Never inferred
     /// locally — see [`TermKind`]. Defaulted for the flat-map fallback shape (research.md §14),
     /// which predates this field and carries no classification at all.
@@ -240,9 +250,28 @@ impl TranslationRequest {
     /// The user-message body: stable context prefix first, this batch's blocks last.
     pub fn render_user_message(&self) -> String {
         let mut out = self.context.render_prefix();
-        out.push_str("Translate these blocks:\n");
+        out.push_str(&self.render_blocks());
+        out
+    }
+
+    /// The dynamic block tail shared by every adapter.
+    ///
+    /// A block with an alternate OCR candidate is deliberately expanded into an A/B choice: the
+    /// provider judges which reading is more plausible Japanese, translates only the chosen one,
+    /// and reports its choice through the structured `selected_source_text` field. A block with
+    /// no alternate stays on the old single-line format, so the common path pays no extra prompt.
+    pub fn render_blocks(&self) -> String {
+        let mut out = String::from("Translate these blocks:\n");
         for block in &self.blocks {
-            out.push_str(&format!("[{}] {}\n", block.block_id, block.source_text));
+            match &block.alternate_source_text {
+                Some(alternate) => {
+                    out.push_str(&format!(
+                        "[{}]\nA) {}\nB) {}\n这是同一段漫画文字的两种 OCR 候选，其一可能乱序。先判断哪个更可能是合理日文，\n再只输出中文译文；若两者都不可信，倾向保持不译。\n并在 selected_source_text 字段中原样填写你选中的那一条候选原文（不要只写 A/B 字母）。\n",
+                        block.block_id, block.source_text, alternate,
+                    ));
+                }
+                None => out.push_str(&format!("[{}] {}\n", block.block_id, block.source_text)),
+            }
         }
         out
     }
@@ -369,11 +398,17 @@ pub fn translation_json_schema() -> serde_json::Value {
                                 (the common case). A short phrase, interjection, or sound effect \
                                 is \"none\", not a term, even if it's brief.",
                         },
+                        "selected_source_text": {
+                            "type": "string",
+                            "description": "For a block whose input offered A) and B) OCR \
+                                candidates, copy verbatim the candidate you actually translated. \
+                                For a single-candidate block, use the empty string.",
+                        },
                     },
                     // Strict schema mode requires every property listed above; `term_kind` still
                     // behaves as optional in practice via its own explicit "none" — see
                     // `TranslatedBlock::term_kind`'s `Option<TermKind>` mapping of that string.
-                    "required": ["block_id", "translated_text", "term_kind"],
+                    "required": ["block_id", "translated_text", "term_kind", "selected_source_text"],
                     "additionalProperties": false,
                 },
             },
@@ -428,6 +463,7 @@ pub fn parse_block_value(
                             v.as_str().map(|text| TranslatedBlock {
                                 block_id: BlockId::from(id.clone()),
                                 translated_text: text.to_string(),
+                                selected_source_text: None,
                                 term_kind: TermKind::None,
                             })
                         })
@@ -535,6 +571,7 @@ mod tests {
             vec![TranslationBlock {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
+                alternate_source_text: None,
             }],
             "en",
         )
@@ -548,6 +585,37 @@ mod tests {
             msg.find("Sayuki").unwrap() < msg.find("こんにちは").unwrap(),
             "stable content must precede batch content so the prefix is cacheable"
         );
+    }
+
+    #[test]
+    fn an_alternate_ocr_candidate_renders_as_an_ab_choice() {
+        let request = TranslationRequest::new(
+            vec![TranslationBlock {
+                block_id: BlockId::from("p1b0"),
+                source_text: "ーッ娘スー母猫".into(),
+                alternate_source_text: Some("スーツ母娘".into()),
+            }],
+            "zh-cn",
+        );
+        let message = request.render_user_message();
+        assert!(message.contains("A) ーッ娘スー母猫"));
+        assert!(message.contains("B) スーツ母娘"));
+        assert!(message.contains("两种 OCR 候选"));
+    }
+
+    #[test]
+    fn a_single_candidate_block_keeps_the_old_single_line_format() {
+        let request = TranslationRequest::new(
+            vec![TranslationBlock {
+                block_id: BlockId::from("p1b0"),
+                source_text: "こんにちは".into(),
+                alternate_source_text: None,
+            }],
+            "zh-cn",
+        );
+        let message = request.render_user_message();
+        assert!(message.contains("[p1b0] こんにちは"));
+        assert!(!message.contains("A) "));
     }
 
     #[test]
@@ -591,7 +659,12 @@ mod tests {
         assert!(item["properties"]["term_kind"].is_object());
         assert_eq!(
             item["required"],
-            serde_json::json!(["block_id", "translated_text", "term_kind"])
+            serde_json::json!([
+                "block_id",
+                "translated_text",
+                "term_kind",
+                "selected_source_text"
+            ])
         );
     }
 

@@ -20,6 +20,8 @@ members = [
     "crates/lanrurugi-inpaint",
     "crates/lanrurugi-gpu-ipc",
     "crates/lanrurugi-gpu-worker",
+    "crates/lanrurugi-embed-ipc",
+    "crates/lanrurugi-embed-worker",
 ]
 
 [workspace.package]
@@ -45,6 +47,7 @@ lanrurugi-fontcache = { path = "crates/lanrurugi-fontcache" }
 lanrurugi-translate = { path = "crates/lanrurugi-translate" }
 lanrurugi-inpaint = { path = "crates/lanrurugi-inpaint" }
 lanrurugi-gpu-ipc = { path = "crates/lanrurugi-gpu-ipc" }
+lanrurugi-embed-ipc = { path = "crates/lanrurugi-embed-ipc" }
 
 tarpc = { version = "0.38.0", features = ["serde-transport", "serde-transport-bincode", "unix", "tokio1"] }
 futures = "0.3.34"

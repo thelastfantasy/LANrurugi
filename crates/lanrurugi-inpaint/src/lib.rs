@@ -31,7 +31,9 @@
 //! is regenerated from surrounding real pixels rather than covered with a guessed flat colour or
 //! left showing through a contrasting-outline compromise.
 
+pub mod densecrf;
 pub mod model_discovery;
+pub mod permutohedral;
 pub mod stroke_mask;
 
 use std::path::Path;

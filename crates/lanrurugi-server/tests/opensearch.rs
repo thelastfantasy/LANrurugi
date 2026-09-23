@@ -87,7 +87,9 @@ async fn test_app() -> Option<axum::Router> {
         ignored_group_suggestions,
         compare_cache,
         bookmarks,
-        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new()),
+        recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
+            std::env::temp_dir().join("lanrurugi-test-models"),
+        )),
         new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
         download_cancellations: Default::default(),
         pending_generate_requests: Default::default(),

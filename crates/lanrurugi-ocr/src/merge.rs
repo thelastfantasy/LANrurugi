@@ -8,7 +8,7 @@
 //! own output).
 
 use crate::bubble_segment::DetectedBubble;
-use crate::entities::{BoundingBox, DetectedTextRegion, PageNumber};
+use crate::entities::{BoundingBox, DetectedTextRegion, PageNumber, WritingDirection};
 use lanrurugi_core::ids::ArchiveId;
 
 /// One raw detection before merging: a box plus the text recognized inside it.
@@ -16,6 +16,14 @@ use lanrurugi_core::ids::ArchiveId;
 pub struct DetectedLine {
     pub bounding_box: BoundingBox,
     pub text: String,
+    /// Recognized reading of the same crop after a 90° rotation, when `reading_axis` was
+    /// ambiguous. `merge_lines` carries it through so the final region can hand both candidates
+    /// to the translation LLM.
+    pub alternate_source_text: Option<String>,
+    /// Reading direction observed for this raw line (or `None` when the projection pass stayed
+    /// ambiguous). Aggregated conservatively across merged members: any ambiguous member keeps
+    /// the final region ambiguous rather than letting a confident sibling mask it.
+    pub writing_direction: Option<WritingDirection>,
 }
 
 impl DetectedLine {
@@ -23,6 +31,24 @@ impl DetectedLine {
         Self {
             bounding_box,
             text: text.into(),
+            alternate_source_text: None,
+            writing_direction: None,
+        }
+    }
+
+    /// Same as [`Self::new`], plus the OCR direction/alternate-candidate metadata carried by the
+    /// batch recognition pass.
+    pub fn with_ocr_metadata(
+        bounding_box: BoundingBox,
+        text: impl Into<String>,
+        alternate_source_text: Option<String>,
+        writing_direction: Option<WritingDirection>,
+    ) -> Self {
+        Self {
+            bounding_box,
+            text: text.into(),
+            alternate_source_text,
+            writing_direction,
         }
     }
 }
@@ -381,6 +407,37 @@ pub fn merge_lines(
             // tested on the raw lines, not the groups' own bboxes — a group's union box can
             // already span outside every bubble once it has absorbed a line or two, but each
             // individual line's own membership never changes.
+            // Two lines measured to belong to *different, non-overlapping* real bubbles must never
+            // merge on geometry alone: geometry cannot see the bubble boundary, and merging them
+            // produces one region spanning two bubbles. Real reported incident (2026-09-19,
+            // page 12): an upper handwritten SFX bubble ("どうして…") and the lower dialogue bubble
+            // directly below it merged into one tall region, so the lower bubble's translation was
+            // laid out over the upper bubble's own area too.
+            //
+            // Deliberately requires the two bubble bboxes to be *disjoint*: the bubble segmentation
+            // model routinely splits one real speech bubble into several overlapping sub-bubbles,
+            // and those sub-bubbles' lines must still be free to merge back (a first version of
+            // this guard blocked any different membership, which re-split the top-right bubble's
+            // own three boxes and dropped the "直属の" tail of "本日より三皇女殿下直属の" —
+            // caught from a real render the same day). Overlapping bubbles are treated as "one
+            // physical bubble the model over-segmented", not as a boundary to enforce.
+            if let (Some(mi), Some(mj)) = (membership[i], membership[j]) {
+                if mi != mj && bubbles[mi].bbox.iou(&bubbles[mj].bbox) <= 0.0 {
+                    continue;
+                }
+            }
+            // …and a line that belongs to a real balloon must not merge with one that belongs to
+            // *no* balloon, either. That second gap is how a hand-drawn SFX sitting on a balloon's
+            // edge ended up absorbed into that balloon's own dialogue (real page-13 case: the blue
+            // 「は！？」overlapping the「ちょ待…」balloon; they were geometrically adjacent, one was a
+            // bubble member and the other was not, and only the both-sides-are-members case above
+            // was blocked — the merged region's own `source_text` came out as `"は!?ちょ待..."`, so
+            // the artwork was translated as dialogue *and* erased with it). Keeping them apart lets
+            // the balloon be erased/translated on its own while the SFX stays its own region — where
+            // the coloured-ink gate then leaves it completely untouched.
+            if membership[i].is_some() != membership[j].is_some() {
+                continue;
+            }
             let by_geometry = should_merge_by_geometry(
                 &group_bbox[ri],
                 &group_bbox[rj],
@@ -482,13 +539,54 @@ pub fn merge_lines(
                 return None;
             }
 
-            Some(DetectedTextRegion::new(
+            // An alternate candidate only exists if at least one member had one; otherwise the
+            // merged region must not acquire a fake B candidate that merely repeats A. When it
+            // does exist, each member contributes its own alternate (or its original text, for
+            // members that had no alternate), preserving the same reading order as `source_text`.
+            let mut any_alternate = false;
+            let alternate_source_text: String = members
+                .iter()
+                .map(|m| {
+                    if let Some(alternate) = &m.alternate_source_text {
+                        any_alternate = true;
+                        alternate.trim().to_string()
+                    } else {
+                        m.text.trim().to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("");
+
+            // Conservative direction vote: every member must have a confident axis and they must
+            // agree. One ambiguous member (the exact detector-fragmentation case this feature
+            // exists for) leaves the whole region `None`, so compositing's legacy fallback and
+            // the whole-region recognition pass both get a chance to resolve it.
+            let mut direction = None;
+            let mut direction_confident = true;
+            for member in &members {
+                match member.writing_direction {
+                    Some(member_direction) => match direction {
+                        Some(existing) if existing != member_direction => {
+                            direction_confident = false;
+                        }
+                        None => direction = Some(member_direction),
+                        Some(_) => {}
+                    },
+                    None => direction_confident = false,
+                }
+            }
+            let writing_direction = direction_confident.then_some(direction).flatten();
+
+            let mut region = DetectedTextRegion::new(
                 archive_id.clone(),
                 page_number,
                 bounding_box,
                 source_text,
                 is_cover,
-            ))
+            );
+            region.alternate_source_text = any_alternate.then_some(alternate_source_text);
+            region.writing_direction = writing_direction;
+            Some(region)
         })
         .collect()
 }
@@ -727,5 +825,71 @@ mod tests {
         ];
         let bubble = solid_bubble(0, 0, 350, 350);
         assert_eq!(merge(lines, Some(&[bubble])).len(), 2);
+    }
+
+    #[test]
+    fn two_lines_in_overlapping_sub_bubbles_still_merge() {
+        // The bubble model routinely splits one real bubble into several overlapping sub-bubbles;
+        // lines assigned to those must still merge back, or a tail like "直属の" gets lost.
+        let lines = vec![
+            line(20, 10, 60, 40, "本日より三皇女殿下"),
+            line(20, 54, 60, 40, "直属の"),
+        ];
+        let bubbles = vec![solid_bubble(10, 0, 80, 80), solid_bubble(10, 30, 80, 80)];
+        let regions = merge(lines, Some(&bubbles));
+        assert_eq!(
+            regions.len(),
+            1,
+            "overlapping sub-bubbles are one physical bubble"
+        );
+        assert_eq!(regions[0].source_text, "本日より三皇女殿下直属の");
+    }
+
+    #[test]
+    fn two_lines_in_different_bubbles_never_merge_on_geometry_alone() {
+        // Documented incident (2026-09-19, page 12): an upper SFX bubble and the dialogue bubble
+        // directly below it are 4px apart (well inside the geometry tolerance) but are two
+        // different real bubbles. Merging them laid the lower translation out over the upper
+        // bubble's own area.
+        let lines = vec![
+            line(20, 10, 60, 40, "どうして"),
+            line(20, 54, 60, 40, "三皇女様を"),
+        ];
+        // Two *disjoint* bubbles (the upper ends at y=50, the lower starts at y=54) — the
+        // refined guard only blocks geometry when the bubbles do not overlap.
+        let bubbles = vec![solid_bubble(10, 0, 80, 50), solid_bubble(10, 54, 80, 60)];
+        let regions = merge(lines, Some(&bubbles));
+        assert_eq!(
+            regions.len(),
+            2,
+            "lines measured to belong to different bubbles must stay separate"
+        );
+    }
+    #[test]
+    fn merged_regions_carry_alternates_and_agreeing_direction() {
+        let mut first = line(20, 10, 60, 40, "A");
+        first.alternate_source_text = Some("A2".into());
+        first.writing_direction = Some(WritingDirection::Horizontal);
+        let mut second = line(20, 54, 60, 40, "B");
+        second.writing_direction = Some(WritingDirection::Horizontal);
+
+        let regions = merge(vec![first, second], None);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].source_text, "AB");
+        assert_eq!(regions[0].alternate_source_text.as_deref(), Some("A2B"));
+        assert_eq!(
+            regions[0].writing_direction,
+            Some(WritingDirection::Horizontal)
+        );
+    }
+
+    #[test]
+    fn one_ambiguous_member_keeps_the_merged_direction_ambiguous() {
+        let mut first = line(20, 10, 60, 40, "A");
+        first.writing_direction = Some(WritingDirection::Vertical);
+        let second = line(20, 54, 60, 40, "B"); // no confident direction
+        let regions = merge(vec![first, second], None);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].writing_direction, None);
     }
 }

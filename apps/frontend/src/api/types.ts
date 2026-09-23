@@ -100,8 +100,15 @@ export interface Settings {
   recommendprecision: string
   /** JWT access-token lifetime in seconds; an expired request transparently refreshes. */
   access_token_lifetime_secs: number
-  /** Refresh-token lifetime in seconds — the longer-lived, rotating, revocable cookie. */
+  /** Absolute refresh-token lifetime in seconds — the hard cap anchored to the original login.
+   *  Silent refreshes never extend this. */
   refresh_token_lifetime_secs: number
+  /** Sliding refresh-token idle window in seconds — each successful rotation renews this, but it
+   *  is always capped by `refresh_token_lifetime_secs`. */
+  refresh_token_idle_lifetime_secs: number
+  /** Maximum simultaneously active login families. `0` means unlimited; a new login evicts the
+   *  oldest-seen family when this cap would be exceeded. */
+  max_login_devices: number
   pagesize: number
   tempmaxsize: number
   sizethreshold: number
@@ -760,6 +767,9 @@ export interface ActivityEntry {
   outcome: ActivityOutcome
   client_ip: string | null
   device_info: ActivityDeviceInfo | null
+  /** Session-actor only: effective login-device name at write time (custom name if set, otherwise
+   *  the auto-generated UA/language label). `null` for token/guest/system/anonymous entries. */
+  device_name: string | null
   before: unknown | null
   after: unknown | null
   caused_by: ActivityCausedBy | null
@@ -868,4 +878,24 @@ export interface ImportSnapshotMetadata {
   category_count: number
   tankoubon_count: number
   stamp_count: number
+}
+
+
+/** One active login device/family as returned by `GET /api/sessions`. */
+export interface LoginSession {
+  family_id: string
+  /** Effective display name: `custom_name` when set, otherwise the auto-generated name. */
+  name: string
+  /** The auto-generated initial label, e.g. `"Linux x86_64 Chrome 152 + zh-CN"`. */
+  auto_name: string
+  custom_name: string | null
+  ip: string | null
+  created_at: number
+  last_seen_at: number
+  /** Sliding idle deadline; renewed on every successful refresh. */
+  idle_expires_at: number
+  /** Absolute hard deadline, anchored to the original login. */
+  expires_at: number
+  /** Whether this is the family behind the browser's current access cookie. */
+  current: boolean
 }

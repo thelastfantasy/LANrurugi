@@ -53,9 +53,10 @@ COPY crates ./crates
 # to find it.
 RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lrr-cargo-target,target=/build/target \
-    cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker && \
+    cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker && \
     cp /build/target/release/lanrurugi-server /build/lanrurugi-server && \
-    cp /build/target/release/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker
+    cp /build/target/release/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker && \
+    cp /build/target/release/lanrurugi-embed-worker /build/lanrurugi-embed-worker
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
@@ -117,13 +118,19 @@ COPY --from=rust-builder /build/lanrurugi-server /usr/local/bin/lanrurugi-server
 # looks for it in the same directory as `std::env::current_exe()`) — same `/usr/local/bin` this
 # stage already puts `lanrurugi-server` in, no separate location to configure.
 COPY --from=rust-builder /build/lanrurugi-gpu-worker /usr/local/bin/lanrurugi-gpu-worker
+# Same pattern for `lanrurugi-embed-worker` (the `lanrurugi-recommend` embedding model's own
+# subprocess, `embed_worker_client::EmbedWorkerClient::worker_binary_path` — kept out of
+# `lanrurugi-server`'s own process so its RSS baseline isn't inflated by a loaded ONNX session).
+COPY --from=rust-builder /build/lanrurugi-embed-worker /usr/local/bin/lanrurugi-embed-worker
 
 # GPU EP integration plan v9 (issue #103): TWO separate ONNX Runtime builds are needed now, not
-# one — `lanrurugi-server` itself no longer touches CUDA at all (every CUDA session moved into the
-# `lanrurugi-gpu-worker` subprocess below), but it still needs a *CPU* `libonnxruntime.so` for
-# `lanrurugi-recommend`'s embedding model (a separate, unrelated `ort` integration, pinned to a
-# different `ort` version — `2.0.0-rc.12` vs this project's `2.0.0-rc.13` elsewhere — see that
-# crate's own `Cargo.toml`). `ort`'s `load-dynamic` feature defaults to a bare `dlopen
+# one — `lanrurugi-server` itself no longer touches CUDA, or any ONNX Runtime session, at all
+# (every CUDA session moved into the `lanrurugi-gpu-worker` subprocess below, and the CPU
+# embedding session moved into `lanrurugi-embed-worker` above) — but that embed-worker still needs
+# a *CPU* `libonnxruntime.so` for `lanrurugi-recommend`'s embedding model (a separate, unrelated
+# `ort` integration, pinned to a different `ort` version — `2.0.0-rc.12` vs this project's
+# `2.0.0-rc.13` elsewhere — see that crate's own `Cargo.toml`). `ort`'s `load-dynamic` feature
+# defaults to a bare `dlopen
 # ("libonnxruntime.so")` (no `ORT_DYLIB_PATH` set) that walks the standard system library search
 # path — if both builds installed a same-named `.so` into the same directory, whichever copied
 # last would silently win for *both* processes, handing `lanrurugi-server` a GPU-flavored library
@@ -253,10 +260,11 @@ ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
 ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 # Explicit, not left to `ort`'s own default `dlopen("libonnxruntime.so")` system-path search — see
-# the ORT-setup comment near this file's CPU/GPU tarball extraction steps for why `lanrurugi-server`
-# and `lanrurugi-gpu-worker` each need their own separate build/path (this one's for
-# `lanrurugi-recommend`'s CPU-only embedding model; the worker sets its own GPU path explicitly on
-# spawn, in `gpu_worker_client.rs`, rather than inheriting this one).
+# the ORT-setup comment near this file's CPU/GPU tarball extraction steps for why
+# `lanrurugi-embed-worker` and `lanrurugi-gpu-worker` each need their own separate build/path (this
+# one's for `lanrurugi-recommend`'s CPU-only embedding model, inherited by `lanrurugi-embed-worker`
+# from this container-wide `ENV`; `lanrurugi-gpu-worker` sets its own GPU path explicitly on spawn,
+# in `gpu_worker_client.rs`, rather than inheriting this one).
 ENV ORT_DYLIB_PATH=/usr/local/lib/ort-cpu/libonnxruntime.so
 # `LANRURUGI_HEALTHCHECK_FRONTEND_URL` makes `/health` probe Vite as well as the backend's own
 # Redis pools. It is only set for the dev image; the production image serves the frontend from the

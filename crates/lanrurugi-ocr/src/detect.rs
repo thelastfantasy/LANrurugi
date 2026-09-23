@@ -57,14 +57,22 @@ pub enum DetectionError {
 /// (or more) real pieces of lettering DB's own probability map failed to separate, so nothing it
 /// does can recover the correct grouping — this filter at the source is the fix. Confirmed against
 /// a real page in this codebase's own reported bug: the anomalous box covered ~10% of the page
-/// (388x470px against a 1136x1600 page), while the largest genuinely correct multi-line region on
-/// that same page covered ~2%. `0.05` sits well clear of both, rejecting the anomaly with room to
-/// spare before it could ever reject a real, large paragraph. Losing the box entirely (rather than
-/// attempting to split it) is deliberate: a spurious merge silently corrupts translation quality in
-/// a way a reader has no way to notice went wrong, while a dropped region is at worst as bad as
-/// detection never having run for that spot (FR-019's own "reader still gets to read the page"
-/// discipline extends the same way here).
-const MAX_BOX_AREA_FRACTION: f64 = 0.05;
+/// (388x470px against a 1136x1600 page).
+///
+/// Raised from `0.05` to `0.08` (2026-09-16, a real live incident): a genuine, correctly-detected
+/// single text box — "不採用", a large stylised title/stamp printed across a whole sheet of paper —
+/// covered ~6.1% of its own real page and was being silently discarded by this exact guard. `0.05`
+/// was picked (see the incident above) only against that one bridging-bug box's own ~10%, without
+/// ever checking it against a real large-title box's own legitimate footprint — this box is normal
+/// in shape (aspect ratio ~1.4, nowhere near [`MAX_BOX_ASPECT_RATIO`]'s own territory), just
+/// genuinely large, and got caught by a threshold that was never actually validated against that
+/// case. `0.08` keeps clear rejection room below the confirmed-anomalous ~10% box while no longer
+/// catching this confirmed-legitimate ~6.1% one. Losing a box entirely (rather than attempting to
+/// split it) is still deliberate for whatever this guard *does* reject: a spurious merge silently
+/// corrupts translation quality in a way a reader has no way to notice went wrong, while a dropped
+/// region is at worst as bad as detection never having run for that spot (FR-019's own "reader
+/// still gets to read the page" discipline extends the same way here).
+const MAX_BOX_AREA_FRACTION: f64 = 0.08;
 
 /// A detected box whose long side exceeds its short side by more than this ratio is discarded —
 /// same reasoning and same real incident as [`MAX_BOX_AREA_FRACTION`]'s own doc comment (that
@@ -155,6 +163,7 @@ fn text_detection_postprocess_config() -> DBPostprocessConfig {
 /// per request — building it per page would pay full model-load cost on every page turn.
 pub struct TextDetector {
     model: DBModel,
+    box_threshold: f32,
 }
 
 impl std::fmt::Debug for TextDetector {
@@ -182,7 +191,38 @@ impl TextDetector {
             .postprocess_config(text_detection_postprocess_config())
             .build(model_path.to_path_buf())
             .map_err(|e| DetectionError::ModelLoad(e.to_string()))?;
-        Ok(Self { model })
+        Ok(Self {
+            model,
+            box_threshold: text_detection_postprocess_config().box_threshold,
+        })
+    }
+
+    /// Diagnostic-only: same as [`Self::load`], but with `box_threshold` overridden — used to
+    /// measure, on a real page, whether a detection miss whose ROI probability mean sits just under
+    /// `box_threshold` (2026-09-18 investigation into "トウカ"/"美女3人" — see this module's own
+    /// `text_detection_postprocess_config` doc comment for the box_threshold value actually shipped)
+    /// would actually be recovered by lowering it, and how many new (possibly spurious) candidate
+    /// boxes that same change produces elsewhere on the same page. Not used by any production call
+    /// site — `detect_batch_with_raw_mask` still calls `text_detection_postprocess_config()`
+    /// directly for its own postprocess call, so this constructor's `box_threshold` only actually
+    /// takes effect wherever a caller also threads it through consistently (currently: nowhere in
+    /// production, only `examples/diag_probmap.rs`).
+    #[doc(hidden)]
+    pub fn load_with_box_threshold(
+        model_path: &Path,
+        box_threshold: f32,
+    ) -> Result<Self, DetectionError> {
+        let mut postprocess = text_detection_postprocess_config();
+        postprocess.box_threshold = box_threshold;
+        let model = DBModelBuilder::new()
+            .preprocess_config(text_detection_preprocess_config())
+            .postprocess_config(postprocess)
+            .build(model_path.to_path_buf())
+            .map_err(|e| DetectionError::ModelLoad(e.to_string()))?;
+        Ok(Self {
+            model,
+            box_threshold,
+        })
     }
 
     /// Detects text boxes across a batch of pages in one inference call.
@@ -244,7 +284,7 @@ impl TextDetector {
             &predictions,
             img_shapes.clone(),
             text_detection_postprocess_config().score_threshold,
-            text_detection_postprocess_config().box_threshold,
+            self.box_threshold,
             text_detection_postprocess_config().unclip_ratio,
         );
 
@@ -472,6 +512,17 @@ mod tests {
         // bubble line connected into one ~10%-of-page detection box.
         let bbox = BoundingBox::new(423, 852, 388, 470);
         assert!(!is_plausible_text_box(&bbox, 1136, 1600));
+    }
+
+    #[test]
+    fn a_large_genuine_title_box_is_no_longer_wrongly_rejected() {
+        // The real over-tightened-threshold bug (2026-09-16): "不採用", a large stylised title
+        // printed across a whole sheet of paper, was a single genuine, correctly-shaped detection
+        // (aspect ratio ~1.4, nowhere near the anomalous shapes the other guard tests cover) that
+        // still tripped the area guard at its old `0.05` because nobody had checked a real large
+        // title's own footprint against it before picking that number.
+        let bbox = BoundingBox::new(423, 852, 397, 280);
+        assert!(is_plausible_text_box(&bbox, 1136, 1600));
     }
 
     #[test]

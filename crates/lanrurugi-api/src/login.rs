@@ -21,7 +21,7 @@ use axum::Router;
 use lanrurugi_core::{password, session};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::device_info::ClientReportedInfo;
-use lanrurugi_storage::refresh_tokens::RotateOutcome;
+use lanrurugi_storage::refresh_tokens::{RotateOutcome, SessionContext};
 use serde::Deserialize;
 
 use crate::activity::record_manual;
@@ -95,10 +95,17 @@ const SESSION_REFRESH_DEDUP_WINDOW_SECS: u64 = 30 * 60;
 /// Builds both `Set-Cookie` header values for a freshly-issued (or rotated) token pair. `Secure`
 /// is appended only when `cfg.force_secure_cookies` is set (see that field's own docs on why it's
 /// an explicit opt-in, not inferred from a request header).
+///
+/// `refresh_max_age_secs` is passed separately rather than read from `cfg` because a rotated
+/// refresh token inherits its parent's absolute `expires_at` (anchored to the original login), so
+/// its cookie must not advertise a full fresh lifetime the server-side record no longer has — see
+/// `refresh_tokens::RefreshTokenRepository::rotate`'s own docs. Login passes the full configured
+/// lifetime; rotation passes the actual remaining time.
 fn auth_cookies(
     cfg: &LiveAuthConfig,
     access_token: &str,
     refresh_cookie_value: &str,
+    refresh_max_age_secs: u64,
 ) -> [String; 2] {
     let secure = if cfg.force_secure_cookies {
         "; Secure"
@@ -118,7 +125,7 @@ fn auth_cookies(
             session::REFRESH_COOKIE_NAME,
             refresh_cookie_value,
             REFRESH_COOKIE_PATH,
-            cfg.refresh_token_lifetime_secs,
+            refresh_max_age_secs,
             secure,
         ),
     ]
@@ -128,7 +135,7 @@ fn auth_cookies(
 /// a clearing `Set-Cookie` with mismatched attributes isn't guaranteed to be treated as the same
 /// cookie by every client (RFC 6265's identity is `(name, domain, path)`, but real browsers have
 /// historically been inconsistent about `Secure`-attribute mismatches on deletion).
-fn cleared_auth_cookies(force_secure: bool) -> [String; 2] {
+pub(crate) fn cleared_auth_cookies(force_secure: bool) -> [String; 2] {
     let secure = if force_secure { "; Secure" } else { "" };
     [
         format!(
@@ -150,7 +157,7 @@ fn cleared_auth_cookies(force_secure: bool) -> [String; 2] {
 /// array elements sharing the `Set-Cookie` key silently collapse to just the last one, so the
 /// browser never actually receives both cookies (caught live by `tests/auth_flow.rs`: `login`
 /// only ever set the refresh cookie). `HeaderMap::append` is the one that keeps both.
-fn cookie_headers(cookies: [String; 2]) -> axum::http::HeaderMap {
+pub(crate) fn cookie_headers(cookies: [String; 2]) -> axum::http::HeaderMap {
     let mut headers = axum::http::HeaderMap::new();
     for cookie in cookies {
         headers.append(
@@ -186,6 +193,7 @@ async fn login(
                 client_ip: ip,
                 user_agent: ua,
                 client_reported,
+                session_family_id: None,
             }),
             action_types::SESSION_LOGIN_FAILED,
             ActivityTarget {
@@ -206,12 +214,35 @@ async fn login(
     let now = now_secs();
     let device_info =
         crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
+    let session_context = SessionContext {
+        device_info,
+        client_ip: ip.clone(),
+    };
+    // Evict the oldest-seen family first when this login would exceed the configured device cap.
+    // A Redis failure here is logged and ignored: failing the whole login because a best-effort
+    // limit-check couldn't run would be worse than briefly exceeding the cap.
+    match state
+        .refresh_tokens
+        .enforce_device_limit(now as i64, auth.max_login_devices as i64)
+        .await
+    {
+        Ok(evicted) if !evicted.is_empty() => {
+            tracing::info!(
+                count = evicted.len(),
+                max = auth.max_login_devices,
+                "evicted oldest login device(s) to honor max_login_devices"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "failed to enforce max_login_devices"),
+    }
     let issued = match state
         .refresh_tokens
-        .issue_new_family(
+        .issue_new_family_with_idle(
             now as i64,
             auth.refresh_token_lifetime_secs as i64,
-            device_info,
+            auth.refresh_token_idle_lifetime_secs as i64,
+            session_context,
         )
         .await
     {
@@ -225,7 +256,18 @@ async fn login(
         &issued.record.family_id,
     );
     let refresh_cookie_value = format!("{}.{}", issued.record.token_id, issued.secret);
-    let cookies = auth_cookies(&auth, &access_token, &refresh_cookie_value);
+    let refresh_cookie_max_age = (issued
+        .record
+        .idle_expires_at
+        .unwrap_or(issued.record.expires_at)
+        - now as i64)
+        .max(1) as u64;
+    let cookies = auth_cookies(
+        &auth,
+        &access_token,
+        &refresh_cookie_value,
+        refresh_cookie_max_age,
+    );
 
     // `Session`, not the `Anonymous` context `require_api_key` actually attached to this request
     // (this route is on `anonymous`'s own allow-list in `route_policy.csv`, since nobody could
@@ -238,6 +280,7 @@ async fn login(
             client_ip: ip,
             user_agent: ua,
             client_reported,
+            session_family_id: Some(issued.record.family_id.clone()),
         }),
         action_types::SESSION_LOGIN,
         ActivityTarget {
@@ -312,9 +355,20 @@ async fn refresh(
     };
 
     let now = now_secs();
+    let rotate_device_info =
+        crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
     let outcome = match state
         .refresh_tokens
-        .rotate(token_id, secret, now as i64)
+        .rotate_with_context(
+            token_id,
+            secret,
+            now as i64,
+            auth.refresh_token_idle_lifetime_secs as i64,
+            SessionContext {
+                device_info: rotate_device_info,
+                client_ip: ip.clone(),
+            },
+        )
         .await
     {
         Ok(outcome) => outcome,
@@ -345,6 +399,7 @@ async fn refresh(
                     client_ip: ip,
                     user_agent: ua,
                     client_reported,
+                    session_family_id: None,
                 }),
                 action_types::SESSION_REFRESH_REUSE_DETECTED,
                 ActivityTarget {
@@ -381,13 +436,25 @@ async fn refresh(
                 &record.family_id,
             );
             let refresh_cookie_value = format!("{}.{}", record.token_id, secret);
-            let cookies = auth_cookies(&auth, &access_token, &refresh_cookie_value);
+            // Inherited absolute expiry: advertise only the actual refresh window left (idle
+            // capped by absolute), not a fresh full lifetime, or the browser will keep a cookie
+            // past the server-side record and report a logged-in-looking session that cannot
+            // actually refresh.
+            let remaining_refresh_secs =
+                (record.idle_expires_at.unwrap_or(record.expires_at) - now as i64).max(1) as u64;
+            let cookies = auth_cookies(
+                &auth,
+                &access_token,
+                &refresh_cookie_value,
+                remaining_refresh_secs,
+            );
 
             let refresh_auth = AuthContext {
                 method: AuthMethod::Session,
                 client_ip: ip,
                 user_agent: ua.clone(),
                 client_reported: client_reported.clone(),
+                session_family_id: Some(record.family_id.clone()),
             };
             // Routine, successful refresh — deduplicated per `(family_id, device fingerprint)`, not
             // written on every single rotation (see `action_types::SESSION_REFRESH`'s own docs on
@@ -559,6 +626,7 @@ async fn logout(
                                 client_ip: ip,
                                 user_agent: ua,
                                 client_reported,
+                                session_family_id: Some(family_id.clone()),
                             }),
                             action_types::SESSION_LOGOUT,
                             ActivityTarget {
@@ -587,4 +655,47 @@ async fn logout(
         axum::Json(serde_json::json!({ "operation": "logout", "success": 1 })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cfg() -> LiveAuthConfig {
+        LiveAuthConfig {
+            guest_mode_enabled: false,
+            password_hash: String::new(),
+            session_secret: b"test-secret".to_vec(),
+            access_token_lifetime_secs: 3_600,
+            refresh_token_lifetime_secs: 604_800,
+            refresh_token_idle_lifetime_secs: 1_209_600,
+            max_login_devices: 5,
+            force_secure_cookies: false,
+        }
+    }
+
+    /// Regression test for the client/server lifetime mismatch fixed alongside this test: a
+    /// rotation must advertise the token record's actual remaining absolute lifetime, not a
+    /// freshly-reset full configured lifetime (browsers would otherwise keep a cookie that
+    /// reports a valid session long after the server-side family has expired).
+    #[test]
+    fn auth_cookies_advertises_the_supplied_remaining_refresh_lifetime() {
+        let cookies = auth_cookies(&test_cfg(), "access-token", "refresh-token", 123);
+
+        assert!(
+            cookies[0].contains("Max-Age=3600"),
+            "access cookie should use its own full lifetime: {}",
+            cookies[0]
+        );
+        assert!(
+            cookies[1].contains("Max-Age=123"),
+            "refresh cookie must use the caller-supplied remaining lifetime: {}",
+            cookies[1]
+        );
+        assert!(
+            cookies[1].contains("Path=/api/token/refresh"),
+            "refresh cookie path must stay scoped: {}",
+            cookies[1]
+        );
+    }
 }

@@ -68,10 +68,7 @@ impl AnthropicAdapter {
     /// cannot — the whole reason this adapter doesn't just send one string.
     fn content_blocks(request: &TranslationRequest) -> Vec<serde_json::Value> {
         let prefix = request.context.render_prefix();
-        let mut tail = String::from("Translate these blocks:\n");
-        for block in &request.blocks {
-            tail.push_str(&format!("[{}] {}\n", block.block_id, block.source_text));
-        }
+        let tail = request.render_blocks();
 
         let mut blocks = Vec::new();
 
@@ -271,6 +268,7 @@ mod tests {
             vec![TranslationBlock {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
+                alternate_source_text: None,
             }],
             "en",
         )
@@ -303,6 +301,7 @@ mod tests {
             vec![TranslationBlock {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
+                alternate_source_text: None,
             }],
             "en",
         );

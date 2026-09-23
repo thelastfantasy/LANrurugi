@@ -77,11 +77,73 @@ fn collect_blocks(pages: &[PageWork]) -> Vec<(usize, usize, TranslationBlock)> {
                 TranslationBlock {
                     block_id: BlockId::for_region(page.page_number.get(), region_index),
                     source_text: region.source_text.clone(),
+                    alternate_source_text: region.alternate_source_text.clone(),
                 },
             ));
         }
     }
     blocks
+}
+
+/// Resolves which OCR candidate the provider actually translated.
+///
+/// The provider reports its choice through `TranslatedBlock::selected_source_text`; actual
+/// candidate text is accepted verbatim (trimmed), and the bare labels `A` / `B` are accepted as a
+/// convenience for models that echo only the option letter. An omitted/empty choice defaults to
+/// the alternate candidate, because the alternate only exists when the original reading was
+/// ambiguous or detector-fragmented; a malformed non-empty answer still falls back to A.
+fn selected_source_text(block: &TranslationBlock, selected: Option<&str>) -> String {
+    let Some(alternate) = &block.alternate_source_text else {
+        return block.source_text.clone();
+    };
+
+    let selected = selected.map(str::trim).filter(|value| !value.is_empty());
+    match selected {
+        Some(value) if is_option_label(value, "a") => block.source_text.clone(),
+        Some(value) if is_option_label(value, "b") => alternate.clone(),
+        Some(value) if value == block.source_text.trim() => block.source_text.clone(),
+        Some(value) if value == alternate.trim() => alternate.clone(),
+        Some(value)
+            if block.source_text.contains(value) || value.contains(block.source_text.as_str()) =>
+        {
+            block.source_text.clone()
+        }
+        Some(value) if alternate.contains(value) || value.contains(alternate.as_str()) => {
+            alternate.clone()
+        }
+        // The provider was explicitly asked to report its choice. If it still omitted or left
+        // the field empty, the alternate candidate exists precisely because the original reading
+        // was ambiguous or detector-fragmented, so prefer the alternate rather than silently
+        // persisting the least-plausible A reading. A malformed non-empty value from a provider
+        // that *did* answer still falls through to A by the final arm below.
+        Some(value) => {
+            tracing::warn!(
+                selected = %value,
+                "provider returned an unrecognized selected_source_text; keeping candidate A"
+            );
+            block.source_text.clone()
+        }
+        None => {
+            tracing::warn!(
+                block_id = %block.block_id,
+                "provider omitted selected_source_text; defaulting to alternate OCR candidate"
+            );
+            alternate.clone()
+        }
+    }
+}
+
+/// Whether `value` is the bare option label (or a lightly decorated form such as `B)` / `B:`)
+/// for `expected` (`"a"` or `"b"`).
+fn is_option_label(value: &str, expected: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower == expected {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix(expected) else {
+        return false;
+    };
+    rest.starts_with([')', '.', ':', '：', '、', ' '])
 }
 
 /// Translates a batch of pages in one provider call.
@@ -167,10 +229,12 @@ pub async fn translate_batch<A: TranslationAdapter>(
         let page = &pages[*page_index];
         let source_archive_id = page.archive_id.clone();
         let source_chapter_name = page.chapter_name.clone();
+        let chosen_source = selected_source_text(block, translated.selected_source_text.as_deref());
+        pages[*page_index].regions[*region_index].source_text = chosen_source.clone();
         pages[*page_index].regions[*region_index].translated_text =
             Some(translated.translated_text.clone());
         applied.push((
-            block.source_text.clone(),
+            chosen_source,
             translated.translated_text.clone(),
             translated.term_kind,
             source_archive_id,
@@ -283,6 +347,7 @@ mod tests {
                     .map(|(id, text, kind)| TranslatedBlock {
                         block_id: BlockId::from(id.as_str()),
                         translated_text: text.clone(),
+                        selected_source_text: None,
                         term_kind: *kind,
                     })
                     .collect(),
@@ -454,5 +519,46 @@ mod tests {
             .unwrap();
 
         assert_eq!(adapter.call_count(), 0);
+    }
+    fn candidate_pair() -> TranslationBlock {
+        TranslationBlock {
+            block_id: BlockId::from("p1b0"),
+            source_text: "ーッ娘スー母猫".into(),
+            alternate_source_text: Some("スーツ母娘".into()),
+        }
+    }
+
+    #[test]
+    fn selected_source_text_accepts_actual_candidate_b_text() {
+        assert_eq!(
+            selected_source_text(&candidate_pair(), Some("スーツ母娘")),
+            "スーツ母娘"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_accepts_a_bare_b_label() {
+        assert_eq!(
+            selected_source_text(&candidate_pair(), Some(" B ")),
+            "スーツ母娘"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_defaults_to_a_when_unrecognized() {
+        assert_eq!(
+            selected_source_text(&candidate_pair(), Some("garbage")),
+            "ーッ娘スー母猫"
+        );
+    }
+
+    #[test]
+    fn a_single_candidate_block_is_never_switched() {
+        let block = TranslationBlock {
+            block_id: BlockId::from("p1b0"),
+            source_text: "こんにちは".into(),
+            alternate_source_text: None,
+        };
+        assert_eq!(selected_source_text(&block, Some("anything")), "こんにちは");
     }
 }

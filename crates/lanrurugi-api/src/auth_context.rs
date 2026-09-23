@@ -46,6 +46,12 @@ pub struct AuthContext {
     /// optional form fields (see `crate::login::ClientReportedFields`); every other request shape,
     /// `GuestVisitor` included, has no body of this shape to carry them and stays `None`.
     pub client_reported: Option<lanrurugi_storage::device_info::ClientReportedInfo>,
+    /// For [`AuthMethod::Session`] only: the login family (`fid` claim) behind the access token
+    /// that authenticated this request. `None` for token/guest/anonymous callers, and also for a
+    /// session whose access cookie somehow lacks a verifiable `fid` (e.g. a pre-migration token)
+    /// — activity writes fall back to the auto-generated device label in that case. Used solely
+    /// so Activity records can snapshot the current custom device name at write time.
+    pub session_family_id: Option<String>,
 }
 
 impl AuthContext {
