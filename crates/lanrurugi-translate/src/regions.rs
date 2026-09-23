@@ -46,6 +46,15 @@ fn translation_key(
     target_language: &str,
     provider: &str,
 ) -> String {
+    // BCP-47 tags are case-insensitive, but Redis keys are not. The SPA sends `zh-CN` while the
+    // backend/tests have historically used `zh-cn`, which split one translation record into two
+    // (`..._zh-CN_...` held a stale A candidate; `..._zh-cn_...` held the corrected B candidate)
+    // while the image-cache filename's own `sanitize()` already lowercases — so whichever request
+    // arrived first rendered the shared file and the other case could never refresh it. Canonicalize
+    // the language component here, at the single persistence boundary every reader/writer crosses.
+    // Provider ids are already canonical lowercase enums; leaving them untouched keeps the key
+    // migration surface limited to the actual bug.
+    let target_language = target_language.trim().to_ascii_lowercase();
     format!(
         "LRR_TRANSLATION_TEXT_{}_{}_{}_{}",
         archive_id.as_str(),
@@ -183,6 +192,21 @@ mod tests {
         let base = translation_key(&a, PageNumber(1), "en", "deepseek");
         assert_ne!(base, translation_key(&a, PageNumber(1), "fr", "deepseek"));
         assert_ne!(base, translation_key(&a, PageNumber(1), "en", "anthropic"));
+    }
+
+    #[test]
+    fn language_tags_are_keyed_case_insensitively() {
+        // Regression: frontend `zh-CN` vs backend `zh-cn` must address the same persisted record,
+        // otherwise one case can silently keep serving a stale OCR/translation candidate forever.
+        let a = ArchiveId::from("abc");
+        assert_eq!(
+            translation_key(&a, PageNumber(1), "zh-CN", "deepseek"),
+            translation_key(&a, PageNumber(1), "zh-cn", "deepseek")
+        );
+        assert_eq!(
+            translation_key(&a, PageNumber(1), " zh-CN ", "deepseek"),
+            translation_key(&a, PageNumber(1), "zh-cn", "deepseek")
+        );
     }
 
     #[test]
