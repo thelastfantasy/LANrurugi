@@ -7,6 +7,10 @@ p, anonymous, /api/login, POST, allow
 p, anonymous, /api/login/status, GET, allow
 p, anonymous, /api/logout, POST, allow
 p, anonymous, /api/token/refresh, POST, allow
+p, anonymous, /api/auth/config, GET, allow
+p, anonymous, /api/auth/bridge/prepare, GET, allow
+p, anonymous, /api/auth/bridge/start, GET, allow
+p, anonymous, /api/auth/bridge/callback, GET, allow
 p, anonymous, /api/theme, GET, allow
 p, anonymous, /api/info, GET, allow
 p, anonymous, /api/version, GET, allow
@@ -35,6 +39,10 @@ p, guest_visitor, /api/login, POST, allow
 p, guest_visitor, /api/login/status, GET, allow
 p, guest_visitor, /api/logout, POST, allow
 p, guest_visitor, /api/token/refresh, POST, allow
+p, guest_visitor, /api/auth/config, GET, allow
+p, guest_visitor, /api/auth/bridge/prepare, GET, allow
+p, guest_visitor, /api/auth/bridge/start, GET, allow
+p, guest_visitor, /api/auth/bridge/callback, GET, allow
 p, guest_visitor, /api/theme, GET, allow
 p, guest_visitor, /api/info, GET, allow
 p, guest_visitor, /api/version, GET, allow

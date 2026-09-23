@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/login/status", get(status))
         .route("/logout", post(logout))
         .route("/token/refresh", post(refresh))
+        .merge(crate::auth_bridge::router())
 }
 
 /// `true` if every field is `None` — a client-reported form that carried literally nothing (an
@@ -101,7 +102,7 @@ const SESSION_REFRESH_DEDUP_WINDOW_SECS: u64 = 30 * 60;
 /// its cookie must not advertise a full fresh lifetime the server-side record no longer has — see
 /// `refresh_tokens::RefreshTokenRepository::rotate`'s own docs. Login passes the full configured
 /// lifetime; rotation passes the actual remaining time.
-fn auth_cookies(
+pub(crate) fn auth_cookies(
     cfg: &LiveAuthConfig,
     access_token: &str,
     refresh_cookie_value: &str,
@@ -112,42 +113,79 @@ fn auth_cookies(
     } else {
         ""
     };
+    let domain = cfg
+        .cookie_domain
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("; Domain={value}"))
+        .unwrap_or_default();
     [
         format!(
-            "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
+            "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
             session::COOKIE_NAME,
             access_token,
             cfg.access_token_lifetime_secs,
             secure,
+            domain,
         ),
         format!(
-            "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}",
+            "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
             session::REFRESH_COOKIE_NAME,
             refresh_cookie_value,
             REFRESH_COOKIE_PATH,
             refresh_max_age_secs,
             secure,
+            domain,
         ),
     ]
+}
+
+/// Long-lived device identity cookie. Not an auth credential; `HttpOnly` keeps it out of JS reach,
+/// and it only carries an opaque per-browser UUID used for device-name inheritance.
+pub(crate) fn device_id_cookie(device_id: &str, secure: bool) -> String {
+    format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
+        session::DEVICE_ID_COOKIE_NAME,
+        device_id,
+        365 * 24 * 60 * 60,
+        if secure { "; Secure" } else { "" },
+    )
+}
+
+/// Whether the browser-facing request used HTTPS, honouring a trusted reverse proxy's
+/// `X-Forwarded-Proto` before falling back to the direct connection scheme.
+pub(crate) fn request_is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("https"))
 }
 
 /// `force_secure` must match whatever `auth_cookies` used to *set* the cookie being cleared here —
 /// a clearing `Set-Cookie` with mismatched attributes isn't guaranteed to be treated as the same
 /// cookie by every client (RFC 6265's identity is `(name, domain, path)`, but real browsers have
 /// historically been inconsistent about `Secure`-attribute mismatches on deletion).
-pub(crate) fn cleared_auth_cookies(force_secure: bool) -> [String; 2] {
+pub(crate) fn cleared_auth_cookies(force_secure: bool, cookie_domain: Option<&str>) -> [String; 2] {
     let secure = if force_secure { "; Secure" } else { "" };
+    let domain = cookie_domain
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("; Domain={value}"))
+        .unwrap_or_default();
     [
         format!(
-            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}",
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
             session::COOKIE_NAME,
             secure,
+            domain,
         ),
         format!(
-            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax{}",
+            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
             session::REFRESH_COOKIE_NAME,
             REFRESH_COOKIE_PATH,
             secure,
+            domain,
         ),
     ]
 }
@@ -212,18 +250,29 @@ async fn login(
     }
 
     let now = now_secs();
+    let device_id = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let device_info =
         crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
     let session_context = SessionContext {
         device_info,
         client_ip: ip.clone(),
+        device_id: Some(device_id.clone()),
     };
     // Evict the oldest-seen family first when this login would exceed the configured device cap.
     // A Redis failure here is logged and ignored: failing the whole login because a best-effort
     // limit-check couldn't run would be worse than briefly exceeding the cap.
     match state
         .refresh_tokens
-        .enforce_device_limit(now as i64, auth.max_login_devices as i64)
+        .make_room_for_new_family_with_device(
+            now as i64,
+            auth.max_login_devices as i64,
+            Some(device_id.as_str()),
+        )
         .await
     {
         Ok(evicted) if !evicted.is_empty() => {
@@ -294,9 +343,20 @@ async fn login(
     )
     .await;
 
+    let mut response_headers = cookie_headers(cookies);
+    let device_cookie = device_id_cookie(
+        &device_id,
+        auth.force_secure_cookies || request_is_https(&headers),
+    );
+    response_headers.append(
+        header::SET_COOKIE,
+        device_cookie
+            .parse()
+            .expect("device id cookie header value is valid"),
+    );
     (
         StatusCode::OK,
-        cookie_headers(cookies),
+        response_headers,
         axum::Json(serde_json::json!({ "operation": "login", "success": 1 })),
     )
         .into_response()
@@ -355,6 +415,12 @@ async fn refresh(
     };
 
     let now = now_secs();
+    let device_id = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let rotate_device_info =
         crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
     let outcome = match state
@@ -367,6 +433,7 @@ async fn refresh(
             SessionContext {
                 device_info: rotate_device_info,
                 client_ip: ip.clone(),
+                device_id: Some(device_id.clone()),
             },
         )
         .await
@@ -416,7 +483,8 @@ async fn refresh(
             .await;
             // The whole family was just burned by `rotate` itself — clear both cookies so the
             // browser doesn't keep presenting now-dead credentials on its next request.
-            let cookies = cleared_auth_cookies(auth.force_secure_cookies);
+            let cookies =
+                cleared_auth_cookies(auth.force_secure_cookies, auth.cookie_domain.as_deref());
             (
                 StatusCode::UNAUTHORIZED,
                 cookie_headers(cookies),
@@ -522,9 +590,19 @@ async fn refresh(
                 }
             }
 
+            let mut response_headers = cookie_headers(cookies);
+            response_headers.append(
+                header::SET_COOKIE,
+                device_id_cookie(
+                    &device_id,
+                    auth.force_secure_cookies || request_is_https(&headers),
+                )
+                .parse()
+                .expect("device id cookie header value is valid"),
+            );
             (
                 StatusCode::OK,
-                cookie_headers(cookies),
+                response_headers,
                 axum::Json(serde_json::json!({ "operation": "token_refresh", "success": 1 })),
             )
                 .into_response()
@@ -606,6 +684,7 @@ async fn logout(
     //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
     // out at all) would be worse than a `Secure`-attribute mismatch.
     let force_secure_cookies = auth.as_ref().is_some_and(|a| a.force_secure_cookies);
+    let cookie_domain = auth.as_ref().and_then(|a| a.cookie_domain.clone());
     if let (Some(auth), Some(cookie_header)) = (
         auth,
         headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
@@ -648,7 +727,7 @@ async fn logout(
         }
     }
 
-    let cookies = cleared_auth_cookies(force_secure_cookies);
+    let cookies = cleared_auth_cookies(force_secure_cookies, cookie_domain.as_deref());
     (
         StatusCode::OK,
         cookie_headers(cookies),
@@ -670,6 +749,7 @@ mod tests {
             refresh_token_lifetime_secs: 604_800,
             refresh_token_idle_lifetime_secs: 1_209_600,
             max_login_devices: 5,
+            cookie_domain: None,
             force_secure_cookies: false,
         }
     }

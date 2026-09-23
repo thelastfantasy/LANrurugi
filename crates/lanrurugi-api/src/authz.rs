@@ -343,6 +343,25 @@ mod tests {
         assert!(check_route(&e, Some(&anon), "/api/theme", "GET"));
         assert!(check_route(&e, Some(&anon), "/api/info", "GET"));
         assert!(check_route(&e, Some(&anon), "/api/version", "GET"));
+        assert!(check_route(&e, Some(&anon), "/api/auth/config", "GET"));
+        assert!(check_route(
+            &e,
+            Some(&anon),
+            "/api/auth/bridge/prepare",
+            "GET"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&anon),
+            "/api/auth/bridge/start",
+            "GET"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&anon),
+            "/api/auth/bridge/callback",
+            "GET"
+        ));
         assert!(!check_route(&e, Some(&anon), "/api/archives", "GET"));
         assert!(!check_route(&e, Some(&anon), "/api/settings", "GET"));
         assert!(!check_route(&e, Some(&anon), "/api/activity", "GET"));
@@ -440,6 +459,25 @@ mod tests {
             "GET"
         ));
         assert!(check_route(&e, Some(&guest), "/api/search", "GET"));
+        assert!(check_route(&e, Some(&guest), "/api/auth/config", "GET"));
+        assert!(check_route(
+            &e,
+            Some(&guest),
+            "/api/auth/bridge/prepare",
+            "GET"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&guest),
+            "/api/auth/bridge/start",
+            "GET"
+        ));
+        assert!(check_route(
+            &e,
+            Some(&guest),
+            "/api/auth/bridge/callback",
+            "GET"
+        ));
         assert!(!check_route(&e, Some(&guest), "/api/archives", "GET"));
         assert!(!check_route(
             &e,

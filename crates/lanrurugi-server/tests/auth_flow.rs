@@ -381,8 +381,8 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
     let login_cookies = set_cookie_values(&login_resp);
     assert_eq!(
         login_cookies.len(),
-        2,
-        "login must set both the access and refresh cookies, got: {login_cookies:?}"
+        3,
+        "login must set access + refresh + stable device-id cookies, got: {login_cookies:?}"
     );
     assert!(login_cookies
         .iter()
@@ -436,7 +436,7 @@ async fn login_then_protected_request_then_refresh_then_logout_revokes_everythin
     .await;
     assert_eq!(refresh_resp.status(), axum::http::StatusCode::OK);
     let rotated_cookies = set_cookie_values(&refresh_resp);
-    assert_eq!(rotated_cookies.len(), 2);
+    assert_eq!(rotated_cookies.len(), 3);
     assert_ne!(
         rotated_cookies, login_cookies,
         "rotation must issue genuinely new cookie values, not repeat the old ones"
@@ -809,6 +809,43 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     guest_lock.release().await;
 }
 
+/// Test-only request helper for the cross-origin bridge test: sends a `Host` header so the app
+/// sees the same backend through two different origins (`a.test` and `b.test`). `origin` is a bare
+/// `scheme://host[:port]`; only the host[:port] part is used as the Host header.
+async fn origin_request(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    origin: &str,
+    cookies: Option<&str>,
+    body: Option<&str>,
+) -> axum::http::Response<axum::body::Body> {
+    let host = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin);
+    let mut builder = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(axum::http::header::HOST, host);
+    if let Some(cookies) = cookies {
+        builder = builder.header(axum::http::header::COOKIE, cookies);
+    }
+    let body = if let Some(body) = body {
+        builder = builder.header(
+            axum::http::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        );
+        axum::body::Body::from(body.to_string())
+    } else {
+        axum::body::Body::empty()
+    };
+    app.clone()
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
 /// Active-login-device management: the Settings UI's own endpoints must be usable by a real
 /// session, expose one row per login family with name/IP metadata, allow renaming, and revoke the
 /// family immediately. Casbin's session-only restriction is covered in `authz` unit tests; this is
@@ -895,5 +932,173 @@ async fn active_login_devices_can_be_listed_renamed_and_revoked_by_a_session() {
         "revoking the only family must empty the active-device list"
     );
 
+    purge_all_refresh_and_api_tokens(&redis).await;
+}
+
+/// End-to-end cross-origin handoff with a single backend and two Host origins. This is the
+/// `a.com`/`b.com` case: login on the auth origin, then visiting the trusted peer must establish a
+/// local session on that peer and return the browser to it (not redirect it to the auth origin).
+#[tokio::test]
+async fn cross_origin_handoff_logs_the_peer_origin_in_and_returns_to_it() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+    {
+        use deadpool_redis::redis::AsyncCommands;
+        let mut conn = redis.config.get().await.unwrap();
+        let _: () = conn
+            .hset("LRR_CONFIG", "auth_origin", "http://a.test")
+            .await
+            .unwrap();
+        let _: () = conn
+            .hset(
+                "LRR_CONFIG",
+                "trusted_origins",
+                "http://a.test\nhttp://b.test",
+            )
+            .await
+            .unwrap();
+        let _: () = conn
+            .hset("LRR_CONFIG", "sso_auto_redirect", "1")
+            .await
+            .unwrap();
+    }
+
+    // Login on the auth origin.
+    let login = origin_request(
+        &app,
+        "POST",
+        "/api/login",
+        "http://a.test",
+        None,
+        Some("password=kamimamita"),
+    )
+    .await;
+    assert_eq!(login.status(), axum::http::StatusCode::OK);
+    let auth_cookies = set_cookie_values(&login);
+    let auth_cookie_header = cookie_header(&auth_cookies);
+
+    // The peer origin is recognized as a trusted, non-auth origin.
+    let config = origin_request(&app, "GET", "/api/auth/config", "http://b.test", None, None).await;
+    assert_eq!(config.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(config.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(config["sso_enabled"], true);
+    assert_eq!(config["auto_redirect"], true);
+    assert_eq!(config["current_origin_trusted"], true);
+    assert_eq!(config["current_origin_is_auth_origin"], false);
+
+    // Prepare on the peer sets a state cookie and gives us the auth-origin start URL.
+    let prepare = origin_request(
+        &app,
+        "GET",
+        "/api/auth/bridge/prepare?return_to=/reader/42",
+        "http://b.test",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(prepare.status(), axum::http::StatusCode::OK);
+    let prepare_cookies = raw_set_cookie_headers(&prepare);
+    let state_cookie = prepare_cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("lanrurugi_sso_state="))
+        .expect("prepare must set the SSO state cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let body = axum::body::to_bytes(prepare.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let prepare: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let start_url = prepare["start_url"].as_str().unwrap();
+    let start_uri = start_url
+        .split_once("://a.test")
+        .map(|(_, path)| path.to_string())
+        .expect("start_url must point at the auth origin");
+
+    // Start on the auth origin issues a one-time code and redirects back to the peer's callback.
+    let start = origin_request(
+        &app,
+        "GET",
+        &start_uri,
+        "http://a.test",
+        Some(&auth_cookie_header),
+        None,
+    )
+    .await;
+    assert_eq!(start.status(), axum::http::StatusCode::SEE_OTHER);
+    let callback_location = start
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .expect("start must redirect to the callback");
+    let callback_uri = callback_location
+        .split_once("://b.test")
+        .map(|(_, path)| path.to_string())
+        .expect("callback must point back at the peer origin");
+
+    // Callback on the peer consumes the code, sets local cookies, and returns to the original path.
+    let callback = origin_request(
+        &app,
+        "GET",
+        &callback_uri,
+        "http://b.test",
+        Some(&state_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(callback.status(), axum::http::StatusCode::SEE_OTHER);
+    assert_eq!(
+        callback
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("http://b.test/reader/42")
+    );
+    let peer_cookies = set_cookie_values(&callback);
+    assert!(peer_cookies
+        .iter()
+        .any(|cookie| cookie.starts_with(lanrurugi_core::session::COOKIE_NAME)));
+    assert!(peer_cookies
+        .iter()
+        .any(|cookie| cookie.starts_with(lanrurugi_core::session::REFRESH_COOKIE_NAME)));
+    // The stable device identity must ride along too, so the peer origin shares the auth
+    // origin's logical device: a later re-login there still inherits the custom device name
+    // instead of showing up as a brand-new device (the exact localhost/127.0.0.1 symptom this
+    // handoff exists to prevent).
+    assert!(peer_cookies
+        .iter()
+        .any(|cookie| cookie.starts_with(lanrurugi_core::session::DEVICE_ID_COOKIE_NAME)));
+
+    // The freshly issued peer-origin cookies authenticate a real request on that origin.
+    let status = origin_request(
+        &app,
+        "GET",
+        "/api/login/status",
+        "http://b.test",
+        Some(&cookie_header(&peer_cookies)),
+        None,
+    )
+    .await;
+    assert_eq!(status.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status["logged_in"], true);
+
+    {
+        use deadpool_redis::redis::AsyncCommands;
+        let mut conn = redis.config.get().await.unwrap();
+        let _: () = conn.hdel("LRR_CONFIG", "trusted_origins").await.unwrap();
+        let _: () = conn.hdel("LRR_CONFIG", "sso_auto_redirect").await.unwrap();
+    }
     purge_all_refresh_and_api_tokens(&redis).await;
 }

@@ -1586,7 +1586,7 @@
   "settings.sessionRefreshAbsoluteWindow": "Session Absolute Window",
   "settings.sessionRefreshAbsoluteWindowHint": "Hard maximum session lifetime, counted from the original login. Silent refreshes do not extend it; the user must log in again after this.",
   "settings.maxLoginDevices": "Maximum Login Devices",
-  "settings.maxLoginDevicesHint": "Maximum number of simultaneously active login devices. When a new login exceeds this, the oldest-seen device is signed out. Set to 0 for unlimited.",
+  "settings.maxLoginDevicesHint": "Maximum number of simultaneously active login sessions. Each browser/client family counts as one session: Chrome and Firefox on the same machine are two, while multiple tabs of the same browser share one. When a new login exceeds this cap the oldest-seen session is signed out. Set to 0 for unlimited.",
   "settings.activeDevices": "Active Devices",
   "settings.activeDevicesHint": "Each row is one active login. Names are generated from the operating system, browser, and language, and can be edited.",
   "settings.noActiveDevices": "No active devices.",
@@ -1607,5 +1607,14 @@
   "settings.errorUpdatingDevice": "Failed to update device.",
   "activity.actionType.session.device_renamed": "Device Renamed",
   "activity.actionType.session.device_revoked": "Device Revoked",
-  "activity.deviceName": "Device Name"
+  "activity.deviceName": "Device Name",
+  "settings.authOrigin": "Central Auth Origin",
+  "settings.authOriginHint": "Exact public origin that owns the login form, e.g. https://a.com. This only makes the app aware of the public URL and enables the one-time SSO handoff; DNS, TLS, and the reverse proxy still must be configured externally.",
+  "settings.trustedOrigins": "Trusted Equivalent Origins",
+  "settings.trustedOriginsHint": "One exact origin per line, e.g. https://a.com and https://b.com. These origins form a symmetric equivalence group: any listed origin can provide the login session for any other. localhost / 127.0.0.1 / ::1 are recognized automatically and do not belong here. Each listed domain must reach the same backend through its reverse proxy, pass Host, and pass X-Forwarded-Proto for HTTPS.",
+  "settings.cookieDomain": "Cookie Sharing Domain",
+  "settings.cookieDomainHint": "Optional. Only for subdomains of the same registrable domain, e.g. .example.com. Different registrable domains such as a.com and b.com cannot share cookies and must use the handoff above. Leave empty for host-only cookies.",
+  "settings.ssoAutoRedirect": "Auto-Start Cross-Origin Login",
+  "settings.ssoAutoRedirectHint": "When this trusted origin has no local session, automatically try other trusted origins until one has a valid session, then return here with a local login. Disable to use this origin’s local login form instead.",
+  "login.ssoError": "Cross-origin login failed or expired. Please try again."
 }

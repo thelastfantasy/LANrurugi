@@ -113,6 +113,10 @@ pub struct IssuedRefreshToken {
 pub struct SessionContext {
     pub device_info: Option<DeviceInfo>,
     pub client_ip: Option<String>,
+    /// Stable per-browser-profile identity carried by the `lanrurugi_device_id` cookie. Used to
+    /// inherit a custom name and replace an older family when the same browser logs in again.
+    /// `None` for callers that don't have a device cookie (tests, programmatic login, legacy).
+    pub device_id: Option<String>,
 }
 
 /// One active login family's own metadata record — separate from the rotating token records so a
@@ -133,6 +137,10 @@ pub struct RefreshFamilyMeta {
     pub current_token_id: String,
     #[serde(default)]
     pub custom_name: Option<String>,
+    /// Stable per-browser-profile identity (`lanrurugi_device_id` cookie), when available. `None`
+    /// for legacy records and programmatic logins without a device cookie.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 impl RefreshFamilyMeta {
@@ -153,6 +161,26 @@ impl RefreshFamilyMeta {
     }
 }
 
+/// One-time cross-origin login handoff record. The browser only ever sees the random `code`
+/// (stored here under a hashed key); the record itself is bound to the target origin, the exact
+/// return path, and the anti-login-CSRF state, and is consumed atomically via Redis `GETDEL`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HandoffCodeRecord {
+    pub family_id: String,
+    pub target_origin: String,
+    pub return_to: String,
+    pub state: String,
+    pub created_at: i64,
+}
+
+/// Short TTL for a handoff code: long enough for one redirect round-trip, short enough that a
+/// leaked URL is useless almost immediately.
+pub const HANDOFF_CODE_TTL_SECS: u64 = 60;
+
+fn handoff_key(code: &str) -> String {
+    format!("LANRURUGI_AUTH_HANDOFF_{}", sha256_hex(code))
+}
+
 fn token_key(token_id: &str) -> String {
     format!("LANRURUGI_REFRESH_TOKEN_{token_id}")
 }
@@ -170,6 +198,21 @@ fn family_meta_key(family_id: &str) -> String {
 /// of `SCAN`-ing every `LANRURUGI_REFRESH_FAMILY_*` key. Stale members are pruned lazily whenever
 /// a list/limit operation notices the corresponding meta key is gone or expired.
 const FAMILY_INDEX_KEY: &str = "LANRURUGI_REFRESH_FAMILY_INDEX";
+
+/// How long a custom device name survives for a stable `device_id`, slightly longer than the
+/// one-year browser cookie so a re-login near the cookie's end still inherits it.
+const DEVICE_NAME_TTL_SECS: u64 = 400 * 24 * 60 * 60;
+
+fn device_families_key(device_id: &str) -> String {
+    format!(
+        "LANRURUGI_REFRESH_DEVICE_FAMILIES_{}",
+        sha256_hex(device_id)
+    )
+}
+
+fn device_name_key(device_id: &str) -> String {
+    format!("LANRURUGI_REFRESH_DEVICE_NAME_{}", sha256_hex(device_id))
+}
 
 /// 32 random bytes, hex-encoded — used for both `token_id` and `secret` generation (they're
 /// unrelated random values, just the same shape).
@@ -248,6 +291,7 @@ impl RefreshTokenRepository {
             SessionContext {
                 device_info,
                 client_ip: None,
+                device_id: None,
             },
         )
         .await
@@ -284,6 +328,27 @@ impl RefreshTokenRepository {
         idle_lifetime_secs: i64,
         context: SessionContext,
     ) -> Result<IssuedRefreshToken> {
+        let mut conn = self.pool.get().await?;
+        let mut inherited_name = None;
+        if let Some(device_id) = context.device_id.as_deref() {
+            // Same browser logging in again should replace its old family, inherit the custom
+            // display name, and otherwise behave like a fresh login (new absolute window).
+            let old_family_ids: Vec<String> = conn.smembers(device_families_key(device_id)).await?;
+            inherited_name = conn
+                .get::<_, Option<String>>(device_name_key(device_id))
+                .await?;
+            for old_family_id in old_family_ids {
+                if old_family_id != family_id {
+                    if inherited_name.is_none() {
+                        if let Ok(Some(old_meta)) = self.get_family_meta(&old_family_id).await {
+                            inherited_name = old_meta.custom_name;
+                        }
+                    }
+                    self.burn_family(&old_family_id).await?;
+                }
+            }
+        }
+
         let token_id = uuid::Uuid::new_v4().to_string();
         let secret = random_hex();
         let expires_at = now + absolute_lifetime_secs.max(1);
@@ -309,7 +374,8 @@ impl RefreshTokenRepository {
             device_info: context.device_info,
             last_ip: context.client_ip,
             current_token_id: token_id.clone(),
-            custom_name: None,
+            custom_name: inherited_name,
+            device_id: context.device_id.clone(),
         };
         let ttl_secs: u64 = (idle_expires_at - now).max(1) as u64;
         let key = token_key(&token_id);
@@ -319,7 +385,6 @@ impl RefreshTokenRepository {
         let meta_raw = serde_json::to_string(&meta)
             .map_err(|e| RefreshTokenStorageError::Json(meta_key.clone(), e))?;
 
-        let mut conn = self.pool.get().await?;
         let _: () = conn.set_ex(&key, raw, ttl_secs).await?;
         let _: () = conn.sadd(family_key(family_id), &token_id).await?;
         // The meta/index are what make this session visible to the Settings device list. Writes
@@ -335,6 +400,21 @@ impl RefreshTokenRepository {
         {
             self.burn_family(family_id).await.ok();
             return Err(e.into());
+        }
+        if let Some(device_id) = context.device_id.as_deref() {
+            let _: () = conn.sadd(device_families_key(device_id), family_id).await?;
+            let _: () = conn
+                .expire(device_families_key(device_id), DEVICE_NAME_TTL_SECS as i64)
+                .await?;
+            if let Some(custom_name) = meta.custom_name.as_deref() {
+                let _: () = conn
+                    .set_ex(
+                        device_name_key(device_id),
+                        custom_name,
+                        DEVICE_NAME_TTL_SECS,
+                    )
+                    .await?;
+            }
         }
         Ok(IssuedRefreshToken { record, secret })
     }
@@ -374,7 +454,8 @@ impl RefreshTokenRepository {
     }
 
     /// Evicts oldest families until at most `max_devices` remain, returning the evicted metadata
-    /// (for optional activity/logging). `max_devices <= 0` means unlimited.
+    /// (for optional activity/logging). `max_devices <= 0` means unlimited. This is the
+    /// "enforce an already-final count" primitive.
     pub async fn enforce_device_limit(
         &self,
         now: i64,
@@ -390,6 +471,49 @@ impl RefreshTokenRepository {
         }
         // New lists are newest-first; evict from the tail (oldest last_seen_at).
         let evicted = active.split_off(max);
+        for meta in &evicted {
+            self.burn_family(&meta.family_id).await?;
+        }
+        Ok(evicted)
+    }
+
+    /// Login-path counterpart of [`enforce_device_limit`]: must leave room for the family that is
+    /// about to be created, so with a cap of N it evicts until only N-1 remain. Calling the
+    /// general method with N *before* issuing the new family was the original off-by-one that let
+    /// N existing sessions grow to N+1. `max_devices <= 0` means unlimited; with `max_devices == 1`
+    /// this intentionally evicts every existing family so the new login is the only one left.
+    pub async fn make_room_for_new_family(
+        &self,
+        now: i64,
+        max_devices: i64,
+    ) -> Result<Vec<RefreshFamilyMeta>> {
+        self.make_room_for_new_family_with_device(now, max_devices, None)
+            .await
+    }
+
+    /// Same as [`make_room_for_new_family`], but `device_id` identifies the browser that is about
+    /// to log in again: its existing family will be replaced immediately after this call, so it
+    /// must not be counted against the cap here (otherwise re-login could needlessly evict an
+    /// unrelated third device).
+    pub async fn make_room_for_new_family_with_device(
+        &self,
+        now: i64,
+        max_devices: i64,
+        device_id: Option<&str>,
+    ) -> Result<Vec<RefreshFamilyMeta>> {
+        if max_devices <= 0 {
+            return Ok(Vec::new());
+        }
+        let mut active = self.list_active_families(now).await?;
+        if let Some(device_id) = device_id {
+            active.retain(|meta| meta.device_id.as_deref() != Some(device_id));
+        }
+        let keep = (max_devices as usize).saturating_sub(1);
+        if active.len() <= keep {
+            return Ok(Vec::new());
+        }
+        // New lists are newest-first; evict from the tail (oldest last_seen_at).
+        let evicted = active.split_off(keep);
         for meta in &evicted {
             self.burn_family(&meta.family_id).await?;
         }
@@ -432,6 +556,19 @@ impl RefreshTokenRepository {
         let ttl_secs = (meta.idle_expires_at - now).max(1) as u64;
         let mut conn = self.pool.get().await?;
         let _: () = conn.set_ex(key, raw, ttl_secs).await?;
+        // Persist the custom name against the stable device identity too, so a future re-login
+        // from the same browser inherits it instead of falling back to the auto-generated label.
+        if let Some(device_id) = meta.device_id.as_deref() {
+            let name_key = device_name_key(device_id);
+            match meta.custom_name.as_deref() {
+                Some(name) if !name.trim().is_empty() => {
+                    let _: () = conn.set_ex(name_key, name, DEVICE_NAME_TTL_SECS).await?;
+                }
+                _ => {
+                    let _: () = conn.del(name_key).await?;
+                }
+            }
+        }
         Ok(Some(meta))
     }
 
@@ -448,6 +585,134 @@ impl RefreshTokenRepository {
         drop(conn);
         self.burn_family(family_id).await?;
         Ok(true)
+    }
+
+    /// Creates a one-time handoff code for `family_id`, bound to `target_origin` and the exact
+    /// `return_to` path/state. The stored key is `sha256(code)`, so a Redis dump/read can't be
+    /// replayed directly; TTL is [`HANDOFF_CODE_TTL_SECS`].
+    pub async fn create_handoff_code(
+        &self,
+        family_id: &str,
+        target_origin: &str,
+        return_to: &str,
+        state: &str,
+        now: i64,
+    ) -> Result<String> {
+        let code = random_hex();
+        let record = HandoffCodeRecord {
+            family_id: family_id.to_string(),
+            target_origin: target_origin.to_string(),
+            return_to: return_to.to_string(),
+            state: state.to_string(),
+            created_at: now,
+        };
+        let raw = serde_json::to_string(&record)
+            .map_err(|e| RefreshTokenStorageError::Json(handoff_key(&code), e))?;
+        let mut conn = self.pool.get().await?;
+        let _: () = conn
+            .set_ex(handoff_key(&code), raw, HANDOFF_CODE_TTL_SECS)
+            .await?;
+        Ok(code)
+    }
+
+    /// Atomically consumes one handoff code (`GETDEL`), returning `None` for unknown/expired/reused
+    /// codes. The extra `created_at` check is defense-in-depth in case a Redis deployment is
+    /// configured without TTL enforcement.
+    pub async fn consume_handoff_code(
+        &self,
+        code: &str,
+        now: i64,
+    ) -> Result<Option<HandoffCodeRecord>> {
+        let key = handoff_key(code);
+        let mut conn = self.pool.get().await?;
+        let raw: Option<String> = redis::cmd("GETDEL")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let record: HandoffCodeRecord =
+            serde_json::from_str(&raw).map_err(|e| RefreshTokenStorageError::Json(key, e))?;
+        if now.saturating_sub(record.created_at) > HANDOFF_CODE_TTL_SECS as i64 {
+            return Ok(None);
+        }
+        Ok(Some(record))
+    }
+
+    /// Mints a fresh rotating token **inside an existing family**, used by the cross-origin bridge
+    /// callback to give the target origin its own cookie without creating a second device/family.
+    /// Absolute expiry is inherited from the family meta; idle expiry is renewed/capped the same
+    /// way a normal rotation is. Returns `None` if the family is unknown or already expired.
+    pub async fn issue_handoff_token(
+        &self,
+        family_id: &str,
+        now: i64,
+        idle_lifetime_secs: i64,
+        context: SessionContext,
+    ) -> Result<Option<IssuedRefreshToken>> {
+        let Some(mut meta) = self.get_family_meta(family_id).await? else {
+            return Ok(None);
+        };
+        if now > meta.expires_at || now > meta.idle_expires_at {
+            return Ok(None);
+        }
+        let token_id = uuid::Uuid::new_v4().to_string();
+        let secret = random_hex();
+        let idle_expires_at = idle_expiry(now, idle_lifetime_secs, meta.expires_at);
+        let device_info = context
+            .device_info
+            .clone()
+            .or_else(|| meta.device_info.clone());
+        let record = RefreshTokenRecord {
+            token_id: token_id.clone(),
+            secret_hash: sha256_hex(&secret),
+            family_id: family_id.to_string(),
+            issued_at: now,
+            expires_at: meta.expires_at,
+            idle_expires_at: Some(idle_expires_at),
+            used: false,
+            used_at: None,
+            grace_reuse_count: 0,
+            device_info: device_info.clone(),
+        };
+        let ttl_secs: u64 = (idle_expires_at - now).max(1) as u64;
+        let token_key_str = token_key(&token_id);
+        let raw = serde_json::to_string(&record)
+            .map_err(|e| RefreshTokenStorageError::Json(token_key_str.clone(), e))?;
+
+        let device_id = context.device_id.or_else(|| meta.device_id.clone());
+        meta.last_seen_at = now;
+        meta.idle_expires_at = idle_expires_at;
+        meta.current_token_id = token_id.clone();
+        meta.last_ip = context.client_ip.or(meta.last_ip);
+        meta.device_info = device_info;
+        meta.device_id = device_id.clone();
+        let meta_key = family_meta_key(family_id);
+        let meta_raw = serde_json::to_string(&meta)
+            .map_err(|e| RefreshTokenStorageError::Json(meta_key.clone(), e))?;
+
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.set_ex(&token_key_str, raw, ttl_secs).await?;
+        let _: () = conn.sadd(family_key(family_id), &token_id).await?;
+        let _: () = conn.set_ex(meta_key, meta_raw, ttl_secs).await?;
+        let _: () = conn.zadd(FAMILY_INDEX_KEY, family_id, now).await?;
+        if let Some(device_id) = device_id.as_deref() {
+            let _: () = conn.sadd(device_families_key(device_id), family_id).await?;
+            let _: () = conn
+                .expire(device_families_key(device_id), DEVICE_NAME_TTL_SECS as i64)
+                .await?;
+            if let Some(custom_name) = meta.custom_name.as_deref() {
+                let _: () = conn
+                    .set_ex(
+                        device_name_key(device_id),
+                        custom_name,
+                        DEVICE_NAME_TTL_SECS,
+                    )
+                    .await?;
+            }
+        }
+        Ok(Some(IssuedRefreshToken { record, secret }))
     }
 
     pub async fn get(&self, token_id: &str) -> Result<Option<RefreshTokenRecord>> {
@@ -529,6 +794,11 @@ impl RefreshTokenRepository {
         let custom_name = existing_meta
             .as_ref()
             .and_then(|meta| meta.custom_name.clone());
+        let meta_device_id = context.device_id.clone().or_else(|| {
+            existing_meta
+                .as_ref()
+                .and_then(|meta| meta.device_id.clone())
+        });
         let meta_last_ip = context
             .client_ip
             .clone()
@@ -659,6 +929,7 @@ impl RefreshTokenRepository {
                     last_ip: meta_last_ip,
                     current_token_id: new_token_id.clone(),
                     custom_name: custom_name.clone(),
+                    device_id: meta_device_id.clone(),
                 };
                 if let Ok(raw) = serde_json::to_string(&meta) {
                     let meta_key = family_meta_key(&family_id);
@@ -670,6 +941,35 @@ impl RefreshTokenRepository {
                         .await
                     {
                         tracing::warn!(%family_id, error = %e, "failed to update refresh family index");
+                    }
+                    if let Some(device_id) = meta_device_id.as_deref() {
+                        if let Err(e) = conn
+                            .sadd::<_, _, ()>(device_families_key(device_id), &family_id)
+                            .await
+                        {
+                            tracing::warn!(%family_id, error = %e, "failed to index refresh family device");
+                        }
+                        if let Err(e) = conn
+                            .expire::<_, ()>(
+                                device_families_key(device_id),
+                                DEVICE_NAME_TTL_SECS as i64,
+                            )
+                            .await
+                        {
+                            tracing::warn!(%family_id, error = %e, "failed to set device-index TTL");
+                        }
+                        if let Some(custom_name) = meta.custom_name.as_deref() {
+                            if let Err(e) = conn
+                                .set_ex::<_, _, ()>(
+                                    device_name_key(device_id),
+                                    custom_name,
+                                    DEVICE_NAME_TTL_SECS,
+                                )
+                                .await
+                            {
+                                tracing::warn!(%family_id, error = %e, "failed to persist device name");
+                            }
+                        }
                     }
                 }
                 Ok(RotateOutcome::Rotated {
@@ -687,6 +987,11 @@ impl RefreshTokenRepository {
     /// replayed — so the whole chain is treated as compromised, not just the one presented token.
     pub async fn burn_family(&self, family_id: &str) -> Result<()> {
         let mut conn = self.pool.get().await?;
+        let meta_key = family_meta_key(family_id);
+        let old_meta: Option<RefreshFamilyMeta> = conn
+            .get::<_, Option<String>>(&meta_key)
+            .await?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
         let fkey = family_key(family_id);
         let token_ids: Vec<String> = conn.smembers(&fkey).await?;
         for id in &token_ids {
@@ -694,8 +999,13 @@ impl RefreshTokenRepository {
         }
         let _: () = conn.del(&fkey).await?;
         // Also remove the device-list row/index entry, not just the credential chain.
-        let _: () = conn.del(family_meta_key(family_id)).await?;
+        let _: () = conn.del(&meta_key).await?;
         let _: () = conn.zrem(FAMILY_INDEX_KEY, family_id).await?;
+        if let Some(device_id) = old_meta.and_then(|meta| meta.device_id) {
+            let _: () = conn
+                .srem(device_families_key(&device_id), family_id)
+                .await?;
+        }
         Ok(())
     }
 }
@@ -1223,6 +1533,163 @@ mod dual_window_tests {
 
         repo.burn_family(&middle.record.family_id).await.unwrap();
         repo.burn_family(&newest.record.family_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn make_room_for_new_login_respects_the_cap_after_creation() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let mut families = Vec::new();
+        for i in 0..3 {
+            families.push(
+                repo.issue_new_family_with_idle(
+                    1_000 + i,
+                    10_000,
+                    10_000,
+                    SessionContext::default(),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+
+        // Cap 3 with 3 already present: this login needs room for itself, so the oldest is evicted
+        // before the new family would be created (leaving exactly 2 existing + the new one = 3).
+        let evicted = repo.make_room_for_new_family(1_003, 3).await.unwrap();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].family_id, families[0].record.family_id);
+        assert!(repo
+            .get(&families[0].record.token_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get(&families[1].record.token_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(repo
+            .get(&families[2].record.token_id)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Cap 1 must clear every existing family so the next login becomes the sole one.
+        let evicted = repo.make_room_for_new_family(1_004, 1).await.unwrap();
+        assert_eq!(evicted.len(), 2);
+
+        repo.burn_family(&families[1].record.family_id)
+            .await
+            .unwrap();
+        repo.burn_family(&families[2].record.family_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn handoff_codes_are_single_use_and_handoff_tokens_stay_in_the_family() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let issued = repo
+            .issue_new_family_with_idle(1_000, 10_000, 10_000, SessionContext::default())
+            .await
+            .unwrap();
+
+        let code = repo
+            .create_handoff_code(
+                &issued.record.family_id,
+                "https://b.example",
+                "/reader/1",
+                "state-1",
+                1_100,
+            )
+            .await
+            .unwrap();
+        let consumed = repo
+            .consume_handoff_code(&code, 1_101)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(consumed.family_id, issued.record.family_id);
+        assert_eq!(consumed.target_origin, "https://b.example");
+        assert_eq!(consumed.return_to, "/reader/1");
+        assert_eq!(consumed.state, "state-1");
+        assert!(repo
+            .consume_handoff_code(&code, 1_102)
+            .await
+            .unwrap()
+            .is_none());
+
+        let handoff = repo
+            .issue_handoff_token(
+                &issued.record.family_id,
+                1_200,
+                5_000,
+                SessionContext::default(),
+            )
+            .await
+            .unwrap()
+            .expect("active family should allow handoff token issuance");
+        assert_eq!(handoff.record.family_id, issued.record.family_id);
+        assert_eq!(handoff.record.expires_at, issued.record.expires_at);
+        assert!(repo.get(&handoff.record.token_id).await.unwrap().is_some());
+        assert!(repo.get(&issued.record.token_id).await.unwrap().is_some());
+
+        repo.burn_family(&issued.record.family_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_device_id_replaces_old_family_and_inherits_custom_name() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let first = repo
+            .issue_new_family_with_idle(
+                1_000,
+                10_000,
+                10_000,
+                SessionContext {
+                    device_id: Some("device-1".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        repo.rename_family(&first.record.family_id, "My browser", 1_010)
+            .await
+            .unwrap();
+
+        let second = repo
+            .issue_new_family_with_idle(
+                2_000,
+                10_000,
+                10_000,
+                SessionContext {
+                    device_id: Some("device-1".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_ne!(second.record.family_id, first.record.family_id);
+        assert!(repo.get(&first.record.token_id).await.unwrap().is_none());
+        let meta = repo
+            .get_family_meta(&second.record.family_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.device_id.as_deref(), Some("device-1"));
+        assert_eq!(meta.device_name(), "My browser");
+
+        repo.burn_family(&second.record.family_id).await.unwrap();
     }
 
     #[tokio::test]

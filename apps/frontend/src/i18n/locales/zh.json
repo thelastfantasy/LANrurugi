@@ -1643,7 +1643,7 @@
   "settings.sessionRefreshAbsoluteWindow": "会话绝对上限",
   "settings.sessionRefreshAbsoluteWindowHint": "从最初登录算起的硬性上限。静默刷新不会延长它；超过后必须重新登录。",
   "settings.maxLoginDevices": "同时登录设备上限",
-  "settings.maxLoginDevicesHint": "最多允许多少个设备同时保持登录。新登录超过上限时会退出最久未活动的设备。设为 0 表示不限制。",
+  "settings.maxLoginDevicesHint": "最多允许多少个同时保持登录的会话。每个浏览器/客户端登录会话算一个：同一台机器上的 Chrome 和 Firefox 算两个，同一浏览器的多个标签页共享一个会话。新登录超过上限时会退出最久未活动的会话。设为 0 表示不限制。",
   "settings.activeDevices": "活动设备",
   "settings.activeDevicesHint": "每一行是一个登录设备。名称根据操作系统、浏览器和语言自动生成，也可以手动修改。",
   "settings.noActiveDevices": "暂无活动设备。",
@@ -1664,5 +1664,14 @@
   "settings.errorUpdatingDevice": "更新设备失败。",
   "activity.actionType.session.device_renamed": "重命名设备",
   "activity.actionType.session.device_revoked": "撤销设备",
-  "activity.deviceName": "设备名称"
+  "activity.deviceName": "设备名称",
+  "settings.authOrigin": "中心认证地址",
+  "settings.authOriginHint": "负责登录表单的精确公开地址，例如 https://a.com。应用只用它来识别公开地址并执行一次性登录交接；DNS、TLS 和反向代理仍需外部配置。",
+  "settings.trustedOrigins": "可信等价域名",
+  "settings.trustedOriginsHint": "每行一个精确 origin，例如 https://a.com 和 https://b.com。这些域名组成对称等价组：任意一个已登录域名都可以为其他域名提供登录状态。localhost / 127.0.0.1 / ::1 由系统自动识别，不需要填写。每个域名都必须通过反向代理访问同一后端，正确传递 Host；HTTPS 还需传递 X-Forwarded-Proto。",
+  "settings.cookieDomain": "Cookie 共享域",
+  "settings.cookieDomainHint": "可选。仅用于同一注册域的子域，例如 .example.com。a.com / b.com 这种不同注册域不能共享 Cookie，必须使用上面的登录交接。留空表示严格 host-only。",
+  "settings.ssoAutoRedirect": "自动发起跨域登录",
+  "settings.ssoAutoRedirectHint": "当前可信域名本地没有会话时，自动依次尝试其他可信域名；找到有效会话后带着本地登录状态返回。关闭后仍显示本地登录表单。",
+  "login.ssoError": "跨域登录失败或已过期，请重试。"
 }

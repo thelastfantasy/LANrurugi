@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { useLogin } from "@/api/hooks"
 import { Footer } from "@/components/Layout"
@@ -13,6 +13,7 @@ import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const login = useLogin()
   const [password, setPassword] = useState("")
   useApplyTheme({ preferAdminTheme: true })
@@ -22,7 +23,13 @@ export function Login() {
     e.preventDefault()
     try {
       await login.mutateAsync(password)
-      navigate(routes.library())
+      const next = searchParams.get("next")
+      if (next && next.startsWith("/") && !next.startsWith("//")) {
+        // Internal bridge/start URL: let the server redirect through the SSO handoff.
+        window.location.assign(next)
+      } else {
+        navigate(routes.library())
+      }
     } catch {
       // login.isError renders the message below; nothing else to do here.
     }
@@ -32,6 +39,9 @@ export function Login() {
     <>
       <div className="ido" style={{ textAlign: "center" }}>
         <p>{t("login.thisPageRequiresYouTo")}</p>
+        {searchParams.get("sso_error") && (
+          <p style={{ color: "#c0392b" }}>{t("login.ssoError")}</p>
+        )}
 
         <form onSubmit={handleSubmit} name="loginForm" method="post">
           <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_XS }}>

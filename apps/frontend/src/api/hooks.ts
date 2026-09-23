@@ -35,6 +35,7 @@ import type {
   ArchiveFilesResponse,
   ArchiveMetadata,
   ArchiveSplitTreeResponse,
+  AuthBridgeConfig,
   BatchDeleteArchivesResponse,
   BookmarkedPageResponse,
   BookmarkSort,
@@ -1581,5 +1582,15 @@ export function useRevokeSession() {
       void queryClient.invalidateQueries({ queryKey: ["sessions"] })
       void queryClient.invalidateQueries({ queryKey: ["login-status"] })
     },
+  })
+}
+
+
+/** Public bridge configuration — used by `AuthBridgeGate` before any session exists. */
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ["auth-config"],
+    queryFn: () => fetchJson<AuthBridgeConfig>("/auth/config"),
+    staleTime: 60_000,
   })
 }

@@ -19,6 +19,10 @@ pub const COOKIE_NAME: &str = "lanrurugi_session";
 /// Cookie carrying the opaque `"{token_id}.{secret}"` refresh token
 /// (`lanrurugi_storage::refresh_tokens`).
 pub const REFRESH_COOKIE_NAME: &str = "lanrurugi_refresh";
+/// Stable per-browser-profile identity cookie (not an auth credential). Lets a re-login from the
+/// same browser inherit its custom device name and replace the previous session instead of
+/// appearing as a new device.
+pub const DEVICE_ID_COOKIE_NAME: &str = "lanrurugi_device_id";
 
 /// Default access-token lifetime — short, since it's stateless/unrevocable on its own; a stolen
 /// access token is only usable for this long. Overridable via the `access_token_lifetime_secs`

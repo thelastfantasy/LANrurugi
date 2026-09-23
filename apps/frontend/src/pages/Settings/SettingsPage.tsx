@@ -94,6 +94,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [refreshTokenLifetimeSecs, setRefreshTokenLifetimeSecs] = useState(settings.refresh_token_lifetime_secs)
   const [refreshTokenIdleLifetimeSecs, setRefreshTokenIdleLifetimeSecs] = useState(settings.refresh_token_idle_lifetime_secs)
   const [maxLoginDevices, setMaxLoginDevices] = useState(settings.max_login_devices)
+  const [trustedOrigins, setTrustedOrigins] = useState(settings.trusted_origins)
+  const [cookieDomain, setCookieDomain] = useState(settings.cookie_domain)
+  const [ssoAutoRedirect, setSsoAutoRedirect] = useState(settings.sso_auto_redirect)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
@@ -165,6 +168,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
       refreshTokenIdleLifetimeSecs !== settings.refresh_token_idle_lifetime_secs ||
       maxLoginDevices !== settings.max_login_devices ||
+      trustedOrigins !== settings.trusted_origins ||
+      cookieDomain !== settings.cookie_domain ||
+      ssoAutoRedirect !== settings.sso_auto_redirect ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
       replacedupe !== settings.replacedupe ||
@@ -185,7 +191,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
       archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
       guestmode, accessTokenLifetimeSecs,
-      refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices, enablecors, tempmaxsize,
+      refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
+      trustedOrigins, cookieDomain, ssoAutoRedirect, enablecors, tempmaxsize,
       replacedupe, hqthumbpages, enablewebp, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings, translationIsDirty,
@@ -223,6 +230,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
       refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
       max_login_devices: maxLoginDevices,
+      trusted_origins: trustedOrigins,
+      cookie_domain: cookieDomain,
+      sso_auto_redirect: ssoAutoRedirect,
       enablecors,
       tempmaxsize,
       replacedupe,
@@ -445,6 +455,12 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setRefreshTokenIdleLifetimeSecs={setRefreshTokenIdleLifetimeSecs}
             maxLoginDevices={maxLoginDevices}
             setMaxLoginDevices={setMaxLoginDevices}
+            trustedOrigins={trustedOrigins}
+            setTrustedOrigins={setTrustedOrigins}
+            cookieDomain={cookieDomain}
+            setCookieDomain={setCookieDomain}
+            ssoAutoRedirect={ssoAutoRedirect}
+            setSsoAutoRedirect={setSsoAutoRedirect}
             enablecors={enablecors}
             setEnablecors={setEnablecors}
           />

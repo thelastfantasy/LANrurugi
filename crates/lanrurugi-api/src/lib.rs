@@ -4,6 +4,7 @@ pub mod archive_split;
 pub mod archives;
 pub mod artist_backfill;
 pub mod auth;
+pub mod auth_bridge;
 pub mod auth_context;
 pub mod authz;
 pub mod bench;

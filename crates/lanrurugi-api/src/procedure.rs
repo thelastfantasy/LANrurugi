@@ -368,6 +368,7 @@ mod tests {
             refresh_token_lifetime_secs: 604_800,
             refresh_token_idle_lifetime_secs: 1_209_600,
             max_login_devices: 5,
+            cookie_domain: None,
             force_secure_cookies: false,
         }
     }

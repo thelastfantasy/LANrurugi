@@ -27,6 +27,13 @@ use crate::common::error;
 use crate::AppState;
 use lanrurugi_storage::keys::CONFIG_KEY;
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs() as i64
+}
+
 /// `NUMBER_FIELDS`' own defaults, re-exported so other modules' fallbacks (when a value is missing
 /// from `LRR_CONFIG` entirely, e.g. a fresh install before the Settings page's own defaulting
 /// logic below has ever run) can't drift out of sync with the one true default declared here.
@@ -306,6 +313,12 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // deliberately a different visual identity so a guest browsing session is never confusable
     // with an admin one at a glance.
     ("guest_theme", "ex.css"),
+    // Cross-origin login handoff (single-backend mini-SSO). `trusted_origins` is the symmetric
+    // equivalence group: any listed origin can be the login source for any other; loopback
+    // aliases are recognized automatically. `cookie_domain` is only for same-registrable-parent
+    // subdomains.
+    ("trusted_origins", ""),
+    ("cookie_domain", ""),
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
     ("motd", "Welcome to this Library running LANrurugi!"),
@@ -383,6 +396,8 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // `devmode` (had zero server-side behavior of its own — see `main.rs`'s
     // `--disable-update-check` flag, which replaces the one real thing it controlled).
     ("guestmode", false),
+    // Auto-start the cross-origin handoff when a trusted peer origin has no local session.
+    ("sso_auto_redirect", true),
     ("enablecors", false),
     ("localprogress", false),
     ("authprogress", false),
@@ -420,6 +435,30 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // by default keep the original and also create the split ZIPs.
     ("archive_split_delete_original_enabled", false),
 ];
+
+/// Normalizes a configured/request origin to a `scheme://host:port` string with a known default
+/// port, lowercased. Used by settings validation and the SSO bridge so `https://a.com` and
+/// `https://a.com:443/` compare equal without accepting paths/query/fragments.
+pub(crate) fn normalize_origin(value: &str) -> Option<String> {
+    let parsed = url::Url::parse(value.trim()).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    if parsed.path() != "/" && !parsed.path().is_empty() {
+        return None;
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return None;
+    }
+    match parsed.port() {
+        Some(port) => Some(format!("{}://{}:{}", parsed.scheme(), host, port)),
+        None => Some(format!("{}://{}", parsed.scheme(), host)),
+    }
+}
 
 /// Checks a single `PUT /settings` field against the `STRING_FIELDS`/`NUMBER_FIELDS`/
 /// `BOOL_FIELDS` allowlist plus the `theme` field's own extra value check, returning the string
@@ -473,6 +512,30 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         };
         if count < 0 {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
+        }
+    }
+    if key == "cookie_domain" {
+        let trimmed = value.as_str().unwrap_or("").trim();
+        if !trimmed.is_empty()
+            && (trimmed.contains('/') || trimmed.contains(':') || trimmed.contains("://"))
+        {
+            return Err(
+                "Field \"cookie_domain\" must be a bare DNS domain like .example.com.".to_string(),
+            );
+        }
+    }
+    if key == "trusted_origins" {
+        let raw = value.as_str().unwrap_or("");
+        for entry in raw
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            if normalize_origin(entry).is_none() {
+                return Err(format!(
+                    "Field \"trusted_origins\" contains an invalid origin: {entry:?}."
+                ));
+            }
         }
     }
     match value {
@@ -598,6 +661,9 @@ const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
     "refresh_token_lifetime_secs",
     "refresh_token_idle_lifetime_secs",
     "max_login_devices",
+    "trusted_origins",
+    "cookie_domain",
+    "sso_auto_redirect",
 ];
 
 async fn put_settings(
@@ -683,6 +749,7 @@ async fn put_settings(
         .get("llm_api_key")
         .and_then(Value::as_str)
         .map(|s| s.to_string());
+    let new_max_login_devices = fields.get("max_login_devices").and_then(Value::as_i64);
     let had_llm_api_key_before = conn
         .hget::<_, _, Option<String>>(CONFIG_KEY, "llm_api_key")
         .await
@@ -809,6 +876,29 @@ async fn put_settings(
         });
         if !already_running {
             crate::artist_backfill::spawn_full_backfill_job(&state, "LLM key configured").await;
+        }
+    }
+
+    // Lowering `max_login_devices` must take effect immediately, not only on the next login: keep
+    // the newest configured number of active families and evict the oldest rest. `0` means
+    // unlimited and the repository's own `enforce_device_limit` is a no-op for it.
+    if let Some(max_login_devices) = new_max_login_devices {
+        match state
+            .refresh_tokens
+            .enforce_device_limit(now_secs(), max_login_devices)
+            .await
+        {
+            Ok(evicted) if !evicted.is_empty() => {
+                tracing::info!(
+                    count = evicted.len(),
+                    max = max_login_devices,
+                    "evicted oldest login device(s) after max_login_devices change"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to enforce max_login_devices after settings change")
+            }
         }
     }
 

@@ -27,6 +27,12 @@ export function SecuritySection({
   setRefreshTokenIdleLifetimeSecs,
   maxLoginDevices,
   setMaxLoginDevices,
+  trustedOrigins,
+  setTrustedOrigins,
+  cookieDomain,
+  setCookieDomain,
+  ssoAutoRedirect,
+  setSsoAutoRedirect,
   enablecors,
   setEnablecors,
 }: {
@@ -42,6 +48,12 @@ export function SecuritySection({
   setRefreshTokenIdleLifetimeSecs: (v: number) => void
   maxLoginDevices: number
   setMaxLoginDevices: (v: number) => void
+  trustedOrigins: string
+  setTrustedOrigins: (v: string) => void
+  cookieDomain: string
+  setCookieDomain: (v: string) => void
+  ssoAutoRedirect: boolean
+  setSsoAutoRedirect: (v: boolean) => void
   enablecors: boolean
   setEnablecors: (v: boolean) => void
 }) {
@@ -116,6 +128,35 @@ export function SecuritySection({
             <br />
             {t("settings.maxLoginDevicesHint")}
           </Row>
+          <Row label={t("settings.trustedOrigins")}>
+            <Input
+              rows={3}
+              style={{ width: "100%", minHeight: 60, height: 60 }}
+              value={trustedOrigins}
+              onValueChange={(value) => setTrustedOrigins(value)}
+              placeholder={"https://a.com\nhttps://b.com"}
+            />
+            <br />
+            {t("settings.trustedOriginsHint")}
+          </Row>
+          <Row label={t("settings.cookieDomain")}>
+            <Input
+              style={{ width: "100%" }}
+              value={cookieDomain}
+              onValueChange={(value) => setCookieDomain(value)}
+              placeholder=".example.com"
+            />
+            <br />
+            {t("settings.cookieDomainHint")}
+          </Row>
+          <CheckboxRow
+            id="ssoAutoRedirect"
+            checked={ssoAutoRedirect}
+            onChange={setSsoAutoRedirect}
+            label={t("settings.ssoAutoRedirect")}
+          >
+            {t("settings.ssoAutoRedirectHint")}
+          </CheckboxRow>
           <CheckboxRow id="enablecors" checked={enablecors} onChange={setEnablecors} label={t("settings.enableCorsForTheClient")}>
             {t("settings.haveApiRequestsSupportCrossorigin")}
             <br />

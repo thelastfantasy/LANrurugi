@@ -1293,7 +1293,7 @@
   "settings.sessionRefreshAbsoluteWindow": "セッションの絶対上限",
   "settings.sessionRefreshAbsoluteWindowHint": "最初のログインから数えたハード上限。サイレント更新では延長されず、超えると再ログインが必要です。",
   "settings.maxLoginDevices": "同時ログイン端末の上限",
-  "settings.maxLoginDevicesHint": "同時にログインできる端末数の上限。新しいログインが上限を超えると、最後に使用した端末から順にログアウトします。0 で無制限。",
+  "settings.maxLoginDevicesHint": "同時にログインできるセッション数の上限。ブラウザ/クライアントごとのログインセッションが 1 つとして数えられ、同じ端末でも Chrome と Firefox は別々、同一ブラウザの複数タブは 1 つとして共有されます。新しいログインが上限を超えると、最後に使用したセッションからログアウトします。0 で無制限。",
   "settings.activeDevices": "ログイン中の端末",
   "settings.activeDevicesHint": "各行が1つのログインセッションです。名前はOS・ブラウザ・言語から自動生成され、編集できます。",
   "settings.noActiveDevices": "ログイン中の端末はありません。",
@@ -1314,5 +1314,14 @@
   "settings.errorUpdatingDevice": "端末の更新に失敗しました。",
   "activity.actionType.session.device_renamed": "端末名を変更",
   "activity.actionType.session.device_revoked": "端末を失効",
-  "activity.deviceName": "端末名"
+  "activity.deviceName": "端末名",
+  "settings.authOrigin": "中央認証オリジン",
+  "settings.authOriginHint": "ログインフォームを提供する正確な公開オリジン（例: https://a.com）。アプリは公開 URL の認識とワンタイム SSO ハンドオフにのみ使用します。DNS・TLS・リバースプロキシは別途設定が必要です。",
+  "settings.trustedOrigins": "信頼する等価オリジン",
+  "settings.trustedOriginsHint": "1 行に 1 つの正確なオリジン（例: https://a.com, https://b.com）。これらは対称な等価グループを形成し、任意の既存ログイン済みオリジンが他のオリジンへセッションを提供できます。localhost / 127.0.0.1 / ::1 は自動認識されるため記入不要です。各ドメインはリバースプロキシ経由で同じバックエンドに到達し、Host と（HTTPS では）X-Forwarded-Proto を転送する必要があります。",
+  "settings.cookieDomain": "Cookie 共有ドメイン",
+  "settings.cookieDomainHint": "任意。同一登録ドメインのサブドメイン用です（例: .example.com）。a.com と b.com のような別登録ドメインは Cookie を共有できないため、上のハンドオフを使用します。空欄なら host-only です。",
+  "settings.ssoAutoRedirect": "クロスオリジンログインを自動開始",
+  "settings.ssoAutoRedirectHint": "この信頼オリジンにローカルセッションがない場合、他の信頼オリジンを順に試し、有効なセッションがあればここへ戻ってローカルログインします。オフにするとローカルのログインフォームを使用します。",
+  "login.ssoError": "クロスオリジンログインに失敗したか期限切れです。もう一度お試しください。"
 }

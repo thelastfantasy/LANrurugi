@@ -46,6 +46,7 @@ const SESSION_SECRET_FIELD: &str = "session_secret";
 pub const DEFAULT_PASSWORD_HASH: &str =
     "{CRYPT}$2a$08$4AcMwwkGXnWtFTOLuw/hduQlRdqWQIBzX3UuKn.M1qTFX5R4CALxy";
 
+#[derive(Clone)]
 pub struct LiveAuthConfig {
     /// 007-guest-restricted-access: the site-wide guest-mode master switch (`guestmode` setting) —
     /// on its own it grants nothing; `procedure::require_api_key`'s guest-eligibility branch also
@@ -69,6 +70,10 @@ pub struct LiveAuthConfig {
     /// Maximum number of simultaneously active login families (devices). `0` means unlimited.
     /// Falls back to `lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES`.
     pub max_login_devices: u64,
+    /// Optional `Domain` attribute for the auth cookies, for sharing across same-registrable-parent
+    /// subdomains (e.g. `.example.com`). Empty means host-only cookies (the default). This is not
+    /// used for different registrable domains, which need the SSO handoff instead.
+    pub cookie_domain: Option<String>,
     pub force_secure_cookies: bool,
 }
 
@@ -104,6 +109,11 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         .get("max_login_devices")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES);
+    let cookie_domain = fields
+        .get("cookie_domain")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
 
     let session_secret = match fields.get(SESSION_SECRET_FIELD) {
         Some(hex) if !hex.is_empty() => hex_decode(hex),
@@ -124,6 +134,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         refresh_token_lifetime_secs,
         refresh_token_idle_lifetime_secs,
         max_login_devices,
+        cookie_domain,
         force_secure_cookies: state.auth.force_secure_cookies,
     })
 }

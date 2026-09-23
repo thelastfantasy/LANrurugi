@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
+import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
 import { DialogHost } from "./dialog"
 import { Layout } from "./Layout"
@@ -35,6 +36,7 @@ function ReaderWithKey() {
 export function App() {
   return (
     <BrowserRouter>
+      <AuthBridgeGate />
       <ToastContainer limit={7} theme="light" />
       <DialogHost />
       <Routes>
