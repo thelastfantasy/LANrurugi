@@ -96,6 +96,12 @@ pub enum InpaintError {
     },
     #[error("failed to run ORT inference: {0}")]
     Inference(#[from] ort::Error),
+    /// A session-build worker panicked instead of returning a normal `Err`. In practice this is
+    /// `ort`'s own `load-dynamic` backend `dlopen`ing `libonnxruntime.so` and panicking when it
+    /// can't be found (`ort` exposes no fallible init for that path). Kept as an error so a missing
+    /// runtime fails the load cleanly rather than unwinding through the caller.
+    #[error("ORT session build panicked for {path} (is libonnxruntime.so loadable?): {message}")]
+    SessionPanic { path: String, message: String },
     #[error("unexpected model output shape: {0}")]
     BadOutput(String),
 }
@@ -220,21 +226,40 @@ impl Inpainter {
         // translation request is blocked on it returning, so halving construction time here
         // directly shortens that stall (see `SESSION_POOL_SIZE`'s own doc comment for the
         // incident this fixes).
+        let path = model_path.display().to_string();
         let sessions: Vec<ManagedSession> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..SESSION_POOL_SIZE)
                 .map(|_| {
-                    scope.spawn(|| {
-                        build_session_with_gpu_fallback(
-                            model_path,
-                            per_session_threads,
-                            cuda_memory_limit_bytes,
-                        )
+                    let path = path.clone();
+                    scope.spawn(move || {
+                        // `ort` panics (not returns `Err`) when its `load-dynamic` backend can't
+                        // `dlopen` the runtime, and `thread::scope` re-panics for any spawned
+                        // thread that unwinds even when its join handle is inspected — so the
+                        // panic has to be caught *inside* the worker to keep a missing runtime a
+                        // normal load failure (see `InpaintError::SessionPanic`).
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            build_session_with_gpu_fallback(
+                                model_path,
+                                per_session_threads,
+                                cuda_memory_limit_bytes,
+                            )
+                        })) {
+                            Ok(result) => result,
+                            Err(payload) => {
+                                let message = payload
+                                    .downcast_ref::<&str>()
+                                    .map(|s| (*s).to_string())
+                                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "non-string panic payload".to_string());
+                                Err(InpaintError::SessionPanic { path, message })
+                            }
+                        }
                     })
                 })
                 .collect();
             handles
                 .into_iter()
-                .map(|h| h.join().expect("session build thread panicked"))
+                .map(|h| h.join().expect("worker catches its own panics"))
                 .collect::<Result<Vec<_>, _>>()
         })?
         .into_iter()
