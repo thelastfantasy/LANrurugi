@@ -21,6 +21,9 @@ export function AuthBridgeGate() {
   useEffect(() => {
     const bridge = config.data
     if (!bridge?.auto_redirect || inFlight.current) return
+    // `/login` is the bridge's own fallback destination when no trusted peer has a session, so
+    // auto-redirecting away from it would loop forever between peers. Let the local form render.
+    if (location.pathname === "/login") return
     if (loginStatus.data?.logged_in !== false) return
     inFlight.current = true
 

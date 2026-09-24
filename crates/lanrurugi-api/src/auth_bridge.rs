@@ -7,8 +7,15 @@
 //! consumes the code and issues B its own access/refresh cookies. No single "auth origin" is
 //! required.
 //!
-//! Loopback aliases (`localhost`, `127.0.0.1`, `::1`, same scheme/port) are built in: a loopback
-//! origin automatically trusts its loopback siblings without any user configuration.
+//! Loopback aliases (`localhost`, `127.0.0.1`, same scheme/port) are built in: a loopback origin
+//! automatically trusts its loopback sibling without any user configuration. `[::1]` is trusted as
+//! an origin too, but is never chosen as a handoff peer — see `loopback_siblings`.
+//!
+//! Invariant for the two endpoints a *browser navigation* can land on (`/auth/bridge/start` and
+//! `/auth/bridge/callback`): every exit is a redirect or an HTML page, **never** a JSON body — a
+//! navigation that ends on JSON leaves the user staring at a blob in the address bar (the original
+//! bug report for this module). `/auth/bridge/prepare` may answer JSON because the SPA calls it
+//! with `fetch`, never as a navigation target. See [`bridge_navigation_error`].
 
 use std::net::SocketAddr;
 
@@ -75,25 +82,43 @@ fn is_https_origin(origin: &str) -> bool {
         .is_some_and(|url| url.scheme() == "https")
 }
 
-fn is_loopback_origin(origin: &str) -> bool {
-    let Ok(url) = Url::parse(origin) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    host == "localhost" || host == "127.0.0.1" || host == "::1"
+/// `url`'s `host_str` keeps the brackets around an IPv6 literal (`"[::1]"`), so both spellings
+/// count here.
+fn is_loopback_host(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "[::1]"
+    )
 }
 
+fn is_loopback_origin(origin: &str) -> bool {
+    Url::parse(origin)
+        .ok()
+        .is_some_and(|url| url.host_str().is_some_and(is_loopback_host))
+}
+
+/// Two origins reach the same server when scheme and port match and the hosts are either literally
+/// equal or two loopback aliases of each other. The alias case matters: a `localhost` → `127.0.0.1`
+/// (or `[::1]`) handoff is exactly the built-in equivalence this bridge exists for, so comparing
+/// `host_str` verbatim would reject it as untrusted.
 fn same_authority(a: &str, b: &str) -> bool {
     let (Ok(a), Ok(b)) = (Url::parse(a), Url::parse(b)) else {
         return false;
     };
-    a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default()
+    a.scheme() == b.scheme()
+        && a.port_or_known_default() == b.port_or_known_default()
+        && (a.host_str() == b.host_str()
+            || (is_loopback_origin(a.as_str()) && is_loopback_origin(b.as_str())))
 }
 
-/// Loopback siblings for a loopback origin, same scheme/port: `localhost`, `127.0.0.1`, `[::1]`.
+/// The other loopback alias(es) a loopback origin can hand off to, same scheme/port:
+/// `localhost` ↔ `127.0.0.1`.
+///
+/// `[::1]` is recognized as a loopback *origin* (`is_loopback_host`) but deliberately never
+/// auto-generated as a candidate: the dev stack (Vite proxying to axum) and the production image
+/// both bind IPv4 `0.0.0.0`, so a redirect there strands the browser on a connection error
+/// mid-handoff instead of reaching the next peer or the login fallback. A server genuinely
+/// reachable on `[::1]` still works — it just has to be reached by the user typing it.
 fn loopback_siblings(origin: &str) -> Vec<String> {
     let Ok(url) = Url::parse(origin) else {
         return Vec::new();
@@ -103,13 +128,10 @@ fn loopback_siblings(origin: &str) -> Vec<String> {
     }
     let scheme = url.scheme();
     let port = url.port();
-    ["localhost", "127.0.0.1", "::1"]
+    ["localhost", "127.0.0.1"]
         .iter()
         .filter_map(|host| {
             let mut candidate = format!("{scheme}://{host}");
-            if host == &"::1" {
-                candidate = format!("{scheme}://[::1]");
-            }
             if let Some(port) = port {
                 candidate = format!("{candidate}:{port}");
             }
@@ -221,8 +243,48 @@ fn redirect(location: &str) -> Response {
     redirect_with_cookies(location, Vec::new())
 }
 
-fn login_error_redirect(origin: &str, reason: &str) -> Response {
-    redirect(&format!("{origin}/login?sso_error={reason}"))
+/// A tiny HTML page for the rare case where there is no trusted origin to send the user to (e.g.
+/// a request with no/forged `Host`). `start`/`callback` are reached by full-page navigation, so
+/// their failure mode must be a page, never JSON.
+fn html_error(status: StatusCode, message: &str) -> Response {
+    let escaped = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let body = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>LANrurugi</title></head><body style=\"font-family: system-ui, sans-serif; \
+         margin: 4rem auto; max-width: 40rem\"><h1>Cross-origin login failed</h1>\
+         <p>{escaped}</p></body></html>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// Failure response for the two endpoints a browser navigates to (`/auth/bridge/start` and
+/// `/auth/bridge/callback`). These must **never** answer a navigation with JSON — the user would
+/// be left staring at a blob in the address bar, which is exactly the bug this helper exists to
+/// prevent. Redirects to the first *trusted* origin among `prefer` (where the user was headed) and
+/// `current` (the origin serving this hop), so a forged `Host` cannot turn this into an open
+/// redirect; when neither is trusted it returns [`html_error`] instead.
+fn bridge_navigation_error(
+    cfg: Option<&BridgeConfig>,
+    current: Option<&str>,
+    prefer: Option<&str>,
+    reason: &str,
+) -> Response {
+    let trusted = |origin: &&str| cfg.is_some_and(|cfg| cfg.is_trusted_origin(origin));
+    match [prefer, current].into_iter().flatten().find(trusted) {
+        Some(origin) => redirect(&format!("{origin}/login?sso_error={reason}")),
+        None => html_error(
+            StatusCode::BAD_REQUEST,
+            "Cross-origin login could not be completed. Open the site directly and sign in.",
+        ),
+    }
 }
 
 fn encode_peers(peers: &[String]) -> String {
@@ -367,56 +429,66 @@ async fn start_bridge(
     headers: HeaderMap,
     Query(query): Query<StartQuery>,
 ) -> Response {
+    let current = request_origin(&headers);
     let cfg = match load_bridge_config(&state).await {
         Ok(cfg) => cfg,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "bridge_start", e),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load bridge config");
+            return bridge_navigation_error(None, current.as_deref(), None, "config");
+        }
     };
-    let Some(current_origin) = request_origin(&headers) else {
-        return error(StatusCode::BAD_REQUEST, "bridge_start", "missing Host.");
+    let Some(current_origin) = current else {
+        return bridge_navigation_error(Some(&cfg), None, None, "origin");
     };
     if !cfg.is_trusted_origin(&current_origin) {
-        return error(
-            StatusCode::FORBIDDEN,
-            "bridge_start",
-            "current origin is not a trusted SSO peer.",
-        );
+        // The current origin is untrusted, so it is not a safe redirect target either.
+        return bridge_navigation_error(Some(&cfg), None, None, "origin");
     }
     let Some(target_origin) = normalize_origin(&query.target_origin) else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "bridge_start",
-            "target_origin must be an exact http(s) origin.",
-        );
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "target");
     };
     if target_origin == current_origin || !cfg.is_trusted_target(&current_origin, &target_origin) {
-        return error(
-            StatusCode::FORBIDDEN,
-            "bridge_start",
-            "target_origin is not a trusted SSO peer.",
-        );
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "target");
     }
     let Some(return_to) = relative_return_to(query.return_to.as_deref()) else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "bridge_start",
-            "return_to must be a relative path.",
+        return bridge_navigation_error(
+            Some(&cfg),
+            Some(&current_origin),
+            Some(&target_origin),
+            "return_to",
         );
     };
     if query.state.trim().is_empty() {
-        return error(StatusCode::BAD_REQUEST, "bridge_start", "missing state.");
+        return bridge_navigation_error(
+            Some(&cfg),
+            Some(&current_origin),
+            Some(&target_origin),
+            "state",
+        );
     }
 
     // This peer has a valid session: generate the one-time code and send the browser back to the
     // target's callback, where it will receive its own local cookies.
     if crate::auth::session_is_valid(&cfg.live, &headers) {
         let Some(family_id) = crate::auth::session_family_id(&cfg.live, &headers) else {
-            return login_error_redirect(&current_origin, "session");
+            return bridge_navigation_error(
+                Some(&cfg),
+                Some(&current_origin),
+                Some(&target_origin),
+                "session",
+            );
         };
         let now = now_secs();
         match state.refresh_tokens.get_family_meta(&family_id).await {
             Ok(Some(meta)) if now <= meta.expires_at && now <= meta.idle_expires_at => {}
-            Ok(_) => return login_error_redirect(&current_origin, "session"),
-            Err(_) => return login_error_redirect(&current_origin, "session"),
+            _ => {
+                return bridge_navigation_error(
+                    Some(&cfg),
+                    Some(&current_origin),
+                    Some(&target_origin),
+                    "session",
+                )
+            }
         }
         let code = match state
             .refresh_tokens
@@ -430,11 +502,27 @@ async fn start_bridge(
             .await
         {
             Ok(code) => code,
-            Err(_) => return login_error_redirect(&current_origin, "handoff"),
+            Err(_) => {
+                return bridge_navigation_error(
+                    Some(&cfg),
+                    Some(&current_origin),
+                    Some(&target_origin),
+                    "handoff",
+                )
+            }
         };
+        // Internal hop: still a redirect a browser can follow (never a JSON body), and the
+        // callback is itself navigation-safe.
         let mut callback = match Url::parse(&format!("{target_origin}/api/auth/bridge/callback")) {
             Ok(url) => url,
-            Err(_) => return login_error_redirect(&current_origin, "handoff"),
+            Err(_) => {
+                return bridge_navigation_error(
+                    Some(&cfg),
+                    Some(&current_origin),
+                    Some(&target_origin),
+                    "handoff",
+                )
+            }
         };
         callback
             .query_pairs_mut()
@@ -458,9 +546,9 @@ async fn start_bridge(
         }
     }
 
-    // No peer had a session. Fall back to the target's own local login, preserving its return path.
-    let next = format!("{target_origin}{return_to}");
-    let login = format!("{target_origin}/login?next={}", urlencoding(&next));
+    // No peer had a session. Fall back to the target's own local login, preserving its return path
+    // as a root-relative `next` (what the SPA's login page accepts) rather than an absolute URL.
+    let login = format!("{target_origin}/login?next={}", urlencoding(&return_to));
     redirect(&login)
 }
 
@@ -470,19 +558,23 @@ async fn bridge_callback(
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    let current = request_origin(&headers);
     let cfg = match load_bridge_config(&state).await {
         Ok(cfg) => cfg,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "bridge_callback", e),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load bridge config");
+            return bridge_navigation_error(None, current.as_deref(), None, "config");
+        }
     };
-    let Some(current_origin) = request_origin(&headers) else {
-        return error(StatusCode::BAD_REQUEST, "bridge_callback", "missing Host.");
+    let Some(current_origin) = current else {
+        return bridge_navigation_error(Some(&cfg), None, None, "origin");
     };
     let state_cookie = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|raw| crate::auth::find_cookie(raw, SSO_STATE_COOKIE));
     if state_cookie.as_deref() != Some(query.state.trim()) {
-        return login_error_redirect(&current_origin, "state");
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "state");
     }
 
     let now = now_secs();
@@ -492,15 +584,17 @@ async fn bridge_callback(
         .await
     {
         Ok(record) => record,
-        Err(_) => return login_error_redirect(&current_origin, "handoff"),
+        Err(_) => {
+            return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "handoff")
+        }
     }) else {
-        return login_error_redirect(&current_origin, "handoff");
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "handoff");
     };
     if record.target_origin != current_origin || record.state != query.state.trim() {
-        return login_error_redirect(&current_origin, "handoff");
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "handoff");
     }
     let Some(return_to) = relative_return_to(Some(&record.return_to)) else {
-        return login_error_redirect(&current_origin, "handoff");
+        return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "handoff");
     };
 
     let ip = crate::procedure::client_ip(&headers, peer_addr);
@@ -531,7 +625,9 @@ async fn bridge_callback(
         .await
     {
         Ok(Some(issued)) => issued,
-        Ok(None) | Err(_) => return login_error_redirect(&current_origin, "handoff"),
+        Ok(None) | Err(_) => {
+            return bridge_navigation_error(Some(&cfg), Some(&current_origin), None, "handoff")
+        }
     };
     let access_token = lanrurugi_core::session::issue_access_token(
         &cfg.live.session_secret,
@@ -565,4 +661,137 @@ async fn bridge_callback(
 
 fn urlencoding(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cfg(trusted: &[&str]) -> BridgeConfig {
+        BridgeConfig {
+            live: LiveAuthConfig {
+                guest_mode_enabled: false,
+                password_hash: String::new(),
+                session_secret: Vec::new(),
+                access_token_lifetime_secs: 0,
+                refresh_token_lifetime_secs: 0,
+                refresh_token_idle_lifetime_secs: 0,
+                max_login_devices: 0,
+                cookie_domain: None,
+                force_secure_cookies: false,
+            },
+            trusted: trusted.iter().map(|origin| (*origin).to_string()).collect(),
+            auto_redirect: true,
+        }
+    }
+
+    async fn body_text(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn navigation_failure_redirects_to_a_trusted_login_page() {
+        let cfg = test_cfg(&["https://a.com"]);
+        let response = bridge_navigation_error(
+            Some(&cfg),
+            Some("https://a.com"),
+            Some("https://b.com"),
+            "target",
+        );
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        // `b.com` is not trusted, so the redirect falls back to the trusted current origin — and
+        // it is a real page route, never one of the JSON API endpoints.
+        assert_eq!(location, "https://a.com/login?sso_error=target");
+        assert!(!location.contains("/api/"), "{location}");
+    }
+
+    #[tokio::test]
+    async fn navigation_failure_without_a_trusted_origin_is_html_not_json() {
+        let cfg = test_cfg(&[]);
+        let response =
+            bridge_navigation_error(Some(&cfg), Some("https://evil.com"), None, "origin");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(content_type.starts_with("text/html"), "{content_type}");
+        assert!(body_text(response)
+            .await
+            .contains("Cross-origin login failed"));
+    }
+
+    #[test]
+    fn loopback_aliases_are_the_same_authority() {
+        for (a, b) in [
+            ("http://localhost:3000", "http://127.0.0.1:3000"),
+            ("http://127.0.0.1:3000", "http://[::1]:3000"),
+            ("https://127.0.0.1", "https://localhost"),
+        ] {
+            assert!(same_authority(a, b), "{a} and {b} are the same server");
+        }
+    }
+
+    #[test]
+    fn different_scheme_port_or_host_is_not_the_same_authority() {
+        assert!(!same_authority(
+            "http://localhost:3000",
+            "http://localhost:4000"
+        ));
+        assert!(!same_authority(
+            "http://localhost:3000",
+            "https://localhost:3000"
+        ));
+        assert!(!same_authority(
+            "http://localhost:3000",
+            "http://example.com:3000"
+        ));
+        // A loopback alias must never be treated as equivalent to a real configured domain.
+        assert!(!same_authority(
+            "http://localhost:3000",
+            "http://a.com:3000"
+        ));
+    }
+
+    #[test]
+    fn bracketed_ipv6_is_recognized_as_loopback() {
+        assert!(is_loopback_origin("http://[::1]:3000"));
+        assert!(is_loopback_origin("http://[::1]"));
+        assert!(!is_loopback_origin("http://example.com"));
+    }
+
+    #[test]
+    fn loopback_siblings_are_well_formed_and_exclude_the_origin() {
+        assert_eq!(
+            loopback_siblings("http://localhost:3000"),
+            vec!["http://127.0.0.1:3000".to_string()]
+        );
+        assert_eq!(
+            loopback_siblings("http://127.0.0.1:3000"),
+            vec!["http://localhost:3000".to_string()]
+        );
+        // `[::1]` is trusted but never auto-chosen (servers bind IPv4 `0.0.0.0`), yet a `[::1]`
+        // origin still gets the reachable IPv4 siblings.
+        assert_eq!(
+            loopback_siblings("http://[::1]:3000"),
+            vec![
+                "http://localhost:3000".to_string(),
+                "http://127.0.0.1:3000".to_string()
+            ]
+        );
+        assert!(loopback_siblings("https://example.com").is_empty());
+    }
 }
