@@ -532,11 +532,15 @@ async fn start_bridge(
     }
 
     // This peer has no session either: try the next candidate. The chain is finite because each
-    // hop removes itself from the `peers` list.
+    // hop removes itself from the `peers` list. That list is only a *hint* from the previous hop:
+    // every entry is re-checked against the peers this server would generate for `target_origin`
+    // right now, so a stale or tampered `peers=` (e.g. a URL minted back when `[::1]` was still an
+    // auto-candidate) can never send the browser to an origin we wouldn't have offered ourselves.
+    let allowed = cfg.candidate_peers(&target_origin);
     let remaining = parse_peers(query.peers.as_deref())
         .into_iter()
         .filter(|peer| peer != &current_origin && peer != &target_origin)
-        .filter(|peer| cfg.is_trusted_target(&target_origin, peer))
+        .filter(|peer| allowed.contains(peer))
         .collect::<Vec<_>>();
     if let Some((next, rest)) = remaining.split_first() {
         if let Some(next_url) =
