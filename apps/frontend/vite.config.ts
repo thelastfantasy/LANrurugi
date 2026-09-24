@@ -57,7 +57,20 @@ function rustHtmlMiddleware(): Plugin {
         if (req.method !== 'GET' && req.method !== 'HEAD') return next()
 
         const accept = req.headers.accept ?? ''
-        if (!accept.includes('text/html') && !accept.includes('*/*')) return next()
+        // Only real document navigations may go to Rust. `Accept` alone can't separate a
+        // navigation from a subresource: Chrome sends `*/*` on images, scripts and manifests too,
+        // so the old `accept.includes('*/*')` check forwarded `/favicon.svg`,
+        // `/favicon-16x16.png` and `app.webappmanifest` to the backend — whose SPA fallback
+        // answered each with `index.html`. The browser then got HTML where it expected an icon or
+        // a manifest, failed to decode it, and fell back to a default/stale favicon (the reported
+        // "sometimes it's Vite's initial favicon"). `Sec-Fetch-Dest: document` is the actual
+        // navigation signal (Chrome/Edge/Firefox/Safari all send it); the `Accept` check stays
+        // only as a fallback for clients that don't.
+        const fetchDest = String(req.headers['sec-fetch-dest'] ?? '')
+        const isDocumentNavigation = fetchDest
+          ? fetchDest === 'document'
+          : accept.includes('text/html')
+        if (!isDocumentNavigation) return next()
 
         const originalUrl = req.originalUrl ?? req.url ?? '/'
         const url = new URL(originalUrl, 'http://localhost')
