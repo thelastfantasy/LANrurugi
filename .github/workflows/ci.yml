@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  RUSTC_WRAPPER: sccache
+
+jobs:
+  rust:
+    name: Rust (check, fmt, clippy, test)
+    runs-on: ubuntu-latest
+    env:
+      LANRURUGI_TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      # Caches ~/.cargo and target/ across runs (constitution Technology Stack Constraints:
+      # "Rust build acceleration").
+      #
+      # `cache-directories` additionally persists sccache's own object cache
+      # (~/.cache/sccache). Without this, sccache had a 0.00% hit rate on Rust objects on every
+      # observed run (confirmed via `sccache --show-stats` on runs 29195223998/29195590947/
+      # 29671404959) — each run got a brand-new runner VM with an empty sccache dir, so
+      # RUSTC_WRAPPER=sccache was pure overhead (a wrapper process per rustc invocation) with zero
+      # payoff. rust-cache's default directory set doesn't include it since sccache isn't
+      # rust-cache's concern.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          cache-directories: /home/runner/.cache/sccache
+
+      - name: Zero sccache stats (isolate this run's hit rate from cache-restore noise)
+        run: sccache --zero-stats
+
+      # Same set `Dockerfile.build`'s dev image installs (see that file's own comment) —
+      # `libarchive2-sys` bundles and statically links libarchive's C source, which itself links
+      # against these at build time. `ubuntu-latest` doesn't ship them, so linking failed with
+      # "mold: fatal: library not found: bz2" (first library alphabetically probed; the others
+      # would have failed the same way one at a time without this).
+      #
+      # `perl`/`cpanminus` here too: `lanrurugi-plugin-converter`'s own `cargo test` now shells out
+      # to a real `perl` + PPI invocation (`ppi.rs`'s own doc comment — genuinely parsing legacy
+      # Perl plugin source needs a real Perl parser, not a hand-rolled one), confirmed via a real
+      # CI failure (run 31936693031) where both of its "converts cleanly, zero boilerplate" tests
+      # failed with "Can't locate PPI.pm in @INC" — `ubuntu-latest` ships a bare `perl` with no CPAN
+      # modules preinstalled. The host binary itself (`lanrurugi-server`) never needs Perl; this is
+      # purely a `cargo test`-time dependency of the offline conversion tool, same as
+      # `Dockerfile.build`'s own `perl cpanminus` + `cpanm PPI JSON::PP` steps.
+      - name: Install libarchive build dependencies + redis-server + perl/PPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            redis-server perl cpanminus
+          sudo cpanm --notest PPI JSON::PP
+
+      # A `services.redis` Docker container can't be started with a custom `--databases` count
+      # (the `services:` schema only allows docker-run flags via `options`, not overriding the
+      # image's own command — and Redis's `databases` setting is immutable at runtime, confirmed
+      # via `CONFIG SET databases N` returning "can't set immutable config"). The workspace's own
+      # test suites collectively claim logical DB indices up to 23 across several crates
+      # (`lanrurugi-scanner::pipeline`'s own comment documents its disjoint-offset convention with
+      # `full_scan.rs`) — `redis-server`'s own default of 16 databases (0-15) isn't enough. Same
+      # real-binary approach the `e2e` job already uses (see its own comment: a service container
+      # can't be given the extra flags a real binary can).
+      #
+      # `apt-get install redis-server`'s own postinst script starts a systemd-managed instance
+      # immediately, bound to :6379 with the package's default 16-database config — confirmed via
+      # a real failed run (29731953500) where `redis-cli ping` came back instantly (too fast to be
+      # our own `--daemonize yes` instance actually starting) and `cargo test` still hit the exact
+      # same "DB index is out of range" error. Must stop that one first, or our own invocation
+      # below either fails to bind :6379 or simply loses the race to which process gets it.
+      - name: Start redis-server with extra logical databases
+        run: |
+          sudo systemctl stop redis-server || true
+          redis-server --daemonize yes --databases 64 --save "" --appendonly no
+          for i in $(seq 1 10); do
+            redis-cli ping && break
+            sleep 1
+          done
+
+      - name: cargo check
+        run: cargo check --workspace
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        # `--no-fail-fast` — without it, `cargo test --workspace` aborts the moment any single
+        # test binary reports a failure, silently skipping every crate still queued behind it
+        # (workspace members run in dependency order, not all at once). Confirmed live, 2026-08-28:
+        # a `lanrurugi-server` test failure cut a CI run off before `lanrurugi-storage`'s own tests
+        # ever ran at all, hiding whatever those results would have been. `mise run test`
+        # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
+        # documented there — this step had drifted out of sync with it.
+        run: cargo test --workspace --no-fail-fast
+
+      - name: sccache stats
+        if: always()
+        run: scripts/sccache-summary.sh
+
+  frontend:
+    name: Frontend (eslint, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      # Every pnpm invocation below runs from the repo root with `--filter`, never with cwd inside
+      # apps/frontend (`working-directory:` on a step, or `defaults.run.working-directory`) —
+      # pnpm-lock.yaml and pnpm-workspace.yaml both live at the repo root, and pnpm 11.10's
+      # workspace detection is unreliable when invoked from a workspace subdirectory (confirmed
+      # via `act` + manual repro: `pnpm root -w` run from apps/frontend resolves back to
+      # apps/frontend/node_modules instead of the real root). Concretely this broke two things
+      # when cwd was apps/frontend: `--frozen-lockfile` compared package.json against a lockfile
+      # it treated as non-workspace-shaped, falsely reporting every real dependency as "newly
+      # added" (e.g. zod); and plain `pnpm run <script>` re-triggers pnpm's own deps-status-check
+      # (implicit install) which then couldn't see the root pnpm-workspace.yaml's `allowBuilds`
+      # entries either, failing on `sharp`'s ignored build script even though it's allow-listed.
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: eslint
+        run: pnpm --filter lanrurugi-frontend run lint
+
+      - name: build (includes tsc type-check)
+        run: pnpm --filter lanrurugi-frontend run build
+
+      - name: vitest (unit)
+        run: pnpm --filter lanrurugi-frontend run test:unit

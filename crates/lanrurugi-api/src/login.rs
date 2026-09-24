@@ -1,0 +1,781 @@
+//! Login/logout/refresh for the bundled SPA's own session (distinct from the third-party
+//! API-token contract, `crate::api_tokens` — constitution Principle II's own annotation on this
+//! project's deliberate departure from legacy's single-fixed-key mechanism). Mirrors legacy
+//! `Controller/Login.pm::check`/`logout` for `login`/`logout`'s own shape, but as a JSON API
+//! rather than a server-rendered form post/redirect (this is our own frontend's mechanism, not
+//! part of the legacy OpenAPI contract) — `refresh` has no legacy equivalent at all.
+//!
+//! Deliberately **not** merged into [`crate::router`] — these routes must stay reachable without
+//! a valid access token (otherwise nobody could ever log in, or silently refresh an expired one),
+//! so the server wires them into the unified `/api` router alongside the protected routes. They
+//! still go through `require_api_key`, but `route_policy.csv` explicitly allows `anonymous` /
+//! `guest_visitor` to reach them.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::extract::{ConnectInfo, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use lanrurugi_core::{password, session};
+use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
+use lanrurugi_storage::device_info::ClientReportedInfo;
+use lanrurugi_storage::refresh_tokens::{RotateOutcome, SessionContext};
+use serde::Deserialize;
+
+use crate::activity::record_manual;
+use crate::auth::load as load_auth_config;
+use crate::auth::LiveAuthConfig;
+use crate::auth_context::{AuthContext, AuthMethod};
+use crate::common::error;
+use crate::procedure::{client_ip, user_agent};
+use crate::state::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/login", post(login))
+        .route("/login/status", get(status))
+        .route("/logout", post(logout))
+        .route("/token/refresh", post(refresh))
+        .merge(crate::auth_bridge::router())
+}
+
+/// `true` if every field is `None` — a client-reported form that carried literally nothing (an
+/// old frontend build, or a hand-crafted request) should store as `client_reported: None`, not
+/// `Some(ClientReportedInfo::default())`, matching `DeviceInfo::is_empty`'s own "an empty part is
+/// the same as an absent part" convention.
+fn non_empty_client_reported(info: ClientReportedInfo) -> Option<ClientReportedInfo> {
+    if info.is_empty() {
+        None
+    } else {
+        Some(info)
+    }
+}
+
+#[derive(Deserialize)]
+struct LoginForm {
+    password: String,
+    /// Every field the frontend can read straight off `window`/`navigator`/`Intl` and no HTTP
+    /// header carries — see `ClientReportedInfo`'s own docs for the full rationale. Flattened
+    /// onto each endpoint's own form body (`#[serde(flatten)]`) rather than a nested JSON object,
+    /// since both `login` and `logout`/`refresh` are plain `application/x-www-form-urlencoded`
+    /// bodies today (`login`'s own `password` field), not JSON — matching the existing wire shape
+    /// rather than introducing a second content type for these two routes alone. Every field on
+    /// `ClientReportedInfo` is `Option` with its own `#[serde(default)]`, so an older cached
+    /// frontend build, or a request crafted by hand/a script, simply omits all of them and gets a
+    /// `ClientReportedInfo::default()` (all-`None`), never a 422.
+    #[serde(flatten)]
+    client_reported: ClientReportedInfo,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs()
+}
+
+/// The refresh cookie's own `Path` — narrower than the access cookie's `/` so the browser only
+/// ever attaches it to the one endpoint that actually reads it, `POST /api/token/refresh` (not to
+/// every single request the way a `Path=/` cookie would be). `logout` deliberately does **not**
+/// read this cookie (see that handler's own docs on why it reads `fid` out of the access token
+/// instead) specifically so this can stay this narrow without also needing to cover `/api/logout`.
+/// Must exactly match the `Path` `cleared_auth_cookies` clears with below — a `Set-Cookie` that
+/// clears the same *name* but a different `Path` creates an unrelated second cookie instead of
+/// removing this one (RFC 6265's own per-`(name, domain, path)` cookie identity), leaking a
+/// zombie cookie that never actually gets cleared.
+const REFRESH_COOKIE_PATH: &str = "/api/token/refresh";
+
+/// How long a `(family_id, device fingerprint)` pair's routine successful refresh stays deduped —
+/// see `action_types::SESSION_REFRESH`'s own docs. Shorter than the guest dedup window
+/// (`procedure::GUEST_DEDUP_WINDOW_SECS`) is unnecessary here since a refresh already only happens
+/// once per `access_token_lifetime_secs`, far less often than a guest's per-request browsing.
+const SESSION_REFRESH_DEDUP_WINDOW_SECS: u64 = 30 * 60;
+
+/// Builds both `Set-Cookie` header values for a freshly-issued (or rotated) token pair. `Secure`
+/// is appended only when `cfg.force_secure_cookies` is set (see that field's own docs on why it's
+/// an explicit opt-in, not inferred from a request header).
+///
+/// `refresh_max_age_secs` is passed separately rather than read from `cfg` because a rotated
+/// refresh token inherits its parent's absolute `expires_at` (anchored to the original login), so
+/// its cookie must not advertise a full fresh lifetime the server-side record no longer has — see
+/// `refresh_tokens::RefreshTokenRepository::rotate`'s own docs. Login passes the full configured
+/// lifetime; rotation passes the actual remaining time.
+pub(crate) fn auth_cookies(
+    cfg: &LiveAuthConfig,
+    access_token: &str,
+    refresh_cookie_value: &str,
+    refresh_max_age_secs: u64,
+) -> [String; 2] {
+    let secure = if cfg.force_secure_cookies {
+        "; Secure"
+    } else {
+        ""
+    };
+    let domain = cfg
+        .cookie_domain
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("; Domain={value}"))
+        .unwrap_or_default();
+    [
+        format!(
+            "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
+            session::COOKIE_NAME,
+            access_token,
+            cfg.access_token_lifetime_secs,
+            secure,
+            domain,
+        ),
+        format!(
+            "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
+            session::REFRESH_COOKIE_NAME,
+            refresh_cookie_value,
+            REFRESH_COOKIE_PATH,
+            refresh_max_age_secs,
+            secure,
+            domain,
+        ),
+    ]
+}
+
+/// Long-lived device identity cookie. Not an auth credential; `HttpOnly` keeps it out of JS reach,
+/// and it only carries an opaque per-browser UUID used for device-name inheritance.
+pub(crate) fn device_id_cookie(device_id: &str, secure: bool) -> String {
+    format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
+        session::DEVICE_ID_COOKIE_NAME,
+        device_id,
+        365 * 24 * 60 * 60,
+        if secure { "; Secure" } else { "" },
+    )
+}
+
+/// Whether the browser-facing request used HTTPS, honouring a trusted reverse proxy's
+/// `X-Forwarded-Proto` before falling back to the direct connection scheme.
+pub(crate) fn request_is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+}
+
+/// `force_secure` must match whatever `auth_cookies` used to *set* the cookie being cleared here —
+/// a clearing `Set-Cookie` with mismatched attributes isn't guaranteed to be treated as the same
+/// cookie by every client (RFC 6265's identity is `(name, domain, path)`, but real browsers have
+/// historically been inconsistent about `Secure`-attribute mismatches on deletion).
+pub(crate) fn cleared_auth_cookies(force_secure: bool, cookie_domain: Option<&str>) -> [String; 2] {
+    let secure = if force_secure { "; Secure" } else { "" };
+    let domain = cookie_domain
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("; Domain={value}"))
+        .unwrap_or_default();
+    [
+        format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
+            session::COOKIE_NAME,
+            secure,
+            domain,
+        ),
+        format!(
+            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
+            session::REFRESH_COOKIE_NAME,
+            REFRESH_COOKIE_PATH,
+            secure,
+            domain,
+        ),
+    ]
+}
+
+/// `[(SET_COOKIE, ..); 2]`'s own `IntoResponseParts` impl (`axum-core`) builds the header map via
+/// `HeaderMap::insert`, which *overwrites* same-name entries rather than adding a second one — two
+/// array elements sharing the `Set-Cookie` key silently collapse to just the last one, so the
+/// browser never actually receives both cookies (caught live by `tests/auth_flow.rs`: `login`
+/// only ever set the refresh cookie). `HeaderMap::append` is the one that keeps both.
+pub(crate) fn cookie_headers(cookies: [String; 2]) -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    for cookie in cookies {
+        headers.append(
+            header::SET_COOKIE,
+            cookie.parse().expect("valid cookie header value"),
+        );
+    }
+    headers
+}
+
+async fn login(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::Form(form): axum::Form<LoginForm>,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    let client_reported = non_empty_client_reported(form.client_reported);
+    let auth = match load_auth_config(&state).await {
+        Ok(a) => a,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "login", e.to_string()),
+    };
+
+    if !password::verify_password(&form.password, &auth.password_hash) {
+        // Recorded as `Anonymous` — no session exists yet at this point, which is exactly the
+        // fact worth capturing: a run of these against one IP is a brute-force signal an operator
+        // would otherwise only see by trawling the raw request log.
+        record_manual(
+            &state,
+            Some(&AuthContext {
+                method: AuthMethod::Anonymous,
+                client_ip: ip,
+                user_agent: ua,
+                client_reported,
+                session_family_id: None,
+            }),
+            action_types::SESSION_LOGIN_FAILED,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("session".to_string()),
+            },
+            Outcome::Failure {
+                reason: "Wrong password.".to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
+        return error(StatusCode::UNAUTHORIZED, "login", "Wrong password.");
+    }
+
+    let now = now_secs();
+    let device_id = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let device_info =
+        crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
+    let session_context = SessionContext {
+        device_info,
+        client_ip: ip.clone(),
+        device_id: Some(device_id.clone()),
+    };
+    // Evict the oldest-seen family first when this login would exceed the configured device cap.
+    // A Redis failure here is logged and ignored: failing the whole login because a best-effort
+    // limit-check couldn't run would be worse than briefly exceeding the cap.
+    match state
+        .refresh_tokens
+        .make_room_for_new_family_with_device(
+            now as i64,
+            auth.max_login_devices as i64,
+            Some(device_id.as_str()),
+        )
+        .await
+    {
+        Ok(evicted) if !evicted.is_empty() => {
+            tracing::info!(
+                count = evicted.len(),
+                max = auth.max_login_devices,
+                "evicted oldest login device(s) to honor max_login_devices"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "failed to enforce max_login_devices"),
+    }
+    let issued = match state
+        .refresh_tokens
+        .issue_new_family_with_idle(
+            now as i64,
+            auth.refresh_token_lifetime_secs as i64,
+            auth.refresh_token_idle_lifetime_secs as i64,
+            session_context,
+        )
+        .await
+    {
+        Ok(issued) => issued,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "login", e.to_string()),
+    };
+    let access_token = session::issue_access_token(
+        &auth.session_secret,
+        now,
+        auth.access_token_lifetime_secs,
+        &issued.record.family_id,
+    );
+    let refresh_cookie_value = format!("{}.{}", issued.record.token_id, issued.secret);
+    let refresh_cookie_max_age = (issued
+        .record
+        .idle_expires_at
+        .unwrap_or(issued.record.expires_at)
+        - now as i64)
+        .max(1) as u64;
+    let cookies = auth_cookies(
+        &auth,
+        &access_token,
+        &refresh_cookie_value,
+        refresh_cookie_max_age,
+    );
+
+    // `Session`, not the `Anonymous` context `require_api_key` actually attached to this request
+    // (this route is on `anonymous`'s own allow-list in `route_policy.csv`, since nobody could
+    // ever log in otherwise) — the password just verified above is exactly what makes this
+    // record's subject a real admin session, not the anonymous caller who made the request.
+    record_manual(
+        &state,
+        Some(&AuthContext {
+            method: AuthMethod::Session,
+            client_ip: ip,
+            user_agent: ua,
+            client_reported,
+            session_family_id: Some(issued.record.family_id.clone()),
+        }),
+        action_types::SESSION_LOGIN,
+        ActivityTarget {
+            id: None,
+            label: None,
+            kind: Some("session".to_string()),
+        },
+        Outcome::Success,
+        None,
+        None,
+    )
+    .await;
+
+    let mut response_headers = cookie_headers(cookies);
+    let device_cookie = device_id_cookie(
+        &device_id,
+        auth.force_secure_cookies || request_is_https(&headers),
+    );
+    response_headers.append(
+        header::SET_COOKIE,
+        device_cookie
+            .parse()
+            .expect("device id cookie header value is valid"),
+    );
+    (
+        StatusCode::OK,
+        response_headers,
+        axum::Json(serde_json::json!({ "operation": "login", "success": 1 })),
+    )
+        .into_response()
+}
+
+/// `POST /token/refresh` — no legacy equivalent. Redeems the refresh cookie for a fresh access
+/// token + rotated refresh cookie (see `lanrurugi_storage::refresh_tokens::rotate`'s own docs for
+/// the rotation/reuse-detection semantics). The frontend calls this transparently on a 401 from
+/// any other endpoint (`apps/frontend/src/api/client.ts`), before ever redirecting to `/login`.
+async fn refresh(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    form: axum::Form<ClientReportedInfo>,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    // A request with a genuinely empty body (an older cached frontend build, or a bare
+    // `curl -X POST` with no body at all) still decodes successfully here — every field on
+    // `ClientReportedInfo` is `Option` with its own `#[serde(default)]`, so `serde_urlencoded`
+    // parsing an empty byte string just produces every field as `None`, not a rejection. Only a
+    // genuinely malformed (non-empty, non-form) body would 400.
+    let client_reported = non_empty_client_reported(form.0);
+    let auth = match load_auth_config(&state).await {
+        Ok(a) => a,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "token_refresh",
+                e.to_string(),
+            )
+        }
+    };
+
+    let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "token_refresh",
+            "No refresh cookie.",
+        );
+    };
+    let Some(cookie_value) = crate::auth::find_cookie(cookie_header, session::REFRESH_COOKIE_NAME)
+    else {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "token_refresh",
+            "No refresh cookie.",
+        );
+    };
+    let Some((token_id, secret)) = cookie_value.split_once('.') else {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "token_refresh",
+            "Malformed refresh cookie.",
+        );
+    };
+
+    let now = now_secs();
+    let device_id = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let rotate_device_info =
+        crate::device_info::build(ua.as_deref(), ip.as_deref(), client_reported.clone());
+    let outcome = match state
+        .refresh_tokens
+        .rotate_with_context(
+            token_id,
+            secret,
+            now as i64,
+            auth.refresh_token_idle_lifetime_secs as i64,
+            SessionContext {
+                device_info: rotate_device_info,
+                client_ip: ip.clone(),
+                device_id: Some(device_id.clone()),
+            },
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "token_refresh",
+                e.to_string(),
+            )
+        }
+    };
+
+    match outcome {
+        RotateOutcome::NotFound => error(
+            StatusCode::UNAUTHORIZED,
+            "token_refresh",
+            "Invalid or expired refresh token.",
+        ),
+        RotateOutcome::ReuseDetected => {
+            // A real security event, unlike a routine successful refresh (never recorded — see
+            // `action_types::SESSION_LOGIN`'s own docs on why) — an already-rotated-out refresh
+            // token being presented again means the family's credentials leaked somewhere, and
+            // `rotate` has already responded by burning every session derived from that login.
+            record_manual(
+                &state,
+                Some(&AuthContext {
+                    method: AuthMethod::Anonymous,
+                    client_ip: ip,
+                    user_agent: ua,
+                    client_reported,
+                    session_family_id: None,
+                }),
+                action_types::SESSION_REFRESH_REUSE_DETECTED,
+                ActivityTarget {
+                    id: None,
+                    label: None,
+                    kind: Some("session".to_string()),
+                },
+                Outcome::Failure {
+                    reason: "Refresh token reuse detected.".to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
+            // The whole family was just burned by `rotate` itself — clear both cookies so the
+            // browser doesn't keep presenting now-dead credentials on its next request.
+            let cookies =
+                cleared_auth_cookies(auth.force_secure_cookies, auth.cookie_domain.as_deref());
+            (
+                StatusCode::UNAUTHORIZED,
+                cookie_headers(cookies),
+                axum::Json(serde_json::json!({
+                    "operation": "token_refresh",
+                    "success": 0,
+                    "error": "Refresh token reuse detected — all sessions for this login have been revoked.",
+                })),
+            )
+                .into_response()
+        }
+        RotateOutcome::Rotated { record, secret } => {
+            let access_token = session::issue_access_token(
+                &auth.session_secret,
+                now,
+                auth.access_token_lifetime_secs,
+                &record.family_id,
+            );
+            let refresh_cookie_value = format!("{}.{}", record.token_id, secret);
+            // Inherited absolute expiry: advertise only the actual refresh window left (idle
+            // capped by absolute), not a fresh full lifetime, or the browser will keep a cookie
+            // past the server-side record and report a logged-in-looking session that cannot
+            // actually refresh.
+            let remaining_refresh_secs =
+                (record.idle_expires_at.unwrap_or(record.expires_at) - now as i64).max(1) as u64;
+            let cookies = auth_cookies(
+                &auth,
+                &access_token,
+                &refresh_cookie_value,
+                remaining_refresh_secs,
+            );
+
+            let refresh_auth = AuthContext {
+                method: AuthMethod::Session,
+                client_ip: ip,
+                user_agent: ua.clone(),
+                client_reported: client_reported.clone(),
+                session_family_id: Some(record.family_id.clone()),
+            };
+            // Routine, successful refresh — deduplicated per `(family_id, device fingerprint)`, not
+            // written on every single rotation (see `action_types::SESSION_REFRESH`'s own docs on
+            // why: this happens silently every `access_token_lifetime_secs` for as long as a tab
+            // stays open).
+            let identity = format!("family:{}", record.family_id);
+            let fp = lanrurugi_storage::activity_dedup::fingerprint(&identity, ua.as_deref());
+            match state
+                .activity_dedup
+                .should_record("session_refresh", &fp, SESSION_REFRESH_DEDUP_WINDOW_SECS)
+                .await
+            {
+                Ok(true) => {
+                    record_manual(
+                        &state,
+                        Some(&refresh_auth),
+                        action_types::SESSION_REFRESH,
+                        ActivityTarget {
+                            id: None,
+                            label: None,
+                            kind: Some("session".to_string()),
+                        },
+                        Outcome::Success,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+                Ok(false) => {} // already recorded recently for this (family, device) pair
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to check session-refresh dedup gate");
+                }
+            }
+
+            // The family's device baseline (captured once at login, never re-derived by `rotate`
+            // itself — see `RefreshTokenRecord::device_info`'s own docs) disagreeing with this
+            // rotation's actual presenting device is a visible flag for an operator, not proof of
+            // theft — recorded once per occurrence (not gated by the dedup check above, since a
+            // real device change is itself the noteworthy event, not routine background noise).
+            // Compared on `user_agent` alone (not the whole `DeviceInfo`, which also carries
+            // geo/client-reported facts that legitimately vary refresh-to-refresh — a phone moving
+            // between WiFi networks changes its IP, and a browser window being resized changes
+            // `screen_width`/`screen_height`, neither of which is a device change worth flagging).
+            let current_ua_info = crate::device_info::parse_user_agent(ua.as_deref());
+            let baseline_ua_info = record
+                .device_info
+                .as_ref()
+                .and_then(|d| d.user_agent.as_ref());
+            if let Some(baseline) = baseline_ua_info {
+                if current_ua_info.as_ref() != Some(baseline) {
+                    record_manual(
+                        &state,
+                        Some(&refresh_auth),
+                        action_types::SESSION_DEVICE_CHANGED,
+                        ActivityTarget {
+                            id: None,
+                            label: None,
+                            kind: Some("session".to_string()),
+                        },
+                        Outcome::Success,
+                        Some(serde_json::json!({ "user_agent": baseline })),
+                        Some(serde_json::json!({ "user_agent": current_ua_info })),
+                    )
+                    .await;
+                }
+            }
+
+            let mut response_headers = cookie_headers(cookies);
+            response_headers.append(
+                header::SET_COOKIE,
+                device_id_cookie(
+                    &device_id,
+                    auth.force_secure_cookies || request_is_https(&headers),
+                )
+                .parse()
+                .expect("device id cookie header value is valid"),
+            );
+            (
+                StatusCode::OK,
+                response_headers,
+                axum::Json(serde_json::json!({ "operation": "token_refresh", "success": 1 })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /login/status` — reports whether the caller is "logged in" for the purposes of gating
+/// admin-only UI, matching legacy's own `userlogged` template variable
+/// (`Controller/Reader.pm`/`Index.pm`: `enable_pass == 0 || session('is_logged')`). Deliberately
+/// its own endpoint rather than a new field on `/info` — `/info` mirrors legacy's third-party
+/// `ServerInfo` OpenAPI schema field-for-field (constitution Principle II), and `logged_in` has no
+/// place in that contract.
+async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let auth = match load_auth_config(&state).await {
+        Ok(a) => a,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "login_status",
+                e.to_string(),
+            )
+        }
+    };
+    // Password login is unconditional as of 007-guest-restricted-access — `logged_in` now means
+    // exactly "a valid administrator session exists", not "the whole instance happens to require
+    // no credentials".
+    let logged_in = crate::auth::session_is_valid(&auth, &headers);
+    // Drives the homepage's "you're using the default password" warning toast (legacy's own
+    // `[% IF usingdefpass %]`, `Controller/Index.pm`). Legacy could expose this unconditionally
+    // because `enablepass` being off already meant "no real login exists to guess" — once
+    // password login became unconditional (007-guest-restricted-access), a `true` here is a live
+    // credential hint ("try kamimamita"), not a harmless nudge, so it must only ever reach a
+    // caller who has already proven they hold that password: `false` for anyone not currently
+    // `logged_in`, including an otherwise-eligible guest_visitor (found live, 2026-08-28 — a
+    // guest session was shown the exact default-password toast an admin should see).
+    let using_default_password =
+        logged_in && auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
+    // `guest_mode_enabled` here reports the site-wide switch only, not "is a category actually
+    // visible" (spec FR-003 keeps those two conditions distinct) — the frontend combines this with
+    // its own knowledge of whether the request that landed on a page succeeded to infer the full
+    // FR-005/FR-006 branch; this field alone answers "will an unauthenticated visitor see anything
+    // other than the login page at all", which is what `RouteGuards.tsx`'s `AllowGuest` needs.
+    axum::Json(serde_json::json!({
+        "logged_in": logged_in,
+        "using_default_password": using_default_password,
+        "guest_mode_enabled": auth.guest_mode_enabled,
+    }))
+    .into_response()
+}
+
+/// Now that refresh tokens are stateful (`lanrurugi_storage::refresh_tokens`), logout actually
+/// revokes — burns the entire refresh-token family the caller's access token was minted from
+/// (same remediation `rotate`'s own reuse-detection path takes), not just clearing the browser's
+/// cookies and hoping the now-orphaned access token quietly expires on its own within the next
+/// few hours.
+///
+/// Reads `fid` out of the *access* token (`session::COOKIE_NAME`, `Path=/`), not the refresh
+/// cookie — deliberately, so `REFRESH_COOKIE_PATH` can stay scoped to only
+/// `POST /api/token/refresh` without also needing to cover this endpoint. Uses
+/// `family_id_ignoring_expiry` rather than the normal expiry-checking verifier: a user who clicks
+/// "log out" after their access token has already expired (idle tab, hasn't hit any endpoint that
+/// would have triggered a silent refresh yet) must still get their refresh-token family actually
+/// revoked — an already-expired access token still proves genuine origin via its signature, which
+/// is all this needs.
+async fn logout(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    form: axum::Form<ClientReportedInfo>,
+) -> Response {
+    let ip = client_ip(&headers, peer_addr);
+    let ua = user_agent(&headers);
+    // See `refresh`'s own comment on this same pattern — an empty body decodes to every field
+    // `None`, not a rejection.
+    let client_reported = non_empty_client_reported(form.0);
+    let auth = load_auth_config(&state).await.ok();
+    // Falls back to non-`Secure` clearing cookies if config couldn't even be loaded — an already
+    //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
+    // out at all) would be worse than a `Secure`-attribute mismatch.
+    let force_secure_cookies = auth.as_ref().is_some_and(|a| a.force_secure_cookies);
+    let cookie_domain = auth.as_ref().and_then(|a| a.cookie_domain.clone());
+    if let (Some(auth), Some(cookie_header)) = (
+        auth,
+        headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
+    ) {
+        if let Some(access_token) = crate::auth::find_cookie(cookie_header, session::COOKIE_NAME) {
+            if let Some(family_id) =
+                session::family_id_ignoring_expiry(&auth.session_secret, &access_token)
+            {
+                match state.refresh_tokens.burn_family(&family_id).await {
+                    // Only recorded once a real, resolvable session was actually torn down —
+                    // not for a bare `POST /logout` with no cookie or an unparseable one, which
+                    // never had a session to end in the first place.
+                    Ok(()) => {
+                        record_manual(
+                            &state,
+                            Some(&AuthContext {
+                                method: AuthMethod::Session,
+                                client_ip: ip,
+                                user_agent: ua,
+                                client_reported,
+                                session_family_id: Some(family_id.clone()),
+                            }),
+                            action_types::SESSION_LOGOUT,
+                            ActivityTarget {
+                                id: None,
+                                label: None,
+                                kind: Some("session".to_string()),
+                            },
+                            Outcome::Success,
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "logout: failed to burn refresh-token family")
+                    }
+                }
+            }
+        }
+    }
+
+    let cookies = cleared_auth_cookies(force_secure_cookies, cookie_domain.as_deref());
+    (
+        StatusCode::OK,
+        cookie_headers(cookies),
+        axum::Json(serde_json::json!({ "operation": "logout", "success": 1 })),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cfg() -> LiveAuthConfig {
+        LiveAuthConfig {
+            guest_mode_enabled: false,
+            password_hash: String::new(),
+            session_secret: b"test-secret".to_vec(),
+            access_token_lifetime_secs: 3_600,
+            refresh_token_lifetime_secs: 604_800,
+            refresh_token_idle_lifetime_secs: 1_209_600,
+            max_login_devices: 5,
+            cookie_domain: None,
+            force_secure_cookies: false,
+        }
+    }
+
+    /// Regression test for the client/server lifetime mismatch fixed alongside this test: a
+    /// rotation must advertise the token record's actual remaining absolute lifetime, not a
+    /// freshly-reset full configured lifetime (browsers would otherwise keep a cookie that
+    /// reports a valid session long after the server-side family has expired).
+    #[test]
+    fn auth_cookies_advertises_the_supplied_remaining_refresh_lifetime() {
+        let cookies = auth_cookies(&test_cfg(), "access-token", "refresh-token", 123);
+
+        assert!(
+            cookies[0].contains("Max-Age=3600"),
+            "access cookie should use its own full lifetime: {}",
+            cookies[0]
+        );
+        assert!(
+            cookies[1].contains("Max-Age=123"),
+            "refresh cookie must use the caller-supplied remaining lifetime: {}",
+            cookies[1]
+        );
+        assert!(
+            cookies[1].contains("Path=/api/token/refresh"),
+            "refresh cookie path must stay scoped: {}",
+            cookies[1]
+        );
+    }
+}
