@@ -188,8 +188,11 @@ fn reading_axis(crop: &RgbImage, prior: &[bool]) -> Axis {
         return Axis::Ambiguous;
     }
 
-    let min_x_run = (((w as f32) * 0.15).ceil() as usize).max(2);
-    let min_y_run = (((h as f32) * 0.15).ceil() as usize).max(2);
+    // Integer arithmetic, not `(len as f32 * 0.15).ceil()`: f32 rounds 200 * 0.15 up to
+    // 30.000002, so a run that is exactly 15% of the crop (a legitimate character column) failed
+    // the `>= min_run_len` test and the axis came back `Ambiguous`. `div_ceil` is exact.
+    let min_x_run = ((w as usize) * 15).div_ceil(100).max(2);
+    let min_y_run = ((h as usize) * 15).div_ceil(100).max(2);
     let x_runs = projection_runs(&x_projection, min_x_run).len();
     let y_runs = projection_runs(&y_projection, min_y_run).len();
 
@@ -198,8 +201,20 @@ fn reading_axis(crop: &RgbImage, prior: &[bool]) -> Axis {
         (2.., 1) => Axis::Horizontal,
         // One clear x-band with several character rows along y: a vertical column.
         (1, 2..) => Axis::Vertical,
-        // Multiple bands in the cross-axis too: a grid, not a single line (the ambiguous case).
-        (2.., 2..) => Axis::Ambiguous,
+        // Multiple bands in both axes: a 2-D grid. Projection alone cannot distinguish a
+        // compact 2x2 tategaki block from a horizontal 2xN caption, but real manga labels almost
+        // always use the former — page 15's `戦士母娘` is exactly a near-square vertical 2x2 block
+        // that this branch used to leave `Ambiguous`, so merge_lines' earlier per-row votes kept
+        // the region horizontal and the translated text got laid out the wrong way. Only let a
+        // clearly wide crop opt into horizontal layout; everything compact stays vertical.
+        (2.., 2..) => {
+            let (w, h) = (w as f32, h as f32);
+            if w >= h * 1.35 {
+                Axis::Horizontal
+            } else {
+                Axis::Vertical
+            }
+        }
         // A single run in both axes is a lone glyph or touching text: fall back to the box's own
         // aspect ratio, the only weak signal left. Keep this deliberately conservative so a
         // square-ish SFX blob stays ambiguous rather than setting a confident wrong direction.
@@ -481,7 +496,11 @@ fn recognize_by_prior_components(
         }
     }
     if !out.is_empty() {
-        return Some(out);
+        // Each component's own `recognize()` ran `strip_inserted_separators`, but a separator
+        // sitting exactly on the boundary between two components survives both individual
+        // passes (it is trailing/leading in each). Real page-15 case: `エ、` + `ルフ母娘` joined
+        // back into `エ、ルフ母娘` even though both halves were normalized. Normalize the join.
+        return Some(crate::recognize::strip_inserted_separators(&out));
     }
 
     // The component split can still fail if the detector's own prior merged the column's strokes
@@ -532,7 +551,7 @@ fn recognize_by_prior_components(
             }
         }
     }
-    (!halves.is_empty()).then_some(halves)
+    (!halves.is_empty()).then(|| crate::recognize::strip_inserted_separators(&halves))
 }
 
 /// One content-failed recognition plus the successful same-page neighbour it should be merged
@@ -1147,12 +1166,34 @@ mod tests {
     }
 
     #[test]
-    fn reading_axis_treats_a_grid_as_ambiguous() {
+    fn reading_axis_prefers_vertical_for_a_compact_grid() {
+        // Page-15 `戦士母娘`: two columns x two rows, nearly square. Manga's own reading order is
+        // right column top-to-bottom, then left column — i.e. vertical, not row-major horizontal.
         let mut crop = blank_crop(100, 100);
         for (x, y) in [(10, 10), (60, 10), (10, 60), (60, 60)] {
             fill_dark(&mut crop, x, y, 30, 30);
         }
-        assert_eq!(reading_axis(&crop, &[]), Axis::Ambiguous);
+        assert_eq!(reading_axis(&crop, &[]), Axis::Vertical);
+    }
+
+    #[test]
+    fn reading_axis_prefers_horizontal_for_a_wide_grid() {
+        // A clearly wide 2-row caption remains horizontal rather than being forced vertical by the
+        // compact-grid default above.
+        let mut crop = blank_crop(200, 80);
+        for (x, y) in [
+            (10, 10),
+            (60, 10),
+            (110, 10),
+            (160, 10),
+            (10, 50),
+            (60, 50),
+            (110, 50),
+            (160, 50),
+        ] {
+            fill_dark(&mut crop, x, y, 30, 20);
+        }
+        assert_eq!(reading_axis(&crop, &[]), Axis::Horizontal);
     }
 
     #[test]

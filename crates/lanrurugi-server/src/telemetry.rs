@@ -26,8 +26,15 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 pub fn init(log_dir: Option<&Path>) {
-    let env_filter =
-        || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = || {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            // `ort=warn`: ONNX Runtime logs every BFCArena reservation / CUDA node assignment / Memcpy insertion
+            // at INFO; on this model set that was ~1700 lines per worker cold start and tens of MB per
+            // session in `general.log` for zero diagnostic value. Warning+ keeps real ORT failures visible
+            // while dropping the per-allocation noise. Everything `lanrurugi_*` stays at info.
+            EnvFilter::new("info,ort=warn,ort_sys=warn")
+        })
+    };
 
     // Stderr, not stdout: `lanrurugi bench` prints its final JSON report to stdout, and log
     // lines interleaved into that same stream would corrupt it for any caller piping the

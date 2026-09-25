@@ -361,9 +361,10 @@ async fn detect_with_degradation(
             if w < 24 || h < 24 || area > 200_000 {
                 continue;
             }
-            if regions.iter().any(|region| {
+            let partly_covered = regions.iter().any(|region| {
                 region_area_fraction_inside_bubble(&region.bounding_box, bubble) >= 0.5
-            }) {
+            });
+            if partly_covered && !bubble_has_uncovered_ink(&image, bubble, &regions) {
                 continue;
             }
             candidates.push(bubble.bbox);
@@ -695,7 +696,7 @@ fn white_blob_candidates(page: &RgbImage, regions: &[DetectedTextRegion]) -> Vec
                 continue;
             }
             let bbox = BoundingBox::new(min_x, min_y, bw, bh);
-            if !blob_covered(&bbox, regions) {
+            if !blob_covered(page, &bbox, regions) {
                 out.push(bbox);
             }
         }
@@ -705,16 +706,94 @@ fn white_blob_candidates(page: &RgbImage, regions: &[DetectedTextRegion]) -> Vec
     out
 }
 
-/// Whether an existing text region already sits (almost entirely) inside `bbox` — the signal that
-/// this white blob is a bubble whose text was detected/translated already. Deliberately measured on
-/// the *region's* own area (>=80% of the region inside the blob bbox) rather than the blob's area:
-/// a tight text-column region covers only a fraction of its bubble's white interior, so a
-/// blob-area threshold would wrongly keep the bubble as a fallback candidate and add a duplicate
-/// second translation for it (real regression caught on the 2026-09-19 page-12 run: the top-right
-/// bubble's existing region is much smaller than the bubble's white blob, and the blob fallback
-/// produced a duplicate region covering the whole bubble).
-fn blob_covered(bbox: &BoundingBox, regions: &[DetectedTextRegion]) -> bool {
-    regions.iter().any(|region| {
+/// Minimum uncovered dark-ink pixels before a bubble/white-blob candidate is re-OCRed even
+/// though some existing region already sits inside it. Small enough to catch a single missed
+/// vertical column; large enough to ignore compression noise and bubble-outline specks.
+const UNCOVERED_INK_MIN_PIXELS: usize = 40;
+/// Minimum share of the candidate's own area that must be uncovered dark ink. Real page-16 top
+/// bubble: one ~44px-wide Japanese column was outside its partial OCR region but clearly visible.
+const UNCOVERED_INK_MIN_FRACTION: f32 = 0.015;
+/// Luma below which a pixel counts as text/ink for the uncovered-text check. Deliberately a
+/// little looser than pure black so anti-aliased glyph edges still count, but tight enough that
+/// a near-white bubble interior never does.
+const UNCOVERED_INK_MAX_LUMA: f32 = 120.0;
+
+fn is_uncovered_ink(page: &RgbImage, x: u32, y: u32, regions: &[DetectedTextRegion]) -> bool {
+    let p = page.get_pixel(x, y).0;
+    let luma = 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
+    if luma >= UNCOVERED_INK_MAX_LUMA {
+        return false;
+    }
+    !regions.iter().any(|region| {
+        let r = &region.bounding_box;
+        x >= r.x && x < r.x.saturating_add(r.w) && y >= r.y && y < r.y.saturating_add(r.h)
+    })
+}
+
+/// Whether a segmented bubble still has dark text outside every existing OCR region's bbox.
+/// This is what distinguishes a normal tight text region (all glyph pixels inside it, so the
+/// bubble is already handled) from the page-16 failure mode: one partial region covered three of
+/// four Japanese columns, so the old "any region mostly inside this bubble" guard suppressed the
+/// whole-bubble fallback and left the fourth column untranslated forever.
+fn bubble_has_uncovered_ink(
+    page: &RgbImage,
+    bubble: &lanrurugi_ocr::bubble_segment::DetectedBubble,
+    regions: &[DetectedTextRegion],
+) -> bool {
+    let b = &bubble.bbox;
+    if bubble.mask.len() != (b.w * b.h) as usize {
+        return false;
+    }
+    let mut uncovered = 0usize;
+    for y in b.y..b.y.saturating_add(b.h) {
+        for x in b.x..b.x.saturating_add(b.w) {
+            let index = ((y - b.y) * b.w + (x - b.x)) as usize;
+            if !bubble.mask[index] {
+                continue;
+            }
+            if is_uncovered_ink(page, x, y, regions) {
+                uncovered += 1;
+            }
+        }
+    }
+    let total = u64::from(b.w) * u64::from(b.h);
+    uncovered >= UNCOVERED_INK_MIN_PIXELS
+        && (uncovered as f32) >= UNCOVERED_INK_MIN_FRACTION * (total as f32)
+}
+
+/// Like [`bubble_has_uncovered_ink`], for the image-only near-white-blob fallback (no
+/// segmentation mask available): dark pixels anywhere inside the blob bbox that no existing OCR
+/// region covers.
+fn blob_has_uncovered_ink(
+    page: &RgbImage,
+    bbox: &BoundingBox,
+    regions: &[DetectedTextRegion],
+) -> bool {
+    let mut uncovered = 0usize;
+    for y in bbox.y..bbox.y.saturating_add(bbox.h) {
+        for x in bbox.x..bbox.x.saturating_add(bbox.w) {
+            if is_uncovered_ink(page, x, y, regions) {
+                uncovered += 1;
+            }
+        }
+    }
+    let total = u64::from(bbox.w) * u64::from(bbox.h);
+    uncovered >= UNCOVERED_INK_MIN_PIXELS
+        && (uncovered as f32) >= UNCOVERED_INK_MIN_FRACTION * (total as f32)
+}
+
+/// Whether an existing text region already sits (almost entirely) inside `bbox` **and** no dark
+/// text remains outside those regions — the signal that this white blob is a bubble whose text
+/// was detected/translated already. Deliberately measured on the *region's* own area (>=80% of the
+/// region inside the blob bbox) rather than the blob's area: a tight text-column region covers
+/// only a fraction of its bubble's white interior, so a blob-area threshold would wrongly keep the
+/// bubble as a fallback candidate and add a duplicate second translation for it (real regression
+/// caught on the 2026-09-19 page-12 run: the top-right bubble's existing region is much smaller
+/// than the bubble's white blob, and the blob fallback produced a duplicate region covering the
+/// whole bubble). The added uncovered-ink recheck keeps that protection for complete regions while
+/// still allowing a partial region to be completed by the whole-blob pass (page-16 top bubble).
+fn blob_covered(page: &RgbImage, bbox: &BoundingBox, regions: &[DetectedTextRegion]) -> bool {
+    let covered_by_region = regions.iter().any(|region| {
         let r = &region.bounding_box;
         let region_area = u64::from(r.w) * u64::from(r.h);
         if region_area == 0 {
@@ -732,7 +811,8 @@ fn blob_covered(bbox: &BoundingBox, regions: &[DetectedTextRegion]) -> bool {
         // white interior (real page-15 `エルフ母娘`), and re-recognizing that interior would only
         // pay for a duplicate the later region-dedup pass immediately throws away.
         inside * 10 >= region_area * 8
-    })
+    });
+    covered_by_region && !blob_has_uncovered_ink(page, bbox, regions)
 }
 
 /// Fraction of `region`'s own bbox area whose pixels fall inside `bubble`'s detected *mask* — the

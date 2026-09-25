@@ -520,6 +520,11 @@ fn try_cuda_session(
     let builder = Session::builder()?
         .with_execution_providers([ep::CUDA::default()
             .with_memory_limit(cuda_memory_limit_bytes)
+            // Quality-neutral VRAM fix: ORT's CUDA EP defaults to `kNextPowerOfTwo` arena growth,
+            // which over-reserves and fragments against `with_memory_limit` (the 8GiB-card
+            // OOM-kill/respawn incident `vram_budget.rs` documents). `SameAsRequested` allocates
+            // exactly what a graph asks for — identical inference results, materially lower peak.
+            .with_arena_extend_strategy(ep::ArenaExtendStrategy::SameAsRequested)
             // See `lanrurugi-inpaint::try_cuda_session`'s identical call for the full rationale —
             // `ort`'s CUDA EP defaults to an unbounded-workspace exhaustive conv-algorithm search
             // regardless of `with_memory_limit`; this caps that separately.
@@ -527,7 +532,10 @@ fn try_cuda_session(
             .with_conv_max_workspace(false)
             .build()
             .error_on_failure()])?
-        .with_intra_threads(intra_threads.max(1))?;
+        .with_intra_threads(intra_threads.max(1))?
+        // ORT logs every BFCArena reservation / CUDA node assignment at INFO; that was tens of MB
+        // of pure I/O per model load on this box. Warning+ keeps real problems visible.
+        .with_log_level(ort::logging::LogLevel::Warning)?;
     let mut builder = builder;
     builder.commit_from_file(path)
 }
@@ -734,6 +742,21 @@ mod tests {
     #[test]
     fn looks_like_japanese_rejects_empty_string() {
         assert!(!crate::recognize::looks_like_japanese(""));
+    }
+
+    #[test]
+    fn separator_removal_composes_across_component_boundaries() {
+        // Real page-15 regression: `batch::recognize_by_prior_components` recognizes each
+        // detector-prior component separately. A `、` that straddles two components is trailing
+        // in the left component and leading in the right one, so it survives both individual
+        // `strip_inserted_separators` passes; only normalizing the joined string removes it.
+        let left = strip_inserted_separators("エ、");
+        let right = strip_inserted_separators("ルフ母娘");
+        assert_eq!(format!("{left}{right}"), "エ、ルフ母娘");
+        assert_eq!(
+            strip_inserted_separators(&format!("{left}{right}")),
+            "エルフ母娘"
+        );
     }
 
     #[test]

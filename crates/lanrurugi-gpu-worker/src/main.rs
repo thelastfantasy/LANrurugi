@@ -399,8 +399,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // would silently swallow this process's own model-loading progress/timing logs (the exact
     // information needed to diagnose a slow cold start) whenever `RUST_LOG` isn't set, which
     // production/dev containers alike normally don't set explicitly.
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        // `ort=warn`: ONNX Runtime logs every BFCArena reservation / CUDA node assignment / Memcpy insertion
+        // at INFO; on this model set that was ~1700 lines per worker cold start and tens of MB per
+        // session in `general.log` for zero diagnostic value. Warning+ keeps real ORT failures visible
+        // while dropping the per-allocation noise. Everything `lanrurugi_*` stays at info.
+        tracing_subscriber::EnvFilter::new("info,ort=warn,ort_sys=warn")
+    });
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let socket_path = std::env::var("LANRURUGI_GPU_WORKER_SOCKET")

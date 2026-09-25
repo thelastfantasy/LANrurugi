@@ -528,6 +528,11 @@ fn try_cuda_session(
     let builder = Session::builder()?
         .with_execution_providers([ep::CUDA::default()
             .with_memory_limit(cuda_memory_limit_bytes)
+            // Quality-neutral VRAM fix: ORT's CUDA EP defaults to `kNextPowerOfTwo` arena growth,
+            // which over-reserves and fragments against `with_memory_limit` (the 8GiB-card
+            // OOM-kill/respawn incident `vram_budget.rs` documents). `SameAsRequested` allocates
+            // exactly what a graph asks for — identical inference results, materially lower peak.
+            .with_arena_extend_strategy(ep::ArenaExtendStrategy::SameAsRequested)
             // `ort`'s CUDA EP defaults to `ConvAlgorithmSearch::Exhaustive` with
             // `with_conv_max_workspace` unset (which itself defaults to `true`, i.e. unlimited) —
             // meaning every prior tuning of this session's memory limit was fighting an
@@ -544,7 +549,10 @@ fn try_cuda_session(
             .with_conv_max_workspace(false)
             .build()
             .error_on_failure()])?
-        .with_intra_threads(intra_threads.max(1))?;
+        .with_intra_threads(intra_threads.max(1))?
+        // ORT logs every BFCArena reservation / CUDA node assignment at INFO; that was tens of MB
+        // of pure I/O per model load on this box. Warning+ keeps real problems visible.
+        .with_log_level(ort::logging::LogLevel::Warning)?;
     let mut builder = builder;
     builder.commit_from_file(path)
 }

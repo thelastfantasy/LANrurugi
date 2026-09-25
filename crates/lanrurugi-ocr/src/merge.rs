@@ -538,6 +538,10 @@ pub fn merge_lines(
             if source_text.is_empty() {
                 return None;
             }
+            // Members were normalized individually, but concatenation can recreate a separator
+            // pair that straddled a member boundary (e.g. `エ、` + `ルフ母娘`). Normalize once more
+            // on the paragraph's own joined text.
+            let source_text = crate::recognize::strip_inserted_separators(&source_text);
 
             // An alternate candidate only exists if at least one member had one; otherwise the
             // merged region must not acquire a fake B candidate that merely repeats A. When it
@@ -584,7 +588,8 @@ pub fn merge_lines(
                 source_text,
                 is_cover,
             );
-            region.alternate_source_text = any_alternate.then_some(alternate_source_text);
+            region.alternate_source_text = any_alternate
+                .then(|| crate::recognize::strip_inserted_separators(&alternate_source_text));
             region.writing_direction = writing_direction;
             Some(region)
         })
