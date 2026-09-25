@@ -38,6 +38,14 @@ use crate::style_estimate::{crop_region, estimate};
 /// because this closure never runs on a true async-reactor thread.
 pub trait TextRecognizerHandle: Send + Sync {
     fn recognize(&self, crop: &RgbImage) -> Result<String, RecognizeHandleError>;
+
+    /// Batched counterpart of [`Self::recognize`]. The default implementation just loops the
+    /// single-crop method, so in-process/test handles are unchanged; the GPU-backed handle
+    /// overrides this to send every crop of a page in one RPC so manga-ocr's encoder runs once
+    /// over `[N, 3, 224, 224]` instead of `N` times over `[1, 3, 224, 224]`.
+    fn recognize_batch(&self, crops: &[RgbImage]) -> Vec<Result<String, RecognizeHandleError>> {
+        crops.iter().map(|crop| self.recognize(crop)).collect()
+    }
 }
 
 /// Why one crop couldn't be transcribed, split by whether re-running it later could plausibly
@@ -63,19 +71,30 @@ pub enum RecognizeHandleError {
 
 impl TextRecognizerHandle for crate::recognize::TextRecognizer {
     fn recognize(&self, crop: &RgbImage) -> Result<String, RecognizeHandleError> {
-        crate::recognize::TextRecognizer::recognize(self, crop).map_err(|e| match e {
-            // In-process recognition has no RPC layer to fail: a session-build, vocabulary-load,
-            // or ORT inference error is a real infrastructure problem. `BadOutput` — which is
-            // where the low-decode-confidence rejection lands — is the model's own verdict.
-            crate::recognize::RecognitionError::Session { .. }
-            | crate::recognize::RecognitionError::Vocab { .. }
-            | crate::recognize::RecognitionError::Inference(_) => {
-                RecognizeHandleError::Infrastructure(e.to_string())
-            }
-            crate::recognize::RecognitionError::BadOutput(_) => {
-                RecognizeHandleError::Content(e.to_string())
-            }
-        })
+        crate::recognize::TextRecognizer::recognize(self, crop).map_err(classify_recognition_error)
+    }
+
+    fn recognize_batch(&self, crops: &[RgbImage]) -> Vec<Result<String, RecognizeHandleError>> {
+        crate::recognize::TextRecognizer::recognize_batch(self, crops)
+            .into_iter()
+            .map(|result| result.map_err(classify_recognition_error))
+            .collect()
+    }
+}
+
+/// In-process recognition has no RPC layer to fail: a session-build, vocabulary-load, or ORT
+/// inference error is a real infrastructure problem. `BadOutput` — which is where the
+/// low-decode-confidence rejection lands — is the model's own verdict.
+fn classify_recognition_error(e: crate::recognize::RecognitionError) -> RecognizeHandleError {
+    match e {
+        crate::recognize::RecognitionError::Session { .. }
+        | crate::recognize::RecognitionError::Vocab { .. }
+        | crate::recognize::RecognitionError::Inference(_) => {
+            RecognizeHandleError::Infrastructure(e.to_string())
+        }
+        crate::recognize::RecognitionError::BadOutput(_) => {
+            RecognizeHandleError::Content(e.to_string())
+        }
     }
 }
 
@@ -744,58 +763,71 @@ pub async fn run_batch(
         .map(|(index, item)| (index, item.crop.clone()))
         .collect();
 
-    let recognized = parallel_map(work, move |item| {
-        // Recognition failure for one region degrades that region to empty text rather than
-        // failing the batch — FR-020's per-page isolation applies within a page too. An
-        // infrastructure failure additionally flags the page as degraded, so the caller knows
-        // this page's region set is incomplete for a transient reason and must not be cached.
-        let outcome = recognize_engine.recognizer.recognize(&item.crop);
-        let infra_failure = is_infrastructure_failure(&outcome);
-        let mut text = match &outcome {
-            Ok(text) => text.clone(),
-            Err(e) => {
-                tracing::warn!(error = %e, "region recognition failed; skipping region");
-                String::new()
-            }
-        };
-        // A content-level failure (empty output, low confidence, or a non-Japanese result) is
-        // frequently the box's own mixed-column crop rather than a real "no text here" verdict —
-        // retry per detector-prior component before dropping the line (see
-        // `recognize_by_prior_components`'s own comment for the real incident this recovers).
-        // Infrastructure failures are deliberately excluded: the caller's normal re-detection
-        // path is what retries those, and re-calling a down worker here would just fail again.
-        if !infra_failure
-            && (text.trim().is_empty() || !crate::recognize::looks_like_japanese(&text))
-        {
-            match recognize_by_prior_components(
-                recognize_engine.recognizer.as_ref(),
-                &item.crop,
-                &item.prior,
-            ) {
-                Some(recovered) => {
-                    tracing::info!(
-                        ?item.bbox,
-                        "recovered recognition by splitting the detector prior into components"
-                    );
-                    text = recovered;
-                }
-                None => tracing::warn!(
-                    ?item.bbox,
-                    "prior-component retry found no readable crop either; dropping region"
-                ),
-            }
-        }
-        let style = estimate(&item.crop, 1);
-        RecognizedWork {
-            page_index: item.page_index,
-            bbox: item.bbox,
-            text,
-            style,
-            infra_failure,
-            writing_direction: item.axis.as_writing_direction(),
-            alternate_source_text: None,
-        }
+    // One encoder pass for the whole batch's crops — see `TextRecognizerHandle::recognize_batch`.
+    // The per-sample decoder is identical to the single-crop path, so transcribed text is
+    // unchanged; only `N - 1` encoder launches/uploads disappear.
+    let batch_crops: Vec<RgbImage> = work.iter().map(|item| item.crop.clone()).collect();
+    let batch_recognizer = Arc::clone(&recognize_engine.recognizer);
+    let outcomes = lanrurugi_core::concurrency::run_blocking(move || {
+        batch_recognizer.recognize_batch(&batch_crops)
     })
+    .await?;
+    let retry_recognizer = Arc::clone(&recognize_engine.recognizer);
+
+    let recognized = parallel_map(
+        work.into_iter().zip(outcomes).collect::<Vec<_>>(),
+        move |(item, outcome)| {
+            // Recognition failure for one region degrades that region to empty text rather than
+            // failing the batch — FR-020's per-page isolation applies within a page too. An
+            // infrastructure failure additionally flags the page as degraded, so the caller knows
+            // this page's region set is incomplete for a transient reason and must not be cached.
+            let infra_failure = is_infrastructure_failure(&outcome);
+            let mut text = match &outcome {
+                Ok(text) => text.clone(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "region recognition failed; skipping region");
+                    String::new()
+                }
+            };
+            // A content-level failure (empty output, low confidence, or a non-Japanese result) is
+            // frequently the box's own mixed-column crop rather than a real "no text here" verdict —
+            // retry per detector-prior component before dropping the line (see
+            // `recognize_by_prior_components`'s own comment for the real incident this recovers).
+            // Infrastructure failures are deliberately excluded: the caller's normal re-detection
+            // path is what retries those, and re-calling a down worker here would just fail again.
+            if !infra_failure
+                && (text.trim().is_empty() || !crate::recognize::looks_like_japanese(&text))
+            {
+                match recognize_by_prior_components(
+                    retry_recognizer.as_ref(),
+                    &item.crop,
+                    &item.prior,
+                ) {
+                    Some(recovered) => {
+                        tracing::info!(
+                            ?item.bbox,
+                            "recovered recognition by splitting the detector prior into components"
+                        );
+                        text = recovered;
+                    }
+                    None => tracing::warn!(
+                        ?item.bbox,
+                        "prior-component retry found no readable crop either; dropping region"
+                    ),
+                }
+            }
+            let style = estimate(&item.crop, 1);
+            RecognizedWork {
+                page_index: item.page_index,
+                bbox: item.bbox,
+                text,
+                style,
+                infra_failure,
+                writing_direction: item.axis.as_writing_direction(),
+                alternate_source_text: None,
+            }
+        },
+    )
     .await?;
 
     // --- Rotated candidate for ambiguous crops: serial, one recognition at a time -------------

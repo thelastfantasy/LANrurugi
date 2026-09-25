@@ -119,6 +119,12 @@ impl std::fmt::Display for WorkerError {
 pub trait GpuWorker {
     /// Transcribes one already-cropped text region crop (`lanrurugi_ocr::recognize::TextRecognizer::recognize`).
     async fn recognize(crop: RawRgbImage) -> Result<String, WorkerError>;
+    /// Transcribes a page's crops in one call, running manga-ocr's encoder once over the whole
+    /// batch (`TextRecognizer::recognize_batch`). Results are in input order; one crop's error
+    /// does not fail its siblings, so the caller must treat the returned vector as positional.
+    async fn recognize_batch(
+        crops: Vec<RawRgbImage>,
+    ) -> Result<Vec<Result<String, WorkerError>>, WorkerError>;
     /// Erases every masked pixel across a whole page (`lanrurugi_inpaint::Inpainter::erase_page`).
     async fn erase_page(
         page: RawRgbImage,

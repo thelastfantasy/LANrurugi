@@ -186,6 +186,14 @@ impl std::fmt::Debug for TextRecognizer {
     }
 }
 
+/// One sample's greedy decode: generated token ids plus the worst per-token confidence seen.
+type DecodedTokens = (Vec<i64>, f32);
+
+/// Per-sample decode verdicts for a whole batch. The outer `Err` is a batch-level failure (the
+/// encoder or session lock failed before any sample could be judged); inner `Err`s are individual
+/// samples' own decode verdicts.
+type BatchDecode = Result<Vec<Result<DecodedTokens, RecognitionError>>, RecognitionError>;
+
 impl TextRecognizer {
     /// Loads the encoder/decoder sessions and vocabulary.
     ///
@@ -264,103 +272,82 @@ impl TextRecognizer {
     pub fn recognize(&self, crop: &RgbImage) -> Result<String, RecognitionError> {
         let pixels = preprocess(crop);
         let special = self.special;
-
-        // The whole encoder call + decode loop runs inside one `with_locked` closure — its
-        // `SessionOutputs`/extracted tensor slices borrow from the `&mut Sessions` `with_locked`
-        // hands in, and that borrow can't outlive the closure itself, so this only ever returns
-        // `(tokens, min_confidence)` (real owned values), never anything still borrowing a session.
         let tokens: (Vec<i64>, f32) = self.sessions.with_locked(
             |sessions| -> Result<(Vec<i64>, f32), RecognitionError> {
-                // --- Encoder: image -> hidden states -----------------------------------------
-                // Scoped so the borrow of `sessions.encoder` (held by `SessionOutputs`) ends
-                // before the decode loop borrows `sessions.decoder`.
-                let (hidden_shape, hidden_flat) = {
-                    let pixel_values = Tensor::from_array((
-                        vec![1i64, 3, i64::from(IMAGE_SIZE), i64::from(IMAGE_SIZE)],
-                        pixels,
-                    ))?;
-                    let encoder_out = sessions.encoder.run(ort::inputs! {
-                        "pixel_values" => pixel_values,
-                    })?;
-                    let (shape, flat) = encoder_out["last_hidden_state"]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| RecognitionError::BadOutput(e.to_string()))?;
-                    (shape.iter().copied().collect::<Vec<i64>>(), flat.to_vec())
-                };
-
-                // --- Decoder: greedy autoregressive decode -----------------------------------
-                // Greedy (argmax) rather than beam search: a text region is short, greedy is what
-                // `manga-ocr` itself is evaluated with, and beam search would multiply decode
-                // cost for a marginal gain on this input length.
-                let mut tokens: Vec<i64> = vec![special.cls];
-                // Tracks the single worst per-token confidence seen so far — see
-                // `MIN_DECODE_CONFIDENCE`'s own doc comment for why the worst step, not an average,
-                // is what actually catches a real misread.
-                let mut min_confidence = 1.0f32;
-
-                for _ in 0..MAX_DECODE_TOKENS {
-                    // The next token id is computed inside this scope so every borrow of
-                    // `sessions.decoder` ends before `tokens` is mutated below.
-                    let next = {
-                        let input_ids = Tensor::from_array((
-                            vec![1i64, tokens.len() as i64],
-                            tokens.clone(),
-                        ))?;
-                        let encoder_hidden =
-                            Tensor::from_array((hidden_shape.clone(), hidden_flat.clone()))?;
-
-                        let decoder_out = sessions.decoder.run(ort::inputs! {
-                            "input_ids" => input_ids,
-                            "encoder_hidden_states" => encoder_hidden,
-                        })?;
-
-                        let (logit_shape, logits) = decoder_out["logits"]
-                            .try_extract_tensor::<f32>()
-                            .map_err(|e| RecognitionError::BadOutput(e.to_string()))?;
-
-                        // [batch, seq, vocab] — only the final position's distribution matters
-                        // for the next token.
-                        if logit_shape.len() != 3 {
-                            return Err(RecognitionError::BadOutput(format!(
-                                "decoder logits have shape {logit_shape:?}, expected [batch, seq, vocab]"
-                            )));
-                        }
-                        let vocab_size = logit_shape[2] as usize;
-                        let seq_len = logit_shape[1] as usize;
-                        if vocab_size == 0 || seq_len == 0 {
-                            return Err(RecognitionError::BadOutput("empty decoder output".into()));
-                        }
-                        let last_offset = (seq_len - 1) * vocab_size;
-                        let last_logits = &logits[last_offset..last_offset + vocab_size];
-
-                        let chosen = last_logits
-                            .iter()
-                            .enumerate()
-                            .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                            .map(|(i, _)| i)
-                            .ok_or_else(|| RecognitionError::BadOutput("empty logit row".into()))?;
-                        min_confidence =
-                            min_confidence.min(softmax_confidence(last_logits, chosen));
-                        chosen as i64
-                    };
-
-                    if next == special.sep || next == special.pad {
-                        break;
-                    }
-                    tokens.push(next);
-
-                    // `tokens[0]` is always `special.cls`, never part of a real repeat streak —
-                    // see `REPEATED_TOKEN_STOP`'s own doc comment for why this check exists at all.
-                    if ends_in_repeat_streak(&tokens[1..], REPEATED_TOKEN_STOP) {
-                        break;
-                    }
-                }
-
-                Ok((tokens, min_confidence))
+                let (hidden_shape, hidden_flat) = encode(sessions, pixels, 1)?;
+                decode_hidden(sessions, special, hidden_shape, hidden_flat)
             },
         )??;
-        let (tokens, min_confidence) = tokens;
+        self.finish(tokens)
+    }
 
+    /// Transcribes every crop in one encoder forward pass.
+    ///
+    /// The encoder is the heavy ViT half of manga-ocr: running `[N, 3, 224, 224]` once instead of
+    /// `N` separate `[1, 3, 224, 224]` runs removes `N - 1` kernel launches and host→device
+    /// uploads while producing the same per-sample hidden states. The decoder is the *identical*
+    /// per-sample greedy loop [`Self::recognize`] already used — only the encoder is batched, so
+    /// the transcribed text is unchanged. If the whole-batch encoder fails for any reason, this
+    /// falls back to the untouched per-crop path so each crop still gets its own real error and
+    /// the caller's infrastructure/content classification is preserved.
+    pub fn recognize_batch(&self, crops: &[RgbImage]) -> Vec<Result<String, RecognitionError>> {
+        if crops.is_empty() {
+            return Vec::new();
+        }
+        match self.encode_and_decode_batch(crops) {
+            Ok(decoded) => decoded
+                .into_iter()
+                .map(|r| r.and_then(|tokens| self.finish(tokens)))
+                .collect(),
+            Err(_) => crops.iter().map(|crop| self.recognize(crop)).collect(),
+        }
+    }
+
+    /// Encoder batch + per-sample decode. Outer `Err` means the batch-level encoder (or the
+    /// session lock) failed before any sample could be judged; inner `Err`s are per-sample decode
+    /// verdicts, isolated exactly like the single-crop path's own.
+    fn encode_and_decode_batch(&self, crops: &[RgbImage]) -> BatchDecode {
+        const PIXELS_PER_CROP: usize = 3 * (IMAGE_SIZE as usize) * (IMAGE_SIZE as usize);
+        let mut pixels = Vec::with_capacity(crops.len() * PIXELS_PER_CROP);
+        for crop in crops {
+            pixels.extend(preprocess(crop));
+        }
+        let batch = crops.len();
+        let special = self.special;
+        self.sessions.with_locked(move |sessions| {
+            let (hidden_shape, hidden_flat) = encode(sessions, pixels, batch as i64)?;
+            if hidden_shape.len() != 3 {
+                return Err(RecognitionError::BadOutput(format!(
+                    "encoder hidden states have shape {hidden_shape:?}, expected [batch, seq, hidden]"
+                )));
+            }
+            let (n, seq, hidden) = (
+                hidden_shape[0] as usize,
+                hidden_shape[1] as usize,
+                hidden_shape[2] as usize,
+            );
+            if n != batch || seq == 0 || hidden == 0 {
+                return Err(RecognitionError::BadOutput(format!(
+                    "encoder hidden states have shape {hidden_shape:?} for a batch of {batch}"
+                )));
+            }
+            let per_sample = seq * hidden;
+            let decoded = (0..n)
+                .map(|i| {
+                    let sample_shape = vec![1i64, seq as i64, hidden as i64];
+                    let sample_flat = hidden_flat[i * per_sample..(i + 1) * per_sample].to_vec();
+                    decode_hidden(sessions, special, sample_shape, sample_flat)
+                })
+                .collect();
+            Ok(decoded)
+        })?
+    }
+
+    /// The confidence gate + vocabulary decode both single and batched paths finish with.
+    fn finish(
+        &self,
+        (tokens, min_confidence): (Vec<i64>, f32),
+    ) -> Result<String, RecognitionError> {
         // See `MIN_DECODE_CONFIDENCE`'s own doc comment — a low-confidence decode is treated the
         // same way a garbled-non-Japanese result already is (`batch.rs`'s own `looks_like_japanese`
         // check): the region is dropped rather than translating a transcription this model itself
@@ -370,12 +357,103 @@ impl TextRecognizer {
                 "decode confidence {min_confidence:.3} below minimum {MIN_DECODE_CONFIDENCE}"
             )));
         }
-
         Ok(strip_inserted_separators(&decode_tokens(
             &self.vocab,
             &tokens[1..],
         )))
     }
+}
+
+/// Runs the encoder over `pixels` reshaped to `[batch, 3, 224, 224]` and returns the hidden states
+/// as `(shape, flat)` — shape `[batch, seq, hidden]`.
+fn encode(
+    sessions: &mut Sessions,
+    pixels: Vec<f32>,
+    batch: i64,
+) -> Result<(Vec<i64>, Vec<f32>), RecognitionError> {
+    let pixel_values = Tensor::from_array((
+        vec![batch, 3, i64::from(IMAGE_SIZE), i64::from(IMAGE_SIZE)],
+        pixels,
+    ))?;
+    let encoder_out = sessions.encoder.run(ort::inputs! {
+        "pixel_values" => pixel_values,
+    })?;
+    let (shape, flat) = encoder_out["last_hidden_state"]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| RecognitionError::BadOutput(e.to_string()))?;
+    Ok((shape.iter().copied().collect::<Vec<i64>>(), flat.to_vec()))
+}
+
+/// Greedy autoregressive decode for one sample's `[1, seq, hidden]` encoder states.
+///
+/// Greedy (argmax) rather than beam search: a text region is short, greedy is what `manga-ocr`
+/// itself is evaluated with, and beam search would multiply decode cost for a marginal gain on
+/// this input length.
+fn decode_hidden(
+    sessions: &mut Sessions,
+    special: SpecialTokens,
+    hidden_shape: Vec<i64>,
+    hidden_flat: Vec<f32>,
+) -> Result<DecodedTokens, RecognitionError> {
+    let mut tokens: Vec<i64> = vec![special.cls];
+    // Tracks the single worst per-token confidence seen so far — see `MIN_DECODE_CONFIDENCE`'s own
+    // doc comment for why the worst step, not an average, is what actually catches a real misread.
+    let mut min_confidence = 1.0f32;
+
+    for _ in 0..MAX_DECODE_TOKENS {
+        // The next token id is computed inside this scope so every borrow of `sessions.decoder`
+        // ends before `tokens` is mutated below.
+        let next = {
+            let input_ids = Tensor::from_array((vec![1i64, tokens.len() as i64], tokens.clone()))?;
+            let encoder_hidden = Tensor::from_array((hidden_shape.clone(), hidden_flat.clone()))?;
+
+            let decoder_out = sessions.decoder.run(ort::inputs! {
+                "input_ids" => input_ids,
+                "encoder_hidden_states" => encoder_hidden,
+            })?;
+
+            let (logit_shape, logits) = decoder_out["logits"]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| RecognitionError::BadOutput(e.to_string()))?;
+
+            // [batch, seq, vocab] — only the final position's distribution matters for the next
+            // token.
+            if logit_shape.len() != 3 {
+                return Err(RecognitionError::BadOutput(format!(
+                    "decoder logits have shape {logit_shape:?}, expected [batch, seq, vocab]"
+                )));
+            }
+            let vocab_size = logit_shape[2] as usize;
+            let seq_len = logit_shape[1] as usize;
+            if vocab_size == 0 || seq_len == 0 {
+                return Err(RecognitionError::BadOutput("empty decoder output".into()));
+            }
+            let last_offset = (seq_len - 1) * vocab_size;
+            let last_logits = &logits[last_offset..last_offset + vocab_size];
+
+            let chosen = last_logits
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(i, _)| i)
+                .ok_or_else(|| RecognitionError::BadOutput("empty logit row".into()))?;
+            min_confidence = min_confidence.min(softmax_confidence(last_logits, chosen));
+            chosen as i64
+        };
+
+        if next == special.sep || next == special.pad {
+            break;
+        }
+        tokens.push(next);
+
+        // `tokens[0]` is always `special.cls`, never part of a real repeat streak — see
+        // `REPEATED_TOKEN_STOP`'s own doc comment for why this check exists at all.
+        if ends_in_repeat_streak(&tokens[1..], REPEATED_TOKEN_STOP) {
+            break;
+        }
+    }
+
+    Ok((tokens, min_confidence))
 }
 
 /// Maps generated token ids back to text.

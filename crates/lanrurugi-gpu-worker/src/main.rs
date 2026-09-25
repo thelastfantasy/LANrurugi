@@ -196,6 +196,58 @@ impl GpuWorker for Worker {
         })
     }
 
+    async fn recognize_batch(
+        self,
+        _: Context,
+        crops: Vec<RawRgbImage>,
+    ) -> Result<Vec<Result<String, WorkerError>>, WorkerError> {
+        let batch_len = crops.len();
+        let Some(recognizer) = self.recognizer.clone() else {
+            return Ok((0..batch_len)
+                .map(|_| {
+                    Err(WorkerError::Config(
+                        "no recognition model loaded in this worker".to_string(),
+                    ))
+                })
+                .collect());
+        };
+        let mut images = Vec::with_capacity(batch_len);
+        for crop in crops {
+            match raw_to_rgb_image(crop) {
+                Ok(image) => images.push(image),
+                Err(error) => {
+                    // Keep the result vector positional: every slot gets the same conversion
+                    // failure rather than a short vector the caller could misalign.
+                    return Ok((0..batch_len)
+                        .map(|_| Err(WorkerError::Config(error.clone())))
+                        .collect());
+                }
+            }
+        }
+        let results = tokio::task::spawn_blocking(move || recognizer.recognize_batch(&images))
+            .await
+            .map_err(|e| WorkerError::Fatal(format!("recognize_batch task panicked: {e}")));
+        let results = results?;
+        let mut any_fatal = false;
+        let out = results
+            .into_iter()
+            .map(|result| match result {
+                Ok(text) => Ok(text),
+                Err(error) => {
+                    let classified = classify_error(&error.to_string());
+                    if matches!(classified, WorkerError::Fatal(_)) {
+                        any_fatal = true;
+                    }
+                    Err(classified)
+                }
+            })
+            .collect();
+        if any_fatal {
+            exit_after_fatal_response();
+        }
+        Ok(out)
+    }
+
     async fn erase_page(
         self,
         _: Context,

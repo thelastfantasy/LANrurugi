@@ -661,6 +661,46 @@ impl GpuWorkerClient {
         .await
     }
 
+    /// Batched [`Self::recognize`] — one RPC for a page's crops so the worker runs manga-ocr's
+    /// encoder once. Always returns exactly `crops.len()` entries (positional): a transport-level
+    /// failure is replicated across every slot rather than returned as a short vector.
+    pub async fn recognize_batch(
+        &self,
+        crops: Vec<RawRgbImage>,
+    ) -> Vec<Result<String, GpuWorkerError>> {
+        let batch_len = crops.len();
+        match self
+            .call(CALL_TIMEOUT, |client| async move {
+                client
+                    .recognize_batch(rpc_context(CALL_TIMEOUT), crops)
+                    .await
+            })
+            .await
+        {
+            Ok(results) => results
+                .into_iter()
+                .map(|result| {
+                    result.map_err(|error| match error {
+                        lanrurugi_gpu_ipc::WorkerError::Config(message) => {
+                            GpuWorkerError::Worker(message)
+                        }
+                        lanrurugi_gpu_ipc::WorkerError::Fatal(message) => {
+                            GpuWorkerError::WorkerFatal(message)
+                        }
+                    })
+                })
+                .collect(),
+            Err(error) => {
+                // See the doc comment: keep the vector positional. `WorkerFatal` is the
+                // infrastructure bucket `classify_for_recognition` maps to a retryable failure.
+                let message = error.to_string();
+                (0..batch_len)
+                    .map(|_| Err(GpuWorkerError::WorkerFatal(message.clone())))
+                    .collect()
+            }
+        }
+    }
+
     /// Uses [`ERASE_PAGE_TIMEOUT`], not [`CALL_TIMEOUT`] — see that constant's own doc comment for
     /// the real cold-start measurement that showed 60s isn't enough for this specific call.
     pub async fn erase_page(
@@ -764,6 +804,19 @@ impl lanrurugi_ocr::batch::TextRecognizerHandle for GpuWorkerClient {
             .clone()
             .block_on(GpuWorkerClient::recognize(self, raw))
             .map_err(|e| e.classify_for_recognition())
+    }
+
+    fn recognize_batch(
+        &self,
+        crops: &[image::RgbImage],
+    ) -> Vec<Result<String, lanrurugi_ocr::batch::RecognizeHandleError>> {
+        let raws = crops.iter().map(rgb_image_to_raw).collect();
+        self.runtime
+            .clone()
+            .block_on(GpuWorkerClient::recognize_batch(self, raws))
+            .into_iter()
+            .map(|result| result.map_err(|error| error.classify_for_recognition()))
+            .collect()
     }
 }
 
