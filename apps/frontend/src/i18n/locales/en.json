@@ -178,6 +178,7 @@
   "reader.chapter": "Chapter…",
   "Check/Uncheck all": "Check/Uncheck all",
   "settings.checkedEvery15MinutesThe": "Checked every 15 minutes; the oldest cached pages are removed first once this size is exceeded.",
+  "reader.retranslatePage": "Retranslate page",
   "reader.cleanArchiveCache": "Clean Archive Cache",
   "settings.cleanDatabase": "Clean Database",
   "settings.cleaningTheDatabaseWillRemove": "Cleaning the database will remove entries that aren't on your filesystem.",

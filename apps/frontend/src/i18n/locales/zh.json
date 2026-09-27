@@ -190,6 +190,7 @@
   "Check/Uncheck all": "全选/取消全选",
   "settings.checkedEvery15MinutesThe": "每15分钟检查一次；一旦超过此大小，将优先清除最旧的缓存页面。",
   "Choose file(s)…": "选择文件…",
+  "reader.retranslatePage": "重新翻译",
   "reader.cleanArchiveCache": "清理档案缓存",
   "Clean Cache": "清理临时文件夹",
   "settings.cleanDatabase": "清理数据库",

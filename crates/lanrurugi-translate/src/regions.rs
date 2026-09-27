@@ -104,6 +104,21 @@ impl RegionRepository {
         Ok(())
     }
 
+    /// Deletes every persisted translation artefact for one page: the detection cache plus every
+    /// translated record (all languages/providers) for this (archive, page). Used by the reader's
+    /// "重新翻译" action — clearing the region cache too means the next request re-runs OCR rather
+    /// than reusing a stale detection that may predate a pipeline fix.
+    pub async fn clear_page(&self, archive_id: &ArchiveId, page: PageNumber) -> Result<u64> {
+        let pattern = format!("LRR_TRANSLATION_*_{}_{}*", archive_id.as_str(), page.get());
+        let mut conn = self.pool.get().await?;
+        let keys: Vec<String> = conn.keys(&pattern).await?;
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let removed: u64 = conn.del(&keys).await?;
+        Ok(removed)
+    }
+
     /// Translated regions for a specific (language, provider) — the authoritative result.
     pub async fn get_translated(
         &self,

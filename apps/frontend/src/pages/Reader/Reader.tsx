@@ -927,6 +927,16 @@ export function Reader() {
     window.location.reload();
   }
 
+  function retranslatePage() {
+    if (!translationArchiveId) return;
+    // Drop this page's detection/text/render caches server-side, then reload so the reader
+    // re-requests the page and the pipeline re-runs OCR -> translate -> composite.
+    void fetch(
+      `/api/archives/${encodeURIComponent(translationArchiveId)}/page/${currentPage}/translation`,
+      { method: "DELETE" },
+    ).finally(() => window.location.reload());
+  }
+
   async function acquireWakeLock() {
     if (wakeLockRef.current) return;
     const nav = navigator as Navigator & {
@@ -2090,6 +2100,14 @@ export function Reader() {
               <a style={{ cursor: "pointer" }} onClick={cleanCache}>
                 {t("reader.cleanArchiveCache")}
               </a>
+              {translationScope?.enabled && (
+                <>
+                  <i className="fas fa-caret-right fa-lg"></i>
+                  <a style={{ cursor: "pointer" }} onClick={retranslatePage}>
+                    {t("reader.retranslatePage")}
+                  </a>
+                </>
+              )}
             </>
           )}
         </div>

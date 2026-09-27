@@ -38,7 +38,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/archives/{id}/page/{page}/translation",
-            get(get_page_translation),
+            get(get_page_translation).delete(clear_page_translation),
         )
         .route(
             "/archives/{id}/page/{page}/text-regions",
@@ -205,6 +205,36 @@ fn not_ready() -> Response {
 /// FR-012 requires the reader to keep showing the original page with a non-blocking indicator
 /// meanwhile. The client polls; a later poll finds the cache entry this triggered. Reading must
 /// never wait on translation (SC-007).
+/// Reader's "重新翻译": drops this page's detection cache, every translated record and the
+/// rendered image, so the next `GET .../translation` re-runs the whole OCR -> translate ->
+/// composite pipeline instead of reusing a stale cache (e.g. one produced by an old pipeline
+/// version, or a partially-detected region set).
+async fn clear_page_translation(
+    State(state): State<AppState>,
+    Path((id, page)): Path<(String, u32)>,
+) -> Response {
+    let archive_id = ArchiveId::from(id);
+    let page_number = PageNumber(page);
+    if let Err(e) = region_repo(&state)
+        .clear_page(&archive_id, page_number)
+        .await
+    {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "clear_page_translation",
+            e.to_string(),
+        );
+    }
+    lanrurugi_translate::cache::TranslationImageCache::new(&state.library.temp_dir)
+        .invalidate_page(&archive_id, page_number)
+        .await;
+    (
+        StatusCode::OK,
+        Json(json!({"operation": "clear_page_translation", "success": 1})),
+    )
+        .into_response()
+}
+
 async fn get_page_translation(
     State(state): State<AppState>,
     Path((id, page)): Path<(String, u32)>,
