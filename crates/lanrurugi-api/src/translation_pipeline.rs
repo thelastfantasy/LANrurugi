@@ -1321,7 +1321,7 @@ async fn composite_and_cache(
     // call via `GpuWorkerClient`'s own `Handle::block_on` — see that type's trait impls) runs in
     // the same blocking closure for the same reason; `spawn_blocking`'s own thread is exactly the
     // kind of thread `block_on` is safe to call from (never the async reactor itself).
-    let bytes = lanrurugi_core::concurrency::run_blocking(move || {
+    let (bytes, changed) = lanrurugi_core::concurrency::run_blocking(move || {
         use lanrurugi_inpaint::InpainterHandle;
 
         let font_set = font_library
@@ -1329,7 +1329,14 @@ async fn composite_and_cache(
             .ok_or_else(|| PipelineError::Composite("no usable font available".into()))?;
         let plan = prepare_page_erase(&image, &regions, bubbles.as_deref());
         let erased = if plan.nothing_to_erase() {
-            None
+            // No region needs the whole-page LaMa pass: every one is either a flat-fill matched
+            // bubble (self-handled) or contributed no precise mask at all. `finish_composite_page`'s
+            // `erased: None` branch means "the erase call failed, draw nothing", so passing `None`
+            // here used to make a flat-fill-only page come back as the untouched original (real
+            // page-20 case: its only region was a fully-translated matched bubble). Hand it the
+            // pristine page unchanged — a no-op assignment that still marks the backdrop as
+            // handled and lets the flat fill + text draw run.
+            Some(image.clone())
         } else {
             let (page_ref, model_mask, paste_mask) = plan.erase_request();
             // Fully-qualified: `GpuWorkerClient` also has its own inherent `async fn erase_page`
@@ -1349,12 +1356,34 @@ async fn composite_and_cache(
                 })
                 .ok()
         };
+        // Snapshot before compositing so a composite that ends up changing nothing (every
+        // region skipped because it had no drawable backdrop) can be detected and, crucially,
+        // *not* written to the disk cache. Real page-20 race: the reader and a manual request
+        // composited the same page concurrently; the run whose bubble segmentation had failed
+        // drew nothing, saved the untouched original over the correct render, and the reader
+        // then served the original forever.
+        let before = image.clone();
         finish_composite_page(&mut image, plan, &font_set, erased)
             .map_err(|e| PipelineError::Composite(e.to_string()))?;
-        encode_webp(&image, COMPOSITE_QUALITY).map_err(|e| PipelineError::Composite(e.to_string()))
+        let changed = image != before;
+        let bytes = encode_webp(&image, COMPOSITE_QUALITY)
+            .map_err(|e| PipelineError::Composite(e.to_string()))?;
+        Ok::<(Vec<u8>, bool), PipelineError>((bytes, changed))
     })
     .await
     .map_err(|e| PipelineError::Composite(e.to_string()))??;
+
+    if !changed {
+        tracing::warn!(
+            %archive_id,
+            %page,
+            region_count,
+            "composite produced an unchanged page (no region had a drawable backdrop); not \
+             caching it so an existing, fully-rendered image is never overwritten by an untouched \
+             original"
+        );
+        return Ok(());
+    }
 
     if !should_persist_composite(degraded) {
         tracing::warn!(

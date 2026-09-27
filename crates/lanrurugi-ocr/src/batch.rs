@@ -207,6 +207,20 @@ fn reading_axis(crop: &RgbImage, prior: &[bool]) -> Axis {
         return Axis::Ambiguous;
     }
 
+    // Shape first: product rule is "tall box => vertical columns, wide box => horizontal line".
+    // A clearly non-square crop's own aspect is a far stronger signal than ink projections, and
+    // it is what stops a confidently-wrong projection from overriding an obvious column pair
+    // (real page-22 `選んでもらいます`: 140x292, projections said Horizontal). Projections only
+    // decide *near-square* boxes — a compact 2x2 vertical label (page 15, 94x89) is slightly wider
+    // than tall and must NOT be forced horizontal by aspect alone.
+    let (width_f, height_f) = (w as f32, h as f32);
+    if height_f >= width_f * 1.25 {
+        return Axis::Vertical;
+    }
+    if width_f >= height_f * 1.25 {
+        return Axis::Horizontal;
+    }
+
     // Integer arithmetic, not `(len as f32 * 0.15).ceil()`: f32 rounds 200 * 0.15 up to
     // 30.000002, so a run that is exactly 15% of the crop (a legitimate character column) failed
     // the `>= min_run_len` test and the axis came back `Ambiguous`. `div_ceil` is exact.
@@ -216,8 +230,19 @@ fn reading_axis(crop: &RgbImage, prior: &[bool]) -> Axis {
     let y_runs = projection_runs(&y_projection, min_y_run).len();
 
     match (x_runs, y_runs) {
-        // One clear y-band with several character strokes along x: a horizontal line.
-        (2.., 1) => Axis::Horizontal,
+        // Several x-bands with a single y-band. A horizontal line looks like this — but so does
+        // a vertical two-column block whose characters touch vertically (the inter-glyph y-gap
+        // falls under `projection_runs`'s ≤2px merge). Real page-22 `選んでもらいます`: x_runs=2,
+        // y_runs=1 on a 140x292 crop, previously forced horizontal. Box aspect disambiguates: a
+        // taller-than-wide box is a column pair, not a row.
+        (2.., 1) => {
+            let (w, h) = (w as f32, h as f32);
+            if h > w {
+                Axis::Vertical
+            } else {
+                Axis::Horizontal
+            }
+        }
         // One clear x-band with several character rows along y: a vertical column.
         (1, 2..) => Axis::Vertical,
         // Multiple bands in both axes: a 2-D grid. Projection alone cannot distinguish a
@@ -273,21 +298,6 @@ fn box_mostly_inside(inner: &BoundingBox, outer: &BoundingBox) -> bool {
     }
     let overlap = u64::from(ix1 - ix0) * u64::from(iy1 - iy0);
     (overlap as f64) >= 0.5 * (inner.area() as f64)
-}
-
-/// Whether two detector boxes are close enough that they are very likely fragments of one visual
-/// text block (overlapping, or separated by a gap well under either box's own size). Used to skip
-/// the per-fragment rotated-recognition fallback: re-reading each fragment of an already-fragmented
-/// block independently is both expensive and unlikely to help the whole-block union pass, and the
-/// extra RPCs are exactly what can push the cold GPU worker past its 60s recognition timeout.
-fn boxes_touch(a: &BoundingBox, b: &BoundingBox) -> bool {
-    if a.iou(b) > 0.0 {
-        return true;
-    }
-    let (dx, dy) = a.gap(b);
-    let min_w = a.w.min(b.w) as f32;
-    let min_h = a.h.min(b.h) as f32;
-    (dx as f32) <= min_w * 0.5 && (dy as f32) <= min_h * 0.5
 }
 
 /// Folds per-region infrastructure-failure flags into one flag per page.
@@ -748,19 +758,16 @@ pub async fn run_batch(
     // dispatch has already consumed `recognize_engine`.
     let retry_engine = Arc::clone(&engine);
 
-    // Collect ambiguous crops before `work` is consumed. This second recognition pass runs
-    // serially (one crop at a time) below: the GPU container is memory-sensitive enough that
-    // simply parallelising a second call per region is the documented crash risk.
+    // Collect *every* crop for the rotated-candidate pass. The product rule is "offer the LLM
+    // both readings — as-detected and 90°-rotated — and let it pick the plausible one", not "only
+    // when `reading_axis` reports Ambiguous": a confidently-*wrong* axis (real page-22
+    // `選んでもらいます`, two columns whose glyphs touch vertically so the y-projection merges into
+    // one run and the box was called Horizontal) previously produced no second candidate at all,
+    // so the LLM never got to choose. The rotated crops go through one batched encoder pass below.
     let rotate_work: Vec<(usize, RgbImage)> = work
         .iter()
         .enumerate()
-        .filter(|(_, item)| {
-            item.axis == Axis::Ambiguous
-                && !boxes_per_page[item.page_index]
-                    .iter()
-                    .any(|other| other != &item.bbox && boxes_touch(other, &item.bbox))
-        })
-        .map(|(index, item)| (index, item.crop.clone()))
+        .map(|(index, item)| (index, rotate_cw(&item.crop)))
         .collect();
 
     // One encoder pass for the whole batch's crops — see `TextRecognizerHandle::recognize_batch`.
@@ -830,18 +837,17 @@ pub async fn run_batch(
     )
     .await?;
 
-    // --- Rotated candidate for ambiguous crops: serial, one recognition at a time -------------
+    // --- Rotated candidate for every crop: one batched encoder pass ----------------------------
     let mut recognized = recognized;
     if !rotate_work.is_empty() {
         let rotate_recognizer = engine.recognizer();
+        let rotated_crops: Vec<RgbImage> =
+            rotate_work.iter().map(|(_, crop)| crop.clone()).collect();
         let rotated = lanrurugi_core::concurrency::run_blocking(move || {
-            rotate_work
-                .into_iter()
-                .map(|(index, crop)| (index, rotate_recognizer.recognize(&rotate_cw(&crop))))
-                .collect::<Vec<_>>()
+            rotate_recognizer.recognize_batch(&rotated_crops)
         })
         .await?;
-        for (index, outcome) in rotated {
+        for ((index, _), outcome) in rotate_work.into_iter().zip(rotated) {
             match outcome {
                 Ok(text) => {
                     let text = text.trim();
@@ -852,7 +858,7 @@ pub async fn run_batch(
                                 bbox = ?existing.bbox,
                                 original = %existing.text,
                                 rotated = %text,
-                                "ambiguous reading axis: rotated 90° candidate differs"
+                                "rotated 90° reading candidate differs"
                             );
                             existing.alternate_source_text = Some(text.to_string());
                         }
@@ -1204,6 +1210,20 @@ mod tests {
         let mut crop = blank_crop(100, 100);
         for (x, y) in [(10, 10), (60, 10), (10, 60), (60, 60)] {
             fill_dark(&mut crop, x, y, 30, 30);
+        }
+        assert_eq!(reading_axis(&crop, &[]), Axis::Vertical);
+    }
+
+    #[test]
+    fn reading_axis_prefers_vertical_for_a_tall_two_column_block() {
+        // Real page-22 `選んでもらいます`: two columns whose glyphs touch vertically, so the y
+        // projection merges into a single run (x_runs=2, y_runs=1) — the old blanket
+        // `(2.., 1) => Horizontal` rule laid it out as rows. The tall box must win.
+        let mut crop = blank_crop(140, 292);
+        for column_x in [20u32, 80u32] {
+            for (row_y, row_h) in [(20u32, 65u32), (86, 65), (152, 65), (218, 65)] {
+                fill_dark(&mut crop, column_x, row_y, 40, row_h);
+            }
         }
         assert_eq!(reading_axis(&crop, &[]), Axis::Vertical);
     }
