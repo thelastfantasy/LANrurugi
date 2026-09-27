@@ -120,6 +120,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
 
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis,
         repos,
         jobs: JobRegistry::new(),

@@ -7,6 +7,7 @@ members = [
     "crates/lanrurugi-plugin",
     "crates/lanrurugi-api",
     "crates/lanrurugi-search",
+    "crates/lanrurugi-equivalence",
     "crates/lanrurugi-backup",
     "crates/lanrurugi-server",
     "crates/lanrurugi-bench",
@@ -37,6 +38,7 @@ lanrurugi-scanner = { path = "crates/lanrurugi-scanner" }
 lanrurugi-plugin = { path = "crates/lanrurugi-plugin" }
 lanrurugi-api = { path = "crates/lanrurugi-api" }
 lanrurugi-search = { path = "crates/lanrurugi-search" }
+lanrurugi-equivalence = { path = "crates/lanrurugi-equivalence" }
 lanrurugi-recommend = { path = "crates/lanrurugi-recommend" }
 lanrurugi-llm = { path = "crates/lanrurugi-llm" }
 lanrurugi-backup = { path = "crates/lanrurugi-backup" }
@@ -133,6 +135,9 @@ regex = "1.13"
 # combined/ZWJ-sequence emoji (a single visually-one-glyph family emoji is 7 Unicode scalar values,
 # would cost 7x its real "one character" toward the limit under a plain `chars()` count).
 unicode-segmentation = "1.13"
+unicode-normalization = "0.1"
+wana_kana = "5.0"
+ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-conversion", "japanese-conversion"] }
 # `chrono` + `chrono-tz`: only used for `date_added` date-range search/display math (converting a
 # Unix timestamp to a `yyyy-mm-dd` in an arbitrary IANA timezone, including DST) — `std::time`
 # can't do that on its own. `chrono-tz` carries its own bundled tzdata (no system `tzdata` dep).

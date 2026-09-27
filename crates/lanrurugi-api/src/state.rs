@@ -6,6 +6,7 @@ use lanrurugi_core::filename_lock::{FilenameLockGuard, FilenameLocks};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
+use lanrurugi_search::Equivalence;
 use lanrurugi_storage::activity::ActivityRepository;
 use lanrurugi_storage::activity_dedup::ActivityDedupGate;
 use lanrurugi_storage::api_tokens::ApiTokenRepository;
@@ -83,6 +84,8 @@ pub struct AppState {
     pub repos: Repositories,
     pub jobs: JobRegistry,
     pub auth: AuthConfig,
+    /// 搜索通假实例：索引写入和查询匹配共用同一 `FoldConfig`/归一化管线。
+    pub equivalence: Arc<Equivalence>,
     /// 007-guest-restricted-access: replaces the removed `devmode` Settings-page toggle (which had
     /// zero server-side behavior of its own) — set once at startup from `--disable-update-check` /
     /// `LANRURUGI_DISABLE_UPDATE_CHECK`, following the same CLI-flag-not-Redis-setting pattern

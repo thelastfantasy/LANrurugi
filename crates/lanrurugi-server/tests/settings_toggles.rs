@@ -87,6 +87,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
@@ -425,12 +426,23 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         (&in_scope_id, "In Scope"),
         (&out_of_scope_id, "Out Of Scope"),
     ] {
-        lanrurugi_search::indexer::index_new_archive(&redis.search, id, title)
-            .await
-            .unwrap();
-        lanrurugi_search::indexer::update_tag_indexes(&redis.search, id, "", "shared_tag")
-            .await
-            .unwrap();
+        lanrurugi_search::indexer::index_new_archive(
+            &redis.search,
+            &lanrurugi_search::Equivalence::default(),
+            id,
+            title,
+        )
+        .await
+        .unwrap();
+        lanrurugi_search::indexer::update_tag_indexes(
+            &redis.search,
+            &lanrurugi_search::Equivalence::default(),
+            id,
+            "",
+            "shared_tag",
+        )
+        .await
+        .unwrap();
     }
     let category = lanrurugi_core::entities::Category {
         catid: lanrurugi_core::ids::CategoryId("SET_9992010002".to_string()),

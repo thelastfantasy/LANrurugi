@@ -8,6 +8,15 @@ pub const TITLES_KEY: &str = "LRR_TITLES";
 /// Set of archive IDs with no tags at all.
 pub const UNTAGGED_KEY: &str = "LRR_UNTAGGED";
 
+/// Sorted set of `"<folded lowercased title>\x00<archive id>"` members, score 0 — the canonical
+/// title index used for matching. `TITLES_KEY` stays the original (display/sort) index; this one
+/// is what `token_matches` scans so 简繁/新旧字体/kana folding is symmetric on index and query.
+pub const TITLES_FOLDED_KEY: &str = "LRR_TITLES_FOLDED";
+
+/// Fingerprint of the `FoldConfig`/rules used to build the folded indexes. If it doesn't match
+/// the running config, the index is stale and must be rebuilt before searching.
+pub const FOLD_FINGERPRINT_KEY: &str = "LRR_FOLD_FINGERPRINT";
+
 /// Set of archive IDs still marked "new" (unread since being added).
 pub const NEW_KEY: &str = "LRR_NEW";
 

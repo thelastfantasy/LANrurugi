@@ -54,6 +54,7 @@ async fn test_app() -> Option<axum::Router> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),

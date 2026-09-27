@@ -12,7 +12,12 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use thiserror::Error;
 
-use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_KEY, UNTAGGED_KEY};
+use lanrurugi_equivalence::Equivalence;
+use lanrurugi_storage::repository::{ArchiveRepository, GroupingRepository};
+
+use crate::keys::{
+    FOLD_FINGERPRINT_KEY, NEW_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY,
+};
 
 #[derive(Debug, Error)]
 pub enum IndexerError {
@@ -20,6 +25,8 @@ pub enum IndexerError {
     Redis(#[from] deadpool_redis::redis::RedisError),
     #[error("pool error: {0}")]
     Pool(#[from] deadpool_redis::PoolError),
+    #[error("repository error: {0}")]
+    Repository(#[from] lanrurugi_storage::repository::RepositoryError),
 }
 
 type Result<T> = std::result::Result<T, IndexerError>;
@@ -43,6 +50,90 @@ fn has_meaningful_tags(tags: &str) -> bool {
     })
 }
 
+/// Original (display/sort) title-index member.
+fn title_member(title: &str, id: &str) -> String {
+    format!("{}\0{}", title.to_lowercase(), id)
+}
+
+/// Canonical title-index member, used only for matching.
+fn folded_title_member(eq: &Equivalence, title: &str, id: &str) -> String {
+    format!("{}\0{}", eq.fold(&title.to_lowercase()), id)
+}
+
+/// Canonical tag index key. Lower-casing happens before `fold` so index and query sides apply the
+/// same order (grammar already lowercases query tokens).
+fn folded_tag_key(eq: &Equivalence, tag: &str) -> String {
+    format!("INDEX_{}", eq.fold(&tag.trim().to_lowercase()))
+}
+
+/// Writes both the original and canonical title-index members for one archive/tank (idempotent).
+async fn write_title_indexes(
+    conn: &mut deadpool_redis::Connection,
+    eq: &Equivalence,
+    id: &str,
+    title: &str,
+) -> Result<()> {
+    let _: () = deadpool_redis::redis::pipe()
+        .atomic()
+        .zadd(TITLES_KEY, title_member(title, id), 0)
+        .zadd(TITLES_FOLDED_KEY, folded_title_member(eq, title, id), 0)
+        .query_async(conn)
+        .await?;
+    Ok(())
+}
+
+/// Writes the canonical `INDEX_<fold(tag)>` memberships for one archive/tank (idempotent).
+async fn write_tag_indexes(
+    conn: &mut deadpool_redis::Connection,
+    eq: &Equivalence,
+    id: &str,
+    tags: &str,
+) -> Result<()> {
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    for tag in tags.split(',') {
+        if !tag.trim().is_empty() {
+            pipe.sadd(folded_tag_key(eq, tag), id);
+        }
+    }
+    let _: () = pipe.query_async(conn).await?;
+    Ok(())
+}
+
+/// One-shot migration for `rebuild-index`: clears the canonical title/tag indexes and rewrites
+/// them for every existing archive **and** Tankoubon. Existing original `INDEX_*` keys are
+/// replaced by canonical ones; `LRR_TITLES` is rewritten too (idempotent) so display/sort data
+/// stays consistent.
+pub async fn rebuild_folded_indexes(
+    archives: &ArchiveRepository,
+    groupings: &GroupingRepository,
+    search_pool: &Pool,
+    eq: &Equivalence,
+) -> Result<()> {
+    // Load first: a failure here must not leave the indexes already deleted.
+    let archives = archives.list_all().await?;
+    let groupings = groupings.list_all().await?;
+
+    let mut conn = search_pool.get().await?;
+
+    let _: () = conn.del(TITLES_FOLDED_KEY).await?;
+    let index_keys: Vec<String> = conn.keys("INDEX_*").await?;
+    if !index_keys.is_empty() {
+        let _: () = conn.del(index_keys).await?;
+    }
+
+    for archive in archives {
+        write_title_indexes(&mut conn, eq, archive.id.as_str(), &archive.title).await?;
+        write_tag_indexes(&mut conn, eq, archive.id.as_str(), &archive.tags).await?;
+    }
+    for grouping in groupings {
+        write_title_indexes(&mut conn, eq, grouping.tankid.as_str(), &grouping.name).await?;
+        write_tag_indexes(&mut conn, eq, grouping.tankid.as_str(), &grouping.tags).await?;
+    }
+
+    Ok(())
+}
+
 /// Registers a freshly-catalogued archive in every search-side set it should start in: title
 /// index, untagged (new archives have no tags yet), not-in-a-tank, and new-flag.
 ///
@@ -52,12 +143,19 @@ fn has_meaningful_tags(tags: &str) -> bool {
 /// which made it permanently invisible to the default (`groupby_tanks=true`) search despite
 /// `ArchiveRepository::save` having already succeeded — a real "ghost record" observed in
 /// practice, not just a theoretical race. All four writes now succeed or fail together.
-pub async fn index_new_archive(search_pool: &Pool, id: &str, title: &str) -> Result<()> {
+pub async fn index_new_archive(
+    search_pool: &Pool,
+    eq: &Equivalence,
+    id: &str,
+    title: &str,
+) -> Result<()> {
     let mut conn = search_pool.get().await?;
-    let title_key = format!("{}\0{}", title.to_lowercase(), id);
+    let title_key = title_member(title, id);
+    let folded_title_key = folded_title_member(eq, title, id);
     let _: () = deadpool_redis::redis::pipe()
         .atomic()
         .zadd(TITLES_KEY, title_key, 0)
+        .zadd(TITLES_FOLDED_KEY, folded_title_key, 0)
         .sadd(UNTAGGED_KEY, id)
         .sadd(TANKGROUPED_KEY, id)
         .sadd(NEW_KEY, id)
@@ -79,22 +177,24 @@ pub async fn index_new_archive(search_pool: &Pool, id: &str, title: &str) -> Res
 /// result — observed in practice, not just theoretical.
 pub async fn remove_archive_index(
     search_pool: &Pool,
+    eq: &Equivalence,
     id: &str,
     title: &str,
     tags: &str,
 ) -> Result<()> {
     let mut conn = search_pool.get().await?;
-    let title_key = format!("{}\0{}", title.to_lowercase(), id);
+    let title_key = title_member(title, id);
+    let folded_title_key = folded_title_member(eq, title, id);
     let mut pipe = deadpool_redis::redis::pipe();
     pipe.atomic()
         .zrem(TITLES_KEY, title_key)
+        .zrem(TITLES_FOLDED_KEY, folded_title_key)
         .srem(UNTAGGED_KEY, id)
         .srem(TANKGROUPED_KEY, id)
         .srem(NEW_KEY, id);
     for tag in tags.split(',') {
-        let tag = tag.trim().to_ascii_lowercase();
-        if !tag.is_empty() {
-            pipe.srem(format!("INDEX_{tag}"), id);
+        if !tag.trim().is_empty() {
+            pipe.srem(folded_tag_key(eq, tag), id);
         }
     }
     let _: () = pipe.query_async(&mut conn).await?;
@@ -104,16 +204,24 @@ pub async fn remove_archive_index(
 /// Strips a single title-index entry (legacy Tankoubon delete's own `LRR_TITLES` cleanup — an
 /// archive's own delete path removes it as part of `remove_archive_index`'s bigger multi-set
 /// pipeline instead, since an archive has more than just a title entry to clean up).
-pub async fn remove_title_index(search_pool: &Pool, id: &str, title: &str) -> Result<()> {
+pub async fn remove_title_index(
+    search_pool: &Pool,
+    eq: &Equivalence,
+    id: &str,
+    title: &str,
+) -> Result<()> {
     let mut conn = search_pool.get().await?;
-    let key = format!("{}\0{}", title.to_lowercase(), id);
+    let key = title_member(title, id);
+    let folded_key = folded_title_member(eq, title, id);
     let _: () = conn.zrem(TITLES_KEY, key).await?;
+    let _: () = conn.zrem(TITLES_FOLDED_KEY, folded_key).await?;
     Ok(())
 }
 
 /// Moves an archive's title-index entry when its title changes (legacy `set_title`).
 pub async fn update_title_index(
     search_pool: &Pool,
+    eq: &Equivalence,
     id: &str,
     old_title: &str,
     new_title: &str,
@@ -122,10 +230,14 @@ pub async fn update_title_index(
         return Ok(());
     }
     let mut conn = search_pool.get().await?;
-    let old_key = format!("{}\0{}", old_title.to_lowercase(), id);
-    let new_key = format!("{}\0{}", new_title.to_lowercase(), id);
+    let old_key = title_member(old_title, id);
+    let new_key = title_member(new_title, id);
+    let old_folded_key = folded_title_member(eq, old_title, id);
+    let new_folded_key = folded_title_member(eq, new_title, id);
     let _: () = conn.zrem(TITLES_KEY, old_key).await?;
+    let _: () = conn.zrem(TITLES_FOLDED_KEY, old_folded_key).await?;
     let _: () = conn.zadd(TITLES_KEY, new_key, 0).await?;
+    let _: () = conn.zadd(TITLES_FOLDED_KEY, new_folded_key, 0).await?;
     Ok(())
 }
 
@@ -134,24 +246,23 @@ pub async fn update_title_index(
 /// display/statistics niceties, not required for search correctness).
 pub async fn update_tag_indexes(
     search_pool: &Pool,
+    eq: &Equivalence,
     id: &str,
     old_tags: &str,
     new_tags: &str,
 ) -> Result<()> {
     let mut conn = search_pool.get().await?;
     for tag in old_tags.split(',') {
-        let tag = tag.trim().to_ascii_lowercase();
-        if tag.is_empty() {
+        if tag.trim().is_empty() {
             continue;
         }
-        let _: () = conn.srem(format!("INDEX_{tag}"), id).await?;
+        let _: () = conn.srem(folded_tag_key(eq, tag), id).await?;
     }
     for tag in new_tags.split(',') {
-        let tag = tag.trim().to_ascii_lowercase();
-        if tag.is_empty() {
+        if tag.trim().is_empty() {
             continue;
         }
-        let _: () = conn.sadd(format!("INDEX_{tag}"), id).await?;
+        let _: () = conn.sadd(folded_tag_key(eq, tag), id).await?;
     }
 
     if has_meaningful_tags(new_tags) {
@@ -230,6 +341,27 @@ pub async fn remove_tank_from_index(search_pool: &Pool, tank_id: &str) -> Result
     Ok(())
 }
 
+/// Records the `Equivalence` fingerprint for the just-rebuilt folded indexes.
+pub async fn set_fold_fingerprint(search_pool: &Pool, fingerprint: &str) -> Result<()> {
+    let mut conn = search_pool.get().await?;
+    let _: () = conn.set(FOLD_FINGERPRINT_KEY, fingerprint).await?;
+    Ok(())
+}
+
+/// Reads the fingerprint the current folded indexes were built with, if any.
+pub async fn get_fold_fingerprint(search_pool: &Pool) -> Result<Option<String>> {
+    let mut conn = search_pool.get().await?;
+    let value: Option<String> = conn.get(FOLD_FINGERPRINT_KEY).await?;
+    Ok(value)
+}
+
+/// `true` when the index fingerprint matches the running config (or no fingerprint is stored yet
+/// and the index is therefore treated as legacy/stale-explicitly by callers).
+pub async fn fold_fingerprint_matches(search_pool: &Pool, eq: &Equivalence) -> Result<bool> {
+    let stored = get_fold_fingerprint(search_pool).await?;
+    Ok(stored.as_deref() == Some(eq.fingerprint().as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +372,10 @@ mod tests {
         lanrurugi_storage::test_support::test_pool_for_url(&url).await
     }
 
+    fn test_eq() -> Equivalence {
+        Equivalence::new(lanrurugi_equivalence::FoldConfig::all())
+    }
+
     #[tokio::test]
     async fn new_archive_lands_in_untagged_new_and_ungrouped_sets() {
         let Some(pool) = test_pool().await else {
@@ -247,7 +383,10 @@ mod tests {
             return;
         };
         let id = "f".repeat(40);
-        index_new_archive(&pool, &id, "My Title").await.unwrap();
+        let eq = test_eq();
+        index_new_archive(&pool, &eq, &id, "My Title")
+            .await
+            .unwrap();
 
         let mut conn = pool.get().await.unwrap();
         let untagged: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
@@ -264,6 +403,10 @@ mod tests {
             .zrem(TITLES_KEY, format!("my title\0{id}"))
             .await
             .unwrap();
+        let _: () = conn
+            .zrem(TITLES_FOLDED_KEY, format!("my title\0{id}"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -273,12 +416,15 @@ mod tests {
             return;
         };
         let id = "d".repeat(40);
-        index_new_archive(&pool, &id, "Ghost Title").await.unwrap();
-        update_tag_indexes(&pool, &id, "", "artist:jane")
+        let eq = test_eq();
+        index_new_archive(&pool, &eq, &id, "Ghost Title")
+            .await
+            .unwrap();
+        update_tag_indexes(&pool, &eq, &id, "", "artist:jane")
             .await
             .unwrap();
 
-        remove_archive_index(&pool, &id, "Ghost Title", "artist:jane")
+        remove_archive_index(&pool, &eq, &id, "Ghost Title", "artist:jane")
             .await
             .unwrap();
 
@@ -308,10 +454,11 @@ mod tests {
             return;
         };
         let id = "e".repeat(40);
+        let eq = test_eq();
         let mut conn = pool.get().await.unwrap();
         let _: () = conn.sadd(UNTAGGED_KEY, &id).await.unwrap();
 
-        update_tag_indexes(&pool, &id, "", "adventure,artist:jane")
+        update_tag_indexes(&pool, &eq, &id, "", "adventure,artist:jane")
             .await
             .unwrap();
 
@@ -323,7 +470,7 @@ mod tests {
         );
         assert!(in_adventure);
 
-        update_tag_indexes(&pool, &id, "adventure,artist:jane", "artist:jane")
+        update_tag_indexes(&pool, &eq, &id, "adventure,artist:jane", "artist:jane")
             .await
             .unwrap();
         let untagged_again: bool = conn.sismember(UNTAGGED_KEY, &id).await.unwrap();
@@ -336,5 +483,29 @@ mod tests {
 
         let _: () = conn.srem("INDEX_artist:jane", &id).await.unwrap();
         let _: () = conn.srem(UNTAGGED_KEY, &id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fold_fingerprint_round_trips_and_detects_config_change() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let eq_all = test_eq();
+        set_fold_fingerprint(&pool, &eq_all.fingerprint())
+            .await
+            .unwrap();
+        assert!(fold_fingerprint_matches(&pool, &eq_all).await.unwrap());
+
+        let jp_only = Equivalence::new(lanrurugi_equivalence::FoldConfig {
+            width: true,
+            zh: false,
+            jp: true,
+            latin: false,
+        });
+        assert!(!fold_fingerprint_matches(&pool, &jp_only).await.unwrap());
+
+        let mut conn = pool.get().await.unwrap();
+        let _: () = conn.del(FOLD_FINGERPRINT_KEY).await.unwrap();
     }
 }

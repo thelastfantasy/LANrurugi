@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use deadpool_redis::Pool;
 use lanrurugi_core::filename_lock::FilenameLocks;
+use lanrurugi_search::Equivalence;
 use lanrurugi_storage::repository::ArchiveRepository;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -37,6 +38,7 @@ impl ScannerHandle {
         thumb_dir: PathBuf,
         config_pool: Pool,
         search_pool: Pool,
+        equivalence: Arc<Equivalence>,
         archives: ArchiveRepository,
         new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
         locks: FilenameLocks,
@@ -51,6 +53,7 @@ impl ScannerHandle {
             archives,
             config_pool,
             search_pool,
+            equivalence,
             thumb_dir,
             new_archive_tx,
             locks,
@@ -76,6 +79,7 @@ impl ScannerHandle {
         thumb_dir: PathBuf,
         config_pool: Pool,
         search_pool: Pool,
+        equivalence: Arc<Equivalence>,
         archives: ArchiveRepository,
         new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
         locks: FilenameLocks,
@@ -86,6 +90,7 @@ impl ScannerHandle {
             thumb_dir,
             config_pool,
             search_pool,
+            equivalence,
             archives,
             new_archive_tx,
             locks,

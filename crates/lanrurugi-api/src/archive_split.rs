@@ -888,6 +888,7 @@ async fn inherit_metadata_to_split_archives(
                 let _ = state.repos.archives.save(&a).await;
                 let _ = lanrurugi_search::indexer::update_tag_indexes(
                     &state.redis.search,
+                    &state.equivalence,
                     new_id.as_str(),
                     &old_tags,
                     &a.tags,
@@ -1167,6 +1168,7 @@ async fn run_split_job(
             state.repos.archives.as_ref(),
             &state.redis.config,
             &state.redis.search,
+            &state.equivalence,
             &state.library.thumb_dir,
             path,
         )
@@ -1179,6 +1181,7 @@ async fn run_split_job(
                 new_id_by_path.insert(path.clone(), id.clone());
                 let _ = lanrurugi_search::indexer::index_new_archive(
                     &state.redis.search,
+                    &state.equivalence,
                     id.as_str(),
                     &archive.title,
                 )
@@ -1191,6 +1194,7 @@ async fn run_split_job(
                 new_id_by_path.insert(path.clone(), id.clone());
                 let _ = lanrurugi_search::indexer::index_new_archive(
                     &state.redis.search,
+                    &state.equivalence,
                     id.as_str(),
                     &archive.title,
                 )
@@ -1203,6 +1207,7 @@ async fn run_split_job(
                 new_id_by_path.insert(path.clone(), new_id.clone());
                 let _ = lanrurugi_search::indexer::index_new_archive(
                     &state.redis.search,
+                    &state.equivalence,
                     new_id.as_str(),
                     &archive.title,
                 )
@@ -1215,6 +1220,7 @@ async fn run_split_job(
                 new_id_by_path.insert(path.clone(), existing_id.clone());
                 let _ = lanrurugi_search::indexer::index_new_archive(
                     &state.redis.search,
+                    &state.equivalence,
                     existing_id.as_str(),
                     &archive.title,
                 )
@@ -1315,6 +1321,7 @@ async fn run_split_job(
         let _ = std::fs::remove_file(&original_path);
         let _ = lanrurugi_search::indexer::remove_archive_index(
             &state.redis.search,
+            &state.equivalence,
             &archive_id.0,
             &archive.title,
             &archive.tags,

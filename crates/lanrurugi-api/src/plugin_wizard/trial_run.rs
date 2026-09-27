@@ -504,6 +504,7 @@ mod tests {
         )
         .expect("failed to write out the real plugin SDK script");
         let state = AppState {
+            equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
             plugins: std::sync::Arc::new(lanrurugi_plugin::pool::PluginPool::new(
                 "deno",
                 dispatcher_path.clone(),

@@ -34,6 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::jobs::JobRegistry;
+use lanrurugi_search::Equivalence;
 use lanrurugi_storage::repository::ArchiveRepository;
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -92,6 +93,7 @@ pub async fn full_scan(
     archives: &ArchiveRepository,
     config_pool: &Pool,
     search_pool: &Pool,
+    equivalence: Arc<Equivalence>,
     thumb_dir: &Path,
     jobs: &JobRegistry,
     job_id: &str,
@@ -139,6 +141,7 @@ pub async fn full_scan(
         let archives = archives.clone();
         let config_pool = config_pool.clone();
         let search_pool = search_pool.clone();
+        let equivalence = equivalence.clone();
         let thumb_dir = thumb_dir.to_path_buf();
         let jobs = jobs.clone();
         let job_id = job_id.to_string();
@@ -149,8 +152,15 @@ pub async fn full_scan(
                 .acquire_owned()
                 .await
                 .expect("semaphore is never closed");
-            let result =
-                ingest_file(&archives, &config_pool, &search_pool, &thumb_dir, &path).await;
+            let result = ingest_file(
+                &archives,
+                &config_pool,
+                &search_pool,
+                &equivalence,
+                &thumb_dir,
+                &path,
+            )
+            .await;
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
             jobs.set_progress(&job_id, done as f32 / total as f32).await;
             (path, result)
@@ -495,6 +505,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,
             &scan_job_id,
@@ -571,6 +582,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,
             &job_id,
@@ -638,6 +650,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,
             &job_id,

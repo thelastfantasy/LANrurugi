@@ -22,6 +22,7 @@ use deadpool_redis::Pool;
 use lanrurugi_core::entities::Archive;
 use lanrurugi_core::filename_lock::FilenameLocks;
 use lanrurugi_core::ids::ArchiveId;
+use lanrurugi_search::Equivalence;
 use lanrurugi_storage::id::size_aware_id;
 pub(crate) use lanrurugi_storage::keys::FILEMAP_KEY;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -128,11 +129,13 @@ impl From<DuplicateReason> for lanrurugi_core::queue_error::DuplicateReasonKind 
 /// lock after the download path releases it, `ingest_file`'s own `Unchanged` branch (content hash
 /// unchanged since the download path already catalogued it) makes this a safe, cheap no-op rather
 /// than a second real ingestion.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     mut rx: mpsc::UnboundedReceiver<PathBuf>,
     archives: ArchiveRepository,
     config_pool: Pool,
     search_pool: Pool,
+    equivalence: std::sync::Arc<Equivalence>,
     thumb_dir: PathBuf,
     new_archive_tx: Option<mpsc::UnboundedSender<IngestEvent>>,
     locks: FilenameLocks,
@@ -149,7 +152,14 @@ pub async fn run(
 
         match tokio::time::timeout(
             INGEST_TIMEOUT,
-            ingest_file(&archives, &config_pool, &search_pool, &thumb_dir, &path),
+            ingest_file(
+                &archives,
+                &config_pool,
+                &search_pool,
+                &equivalence,
+                &thumb_dir,
+                &path,
+            ),
         )
         .await
         {
@@ -185,6 +195,7 @@ pub async fn ingest_file(
     archives: &ArchiveRepository,
     config_pool: &Pool,
     search_pool: &Pool,
+    equivalence: &Equivalence,
     thumb_dir: &Path,
     path: &Path,
 ) -> Result<IngestOutcome, PipelineError> {
@@ -192,6 +203,7 @@ pub async fn ingest_file(
         archives,
         config_pool,
         search_pool,
+        equivalence,
         thumb_dir,
         path,
         IngestOptions::default(),
@@ -245,6 +257,7 @@ pub async fn ingest_file_with_policy(
     archives: &ArchiveRepository,
     config_pool: &Pool,
     search_pool: &Pool,
+    equivalence: &Equivalence,
     thumb_dir: &Path,
     path: &Path,
     options: IngestOptions<'_>,
@@ -319,8 +332,14 @@ pub async fn ingest_file_with_policy(
                         });
                     }
                     DuplicatePolicy::Overwrite => {
-                        delete_existing_archive(archives, config_pool, search_pool, &existing)
-                            .await?;
+                        delete_existing_archive(
+                            archives,
+                            config_pool,
+                            search_pool,
+                            equivalence,
+                            &existing,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -339,6 +358,7 @@ pub async fn ingest_file_with_policy(
     catalogue_new_archive(
         archives,
         search_pool,
+        equivalence,
         thumb_dir,
         &id,
         path,
@@ -400,6 +420,7 @@ async fn delete_existing_archive(
     archives: &ArchiveRepository,
     config_pool: &Pool,
     search_pool: &Pool,
+    equivalence: &Equivalence,
     existing: &Archive,
 ) -> Result<(), PipelineError> {
     let _ = tokio::fs::remove_file(&existing.file).await;
@@ -423,6 +444,7 @@ async fn delete_existing_archive(
     // index entry for a future rescan to reconcile, logged for visibility).
     if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
         search_pool,
+        equivalence,
         existing.id.as_str(),
         &existing.title,
         &existing.tags,
@@ -434,9 +456,11 @@ async fn delete_existing_archive(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn catalogue_new_archive(
     archives: &ArchiveRepository,
     search_pool: &Pool,
+    equivalence: &Equivalence,
     thumb_dir: &Path,
     id: &ArchiveId,
     path: &Path,
@@ -531,8 +555,13 @@ async fn catalogue_new_archive(
         has_patch,
     };
     archives.save(&archive).await?;
-    if let Err(e) =
-        lanrurugi_search::indexer::index_new_archive(search_pool, id.as_str(), &archive.title).await
+    if let Err(e) = lanrurugi_search::indexer::index_new_archive(
+        search_pool,
+        equivalence,
+        id.as_str(),
+        &archive.title,
+    )
+    .await
     {
         tracing::warn!(%id, error = %e, "failed to index new archive for search");
     }
@@ -619,6 +648,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &path,
         )
@@ -637,6 +667,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &path,
         )
@@ -674,6 +705,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &staged_path,
             IngestOptions {
@@ -721,6 +753,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &path,
         )
@@ -736,6 +769,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &path,
         )
@@ -781,6 +815,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &first_path,
         )
@@ -797,6 +832,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &second_path,
             IngestOptions {
@@ -856,6 +892,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &existing_staged_path,
         )
@@ -878,6 +915,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &new_staged_path,
             IngestOptions::named(DuplicatePolicy::Overwrite, &shared_name),
@@ -945,6 +983,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &first_path,
         )
@@ -964,6 +1003,7 @@ mod tests {
             &archives,
             &config_pool,
             &search_pool,
+            &Equivalence::default(),
             thumb_dir.path(),
             &second_path,
             IngestOptions::default(),
@@ -1031,6 +1071,7 @@ mod tests {
             archives.clone(),
             config_pool.clone(),
             search_pool,
+            std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path().to_path_buf(),
             None,
             run_locks,
@@ -1096,6 +1137,7 @@ mod tests {
             archives.clone(),
             config_pool.clone(),
             search_pool,
+            std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path().to_path_buf(),
             Some(event_tx),
             lanrurugi_core::filename_lock::FilenameLocks::new(),

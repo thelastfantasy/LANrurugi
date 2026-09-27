@@ -228,6 +228,7 @@ async fn create_or_rename_tankoubon(
             if old_name != grouping.name {
                 if let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,
+                    &state.equivalence,
                     &tankid,
                     &old_name,
                     &grouping.name,
@@ -957,6 +958,7 @@ async fn update_tankoubon(
             if old_tags != grouping.tags {
                 if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
                     &state.redis.search,
+                    &state.equivalence,
                     id.as_str(),
                     &old_tags,
                     &grouping.tags,
@@ -969,6 +971,7 @@ async fn update_tankoubon(
             if old_name != grouping.name {
                 if let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,
+                    &state.equivalence,
                     &id,
                     &old_name,
                     &grouping.name,
@@ -1196,6 +1199,7 @@ async fn delete_tankoubon(
             if !old_name.is_empty() {
                 if let Err(e) = lanrurugi_search::indexer::remove_title_index(
                     &state.redis.search,
+                    &state.equivalence,
                     &id,
                     &old_name,
                 )

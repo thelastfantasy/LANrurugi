@@ -384,6 +384,7 @@ pub async fn backfill_artist_tag(state: &AppState, archive_id: &str, title: &str
     }
     if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
         &state.redis.search,
+        &state.equivalence,
         archive_id,
         &old_tags,
         &archive.tags,

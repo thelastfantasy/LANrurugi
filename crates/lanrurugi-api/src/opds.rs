@@ -92,7 +92,14 @@ async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>)
         groupby_tanks: true,
         ..Default::default()
     };
-    let result = match search(&state.redis.archive, &state.redis.search, &params).await {
+    let result = match search(
+        &state.redis.archive,
+        &state.redis.search,
+        &state.equivalence,
+        &params,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             return (

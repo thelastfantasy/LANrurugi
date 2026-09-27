@@ -364,9 +364,14 @@ async fn create_tankoubon_from_folder(
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Err(e) =
-        lanrurugi_search::indexer::update_title_index(&state.redis.search, &candidate, "", &name)
-            .await
+    if let Err(e) = lanrurugi_search::indexer::update_title_index(
+        &state.redis.search,
+        &state.equivalence,
+        &candidate,
+        "",
+        &name,
+    )
+    .await
     {
         tracing::warn!(%candidate, error = %e, "failed to write new tank title index entry");
     }
@@ -378,6 +383,7 @@ async fn create_tankoubon_from_folder(
     if !tags.is_empty() {
         if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
             &state.redis.search,
+            &state.equivalence,
             &candidate,
             "",
             &tags,

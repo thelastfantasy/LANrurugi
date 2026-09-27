@@ -7,14 +7,17 @@
 
 use std::collections::HashSet;
 
+use std::sync::Arc;
+
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::entities::Category;
 use lanrurugi_core::ids::ArchiveId;
+use lanrurugi_equivalence::Equivalence;
 use thiserror::Error;
 
 use crate::grammar::{compute_search_filter, Token};
-use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_KEY, UNTAGGED_KEY};
+use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -82,6 +85,50 @@ pub struct SearchResult {
     pub ids: Vec<String>,
 }
 
+/// Owns the two Redis pools and the canonical `Equivalence` used by every search/index entry
+/// point. Construct once at startup (`Arc<SearchEngine>`) so query-time `fold` and index-time
+/// `fold` always share the exact same config/pipeline.
+pub struct SearchEngine {
+    archive_pool: Pool,
+    search_pool: Pool,
+    equivalence: Arc<Equivalence>,
+}
+
+impl SearchEngine {
+    pub fn new(archive_pool: Pool, search_pool: Pool, equivalence: Arc<Equivalence>) -> Self {
+        Self {
+            archive_pool,
+            search_pool,
+            equivalence,
+        }
+    }
+
+    pub fn equivalence(&self) -> &Equivalence {
+        &self.equivalence
+    }
+
+    pub async fn search(&self, params: &SearchParams) -> Result<SearchResult> {
+        search(
+            &self.archive_pool,
+            &self.search_pool,
+            &self.equivalence,
+            params,
+        )
+        .await
+    }
+
+    pub async fn search_exists(&self, filter: &str, timezone: &str) -> Result<bool> {
+        search_exists(
+            &self.archive_pool,
+            &self.search_pool,
+            &self.equivalence,
+            filter,
+            timezone,
+        )
+        .await
+    }
+}
+
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
 /// `hidecompleted`'s own "counts as finished" threshold — matches legacy's
@@ -108,11 +155,15 @@ const HIDE_COMPLETED_THRESHOLD: f64 = 0.85;
 pub async fn search_exists(
     archive_pool: &Pool,
     search_pool: &Pool,
+    eq: &Equivalence,
     filter: &str,
     timezone: &str,
 ) -> Result<bool> {
     let mut archive_conn = archive_pool.get().await?;
     let mut search_conn = search_pool.get().await?;
+    let legacy_fallback = !crate::indexer::fold_fingerprint_matches(search_pool, eq)
+        .await
+        .unwrap_or(false);
 
     let tokens = compute_search_filter(filter);
     if tokens.is_empty() {
@@ -135,6 +186,8 @@ pub async fn search_exists(
         let ids = token_matches(
             &mut archive_conn,
             &mut search_conn,
+            eq,
+            legacy_fallback,
             token,
             &candidates,
             timezone,
@@ -159,10 +212,14 @@ pub async fn search_exists(
 pub async fn search(
     archive_pool: &Pool,
     search_pool: &Pool,
+    eq: &Equivalence,
     params: &SearchParams,
 ) -> Result<SearchResult> {
     let mut archive_conn = archive_pool.get().await?;
     let mut search_conn = search_pool.get().await?;
+    let legacy_fallback = !crate::indexer::fold_fingerprint_matches(search_pool, eq)
+        .await
+        .unwrap_or(false);
 
     let mut filtered: HashSet<String> = if params.groupby_tanks {
         search_conn
@@ -312,6 +369,8 @@ pub async fn search(
         let ids = token_matches(
             &mut archive_conn,
             &mut search_conn,
+            eq,
+            legacy_fallback,
             token,
             &filtered,
             &params.timezone,
@@ -363,6 +422,8 @@ pub async fn search(
 async fn token_matches(
     archive_conn: &mut deadpool_redis::Connection,
     search_conn: &mut deadpool_redis::Connection,
+    eq: &Equivalence,
+    legacy_fallback: bool,
     token: &Token,
     scope: &HashSet<String>,
     timezone: &str,
@@ -474,16 +535,21 @@ async fn token_matches(
     // and skipping the fallback (an earlier version of this function did) silently returned zero
     // results for exact-match searches on any namespace containing an underscore, a real
     // live-confirmed regression from legacy's own actual (if accidental) behavior.
-    let exact_key = format!("INDEX_{}", token.tag);
+    // Canonicalize the query token's literal segments; `*`/`?` wildcards are preserved by
+    // `fold_pattern` and only the literal runs between them are folded, so glob semantics stay
+    // intact and OpenCC phrase mappings never cross a wildcard.
+    let folded = eq.fold_pattern(&token.tag);
+
+    let exact_key = format!("INDEX_{folded}");
     let exact_hit = token.isexact && search_conn.exists(&exact_key).await.unwrap_or(false);
     if exact_hit {
         let members: Vec<String> = search_conn.smembers(&exact_key).await.unwrap_or_default();
         ids.extend(members);
     } else {
-        let pattern = if token.tag.contains(':') {
-            format!("INDEX_{}*", token.tag)
+        let pattern = if folded.contains(':') {
+            format!("INDEX_{folded}*")
         } else {
-            format!("INDEX_*{}*", token.tag)
+            format!("INDEX_*{folded}*")
         };
         let keys: Vec<String> = search_conn.keys(pattern).await?;
         for key in keys {
@@ -492,20 +558,65 @@ async fn token_matches(
         }
     }
 
-    // Fuzzy title match: LRR_TITLES members are "title\0id".
+    // Fuzzy title match: LRR_TITLES_FOLDED members are "<folded title>\0id".
     let name_pattern = if token.isexact {
-        format!("{}\0*", token.tag)
+        format!("{folded}\0*")
     } else {
-        format!("*{}*", token.tag)
+        format!("*{folded}*")
     };
     let title_members: Vec<String> = search_conn
-        .zrangebyscore(TITLES_KEY, "-inf", "+inf")
+        .zrangebyscore(TITLES_FOLDED_KEY, "-inf", "+inf")
         .await
         .unwrap_or_default();
     for member in title_members {
         if glob_match(&name_pattern, &member) {
             if let Some(pos) = member.find('\0') {
                 ids.insert(member[pos + 1..].to_string());
+            }
+        }
+    }
+
+    // Migration bridge: when the stored fingerprint doesn't match this config, the pre-folded
+    // `INDEX_*`/`LRR_TITLES` indexes from before this change are still the only trustworthy copy
+    // for old archives. Read both and union; once `rebuild-index` writes the fingerprint, this
+    // branch is disabled and only the canonical indexes are used.
+    if legacy_fallback {
+        let raw_exact_key = format!("INDEX_{}", token.tag);
+        let raw_exact_hit =
+            token.isexact && search_conn.exists(&raw_exact_key).await.unwrap_or(false);
+        if raw_exact_hit {
+            let members: Vec<String> = search_conn
+                .smembers(&raw_exact_key)
+                .await
+                .unwrap_or_default();
+            ids.extend(members);
+        } else {
+            let raw_pattern = if token.tag.contains(':') {
+                format!("INDEX_{}*", token.tag)
+            } else {
+                format!("INDEX_*{}*", token.tag)
+            };
+            let keys: Vec<String> = search_conn.keys(raw_pattern).await?;
+            for key in keys {
+                let members: Vec<String> = search_conn.smembers(&key).await?;
+                ids.extend(members);
+            }
+        }
+
+        let raw_name_pattern = if token.isexact {
+            format!("{}\0*", token.tag)
+        } else {
+            format!("*{}*", token.tag)
+        };
+        let raw_titles: Vec<String> = search_conn
+            .zrangebyscore(TITLES_KEY, "-inf", "+inf")
+            .await
+            .unwrap_or_default();
+        for member in raw_titles {
+            if glob_match(&raw_name_pattern, &member) {
+                if let Some(pos) = member.find('\0') {
+                    ids.insert(member[pos + 1..].to_string());
+                }
             }
         }
     }
@@ -820,6 +931,10 @@ mod tests {
         Some((archive, search))
     }
 
+    fn test_eq() -> Equivalence {
+        Equivalence::new(lanrurugi_equivalence::FoldConfig::all())
+    }
+
     /// Issue regression (2026-08-04): a descending `date_added` sort used to `rev()` the *whole*
     /// list at the call site, flipping unkeyed ids — Tankoubons, which have no archive `tags`
     /// hash — to the front, so a library sorted newest-first showed its (older) Tankoubons above
@@ -831,6 +946,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+
         let mut aconn = archive_pool.get().await.unwrap();
         let id_old = "a".repeat(40);
         let id_new = "b".repeat(40);
@@ -898,6 +1014,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+
         let mut aconn = archive_pool.get().await.unwrap();
         let id_old = "d".repeat(40);
         let member_new = "e".repeat(40);
@@ -956,6 +1073,8 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+
+        let eq = test_eq();
         let id_a = "1".repeat(40);
         let id_b = "2".repeat(40);
 
@@ -983,16 +1102,16 @@ mod tests {
             .await
             .unwrap();
 
-        crate::indexer::index_new_archive(&search_pool, &id_a, "Book A")
+        crate::indexer::index_new_archive(&search_pool, &eq, &id_a, "Book A")
             .await
             .unwrap();
-        crate::indexer::index_new_archive(&search_pool, &id_b, "Book B")
+        crate::indexer::index_new_archive(&search_pool, &eq, &id_b, "Book B")
             .await
             .unwrap();
-        crate::indexer::update_tag_indexes(&search_pool, &id_a, "", "artist:jane")
+        crate::indexer::update_tag_indexes(&search_pool, &eq, &id_a, "", "artist:jane")
             .await
             .unwrap();
-        crate::indexer::update_tag_indexes(&search_pool, &id_b, "", "artist:bob")
+        crate::indexer::update_tag_indexes(&search_pool, &eq, &id_b, "", "artist:bob")
             .await
             .unwrap();
 
@@ -1001,7 +1120,9 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let result = search(&archive_pool, &search_pool, &params).await.unwrap();
+        let result = search(&archive_pool, &search_pool, &eq, &params)
+            .await
+            .unwrap();
         assert_eq!(result.ids, vec![id_a.clone()]);
 
         let neg_params = SearchParams {
@@ -1009,7 +1130,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let neg_result = search(&archive_pool, &search_pool, &neg_params)
+        let neg_result = search(&archive_pool, &search_pool, &eq, &neg_params)
             .await
             .unwrap();
         assert!(neg_result.ids.contains(&id_b));
@@ -1053,6 +1174,8 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+
+        let eq = test_eq();
         // NOT a single-character-repeated id (`"3".repeat(40)`, `"f".repeat(40)`, ...) — this
         // whole module (and `indexer.rs` in the same crate, sharing the same CI Redis instance/DB
         // via `test_pools()`'s fixed `LANRURUGI_TEST_REDIS_URL`) already has a same-shaped test for
@@ -1075,7 +1198,7 @@ mod tests {
                 .hset_multiple(id, &[("tags", ""), ("pagecount", "10"), ("progress", "0")])
                 .await
                 .unwrap();
-            crate::indexer::index_new_archive(&search_pool, id, title)
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
                 .await
                 .unwrap();
         }
@@ -1085,7 +1208,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let result = search(&archive_pool, &search_pool, &unrestricted)
+        let result = search(&archive_pool, &search_pool, &eq, &unrestricted)
             .await
             .unwrap();
         assert!(result.ids.contains(&id_a));
@@ -1097,7 +1220,9 @@ mod tests {
             restrict_to_archive_ids: Some([ArchiveId(id_a.clone())].into_iter().collect()),
             ..Default::default()
         };
-        let scoped_result = search(&archive_pool, &search_pool, &scoped).await.unwrap();
+        let scoped_result = search(&archive_pool, &search_pool, &eq, &scoped)
+            .await
+            .unwrap();
         assert!(scoped_result.ids.contains(&id_a));
         assert!(!scoped_result.ids.contains(&id_b));
 
@@ -1107,7 +1232,7 @@ mod tests {
             restrict_to_archive_ids: Some(HashSet::new()),
             ..Default::default()
         };
-        let empty_result = search(&archive_pool, &search_pool, &empty_scope)
+        let empty_result = search(&archive_pool, &search_pool, &eq, &empty_scope)
             .await
             .unwrap();
         assert!(!empty_result.ids.contains(&id_a));
@@ -1144,6 +1269,8 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+
+        let eq = test_eq();
         let id = "3".repeat(40);
         let tags = "female:huge breasts,female:milf";
 
@@ -1156,10 +1283,10 @@ mod tests {
             .await
             .unwrap();
 
-        crate::indexer::index_new_archive(&search_pool, &id, "Book C")
+        crate::indexer::index_new_archive(&search_pool, &eq, &id, "Book C")
             .await
             .unwrap();
-        crate::indexer::update_tag_indexes(&search_pool, &id, "", tags)
+        crate::indexer::update_tag_indexes(&search_pool, &eq, &id, "", tags)
             .await
             .unwrap();
 
@@ -1177,7 +1304,9 @@ mod tests {
                 groupby_tanks: true,
                 ..Default::default()
             };
-            let result = search(&archive_pool, &search_pool, &params).await.unwrap();
+            let result = search(&archive_pool, &search_pool, &eq, &params)
+                .await
+                .unwrap();
             assert_eq!(
                 result.ids,
                 vec![id.clone()],
@@ -1206,7 +1335,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let negated_result = search(&archive_pool, &search_pool, &negated_params)
+        let negated_result = search(&archive_pool, &search_pool, &eq, &negated_params)
             .await
             .unwrap();
         assert!(!negated_result.ids.contains(&id));
@@ -1229,6 +1358,100 @@ mod tests {
 
     // `parse_rating_filter` is a pure function — no Redis needed, unlike the `token_matches`-level
     // integration tests above.
+    #[tokio::test]
+    async fn canonical_folding_makes_cn_jp_kana_and_latin_variants_findable() {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let eq = test_eq();
+        let mut aconn = archive_pool.get().await.unwrap();
+
+        let id_jp = "a1".repeat(20);
+        let id_cn = "b1".repeat(20);
+        let id_half = "c1".repeat(20);
+        let id_latin = "d1".repeat(20);
+
+        for (id, title, tags) in [
+            (&id_jp, "龍が如く", "series:龍が如く"),
+            (&id_cn, "龙与虎", "series:龙与虎"),
+            (&id_half, "スーパー", "series:スーパー"),
+            (&id_latin, "MAR", "series:MAR"),
+        ] {
+            let _: () = aconn
+                .hset_multiple(
+                    id,
+                    &[("tags", tags), ("pagecount", "10"), ("progress", "0")],
+                )
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", tags)
+                .await
+                .unwrap();
+        }
+
+        for (filter, expected) in [
+            ("series:龙が如く", &id_jp),
+            ("series:龍が如く", &id_jp),
+            ("series:ｽｰﾊﾟｰ", &id_half),
+            ("series:MÄR", &id_latin),
+            ("龙*", &id_cn),
+        ] {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &eq, &params)
+                .await
+                .unwrap();
+            assert!(
+                result.ids.contains(expected),
+                "filter {filter:?} should match {expected:?}, got {:?}",
+                result.ids
+            );
+        }
+
+        for id in [&id_jp, &id_cn, &id_half, &id_latin] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+        let mut sconn = search_pool.get().await.unwrap();
+        for id in [&id_jp, &id_cn, &id_half, &id_latin] {
+            let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
+            let _: () = sconn.srem(NEW_KEY, id).await.unwrap();
+            let _: () = sconn.srem(TANKGROUPED_KEY, id).await.unwrap();
+        }
+        // Remove this test's own canonical indexes (folded tag keys + both title zsets).
+        for key in [
+            "INDEX_series:龙が如く",
+            "INDEX_series:龙与虎",
+            "INDEX_series:すーぱー",
+            "INDEX_series:MAR",
+        ] {
+            let _: () = sconn.del(key).await.unwrap();
+        }
+        for (title, id) in [
+            ("龍が如く", &id_jp),
+            ("龙与虎", &id_cn),
+            ("スーパー", &id_half),
+            ("MAR", &id_latin),
+        ] {
+            let _: () = sconn
+                .zrem(TITLES_KEY, format!("{}\0{id}", title.to_lowercase()))
+                .await
+                .unwrap();
+            let lower = title.to_lowercase();
+            let folded = eq.fold(&lower).into_owned();
+            let _: () = sconn
+                .zrem(TITLES_FOLDED_KEY, format!("{folded}\0{id}"))
+                .await
+                .unwrap();
+        }
+    }
+
     #[test]
     fn parse_rating_filter_recognizes_every_operator() {
         assert_eq!(parse_rating_filter("rating:>=1"), Some((">=", 1.0)));

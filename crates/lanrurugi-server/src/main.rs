@@ -369,6 +369,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     lanrurugi_api::authz::Authz::get().await;
 
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos: repos.clone(),
         jobs: jobs.clone(),
@@ -752,6 +753,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 args.thumb_dir.clone(),
                 redis.config.clone(),
                 redis.search.clone(),
+                state.equivalence.clone(),
                 (*repos.archives).clone(),
                 Some(new_archive_tx.clone()),
                 filename_locks.clone(),
@@ -786,6 +788,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let library_path = args.library_path.clone();
         let thumb_dir = args.thumb_dir.clone();
         let new_archive_tx = new_archive_tx.clone();
+        let equivalence = state.equivalence.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -793,6 +796,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 &repos.archives,
                 &redis.config,
                 &redis.search,
+                equivalence.clone(),
                 &thumb_dir,
                 &jobs,
                 &job_id,
@@ -1044,6 +1048,7 @@ async fn repair_zombie_archives(state: &AppState) {
         );
         if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
             &state.redis.search,
+            &state.equivalence,
             archive.id.as_str(),
             &archive.title,
             &archive.tags,
@@ -1096,11 +1101,13 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
     // with no `AppState`/Deno plugin pool constructed at all (unlike `serve`'s own startup scan,
     // which has a live one to thread through) — nothing here could run a metadata plugin even if
     // asked to.
+    let equivalence = std::sync::Arc::new(lanrurugi_search::Equivalence::default());
     let scan_summary = lanrurugi_scanner::full_scan::full_scan(
         &args.library_path,
         &repos.archives,
         &redis.config,
         &redis.search,
+        equivalence.clone(),
         &args.thumb_dir,
         &jobs,
         &job_id,
@@ -1131,6 +1138,18 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
     lanrurugi_storage::rebuild::backfill_reverse_indexes(&repos.categories, &repos.groupings)
         .await?;
     tracing::info!("Reverse-index backfill complete");
+
+    tracing::info!("Rebuilding canonical folded search indexes...");
+    lanrurugi_search::indexer::rebuild_folded_indexes(
+        &repos.archives,
+        &repos.groupings,
+        &redis.search,
+        &equivalence,
+    )
+    .await?;
+    lanrurugi_search::indexer::set_fold_fingerprint(&redis.search, &equivalence.fingerprint())
+        .await?;
+    tracing::info!("Canonical folded search indexes rebuilt");
 
     Ok(())
 }

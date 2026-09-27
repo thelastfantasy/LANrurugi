@@ -1484,6 +1484,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
                 if archive.title != old_title {
                     if let Err(e) = lanrurugi_search::indexer::update_title_index(
                         &state.redis.search,
+                        &state.equivalence,
                         archive_id,
                         &old_title,
                         &archive.title,
@@ -1496,6 +1497,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
                 if archive.tags != old_tags {
                     if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
                         &state.redis.search,
+                        &state.equivalence,
                         archive_id,
                         &old_tags,
                         &archive.tags,
@@ -2655,6 +2657,7 @@ async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: 
     // Re-index so the new tags are searchable immediately.
     if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
         &state.redis.search,
+        &state.equivalence,
         archive_id,
         &old_tags,
         &archive.tags,
@@ -3419,6 +3422,7 @@ pub(crate) mod tests {
         let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
         let repos = crate::Repositories::new(&redis);
         Some(AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
             redis: redis.clone(),
             repos,
             jobs: lanrurugi_core::jobs::JobRegistry::new(),

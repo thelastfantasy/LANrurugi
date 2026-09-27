@@ -268,6 +268,7 @@ async fn catalogue_staged_file(
         &state.repos.archives,
         &state.redis.config,
         &state.redis.search,
+        &state.equivalence,
         &state.library.thumb_dir,
         staging_path,
         options,

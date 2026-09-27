@@ -61,6 +61,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
@@ -259,12 +260,23 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
     .await
     .unwrap();
 
-    lanrurugi_search::indexer::index_new_archive(&redis.search, &id, title)
-        .await
-        .unwrap();
-    lanrurugi_search::indexer::update_tag_indexes(&redis.search, &id, "", tag)
-        .await
-        .unwrap();
+    lanrurugi_search::indexer::index_new_archive(
+        &redis.search,
+        &lanrurugi_search::Equivalence::default(),
+        &id,
+        title,
+    )
+    .await
+    .unwrap();
+    lanrurugi_search::indexer::update_tag_indexes(
+        &redis.search,
+        &lanrurugi_search::Equivalence::default(),
+        &id,
+        "",
+        tag,
+    )
+    .await
+    .unwrap();
 
     // A real Tankoubon whose reverse index points at the archive, so the raw endpoint can report
     // which Tankoubon it is filed under.
@@ -335,9 +347,15 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
         "raw endpoint must include the owning Tankoubon's own metadata: {raw}"
     );
 
-    lanrurugi_search::indexer::remove_archive_index(&redis.search, &id, title, tag)
-        .await
-        .unwrap();
+    lanrurugi_search::indexer::remove_archive_index(
+        &redis.search,
+        &lanrurugi_search::Equivalence::default(),
+        &id,
+        title,
+        tag,
+    )
+    .await
+    .unwrap();
     grouping_repo.delete(&tankid).await.unwrap();
     repo.delete(&lanrurugi_core::ids::ArchiveId(id))
         .await
@@ -559,6 +577,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis,
         repos,
         jobs: JobRegistry::new(),
@@ -727,6 +746,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis,
         repos,
         jobs: JobRegistry::new(),
@@ -987,6 +1007,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         .unwrap();
 
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
@@ -1190,6 +1211,7 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
     }
 
     let state = AppState {
+        equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),

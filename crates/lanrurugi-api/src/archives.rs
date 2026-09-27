@@ -432,6 +432,7 @@ async fn delete_one_archive(
             // to eventually reconcile.
             if let Err(e) = lanrurugi_search::indexer::remove_archive_index(
                 &state.redis.search,
+                &state.equivalence,
                 id,
                 &archive.title,
                 &archive.tags,
@@ -1930,6 +1931,7 @@ async fn update_archive_metadata(
             if archive.title != old_title {
                 if let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,
+                    &state.equivalence,
                     &id,
                     &old_title,
                     &archive.title,
@@ -1942,6 +1944,7 @@ async fn update_archive_metadata(
             if archive.tags != old_tags {
                 if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
                     &state.redis.search,
+                    &state.equivalence,
                     &id,
                     &old_tags,
                     &archive.tags,

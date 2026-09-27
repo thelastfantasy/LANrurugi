@@ -604,12 +604,37 @@ async fn run_rebuild_sequence(
         &repos.archives,
         &state.redis.config,
         &state.redis.search,
+        state.equivalence.clone(),
         &state.library.thumb_dir,
         jobs,
         job_id,
         Some(state.new_archive_tx.clone()),
     )
     .await;
+
+    // Rewrite canonical title/tag indexes for every existing archive/tank. Without this,
+    // `full_scan` alone only catalogs genuinely new files and existing archives would never get
+    // `INDEX_<fold(tag)>` / `LRR_TITLES_FOLDED` entries.
+    if let Err(e) = lanrurugi_search::indexer::rebuild_folded_indexes(
+        &repos.archives,
+        &repos.groupings,
+        &state.redis.search,
+        &state.equivalence,
+    )
+    .await
+    {
+        return Err(e.to_string());
+    }
+
+    // Record the canonical-index fingerprint only after the reindex actually succeeded.
+    if let Err(e) = lanrurugi_search::indexer::set_fold_fingerprint(
+        &state.redis.search,
+        &state.equivalence.fingerprint(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "failed to record fold fingerprint after rebuild");
+    }
 
     let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
 

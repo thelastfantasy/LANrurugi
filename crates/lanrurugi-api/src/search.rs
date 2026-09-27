@@ -235,6 +235,7 @@ pub(crate) async fn guest_has_any_visible_archive(
                 if let Ok(true) = lanrurugi_search::engine::search_exists(
                     &state.redis.archive,
                     &state.redis.search,
+                    &state.equivalence,
                     predicate,
                     "UTC",
                 )
@@ -276,7 +277,13 @@ pub(crate) async fn guest_visible_archive_ids(
                     groupby_tanks: false,
                     ..SearchParams::default()
                 };
-                if let Ok(result) = search(&state.redis.archive, &state.redis.search, &params).await
+                if let Ok(result) = search(
+                    &state.redis.archive,
+                    &state.redis.search,
+                    &state.equivalence,
+                    &params,
+                )
+                .await
                 {
                     ids.extend(result.ids.into_iter().map(lanrurugi_core::ids::ArchiveId));
                 }
@@ -444,7 +451,14 @@ async fn search_archives_with_mode(
             }
         };
     }
-    match search(&state.redis.archive, &state.redis.search, &params).await {
+    match search(
+        &state.redis.archive,
+        &state.redis.search,
+        &state.equivalence,
+        &params,
+    )
+    .await
+    {
         Ok(result) => {
             let page = paginate(&result.ids, q.start);
             let mut data = Vec::with_capacity(page.len());
@@ -503,7 +517,14 @@ async fn search_archive_ids(
             }
         };
     }
-    match search(&state.redis.archive, &state.redis.search, &params).await {
+    match search(
+        &state.redis.archive,
+        &state.redis.search,
+        &state.equivalence,
+        &params,
+    )
+    .await
+    {
         Ok(result) => {
             let page = paginate(&result.ids, q.start);
             axum::Json(json!({
@@ -580,7 +601,14 @@ async fn search_random(
             }
         };
     }
-    match search(&state.redis.archive, &state.redis.search, &params).await {
+    match search(
+        &state.redis.archive,
+        &state.redis.search,
+        &state.equivalence,
+        &params,
+    )
+    .await
+    {
         Ok(result) => {
             use rand::seq::SliceRandom;
             let mut ids = result.ids;
