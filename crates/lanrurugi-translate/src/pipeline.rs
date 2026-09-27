@@ -6,7 +6,7 @@
 //! file, or a provider.
 
 use lanrurugi_core::ids::ArchiveId;
-use lanrurugi_ocr::entities::{DetectedTextRegion, PageNumber};
+use lanrurugi_ocr::entities::{DetectedTextRegion, PageNumber, WritingDirection};
 
 use crate::adapter::{
     BlockId, TermKind, TranslationAdapter, TranslationBlock, TranslationError, TranslationRequest,
@@ -78,11 +78,25 @@ fn collect_blocks(pages: &[PageWork]) -> Vec<(usize, usize, TranslationBlock)> {
                     block_id: BlockId::for_region(page.page_number.get(), region_index),
                     source_text: region.source_text.clone(),
                     alternate_source_text: region.alternate_source_text.clone(),
+                    vertical_confidence: vertical_confidence(&region.bounding_box),
                 },
             ));
         }
     }
     blocks
+}
+
+/// Local, image-free vertical-layout prior from a region's own box shape: `h / (h + w)`.
+///
+/// `0.5` is square; `> 0.5` leans vertical (tategaki columns), `< 0.5` leans horizontal (yokogaki
+/// rows). Deliberately a *weak* hint — the provider weighs it against which A/B reading is
+/// plausible Japanese and reports the final direction through `TranslatedBlock::writing_direction`.
+fn vertical_confidence(bbox: &lanrurugi_ocr::entities::BoundingBox) -> Option<f32> {
+    let (w, h) = (u64::from(bbox.w), u64::from(bbox.h));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((h as f32) / ((h + w) as f32))
 }
 
 /// Resolves which OCR candidate the provider actually translated.
@@ -233,6 +247,18 @@ pub async fn translate_batch<A: TranslationAdapter>(
         pages[*page_index].regions[*region_index].source_text = chosen_source.clone();
         pages[*page_index].regions[*region_index].translated_text =
             Some(translated.translated_text.clone());
+        // The provider's own layout-direction verdict (guided by the block's local shape hint)
+        // overrides the OCR-stage axis guess — this is the "let the LLM decide 横/竖" path.
+        if let Some(direction) = translated.writing_direction.as_deref().map(str::trim) {
+            let parsed = match direction.to_ascii_lowercase().as_str() {
+                "vertical" => Some(WritingDirection::Vertical),
+                "horizontal" => Some(WritingDirection::Horizontal),
+                _ => None,
+            };
+            if let Some(parsed) = parsed {
+                pages[*page_index].regions[*region_index].writing_direction = Some(parsed);
+            }
+        }
         applied.push((
             chosen_source,
             translated.translated_text.clone(),
@@ -348,6 +374,7 @@ mod tests {
                         block_id: BlockId::from(id.as_str()),
                         translated_text: text.clone(),
                         selected_source_text: None,
+                        writing_direction: None,
                         term_kind: *kind,
                     })
                     .collect(),
@@ -525,6 +552,7 @@ mod tests {
             block_id: BlockId::from("p1b0"),
             source_text: "ーッ娘スー母猫".into(),
             alternate_source_text: Some("スーツ母娘".into()),
+            vertical_confidence: None,
         }
     }
 
@@ -558,6 +586,7 @@ mod tests {
             block_id: BlockId::from("p1b0"),
             source_text: "こんにちは".into(),
             alternate_source_text: None,
+            vertical_confidence: None,
         };
         assert_eq!(selected_source_text(&block, Some("anything")), "こんにちは");
     }

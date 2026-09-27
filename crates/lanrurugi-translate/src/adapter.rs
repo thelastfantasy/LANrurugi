@@ -66,6 +66,13 @@ pub struct TranslationBlock {
     /// [`TranslatedBlock::selected_source_text`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternate_source_text: Option<String>,
+    /// Local, image-free shape prior for the original layout direction: the region box's
+    /// `h / (h + w)`, so `0.5` is square, `> 0.5` leans vertical (tategaki columns), `< 0.5` leans
+    /// horizontal (yokogaki rows). It is deliberately a *weak* hint the provider weighs against
+    /// which A/B reading is plausible Japanese; the provider reports the final choice back through
+    /// [`TranslatedBlock::writing_direction`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_confidence: Option<f32>,
 }
 
 /// What kind of glossary candidate a block's source text is, per the backend's own judgment
@@ -100,6 +107,12 @@ pub struct TranslatedBlock {
     /// (`source_text` or `alternate_source_text`). `None` for ordinary single-candidate blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_source_text: Option<String>,
+    /// The original text's own layout direction the provider chose for this block
+    /// (`"vertical"` / `"horizontal"`), using the block's `vertical_confidence` shape hint plus
+    /// the A/B reading it picked. Optional so the flat-map fallback shape (research.md §14) and
+    /// older providers keep working; callers fall back to the locally-detected axis when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing_direction: Option<String>,
     /// `TermKind::None` for ordinary dialogue/narration (the common case). Never inferred
     /// locally — see [`TermKind`]. Defaulted for the flat-map fallback shape (research.md §14),
     /// which predates this field and carries no classification at all.
@@ -263,14 +276,28 @@ impl TranslationRequest {
     pub fn render_blocks(&self) -> String {
         let mut out = String::from("Translate these blocks:\n");
         for block in &self.blocks {
+            // See `TranslationBlock::vertical_confidence`: a weak, image-free shape prior the model
+            // combines with the A/B text plausibility to pick the original layout direction.
+            let shape = match block.vertical_confidence {
+                Some(confidence) => {
+                    let ratio = confidence / (1.0 - confidence).max(f32::EPSILON);
+                    format!(
+                        "本地形状信号：框 h/w≈{ratio:.2}，竖排置信度 {confidence:.2}（0.5 为中性，越高越像竖排）。\n"
+                    )
+                }
+                None => String::new(),
+            };
             match &block.alternate_source_text {
                 Some(alternate) => {
                     out.push_str(&format!(
-                        "[{}]\nA) {}\nB) {}\n这是同一段漫画文字的两种 OCR 候选，其一可能乱序。先判断哪个更可能是合理日文，\n再只输出中文译文；若两者都不可信，倾向保持不译。\n并在 selected_source_text 字段中原样填写你选中的那一条候选原文（不要只写 A/B 字母）。\n",
+                        "[{}]\nA) {}\nB) {}\n{shape}这是同一段漫画文字的两种 OCR 候选，其一可能乱序。请综合候选文本的日文合理性与上面的形状信号，判断原文排版方向，只输出中文译文；若两者都不可信，倾向保持不译。\n并在 selected_source_text 字段中原样填写你选中的那一条候选原文（不要只写 A/B 字母），在 writing_direction 字段填 \"vertical\" 或 \"horizontal\"（该漫画原文的排版方向）。\n",
                         block.block_id, block.source_text, alternate,
                     ));
                 }
-                None => out.push_str(&format!("[{}] {}\n", block.block_id, block.source_text)),
+                None => out.push_str(&format!(
+                    "[{}] {}\n{shape}请在 writing_direction 字段填 \"vertical\" 或 \"horizontal\"（该漫画原文的排版方向）。\n",
+                    block.block_id, block.source_text,
+                )),
             }
         }
         out
@@ -404,11 +431,19 @@ pub fn translation_json_schema() -> serde_json::Value {
                                 candidates, copy verbatim the candidate you actually translated. \
                                 For a single-candidate block, use the empty string.",
                         },
+                        "writing_direction": {
+                            "type": "string",
+                            "enum": ["vertical", "horizontal"],
+                            "description": "The original manga text's own layout direction for \
+                                this block: \"vertical\" for tategaki columns, \"horizontal\" \
+                                for yokogaki rows. Use the block's local shape-signal hint plus \
+                                which A/B reading is plausible Japanese to decide.",
+                        },
                     },
                     // Strict schema mode requires every property listed above; `term_kind` still
                     // behaves as optional in practice via its own explicit "none" — see
                     // `TranslatedBlock::term_kind`'s `Option<TermKind>` mapping of that string.
-                    "required": ["block_id", "translated_text", "term_kind", "selected_source_text"],
+                    "required": ["block_id", "translated_text", "term_kind", "selected_source_text", "writing_direction"],
                     "additionalProperties": false,
                 },
             },
@@ -464,6 +499,7 @@ pub fn parse_block_value(
                                 block_id: BlockId::from(id.clone()),
                                 translated_text: text.to_string(),
                                 selected_source_text: None,
+                                writing_direction: None,
                                 term_kind: TermKind::None,
                             })
                         })
@@ -572,6 +608,7 @@ mod tests {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
                 alternate_source_text: None,
+                vertical_confidence: None,
             }],
             "en",
         )
@@ -594,6 +631,7 @@ mod tests {
                 block_id: BlockId::from("p1b0"),
                 source_text: "ーッ娘スー母猫".into(),
                 alternate_source_text: Some("スーツ母娘".into()),
+                vertical_confidence: None,
             }],
             "zh-cn",
         );
@@ -610,6 +648,7 @@ mod tests {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
                 alternate_source_text: None,
+                vertical_confidence: None,
             }],
             "zh-cn",
         );
@@ -663,7 +702,8 @@ mod tests {
                 "block_id",
                 "translated_text",
                 "term_kind",
-                "selected_source_text"
+                "selected_source_text",
+                "writing_direction"
             ])
         );
     }

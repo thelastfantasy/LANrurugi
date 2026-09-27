@@ -269,6 +269,7 @@ mod tests {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
                 alternate_source_text: None,
+                vertical_confidence: None,
             }],
             "en",
         )
@@ -302,6 +303,7 @@ mod tests {
                 block_id: BlockId::from("p1b0"),
                 source_text: "こんにちは".into(),
                 alternate_source_text: None,
+                vertical_confidence: None,
             }],
             "en",
         );

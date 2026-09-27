@@ -25,7 +25,7 @@ pub(crate) fn translation_system(target_language: &str) -> String {
          不要改动）、\"translated_text\"（该块的译文）、\"term_kind\"——如果该块的*原文*是一个\
          角色/人物的名字，填 \"person_name\"；如果是其它需要在全书保持一致的专有名称（地名、\
          组织名、作品内的专有概念等），填 \"term\"；其余情况（绝大多数文本块，包括短句、语气词、\
-         拟声词）一律填 \"none\"；\"selected_source_text\"——输入块给了 A/B 两种 OCR 候选时，把你实际翻译的那一条原文原样填入，单候选块填空字符串。不要输出任何多余的说明文字，也不要为这个任务展开长篇分步推理\
+         拟声词）一律填 \"none\"；\"selected_source_text\"——输入块给了 A/B 两种 OCR 候选时，把你实际翻译的那一条原文原样填入，单候选块填空字符串；\"writing_direction\"——结合输入给的本地形状置信度与所选读法，判断原文排版方向，填 \"vertical\" 或 \"horizontal\"。不要输出任何多余的说明文字，也不要为这个任务展开长篇分步推理\
          ——直接判断并翻译即可。"
     )
 }

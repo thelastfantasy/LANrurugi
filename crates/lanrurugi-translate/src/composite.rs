@@ -407,17 +407,24 @@ pub fn prepare_page_erase<'a>(
                 frame: region.bounding_box,
             }),
         });
+        // `combined_erase_mask` consumes `bubble_mask`, but the coloured-ink gate below needs the
+        // same shape: only the *balloon interior* should decide whether this is coloured artwork.
+        // Judging the whole region bbox counts the colourful character art around a perfectly
+        // ordinary white balloon and drops it (real page-22 fallback bbox: 37% coloured ink in
+        // 302x387, while the balloon itself is white with black lettering).
+        let gate_bubble_mask = bubble_mask.clone();
         let (region_erase, sampled_fg) =
             combined_erase_mask(&pristine, region, bubble_mask, prefer_bubble_only);
         // 不翻译的地方就不要抠: strongly coloured ink means this is stylised/hand-drawn artwork we
         // cannot reliably read — drop the region entirely (no erase, and via `backdrop_handled` no
         // drawn translation either) rather than wiping art and drawing a pink-on-pink guess into it.
-        let region_erase =
-            if region_erase.is_some() && coloured_ink_gate(&pristine, &region.bounding_box) {
-                None
-            } else {
-                region_erase
-            };
+        let region_erase = if region_erase.is_some()
+            && coloured_ink_gate(&pristine, &region.bounding_box, gate_bubble_mask.as_deref())
+        {
+            None
+        } else {
+            region_erase
+        };
         sampled_colours.push(sampled_fg);
         has_precise_mask.push(region_erase.is_some());
 
@@ -1322,14 +1329,25 @@ const COLOURED_INK_MIN_FRACTION: f32 = 0.15;
 /// `true` makes the caller drop the region's erase mask entirely, which (through
 /// `finish_composite_page`'s own all-or-nothing `backdrop_handled` guard) also stops its translation
 /// from being drawn.
-fn coloured_ink_gate(page: &RgbImage, bbox: &BoundingBox) -> bool {
+fn coloured_ink_gate(page: &RgbImage, bbox: &BoundingBox, bubble_mask: Option<&[bool]>) -> bool {
     let (pw, ph) = page.dimensions();
     let x1 = (bbox.x + bbox.w).min(pw);
     let y1 = (bbox.y + bbox.h).min(ph);
+    // When a matched bubble's own cropped mask is available, judge *only its interior* — the
+    // balloon is the thing whose lettering we would be replacing, and the colourful artwork around
+    // it must not veto an ordinary white balloon. Falls back to the whole bbox when there is no
+    // mask (no matched bubble), which is the previous behaviour.
+    let mask = bubble_mask.filter(|m| m.len() == (bbox.w * bbox.h) as usize);
     let mut ink_pixels = 0usize;
     let mut coloured_pixels = 0usize;
     for y in bbox.y..y1 {
         for x in bbox.x..x1 {
+            if let Some(mask) = mask {
+                let index = ((y - bbox.y) * bbox.w + (x - bbox.x)) as usize;
+                if !mask[index] {
+                    continue;
+                }
+            }
             let p = page.get_pixel(x, y).0;
             let luminance =
                 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
