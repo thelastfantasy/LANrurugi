@@ -98,6 +98,13 @@ jobs:
       # `arguments`) is intentional: the optional OCR/inpaint/ONNX crates are checked too.
       - name: cargo deny (licenses)
         uses: EmbarkStudios/cargo-deny-action@v2
+        # The job-level `RUSTC_WRAPPER=sccache` must not leak into this action's own Alpine
+        # container (which has no sccache): `cargo metadata` would then fail with
+        # "could not execute process `sccache ... rustc -vV`". An empty value makes cargo treat
+        # the wrapper as unset. Confirmed against the first real run of this step (run 36417649477:
+        # it failed on exactly that sccache error before this override was added).
+        env:
+          RUSTC_WRAPPER: ""
         with:
           command: check
           command-arguments: licenses
