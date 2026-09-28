@@ -1,34 +1,34 @@
 import type { ReactElement } from "react"
 import { Navigate, Outlet, useLocation } from "react-router-dom"
 
-import { useLoginStatus } from "@/api/hooks"
 import { routes } from "@/lib/routes"
+import { useSession } from "@/session/SessionProvider"
 
 /** Wraps a route only for a logged-out visitor (`/login`) — an authenticated session redirects
- * to the library instead. Renders nothing until `/login/status` resolves. */
+ * to the library instead. Renders nothing until the shared session status resolves. */
 export function RequireGuest({ children }: { children: ReactElement }) {
-  const loginStatus = useLoginStatus()
+  const { isSuccess, isAuthenticated } = useSession()
 
-  if (!loginStatus.isSuccess) return null
-  if (loginStatus.data.logged_in) return <Navigate to={routes.library()} replace />
+  if (!isSuccess) return null
+  if (isAuthenticated) return <Navigate to={routes.library()} replace />
 
   return children
 }
 
 /** Wraps every route expecting an authenticated caller. Unlike `AllowGuest`, it is deliberately
- * not optimistic: rendering an admin page while `login-status` is still loading/errored leaves the
+ * not optimistic: rendering an admin page while session status is still loading/errored leaves the
  * admin nav visible over guest-scoped content (the mobile report, 2026-09-04) and, combined with
  * guest-visible API routes such as `GET /bookmarks`, can expose admin data to a caller who is only
- * a guest. Blank until the query settles, then redirect on false/error. */
+ * a guest. Blank until the shared status settles, then redirect on false/error. */
 export function RequireAuth({ children }: { children?: ReactElement }) {
-  const loginStatus = useLoginStatus()
+  const { isError, isSuccess, isAuthenticated } = useSession()
   const location = useLocation()
 
-  if (loginStatus.isError) {
+  if (isError) {
     return <Navigate to={routes.login()} state={{ from: location }} replace />
   }
-  if (!loginStatus.isSuccess) return null
-  if (!loginStatus.data.logged_in) {
+  if (!isSuccess) return null
+  if (!isAuthenticated) {
     return <Navigate to={routes.login()} state={{ from: location }} replace />
   }
 
@@ -37,16 +37,12 @@ export function RequireAuth({ children }: { children?: ReactElement }) {
 }
 
 /** Wraps routes an eligible unauthenticated guest may also reach (Library, Reader) — unlike
- * `RequireAuth`, `guest_mode_enabled` alone is also a valid reason to let the request through. */
+ * `RequireAuth`, `isGuestModeEnabled` alone is also a valid reason to let the request through. */
 export function AllowGuest({ children }: { children?: ReactElement }) {
-  const loginStatus = useLoginStatus()
+  const { isSuccess, isAuthenticated, isGuestModeEnabled } = useSession()
   const location = useLocation()
 
-  if (
-    loginStatus.isSuccess &&
-    !loginStatus.data.logged_in &&
-    !loginStatus.data.guest_mode_enabled
-  ) {
+  if (isSuccess && !isAuthenticated && !isGuestModeEnabled) {
     return <Navigate to={routes.login()} state={{ from: location }} replace />
   }
 

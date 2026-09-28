@@ -11,12 +11,12 @@ import { useEffect, useSyncExternalStore } from "react"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { clearSearchNavigationState } from "@/pages/Reader/crossArchiveNav"
+import { SESSION_QUERY_KEY } from "@/session/queryKey"
 
 import {
   ApiError,
   clearLastRefreshTimestamp,
   fetchJson,
-  fetchLoginStatusWithRefresh,
   fetchText,
   sendForm,
   sendJson,
@@ -51,7 +51,6 @@ import type {
   JobRecord,
   JobsResponse,
   LoginSession,
-  LoginStatus,
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
   PluginInfo,
@@ -696,9 +695,16 @@ export function useUpdateCheck() {
 }
 
 export function useLogin() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (password: string) =>
       sendForm("POST", "/login", { password, ...(await collectClientReportedInfo()) }),
+    // Refetch the single session source before the caller navigates. Without this, the
+    // Login page could mount the library with the cached pre-login `logged_in:false` status and
+    // bounce straight back; with it, the provider observes the new cookies first.
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
+    },
   })
 }
 
@@ -715,20 +721,21 @@ export function useLogout() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async () => sendForm("POST", "/logout", { ...(await collectClientReportedInfo()) }),
-    onSuccess: () => {
-      queryClient.clear()
+    onSuccess: async () => {
+      // Drop every identity-dependent cached result, but leave a deliberate logged-out session
+      // status in place so route guards render the login page immediately instead of flashing the
+      // outgoing admin chrome while the invalidated session query refetches.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
+      queryClient.setQueryData(SESSION_QUERY_KEY, {
+        logged_in: false,
+        using_default_password: false,
+        guest_mode_enabled: false,
+      })
+      await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       clearSearchNavigationState()
       clearLastRefreshTimestamp()
       localStorage.removeItem(MSM_SELECTION_KEY)
     },
-  })
-}
-
-/** Session state — gates admin-only reader UI and progress persistence. */
-export function useLoginStatus() {
-  return useQuery({
-    queryKey: ["login-status"],
-    queryFn: () => fetchLoginStatusWithRefresh<LoginStatus>(),
   })
 }
 

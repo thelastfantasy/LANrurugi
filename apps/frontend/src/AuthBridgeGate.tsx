@@ -1,7 +1,18 @@
 import { useEffect, useRef } from "react"
 import { useLocation } from "react-router-dom"
 
-import { useAuthConfig, useLoginStatus } from "@/api/hooks"
+import { useAuthConfig } from "@/api/hooks"
+import { useSession } from "@/session/SessionProvider"
+
+/**
+ * The routes `App.tsx` wraps in `AllowGuest`: Library (`/`) and Reader (`/reader/:archiveId`).
+ * A guest-eligible visitor already has a valid local page on these paths, so the SSO bridge must
+ * not navigate them away from it. Kept as a small exported predicate so the path list can be unit
+ * tested independently of the component's query/browser wiring.
+ */
+export function isGuestAccessiblePath(pathname: string): boolean {
+  return pathname === "/" || /^\/reader\/[^/]+\/?$/.test(pathname)
+}
 
 /**
  * Cross-origin login bridge bootstrap. When the backend says this origin is a trusted SSO peer
@@ -15,7 +26,7 @@ import { useAuthConfig, useLoginStatus } from "@/api/hooks"
 export function AuthBridgeGate() {
   const location = useLocation()
   const config = useAuthConfig()
-  const loginStatus = useLoginStatus()
+  const { status: loginStatus, isGuestModeEnabled } = useSession()
   const inFlight = useRef(false)
 
   useEffect(() => {
@@ -24,7 +35,13 @@ export function AuthBridgeGate() {
     // `/login` is the bridge's own fallback destination when no trusted peer has a session, so
     // auto-redirecting away from it would loop forever between peers. Let the local form render.
     if (location.pathname === "/login") return
-    if (loginStatus.data?.logged_in !== false) return
+    if (loginStatus?.logged_in !== false) return
+    // Guest mode makes `/` and `/reader/:archiveId` valid for an unauthenticated caller (the
+    // `AllowGuest` route guard already lets them render). Auto-redirecting them to a peer origin —
+    // which, when no peer has a session, falls back to `{origin}/login?next=...` — is what made an
+    // eligible guest's `/` visit bounce to `/login` despite `guest_mode_enabled: true`. Admin-only
+    // routes still bridge: guest mode grants no access there, so SSO remains useful.
+    if (isGuestModeEnabled && isGuestAccessiblePath(location.pathname)) return
     inFlight.current = true
 
     const returnTo = `${location.pathname}${location.search}${location.hash}`
@@ -41,7 +58,7 @@ export function AuthBridgeGate() {
         // this origin's own login form.
         inFlight.current = false
       })
-  }, [config.data, location.hash, location.pathname, location.search, loginStatus.data])
+  }, [config.data, location.hash, location.pathname, location.search, loginStatus, isGuestModeEnabled])
 
   return null
 }

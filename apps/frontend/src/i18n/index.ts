@@ -3,7 +3,8 @@ import LanguageDetector from "i18next-browser-languagedetector"
 import { useEffect } from "react"
 import { initReactI18next } from "react-i18next"
 
-import { useLoginStatus, usePublicSettings, useSettings } from "@/api/hooks"
+import { usePublicSettings, useSettings } from "@/api/hooks"
+import { useSession } from "@/session/SessionProvider"
 
 import asLocale from "./locales/as.json"
 import de from "./locales/de.json"
@@ -78,8 +79,8 @@ void i18n
 /** Applies the server-side `language` setting on top of i18next's own detection, which has no
  * idea it exists. Falls back to the public `/theme` endpoint's `language` field while logged out. */
 export function useApplySettingsLanguage() {
-  const loginStatus = useLoginStatus()
-  const settings = useSettings({ enabled: loginStatus.data?.logged_in === true })
+  const { isAuthenticated } = useSession()
+  const settings = useSettings({ enabled: isAuthenticated })
   const publicSettings = usePublicSettings({ enabled: settings.data === undefined })
   const language = settings.data?.language ?? publicSettings.data?.language
   useEffect(() => {

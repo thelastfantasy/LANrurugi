@@ -3,8 +3,8 @@ import { NavLink, Outlet } from "react-router-dom"
 
 import { Footer } from "@/components/Layout"
 import { UpdateBanner } from "@/components/Layout"
+import { useSession } from "@/session/SessionProvider"
 
-import { useLoginStatus } from "./api/hooks"
 import { useApplySettingsLanguage } from "./i18n"
 import { useApplyTheme } from "./theme"
 
@@ -14,13 +14,12 @@ export function Layout() {
   const { t } = useTranslation()
   useApplyTheme()
   useApplySettingsLanguage()
-  const loginStatus = useLoginStatus()
   // Do not default to the logged-in link set while the status query is still in flight: the
   // mobile report showed a slow/errored `/login/status` holding the admin nav open over guest
   // content. A brief guest-looking nav is safer than the reverse flash.
-  const loggedIn = loginStatus.data?.logged_in === true
+  const { isAuthenticated } = useSession()
 
-  const links: Array<{ to: string; label: string; end?: boolean }> = loggedIn
+  const links: Array<{ to: string; label: string; end?: boolean }> = isAuthenticated
     ? [
         { to: "/upload", label: t("app.addArchives") },
         { to: "/duplicates", label: t("app.duplicateDetection") },

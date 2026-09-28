@@ -1,5 +1,7 @@
 import axios from "axios"
 
+import { SESSION_QUERY_KEY } from "@/session/queryKey"
+
 import { ApiError, ValidationError } from "./apiError"
 import { collectClientReportedInfo } from "./clientReportedInfo"
 import { queryClient } from "./queryClient"
@@ -14,7 +16,7 @@ function isAuthBootstrapPath(path: string): boolean {
 
 /** Marks login status stale instead of redirecting directly; `RequireAuth` handles navigation. */
 function invalidateLoginStatus() {
-  void queryClient.invalidateQueries({ queryKey: ["login-status"] })
+  void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
 }
 
 /** `"network-error"` must never be treated as `"rejected"` — a connectivity blip isn't a dead session. */
@@ -157,12 +159,17 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
  * consequently never reached for this specific request, and `RequireAuth` would otherwise bounce
  * a still-has-a-valid-refresh-token admin straight to `/login` — confirmed live via issue #99's
  * own repro (guest mode on, access token expired, refresh token still valid: `/login/status`
- * returned `logged_in:false` directly, no 401/403 ever crossed this function). Only worth
- * attempting when `guest_mode_enabled` is true — with guest mode off, an unauthenticated caller is
- * unambiguously logged out and a refresh attempt would just be a wasted round trip. */
+ * returned `logged_in:false` directly, no 401/403 ever crossed this function).
+ *
+ * Guest mode is *not* a valid proxy for "has a refresh cookie": an expired access token plus a
+ * still-valid refresh cookie looks identical to a fully logged-out caller here, whether guest
+ * mode is on or off. The refresh cookie is path-scoped to `/api/token/refresh`, so this request
+ * never carries it and cannot ask the server to distinguish the two. Always make one refresh
+ * attempt on `logged_in:false`; a genuinely logged-out visitor pays one extra 401 and a short
+ * recheck, which is much better than logging out an admin whose refresh token is still good. */
 export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean; guest_mode_enabled: boolean }>(): Promise<T> {
   const status = await fetchJson<T>("/login/status")
-  if (status.logged_in || !status.guest_mode_enabled) return status
+  if (status.logged_in) return status
   // A refresh failure must never make the login-status query itself reject. A rejected query turns
   // `RequireAuth` into an optimistic "keep showing admin UI" forever on browsers where the refresh
   // path can throw (e.g. a mobile WebView without `navigator.locks`). Returning the already-known
@@ -190,7 +197,7 @@ export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean
   // allowed to render, which is far too slow on mobile. The strict `RequireAuth`/`Layout` changes
   // already stop the admin chrome from appearing before login-status settles; the invalidation
   // then brings the remaining queries over to the admin view asynchronously.
-  if (refreshed.logged_in) void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "login-status" })
+  if (refreshed.logged_in) void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
   return refreshed
 }
 

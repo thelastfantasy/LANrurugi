@@ -16,7 +16,6 @@ import {
   useDeleteTankoubon,
   useGenerateThumbnails,
   useGenerateThumbnailsForArchives,
-  useLoginStatus,
   usePageDimensions,
   useRemoveBookmark,
   useSettings,
@@ -54,6 +53,7 @@ import {
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
+import { useSession } from "@/session/SessionProvider";
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
 import { TranslationOverlay } from "@/translation/components/TranslationOverlay";
@@ -170,7 +170,7 @@ export function Reader() {
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
   const updateSettings = useUpdateSettings();
-  const loginStatus = useLoginStatus();
+  const { isAuthenticated: loggedIn } = useSession();
   const categories = useCategories();
   const singleBookmarks = useBookmarksForArchive(isTank ? null : archiveId);
   const tankBookmarks = useBookmarksForTankoubon(isTank ? archiveId : null);
@@ -187,7 +187,6 @@ export function Reader() {
   );
   const generateThumbnailsForArchives = useGenerateThumbnailsForArchives();
   const [readerSettings, updateReaderSettings] = useReaderSettings();
-  const loggedIn = loginStatus.data?.logged_in ?? false;
   const totalPages = pages.data?.pages.length ?? 0;
   // `startPage`/`startWithOverview` are also read further down (query-string cleanup effect,
   // overlay initial state) — declared here, ahead of everything below that needs `currentPage`,

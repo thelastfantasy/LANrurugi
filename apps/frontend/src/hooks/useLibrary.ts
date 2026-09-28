@@ -8,7 +8,6 @@ import { sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
-  useLoginStatus,
   useSearch,
   useServerInfo,
   useSetArchiveProgress,
@@ -45,6 +44,7 @@ import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { sortCategories } from "@/lib/utils/sortCategories";
 import { type ContextMenuState } from "@/pages/Library/types";
 import { recordSearchNavigation } from "@/pages/Reader/crossArchiveNav";
+import { useSession } from "@/session/SessionProvider";
 import { toast } from "@/toast";
 
 import { useDocumentTitle } from "./useDocumentTitle";
@@ -59,13 +59,10 @@ export function useLibrary() {
   const categories = useCategories();
   const tankoubons = useTankoubons();
   const createTankoubon = useCreateTankoubon();
-  const loginStatus = useLoginStatus();
+  const { isAuthenticated: loggedIn, usingDefaultPassword } = useSession();
   const settings = useSettings();
   const stats = useStats(2);
   const queryClient = useQueryClient();
-  // Same strict gate as `Layout`: while login status is unresolved/errored the page must not
-  // render admin-only library chrome on top of guest-scoped content.
-  const loggedIn = loginStatus.data?.logged_in === true;
 
   const urlParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -184,7 +181,7 @@ export function useLibrary() {
 
   useEffect(() => {
     if (
-      loginStatus.data?.using_default_password &&
+      usingDefaultPassword &&
       !defaultPasswordToastShownThisPageLoad
     ) {
       defaultPasswordToastShownThisPageLoad = true;
@@ -197,7 +194,7 @@ export function useLibrary() {
         draggable: false,
       });
     }
-  }, [loginStatus.data?.using_default_password, t]);
+  }, [usingDefaultPassword, t]);
 
   useEffect(() => {
     const seenKey = "seenContextMenuTutorial";
@@ -457,7 +454,6 @@ export function useLibrary() {
     categories,
     tankoubons,
     createTankoubon,
-    loginStatus,
     settings,
     stats,
     loggedIn,

@@ -1,8 +1,9 @@
 import { useEffect } from "react"
 
 import { THEME_STORAGE_KEY } from "@/lib/storageKeys"
+import { useSession } from "@/session/SessionProvider"
 
-import { useLoginStatus, usePublicSettings, useSettings } from "./api/hooks"
+import { usePublicSettings, useSettings } from "./api/hooks"
 
 // Matches legacy's own theme file names/display data (`Utils/Generic.pm::css_default_data`);
 // `id` is stored verbatim under Redis `LRR_CONFIG`'s `theme` key.
@@ -142,8 +143,7 @@ export function useLegacyConfigCss() {
  * admin-password screen always matches the administrator's own theme even when guest mode is on
  * and the guest theme is a different one. */
 export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
-  const loginStatus = useLoginStatus()
-  const isAdminSession = loginStatus.data?.logged_in === true
+  const { isAuthenticated: isAdminSession, isSuccess: isSessionSuccess, isError: isSessionError } = useSession()
   const settings = useSettings({ enabled: isAdminSession })
   const publicTheme = usePublicSettings({ enabled: !isAdminSession })
 
@@ -156,7 +156,7 @@ export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
   // Only fall back to `DEFAULT_THEME_ID` once both queries have genuinely settled — applying it
   // too early overwrites `index.html`'s own synchronous theme application, flashing the default.
   const settingsDisabledAndLoginStatusSettled =
-    !isAdminSession && settings.data === undefined && (loginStatus.isSuccess || loginStatus.isError)
+    !isAdminSession && settings.data === undefined && (isSessionSuccess || isSessionError)
   const settingsSettled = isAdminSession
     ? settings.isSuccess || settings.isError
     : settingsDisabledAndLoginStatusSettled

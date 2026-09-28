@@ -1,17 +1,17 @@
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useLoginStatus } from "@/api/hooks"
 import { routes } from "@/lib/routes"
+import { useSession } from "@/session/SessionProvider"
 
 /** 403 content, rendered inline wherever a protected page's data load comes back `403` (not a
  * dedicated route). Not-logged-in is a defensive fallback; logged-in shows the real denial reason. */
 export function ForbiddenPage({ reason }: { reason?: string }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const loginStatus = useLoginStatus()
+  const { status } = useSession()
   // Defaults to "logged in" while in flight — a 403 already implies some identity was resolved.
-  const loggedIn = loginStatus.data?.logged_in ?? true
+  const loggedIn = status?.logged_in ?? true
 
   return (
     <div className="ido" style={{ textAlign: "center", padding: 40 }}>
