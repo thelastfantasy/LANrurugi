@@ -1,0 +1,57 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+#
+# Scope: this file exists to enforce a LICENSE gate on the dependency graph (issue #108).
+# The search-normalization work moved the project into the Chinese/Japanese text-conversion
+# crate ecosystem, which contains crates that are NOT license-compatible with this project's
+# MIT license. These were concrete near-misses during evaluation:
+#
+#   * `zhconv`   — GPL-2.0-or-later  (would have forced the whole distributed binary under GPL)
+#   * `jp_utils` — AGPL-3.0          (even stronger network-copyleft)
+#
+# `allow` below is an explicit allowlist: a crate's license expression must be satisfiable using
+# ONLY the permissive licenses listed there, so GPL/LGPL/AGPL are rejected automatically (even
+# when they show up as one branch of an OR-expression such as `MIT OR LGPL-2.1-or-later`).
+#
+# Run locally (same invocation CI uses):
+#   cargo deny --all-features check licenses
+
+[graph]
+# CI passes `--all-features` on the command line (cargo-deny-action's default `arguments`), so the
+# optional heavy crates (OCR / inpaint / ONNX) are part of the checked surface too. This config
+# therefore lists no target/feature narrowing of its own.
+all-features = false
+no-default-features = false
+
+[licenses]
+# Permissive licenses only — keep this list alphabetically sorted.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# License text must be a close match to the canonical SPDX text before the id is trusted.
+confidence-threshold = 0.9
+
+# Per-crate exceptions. Every entry needs a reason — do NOT add one just to silence CI; prefer
+# replacing the dependency.
+exceptions = [
+    # `smartstring` 1.0.1 declares `MPL-2.0+` (weak, file-level copyleft) and is NOT replaceable:
+    # it is a hard transitive dependency of `casbin` -> `rhai` (the authorization layer). MPL-2.0
+    # is weak copyleft and imposes no obligations on this project's own MIT-licensed code, so it is
+    # accepted here rather than in the global `allow` list above (where it would silently green-light
+    # MPL for every future crate). Re-check when bumping `casbin`/`rhai`.
+    { allow = ["MPL-2.0"], crate = "smartstring" },
+]
