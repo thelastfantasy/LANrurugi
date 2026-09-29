@@ -73,6 +73,21 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t("components.layout.anInternalErrorOccurred")}</span>
     case "stale_after_restart":
       return <span>{t("components.layout.downloadWasInterruptedByA")}</span>
+    case "superseded_by_newer_revision":
+      return (
+        <span>
+          {t("components.layout.aNewerRevisionIsAlreadyInLibrary")}{" "}
+          <a
+            href={routes.reader(error.archive_id)}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(routes.reader(error.archive_id))
+            }}
+          >
+            {error.archive_id}
+          </a>
+        </span>
+      )
     case "already_patched":
       return (
         <span style={{ color: "#c79121" }}>

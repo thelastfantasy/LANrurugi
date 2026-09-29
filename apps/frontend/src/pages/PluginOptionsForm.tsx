@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next"
 
 import { ValidationError } from "@/api/client"
 import { usePluginOptions, useResetPluginOptions, useUpdatePluginOptions } from "@/api/hooks"
-import type { PluginOptions, PluginOptionsUpdate } from "@/api/types"
+import type {
+  PluginOptions,
+  PluginOptionsUpdate,
+  RelativeNewerPolicy,
+  RelativeOlderPolicy,
+} from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 
 import { ICON_BUTTON_STYLE } from "./Upload/shared"
@@ -59,6 +64,12 @@ function PluginOptionsFormBody({
   const [rows, setRows] = useState<DomainRuleFormRow[]>(() => rowsFromOptions(initial))
   const [bundleValue, setBundleValue] = useState(initial.bundle_as_archive?.value ?? false)
   const [overwriteValue, setOverwriteValue] = useState(initial.overwrite_on_duplicate?.value ?? false)
+  const [newerPolicy, setNewerPolicy] = useState<RelativeNewerPolicy>(
+    initial.relative_newer_policy?.value ?? "overwrite_if_same_name",
+  )
+  const [olderPolicy, setOlderPolicy] = useState<RelativeOlderPolicy>(
+    initial.relative_older_policy?.value ?? "warn_then_conflict_menu",
+  )
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null)
 
   function addRow() {
@@ -86,6 +97,10 @@ function PluginOptionsFormBody({
     }
     if (initial.bundle_as_archive) body.bundle_as_archive = bundleValue
     if (initial.overwrite_on_duplicate) body.overwrite_on_duplicate = overwriteValue
+    if (initial.supports_version_history) {
+      body.relative_newer_policy = newerPolicy
+      body.relative_older_policy = olderPolicy
+    }
     try {
       const saved = await update.mutateAsync(body)
       // Re-seeds from the server's response, not last-typed rows — this component never remounts
@@ -93,6 +108,8 @@ function PluginOptionsFormBody({
       setRows(rowsFromOptions(saved))
       setBundleValue(saved.bundle_as_archive?.value ?? false)
       setOverwriteValue(saved.overwrite_on_duplicate?.value ?? false)
+      if (saved.relative_newer_policy) setNewerPolicy(saved.relative_newer_policy.value)
+      if (saved.relative_older_policy) setOlderPolicy(saved.relative_older_policy.value)
     } catch (e) {
       if (e instanceof ValidationError) {
         setFieldError({ field: e.field, message: e.message })
@@ -107,6 +124,8 @@ function PluginOptionsFormBody({
     setRows(rowsFromOptions(restored))
     setBundleValue(restored.bundle_as_archive?.value ?? false)
     setOverwriteValue(restored.overwrite_on_duplicate?.value ?? false)
+    if (restored.relative_newer_policy) setNewerPolicy(restored.relative_newer_policy.value)
+    if (restored.relative_older_policy) setOlderPolicy(restored.relative_older_policy.value)
   }
 
   return (
@@ -191,6 +210,62 @@ function PluginOptionsFormBody({
             {t(initial.overwrite_on_duplicate.description)}
           </label>
         </p>
+      )}
+
+      {initial.supports_version_history && (
+        <>
+          <h3 className="ih" style={{ fontSize: "1.0em", margin: "10px 0 6px" }}>
+            {t("pluginOptions.versionHistoryHandling")}
+          </h3>
+          <p style={{ margin: "0 0 6px" }}>
+            {initial.relative_newer_policy?.description
+              ? t(initial.relative_newer_policy.description)
+              : t("pluginOptions.whenTheDownloadIsNewer")}
+          </p>
+          {(
+            [
+              ["overwrite_if_same_name", "pluginOptions.newerOverwriteIfSameName"],
+              ["always_overwrite", "pluginOptions.newerAlwaysOverwrite"],
+            ] as const
+          ).map(([value, labelKey]) => (
+            <p key={value} style={{ margin: "0 0 3px" }}>
+              <label>
+                <input
+                  type="radio"
+                  name={`relative-newer-policy-${namespace}`}
+                  checked={newerPolicy === value}
+                  onChange={() => setNewerPolicy(value)}
+                />{" "}
+                {t(labelKey)}
+              </label>
+            </p>
+          ))}
+
+          <p style={{ margin: "10px 0 6px" }}>
+            {initial.relative_older_policy?.description
+              ? t(initial.relative_older_policy.description)
+              : t("pluginOptions.whenTheDownloadIsOlder")}
+          </p>
+          {(
+            [
+              ["block", "pluginOptions.olderBlock"],
+              ["warn_then_conflict_menu", "pluginOptions.olderWarnThenConfirm"],
+              ["silent_then_conflict_menu", "pluginOptions.olderSilent"],
+            ] as const
+          ).map(([value, labelKey]) => (
+            <p key={value} style={{ margin: "0 0 3px" }}>
+              <label>
+                <input
+                  type="radio"
+                  name={`relative-older-policy-${namespace}`}
+                  checked={olderPolicy === value}
+                  onChange={() => setOlderPolicy(value)}
+                />{" "}
+                {t(labelKey)}
+              </label>
+            </p>
+          ))}
+        </>
       )}
 
       {fieldError && (

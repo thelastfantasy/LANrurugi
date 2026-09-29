@@ -62,11 +62,21 @@
  * local info-hash interface with `extends Pick<AuthoritativeInterface, "key1" | "key2" | ...>`
  * against these exact four (`render.rs`'s `authoritative_host_args_interface`) — a real symbol
  * reference a generated plugin file needs to resolve with zero `import`/reference of its own, the
- * same constraint that keeps `Legacy*`/`legacyCompat` out of this `export`-bearing module. Every
- * *other* protocol type below (results, `PluginInfoResult`, permissions, ...) has no such
- * constraint — nothing generated ever needs to reference them by name inside a plugin file's own
- * source, only this module's own callers (`dispatcher.ts`, `deno doc`, a future Rust-side
- * `protocol.rs` comparison) do, so they stay right here as ordinary `export`s.
+ * same constraint that keeps `Legacy*`/`legacyCompat` out of this `export`-bearing module.
+ *
+ * {@linkcode DownloadResult} and the types it contains are mirrored there for the same reason
+ * (as `DownloadResultShape`/`DownloadRequestResult`/`VersionHistoryEntryResult`/
+ * `PluginErrorResult`): a download plugin annotates its own `execDownload` return type with them,
+ * which needs a name resolvable without an import. That annotation is what makes a mistyped key a
+ * compile error instead of a field the host's deserializer silently drops — `version_history`
+ * (issue #107) is exactly the kind of optional field that failure mode would hide. The two copies
+ * are kept in sync by hand; this module stays the authoritative source the Rust side is verified
+ * against.
+ *
+ * Every *other* protocol type below (`PluginInfoResult`, permissions, `MetadataResult`, ...) has no
+ * such constraint — nothing needs to reference them by name inside a plugin file's own source, only
+ * this module's own callers (`dispatcher.ts`, `deno doc`, a future Rust-side `protocol.rs`
+ * comparison) do, so they stay right here as ordinary `export`s.
  *
  * `deno doc` this file together with `dispatcher.ts` (exactly what `mise run plugin-sdk-docs`
  * does) to get the protocol-type half in one place — `plugins/legacy-globals.d.ts`'s own host
@@ -347,7 +357,44 @@ export interface DownloadResult {
    * progress/concurrency/rate-limit treatment since the transfer already happened entirely inside
    * the plugin process by the time this returns. */
   file_path?: string;
+  /** The full known version-history of this download's series, as this plugin's site exposes it —
+   * every source URL the plugin can enumerate (ancestors AND descendants, where the site's API
+   * makes both directions available; e-hentai only exposes the ancestor direction via `parent_gid`
+   * chains plus the current tip via `current_gid`, so in practice this ends up being "every node
+   * from `first_gid` to `current_gid`"), each with the timestamp the site reports for it.
+   *
+   * The plugin performs NO comparison against the library and reaches NO conclusion — it just
+   * reports what the site says exists. The host walks this list against its own catalogue to decide
+   * whether/what to overwrite (see {@linkcode PluginOptionsResult.relative_newer_policy}/
+   * {@linkcode PluginOptionsResult.relative_older_policy}). Keeping the judgment host-side means
+   * one tested implementation shared by every plugin, rather than each (especially AI-generated)
+   * plugin reinventing a multi-hop reachability walk with its own edge-case bugs.
+   *
+   * Every `source` MUST already be passed through this plugin's own {@linkcode canonicalizeSource}
+   * — the host compares these against stored `source:` tags by plain string equality, so an
+   * un-normalized entry silently fails to match with no error surfaced anywhere. Include the
+   * just-downloaded item itself as one of the entries; the host locates it by matching this
+   * download's own source URL. Order does not matter — the host sorts by `posted_at`.
+   *
+   * Absent when the plugin's site has no version-history concept, or this particular download has
+   * none (e.g. a first-ever upload with no parent and no later revision). */
+  version_history?: VersionHistoryEntry[];
   error?: PluginError;
+}
+
+/** One node of a {@linkcode DownloadResult.version_history} chain — a single known revision of the
+ * series, as the plugin's site reports it. */
+export interface VersionHistoryEntry {
+  /** This revision's source URL, already normalized through this plugin's own
+   * {@linkcode canonicalizeSource} (see {@linkcode DownloadResult.version_history}'s docs — an
+   * un-normalized value silently fails to match a stored `source:` tag). */
+  source: string;
+  /** ISO 8601 timestamp the site reports for this revision. The plugin converts from whatever the
+   * site's native format is (e-hentai's `gdata` reports `posted` as a unix-seconds *string*). Sole
+   * determiner of revision order: there is deliberately no separate "this one is current" flag,
+   * since a second source of truth could contradict the sort and leave the host no way to know
+   * which to believe. */
+  posted_at: string;
 }
 
 /** One per-domain concurrency/rate-limit rule, as declared by a plugin's own {@linkcode
@@ -401,5 +448,88 @@ export interface PluginOptionsResult {
     /** Human-readable explanation shown in the settings UI. */
     description: string;
   };
+  /** How to handle a download the host determines (via {@linkcode DownloadResult.version_history})
+   * is a NEWER revision of an already-catalogued archive.
+   *
+   * Declaring this is entirely optional even for a plugin that does populate `version_history`:
+   * the host detects `version_history` support by static analysis of the plugin's own source (a
+   * `plugin_introspect` dispatcher call), so the settings UI offers both policies to the user
+   * regardless, falling back to {@linkcode DEFAULT_RELATIVE_NEWER_POLICY} when the plugin states no
+   * preference. Declare it only to express a *different* default than that. */
+  relative_newer_policy?: {
+    default: RelativeNewerPolicy;
+    /** Human-readable explanation shown in the settings UI. */
+    description: string;
+  };
+  /** How to handle a download the host determines is an OLDER revision of an already-catalogued
+   * archive. Optional on exactly the same terms as
+   * {@linkcode PluginOptionsResult.relative_newer_policy}; defaults to
+   * {@linkcode DEFAULT_RELATIVE_OLDER_POLICY}. */
+  relative_older_policy?: {
+    default: RelativeOlderPolicy;
+    /** Human-readable explanation shown in the settings UI. */
+    description: string;
+  };
 }
+
+/** What to do when the incoming download is a newer revision of something already in the library.
+ * - `"always_overwrite"`: delete the old archive unconditionally, regardless of filename.
+ * - `"overwrite_if_same_name"`: only overwrite when destination filenames actually collide;
+ *   otherwise keep both as separate archives. */
+export type RelativeNewerPolicy = "always_overwrite" | "overwrite_if_same_name";
+
+/** What to do when the incoming download is an *older* revision than something already in library.
+ * - `"block"`: refuse the download outright before any bytes transfer, surfacing which in-library
+ *   archive is newer as the failure reason.
+ * - `"warn_then_conflict_menu"`: hold the queue item for explicit user confirmation before
+ *   starting the transfer; afterwards the existing filename-collision conflict menu still applies
+ *   if (and only if) the filename actually collides.
+ * - `"silent_then_conflict_menu"`: no upfront prompt, the download just proceeds; same
+ *   filename-collision-gated conflict menu afterwards. */
+export type RelativeOlderPolicy =
+  | "block"
+  | "warn_then_conflict_menu"
+  | "silent_then_conflict_menu";
+
+/** Applied when neither the user nor the plugin states a preference. Conservative on purpose: only
+ * replacing an archive whose filename already collides avoids silently deleting a library entry the
+ * user may have deliberately kept alongside its revision. */
+export const DEFAULT_RELATIVE_NEWER_POLICY: RelativeNewerPolicy = "overwrite_if_same_name";
+
+/** Applied when neither the user nor the plugin states a preference. Asking first is the safe
+ * default for the genuinely surprising case — the user asked for a URL that turns out to be older
+ * than what they already have. */
+export const DEFAULT_RELATIVE_OLDER_POLICY: RelativeOlderPolicy = "warn_then_conflict_menu";
+
+/** Optional export, parallel to {@linkcode pluginOptions}. Given a URL this plugin's site might
+ * expose (any domain alias, with or without query string/trailing slash/scheme), returns the
+ * canonical form the host should use for matching against stored `source:` tags — e.g. e-hentai
+ * folding `exhentai.org`/`g.e-hentai.org`/`forums.e-hentai.org` all down to a single
+ * `e-hentai.org/g/{gid}/{token}` form. The host calls this before every `source:` tag comparison
+ * (both for {@linkcode DownloadResult.version_history} matching and for
+ * `plugins/script/sourcefinder.ts`'s existing lookup) instead of maintaining its own per-site
+ * domain-alias table, so this plugin's own domain-alias knowledge lives in the one place that
+ * actually has it.
+ *
+ * CONTRACT (required, not just a suggestion): this function MUST be idempotent and MUST produce
+ * byte-identical output for every URL form that refers to the same underlying resource — including
+ * a URL already stored in an archive's `source:` tag from a PAST version of this plugin (or from
+ * the host's own generic `trim_url()`), a freshly-fetched URL this plugin just resolved via
+ * `execDownload`, AND every entry this plugin puts in `DownloadResult.version_history[].source`.
+ * The host calls this function on both sides of every comparison and does a plain string equality
+ * check on the results — if this function ever normalizes the same real-world resource into two
+ * different strings depending on which historical form of the URL it was given, the comparison
+ * silently fails to match with no error surfaced anywhere, which is far harder to diagnose than an
+ * exception. When in doubt, normalize toward the most stable identifier the site guarantees never
+ * changes (e.g. e-hentai's numeric `gid`), not toward whatever the most recently observed URL
+ * shape happens to look like.
+ *
+ * Return the input unchanged if this plugin has no additional normalization beyond the host's
+ * generic scheme/www/query/trailing-slash trimming. Omitting this export entirely is valid — the
+ * host then applies only its own generic `trim_url()`.
+ *
+ * This declaration exists purely to document the contract; a plugin declares its own
+ * `export function canonicalizeSource(url: string): string` rather than importing this type.
+ */
+export type CanonicalizeSource = (url: string) => string;
 

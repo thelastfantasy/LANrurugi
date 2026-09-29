@@ -24,7 +24,13 @@ use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::permissions::build_flags;
-use crate::protocol::{PluginInfo, PluginOptionsResult, Request, Response};
+use crate::protocol::{PluginInfo, PluginIntrospection, PluginOptionsResult, Request, Response};
+
+/// `dispatcher.ts`'s `canonicalize_source` reply shape.
+#[derive(serde::Deserialize)]
+struct CanonicalizeSourceResult {
+    canonical: Vec<String>,
+}
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -284,6 +290,77 @@ impl PluginPool {
         } else {
             Ok(Some(serde_json::from_value(value)?))
         }
+    }
+
+    /// Reports what a plugin's own *source* says it supports, without running its entry points —
+    /// same throwaway, zero-permission subprocess as [`plugin_options`](Self::plugin_options).
+    ///
+    /// Static analysis rather than runtime observation is what makes a freshly-edited plugin take
+    /// effect on the very next settings-page load, with no download ever having run: pairs with
+    /// `discover_namespaces`' own rescan-per-request behavior.
+    pub async fn plugin_introspect(&self, namespace: &str) -> Result<PluginIntrospection> {
+        if !is_safe_namespace(namespace) {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
+        let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
+        if !plugin_module.is_file() {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
+        let mut worker = Worker::spawn(
+            &self.deno_binary,
+            &self.dispatcher_path,
+            &self.plugins_dir,
+            namespace,
+            &[],
+            false,
+        )
+        .await?;
+        let response = worker
+            .call(namespace, "plugin_introspect", serde_json::json!({}))
+            .await?;
+        Ok(serde_json::from_value(response_to_result(response)?)?)
+    }
+
+    /// Runs `urls` through a plugin's own optional `canonicalizeSource` export, returning `Ok(None)`
+    /// when the plugin has no such export (the host then applies only its own generic `trim_url`).
+    ///
+    /// Batched deliberately: a `source:` tag comparison normalizes both sides of every candidate
+    /// pair, so a per-URL call would mean one subprocess round-trip per library archive.
+    pub async fn canonicalize_sources(
+        &self,
+        namespace: &str,
+        urls: &[String],
+    ) -> Result<Option<Vec<String>>> {
+        if urls.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let value = self
+            .execute(
+                namespace,
+                "canonicalize_source",
+                serde_json::json!({ "urls": urls }),
+            )
+            .await?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let parsed: CanonicalizeSourceResult = serde_json::from_value(value)?;
+        // A plugin returning the wrong number of results would silently misalign every comparison
+        // that follows, which is exactly the failure mode `canonicalizeSource`'s contract warns is
+        // harder to diagnose than an exception — so refuse it here instead.
+        if parsed.canonical.len() != urls.len() {
+            return Err(PoolError::PluginError(crate::protocol::ResponseError {
+                message: format!(
+                    "canonicalizeSource returned {} results for {} inputs",
+                    parsed.canonical.len(),
+                    urls.len()
+                ),
+                kind: "plugin_error".to_string(),
+                error_code: None,
+                data: None,
+            }));
+        }
+        Ok(Some(parsed.canonical))
     }
 
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its

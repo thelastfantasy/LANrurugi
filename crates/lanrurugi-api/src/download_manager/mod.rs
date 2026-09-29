@@ -12,6 +12,7 @@ pub mod live_rate;
 pub mod rate_limit;
 pub mod settings;
 pub mod stream;
+pub mod version_history;
 
 use std::collections::HashMap;
 use std::sync::Arc;

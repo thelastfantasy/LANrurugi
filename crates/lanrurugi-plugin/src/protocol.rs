@@ -156,6 +156,46 @@ pub struct OverwriteOnDuplicateOption {
     pub description: String,
 }
 
+/// What to do when an incoming download is a *newer* revision of an already-catalogued archive —
+/// mirrors `plugin-sdk.ts`'s `RelativeNewerPolicy`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RelativeNewerPolicy {
+    /// Delete the old archive unconditionally, regardless of filename.
+    AlwaysOverwrite,
+    /// Only overwrite when destination filenames actually collide; otherwise keep both.
+    #[default]
+    OverwriteIfSameName,
+}
+
+/// What to do when an incoming download is an *older* revision than an already-catalogued archive —
+/// mirrors `plugin-sdk.ts`'s `RelativeOlderPolicy`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RelativeOlderPolicy {
+    /// Refuse before any bytes transfer, reporting which in-library archive is newer.
+    Block,
+    /// Hold for explicit user confirmation before transferring.
+    #[default]
+    WarnThenConflictMenu,
+    /// Proceed silently; only the existing filename-collision menu may appear afterwards.
+    SilentThenConflictMenu,
+}
+
+/// Mirrors `plugin-sdk.ts`'s `PluginOptionsResult.relative_newer_policy` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelativeNewerPolicyOption {
+    pub default: RelativeNewerPolicy,
+    pub description: String,
+}
+
+/// Mirrors `plugin-sdk.ts`'s `PluginOptionsResult.relative_older_policy` field-for-field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelativeOlderPolicyOption {
+    pub default: RelativeOlderPolicy,
+    pub description: String,
+}
+
 /// A download plugin's `pluginOptions()` response (spec FR-015) — absent/`null` when the plugin
 /// exports no such function (the common case: every non-download plugin, and a download plugin
 /// with nothing to configure). Mirrors `plugin-sdk.ts`'s `PluginOptionsResult` field-for-field.
@@ -167,6 +207,30 @@ pub struct PluginOptionsResult {
     pub bundle_as_archive: Option<BundleAsArchiveOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overwrite_on_duplicate: Option<OverwriteOnDuplicateOption>,
+    /// Optional even for a plugin that populates `version_history` — the host offers both policies
+    /// in the settings UI based on static analysis of the plugin's source
+    /// ([`PluginIntrospection::returns_version_history`]), not on this declaration. Present only
+    /// when the plugin wants a different default than the type's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_newer_policy: Option<RelativeNewerPolicyOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_older_policy: Option<RelativeOlderPolicyOption>,
+}
+
+/// What a `plugin_introspect` dispatcher call reports about a plugin's *source code*, without
+/// running it — see `dispatcher.ts`'s own `plugin_introspect` case.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PluginIntrospection {
+    /// Whether `execDownload`'s body ever returns a `version_history` key. Drives whether the
+    /// settings UI offers the two relative-revision policies at all. Static analysis, not runtime
+    /// observation, so a freshly-edited plugin takes effect on the next options request with no
+    /// download ever having run.
+    #[serde(default)]
+    pub returns_version_history: bool,
+    /// Whether the plugin exports `canonicalizeSource`, meaning the host should route every
+    /// `source:` tag comparison for this plugin's namespace through it.
+    #[serde(default)]
+    pub exports_canonicalize_source: bool,
 }
 
 /// A plugin-authored error — mirrors `plugin-sdk.ts`'s `PluginError` field-for-field. `error_code`
@@ -281,6 +345,20 @@ pub struct DownloadResult {
     pub downloads: Option<Vec<DownloadRequest>>,
     #[serde(default)]
     pub file_path: Option<String>,
+    /// Every revision of this download's series the plugin's site exposes, each already normalized
+    /// through the plugin's own `canonicalizeSource`. The plugin reaches no conclusion; the host
+    /// compares this against its own catalogue (`download_manager::version_history`).
+    #[serde(default)]
+    pub version_history: Option<Vec<VersionHistoryEntry>>,
     #[serde(default)]
     pub error: Option<PluginError>,
+}
+
+/// One node of a [`DownloadResult::version_history`] chain — mirrors `plugin-sdk.ts`'s
+/// `VersionHistoryEntry` field-for-field.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct VersionHistoryEntry {
+    pub source: String,
+    /// ISO 8601, as the plugin converted it from whatever its site reports natively.
+    pub posted_at: String,
 }

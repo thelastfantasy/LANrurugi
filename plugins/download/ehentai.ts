@@ -33,7 +33,9 @@ export function pluginInfo() {
     // E-Hentai/ExHentai itself (to resolve the real archive-download URL via the archiver form)
     // before handing the resulting URL off to Rust for the real byte-level fetch, unlike chaika.ts
     // (which needs no net permission at all since it does zero HTTP itself).
-    declared_permissions: { net: ["e-hentai.org", "exhentai.org"], read: false, write: false },
+    // `api.e-hentai.org` is the JSON `gdata` endpoint the version-history walk below uses; the
+    // other two are the archiver.php form this plugin has always talked to.
+    declared_permissions: { net: ["e-hentai.org", "exhentai.org", "api.e-hentai.org"], read: false, write: false },
     name: "E*Hentai Downloader",
     author: "thelastfantasy",
     description: "Downloads the given e*hentai URL and adds it to LANraragi. This uses GP to call the archiver, so make sure you have enough!",
@@ -42,6 +44,29 @@ export function pluginInfo() {
     url_pattern: "e-?hentai\\.org|exhentai\\.org",
     domain_match: ["e-hentai.org", "exhentai.org"],
   };
+}
+
+/** Folds every E-Hentai domain alias and URL shape onto one `e-hentai.org/g/{gid}/{token}` string,
+ * so the host can compare a freshly-resolved URL against a `source:` tag written by any past
+ * version of this plugin by plain string equality (SDK contract: same resource must always produce
+ * the same output, whichever historical shape it arrived in).
+ *
+ * `gid` is the identifier E-Hentai guarantees stable, so normalizing toward it — rather than toward
+ * whatever host/path a given URL happened to use — is what makes that contract hold. A URL this
+ * plugin doesn't recognize as a gallery falls back to the host's own generic trimming rather than
+ * being mangled into something that would never match anything. */
+export function canonicalizeSource(url: string): string {
+  const generic = String(url ?? "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/\/+$/, "");
+  const match = generic.match(
+    /^(?:g\.|forums\.)?(?:ex|e-)hentai\.org\/g\/([0-9]+)\/([0-9a-f]+)/i,
+  );
+  return match ? `e-hentai.org/g/${match[1]}/${match[2]}` : generic;
 }
 
 export function pluginOptions() {
@@ -64,7 +89,101 @@ export function pluginOptions() {
 }
 
 
-export async function execDownload(hostArgs: Record<string, unknown>) {
+/** One `gdata` response entry, limited to the fields this plugin reads. */
+interface GalleryData {
+  gid: number;
+  token: string;
+  posted: string;
+  parent_gid?: string;
+  parent_key?: string;
+  /** Present ONLY when the queried gallery is not itself the newest revision — its absence is how
+   * E-Hentai says "this one is current". */
+  current_gid?: string;
+  current_key?: string;
+}
+
+/** One `gdata` call. `namespace: 0` is load-bearing: the newer `namespace: 1` format omits
+ * `current_gid` entirely, which is the only field that identifies the series' newest revision.
+ *
+ * Safe here, but NOT a change to copy into `plugins/metadata/ehentai.ts`: `namespace: 0` also
+ * returns tags stripped of their namespace prefixes (a bare value, not `artist:<value>` — verified
+ * live against a real gallery),
+ * which would collapse every E-Hentai tag into the bare-tag "Other" bucket. This function reads
+ * only gid/token/posted/parent/current and never looks at `tags`, so the stripping costs nothing. */
+async function fetchGalleryData(
+  pairs: [number, string][],
+): Promise<GalleryData[]> {
+  const response = await fetch("https://api.e-hentai.org/api.php", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ method: "gdata", gidlist: pairs, namespace: 0 }),
+  });
+  if (!response.ok) return [];
+  const body = await response.json() as { gmetadata?: GalleryData[] };
+  return body.gmetadata ?? [];
+}
+
+/** Collects every revision of a gallery's series, walking `parent_gid` back to the chain's root and
+ * `current_gid` forward to its tip.
+ *
+ * Returns `[]` rather than throwing on any failure: version history is optional enrichment, and a
+ * download must never fail because this lookup did. The host treats an empty list as "no version
+ * relationship known" and catalogues the download normally. */
+async function collectVersionHistory(
+  gID: string,
+  gToken: string,
+  logger: ReturnType<typeof legacyCompat.getLogger>,
+): Promise<VersionHistoryEntryResult[]> {
+  const MAX_HOPS = 50;
+  const byGid = new Map<number, GalleryData>();
+
+  const record = (entry: GalleryData) => {
+    if (entry && typeof entry.gid === "number") byGid.set(entry.gid, entry);
+    return entry;
+  };
+
+  try {
+    const [seed] = await fetchGalleryData([[Number(gID), gToken]]);
+    if (!seed) return [];
+    record(seed);
+
+    // Backward: each gallery names at most one direct parent, so this is a plain chain walk.
+    let cursor: GalleryData | undefined = seed;
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const parentGid = Number(cursor?.parent_gid ?? 0);
+      const parentKey = cursor?.parent_key;
+      if (!parentGid || !parentKey || byGid.has(parentGid)) break;
+      const [parent] = await fetchGalleryData([[parentGid, parentKey]]);
+      if (!parent) break;
+      cursor = record(parent);
+    }
+
+    // Forward: `current_gid` jumps straight to the newest revision, so this normally runs once.
+    // Looping guards the case where the tip has itself since been superseded.
+    cursor = seed;
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const currentGid = Number(cursor?.current_gid ?? 0);
+      const currentKey = cursor?.current_key;
+      if (!currentGid || !currentKey || byGid.has(currentGid)) break;
+      const [current] = await fetchGalleryData([[currentGid, currentKey]]);
+      if (!current) break;
+      cursor = record(current);
+    }
+  } catch (e) {
+    logger.warn(`version history lookup failed, continuing without it: ${e}`);
+    return [];
+  }
+
+  return [...byGid.values()].map((entry) => ({
+    source: canonicalizeSource(`e-hentai.org/g/${entry.gid}/${entry.token}`),
+    // `posted` is unix seconds as a string; the SDK contract wants ISO 8601.
+    posted_at: new Date(Number(entry.posted) * 1000).toISOString(),
+  }));
+}
+
+export async function execDownload(
+  hostArgs: Record<string, unknown>,
+): Promise<DownloadResultShape> {
   {
     const info = hostArgs as Record<string, any>;
     info.user_agent = legacyCompat.userAgent();
@@ -149,5 +268,11 @@ export async function execDownload(hostArgs: Record<string, unknown>) {
   // Rust's `resolve_filename` fallback chain to use) — E-Hentai galleries are always packaged as a
   // real `.zip` by the archiver, so `{gID}_{gToken}.zip` gives every download here a stable,
   // sensible, uniquely-named `.zip` file instead of a URL-derived guess.
-  return { downloads: [{ url: finalURL.href, filename_hint: `${gID}_${gToken}.zip` }] };
+  // Reported, never judged: the host compares this against its own catalogue to decide whether
+  // this download supersedes (or is superseded by) an existing archive.
+  const version_history = await collectVersionHistory(gID, gToken, logger);
+  return {
+    downloads: [{ url: finalURL.href, filename_hint: `${gID}_${gToken}.zip` }],
+    version_history,
+  };
 }

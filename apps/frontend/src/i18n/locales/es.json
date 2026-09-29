@@ -317,6 +317,14 @@
   "settings.resetDatabase": "Reiniciar base de datos",
   "settings.resetSearchCache": "Reiniciar caché de búsqueda",
   "pluginOptions.resetToDefaults": "Reset to Defaults",
+  "pluginOptions.versionHistoryHandling": "Revision handling",
+  "pluginOptions.whenTheDownloadIsNewer": "When the download is a newer revision of an archive already in your library:",
+  "pluginOptions.newerOverwriteIfSameName": "Replace the old archive only when the filenames collide (keep both otherwise)",
+  "pluginOptions.newerAlwaysOverwrite": "Always replace the old archive, regardless of filename",
+  "pluginOptions.whenTheDownloadIsOlder": "When the download is an older revision than an archive already in your library:",
+  "pluginOptions.olderBlock": "Refuse the download before it starts",
+  "pluginOptions.olderWarnThenConfirm": "Ask for confirmation before downloading",
+  "pluginOptions.olderSilent": "Download it without asking",
   "settings.resizeImagesInReader": "Redimensionar imágenes en el lector",
   "settings.resizeQuality": "Calidad de redimensionado",
   "settings.restartFileWatcher": "Reiniciar vigilante de archivos",
@@ -467,6 +475,7 @@
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
   "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
+  "components.layout.aNewerRevisionIsAlreadyInLibrary": "A newer revision of this gallery is already in your library:",
   "upload.waiting": "Waiting…",
   "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
   "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
@@ -518,5 +527,8 @@
   "reader.splitBatchRunning": "Splitting: ",
   "reader.splitBatchDone": "Split complete",
   "reader.tankSplitSelectArchives": "Select archives to split",
-  "reader.tankSplitNoSuggestions": "No archives with split suggestions"
+  "reader.tankSplitNoSuggestions": "No archives with split suggestions",
+  "upload.olderRevisionWarning": "This is an older revision — your library already has a newer one:",
+  "upload.downloadAnyway": "Download anyway",
+  "upload.abandonDownload": "Abandon this download"
 }

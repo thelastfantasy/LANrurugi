@@ -455,3 +455,46 @@ interface DownloadHostArgs {
    * `forceresampled` toggle reads `hostArgs.customargs[0]` exactly like a metadata plugin would. */
   customargs: CustomArgValue[];
 }
+
+/** A plugin-authored error, structurally identical to `plugin-sdk.ts`'s own `PluginError` — see
+ * that interface for the full `error_code`-as-i18n-key convention. Declared here (not only there)
+ * for the same zero-boilerplate reason as {@linkcode DownloadHostArgs}: it appears in the return
+ * type a plugin file annotates, and a plugin file can never `import` the SDK module. */
+interface PluginErrorResult {
+  error_code: string;
+  data?: Record<string, string | number>;
+}
+
+/** One resource for the host to fetch — mirrors `plugin-sdk.ts`'s `DownloadRequest`. */
+interface DownloadRequestResult {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  /** Fallback filename, used only when the real response has no usable `Content-Disposition`. */
+  filename_hint?: string;
+}
+
+/** One revision of a download's series — mirrors `plugin-sdk.ts`'s `VersionHistoryEntry`. */
+interface VersionHistoryEntryResult {
+  /** Already normalized through this plugin's own `canonicalizeSource` — the host compares these
+   * against stored `source:` tags by plain string equality. */
+  source: string;
+  /** ISO 8601. Sole determiner of revision order; there is deliberately no "is current" flag. */
+  posted_at: string;
+}
+
+/** `execDownload`'s return shape — mirrors `plugin-sdk.ts`'s `DownloadResult` field-for-field.
+ *
+ * Annotate `execDownload` with this (`): Promise<DownloadResultShape>`) so a typo in a field name
+ * is a compile error rather than a silently-ignored property: the host deserializes this JSON into
+ * `lanrurugi_plugin::protocol::DownloadResult`, which skips anything it doesn't recognize, so an
+ * unannotated return value has nothing checking it against the real contract at all. */
+interface DownloadResultShape {
+  downloads?: DownloadRequestResult[];
+  /** Escape hatch: the plugin already wrote the file itself and hands back a local path. */
+  file_path?: string;
+  /** Every revision of this download's series the site exposes, including the one being downloaded.
+   * The plugin reports only; the host decides what supersedes what (issue #107). */
+  version_history?: VersionHistoryEntryResult[];
+  error?: PluginErrorResult;
+}

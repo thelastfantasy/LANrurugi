@@ -1325,6 +1325,24 @@ export function useStartQueueItem() {
   })
 }
 
+/** Answers the older-revision prompt (issue #107). `proceed: false` abandons the item
+ * (`cancelled`); `proceed: true` records the decision and restarts the download. */
+export function useConfirmOlderRevision() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, proceed }: { id: string; proceed: boolean }) =>
+      sendJson<{ proceeded: boolean; job?: string }>(
+        "POST",
+        `/download_queue/${encodeURIComponent(id)}/confirm-older`,
+        { proceed },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+    },
+  })
+}
+
 export function useStopQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({

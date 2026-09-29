@@ -383,13 +383,13 @@ async fn get_archive_deprecated(
 /// by the single-archive [`delete_archive`] handler and [`batch_delete_archives`]'s per-id loop so
 /// the two never drift on what "delete an archive" actually does (file removal, search-index
 /// cleanup, recommend-cache eviction, stale download-queue entries, thumbnails, sidecar patch).
-enum DeleteOneOutcome {
+pub(crate) enum DeleteOneOutcome {
     NotFound,
     Deleted { filename: String },
     Error(String),
 }
 
-async fn delete_one_archive(
+pub(crate) async fn delete_one_archive(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
     auth: Option<&crate::auth_context::AuthContext>,

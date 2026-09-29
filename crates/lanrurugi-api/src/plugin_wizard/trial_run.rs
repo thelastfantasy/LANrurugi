@@ -179,13 +179,24 @@ async fn probe_declared_options(
     state: &AppState,
     namespace: &str,
 ) -> Option<EffectivePluginOptions> {
-    let declared = state
+    let declared = state.plugins.plugin_options(namespace).await.ok().flatten();
+    let supports_version_history = state
         .plugins
-        .plugin_options(namespace)
+        .plugin_introspect(namespace)
         .await
-        .ok()
-        .flatten()?;
-    Some(merge(namespace, &declared, None))
+        .map(|i| i.returns_version_history)
+        .unwrap_or(false);
+    // Same "either signal is enough" rule as the installed-plugin path: a draft that reports
+    // version history but declares no `pluginOptions()` still has a settings panel worth showing.
+    if declared.is_none() && !supports_version_history {
+        return None;
+    }
+    Some(merge(
+        namespace,
+        &declared.unwrap_or_default(),
+        None,
+        supports_version_history,
+    ))
 }
 
 async fn run_login_trial(

@@ -424,6 +424,14 @@
   "settings.resetDatabase": "데이터베이스 초기화",
   "settings.resetSearchCache": "검색 캐시 초기화",
   "pluginOptions.resetToDefaults": "Reset to Defaults",
+  "pluginOptions.versionHistoryHandling": "Revision handling",
+  "pluginOptions.whenTheDownloadIsNewer": "When the download is a newer revision of an archive already in your library:",
+  "pluginOptions.newerOverwriteIfSameName": "Replace the old archive only when the filenames collide (keep both otherwise)",
+  "pluginOptions.newerAlwaysOverwrite": "Always replace the old archive, regardless of filename",
+  "pluginOptions.whenTheDownloadIsOlder": "When the download is an older revision than an archive already in your library:",
+  "pluginOptions.olderBlock": "Refuse the download before it starts",
+  "pluginOptions.olderWarnThenConfirm": "Ask for confirmation before downloading",
+  "pluginOptions.olderSilent": "Download it without asking",
   "settings.resizeImagesInReader": "리더에서 이미지 크기 조정",
   "settings.resizeQuality": "리사이즈 품질",
   "settings.restartFileWatcher": "파일 감시자 재시작",
@@ -628,6 +636,7 @@
   "upload.matchedRulePattern": "Matched rule: {{pattern}}",
   "Edit this plugin’s rate-limit settings": "Edit this plugin’s rate-limit settings",
   "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
+  "components.layout.aNewerRevisionIsAlreadyInLibrary": "A newer revision of this gallery is already in your library:",
   "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
   "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
   "settings.importLegacyConflictModeMerge": "Merge tags, keep this library's title/summary",
@@ -678,5 +687,8 @@
   "reader.splitBatchRunning": "분할 중: ",
   "reader.splitBatchDone": "분할 완료",
   "reader.tankSplitSelectArchives": "분할할 아카이브 선택",
-  "reader.tankSplitNoSuggestions": "분할 제안이 있는 아카이브가 없습니다"
+  "reader.tankSplitNoSuggestions": "분할 제안이 있는 아카이브가 없습니다",
+  "upload.olderRevisionWarning": "This is an older revision — your library already has a newer one:",
+  "upload.downloadAnyway": "Download anyway",
+  "upload.abandonDownload": "Abandon this download"
 }

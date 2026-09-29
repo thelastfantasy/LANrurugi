@@ -559,22 +559,122 @@ async fn put_plugin_priority(
         .into_response()
 }
 
-/// Fetches `namespace`'s declared `pluginOptions()` fresh from the plugin, mapping "plugin exports
-/// no such function" (`Ok(None)`) and "namespace doesn't exist at all" (`Err`) onto the same `404`
-/// (spec FR-015 / contracts/download-settings-api.md — the two cases are indistinguishable from
-/// the caller's point of view: no settings interface either way).
+/// Normalizes `urls` for `source:` tag comparison, preferring the plugin's own
+/// `canonicalizeSource` export over the host's generic [`trim_url`] (issue #107).
+///
+/// Both sides of every comparison must go through this same function: the plugin's contract is that
+/// it folds every historical URL shape for one resource onto one string, and a comparison where
+/// only one side was normalized silently fails to match with nothing reported anywhere.
+async fn canonicalize_sources_for(
+    state: &AppState,
+    plugin_namespace: &str,
+    urls: Vec<String>,
+) -> Vec<String> {
+    match state
+        .plugins
+        .canonicalize_sources(plugin_namespace, &urls)
+        .await
+    {
+        Ok(Some(canonical)) => canonical,
+        // No `canonicalizeSource` export, or the plugin errored: fall back to the generic trim,
+        // which is exactly what a plugin without site-specific alias knowledge would do anyway.
+        Ok(None) => urls.iter().map(|u| trim_url(u)).collect(),
+        Err(e) => {
+            tracing::warn!(
+                plugin = %plugin_namespace,
+                error = %e,
+                "canonicalizeSource failed; falling back to generic URL trimming"
+            );
+            urls.iter().map(|u| trim_url(u)).collect()
+        }
+    }
+}
+
+/// Works out whether this download is a newer/older revision of something already catalogued, from
+/// the `version_history` its plugin reported (issue #107).
+///
+/// Returns [`RevisionRelation::Unrelated`] whenever the question can't be answered — no history
+/// reported, no source URL to anchor on, or the library can't be listed — so an ordinary download
+/// is never blocked by a failure of this optional enrichment.
+async fn classify_revision(
+    state: &AppState,
+    plugin_namespace: &str,
+    source_url: Option<&str>,
+    history: &[lanrurugi_plugin::protocol::VersionHistoryEntry],
+) -> crate::download_manager::version_history::RevisionRelation {
+    use crate::download_manager::version_history::{classify, CataloguedSource, RevisionRelation};
+
+    let Some(source_url) = source_url else {
+        return RevisionRelation::Unrelated;
+    };
+    if history.is_empty() {
+        return RevisionRelation::Unrelated;
+    }
+    let Ok(archives) = state.repos.archives.list_all().await else {
+        return RevisionRelation::Unrelated;
+    };
+
+    // Every `source:` tag in the library, plus this download's own URL, canonicalized in one batch
+    // — one plugin round-trip for the whole comparison rather than one per archive.
+    let mut raw: Vec<String> = vec![source_url.to_string()];
+    let mut owners: Vec<String> = Vec::new();
+    for archive in &archives {
+        for tag in archive.tags.split(',') {
+            if let Some(source) = tag.trim().strip_prefix("source:") {
+                raw.push(source.to_string());
+                owners.push(archive.id.to_string());
+            }
+        }
+    }
+
+    let canonical = canonicalize_sources_for(state, plugin_namespace, raw).await;
+    let mut canonical = canonical.into_iter();
+    let Some(downloaded_source) = canonical.next() else {
+        return RevisionRelation::Unrelated;
+    };
+    let catalogued: Vec<CataloguedSource> = owners
+        .into_iter()
+        .zip(canonical)
+        .map(|(archive_id, source)| CataloguedSource { archive_id, source })
+        .collect();
+
+    classify(&downloaded_source, history, &catalogued)
+}
+
+/// Fetches `namespace`'s declared `pluginOptions()` fresh from the plugin, alongside what static
+/// analysis of its source says it supports (issue #107).
+///
+/// Returns `None` — which every caller maps to `404` — only when the plugin offers no settings
+/// interface *at all*: neither a `pluginOptions()` export nor a `version_history`-reporting
+/// `execDownload`. A plugin with only the latter still gets a settings page (the two
+/// relative-revision policy pickers), which is the whole point of detecting support from source
+/// rather than requiring it be declared twice.
 async fn fetch_declared_options(
     state: &AppState,
     namespace: &str,
-) -> Option<lanrurugi_plugin::protocol::PluginOptionsResult> {
-    state.plugins.plugin_options(namespace).await.ok().flatten()
+) -> Option<(lanrurugi_plugin::protocol::PluginOptionsResult, bool)> {
+    let declared = state.plugins.plugin_options(namespace).await.ok().flatten();
+    // A failed introspect (plugin file unreadable, Deno missing) degrades to "no version-history
+    // support" rather than failing the whole settings request — the pickers just don't appear.
+    let supports_version_history = state
+        .plugins
+        .plugin_introspect(namespace)
+        .await
+        .map(|i| i.returns_version_history)
+        .unwrap_or(false);
+    match (declared, supports_version_history) {
+        (None, false) => None,
+        (declared, supports) => (declared.unwrap_or_default(), supports).into(),
+    }
 }
 
 async fn get_plugin_options(
     State(state): State<AppState>,
     Query(query): Query<PluginSettingsQuery>,
 ) -> Response {
-    let Some(declared) = fetch_declared_options(&state, &query.namespace).await else {
+    let Some((declared, supports_version_history)) =
+        fetch_declared_options(&state, &query.namespace).await
+    else {
         return error(
             StatusCode::NOT_FOUND,
             "get_plugin_options",
@@ -591,7 +691,12 @@ async fn get_plugin_options(
             )
         }
     };
-    let effective = merge(&query.namespace, &declared, override_.as_ref());
+    let effective = merge(
+        &query.namespace,
+        &declared,
+        override_.as_ref(),
+        supports_version_history,
+    );
     axum::Json(effective).into_response()
 }
 
@@ -603,6 +708,10 @@ pub struct PutPluginOptionsBody {
     bundle_as_archive: Option<bool>,
     #[serde(default)]
     overwrite_on_duplicate: Option<bool>,
+    #[serde(default)]
+    relative_newer_policy: Option<lanrurugi_storage::plugin_options::RelativeNewerPolicyOverride>,
+    #[serde(default)]
+    relative_older_policy: Option<lanrurugi_storage::plugin_options::RelativeOlderPolicyOverride>,
 }
 
 /// FR-014: a concurrency/rate-limit value, if present at all, must be a positive integer — a `0`
@@ -633,7 +742,9 @@ async fn put_plugin_options(
     Query(query): Query<PluginSettingsQuery>,
     axum::Json(body): axum::Json<PutPluginOptionsBody>,
 ) -> Response {
-    let Some(declared) = fetch_declared_options(&state, &query.namespace).await else {
+    let Some((declared, supports_version_history)) =
+        fetch_declared_options(&state, &query.namespace).await
+    else {
         return error(
             StatusCode::NOT_FOUND,
             "put_plugin_options",
@@ -669,6 +780,12 @@ async fn put_plugin_options(
     if body.overwrite_on_duplicate.is_some() {
         override_.overwrite_on_duplicate = body.overwrite_on_duplicate;
     }
+    if body.relative_newer_policy.is_some() {
+        override_.relative_newer_policy = body.relative_newer_policy;
+    }
+    if body.relative_older_policy.is_some() {
+        override_.relative_older_policy = body.relative_older_policy;
+    }
 
     if let Err(e) = state
         .plugin_options
@@ -688,7 +805,12 @@ async fn put_plugin_options(
         .plugin_options_generation
         .fetch_add(1, std::sync::atomic::Ordering::Release);
 
-    let effective = merge(&query.namespace, &declared, Some(&override_));
+    let effective = merge(
+        &query.namespace,
+        &declared,
+        Some(&override_),
+        supports_version_history,
+    );
     axum::Json(effective).into_response()
 }
 
@@ -696,7 +818,9 @@ async fn delete_plugin_options(
     State(state): State<AppState>,
     Query(query): Query<PluginSettingsQuery>,
 ) -> Response {
-    let Some(declared) = fetch_declared_options(&state, &query.namespace).await else {
+    let Some((declared, supports_version_history)) =
+        fetch_declared_options(&state, &query.namespace).await
+    else {
         return error(
             StatusCode::NOT_FOUND,
             "delete_plugin_options",
@@ -713,7 +837,7 @@ async fn delete_plugin_options(
     state
         .plugin_options_generation
         .fetch_add(1, std::sync::atomic::Ordering::Release);
-    let effective = merge(&query.namespace, &declared, None);
+    let effective = merge(&query.namespace, &declared, None, supports_version_history);
     axum::Json(effective).into_response()
 }
 
@@ -1125,12 +1249,16 @@ pub(crate) fn trim_url(url: &str) -> String {
 }
 
 /// `plugins/script/sourcefinder.ts`'s one real need: the ID of whichever archive (if any) has a
-/// `source:` tag matching `url`, including the E-Hentai/ExHentai domain-alias special case
-/// (`SourceFinder.pm::run_script`'s own two extra branches) — resolved host-side the same way
-/// `get_other_archive_tags` resolves `copyarchivetags`' need, since a Deno-sandboxed plugin has no
-/// direct storage access. Legacy maintains a dedicated `LRR_URLMAP` index for this; this scans
-/// every archive's tags on demand instead (same simplification already used by `GET
-/// /database/stats` — correct, just not index-accelerated, acceptable at personal-library scale).
+/// `source:` tag matching `url` — resolved host-side the same way `get_other_archive_tags` resolves
+/// `copyarchivetags`' need, since a Deno-sandboxed plugin has no direct storage access. Legacy
+/// maintains a dedicated `LRR_URLMAP` index for this; this scans every archive's tags on demand
+/// instead (same simplification already used by `GET /database/stats` — correct, just not
+/// index-accelerated, acceptable at personal-library scale).
+///
+/// Domain aliases (E-Hentai/ExHentai and friends) come from whichever installed plugin claims this
+/// URL, via its own `canonicalizeSource` — issue #107 replaced the hardcoded two-branch alias
+/// special case that used to live here. `sourcefinder` itself is a script plugin with no such
+/// export; the knowledge belongs to the plugin that owns the domain, not to this call site.
 async fn get_existing_archive_id_for_url(
     state: &AppState,
     plugin: &str,
@@ -1142,29 +1270,47 @@ async fn get_existing_archive_id_for_url(
     let Some(url) = url else {
         return Value::Null;
     };
-    let trimmed = trim_url(url);
-    if trimmed.is_empty() {
+    if trim_url(url).is_empty() {
         return Value::Null;
-    }
-
-    let mut candidates = vec![trimmed.clone()];
-    if let Some(rest) = trimmed.strip_prefix("exhentai.org/") {
-        candidates.push(format!("e-hentai.org/{rest}"));
-    } else if let Some(rest) = trimmed.strip_prefix("e-hentai.org/") {
-        candidates.push(format!("exhentai.org/{rest}"));
     }
 
     let Ok(archives) = state.repos.archives.list_all().await else {
         return Value::Null;
     };
+
+    // Whichever plugin claims this URL supplies the domain-alias knowledge; absent one, the
+    // generic trim applies to both sides, which is what a site without aliases needs anyway.
+    let owning_plugin = {
+        let namespaces = discover_namespaces(&state.plugins_dir).await;
+        find_matching_plugin(state, &namespaces, url)
+            .await
+            .map(|(ns, _)| ns)
+    };
+
+    // One batch: this URL first, then every stored `source:` tag, so a plugin round-trip happens
+    // once rather than once per archive.
+    let mut raw = vec![url.to_string()];
+    let mut owners: Vec<&lanrurugi_core::ids::ArchiveId> = Vec::new();
     for archive in &archives {
         for tag in archive.tags.split(',') {
-            let Some(source) = tag.trim().strip_prefix("source:") else {
-                continue;
-            };
-            if candidates.iter().any(|c| c == &trim_url(source)) {
-                return json!(archive.id);
+            if let Some(source) = tag.trim().strip_prefix("source:") {
+                raw.push(source.to_string());
+                owners.push(&archive.id);
             }
+        }
+    }
+
+    let canonical = match &owning_plugin {
+        Some(ns) => canonicalize_sources_for(state, ns, raw).await,
+        None => raw.iter().map(|u| trim_url(u)).collect(),
+    };
+    let mut canonical = canonical.into_iter();
+    let Some(needle) = canonical.next() else {
+        return Value::Null;
+    };
+    for (archive_id, source) in owners.into_iter().zip(canonical) {
+        if source == needle {
+            return json!(archive_id);
         }
     }
     Value::Null
@@ -2105,6 +2251,157 @@ pub(crate) async fn start_download(
                 return;
             }
 
+            // Issue #107: decide whether this download supersedes (or is superseded by) something
+            // already in the library, *before* any bytes move — that ordering is what lets the
+            // `block` policy refuse an older revision without spending the transfer at all.
+            let mut overwrite = overwrite;
+            if let Some(history) = parsed.version_history.as_deref().filter(|h| !h.is_empty()) {
+                use crate::download_manager::version_history::RevisionRelation;
+                let relation = classify_revision(
+                    &state_for_task,
+                    &plugin_namespace_for_task,
+                    Some(source_url.as_str()),
+                    history,
+                )
+                .await;
+
+                let (declared, _) =
+                    fetch_declared_options(&state_for_task, &plugin_namespace_for_task)
+                        .await
+                        .unwrap_or_default();
+                let stored_override = state_for_task
+                    .plugin_options
+                    .get(&plugin_namespace_for_task)
+                    .await
+                    .unwrap_or_default();
+
+                match relation {
+                    RevisionRelation::NewerThan { archive_id, .. } => {
+                        let policy =
+                            crate::download_manager::settings::resolve_relative_newer_policy(
+                                &declared,
+                                stored_override.as_ref(),
+                            );
+                        tracing::info!(
+                            plugin = %plugin_namespace_for_task,
+                            supersedes = %archive_id,
+                            ?policy,
+                            "download is a newer revision of an existing archive"
+                        );
+                        if policy
+                            == lanrurugi_plugin::protocol::RelativeNewerPolicy::AlwaysOverwrite
+                        {
+                            // Delete the superseded archive up front, so the new revision is
+                            // catalogued as the series' single entry regardless of filename.
+                            // Reuses the same full-cleanup path as a real user delete (file,
+                            // search index, thumbnails, ...), not a bare record removal.
+                            if let crate::archives::DeleteOneOutcome::Error(e) =
+                                crate::archives::delete_one_archive(
+                                    &state_for_task,
+                                    &lanrurugi_core::ids::ArchiveId(archive_id.clone()),
+                                    None,
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    archive_id = %archive_id,
+                                    error = %e,
+                                    "failed to remove superseded archive; continuing with download"
+                                );
+                            }
+                        }
+                        // Under either policy the incoming revision is meant to win: with
+                        // `always_overwrite` the old archive is already gone, and with
+                        // `overwrite_if_same_name` this is precisely the "filenames collide, so
+                        // replace" case — otherwise nothing collides and this has no effect.
+                        overwrite = true;
+                    }
+                    RevisionRelation::OlderThan { archive_id, hops } => {
+                        use lanrurugi_plugin::protocol::RelativeOlderPolicy;
+                        let policy =
+                            crate::download_manager::settings::resolve_relative_older_policy(
+                                &declared,
+                                stored_override.as_ref(),
+                            );
+                        tracing::info!(
+                            plugin = %plugin_namespace_for_task,
+                            superseded_by = %archive_id,
+                            hops,
+                            ?policy,
+                            "download is an older revision than an existing archive"
+                        );
+                        match policy {
+                            RelativeOlderPolicy::Block => {
+                                let queue_error =
+                                lanrurugi_core::queue_error::QueueError::SupersededByNewerRevision {
+                                    archive_id: archive_id.clone(),
+                                };
+                                if let Some((repo, item_id)) = &queue_link {
+                                    update_queue_item_state(
+                                        repo,
+                                        state_for_task.download_queue_tx.as_ref(),
+                                        item_id,
+                                        lanrurugi_storage::download_queue::DownloadQueueState::Error,
+                                        None,
+                                        Some(queue_error.clone()),
+                                        None,
+                                    )
+                                    .await;
+                                }
+                                jobs.fail(
+                                    &job_id_for_task,
+                                    format!(
+                                        "a newer revision is already in the library ({archive_id})"
+                                    ),
+                                )
+                                .await;
+                                return;
+                            }
+                            RelativeOlderPolicy::WarnThenConflictMenu => {
+                                // Park before any bytes move and hand the decision to the user;
+                                // `.../confirm-older` is what resumes (or abandons) this item. An
+                                // item with no queue row has no surface to ask through, so it just
+                                // proceeds — the alternative would be stalling forever unseen.
+                                //
+                                // `revision_confirmed` is the user's already-given answer, set by
+                                // that endpoint and persisted on the item, so the restart it
+                                // triggers runs straight through instead of parking again on the
+                                // same finding.
+                                let already_confirmed = match &queue_link {
+                                    Some((repo, item_id)) => repo
+                                        .get(item_id)
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .is_some_and(|i| i.revision_confirmed),
+                                    None => false,
+                                };
+                                if let (false, Some((repo, item_id))) =
+                                    (already_confirmed, &queue_link)
+                                {
+                                    park_awaiting_revision_confirmation(
+                                        repo,
+                                        state_for_task.download_queue_tx.as_ref(),
+                                        item_id,
+                                        &archive_id,
+                                        hops,
+                                    )
+                                    .await;
+                                    jobs.finish(
+                                        &job_id_for_task,
+                                        json!({ "awaiting_revision_confirmation": archive_id }),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            }
+                            RelativeOlderPolicy::SilentThenConflictMenu => {}
+                        }
+                    }
+                    RevisionRelation::Unrelated => {}
+                }
+            }
+
             if let Some(downloads) = parsed.downloads.filter(|d| !d.is_empty()) {
                 match run_managed_downloads(
                     state_for_task.clone(),
@@ -2365,6 +2662,10 @@ pub(crate) async fn update_queue_item_state(
                                 "title": &item.title,
                                 "metadata_preview": &item.metadata_preview,
                                 "error": &item.error,
+                                // Included so a client's delta merge (a plain field spread) can
+                                // never keep showing a stale older-revision banner after the item
+                                // has moved on to some other state.
+                                "pending_revision_confirmation": &item.pending_revision_confirmation,
                             }));
                         }
                         return;
@@ -2388,6 +2689,71 @@ pub(crate) async fn update_queue_item_state(
             }
             Err(e) => {
                 tracing::warn!(%item_id, attempt, error = %e, "failed to load download-queue item for state update after {RETRIES} attempts");
+                return;
+            }
+        }
+    }
+}
+
+/// Parks a queue item in [`DownloadQueueState::AwaitingRevisionConfirmation`] with the reason
+/// attached, before any bytes transfer (issue #107's `warn_then_conflict_menu`).
+///
+/// Separate from [`update_queue_item_state`] rather than another pair of parameters on it: this
+/// writes a field no other transition touches, and every one of that function's ~20 call sites
+/// would otherwise have to thread two more `None`s through for a case none of them can hit.
+/// Same best-effort retry shape as that function — a queue row that fails to persist leaves the
+/// download not started, which is the safe direction for a decision the user still has to make.
+async fn park_awaiting_revision_confirmation(
+    repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
+    tx: Option<&tokio::sync::broadcast::Sender<serde_json::Value>>,
+    item_id: &str,
+    newer_archive_id: &str,
+    hops: usize,
+) {
+    use lanrurugi_storage::download_queue::{DownloadQueueState, PendingRevisionConfirmation};
+    const RETRIES: u32 = 3;
+    const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
+    for (i, &delay) in BACKOFF_MS.iter().enumerate() {
+        let attempt = i as u32 + 1;
+        match repo.get(item_id).await {
+            Ok(Some(mut item)) => {
+                item.state = DownloadQueueState::AwaitingRevisionConfirmation;
+                item.job_id = None;
+                item.error = None;
+                item.pending_revision_confirmation = Some(PendingRevisionConfirmation {
+                    newer_archive_id: newer_archive_id.to_string(),
+                    hops: hops as u32,
+                });
+                match repo.update(&item).await {
+                    Ok(()) => {
+                        if let Some(tx) = tx {
+                            let _ = tx.send(serde_json::json!({
+                                "kind": "update",
+                                "id": item_id,
+                                "state": DownloadQueueState::AwaitingRevisionConfirmation,
+                                "pending_revision_confirmation": &item.pending_revision_confirmation,
+                                "title": &item.title,
+                                "metadata_preview": &item.metadata_preview,
+                            }));
+                        }
+                        return;
+                    }
+                    Err(e) if attempt < RETRIES => {
+                        tracing::warn!(%item_id, attempt, delay_ms = delay, error = %e, "failed to park item awaiting revision confirmation, retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%item_id, attempt, error = %e, "failed to park item awaiting revision confirmation after {RETRIES} attempts");
+                    }
+                }
+            }
+            Ok(None) => return,
+            Err(e) if attempt < RETRIES => {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                tracing::warn!(%item_id, attempt, error = %e, "failed to load queue item to park, retrying");
+            }
+            Err(e) => {
+                tracing::warn!(%item_id, attempt, error = %e, "failed to load queue item to park after {RETRIES} attempts");
                 return;
             }
         }
@@ -2690,7 +3056,7 @@ async fn run_managed_downloads(
     auth: Option<crate::auth_context::AuthContext>,
 ) -> Result<Vec<String>, lanrurugi_core::queue_error::QueueError> {
     let manager = download_manager_for(&state, &plugin_namespace).await;
-    let declared = fetch_declared_options(&state, &plugin_namespace)
+    let (declared, _supports_version_history) = fetch_declared_options(&state, &plugin_namespace)
         .await
         .unwrap_or_default();
     let override_ = state
@@ -3584,6 +3950,8 @@ pub(crate) mod tests {
                     ]),
                     bundle_as_archive: None,
                     overwrite_on_duplicate: None,
+                    relative_newer_policy: None,
+                    relative_older_policy: None,
                 },
             )
             .await

@@ -55,7 +55,9 @@ interface ExecDownloadInfo extends Required<Pick<DownloadHostArgs, "url">> {
   user_agent_cookies?: LegacyCookie[];
 }
 
-export async function execDownload(hostArgs: Record<string, unknown>) {
+export async function execDownload(
+  hostArgs: Record<string, unknown>,
+): Promise<DownloadResultShape> {
   const info = hostArgs as unknown as ExecDownloadInfo;
   const ua = legacyCompat.userAgent();
   for (const c of info.user_agent_cookies ?? []) {

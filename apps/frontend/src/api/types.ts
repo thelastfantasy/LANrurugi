@@ -283,6 +283,26 @@ export interface EffectiveOverwriteOnDuplicate {
   source: PluginOptionsSource
 }
 
+/** What to do when a download turns out to be a newer revision of an archive already in library. */
+export type RelativeNewerPolicy = "always_overwrite" | "overwrite_if_same_name"
+
+/** What to do when a download turns out to be an older revision than one already in library. */
+export type RelativeOlderPolicy = "block" | "warn_then_conflict_menu" | "silent_then_conflict_menu"
+
+export interface EffectiveRelativeNewerPolicy {
+  value: RelativeNewerPolicy
+  default: RelativeNewerPolicy
+  description?: string
+  source: PluginOptionsSource
+}
+
+export interface EffectiveRelativeOlderPolicy {
+  value: RelativeOlderPolicy
+  default: RelativeOlderPolicy
+  description?: string
+  source: PluginOptionsSource
+}
+
 export interface PluginOptions {
   namespace: string
   domain_rules: EffectiveDomainRule[]
@@ -290,6 +310,12 @@ export interface PluginOptions {
   bundle_as_archive?: EffectiveBundleAsArchive
   /** Absent when the plugin has no opinion; falls back to `Settings.replacedupe`. */
   overwrite_on_duplicate?: EffectiveOverwriteOnDuplicate
+  /** Both present exactly when `supports_version_history` is true. */
+  relative_newer_policy?: EffectiveRelativeNewerPolicy
+  relative_older_policy?: EffectiveRelativeOlderPolicy
+  /** Whether this plugin's source shows it reports version history at all — derived server-side by
+   * static analysis, so editing a plugin file is reflected on the next load with no download run. */
+  supports_version_history: boolean
 }
 
 /** `PUT /api/plugins/options`'s body — a partial update; an omitted field keeps its current value. */
@@ -301,6 +327,8 @@ export interface PluginOptionsUpdate {
   }>
   bundle_as_archive?: boolean
   overwrite_on_duplicate?: boolean
+  relative_newer_policy?: RelativeNewerPolicy
+  relative_older_policy?: RelativeOlderPolicy
 }
 
 export interface StatTag {
@@ -350,6 +378,10 @@ export type DownloadQueueState =
   | "done"
   | "error"
   | "cancelled"
+  /** Parked before any bytes transferred: the download is an older revision than an archive already
+   * in the library, and the plugin's `relative_older_policy` asks the user first (issue #107).
+   * Resolved via `POST /download_queue/{id}/confirm-older`, not the ordinary Start button. */
+  | "awaiting_revision_confirmation"
 
 /** An interpolation value in a `QueueError`'s `data` map. */
 export type PluginErrorValue = string | number
@@ -373,6 +405,7 @@ export type QueueError =
   | { kind: "internal" }
   | { kind: "stale_after_restart" }
   | { kind: "already_patched"; existing_id: string; filename: string }
+  | { kind: "superseded_by_newer_revision"; archive_id: string }
 
 /** Set on a queue item whose download was blocked by a filename collision (content is new, only
  * the filename collides) and staged pending the user's overwrite/rename choice. */
@@ -520,7 +553,17 @@ export interface DownloadQueueItem {
   metadata_preview_at: number | null
   error: QueueError | null
   pending_filename_conflict?: PendingFilenameConflict | null
+  /** Set alongside state `awaiting_revision_confirmation` — which in-library archive is the newer
+   * revision, so the row can name and link to it (issue #107). */
+  pending_revision_confirmation?: PendingRevisionConfirmation | null
   created_at: number
+}
+
+/** Why an item is parked in `awaiting_revision_confirmation`. */
+export interface PendingRevisionConfirmation {
+  newer_archive_id: string
+  /** Revisions between this download and that archive (1 = directly adjacent). */
+  hops: number
 }
 
 export interface DownloadQueueListResponse {

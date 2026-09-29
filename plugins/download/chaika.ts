@@ -31,7 +31,9 @@ export function pluginOptions() {
 }
 
 
-export async function execDownload(hostArgs: Record<string, unknown>) {
+export async function execDownload(
+  hostArgs: Record<string, unknown>,
+): Promise<DownloadResultShape> {
   {
     const info = hostArgs as Record<string, any>;
     info.user_agent = legacyCompat.userAgent();

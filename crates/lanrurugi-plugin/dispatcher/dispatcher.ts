@@ -582,6 +582,95 @@ if (!pluginsDir || !namespace) {
   Deno.exit(1);
 }
 
+// ── Source introspection (`plugin_introspect`) ───────────────────────────────────────────────────
+// Answers "does this plugin's `execDownload` ever return a `version_history`?" from the plugin's
+// own *source*, so the settings UI can offer the two relative-revision policies the moment a plugin
+// file is edited — no real download needs to have run first, and nothing needs to be declared twice
+// in `pluginOptions()`.
+//
+// This is a lexical scan, not a real AST walk: the dispatcher imports no external modules at all
+// (see this file's top-of-file docs), which rules out a TS parser here. To stay honest anyway, the
+// scan strips comments and string/template literals first, so the key has to appear as real code —
+// a `version_history` mentioned only in a doc comment or an error message does not count. What
+// remains is a property-name match, which is precisely the question being asked: the SDK's contract
+// is that the key appears as an object-literal property of `execDownload`'s return value.
+
+/** Replaces every comment and string/template literal with equivalent-length blanks, so a later
+ * scan sees only real code while every byte offset stays put. */
+function blankCommentsAndStrings(src: string): string {
+  const out = src.split("");
+  let i = 0;
+  const blankTo = (end: number) => {
+    for (let k = i; k < end && k < out.length; k++) {
+      if (out[k] !== "\n") out[k] = " ";
+    }
+  };
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (c === "/" && next === "/") {
+      const end = src.indexOf("\n", i);
+      blankTo(end === -1 ? src.length : end);
+      i = end === -1 ? src.length : end;
+    } else if (c === "/" && next === "*") {
+      const end = src.indexOf("*/", i + 2);
+      const stop = end === -1 ? src.length : end + 2;
+      blankTo(stop);
+      i = stop;
+    } else if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (src[j] === quote) break;
+        j++;
+      }
+      const stop = Math.min(j + 1, src.length);
+      blankTo(stop);
+      i = stop;
+    } else {
+      i++;
+    }
+  }
+  return out.join("");
+}
+
+/** True when `key` appears as an object-literal property name — `key:`, a shorthand `key,`/`key}`,
+ * or a quoted `"key":` — anywhere in `code`.
+ *
+ * A leading `.` is excluded so a property *read* (`result.version_history`) doesn't count as the
+ * plugin declaring it; only a key it writes does. Quoted keys are matched against the *original*
+ * source rather than the blanked copy, since blanking erases string literals — including the very
+ * quotes that make a quoted key a key. */
+function usesPropertyKey(code: string, rawSource: string, key: string): boolean {
+  const bare = new RegExp(`(^|[^\\w$.])${key}\\s*[:,}]`, "m");
+  const quoted = new RegExp(`["']${key}["']\\s*:`, "m");
+  return bare.test(code) || quoted.test(rawSource);
+}
+
+async function introspectPlugin(mod: Record<string, unknown>) {
+  let returnsVersionHistory = false;
+  try {
+    const source = await Deno.readTextFile(`${pluginsDir}/${namespace}.ts`);
+    returnsVersionHistory = usesPropertyKey(
+      blankCommentsAndStrings(source),
+      source,
+      "version_history",
+    );
+  } catch {
+    // An unreadable plugin file just means "no evidence of support" — the plugin's own real calls
+    // would fail loudly elsewhere anyway, so this never needs to be an error of its own.
+    returnsVersionHistory = false;
+  }
+  return {
+    returns_version_history: returnsVersionHistory,
+    exports_canonicalize_source: typeof mod.canonicalizeSource === "function",
+  };
+}
+
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);
 
 const encoder = new TextEncoder();
@@ -603,6 +692,21 @@ async function handleRequest(req: PluginRequest) {
         // no configurable settings at all, so its absence is normal, not an error.
         result = typeof mod.pluginOptions === "function" ? await mod.pluginOptions() : null;
         break;
+      case "plugin_introspect":
+        result = await introspectPlugin(mod);
+        break;
+      case "canonicalize_source": {
+        // Host-side `source:` tag comparison routes through the plugin's own normalizer when it
+        // has one, so a site's domain-alias knowledge stays in the plugin that actually has it.
+        const urls = (req.args as { urls?: unknown })?.urls;
+        if (!Array.isArray(urls)) {
+          throw new Error("canonicalize_source requires args.urls to be an array of strings");
+        }
+        result = typeof mod.canonicalizeSource === "function"
+          ? { canonical: urls.map((u) => mod.canonicalizeSource(String(u))) }
+          : null;
+        break;
+      }
       case "exec_metadata":
         result = await mod.execMetadata(req.args);
         break;

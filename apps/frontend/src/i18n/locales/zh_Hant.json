@@ -451,6 +451,14 @@
   "settings.resetDatabase": "重置資料庫",
   "settings.resetSearchCache": "重置搜尋快取",
   "pluginOptions.resetToDefaults": "Reset to Defaults",
+  "pluginOptions.versionHistoryHandling": "版本關係處理",
+  "pluginOptions.whenTheDownloadIsNewer": "當下載的是庫中已有檔案的更新版本時：",
+  "pluginOptions.newerOverwriteIfSameName": "僅當檔名衝突時替換舊檔案（否則兩者都保留）",
+  "pluginOptions.newerAlwaysOverwrite": "始終替換舊檔案，不論檔名是否相同",
+  "pluginOptions.whenTheDownloadIsOlder": "當下載的版本比庫中已有檔案更舊時：",
+  "pluginOptions.olderBlock": "在開始下載前直接拒絕",
+  "pluginOptions.olderWarnThenConfirm": "下載前先要求確認",
+  "pluginOptions.olderSilent": "不詢問，直接下載",
   "settings.resizeImagesInReader": "在閱讀器中調整圖片大小",
   "settings.resizeQuality": "縮放品質",
   "Resize images server-side before sending them to the client": "在伺服器端調整圖片大小後再傳送給客戶端",
@@ -681,6 +689,7 @@
   "upload.matchedRulePattern": "匹配規則：{{pattern}}",
   "Edit this plugin’s rate-limit settings": "編輯該插件的限速設定",
   "components.layout.downloadWasInterruptedByA": "下載因伺服器重啟而中斷，重試時會嘗試從斷點繼續",
+  "components.layout.aNewerRevisionIsAlreadyInLibrary": "庫中已存在該作品的更新版本：",
   "reader.toggleBookmark": "切換書籤",
   "reader.bToggleBookmarkThisPage": "為目前頁面切換書籤",
   "bookmarks.pageTitle": "書籤",
@@ -758,5 +767,8 @@
   "reader.splitBatchRunning": "正在拆包：",
   "reader.splitBatchDone": "拆包完成",
   "reader.tankSplitSelectArchives": "選擇要拆包的檔案",
-  "reader.tankSplitNoSuggestions": "沒有帶拆包建議的檔案"
+  "reader.tankSplitNoSuggestions": "沒有帶拆包建議的檔案",
+  "upload.olderRevisionWarning": "這是較舊的版本 —— 庫中已有更新的版本：",
+  "upload.downloadAnyway": "仍然下載",
+  "upload.abandonDownload": "放棄本次下載"
 }

@@ -136,6 +136,13 @@ pub enum QueueError {
     /// `DuplicateFilenameCleaned`'s own "explain what happened, offer a real next step" design
     /// rather than a generic "check the server logs" dead end.
     StaleAfterRestart,
+    /// The plugin's reported version history places this download *earlier* in the series than an
+    /// archive already in the library, and the plugin's `relative_older_policy` is `block` — so the
+    /// download was refused before any bytes transferred (issue #107). `archive_id` is the newer
+    /// archive the user presumably already wanted.
+    SupersededByNewerRevision {
+        archive_id: String,
+    },
 }
 
 impl QueueError {
@@ -159,6 +166,7 @@ impl QueueError {
             QueueError::DuplicateFilenameCleaned { .. } => 1004,
             QueueError::AlreadyPatched { .. } => 1006,
             QueueError::StaleAfterRestart => 1005,
+            QueueError::SupersededByNewerRevision { .. } => 1007,
         }
     }
 }

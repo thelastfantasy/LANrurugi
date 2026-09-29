@@ -55,6 +55,19 @@ pub enum DownloadQueueState {
     /// needs to survive a page refresh, not just live in transient frontend mutation state. Treated
     /// as a startable state everywhere `Queued`/`Error` already are (see `start_one`'s guard).
     Cancelled,
+    /// The plugin's reported `version_history` places this download *earlier* in its series than an
+    /// archive already in the library, and the effective `relative_older_policy` is
+    /// `warn_then_conflict_menu` — so the item is parked here, before any bytes transfer, until the
+    /// user explicitly confirms or abandons it (issue #107).
+    ///
+    /// Distinct from the filename-collision conflict (`pending_filename_conflict`, issue #77),
+    /// which happens *after* a download and asks "overwrite or rename?" — this one happens *before*
+    /// and asks "you already have a newer version, still want this?". A single item can hit both,
+    /// in that order.
+    ///
+    /// Not in-flight (no background task holds it) and not startable by the ordinary Start button —
+    /// resuming goes through `.../confirm-older`, which is what carries the user's decision.
+    AwaitingRevisionConfirmation,
 }
 
 /// What produced this queue item — a download (the original, only kind this queue ever held) or
@@ -172,7 +185,32 @@ pub struct DownloadQueueItem {
     /// can specifically detect "this needs a resolve action" rather than a plain retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_filename_conflict: Option<PendingFilenameConflict>,
+    /// Set alongside [`DownloadQueueState::AwaitingRevisionConfirmation`] — which already-catalogued
+    /// archive this download is an older revision of, so the row can name (and link to) it rather
+    /// than just saying "something newer exists" (issue #107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_revision_confirmation: Option<PendingRevisionConfirmation>,
+    /// The user answered "download it anyway" to a
+    /// [`DownloadQueueState::AwaitingRevisionConfirmation`] prompt. Persisted rather than passed
+    /// through the restart call so the answer survives a server restart, and so the decision lives
+    /// with the item it belongs to. Cleared whenever the item starts from a genuinely fresh state,
+    /// so a later re-run of the same URL asks again instead of silently inheriting a stale yes.
+    #[serde(default)]
+    pub revision_confirmed: bool,
     pub created_at: i64,
+}
+
+/// Why a queue item is parked in [`DownloadQueueState::AwaitingRevisionConfirmation`] — see that
+/// state's own docs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingRevisionConfirmation {
+    /// The in-library archive that the plugin's `version_history` says is a *newer* revision than
+    /// this download.
+    pub newer_archive_id: String,
+    /// How many revisions separate the two, per that same reported history (1 = directly adjacent).
+    /// Shown so "you already have the very next revision" reads differently from "you already have
+    /// one five revisions ahead".
+    pub hops: u32,
 }
 
 /// What [`DownloadQueueRepository::add`] needs to construct a new item — every field a caller
@@ -241,6 +279,8 @@ impl DownloadQueueRepository {
             metadata_preview_at: None,
             error: None,
             pending_filename_conflict: None,
+            pending_revision_confirmation: None,
+            revision_confirmed: false,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)

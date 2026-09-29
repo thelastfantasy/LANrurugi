@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import {
+  useConfirmOlderRevision,
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
   useOverwriteQueueItem,
@@ -102,6 +103,7 @@ export function QueueItemRow({
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
   const stop = useStopQueueItem();
+  const confirmOlder = useConfirmOlderRevision();
   const del = useDeleteQueueItem();
   const overwriteConflict = useOverwriteQueueItem();
   const renameConflict = useRenameQueueItem();
@@ -120,6 +122,7 @@ export function QueueItemRow({
     item.archive_ids?.[0] ??
     (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0];
   const wasCancelled = item.state === "cancelled";
+  const newerRevisionId = item.pending_revision_confirmation?.newer_archive_id;
   const isLocalUpload = item.plugin_namespace === LOCAL_UPLOAD_NAMESPACE;
   const fileSize = item.file_size ?? job?.total_bytes;
 
@@ -354,6 +357,22 @@ export function QueueItemRow({
                 {t("upload.cancelled")}
               </div>
             )}
+            {item.state === "awaiting_revision_confirmation" &&
+              newerRevisionId && (
+                <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
+                  {t("upload.olderRevisionWarning")}{" "}
+                  <a
+                    href={routes.reader(newerRevisionId)}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      navigate(routes.reader(newerRevisionId))
+                    }}
+                    style={{ color: "inherit" }}
+                  >
+                    {newerRevisionId}
+                  </a>
+                </div>
+              )}
           </div>
         </TooltipIfPresent>
 
@@ -445,6 +464,35 @@ export function QueueItemRow({
                 }}
               />
             )}
+          </>
+        ) : item.state === "awaiting_revision_confirmation" ? (
+          <>
+            <Tooltip label={t("upload.downloadAnyway") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={confirmOlder.isPending}
+                onClick={() =>
+                  void confirmOlder.mutateAsync({ id: item.id, proceed: true })
+                }
+              >
+                <i className="fa fa-download" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+            <Tooltip label={t("upload.abandonDownload") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={confirmOlder.isPending}
+                onClick={() =>
+                  void confirmOlder.mutateAsync({ id: item.id, proceed: false })
+                }
+              >
+                <i className="fa fa-ban" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
           </>
         ) : isLocalUpload ? null : item.state === "starting" ||
           item.state === "waiting" ||

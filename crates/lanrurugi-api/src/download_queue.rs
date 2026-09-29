@@ -43,6 +43,10 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/{id}/rename", post(rename_queue_item))
         .route("/download_queue/{id}/compare", post(compare_queue_item))
         .route(
+            "/download_queue/{id}/confirm-older",
+            post(confirm_older_revision),
+        )
+        .route(
             "/download_queue/{id}/compare/stream",
             get(compare_queue_item_stream),
         )
@@ -595,7 +599,15 @@ async fn start_queue_item(
         }),
     )
     .await;
-    match start_one(&state, auth.as_ref().map(|e| &e.0), &id, activity_entry_id).await {
+    match start_one(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        &id,
+        activity_entry_id,
+        false,
+    )
+    .await
+    {
         Ok(job_id) => axum::Json(
             json!({ "operation": "start_download_queue_item", "success": 1, "job": job_id }),
         )
@@ -642,6 +654,179 @@ async fn start_queue_item(
                 e,
             )
         }
+    }
+}
+
+/// Pushes one item's current state over the queue SSE stream, so an open Upload page reflects a
+/// change made outside the normal in-flight update path without waiting for a refetch.
+fn broadcast_item_update(
+    state: &AppState,
+    item: &lanrurugi_storage::download_queue::DownloadQueueItem,
+) {
+    let Some(tx) = &state.download_queue_tx else {
+        return;
+    };
+    let _ = tx.send(json!({
+        "kind": "update",
+        "id": item.id,
+        "state": item.state,
+        "job_id": item.job_id,
+        "error": item.error,
+        "pending_revision_confirmation": item.pending_revision_confirmation,
+        "title": item.title,
+        "metadata_preview": item.metadata_preview,
+    }));
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ConfirmOlderRevisionBody {
+    /// `true` = download it anyway, `false` = abandon it (issue #107). No default: this endpoint
+    /// exists precisely to capture a decision, so a body that states none is a client bug, not a
+    /// case to guess at.
+    proceed: bool,
+}
+
+/// `POST /download_queue/{id}/confirm-older` — answers the
+/// `AwaitingRevisionConfirmation` prompt raised when a download turned out to be an *older*
+/// revision than an archive already in the library (issue #107's `warn_then_conflict_menu`).
+///
+/// `proceed: true` records the decision on the item and restarts it — the restart runs straight
+/// through the same version-history check instead of parking again, because `revision_confirmed`
+/// is now set. `proceed: false` moves the item to `Cancelled`, which is already the "user stopped
+/// this on purpose, still restartable" state, so no new terminal state is needed.
+///
+/// Deliberately separate from `.../start`: `AwaitingRevisionConfirmation` is not `is_startable`,
+/// so the ordinary Start button can't skip the question by accident.
+async fn confirm_older_revision(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<ConfirmOlderRevisionBody>,
+) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("confirm_older_revision", format!("Item {id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "confirm_older_revision",
+                e.to_string(),
+            )
+        }
+    };
+
+    if item.state != DownloadQueueState::AwaitingRevisionConfirmation {
+        return error(
+            StatusCode::CONFLICT,
+            "confirm_older_revision",
+            format!("Item {id} is not awaiting revision confirmation."),
+        );
+    }
+
+    let newer_archive_id = item
+        .pending_revision_confirmation
+        .as_ref()
+        .map(|c| c.newer_archive_id.clone());
+    item.pending_revision_confirmation = None;
+
+    if !body.proceed {
+        item.state = DownloadQueueState::Cancelled;
+        item.revision_confirmed = false;
+        if let Err(e) = state.download_queue.update(&item).await {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "confirm_older_revision",
+                e.to_string(),
+            );
+        }
+        broadcast_item_update(&state, &item);
+        record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            action_types::DOWNLOAD_QUEUE_START,
+            ActivityTarget {
+                id: Some(id.clone()),
+                label: item.title.clone().or_else(|| Some(item.url.clone())),
+                kind: Some("download_queue_item".to_string()),
+            },
+            Outcome::Success,
+            None,
+            Some(json!({ "revision_confirmation": "abandoned", "newer_archive_id": newer_archive_id })),
+        )
+        .await;
+        return axum::Json(
+            json!({ "operation": "confirm_older_revision", "success": 1, "proceeded": false }),
+        )
+        .into_response();
+    }
+
+    // Recorded before the restart, so the decision survives even if `start_one` then fails — the
+    // same write-then-maybe-fail ordering `start_queue_item` already uses for its activity entry.
+    item.revision_confirmed = true;
+    item.state = DownloadQueueState::Queued;
+    if let Err(e) = state.download_queue.update(&item).await {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "confirm_older_revision",
+            e.to_string(),
+        );
+    }
+    broadcast_item_update(&state, &item);
+
+    let activity_entry_id = record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        action_types::DOWNLOAD_QUEUE_START,
+        ActivityTarget {
+            id: Some(id.clone()),
+            label: item.title.clone().or_else(|| Some(item.url.clone())),
+            kind: Some("download_queue_item".to_string()),
+        },
+        Outcome::Success,
+        None,
+        Some(json!({ "revision_confirmation": "proceeded", "newer_archive_id": newer_archive_id })),
+    )
+    .await;
+
+    match start_one(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        &id,
+        activity_entry_id,
+        true,
+    )
+    .await
+    {
+        Ok(job_id) => axum::Json(json!({
+            "operation": "confirm_older_revision",
+            "success": 1,
+            "proceeded": true,
+            "job": job_id,
+        }))
+        .into_response(),
+        Err(StartError::NotFound) => {
+            not_found("confirm_older_revision", format!("Item {id} not found."))
+        }
+        Err(StartError::PluginMissing) => error(
+            StatusCode::BAD_REQUEST,
+            "confirm_older_revision",
+            "The plugin this item was queued under is no longer installed.",
+        ),
+        Err(StartError::DuplicateInFlight) => error(
+            StatusCode::CONFLICT,
+            "confirm_older_revision",
+            format!("Another item for the same URL as {id} is already downloading."),
+        ),
+        Err(StartError::NotQueued) => error(
+            StatusCode::CONFLICT,
+            "confirm_older_revision",
+            format!("Item {id} is not in the Queued state."),
+        ),
+        Err(StartError::Storage(e)) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "confirm_older_revision",
+            e,
+        ),
     }
 }
 
@@ -735,7 +920,7 @@ async fn start_many(state: &AppState, auth: Option<&AuthContext>, ids: Vec<Strin
             }),
         )
         .await;
-        match start_one(state, auth, &id, activity_entry_id).await {
+        match start_one(state, auth, &id, activity_entry_id, false).await {
             Ok(job_id) => started.push(json!({ "id": id, "job": job_id })),
             Err(StartError::NotQueued) => {} // silent no-op, per contract
             Err(StartError::Storage(e)) => {
@@ -860,11 +1045,15 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
+/// `from_revision_confirmation` is set only by `confirm_older_revision`, and means "the user just
+/// answered the older-revision prompt for this exact run" — it preserves the `revision_confirmed`
+/// flag that would otherwise be cleared here as a stale approval. See the clearing logic below.
 async fn start_one(
     state: &AppState,
     auth: Option<&AuthContext>,
     id: &str,
     activity_entry_id: Option<String>,
+    from_revision_confirmation: bool,
 ) -> Result<String, StartError> {
     let mut item = state
         .download_queue
@@ -922,6 +1111,19 @@ async fn start_one(
         // genuinely back in flight (reported live, 2026-08-25).
         item.pending_filename_conflict = None;
     }
+
+    // A `revision_confirmed` yes applies to the one run it was given for. `confirm_older_revision`
+    // sets it immediately before calling this function, so that run keeps it; any *other* entry
+    // into `start_one` (the plain Start button, Start All, a retry after an error) is a new
+    // decision point and must ask again rather than inherit a stale approval.
+    if !from_revision_confirmation {
+        item.revision_confirmed = false;
+    }
+    // Any start clears a leftover prompt: either it was just answered (and the answer is carried by
+    // the flag above), or this is a fresh run whose own check will re-raise it if still warranted.
+    // Without this the row would keep rendering the old banner through the entire new attempt —
+    // the same bug `pending_filename_conflict` had to be cleared here for.
+    item.pending_revision_confirmation = None;
 
     item.state = DownloadQueueState::Starting;
     state
@@ -2748,6 +2950,8 @@ mod tests {
             metadata_preview_at: None,
             error: None,
             pending_filename_conflict: None,
+            pending_revision_confirmation: None,
+            revision_confirmed: false,
             created_at: 0,
         }
     }
@@ -2976,5 +3180,24 @@ mod tests {
         assert!(!is_in_flight(DownloadQueueState::Error));
         assert!(!is_in_flight(DownloadQueueState::Cancelled));
         assert!(!is_in_flight(DownloadQueueState::Done));
+    }
+
+    /// The whole point of the parked state (issue #107): the ordinary Start button — and
+    /// `start_selected`, which shares `is_startable` — must not be able to bypass the question the
+    /// user was asked. Resuming goes through `confirm_older_revision` instead.
+    #[test]
+    fn awaiting_revision_confirmation_is_not_startable() {
+        assert!(!is_startable(
+            DownloadQueueState::AwaitingRevisionConfirmation
+        ));
+    }
+
+    /// Nothing holds a parked item — no background task, no transfer — so `delete`/`clear` must
+    /// treat it as an ordinary at-rest item rather than refusing to touch it.
+    #[test]
+    fn awaiting_revision_confirmation_is_not_in_flight() {
+        assert!(!is_in_flight(
+            DownloadQueueState::AwaitingRevisionConfirmation
+        ));
     }
 }

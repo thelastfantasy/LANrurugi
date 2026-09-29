@@ -49,6 +49,30 @@ pub struct PluginOptionsOverride {
     pub bundle_as_archive: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overwrite_on_duplicate: Option<bool>,
+    /// Mirrors `lanrurugi_plugin::protocol::RelativeNewerPolicy` — duplicated as a plain enum here
+    /// for the same dependency-direction reason as [`DomainRuleOverride`], and kept in sync by
+    /// `lanrurugi-api`'s own conversion at the one place the two types meet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_newer_policy: Option<RelativeNewerPolicyOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_older_policy: Option<RelativeOlderPolicyOverride>,
+}
+
+/// Mirrors `lanrurugi_plugin::protocol::RelativeNewerPolicy` variant-for-variant.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelativeNewerPolicyOverride {
+    AlwaysOverwrite,
+    OverwriteIfSameName,
+}
+
+/// Mirrors `lanrurugi_plugin::protocol::RelativeOlderPolicy` variant-for-variant.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelativeOlderPolicyOverride {
+    Block,
+    WarnThenConflictMenu,
+    SilentThenConflictMenu,
 }
 
 fn redis_key(plugin_namespace: &str) -> String {
@@ -128,6 +152,8 @@ mod tests {
             }]),
             bundle_as_archive: Some(false),
             overwrite_on_duplicate: Some(true),
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
         repo.save(namespace, &overrides).await.unwrap();
         assert_eq!(repo.get(namespace).await.unwrap(), Some(overrides));

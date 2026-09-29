@@ -5,11 +5,59 @@
 //! `Vec<domain_rules::DomainRule>` snapshot `download_url` resolves once per download (spec
 //! FR-016).
 
-use lanrurugi_plugin::protocol::PluginOptionsResult as PluginDeclaredOptions;
-use lanrurugi_storage::plugin_options::PluginOptionsOverride;
+use lanrurugi_plugin::protocol::{
+    PluginOptionsResult as PluginDeclaredOptions, RelativeNewerPolicy, RelativeOlderPolicy,
+};
+use lanrurugi_storage::plugin_options::{
+    PluginOptionsOverride, RelativeNewerPolicyOverride, RelativeOlderPolicyOverride,
+};
 use serde::Serialize;
 
 use super::domain_rules::DomainRule;
+
+/// The one place `lanrurugi-storage`'s policy mirrors and `lanrurugi-plugin`'s real protocol enums
+/// meet (see [`RelativeNewerPolicyOverride`]'s own docs on why the type is duplicated at all).
+pub fn newer_policy_from_storage(stored: RelativeNewerPolicyOverride) -> RelativeNewerPolicy {
+    match stored {
+        RelativeNewerPolicyOverride::AlwaysOverwrite => RelativeNewerPolicy::AlwaysOverwrite,
+        RelativeNewerPolicyOverride::OverwriteIfSameName => {
+            RelativeNewerPolicy::OverwriteIfSameName
+        }
+    }
+}
+
+pub fn newer_policy_to_storage(policy: RelativeNewerPolicy) -> RelativeNewerPolicyOverride {
+    match policy {
+        RelativeNewerPolicy::AlwaysOverwrite => RelativeNewerPolicyOverride::AlwaysOverwrite,
+        RelativeNewerPolicy::OverwriteIfSameName => {
+            RelativeNewerPolicyOverride::OverwriteIfSameName
+        }
+    }
+}
+
+pub fn older_policy_from_storage(stored: RelativeOlderPolicyOverride) -> RelativeOlderPolicy {
+    match stored {
+        RelativeOlderPolicyOverride::Block => RelativeOlderPolicy::Block,
+        RelativeOlderPolicyOverride::WarnThenConflictMenu => {
+            RelativeOlderPolicy::WarnThenConflictMenu
+        }
+        RelativeOlderPolicyOverride::SilentThenConflictMenu => {
+            RelativeOlderPolicy::SilentThenConflictMenu
+        }
+    }
+}
+
+pub fn older_policy_to_storage(policy: RelativeOlderPolicy) -> RelativeOlderPolicyOverride {
+    match policy {
+        RelativeOlderPolicy::Block => RelativeOlderPolicyOverride::Block,
+        RelativeOlderPolicy::WarnThenConflictMenu => {
+            RelativeOlderPolicyOverride::WarnThenConflictMenu
+        }
+        RelativeOlderPolicy::SilentThenConflictMenu => {
+            RelativeOlderPolicyOverride::SilentThenConflictMenu
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +96,24 @@ pub struct EffectiveOverwriteOnDuplicate {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct EffectiveRelativeNewerPolicy {
+    pub value: RelativeNewerPolicy,
+    pub default: RelativeNewerPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: Source,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EffectiveRelativeOlderPolicy {
+    pub value: RelativeOlderPolicy,
+    pub default: RelativeOlderPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: Source,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EffectivePluginOptions {
     pub namespace: String,
     pub domain_rules: Vec<EffectiveDomainRule>,
@@ -55,6 +121,17 @@ pub struct EffectivePluginOptions {
     pub bundle_as_archive: Option<EffectiveBundleAsArchive>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overwrite_on_duplicate: Option<EffectiveOverwriteOnDuplicate>,
+    /// Both present exactly when the plugin's source shows it reports `version_history` at all
+    /// (`supports_version_history`) — the frontend renders the two policy pickers on that basis,
+    /// not on whether the plugin declared them in `pluginOptions()`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_newer_policy: Option<EffectiveRelativeNewerPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_older_policy: Option<EffectiveRelativeOlderPolicy>,
+    /// Drives whether the frontend renders the two policy pickers at all. Derived from static
+    /// analysis of the plugin's own source, so editing a plugin file is reflected on the next
+    /// settings-page load with no download needing to have run.
+    pub supports_version_history: bool,
 }
 
 /// Merges `declared` (fresh from the plugin's own `pluginOptions()` call) with `override_`
@@ -64,10 +141,16 @@ pub struct EffectivePluginOptions {
 /// `PUT`'s own contract: "a field omitted from the request body is left at its current effective
 /// value" — `domain_rules` as a whole is one such field, not a per-rule merge) — whichever list
 /// the user last saved is authoritative in full once they've touched it at all.
+///
+/// `supports_version_history` comes from the plugin's own source (`PluginPool::plugin_introspect`),
+/// and is what makes the two relative-revision policies appear — a plugin that reports version
+/// history never has to declare those two options itself, it just gets the type's own defaults
+/// unless it wants different ones.
 pub fn merge(
     namespace: &str,
     declared: &PluginDeclaredOptions,
     override_: Option<&PluginOptionsOverride>,
+    supports_version_history: bool,
 ) -> EffectivePluginOptions {
     let domain_rules = match override_.and_then(|o| o.domain_rules.as_ref()) {
         Some(overridden) => overridden
@@ -131,12 +214,86 @@ pub fn merge(
                 },
             );
 
+    let (relative_newer_policy, relative_older_policy) = if supports_version_history {
+        let declared_newer = declared.relative_newer_policy.as_ref();
+        let newer_default = declared_newer.map(|d| d.default).unwrap_or_default();
+        let newer = match override_
+            .and_then(|o| o.relative_newer_policy)
+            .map(newer_policy_from_storage)
+        {
+            Some(value) => EffectiveRelativeNewerPolicy {
+                value,
+                default: newer_default,
+                description: declared_newer.map(|d| d.description.clone()),
+                source: Source::UserOverride,
+            },
+            None => EffectiveRelativeNewerPolicy {
+                value: newer_default,
+                default: newer_default,
+                description: declared_newer.map(|d| d.description.clone()),
+                source: Source::PluginDefault,
+            },
+        };
+
+        let declared_older = declared.relative_older_policy.as_ref();
+        let older_default = declared_older.map(|d| d.default).unwrap_or_default();
+        let older = match override_
+            .and_then(|o| o.relative_older_policy)
+            .map(older_policy_from_storage)
+        {
+            Some(value) => EffectiveRelativeOlderPolicy {
+                value,
+                default: older_default,
+                description: declared_older.map(|d| d.description.clone()),
+                source: Source::UserOverride,
+            },
+            None => EffectiveRelativeOlderPolicy {
+                value: older_default,
+                default: older_default,
+                description: declared_older.map(|d| d.description.clone()),
+                source: Source::PluginDefault,
+            },
+        };
+        (Some(newer), Some(older))
+    } else {
+        (None, None)
+    };
+
     EffectivePluginOptions {
         namespace: namespace.to_string(),
         domain_rules,
         bundle_as_archive,
         overwrite_on_duplicate,
+        relative_newer_policy,
+        relative_older_policy,
+        supports_version_history,
     }
+}
+
+/// Resolves the effective [`RelativeNewerPolicy`] a download should apply — the same
+/// user-override ?? plugin-default ?? type-default chain [`merge`] reports, minus the display
+/// metadata.
+pub fn resolve_relative_newer_policy(
+    declared: &PluginDeclaredOptions,
+    override_: Option<&PluginOptionsOverride>,
+) -> RelativeNewerPolicy {
+    override_
+        .and_then(|o| o.relative_newer_policy)
+        .map(newer_policy_from_storage)
+        .or_else(|| declared.relative_newer_policy.as_ref().map(|d| d.default))
+        .unwrap_or_default()
+}
+
+/// Resolves the effective [`RelativeOlderPolicy`] a download should apply.
+pub fn resolve_relative_older_policy(
+    declared: &PluginDeclaredOptions,
+    override_: Option<&PluginOptionsOverride>,
+) -> RelativeOlderPolicy {
+    override_
+        .and_then(|o| o.relative_older_policy)
+        .map(older_policy_from_storage)
+        .or_else(|| declared.relative_older_policy.as_ref().map(|d| d.default))
+        .unwrap_or_default()
 }
 
 /// Extracts just the `Vec<domain_rules::DomainRule>` snapshot `download_url` needs to actually
@@ -227,12 +384,14 @@ mod tests {
                 default: false,
                 description: "overwrite by default".to_string(),
             }),
+            relative_newer_policy: None,
+            relative_older_policy: None,
         }
     }
 
     #[test]
     fn no_override_uses_plugin_declared_defaults_verbatim() {
-        let effective = merge("pixivdl", &declared_with_one_rule(), None);
+        let effective = merge("pixivdl", &declared_with_one_rule(), None, false);
         assert_eq!(effective.domain_rules.len(), 1);
         assert_eq!(effective.domain_rules[0].max_concurrent, Some(2));
         assert_eq!(effective.domain_rules[0].source, Source::PluginDefault);
@@ -251,8 +410,15 @@ mod tests {
             }]),
             bundle_as_archive: Some(false),
             overwrite_on_duplicate: None,
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
-        let effective = merge("pixivdl", &declared_with_one_rule(), Some(&override_));
+        let effective = merge(
+            "pixivdl",
+            &declared_with_one_rule(),
+            Some(&override_),
+            false,
+        );
         assert_eq!(effective.domain_rules[0].max_concurrent, Some(5));
         assert_eq!(effective.domain_rules[0].source, Source::UserOverride);
         let bundle = effective.bundle_as_archive.unwrap();
@@ -267,8 +433,10 @@ mod tests {
             domain_rules: None,
             bundle_as_archive: None,
             overwrite_on_duplicate: Some(true),
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
-        let effective = merge("ehdl", &declared_with_one_rule(), Some(&override_));
+        let effective = merge("ehdl", &declared_with_one_rule(), Some(&override_), false);
         let overwrite = effective.overwrite_on_duplicate.unwrap();
         assert!(overwrite.value);
         assert!(!overwrite.default, "plugin's own default is still reported");
@@ -277,7 +445,7 @@ mod tests {
 
     #[test]
     fn no_override_reports_overwrite_on_duplicate_plugin_default() {
-        let effective = merge("ehdl", &declared_with_one_rule(), None);
+        let effective = merge("ehdl", &declared_with_one_rule(), None, false);
         let overwrite = effective.overwrite_on_duplicate.unwrap();
         assert!(!overwrite.value);
         assert_eq!(overwrite.source, Source::PluginDefault);
@@ -286,7 +454,7 @@ mod tests {
     #[test]
     fn overwrite_on_duplicate_absent_when_plugin_declares_nothing() {
         let declared = PluginDeclaredOptions::default();
-        let effective = merge("chaikadl", &declared, None);
+        let effective = merge("chaikadl", &declared, None, false);
         assert!(effective.overwrite_on_duplicate.is_none());
     }
 
@@ -300,6 +468,8 @@ mod tests {
             }]),
             bundle_as_archive: None,
             overwrite_on_duplicate: None,
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
         let resolved = resolve_domain_rules(&declared_with_one_rule(), Some(&override_));
         assert_eq!(resolved.len(), 1);
@@ -325,6 +495,8 @@ mod tests {
             domain_rules: None,
             bundle_as_archive: Some(false),
             overwrite_on_duplicate: None,
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
         assert!(!resolve_bundle_as_archive(
             &declared_with_one_rule(),
@@ -344,6 +516,8 @@ mod tests {
             domain_rules: None,
             bundle_as_archive: None,
             overwrite_on_duplicate: Some(true),
+            relative_newer_policy: None,
+            relative_older_policy: None,
         };
         assert_eq!(
             resolve_overwrite_on_duplicate(&declared_with_one_rule(), Some(&override_)),
