@@ -491,10 +491,12 @@ export type RelativeOlderPolicy =
   | "warn_then_conflict_menu"
   | "silent_then_conflict_menu";
 
-/** Applied when neither the user nor the plugin states a preference. Conservative on purpose: only
- * replacing an archive whose filename already collides avoids silently deleting a library entry the
- * user may have deliberately kept alongside its revision. */
-export const DEFAULT_RELATIVE_NEWER_POLICY: RelativeNewerPolicy = "overwrite_if_same_name";
+/** Applied when neither the user nor the plugin states a preference. A download the site itself
+ * marks as a later revision of something already in the library is normally meant to replace it;
+ * keeping both would leave a superseded duplicate for the user to find and delete by hand. The old
+ * archive is only removed after the new revision is safely catalogued, so this default never risks
+ * ending up with neither. */
+export const DEFAULT_RELATIVE_NEWER_POLICY: RelativeNewerPolicy = "always_overwrite";
 
 /** Applied when neither the user nor the plugin states a preference. Asking first is the safe
  * default for the genuinely surprising case — the user asked for a URL that turns out to be older

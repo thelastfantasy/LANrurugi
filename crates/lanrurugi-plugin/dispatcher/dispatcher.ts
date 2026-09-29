@@ -596,8 +596,17 @@ if (!pluginsDir || !namespace) {
 // is that the key appears as an object-literal property of `execDownload`'s return value.
 
 /** Replaces every comment and string/template literal with equivalent-length blanks, so a later
- * scan sees only real code while every byte offset stays put. */
-function blankCommentsAndStrings(src: string): string {
+ * scan sees only real code while every byte offset stays put.
+ *
+ * `keepPropertyKeyStrings` makes one exception: a string immediately followed by `:` is a quoted
+ * *property key* (`{"version_history": …}`), which is real code, so it is left intact. Every other
+ * string — including one that merely mentions the key in prose (`"version_history: none found"`) —
+ * is blanked as usual. Without the exception a quoted key is invisible to the scan; without the
+ * `:` requirement any mention in any message would count. */
+function blankCommentsAndStrings(
+  src: string,
+  keepPropertyKeyStrings = false,
+): string {
   const out = src.split("");
   let i = 0;
   const blankTo = (end: number) => {
@@ -628,7 +637,25 @@ function blankCommentsAndStrings(src: string): string {
         if (src[j] === quote) break;
         j++;
       }
+      if (j >= src.length) {
+        // No closing quote anywhere: this was never a string. The usual culprit is a quote inside
+        // a regex literal (`/["']/`), which this scanner has no way to recognize as such. Blanking
+        // to EOF here would erase the rest of the file — including a real `version_history` key —
+        // and report the plugin as unsupported. Treating the character as ordinary code costs
+        // nothing by comparison: the worst case is one stray quote the regexes ignore anyway.
+        i++;
+        continue;
+      }
       const stop = Math.min(j + 1, src.length);
+      if (keepPropertyKeyStrings && quote !== "`") {
+        // A quoted property key is code, not prose — recognized by the `:` that must follow it
+        // (whitespace permitted). Template literals are excluded: they can't be property keys.
+        const after = src.slice(stop).match(/^\s*:/);
+        if (after) {
+          i = stop;
+          continue;
+        }
+      }
       blankTo(stop);
       i = stop;
     } else {
@@ -639,25 +666,25 @@ function blankCommentsAndStrings(src: string): string {
 }
 
 /** True when `key` appears as an object-literal property name — `key:`, a shorthand `key,`/`key}`,
- * or a quoted `"key":` — anywhere in `code`.
+ * or a quoted `"key":` — anywhere in the given code.
  *
  * A leading `.` is excluded so a property *read* (`result.version_history`) doesn't count as the
- * plugin declaring it; only a key it writes does. Quoted keys are matched against the *original*
- * source rather than the blanked copy, since blanking erases string literals — including the very
- * quotes that make a quoted key a key. */
-function usesPropertyKey(code: string, rawSource: string, key: string): boolean {
+ * plugin declaring it; only a key it writes does. `quotedCode` is the same source blanked with
+ * `keepPropertyKeyStrings`, where a quoted key survives verbatim but a mention inside any other
+ * string does not (see `blankCommentsAndStrings`). */
+function usesPropertyKey(code: string, quotedCode: string, key: string): boolean {
   const bare = new RegExp(`(^|[^\\w$.])${key}\\s*[:,}]`, "m");
   const quoted = new RegExp(`["']${key}["']\\s*:`, "m");
-  return bare.test(code) || quoted.test(rawSource);
+  return bare.test(code) || quoted.test(quotedCode);
 }
 
-async function introspectPlugin(mod: Record<string, unknown>) {
+async function introspectPlugin(_mod: Record<string, unknown>) {
   let returnsVersionHistory = false;
   try {
     const source = await Deno.readTextFile(`${pluginsDir}/${namespace}.ts`);
     returnsVersionHistory = usesPropertyKey(
       blankCommentsAndStrings(source),
-      source,
+      blankCommentsAndStrings(source, true),
       "version_history",
     );
   } catch {
@@ -665,10 +692,7 @@ async function introspectPlugin(mod: Record<string, unknown>) {
     // would fail loudly elsewhere anyway, so this never needs to be an error of its own.
     returnsVersionHistory = false;
   }
-  return {
-    returns_version_history: returnsVersionHistory,
-    exports_canonicalize_source: typeof mod.canonicalizeSource === "function",
-  };
+  return { returns_version_history: returnsVersionHistory };
 }
 
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);

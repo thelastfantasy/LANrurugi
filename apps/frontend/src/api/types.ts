@@ -556,6 +556,10 @@ export interface DownloadQueueItem {
   /** Set alongside state `awaiting_revision_confirmation` — which in-library archive is the newer
    * revision, so the row can name and link to it (issue #107). */
   pending_revision_confirmation?: PendingRevisionConfirmation | null
+  /** The user answered "download it anyway" for the run currently starting. Server-owned and
+   * scoped to that single run; the UI has no reason to act on it, but the field is serialized so
+   * the type reflects what the API actually sends. */
+  revision_confirmed?: boolean
   created_at: number
 }
 

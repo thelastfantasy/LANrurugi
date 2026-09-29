@@ -47,6 +47,13 @@ pub enum RevisionRelation {
 /// revisions of one series), the one *nearest* the incoming download wins: it is the most specific
 /// thing to compare against, and it is what decides whether this download is a step forward or
 /// backward from the library's current position.
+///
+/// Ties — one catalogued archive equally distant on each side — resolve to the **older** one, so the
+/// download reports as [`RevisionRelation::NewerThan`]. The comparison below is strictly `<`, so the
+/// earlier-indexed (older) candidate is kept; that is a deliberate choice, not an accident of
+/// iteration order. It favors the less destructive branch: the newer-side policies at worst replace
+/// an archive this download genuinely supersedes, whereas treating the download as older can block
+/// it outright (`relative_older_policy: block`) over a relationship that is symmetric anyway.
 pub fn classify(
     downloaded_source: &str,
     history: &[VersionHistoryEntry],
@@ -213,6 +220,48 @@ mod tests {
         );
         assert_eq!(
             relation,
+            RevisionRelation::NewerThan {
+                archive_id: "arc-a".to_string(),
+                hops: 1,
+            }
+        );
+    }
+
+    /// Equidistant candidates on both sides resolve to the older one (reported as `NewerThan`) —
+    /// see [`classify`]'s own docs for why that side is the safe one to pick.
+    #[test]
+    fn an_equidistant_tie_resolves_to_the_older_candidate() {
+        // Download is b, with a one hop back and c one hop forward — both catalogued.
+        let relation = classify(
+            "e-hentai.org/g/2/b",
+            &three_revision_history(),
+            &[
+                catalogued("arc-a", "e-hentai.org/g/1/a"),
+                catalogued("arc-c", "e-hentai.org/g/3/c"),
+            ],
+        );
+        assert_eq!(
+            relation,
+            RevisionRelation::NewerThan {
+                archive_id: "arc-a".to_string(),
+                hops: 1,
+            }
+        );
+    }
+
+    /// The tie-break must not depend on which order the catalogue happens to arrive in.
+    #[test]
+    fn the_tie_break_is_independent_of_catalogue_order() {
+        let reversed = classify(
+            "e-hentai.org/g/2/b",
+            &three_revision_history(),
+            &[
+                catalogued("arc-c", "e-hentai.org/g/3/c"),
+                catalogued("arc-a", "e-hentai.org/g/1/a"),
+            ],
+        );
+        assert_eq!(
+            reversed,
             RevisionRelation::NewerThan {
                 archive_id: "arc-a".to_string(),
                 hops: 1,

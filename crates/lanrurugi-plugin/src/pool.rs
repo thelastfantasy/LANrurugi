@@ -585,4 +585,132 @@ mod tests {
             .unwrap();
         assert_eq!(result["tags"], "source:sample,archive:still-works");
     }
+
+    /// Writes one throwaway plugin whose `execDownload` body is `body`, and reports what
+    /// `plugin_introspect` makes of it. Drives the REAL dispatcher rather than a copy of its
+    /// lexical scanner, so these cases can't drift from the code that actually ships.
+    async fn introspects_version_history(name: &str, body: &str) -> Option<bool> {
+        which_deno()?;
+        let dispatcher = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dispatcher/dispatcher.ts");
+        let dir = std::env::temp_dir().join(format!("lrr-introspect-{name}"));
+        std::fs::create_dir_all(&dir).ok()?;
+        // `plugin-sdk.ts` must sit beside the dispatcher wherever it runs from (see `Worker::spawn`).
+        std::fs::write(
+            dispatcher.parent()?.join("plugin-sdk.ts"),
+            crate::PLUGIN_SDK_SCRIPT,
+        )
+        .ok()?;
+        let source = format!(
+            "export function pluginInfo() {{\n  return {{\n    namespace: \"{name}\",\n    type: \"download\",\n    parameters: [],\n    declared_permissions: {{ net: [], read: false, write: false }},\n    name: \"{name}\",\n    author: \"t\",\n    description: \"t\",\n    version: \"1\",\n  }};\n}}\n\nexport async function execDownload(_hostArgs) {{\n{body}\n}}\n"
+        );
+        std::fs::write(dir.join(format!("{name}.ts")), source).ok()?;
+        let pool = PluginPool::new("deno", dispatcher, dir);
+        Some(
+            pool.plugin_introspect(name)
+                .await
+                .ok()?
+                .returns_version_history,
+        )
+    }
+
+    /// A quote inside a regex literal has no closing partner, and a scanner that blanks "to the
+    /// closing quote" would erase the rest of the file — hiding the real `version_history` key and
+    /// silently reporting the plugin as unsupported. Found by review; this is the regression guard.
+    #[tokio::test]
+    async fn a_quote_inside_a_regex_literal_does_not_hide_version_history() {
+        let Some(found) = introspects_version_history(
+            "regexquote",
+            r#"  const m = String(_hostArgs).match(/["']/);
+  return { downloads: [], version_history: [], matched: m };"#,
+        )
+        .await
+        else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        assert!(
+            found,
+            "a regex literal containing a quote must not swallow the rest of the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shorthand_property_counts_as_support() {
+        let Some(found) = introspects_version_history(
+            "shorthand",
+            "  const version_history = [];\n  return { downloads: [], version_history };",
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(found);
+    }
+
+    #[tokio::test]
+    async fn a_quoted_property_key_counts_as_support() {
+        let Some(found) = introspects_version_history(
+            "quotedkey",
+            r#"  return { downloads: [], "version_history": [] };"#,
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(found);
+    }
+
+    /// The contract says a mention in a comment does not count — this is the case a previous
+    /// implementation got wrong by matching quoted keys against the raw, un-blanked source.
+    #[tokio::test]
+    async fn a_mention_in_a_comment_is_not_support() {
+        let Some(found) = introspects_version_history(
+            "commentonly",
+            "  // this plugin does not report \"version_history\": nothing to see\n  return { downloads: [] };",
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(!found);
+    }
+
+    /// ...nor does a mention inside a string, even one that looks like a key because it contains
+    /// a colon.
+    #[tokio::test]
+    async fn a_mention_inside_a_string_is_not_support() {
+        let Some(found) = introspects_version_history(
+            "stringonly",
+            r#"  const msg = "version_history: none found";
+  return { downloads: [], error: { error_code: msg } };"#,
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(!found);
+    }
+
+    /// Reading the key off some other object says nothing about whether this plugin reports one.
+    #[tokio::test]
+    async fn a_property_read_is_not_support() {
+        let Some(found) = introspects_version_history(
+            "propread",
+            "  const prior = (_hostArgs ?? {}).version_history;\n  return { downloads: [], prior };",
+        )
+        .await
+        else {
+            return;
+        };
+        assert!(!found);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_never_mentions_it_is_not_support() {
+        let Some(found) = introspects_version_history("plain", "  return { downloads: [] };").await
+        else {
+            return;
+        };
+        assert!(!found);
+    }
 }

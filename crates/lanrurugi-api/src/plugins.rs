@@ -2255,6 +2255,9 @@ pub(crate) async fn start_download(
             // already in the library, *before* any bytes move — that ordering is what lets the
             // `block` policy refuse an older revision without spending the transfer at all.
             let mut overwrite = overwrite;
+            // Set when `always_overwrite` decided an in-library archive is superseded by this
+            // download; acted on only after the new revision is actually catalogued.
+            let mut supersedes_archive_id: Option<String> = None;
             if let Some(history) = parsed.version_history.as_deref().filter(|h| !h.is_empty()) {
                 use crate::download_manager::version_history::RevisionRelation;
                 let relation = classify_revision(
@@ -2265,10 +2268,17 @@ pub(crate) async fn start_download(
                 )
                 .await;
 
-                let (declared, _) =
-                    fetch_declared_options(&state_for_task, &plugin_namespace_for_task)
-                        .await
-                        .unwrap_or_default();
+                // `plugin_options` directly, not `fetch_declared_options`: the latter also runs
+                // `plugin_introspect` in its own Deno subprocess, and that answer only decides
+                // whether the *settings UI* offers these policies. Reaching this branch at all
+                // already proves the plugin reports version history.
+                let declared = state_for_task
+                    .plugins
+                    .plugin_options(&plugin_namespace_for_task)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let stored_override = state_for_task
                     .plugin_options
                     .get(&plugin_namespace_for_task)
@@ -2291,24 +2301,13 @@ pub(crate) async fn start_download(
                         if policy
                             == lanrurugi_plugin::protocol::RelativeNewerPolicy::AlwaysOverwrite
                         {
-                            // Delete the superseded archive up front, so the new revision is
-                            // catalogued as the series' single entry regardless of filename.
-                            // Reuses the same full-cleanup path as a real user delete (file,
-                            // search index, thumbnails, ...), not a bare record removal.
-                            if let crate::archives::DeleteOneOutcome::Error(e) =
-                                crate::archives::delete_one_archive(
-                                    &state_for_task,
-                                    &lanrurugi_core::ids::ArchiveId(archive_id.clone()),
-                                    None,
-                                )
-                                .await
-                            {
-                                tracing::warn!(
-                                    archive_id = %archive_id,
-                                    error = %e,
-                                    "failed to remove superseded archive; continuing with download"
-                                );
-                            }
+                            // Deferred until the new revision is safely catalogued — deleting here
+                            // would leave the user with neither copy if anything between this point
+                            // and ingestion failed (network drop, full disk, plugin error, restart),
+                            // and opens a window where the series is absent from the library even
+                            // when everything succeeds. See the deletion site after
+                            // `run_managed_downloads` returns `Ok`.
+                            supersedes_archive_id = Some(archive_id.clone());
                         }
                         // Under either policy the incoming revision is meant to win: with
                         // `always_overwrite` the old archive is already gone, and with
@@ -2419,6 +2418,48 @@ pub(crate) async fn start_download(
                 .await
                 {
                     Ok(ids) => {
+                        // The new revision is catalogued now, so retiring the one it supersedes is
+                        // finally safe (issue #107's `always_overwrite`). Skipped when ingestion
+                        // resolved *onto* that same archive — a same-filename overwrite reuses the
+                        // existing ID, and deleting it here would throw away the very bytes just
+                        // downloaded.
+                        if let Some(superseded) = supersedes_archive_id
+                            .filter(|superseded| !ids.contains(superseded))
+                        {
+                            // Full user-delete path (file, search index, thumbnails, ...), not a
+                            // bare record removal.
+                            match crate::archives::delete_one_archive(
+                                &state_for_task,
+                                &lanrurugi_core::ids::ArchiveId(superseded.clone()),
+                                None,
+                            )
+                            .await
+                            {
+                                crate::archives::DeleteOneOutcome::Error(e) => {
+                                    tracing::warn!(
+                                        archive_id = %superseded,
+                                        error = %e,
+                                        "failed to remove superseded archive after the newer revision was catalogued"
+                                    );
+                                }
+                                crate::archives::DeleteOneOutcome::NotFound => {
+                                    // Already gone — ingestion itself rekeyed or replaced it.
+                                    // Reporting this as "removed" would claim work this call
+                                    // didn't do.
+                                    tracing::debug!(
+                                        archive_id = %superseded,
+                                        "superseded archive was already gone by the time it was retired"
+                                    );
+                                }
+                                crate::archives::DeleteOneOutcome::Deleted { .. } => {
+                                    tracing::info!(
+                                        archive_id = %superseded,
+                                        replaced_by = ?ids,
+                                        "removed archive superseded by a newer revision"
+                                    );
+                                }
+                            }
+                        }
                         // The item's own freshest title/metadata preview (if any), patched onto
                         // the start entry alongside `archive_ids` below — the start-request side
                         // could only snapshot whatever existed back then, while
@@ -2513,6 +2554,10 @@ pub(crate) async fn start_download(
                 // itself; unmanaged, no progress/concurrency/rate-limit treatment, since the byte
                 // transfer already happened entirely inside the plugin process by this point. No
                 // `archive_ids` either — this path never catalogs the file into an archive itself.
+                //
+                // `supersedes_archive_id` is deliberately NOT consumed here (issue #107): nothing
+                // was catalogued, so there is no new revision to replace the old one with, and
+                // retiring the existing archive would leave the library with neither.
                 if let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,

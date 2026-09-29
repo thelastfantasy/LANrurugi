@@ -740,10 +740,12 @@ async fn confirm_older_revision(
             );
         }
         broadcast_item_update(&state, &item);
+        // Abandoning is a stop, not a start — the item ends in `Cancelled`, exactly where
+        // `stop_one` leaves one.
         record_manual(
             &state,
             auth.as_ref().map(|e| &e.0),
-            action_types::DOWNLOAD_QUEUE_START,
+            action_types::DOWNLOAD_QUEUE_STOP,
             ActivityTarget {
                 id: Some(id.clone()),
                 label: item.title.clone().or_else(|| Some(item.url.clone())),
@@ -849,10 +851,18 @@ async fn start_all(
     };
     let ids: Vec<String> = items
         .into_iter()
-        .filter(|i| i.state == DownloadQueueState::Queued)
+        .filter(|i| is_bulk_startable(i.state))
         .map(|i| i.id)
         .collect();
     start_many(&state, auth.as_ref().map(|e| &e.0), ids).await
+}
+
+/// Which states "Start All" sweeps up. Deliberately narrower than [`is_startable`]: that one also
+/// admits `Error`/`Cancelled`, which a user retries deliberately one at a time, and it must never
+/// admit `AwaitingRevisionConfirmation` — bulk-starting a parked item would answer, by omission,
+/// the very question it is parked on (issue #107).
+fn is_bulk_startable(state: DownloadQueueState) -> bool {
+    matches!(state, DownloadQueueState::Queued)
 }
 
 #[derive(Debug, Deserialize)]
@@ -3199,5 +3209,46 @@ mod tests {
         assert!(!is_in_flight(
             DownloadQueueState::AwaitingRevisionConfirmation
         ));
+    }
+
+    /// `start_all` only ever picks up `Queued` items, so a parked one can't be swept back into
+    /// flight by the bulk action either — the per-item `is_startable` guard is not the only path.
+    /// Calls the same predicate `start_all` itself filters on — re-implementing that filter here
+    /// would stay green even if production started sweeping up parked items.
+    #[test]
+    fn start_all_skips_a_parked_item() {
+        assert!(is_bulk_startable(DownloadQueueState::Queued));
+        assert!(!is_bulk_startable(
+            DownloadQueueState::AwaitingRevisionConfirmation
+        ));
+        // Not bulk-started either: a retry after failure/stop is a per-item decision.
+        assert!(!is_bulk_startable(DownloadQueueState::Error));
+        assert!(!is_bulk_startable(DownloadQueueState::Cancelled));
+    }
+
+    /// A parked item is at rest, so a *different* queue entry for the same URL must not be
+    /// considered blocked by it — `has_running_duplicate` keys off `is_in_flight`.
+    #[test]
+    fn a_parked_item_does_not_block_another_item_for_the_same_url() {
+        let items = vec![
+            item("a", "same-url", DownloadQueueState::Queued),
+            item(
+                "b",
+                "same-url",
+                DownloadQueueState::AwaitingRevisionConfirmation,
+            ),
+        ];
+        assert!(!has_running_duplicate(&items[0], &items));
+    }
+
+    /// ...while a genuinely in-flight one still does, so the parked state didn't punch a hole in
+    /// the existing dedup guard.
+    #[test]
+    fn an_in_flight_item_still_blocks_another_item_for_the_same_url() {
+        let items = vec![
+            item("a", "same-url", DownloadQueueState::Queued),
+            item("b", "same-url", DownloadQueueState::Downloading),
+        ];
+        assert!(has_running_duplicate(&items[0], &items));
     }
 }

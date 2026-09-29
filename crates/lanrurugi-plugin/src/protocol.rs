@@ -161,10 +161,14 @@ pub struct OverwriteOnDuplicateOption {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RelativeNewerPolicy {
-    /// Delete the old archive unconditionally, regardless of filename.
+    /// Delete the old archive unconditionally, regardless of filename. The default: a download the
+    /// site itself marks as a later revision of something already in the library is normally meant
+    /// to replace it, and keeping both leaves a superseded duplicate the user then has to find and
+    /// remove by hand. Safe to make the default because the old archive is only removed *after* the
+    /// new revision is catalogued (see `plugins.rs`'s deletion site).
+    #[default]
     AlwaysOverwrite,
     /// Only overwrite when destination filenames actually collide; otherwise keep both.
-    #[default]
     OverwriteIfSameName,
 }
 
@@ -225,12 +229,13 @@ pub struct PluginIntrospection {
     /// settings UI offers the two relative-revision policies at all. Static analysis, not runtime
     /// observation, so a freshly-edited plugin takes effect on the next options request with no
     /// download ever having run.
+    ///
+    /// Whether the plugin exports `canonicalizeSource` is deliberately *not* reported here: the
+    /// host learns that from `canonicalize_sources` returning `None`, at the exact moment it
+    /// matters, so a second separately-derived signal for the same fact would only be one more
+    /// thing that can disagree.
     #[serde(default)]
     pub returns_version_history: bool,
-    /// Whether the plugin exports `canonicalizeSource`, meaning the host should route every
-    /// `source:` tag comparison for this plugin's namespace through it.
-    #[serde(default)]
-    pub exports_canonicalize_source: bool,
 }
 
 /// A plugin-authored error — mirrors `plugin-sdk.ts`'s `PluginError` field-for-field. `error_code`

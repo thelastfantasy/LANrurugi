@@ -24,6 +24,7 @@ export function PluginCard({
   const { t } = useTranslation()
   const [scriptArg, setScriptArg] = useState("")
   const [scriptRunning, setScriptRunning] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // Deep-link target from /config/plugins?focus=<namespace> (upload queue's rate-limit tooltip) —
   // when this card is focused and its rate-limit section has rendered, scroll + flash it.
   const [searchParams] = useSearchParams()
@@ -33,6 +34,14 @@ export function PluginCard({
   const options = usePluginOptions(plugin.type === "download" ? plugin.namespace : "")
   const hasDownloadOptions = plugin.type === "download" && Boolean(options.data)
   const hasParameters = plugin.parameters.length > 0
+
+  // The deep-link target now lives inside the collapsed settings panel, so open it before trying
+  // to scroll — otherwise the element doesn't exist and the flash silently no-ops.
+  useEffect(() => {
+    if (focusNamespace === plugin.namespace && hasDownloadOptions && !didFocusRef.current) {
+      setSettingsOpen(true)
+    }
+  }, [focusNamespace, plugin.namespace, hasDownloadOptions])
 
   useEffect(() => {
     if (!focusNamespace || focusNamespace !== plugin.namespace || !hasDownloadOptions || didFocusRef.current) return
@@ -46,7 +55,8 @@ export function PluginCard({
       htmlEl.style.backgroundColor = ""
     }, 2500)
     return () => window.clearTimeout(timer)
-  }, [focusNamespace, plugin.namespace, hasDownloadOptions])
+    // `settingsOpen` is a real dependency: the target only exists once the panel above has opened.
+  }, [focusNamespace, plugin.namespace, hasDownloadOptions, settingsOpen])
 
   const settings = usePluginSettings(plugin.type === "metadata" ? plugin.namespace : "")
   const updateSettings = useUpdatePluginSettings(plugin.namespace)
@@ -184,8 +194,36 @@ export function PluginCard({
           </table>
         )}
 
-        {hasDownloadOptions && <PluginOptionsForm namespace={plugin.namespace} />}
-        {hasParameters && <PluginParametersForm namespace={plugin.namespace} parameters={plugin.parameters} />}
+        {/* One "插件设置" panel for everything configurable about this plugin — the download
+            options (rate limits, overwrite, revision policies) and the plugin's own declared
+            parameters both live here, rather than the options sitting loose above the panel while
+            only the parameters were collapsible. */}
+        {(hasDownloadOptions || hasParameters) && (
+          <>
+            <div
+              className={`collapsible-title caret-right${settingsOpen ? " active" : ""}`}
+              style={{ padding: "5px 0 0 5px", cursor: "pointer" }}
+              onClick={() => setSettingsOpen((o) => !o)}
+            >
+              <i className="fas fa-sliders-h fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
+              <b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>
+            </div>
+            {settingsOpen && (
+              <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
+                {hasDownloadOptions && <PluginOptionsForm namespace={plugin.namespace} />}
+                {/* Deliberately its own box, outside the options form: everything in that form
+                    persists through one `/plugins/options` record that Save/Reset act on as a
+                    unit, while these parameters go to `/plugins/settings` and are untouched by
+                    that Reset. Putting them under the Reset button would misrepresent its reach. */}
+                {hasParameters && (
+                  <div className="option-flyout">
+                    <PluginParametersForm namespace={plugin.namespace} parameters={plugin.parameters} />
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
 
         <br />
       </span>

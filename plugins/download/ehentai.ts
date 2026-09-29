@@ -100,6 +100,9 @@ interface GalleryData {
    * E-Hentai says "this one is current". */
   current_gid?: string;
   current_key?: string;
+  /** Present instead of the real fields when E-Hentai can't serve this gid (expunged, or not
+   * visible to these credentials). */
+  error?: string;
 }
 
 /** One `gdata` call. `namespace: 0` is load-bearing: the newer `namespace: 1` format omits
@@ -120,7 +123,10 @@ async function fetchGalleryData(
   });
   if (!response.ok) return [];
   const body = await response.json() as { gmetadata?: GalleryData[] };
-  return body.gmetadata ?? [];
+  // `gdata` answers an expunged/unavailable gid with an error stub (`{gid, error}`) rather than
+  // omitting it — such an entry has no `token`/`posted`, so keeping it would put a useless node in
+  // the chain and feed `NaN` into the timestamp conversion below.
+  return (body.gmetadata ?? []).filter((entry) => !entry.error);
 }
 
 /** Collects every revision of a gallery's series, walking `parent_gid` back to the chain's root and
@@ -174,11 +180,24 @@ async function collectVersionHistory(
     return [];
   }
 
-  return [...byGid.values()].map((entry) => ({
-    source: canonicalizeSource(`e-hentai.org/g/${entry.gid}/${entry.token}`),
+  // Deliberately outside the `try` above but individually guarded: a single malformed entry must
+  // drop only itself, never abort `execDownload`. `new Date(NaN).toISOString()` throws
+  // `RangeError`, and an entry missing `token`/`posted` would otherwise produce exactly that — so
+  // a version chain containing one unavailable gallery would have failed the whole download, which
+  // inverts this feature's own rule that version history never breaks a download.
+  const entries: VersionHistoryEntryResult[] = [];
+  for (const entry of byGid.values()) {
+    const postedSeconds = Number(entry.posted);
+    if (!entry.token || !Number.isFinite(postedSeconds)) continue;
     // `posted` is unix seconds as a string; the SDK contract wants ISO 8601.
-    posted_at: new Date(Number(entry.posted) * 1000).toISOString(),
-  }));
+    const postedAt = new Date(postedSeconds * 1000);
+    if (Number.isNaN(postedAt.getTime())) continue;
+    entries.push({
+      source: canonicalizeSource(`e-hentai.org/g/${entry.gid}/${entry.token}`),
+      posted_at: postedAt.toISOString(),
+    });
+  }
+  return entries;
 }
 
 export async function execDownload(

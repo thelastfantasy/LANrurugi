@@ -10,6 +10,8 @@ import type {
   RelativeOlderPolicy,
 } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
+import { toast } from "@/toast"
 
 import { ICON_BUTTON_STYLE } from "./Upload/shared"
 
@@ -65,7 +67,7 @@ function PluginOptionsFormBody({
   const [bundleValue, setBundleValue] = useState(initial.bundle_as_archive?.value ?? false)
   const [overwriteValue, setOverwriteValue] = useState(initial.overwrite_on_duplicate?.value ?? false)
   const [newerPolicy, setNewerPolicy] = useState<RelativeNewerPolicy>(
-    initial.relative_newer_policy?.value ?? "overwrite_if_same_name",
+    initial.relative_newer_policy?.value ?? "always_overwrite",
   )
   const [olderPolicy, setOlderPolicy] = useState<RelativeOlderPolicy>(
     initial.relative_older_policy?.value ?? "warn_then_conflict_menu",
@@ -110,34 +112,43 @@ function PluginOptionsFormBody({
       setOverwriteValue(saved.overwrite_on_duplicate?.value ?? false)
       if (saved.relative_newer_policy) setNewerPolicy(saved.relative_newer_policy.value)
       if (saved.relative_older_policy) setOlderPolicy(saved.relative_older_policy.value)
+      toast({ text: t("pluginOptions.settingsSaved") ?? undefined, icon: "success" })
     } catch (e) {
       if (e instanceof ValidationError) {
+        // Rendered inline next to the offending field; a toast would duplicate it.
         setFieldError({ field: e.field, message: e.message })
       } else {
+        toast({ text: t("pluginOptions.settingsSaveFailed") ?? undefined, icon: "error" })
         throw e
       }
     }
   }
 
   async function resetToDefaults() {
-    const restored = await reset.mutateAsync()
+    let restored: PluginOptions
+    try {
+      restored = await reset.mutateAsync()
+    } catch {
+      toast({ text: t("pluginOptions.settingsSaveFailed") ?? undefined, icon: "error" })
+      return
+    }
     setRows(rowsFromOptions(restored))
     setBundleValue(restored.bundle_as_archive?.value ?? false)
     setOverwriteValue(restored.overwrite_on_duplicate?.value ?? false)
     if (restored.relative_newer_policy) setNewerPolicy(restored.relative_newer_policy.value)
     if (restored.relative_older_policy) setOlderPolicy(restored.relative_older_policy.value)
+    toast({ text: t("pluginOptions.settingsReset") ?? undefined, icon: "success" })
   }
 
   return (
+    <>
     <div
       data-download-settings-namespace={namespace}
       className="option-flyout"
-      style={{
-        borderTop: "1px solid rgba(128,128,128,0.3)",
-        marginTop: 8,
-        paddingTop: 8,
-        transition: "background-color 0.6s ease",
-      }}
+      // No `borderTop` override here: `.option-flyout` already draws all four sides in the active
+      // theme's own color, and overriding just the top left this box with three themed edges and
+      // one hardcoded grey one. `transition` stays — the deep-link flash animates `background`.
+      style={{ transition: "background-color 0.6s ease" }}
     >
       <h3 className="ih" style={{ fontSize: "1.0em", margin: "0 0 6px" }}>
         {t("pluginOptions.downloadRatelimitSettings")}
@@ -193,79 +204,87 @@ function PluginOptionsFormBody({
         </tbody>
       </table>
       <input type="button" className="stdbtn" value={t("pluginOptions.addRule") ?? undefined} onClick={addRow} />
+      </div>
 
-      {initial.bundle_as_archive && (
-        <p>
-          <label>
-            <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{" "}
-            {t(initial.bundle_as_archive.description)}
-          </label>
-        </p>
-      )}
-
-      {initial.overwrite_on_duplicate && (
-        <p>
-          <label>
-            <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{" "}
-            {t(initial.overwrite_on_duplicate.description)}
-          </label>
-        </p>
-      )}
-
-      {initial.supports_version_history && (
-        <>
-          <h3 className="ih" style={{ fontSize: "1.0em", margin: "10px 0 6px" }}>
-            {t("pluginOptions.versionHistoryHandling")}
-          </h3>
-          <p style={{ margin: "0 0 6px" }}>
-            {initial.relative_newer_policy?.description
-              ? t(initial.relative_newer_policy.description)
-              : t("pluginOptions.whenTheDownloadIsNewer")}
-          </p>
-          {(
-            [
-              ["overwrite_if_same_name", "pluginOptions.newerOverwriteIfSameName"],
-              ["always_overwrite", "pluginOptions.newerAlwaysOverwrite"],
-            ] as const
-          ).map(([value, labelKey]) => (
-            <p key={value} style={{ margin: "0 0 3px" }}>
+      {/* Duplicate/revision handling is its own concern, so it gets its own bordered box rather
+          than trailing off the bottom of the rate-limit one — where it read as more rate-limit
+          settings. */}
+      {(initial.bundle_as_archive ||
+        initial.overwrite_on_duplicate ||
+        initial.supports_version_history) && (
+        <div className="option-flyout">
+          {initial.bundle_as_archive && (
+            <p>
               <label>
-                <input
-                  type="radio"
-                  name={`relative-newer-policy-${namespace}`}
-                  checked={newerPolicy === value}
-                  onChange={() => setNewerPolicy(value)}
-                />{" "}
-                {t(labelKey)}
+                <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{" "}
+                {t(initial.bundle_as_archive.description)}
               </label>
             </p>
-          ))}
+          )}
 
-          <p style={{ margin: "10px 0 6px" }}>
-            {initial.relative_older_policy?.description
-              ? t(initial.relative_older_policy.description)
-              : t("pluginOptions.whenTheDownloadIsOlder")}
-          </p>
-          {(
-            [
-              ["block", "pluginOptions.olderBlock"],
-              ["warn_then_conflict_menu", "pluginOptions.olderWarnThenConfirm"],
-              ["silent_then_conflict_menu", "pluginOptions.olderSilent"],
-            ] as const
-          ).map(([value, labelKey]) => (
-            <p key={value} style={{ margin: "0 0 3px" }}>
+          {initial.overwrite_on_duplicate && (
+            <p>
               <label>
-                <input
-                  type="radio"
-                  name={`relative-older-policy-${namespace}`}
-                  checked={olderPolicy === value}
-                  onChange={() => setOlderPolicy(value)}
-                />{" "}
-                {t(labelKey)}
+                <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{" "}
+                {t(initial.overwrite_on_duplicate.description)}
               </label>
             </p>
-          ))}
-        </>
+          )}
+
+          {initial.supports_version_history && (
+            <>
+              <h3 className="ih" style={{ fontSize: "1.0em", margin: "10px 0 6px" }}>
+                {t("pluginOptions.versionHistoryHandling")}
+              </h3>
+              <p style={{ margin: "0 0 6px" }}>
+                {initial.relative_newer_policy?.description
+                  ? t(initial.relative_newer_policy.description)
+                  : t("pluginOptions.whenTheDownloadIsNewer")}
+              </p>
+              <RadioGroup
+                value={newerPolicy}
+                onValueChange={setNewerPolicy}
+                name={`relative-newer-policy-${namespace}`}
+                style={{ display: "flex", flexDirection: "column", gap: 3 }}
+              >
+                {(
+                  [
+                    ["overwrite_if_same_name", "pluginOptions.newerOverwriteIfSameName"],
+                    ["always_overwrite", "pluginOptions.newerAlwaysOverwrite"],
+                  ] as const
+                ).map(([value, labelKey]) => (
+                  <RadioItem key={value} value={value}>
+                    {t(labelKey)}
+                  </RadioItem>
+                ))}
+              </RadioGroup>
+
+              <p style={{ margin: "10px 0 6px" }}>
+                {initial.relative_older_policy?.description
+                  ? t(initial.relative_older_policy.description)
+                  : t("pluginOptions.whenTheDownloadIsOlder")}
+              </p>
+              <RadioGroup
+                value={olderPolicy}
+                onValueChange={setOlderPolicy}
+                name={`relative-older-policy-${namespace}`}
+                style={{ display: "flex", flexDirection: "column", gap: 3 }}
+              >
+                {(
+                  [
+                    ["block", "pluginOptions.olderBlock"],
+                    ["warn_then_conflict_menu", "pluginOptions.olderWarnThenConfirm"],
+                    ["silent_then_conflict_menu", "pluginOptions.olderSilent"],
+                  ] as const
+                ).map(([value, labelKey]) => (
+                  <RadioItem key={value} value={value}>
+                    {t(labelKey)}
+                  </RadioItem>
+                ))}
+              </RadioGroup>
+            </>
+          )}
+        </div>
       )}
 
       {fieldError && (
@@ -274,7 +293,9 @@ function PluginOptionsFormBody({
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 8 }}>
+      {/* Outside both boxes: one Save/Reset pair covers every field above, since they all persist
+          through the same `/api/plugins/{ns}/options` request. */}
+      <div style={{ display: "flex", gap: 8, margin: "0 10px" }}>
         <input
           type="button"
           className="stdbtn"
@@ -290,6 +311,6 @@ function PluginOptionsFormBody({
           onClick={() => void resetToDefaults()}
         />
       </div>
-    </div>
+    </>
   )
 }

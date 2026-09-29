@@ -102,13 +102,16 @@ with no download ever having run and nothing declared twice in `pluginOptions()`
 **Response `result`**:
 
 ```json
-{ "returns_version_history": true, "exports_canonicalize_source": true }
+{ "returns_version_history": true }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
 | `returns_version_history` | boolean | Whether `execDownload`'s body ever returns a `version_history` key. Drives whether the settings UI offers the two relative-revision policies at all. |
-| `exports_canonicalize_source` | boolean | Whether the plugin exports `canonicalizeSource`. |
+
+Whether the plugin exports `canonicalizeSource` is deliberately not reported here: the host learns
+that from `canonicalize_source` answering `null`, at the moment it matters, so a second
+separately-derived signal for the same fact would only be one more thing that can disagree.
 
 Detection is a lexical scan of the plugin's own source with comments and string/template literals
 blanked first, so the key must appear as real code — a `version_history` mentioned only in a doc
@@ -202,7 +205,7 @@ asks "overwrite or rename?". One item can hit both, in that order.
 Both policy fields are optional **even for a plugin that populates `version_history`**: the host
 decides whether to offer them from `plugin_introspect`, not from this declaration, so a plugin only
 ever has to fill in `version_history` and never has to touch `pluginOptions()` at all. Declare one
-only to express a different default than the built-in `overwrite_if_same_name` /
+only to express a different default than the built-in `always_overwrite` /
 `warn_then_conflict_menu`.
 
 A `PluginOptionsResult` with every field absent/empty is equivalent to not implementing

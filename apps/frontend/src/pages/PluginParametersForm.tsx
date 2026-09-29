@@ -3,9 +3,11 @@ import { useTranslation } from "react-i18next"
 
 import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { CustomArgValue, PluginSettings } from "@/api/types"
+import { toast } from "@/toast"
 
-// Per-plugin custom-parameter settings — one text input per `PluginInfo.parameters` entry,
-// inside an accordion matching legacy's own "插件设置" panel. Distinct from `PluginOptionsForm`.
+// Per-plugin custom-parameter settings — one input per `PluginInfo.parameters` entry. Rendered
+// inside `PluginCard`'s own "插件设置" accordion, which it shares with `PluginOptionsForm`; the
+// collapsible wrapper used to live here, back when this was the only collapsible section.
 export function PluginParametersForm({
   namespace,
   parameters,
@@ -14,32 +16,16 @@ export function PluginParametersForm({
   parameters: Array<{ name: string; desc: string; type?: string }>
 }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
   const settings = usePluginSettings(namespace)
 
+  if (settings.isLoading) return <p>{t("common.loading")}</p>
+  if (!settings.data) return null
   return (
-    <>
-      <div
-        className={`collapsible-title caret-right${open ? " active" : ""}`}
-        style={{ padding: "5px 0 0 5px", cursor: "pointer" }}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <i className="fas fa-sliders-h fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
-        <b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>
-      </div>
-      {open && (
-        <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
-          {settings.isLoading && <p>{t("common.loading")}</p>}
-          {settings.data && (
-            <PluginParametersFormBody
-              namespace={namespace}
-              parameters={parameters}
-              initial={settings.data}
-            />
-          )}
-        </div>
-      )}
-    </>
+    <PluginParametersFormBody
+      namespace={namespace}
+      parameters={parameters}
+      initial={settings.data}
+    />
   )
 }
 
@@ -66,6 +52,33 @@ function PluginParametersFormBody({
     setValues((v) => v.map((existing, i) => (i === index ? value : existing)))
   }
 
+  /** A toggle has no "still typing" state, so it persists immediately — matching the
+   * "Run Automatically" switch on this same card, which has never had a save button. The whole
+   * `customargs` array goes along, since that's what the endpoint replaces; `values` is stale
+   * inside this closure, so the changed entry is applied here rather than read back after
+   * `setValue`. */
+  function setBoolAndSave(index: number, checked: boolean) {
+    setValue(index, checked)
+    const next = values.map((existing, i) => (i === index ? checked : existing))
+    void persist(next)
+  }
+
+  /** Saves and reports the outcome either way. A bare `.then(toast)` would leave a failed save's
+   * rejection unhandled *and* silently unreported — worst of both, since this form's only feedback
+   * is the toast. */
+  async function persist(customargs: CustomArgValue[]) {
+    try {
+      await update.mutateAsync({ customargs })
+      toast({ text: t("pluginParameters.parametersSaved") ?? undefined, icon: "success" })
+    } catch {
+      toast({ text: t("pluginParameters.parametersSaveFailed") ?? undefined, icon: "error" })
+    }
+  }
+
+  // Only text/number parameters need an explicit Save — firing a request per keystroke isn't an
+  // option, and debouncing would leave "is it saved yet?" ambiguous.
+  const hasNonBoolParameters = parameters.some((param) => param.type !== "bool")
+
   return (
     <table>
       <tbody>
@@ -81,7 +94,8 @@ function PluginParametersFormBody({
                   type="checkbox"
                   className="fa"
                   checked={values[i] === true}
-                  onChange={(e) => setValue(i, e.target.checked)}
+                  disabled={update.isPending}
+                  onChange={(e) => setBoolAndSave(i, e.target.checked)}
                 />
               </td>
             </tr>
@@ -102,17 +116,19 @@ function PluginParametersFormBody({
             </tr>
           ),
         )}
-        <tr>
-          <td colSpan={2}>
-            <input
-              type="button"
-              className="stdbtn"
-              disabled={update.isPending}
-              value={t("pluginParameters.savePluginSettings") ?? undefined}
-              onClick={() => void update.mutateAsync({ customargs: values })}
-            />
-          </td>
-        </tr>
+        {hasNonBoolParameters && (
+          <tr>
+            <td colSpan={2}>
+              <input
+                type="button"
+                className="stdbtn"
+                disabled={update.isPending}
+                value={t("pluginParameters.savePluginSettings") ?? undefined}
+                onClick={() => void persist(values)}
+              />
+            </td>
+          </tr>
+        )}
       </tbody>
     </table>
   )
