@@ -194,7 +194,7 @@ async fn is_guest_eligible_request(state: &AppState, headers: &axum::http::Heade
         Ok(cfg) => cfg,
         Err(_) => return false,
     };
-    if crate::auth::session_is_valid(&cfg, headers) {
+    if crate::auth::session_is_live(state, &cfg, headers).await {
         return false;
     }
     if !cfg.guest_mode_enabled {

@@ -171,6 +171,45 @@ pub fn session_is_valid(cfg: &LiveAuthConfig, headers: &axum::http::HeaderMap) -
     lanrurugi_core::session::verify_access_token(&cfg.session_secret, &token, now).is_some()
 }
 
+/// [`session_is_valid`] **plus** the Redis-backed check that the access token's refresh-token
+/// family is still alive.
+///
+/// The access JWT carries its own 4-hour expiry ([`lanrurugi_core::session::
+/// DEFAULT_ACCESS_TOKEN_LIFETIME_SECS`]) and is otherwise stateless, so on its own it keeps
+/// authenticating long after `logout` burned the family it belongs to. That is exactly the
+/// cross-origin gap this closes: logging out on one equivalent origin (`localhost`) burns the
+/// shared family, and every sibling origin (`127.0.0.1`) must therefore stop being authenticated
+/// on its *next request*, not up to four hours later. `auth_bridge`'s handoff check already pairs
+/// the two — this is the same pairing for ordinary request authentication.
+///
+/// A missing family is a definite "logged out"; a Redis error is treated as still-live (fail
+/// open), so a transient Redis hiccup degrades to the pre-existing stateless behavior instead of
+/// mass-logging-out every session.
+pub async fn session_is_live(
+    state: &AppState,
+    cfg: &LiveAuthConfig,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    if !session_is_valid(cfg, headers) {
+        return false;
+    }
+    let Some(family_id) = session_family_id(cfg, headers) else {
+        return false;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs() as i64;
+    match state.refresh_tokens.get_family_meta(&family_id).await {
+        Ok(Some(meta)) => now <= meta.expires_at && now <= meta.idle_expires_at,
+        Ok(None) => false,
+        Err(e) => {
+            tracing::warn!(error = %e, "refresh-token family liveness lookup failed; treating session as live");
+            true
+        }
+    }
+}
+
 /// Minimal `Cookie` header lookup — avoids pulling in a full cookie-jar crate for a single-name
 /// lookup. `pub(crate)` — also used by `login.rs`'s `refresh` handler to read the refresh-token
 /// cookie.

@@ -22,6 +22,12 @@ export function isGuestAccessiblePath(pathname: string): boolean {
  *
  * Purely a browser-navigation concern: this never touches API-token requests and does nothing on
  * an origin that already has a local session, which is where the actual login form lives.
+ *
+ * Guest-accessible pages (`/`, `/reader/:archiveId`) bridge too: loopback aliases have to be fully
+ * equivalent, so a returning user landing on `/` must end up signed in exactly as on the sibling
+ * origin. They pass `guest_ok=1`, which makes the "no peer has a session" fallback return to that
+ * same page instead of `/login` (see `no_session_fallback` in `auth_bridge.rs`); the resulting
+ * `sso_guest=1` marker is consumed once here so the fallback's own reload cannot loop.
  */
 export function AuthBridgeGate() {
   const location = useLocation()
@@ -36,16 +42,36 @@ export function AuthBridgeGate() {
     // auto-redirecting away from it would loop forever between peers. Let the local form render.
     if (location.pathname === "/login") return
     if (loginStatus?.logged_in !== false) return
-    // Guest mode makes `/` and `/reader/:archiveId` valid for an unauthenticated caller (the
-    // `AllowGuest` route guard already lets them render). Auto-redirecting them to a peer origin —
-    // which, when no peer has a session, falls back to `{origin}/login?next=...` — is what made an
-    // eligible guest's `/` visit bounce to `/login` despite `guest_mode_enabled: true`. Admin-only
-    // routes still bridge: guest mode grants no access there, so SSO remains useful.
-    if (isGuestModeEnabled && isGuestAccessiblePath(location.pathname)) return
+
+    // Guest mode makes `/` and `/reader/:archiveId` valid for an unauthenticated caller, but that
+    // is no reason to leave a *signed-in* sibling origin unrecognised (loopback aliases must be
+    // fully equivalent). So these paths bridge too, and are only spared the `/login` bounce by the
+    // marker below plus `guest_ok=1`. Admin-only routes always bridged already.
+    const guestPage = isGuestModeEnabled && isGuestAccessiblePath(location.pathname)
+
+    // A guest page whose bridge found no session anywhere comes back here with `sso_guest=1` (see
+    // `no_session_fallback` in `auth_bridge.rs`): consume the marker once so this very reload can't
+    // re-trigger the round-trip, and strip it so a later refresh can try again. `inFlight` is armed
+    // first, so even a re-render triggered by the URL rewrite cannot restart the bridge.
+    const params = new URLSearchParams(location.search)
+    if (params.get("sso_guest") === "1") {
+      inFlight.current = true
+      params.delete("sso_guest")
+      const query = params.toString()
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${location.pathname}${query ? `?${query}` : ""}${location.hash}`,
+      )
+      return
+    }
+
     inFlight.current = true
 
     const returnTo = `${location.pathname}${location.search}${location.hash}`
-    const prepareUrl = `/api/auth/bridge/prepare?return_to=${encodeURIComponent(returnTo)}`
+    const prepareUrl = `/api/auth/bridge/prepare?return_to=${encodeURIComponent(returnTo)}${
+      guestPage ? "&guest_ok=1" : ""
+    }`
     void fetch(prepareUrl, { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) throw new Error(`prepare failed: ${response.status}`)

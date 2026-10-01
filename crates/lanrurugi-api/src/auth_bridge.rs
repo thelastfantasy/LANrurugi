@@ -218,6 +218,33 @@ fn relative_return_to(value: Option<&str>) -> Option<String> {
     Some(value.to_string())
 }
 
+/// A bridge query's boolean flag: present and not an explicit false-y spelling.
+fn query_flag(value: Option<&str>) -> bool {
+    value.is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
+}
+
+/// Where a bridge chain that found no session on *any* peer sends the browser.
+///
+/// An admin-targeted login lands on the target origin's own `/login`, preserving the return path
+/// as a root-relative `next` (what the SPA's login page accepts). A guest-accessible page must not
+/// be bounced there — that is the whole point of `guest_ok` — so it goes back to that page with
+/// `sso_guest=1`, which the SPA consumes once to avoid re-triggering the bridge on the reload it
+/// just caused, then strips so a later refresh can try again.
+fn no_session_fallback(target_origin: &str, return_to: &str, guest_ok: bool) -> String {
+    if !guest_ok {
+        return format!("{target_origin}/login?next={}", urlencoding(return_to));
+    }
+    match Url::parse(&format!("{target_origin}{return_to}")) {
+        Ok(mut url) => {
+            url.query_pairs_mut().append_pair("sso_guest", "1");
+            url.to_string()
+        }
+        // `return_to` is validated root-relative long before this point, so this is unreachable in
+        // practice; redirecting to the plain page still beats dropping a guest on `/login`.
+        Err(_) => format!("{target_origin}{return_to}"),
+    }
+}
+
 fn set_cookie(name: &str, value: &str, path: &str, max_age: i64, secure: bool) -> String {
     format!(
         "{name}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{}",
@@ -306,6 +333,7 @@ fn start_url(
     return_to: &str,
     state: &str,
     remaining_peers: &[String],
+    guest_ok: bool,
 ) -> Option<String> {
     let mut url = Url::parse(&format!("{peer}/api/auth/bridge/start")).ok()?;
     {
@@ -314,6 +342,9 @@ fn start_url(
             .append_pair("target_origin", target_origin)
             .append_pair("return_to", return_to)
             .append_pair("state", state);
+        if guest_ok {
+            query.append_pair("guest_ok", "1");
+        }
         if !remaining_peers.is_empty() {
             query.append_pair("peers", &encode_peers(remaining_peers));
         }
@@ -324,6 +355,9 @@ fn start_url(
 #[derive(Deserialize)]
 struct PrepareQuery {
     return_to: Option<String>,
+    /// `1` when the requesting page may stay usable as a guest — see [`no_session_fallback`].
+    #[serde(default)]
+    guest_ok: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -333,6 +367,8 @@ struct StartQuery {
     state: String,
     #[serde(default)]
     peers: Option<String>,
+    #[serde(default)]
+    guest_ok: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -402,6 +438,7 @@ async fn prepare_bridge(
         &return_to,
         &state_value,
         &remaining,
+        query_flag(query.guest_ok.as_deref()),
     ) else {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -458,6 +495,7 @@ async fn start_bridge(
             "return_to",
         );
     };
+    let guest_ok = query_flag(query.guest_ok.as_deref());
     if query.state.trim().is_empty() {
         return bridge_navigation_error(
             Some(&cfg),
@@ -467,68 +505,67 @@ async fn start_bridge(
         );
     }
 
-    // This peer has a valid session: generate the one-time code and send the browser back to the
-    // target's callback, where it will receive its own local cookies.
-    if crate::auth::session_is_valid(&cfg.live, &headers) {
-        let Some(family_id) = crate::auth::session_family_id(&cfg.live, &headers) else {
-            return bridge_navigation_error(
-                Some(&cfg),
-                Some(&current_origin),
-                Some(&target_origin),
-                "session",
-            );
-        };
+    // This peer has a **live** session — the access JWT must be unexpired *and* its refresh-token
+    // family still alive in Redis — so generate the one-time code and send the browser back to the
+    // target's callback, where it will receive its own local cookies. A signed-but-burned access
+    // token (the peer origin was logged out on a sibling) deliberately falls through to the
+    // no-session path below rather than erroring: a `guest_ok` caller has to land back on its own
+    // page, not on `/login`.
+    let live_family_id = if crate::auth::session_is_live(&state, &cfg.live, &headers).await {
+        crate::auth::session_family_id(&cfg.live, &headers)
+    } else {
+        None
+    };
+    if let Some(family_id) = live_family_id {
         let now = now_secs();
-        match state.refresh_tokens.get_family_meta(&family_id).await {
-            Ok(Some(meta)) if now <= meta.expires_at && now <= meta.idle_expires_at => {}
-            _ => {
-                return bridge_navigation_error(
-                    Some(&cfg),
-                    Some(&current_origin),
-                    Some(&target_origin),
-                    "session",
+        // Re-read for the exact record the handoff binds to, closing the race with a logout that
+        // lands between the liveness check above and here.
+        let family_is_fresh = matches!(
+            state.refresh_tokens.get_family_meta(&family_id).await,
+            Ok(Some(meta)) if now <= meta.expires_at && now <= meta.idle_expires_at
+        );
+        if family_is_fresh {
+            let code = match state
+                .refresh_tokens
+                .create_handoff_code(
+                    &family_id,
+                    &target_origin,
+                    &return_to,
+                    query.state.trim(),
+                    now,
                 )
-            }
+                .await
+            {
+                Ok(code) => code,
+                Err(_) => {
+                    return bridge_navigation_error(
+                        Some(&cfg),
+                        Some(&current_origin),
+                        Some(&target_origin),
+                        "handoff",
+                    )
+                }
+            };
+            // Internal hop: still a redirect a browser can follow (never a JSON body), and the
+            // callback is itself navigation-safe.
+            let mut callback =
+                match Url::parse(&format!("{target_origin}/api/auth/bridge/callback")) {
+                    Ok(url) => url,
+                    Err(_) => {
+                        return bridge_navigation_error(
+                            Some(&cfg),
+                            Some(&current_origin),
+                            Some(&target_origin),
+                            "callback",
+                        )
+                    }
+                };
+            callback
+                .query_pairs_mut()
+                .append_pair("code", &code)
+                .append_pair("state", query.state.trim());
+            return redirect(callback.as_str());
         }
-        let code = match state
-            .refresh_tokens
-            .create_handoff_code(
-                &family_id,
-                &target_origin,
-                &return_to,
-                query.state.trim(),
-                now,
-            )
-            .await
-        {
-            Ok(code) => code,
-            Err(_) => {
-                return bridge_navigation_error(
-                    Some(&cfg),
-                    Some(&current_origin),
-                    Some(&target_origin),
-                    "handoff",
-                )
-            }
-        };
-        // Internal hop: still a redirect a browser can follow (never a JSON body), and the
-        // callback is itself navigation-safe.
-        let mut callback = match Url::parse(&format!("{target_origin}/api/auth/bridge/callback")) {
-            Ok(url) => url,
-            Err(_) => {
-                return bridge_navigation_error(
-                    Some(&cfg),
-                    Some(&current_origin),
-                    Some(&target_origin),
-                    "handoff",
-                )
-            }
-        };
-        callback
-            .query_pairs_mut()
-            .append_pair("code", &code)
-            .append_pair("state", query.state.trim());
-        return redirect(callback.as_str());
     }
 
     // This peer has no session either: try the next candidate. The chain is finite because each
@@ -543,17 +580,20 @@ async fn start_bridge(
         .filter(|peer| allowed.contains(peer))
         .collect::<Vec<_>>();
     if let Some((next, rest)) = remaining.split_first() {
-        if let Some(next_url) =
-            start_url(next, &target_origin, &return_to, query.state.trim(), rest)
-        {
+        if let Some(next_url) = start_url(
+            next,
+            &target_origin,
+            &return_to,
+            query.state.trim(),
+            rest,
+            guest_ok,
+        ) {
             return redirect(&next_url);
         }
     }
 
-    // No peer had a session. Fall back to the target's own local login, preserving its return path
-    // as a root-relative `next` (what the SPA's login page accepts) rather than an absolute URL.
-    let login = format!("{target_origin}/login?next={}", urlencoding(&return_to));
-    redirect(&login)
+    // No peer had a session — see `no_session_fallback` for where each kind of caller lands.
+    redirect(&no_session_fallback(&target_origin, &return_to, guest_ok))
 }
 
 async fn bridge_callback(
@@ -775,6 +815,31 @@ mod tests {
         assert!(is_loopback_origin("http://[::1]:3000"));
         assert!(is_loopback_origin("http://[::1]"));
         assert!(!is_loopback_origin("http://example.com"));
+    }
+
+    #[test]
+    fn no_session_fallback_sends_admin_logins_to_login_but_guests_to_their_page() {
+        assert_eq!(
+            no_session_fallback("http://localhost:3000", "/config/plugins", false),
+            "http://localhost:3000/login?next=%2Fconfig%2Fplugins"
+        );
+        assert_eq!(
+            no_session_fallback("http://localhost:3000", "/", true),
+            "http://localhost:3000/?sso_guest=1"
+        );
+        assert_eq!(
+            no_session_fallback("http://127.0.0.1:3000", "/search?q=x", true),
+            "http://127.0.0.1:3000/search?q=x&sso_guest=1"
+        );
+    }
+
+    #[test]
+    fn query_flag_only_accepts_truthy_spellings() {
+        assert!(query_flag(Some("1")));
+        assert!(query_flag(Some("true")));
+        assert!(!query_flag(None));
+        assert!(!query_flag(Some("0")));
+        assert!(!query_flag(Some("")));
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub async fn require_api_key(
         }
     }
 
-    if crate::auth::session_is_valid(&cfg, request.headers()) {
+    if crate::auth::session_is_live(&state, &cfg, request.headers()).await {
         let auth = AuthContext {
             method: AuthMethod::Session,
             client_ip,

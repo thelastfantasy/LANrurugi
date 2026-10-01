@@ -1095,6 +1095,40 @@ async fn cross_origin_handoff_logs_the_peer_origin_in_and_returns_to_it() {
     let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(status["logged_in"], true);
 
+    // Cross-origin logout propagation: the handoff gave `b.test` a token in the *same* refresh
+    // family, so burning that family on `a.test` must stop authenticating `b.test` on its very
+    // next request — the access JWT alone is valid for four more hours and must not be what keeps
+    // the peer signed in. This is the logout half of "equivalent origins are fully mirrored".
+    let logout = origin_request(
+        &app,
+        "POST",
+        "/api/logout",
+        "http://a.test",
+        Some(&auth_cookie_header),
+        Some(""),
+    )
+    .await;
+    assert_eq!(logout.status(), axum::http::StatusCode::OK);
+
+    let status_after = origin_request(
+        &app,
+        "GET",
+        "/api/login/status",
+        "http://b.test",
+        Some(&cookie_header(&peer_cookies)),
+        None,
+    )
+    .await;
+    assert_eq!(status_after.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(status_after.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let status_after: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        status_after["logged_in"], false,
+        "logging out on one equivalent origin must log the peer origin out too"
+    );
+
     {
         use deadpool_redis::redis::AsyncCommands;
         let mut conn = redis.config.get().await.unwrap();

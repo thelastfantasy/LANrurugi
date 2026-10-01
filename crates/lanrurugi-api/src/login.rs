@@ -630,7 +630,7 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // Password login is unconditional as of 007-guest-restricted-access — `logged_in` now means
     // exactly "a valid administrator session exists", not "the whole instance happens to require
     // no credentials".
-    let logged_in = crate::auth::session_is_valid(&auth, &headers);
+    let logged_in = crate::auth::session_is_live(&state, &auth, &headers).await;
     // Drives the homepage's "you're using the default password" warning toast (legacy's own
     // `[% IF usingdefpass %]`, `Controller/Index.pm`). Legacy could expose this unconditionally
     // because `enablepass` being off already meant "no real login exists to guess" — once
