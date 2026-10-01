@@ -129,8 +129,19 @@ async function fetchGalleryData(
   return (body.gmetadata ?? []).filter((entry) => !entry.error);
 }
 
-/** Collects every revision of a gallery's series, walking `parent_gid` back to the chain's root and
- * `current_gid` forward to its tip.
+/** Collects every revision of a gallery's series.
+ *
+ * E-Hentai only exposes *upward* links: a gallery names its `parent_gid`, never its children. The
+ * one downward shortcut is `current_gid`, which jumps straight to the chain's newest revision —
+ * skipping everything in between. So the walk is: jump to the tip, then follow `parent_gid` all the
+ * way back to the root. That visits every node exactly once.
+ *
+ * Walking outward from the requested gallery instead (back along its parents, forward via
+ * `current_gid`) looks equivalent but silently drops every revision *between* it and the tip — the
+ * common case being a library that holds one of those middle revisions. Observed live on a real
+ * 29-revision chain: downloading one revision while the library held its direct child collected 26
+ * nodes and missed exactly that child, so the host saw no relationship and let an older revision
+ * through unchallenged.
  *
  * Returns `[]` rather than throwing on any failure: version history is optional enrichment, and a
  * download must never fail because this lookup did. The host treats an empty list as "no version
@@ -153,27 +164,32 @@ async function collectVersionHistory(
     if (!seed) return [];
     record(seed);
 
-    // Backward: each gallery names at most one direct parent, so this is a plain chain walk.
-    let cursor: GalleryData | undefined = seed;
+    // Climb to the newest revision first. `current_gid` is absent exactly when the queried gallery
+    // already IS the tip, in which case the backtrack below simply starts from the seed.
+    let tip = seed;
     for (let hop = 0; hop < MAX_HOPS; hop++) {
-      const parentGid = Number(cursor?.parent_gid ?? 0);
-      const parentKey = cursor?.parent_key;
-      if (!parentGid || !parentKey || byGid.has(parentGid)) break;
-      const [parent] = await fetchGalleryData([[parentGid, parentKey]]);
-      if (!parent) break;
-      cursor = record(parent);
-    }
-
-    // Forward: `current_gid` jumps straight to the newest revision, so this normally runs once.
-    // Looping guards the case where the tip has itself since been superseded.
-    cursor = seed;
-    for (let hop = 0; hop < MAX_HOPS; hop++) {
-      const currentGid = Number(cursor?.current_gid ?? 0);
-      const currentKey = cursor?.current_key;
-      if (!currentGid || !currentKey || byGid.has(currentGid)) break;
+      const currentGid = Number(tip.current_gid ?? 0);
+      const currentKey = tip.current_key;
+      if (!currentGid || !currentKey || currentGid === tip.gid) break;
       const [current] = await fetchGalleryData([[currentGid, currentKey]]);
       if (!current) break;
-      cursor = record(current);
+      tip = record(current);
+    }
+
+    // Then walk the single parent chain from the tip down to the root, which is the only traversal
+    // that reaches every node — including revisions between the seed and the tip.
+    let cursor: GalleryData = tip;
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const parentGid = Number(cursor.parent_gid ?? 0);
+      const parentKey = cursor.parent_key;
+      if (!parentGid || !parentKey) break;
+      const [parent] = await fetchGalleryData([[parentGid, parentKey]]);
+      if (!parent) break;
+      const alreadySeen = byGid.has(parent.gid);
+      cursor = record(parent);
+      // The seed was recorded up front, so meeting it again is normal and must not stop the walk;
+      // only a genuine repeat of an already-walked *parent* indicates a cycle.
+      if (alreadySeen && parent.gid !== seed.gid) break;
     }
   } catch (e) {
     logger.warn(`version history lookup failed, continuing without it: ${e}`);

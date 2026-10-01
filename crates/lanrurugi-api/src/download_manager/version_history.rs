@@ -210,6 +210,36 @@ mod tests {
         );
     }
 
+    /// The shape that slipped through in production (issue #107 follow-up): the library holds a
+    /// revision *between* the downloaded one and the chain tip. `classify` handles it correctly —
+    /// the real defect was `ehentai.ts` never putting that middle revision in `version_history` at
+    /// all, because it walked outward from the seed instead of backtracking from the tip. This
+    /// pins the host-side half so a future change can't break it too.
+    #[test]
+    fn a_catalogued_middle_revision_is_found_between_the_download_and_the_tip() {
+        let history = vec![
+            entry("e-hentai.org/g/1/a", "2026-01-01T00:00:00Z"),
+            // Downloaded.
+            entry("e-hentai.org/g/2/b", "2026-02-01T00:00:00Z"),
+            // In the library — neither the download's parent nor the chain tip.
+            entry("e-hentai.org/g/3/c", "2026-03-01T00:00:00Z"),
+            entry("e-hentai.org/g/4/d", "2026-04-01T00:00:00Z"),
+        ];
+        let relation = classify(
+            "e-hentai.org/g/2/b",
+            &history,
+            &[catalogued("arc-c", "e-hentai.org/g/3/c")],
+        );
+        assert_eq!(
+            relation,
+            RevisionRelation::OlderThan {
+                archive_id: "arc-c".to_string(),
+                hops: 1,
+            },
+            "a download must be judged older than a catalogued revision that sits between it and the tip"
+        );
+    }
+
     #[test]
     fn nearest_match_can_be_in_the_older_direction() {
         // Download is b; library holds a (1 hop back) and nothing after.

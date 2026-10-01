@@ -358,10 +358,15 @@ export interface DownloadResult {
    * the plugin process by the time this returns. */
   file_path?: string;
   /** The full known version-history of this download's series, as this plugin's site exposes it —
-   * every source URL the plugin can enumerate (ancestors AND descendants, where the site's API
-   * makes both directions available; e-hentai only exposes the ancestor direction via `parent_gid`
-   * chains plus the current tip via `current_gid`, so in practice this ends up being "every node
-   * from `first_gid` to `current_gid`"), each with the timestamp the site reports for it.
+   * every source URL the plugin can enumerate, each with the timestamp the site reports for it.
+   *
+   * "Every node" is a real requirement, not a best effort: the host can only detect a relationship
+   * to a revision that appears in this list, so an omitted node means an older download silently
+   * passes as unrelated. Mind the traversal when a site only exposes upward links. E-Hentai is the
+   * worked example: a gallery names its `parent_gid`, never its children, and `current_gid` jumps
+   * straight to the chain tip — so walking outward from the requested gallery (up its parents, then
+   * one hop to the tip) skips every revision in between. Jumping to the tip first and then
+   * following `parent_gid` down to the root is what actually visits all of them.
    *
    * The plugin performs NO comparison against the library and reaches NO conclusion — it just
    * reports what the site says exists. The host walks this list against its own catalogue to decide
