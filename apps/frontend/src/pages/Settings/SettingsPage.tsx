@@ -289,10 +289,24 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <img className="logo-container" src="/legacy/img/logo.png" alt="LANrurugi" />
         <br />
         <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
-        {t("settings.versionVersionVername", {
-          version: info.data?.version ?? "",
-          vername: info.data?.version_name ?? "",
-        })}
+        <span>
+          {t("settings.versionNumber", { version: info.data?.version ?? "" })}
+          {info.data?.version_name ? (
+            // The concrete commit sits in parentheses, a step smaller and greyed out, so the
+            // readable semver stays the primary line and the hash reads as build metadata rather
+            // than a second version number.
+            <span
+              style={{
+                color: "#888",
+                fontSize: "0.85em",
+                fontFamily: '"SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace',
+              }}
+            >
+              {" "}
+              ({info.data.version_name})
+            </span>
+          ) : null}
+        </span>
         <br />
         <h2>{t("settings.selectACategoryToShow")}</h2>
         <br />

@@ -1080,7 +1080,7 @@
   "edit.usingAPluginWillSave": "使用插件将保存您可能对档案元数据所做的任何修改！",
   "upload.validUrlLinesCount": "有效 URL 行数：{{count}}",
   "Version %1 %2": "版本 %1 %2",
-  "settings.versionVersionVername": "版本 {{version}} {{vername}}",
+  "settings.versionNumber": "版本 {{version}}",
   "reader.viewFullPage": "查看大图 / 快速划分章节",
   "View LANrurugi Logs": "查看LANrurugi日志",
   "查看HTTP请求日志": "查看HTTP请求日志",

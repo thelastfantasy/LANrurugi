@@ -1019,7 +1019,7 @@
   "edit.usingAPluginWillSave": "Using a Plugin will save any modifications to archive metadata you might have made !",
   "upload.validUrlLinesCount": "Valid URL lines: {{count}}",
   "Version %1 %2": "Version %1 - %2",
-  "settings.versionVersionVername": "Version {{version}} {{vername}}",
+  "settings.versionNumber": "Version {{version}}",
   "reader.viewFullPage": "View Full Page / Quick Chapter Split",
   "View LANrurugi Logs": "View LANrurugi Logs",
   "View HTTP Request Logs": "View HTTP Request Logs",

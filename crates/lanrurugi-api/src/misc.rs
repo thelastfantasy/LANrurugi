@@ -76,7 +76,13 @@ async fn server_info(State(state): State<AppState>) -> Response {
         "name": field("htmltitle", "LANrurugi"),
         "motd": field("motd", "Welcome to this Library running LANrurugi!"),
         "version": env!("CARGO_PKG_VERSION"),
-        "version_name": "",
+        // Legacy's own `version_name` slot — the Settings header renders it as
+        // "版本 {{version}} {{vername}}". Holds the concrete commit this binary was built
+        // from, truncated to the usual 7-character display form; the full value (plus
+        // release/upstream metadata) stays on `/api/version`'s `details.sha`.
+        "version_name": crate::version::current_sha()
+            .map(|sha| sha.chars().take(7).collect::<String>())
+            .unwrap_or_default(),
         // Legacy's own tagline (`~/LANraragi/package.json`'s `description`), verbatim — the
         // footer (`Footer.tsx`) prints this above "Powered by LANraragi." exactly like legacy's
         // own `footer.html.tt2` does with its `descstr`. Purely cosmetic (no version semantics),

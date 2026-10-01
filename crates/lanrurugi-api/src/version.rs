@@ -79,7 +79,7 @@ fn current_version() -> &'static str {
 /// spawning `git rev-parse HEAD` per request would be needless overhead.
 static SHA_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
-fn current_sha() -> Option<String> {
+pub(crate) fn current_sha() -> Option<String> {
     SHA_CACHE
         .get_or_init(|| {
             if let Ok(value) = std::env::var("LANRURUGI_GIT_SHA") {

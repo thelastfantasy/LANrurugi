@@ -1048,7 +1048,7 @@
   "Unknown file format": "不明なファイル形式です",
   "tankoubonEdit.update": "更新",
   "upload.validUrlLinesCount": "有効なURLの行数：{{count}}",
-  "settings.versionVersionVername": "バージョン {{version}} {{vername}}",
+  "settings.versionNumber": "バージョン {{version}}",
   "reader.viewFullPage": "全ページ表示 / クイック区切り分割",
   "Wait for this job to finish before clearing it.": "このジョブが完了するまで、クリアはお待ちください。",
   "reader.whenReadingAnArchiveFrom": "検索結果からアーカイブを読んでいる場合、以下の方法でアーカイブ間を移動することもできます：",

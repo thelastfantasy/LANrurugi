@@ -640,7 +640,7 @@
   "batch.usePluginLabel": "使用外掛：",
   "edit.usingAPluginWillSave": "使用外掛會一併儲存您對檔案中繼資料所做的所有修改！",
   "Version %1 %2": "版本 %1 %2",
-  "settings.versionVersionVername": "版本 {{version}} {{vername}}",
+  "settings.versionNumber": "版本 {{version}}",
   "View LANrurugi Logs": "查看 LANrurugi 日誌",
   "查看 HTTP 請求日誌": "查看 HTTP 請求日誌",
   "View Plugin Logs": "查看外掛日誌",
