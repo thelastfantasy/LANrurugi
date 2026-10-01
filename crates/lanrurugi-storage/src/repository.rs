@@ -406,6 +406,36 @@ impl CategoryRepository {
     /// categories — a handful of targeted Redis round trips instead of one that scales with the
     /// total number of categories in the library regardless of how many actually contain this
     /// archive. Dynamic categories never appear here, matching `save`'s own indexing rule.
+    /// Removes `archive_id` from every static category that lists it, and drops its reverse-index
+    /// set (issue #102).
+    ///
+    /// Category membership lives in two places — each Category's own `archives` JSON array and the
+    /// `archive_categories:<id>` reverse index — and neither is touched by deleting the archive
+    /// record itself, so a deleted archive stays a member: inflated counts and dangling ids. Goes
+    /// through `save` for each affected category rather than rewriting the Hash field directly, so
+    /// the reverse-index bookkeeping `save` already owns stays the single implementation.
+    ///
+    /// Returns how many categories actually changed.
+    pub async fn remove_archive_from_all(&self, archive_id: &ArchiveId) -> Result<u32> {
+        let mut changed = 0u32;
+        for mut category in self.for_archive(archive_id).await? {
+            let before = category.archives.len();
+            category.archives.retain(|a| a != archive_id);
+            if category.archives.len() != before {
+                self.save(&category).await?;
+                changed += 1;
+            }
+        }
+        // `save` above already prunes this archive's own reverse-index entry for each category it
+        // touched; this clears whatever would survive a category that somehow indexed the archive
+        // without listing it, so no stale set is left behind either way.
+        let mut conn = self.pool.get().await?;
+        let _: () = conn
+            .del(crate::keys::archive_categories_key(archive_id.as_str()))
+            .await?;
+        Ok(changed)
+    }
+
     pub async fn for_archive(&self, archive_id: &ArchiveId) -> Result<Vec<Category>> {
         let mut conn = self.pool.get().await?;
         let catids: Vec<String> = conn
@@ -974,6 +1004,22 @@ impl StampRepository {
         Ok(())
     }
 
+    /// Deletes the `STAMPS_*` entities named by `stamp_ids`, without the per-stamp read-modify-write
+    /// of the owning archive's `stamps` list that [`delete`](Self::delete) does (issue #102).
+    ///
+    /// For archive deletion that list is about to disappear with the record, so maintaining it
+    /// stamp by stamp is pure overhead. A stamp's own hash is a separate key and does NOT go away
+    /// with the archive record, which is how orphaned `STAMPS_*` entities accumulated.
+    pub async fn delete_many_raw(&self, stamp_ids: &[StampId]) -> Result<u32> {
+        if stamp_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.pool.get().await?;
+        let keys: Vec<&str> = stamp_ids.iter().map(|s| s.as_str()).collect();
+        let removed: u32 = conn.del(keys).await?;
+        Ok(removed)
+    }
+
     pub async fn delete(&self, stamp_id: &StampId) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let archive_id: Option<String> = conn.hget(stamp_id.as_str(), "archive_id").await?;
@@ -1078,6 +1124,59 @@ mod tests {
         assert!(repo.get(&tankid).await.unwrap().is_none());
     }
 
+    /// Issue #102: deleting an archive must drop it from every category that lists it, and clear
+    /// its reverse index — otherwise categories keep dangling member ids and inflated counts.
+    #[tokio::test]
+    async fn remove_archive_from_all_prunes_membership_and_reverse_index() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = CategoryRepository::new(pool.clone());
+        let doomed = ArchiveId("d".repeat(40));
+        let kept = ArchiveId("k".repeat(40));
+        let in_both = CategoryId("SET_1700000101".to_string());
+        let only_kept = CategoryId("SET_1700000102".to_string());
+
+        repo.save(&Category {
+            catid: in_both.clone(),
+            name: "Both".to_string(),
+            search: None,
+            archives: vec![doomed.clone(), kept.clone()],
+            pinned: false,
+            visible_to_guest: false,
+        })
+        .await
+        .unwrap();
+        repo.save(&Category {
+            catid: only_kept.clone(),
+            name: "Untouched".to_string(),
+            search: None,
+            archives: vec![kept.clone()],
+            pinned: false,
+            visible_to_guest: false,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(repo.remove_archive_from_all(&doomed).await.unwrap(), 1);
+
+        // Dropped from the category it belonged to, without disturbing the other member.
+        let after = repo.get(&in_both).await.unwrap().unwrap();
+        assert_eq!(after.archives, vec![kept.clone()]);
+        // A category it was never in is left entirely alone.
+        assert_eq!(
+            repo.get(&only_kept).await.unwrap().unwrap().archives,
+            vec![kept.clone()]
+        );
+        // Reverse index gone, so `for_archive` can't resurrect the membership.
+        assert!(repo.for_archive(&doomed).await.unwrap().is_empty());
+        assert_eq!(repo.for_archive(&kept).await.unwrap().len(), 2);
+
+        repo.delete(&in_both).await.unwrap();
+        repo.delete(&only_kept).await.unwrap();
+    }
+
     #[tokio::test]
     async fn category_roundtrip_static_and_dynamic() {
         let Some(pool) = test_pool().await else {
@@ -1113,6 +1212,89 @@ mod tests {
 
         repo.delete(&catid).await.unwrap();
         repo.delete(&dyn_catid).await.unwrap();
+    }
+
+    /// Issue #102: a stamp's `STAMPS_*` hash is its own key and does NOT disappear with the
+    /// archive record, so archive deletion has to clear them explicitly or they pile up as
+    /// orphans. `delete_many_raw` skips the per-stamp rewrite of the owning archive's `stamps`
+    /// list that `delete` does — that list is about to vanish with the record anyway.
+    #[tokio::test]
+    async fn delete_many_raw_drops_stamp_entities_without_touching_the_archive() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archive_repo = ArchiveRepository::new(pool.clone());
+        let stamp_repo = StampRepository::new(pool);
+        let archive_id = ArchiveId("a7".repeat(20));
+        let archive = Archive {
+            id: archive_id.clone(),
+            name: "n".to_string(),
+            title: "t".to_string(),
+            file: "/x.zip".to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 10,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        };
+        archive_repo.save(&archive).await.unwrap();
+
+        let a = stamp_repo
+            .create(
+                &archive_id,
+                1,
+                "one",
+                "0,0",
+                "A",
+                "0,0,1,1,tl,#000",
+                1_700_000_001_000,
+            )
+            .await
+            .unwrap();
+        let b = stamp_repo
+            .create(
+                &archive_id,
+                2,
+                "two",
+                "0,0",
+                "B",
+                "0,0,1,1,tl,#000",
+                1_700_000_002_000,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stamp_repo
+                .delete_many_raw(&[a.clone(), b.clone()])
+                .await
+                .unwrap(),
+            2
+        );
+        assert!(stamp_repo.get(&a).await.unwrap().is_none());
+        assert!(stamp_repo.get(&b).await.unwrap().is_none());
+
+        archive_repo.delete(&archive_id).await.unwrap();
+    }
+
+    /// Called unconditionally on archive deletion, so an archive with no stamps must be fine.
+    #[tokio::test]
+    async fn delete_many_raw_is_a_no_op_for_an_empty_list() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let stamp_repo = StampRepository::new(pool);
+        assert_eq!(stamp_repo.delete_many_raw(&[]).await.unwrap(), 0);
     }
 
     #[tokio::test]

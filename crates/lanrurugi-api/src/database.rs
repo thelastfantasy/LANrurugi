@@ -504,9 +504,26 @@ async fn clean_database(
     let mut unlinked = 0u32;
     for mut archive in archives {
         if archive.file.is_empty() {
-            let _ = state.repos.archives.delete(&archive.id).await;
-            let _ = state.recommend_cache.delete_for(archive.id.as_str()).await;
-            deleted += 1;
+            // Reuses the single-delete path rather than repeating a subset of it (issue #102).
+            // Deleting the record plus the recommend cache — all this branch used to do — left the
+            // search index, cover/page thumbnails, the sidecar patch file and any stale download-
+            // queue rows behind, so an archive removed here stayed visible in search and kept its
+            // whole thumbnail cache on disk. Thumbnails are keyed by archive id, not by `file`, so
+            // an empty `file` does nothing to make them go away. Routing both deletion paths
+            // through one function is also what stops them drifting apart again the next time a
+            // cleanup step is added.
+            match crate::archives::delete_one_archive(
+                &state,
+                &archive.id,
+                auth.as_ref().map(|e| &e.0),
+            )
+            .await
+            {
+                crate::archives::DeleteOneOutcome::Error(e) => {
+                    tracing::warn!(id = %archive.id, error = %e, "clean_database failed to delete an archive");
+                }
+                _ => deleted += 1,
+            }
             continue;
         }
         if !std::path::Path::new(&archive.file).exists() {

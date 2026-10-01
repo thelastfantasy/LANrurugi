@@ -134,6 +134,35 @@ impl BookmarksRepository {
             .collect())
     }
 
+    /// Drops every bookmark belonging to `archive_id` — its `"{id}:{page}"` fields in both the
+    /// timestamp and name Hashes, plus its own `UPDATED_AT_HASH_KEY` field (issue #102).
+    ///
+    /// Bookmarks live in standalone Hashes, not inside the archive's own record, so deleting an
+    /// archive leaves them behind as dead cards pointing at something that no longer exists. Called
+    /// from the one archive-deletion path (`archives::delete_one_archive`) so both the manual
+    /// delete and `clean_database` get it.
+    ///
+    /// Returns the number of bookmarks removed. Scans the Hash's own fields rather than probing
+    /// page-by-page: page numbers aren't contiguous and the archive's page count isn't knowable
+    /// here (its record is typically already gone by this point).
+    pub async fn remove_all_for_archive(&self, archive_id: &str) -> Result<u32> {
+        let mut conn = self.pool.get().await?;
+        let prefix = format!("{archive_id}:");
+        let fields: Vec<String> = conn.hkeys(HASH_KEY).await?;
+        let mine: Vec<String> = fields
+            .into_iter()
+            .filter(|f| f.starts_with(&prefix))
+            .collect();
+        if !mine.is_empty() {
+            let _: () = conn.hdel(HASH_KEY, &mine).await?;
+            // Names are optional, so this Hash holds a subset of the same field names — deleting
+            // an absent field is a no-op, which is why it needs no filtering of its own.
+            let _: () = conn.hdel(NAMES_HASH_KEY, &mine).await?;
+        }
+        let _: () = conn.hdel(UPDATED_AT_HASH_KEY, archive_id).await?;
+        Ok(mine.len() as u32)
+    }
+
     /// Each archive_id's own `bookmarks_updated_at` — the sort key for the default
     /// (`sort=bookmarked_at`) ordering of `GET /bookmarks`. A direct read of `UPDATED_AT_HASH_KEY`
     /// (not derived from `list_all()`, unlike the individual-bookmark data this repository
@@ -344,6 +373,59 @@ mod tests {
         repo.remove("test-archive", 12, 1_700_000_400)
             .await
             .unwrap();
+    }
+
+    /// Issue #102: deleting an archive must take its bookmarks with it, and must not touch any
+    /// other archive's — the prefix match is `"{id}:"`, so an id that is a prefix of another
+    /// (`"arc-1"` vs `"arc-10"`) must not collide.
+    #[tokio::test]
+    async fn remove_all_for_archive_drops_only_that_archives_bookmarks() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = BookmarksRepository::new(pool.clone());
+        let pages = [("arc-1", 1), ("arc-1", 7), ("arc-10", 1), ("arc-2", 3)];
+        clear_test_archives(&pool, &["arc-1", "arc-10", "arc-2"], &pages).await;
+
+        repo.add("arc-1", 1, 1_700_000_000).await.unwrap();
+        repo.add("arc-1", 7, 1_700_000_100).await.unwrap();
+        repo.set_name("arc-1", 7, Some("named")).await.unwrap();
+        repo.add("arc-10", 1, 1_700_000_200).await.unwrap();
+        repo.add("arc-2", 3, 1_700_000_300).await.unwrap();
+
+        let removed = repo.remove_all_for_archive("arc-1").await.unwrap();
+        assert_eq!(removed, 2);
+
+        assert!(repo.list_for_archive("arc-1").await.unwrap().is_empty());
+        // The id-prefix neighbour and an unrelated archive both survive untouched.
+        assert_eq!(repo.list_for_archive("arc-10").await.unwrap().len(), 1);
+        assert_eq!(repo.list_for_archive("arc-2").await.unwrap().len(), 1);
+
+        // The per-archive UPDATED_AT field goes too, so the archive can't resurface in /bookmarks.
+        let updated = repo.latest_bookmark_per_archive().await.unwrap();
+        assert!(!updated.contains_key("arc-1"));
+        assert!(updated.contains_key("arc-10"));
+
+        repo.remove("arc-10", 1, 1_700_000_400).await.unwrap();
+        repo.remove("arc-2", 3, 1_700_000_500).await.unwrap();
+    }
+
+    /// Removing bookmarks for an archive that has none is a no-op, not an error — archive deletion
+    /// calls this unconditionally.
+    #[tokio::test]
+    async fn remove_all_for_archive_is_a_no_op_when_there_are_none() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = BookmarksRepository::new(pool.clone());
+        assert_eq!(
+            repo.remove_all_for_archive("arc-never-bookmarked")
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

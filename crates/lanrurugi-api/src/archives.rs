@@ -444,6 +444,36 @@ pub(crate) async fn delete_one_archive(
             if let Err(e) = state.recommend_cache.delete_for(id.as_str()).await {
                 tracing::warn!(%id, error = %e, "failed to remove deleted archive from recommendation cache");
             }
+            // Issue #102 — three kinds of data that live OUTSIDE the archive record and so survive
+            // its deletion. Each is best-effort for the same reason as the index cleanup above: the
+            // record is already gone, and failing here must not turn a completed delete into an
+            // error. Doing them here, in the one function both the manual delete and
+            // `clean_database` call, is what keeps the two paths from drifting apart again.
+            match state.repos.categories.remove_archive_from_all(id).await {
+                Ok(changed) if changed > 0 => {
+                    tracing::debug!(%id, categories = changed, "removed deleted archive from its categories");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "failed to remove deleted archive from its categories");
+                }
+            }
+            match state.bookmarks.remove_all_for_archive(id.as_str()).await {
+                Ok(removed) if removed > 0 => {
+                    tracing::debug!(%id, bookmarks = removed, "removed deleted archive's bookmarks");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "failed to remove deleted archive's bookmarks");
+                }
+            }
+            // `stamp_ids` was read off the record before it was deleted — a stamp's own
+            // `STAMPS_*` hash is a separate key that the record's removal doesn't touch.
+            if !archive.stamp_ids.is_empty() {
+                if let Err(e) = state.repos.stamps.delete_many_raw(&archive.stamp_ids).await {
+                    tracing::warn!(%id, error = %e, "failed to remove deleted archive's stamps");
+                }
+            }
             // A completed download-queue entry references the archive(s) it produced via
             // `archive_ids` — deleting the archive without also deleting this entry left a
             // "successful download" row in the Upload page's queue pointing at an id that no
