@@ -1,0 +1,70 @@
+/* Corner-anchored translation progress affordance (FR-012).
+ *
+ * Deliberately small and out of the way: the page underneath must stay readable while its
+ * translation finishes, so this never overlays content in the centre and never dims the page.
+ *
+ * A real stylesheet rather than inline `style` because the mobile adjustment below is a media
+ * query, which an inline `style` prop has no mechanism to express at all (constitution
+ * Principle VII). */
+
+.translation-loading {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 20;
+
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+
+  font-size: 0.8rem;
+  line-height: 1.2;
+  white-space: nowrap;
+
+  /* Neutral translucent chip rather than a theme accent: this is transient status, and it sits on
+   * top of arbitrary artwork, so legibility matters more than theme fidelity here. */
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+
+  pointer-events: none;
+}
+
+.translation-loading__spinner {
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: translation-loading-spin 0.8s linear infinite;
+}
+
+@keyframes translation-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* On a phone the reader uses the full viewport and screen space is scarce — shrink to the spinner
+ * alone rather than letting the label crowd the page. */
+@media (max-width: 640px) {
+  .translation-loading__label {
+    display: none;
+  }
+
+  .translation-loading {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    padding: 0.3rem;
+  }
+}
+
+/* Respect a user's reduced-motion preference: keep the indicator, drop the spin. */
+@media (prefers-reduced-motion: reduce) {
+  .translation-loading__spinner {
+    animation: none;
+  }
+}

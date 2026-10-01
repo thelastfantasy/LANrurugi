@@ -1,0 +1,47 @@
+version: 2
+updates:
+  # Rust workspace (crates/lanrurugi-*) — one root Cargo.toml covers every workspace member.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-dependencies:
+        patterns:
+          - "*"
+
+  # Frontend (apps/frontend) — pnpm-lock.yaml lives here per the pnpm workspace layout.
+  - package-ecosystem: npm
+    directory: /apps/frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
+
+  # Docker base images and ARG-pinned tool versions (rust:${RUST_VERSION}-slim-bookworm,
+  # denoland/deno:bin-${DENO_VERSION}, redis:${REDIS_VERSION}-bookworm, node:${NODE_VERSION}-slim)
+  # across every Dockerfile in the repo (Dockerfile, Dockerfile.build, Dockerfile.dev,
+  # Dockerfile.test-e2e, Dockerfile.act-runner) — one `docker` entry scans every filename
+  # containing "dockerfile"/"containerfile" (case-insensitive) in `directory`, not just the
+  # literally-named `Dockerfile`, and resolves ARG-declared version pins used in a FROM line, not
+  # just literal tags.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # compose.dev.yaml — NOT covered by the `docker` ecosystem entry above (Dependabot only
+  # auto-detects YAML there if it structurally looks like a Kubernetes manifest/Helm chart); Compose
+  # files need this separate ecosystem.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+
+  # GitHub Actions workflow versions (.github/workflows/ci.yml).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

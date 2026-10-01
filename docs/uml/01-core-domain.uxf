@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<diagram program="umlet" version="15.1">
+  <zoom_level>10</zoom_level>
+
+  <!-- Archive -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>60</x>
+      <y>40</y>
+      <w>320</w>
+      <h>340</h>
+    </coordinates>
+    <panel_attributes>Archive
+--
+id: ArchiveId
+name: String
+title: String
+file: String
+tags: String
+summary: String
+arcsize: u64
+pagecount: u32
+isnew: bool
+lastreadpage: u32
+lastreadtime: u64
+thumbhash: Option&lt;String&gt;
+toc: Vec&lt;TocEntry&gt;
+stamp_ids: Vec&lt;StampId&gt;
+heal_failed_at: Option&lt;u64&gt;
+corrupted_pages: Vec&lt;String&gt;
+--
++extension(): String</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- TocEntry -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>480</x>
+      <y>40</y>
+      <w>200</w>
+      <h>80</h>
+    </coordinates>
+    <panel_attributes>TocEntry
+--
+page: u32
+name: String</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- Archive 到 TocEntry（内嵌持有）-->
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>380</x>
+      <y>50</y>
+      <w>100</w>
+      <h>40</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;&lt;-
+m1=1
+m2=0..*
+内嵌字段</panel_attributes>
+    <additional_attributes>10;10;80;10</additional_attributes>
+  </element>
+
+  <!-- Stamp -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>480</x>
+      <y>180</y>
+      <w>260</w>
+      <h>170</h>
+    </coordinates>
+    <panel_attributes>Stamp
+--
+stamp_id: StampId
+content: String
+position: String
+archive_id: ArchiveId
+icon: String
+rect: String
+--
++page(): Option&lt;u32&gt;
+（从 stamp_id 解析出来，
+不单独存储）</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- Archive 1 对 0..* Stamp（通过 stamp_ids / archive_id 关联，类型系统不强制约束）-->
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>380</x>
+      <y>200</y>
+      <w>120</w>
+      <h>60</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-&gt;
+m1=1
+m2=0..*
+stamp_ids[] / archive_id
+（仅靠约定双向对应，
+非类型层面强制）</panel_attributes>
+    <additional_attributes>10;40;100;40</additional_attributes>
+  </element>
+
+  <!-- Category -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>60</x>
+      <y>440</y>
+      <w>260</w>
+      <h>140</h>
+    </coordinates>
+    <panel_attributes>Category
+--
+catid: CategoryId
+name: String
+search: Option&lt;String&gt;
+archives: Vec&lt;ArchiveId&gt;
+pinned: bool
+--
++is_dynamic(): bool</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- Archive 与 Category 多对多 -->
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>190</x>
+      <y>380</y>
+      <w>40</w>
+      <h>60</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-&gt;
+m1=0..*
+m2=0..*
+archives[]</panel_attributes>
+    <additional_attributes>10;10;10;60</additional_attributes>
+  </element>
+
+  <!-- Grouping (Tankoubon) -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>380</x>
+      <y>440</y>
+      <w>260</w>
+      <h>150</h>
+    </coordinates>
+    <panel_attributes>Grouping
+（单行本 Tankoubon）
+--
+tankid: TankId
+name: String
+summary: String
+tags: String
+progress: u32
+archives: Vec&lt;ArchiveId&gt;
+--
+存储方式：Redis ZSET，
+不是 hash</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- Archive 与 Grouping 多对多 -->
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>350</x>
+      <y>200</y>
+      <w>160</w>
+      <h>280</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-&gt;
+m1=0..*
+m2=0..*
+archives[]
+（有序 = 卷序）</panel_attributes>
+    <additional_attributes>10;270;10;10;150;10</additional_attributes>
+  </element>
+
+  <!-- ID newtype 说明 -->
+  <element>
+    <id>UMLNote</id>
+    <coordinates>
+      <x>820</x>
+      <y>40</y>
+      <w>320</w>
+      <h>180</h>
+    </coordinates>
+    <panel_attributes>lanrurugi_core::ids —— ID newtype
+（全部 #[serde(transparent)]，
+线上/Redis 表示仍是纯字符串，
+newtype 只在编译期起类型隔离作用）
+--
+ArchiveId(String)
+CategoryId(String)
+TankId(String)
+StampId(String)
+--
+本次会话新增，专门防止例如
+CategoryId 被传到期望 ArchiveId
+的地方——见 constitution
+Technology Stack Constraints
+"Domain entity identifiers are
+newtypes..." 条款</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- 孤立未使用的 Extension 类型 -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>820</x>
+      <y>260</y>
+      <w>320</w>
+      <h>170</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;孤立未使用，已标记&gt;&gt;
+Extension
+--
+namespace: String
+kind: ExtensionType
+parameters: HashMap&lt;String,String&gt;
+enabled: bool
+declared_permissions: Vec&lt;String&gt;
+--
+lanrurugi-api 里没有任何 repository、
+Redis key、路由引用这个类型。
+很可能是早期 data-model.md 遗留的
+设计产物，真实的插件配置实现
+后来走了完全不同的 plugin_options
+形状。属于死代码。
+bg=#ffdddd</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- 标题/图例说明 -->
+  <element>
+    <id>UMLNote</id>
+    <coordinates>
+      <x>60</x>
+      <y>640</y>
+      <w>640</w>
+      <h>110</h>
+    </coordinates>
+    <panel_attributes>图 1/3 —— 核心领域模型（issue #49）
+范围：直接持久化在 Redis 里的实体（lanrurugi_core::entities +
+lanrurugi_core::ids）。任务队列/后台任务子系统见
+02-jobs-and-queue.uxf；DomainRule 三重重复的发现见
+03-plugin-options-redundancy.uxf。完整字段级清单以及跟前端
+TypeScript 类型的交叉核对：docs/uml/data-model-analysis.md。</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+</diagram>
