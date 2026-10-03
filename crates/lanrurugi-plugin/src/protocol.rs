@@ -219,6 +219,67 @@ pub struct PluginOptionsResult {
     pub relative_newer_policy: Option<RelativeNewerPolicyOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_older_policy: Option<RelativeOlderPolicyOption>,
+    /// Interval guidance for subscriptions against this source (issue #55). `minimum_secs` is a
+    /// floor the host enforces; see `CheckIntervalOption`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_interval: Option<CheckIntervalOption>,
+}
+
+/// Mirrors `plugin-sdk.ts`'s `PluginOptionsResult.check_interval` field-for-field.
+///
+/// Two values rather than one because the knowledge is split: the extension knows what its site
+/// tolerates, the user knows how closely they want to follow something. The minimum is enforced
+/// rather than advisory — a user has no way to know a site's ban threshold, so leaving it to them
+/// would be leaving it to trial and error.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckIntervalOption {
+    pub suggested_secs: u64,
+    pub minimum_secs: u64,
+    pub description: String,
+}
+
+/// What a subscription is looking for — mirrors `plugin-sdk.ts`'s `DiscoveryCriteria`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiscoveryCriteria {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// A feed or index page supplied by the user, for sources whose extension cannot search unaided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_url: Option<String>,
+}
+
+/// One work a listing offered — mirrors `plugin-sdk.ts`'s `DiscoveredCandidate`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DiscoveredCandidate {
+    /// Already normalised through the plugin's own `canonicalizeSource`.
+    pub source: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub posted_at: Option<String>,
+    #[serde(default)]
+    pub rating: Option<f32>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DiscoveryResult {
+    #[serde(default)]
+    pub candidates: Option<Vec<DiscoveredCandidate>>,
+    /// `true` when the listing was read without the sign-in it needed.
+    ///
+    /// Load-bearing: many sources answer a signed-out search with a *smaller result set* rather than
+    /// an error, so the call succeeds having simply seen less. The host must treat this as an
+    /// inconclusive check and refuse to record its candidates as seen — otherwise works it never had
+    /// access to are marked handled and hidden permanently, with no error anywhere to reveal it.
+    #[serde(default)]
+    pub degraded: bool,
+    #[serde(default)]
+    pub error: Option<PluginError>,
 }
 
 /// What a `plugin_introspect` dispatcher call reports about a plugin's *source code*, without
@@ -236,6 +297,11 @@ pub struct PluginIntrospection {
     /// thing that can disagree.
     #[serde(default)]
     pub returns_version_history: bool,
+    /// Whether the plugin exports `discover`, i.e. whether it can back a subscription at all. Read
+    /// before offering a source for subscription so an unusable source is excluded with a stated
+    /// reason, rather than accepted and failing at its first scheduled check.
+    #[serde(default)]
+    pub exports_discover: bool,
 }
 
 /// A plugin-authored error — mirrors `plugin-sdk.ts`'s `PluginError` field-for-field. `error_code`

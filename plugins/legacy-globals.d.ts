@@ -483,6 +483,38 @@ interface VersionHistoryEntryResult {
   posted_at: string;
 }
 
+/** What a subscription is looking for — mirrors `plugin-sdk.ts`'s `DiscoveryCriteria`. Declared here
+ * too, for the same zero-import reason as the host-args types: a discovery extension annotates its
+ * own `discover` function with it, and a plugin file can never `import` the SDK module. */
+interface DiscoveryCriteriaArgs {
+  creator?: string;
+  tags?: string[];
+  listing_url?: string;
+}
+
+/** One work a listing offered — mirrors `plugin-sdk.ts`'s `DiscoveredCandidate`. */
+interface DiscoveredCandidateResult {
+  /** Must already be normalised through this plugin's own `canonicalizeSource`. */
+  source: string;
+  title?: string;
+  posted_at?: string;
+  rating?: number;
+  tags?: string[];
+}
+
+/** `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.
+ *
+ * Annotate `discover` with this so a mistyped key is a compile error rather than a field the host's
+ * deserializer silently drops. `degraded` is the one most worth getting right: forgetting to set it
+ * turns "I could not see everything" into "there is nothing new", and the host will then record
+ * works it never saw as handled. */
+interface DiscoveryResultShape {
+  candidates?: DiscoveredCandidateResult[];
+  /** Set whenever the sign-in was missing, expired, or rejected — even if the listing parsed fine. */
+  degraded?: boolean;
+  error?: PluginErrorResult;
+}
+
 /** `execDownload`'s return shape — mirrors `plugin-sdk.ts`'s `DownloadResult` field-for-field.
  *
  * Annotate `execDownload` with this (`): Promise<DownloadResultShape>`) so a typo in a field name

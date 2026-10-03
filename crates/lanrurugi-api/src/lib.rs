@@ -42,6 +42,7 @@ pub mod settings;
 pub mod shinobu;
 pub mod stamps;
 pub mod state;
+pub mod subscriptions;
 pub mod tag_rules;
 pub mod tankoubon_grouping;
 pub mod tankoubons;

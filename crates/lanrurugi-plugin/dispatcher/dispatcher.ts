@@ -692,7 +692,10 @@ async function introspectPlugin(_mod: Record<string, unknown>) {
     // would fail loudly elsewhere anyway, so this never needs to be an error of its own.
     returnsVersionHistory = false;
   }
-  return { returns_version_history: returnsVersionHistory };
+  return {
+    returns_version_history: returnsVersionHistory,
+    exports_discover: typeof _mod.discover === "function",
+  };
 }
 
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);
@@ -718,6 +721,13 @@ async function handleRequest(req: PluginRequest) {
         break;
       case "plugin_introspect":
         result = await introspectPlugin(mod);
+        break;
+      case "discover":
+        // Optional, like `pluginOptions` — a plugin without it simply cannot back a subscription,
+        // which the host checks for before offering the source rather than discovering here.
+        result = typeof mod.discover === "function"
+          ? await mod.discover(req.args)
+          : null;
         break;
       case "canonicalize_source": {
         // Host-side `source:` tag comparison routes through the plugin's own normalizer when it

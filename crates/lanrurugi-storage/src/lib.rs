@@ -16,4 +16,5 @@ pub mod recommend_cache;
 pub mod redis;
 pub mod refresh_tokens;
 pub mod repository;
+pub mod subscriptions;
 pub mod test_support;

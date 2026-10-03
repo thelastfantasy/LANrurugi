@@ -386,6 +386,7 @@ mod tests {
             }),
             relative_newer_policy: None,
             relative_older_policy: None,
+            check_interval: None,
         }
     }
 

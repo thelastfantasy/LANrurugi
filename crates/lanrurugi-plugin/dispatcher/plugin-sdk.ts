@@ -402,6 +402,73 @@ export interface VersionHistoryEntry {
   posted_at: string;
 }
 
+/** What a subscription is looking for, handed to {@linkcode discover} (issue #55).
+ *
+ * Exactly one shape drives a given call: an extension that can search its own site is given
+ * `creator`/`tags`; one pointed at a feed or index page is given `listing_url`. Both paths return
+ * the same thing — candidate works — which is why they share one capability rather than being two.
+ */
+export interface DiscoveryCriteria {
+  /** A creator/uploader to follow. */
+  creator?: string;
+  /** Tags that scope the subscription. */
+  tags?: string[];
+  /** A feed or index page the user supplied, for sources whose extension cannot search unaided. */
+  listing_url?: string;
+}
+
+/** One work a listing offered. */
+export interface DiscoveredCandidate {
+  /** This work's source URL, already normalised through this plugin's own
+   * {@linkcode canonicalizeSource} so the host's duplicate check is a plain comparison. An
+   * un-normalised value silently fails to match an identical work already held, with nothing
+   * reporting the mismatch. */
+  source: string;
+  /** Whatever the listing revealed cheaply. Supplying these lets the host apply the user's filters
+   * without fetching every candidate individually — omit a field rather than guessing at it, since
+   * a wrong value here silently filters out a work the user wanted. */
+  title?: string;
+  posted_at?: string;
+  rating?: number;
+  tags?: string[];
+}
+
+/** `discover`'s return shape.
+ *
+ * Note what this does NOT contain: any judgment about whether a candidate is worth downloading.
+ * The extension reports what the site says exists; the host compares that against its own library
+ * and the user's rules. Keeping the judgment host-side means one tested implementation shared by
+ * every source rather than each extension reinventing it — the same split {@linkcode
+ * DownloadResult.version_history} already uses. */
+export interface DiscoveryResult {
+  candidates?: DiscoveredCandidate[];
+  /** **Load-bearing.** `true` when this listing was read without the sign-in it needed.
+   *
+   * Many sources answer a signed-out search with a *smaller result set* rather than an error — the
+   * call succeeds, it simply saw less. Staying silent about that would be indistinguishable from
+   * "nothing new", and the host would record works it never had access to as handled, hiding them
+   * permanently with no error anywhere to reveal it. Set this whenever the sign-in was missing,
+   * expired, or rejected, even though the listing itself parsed fine. */
+  degraded?: boolean;
+  /** Why the result is degraded, or why nothing could be read at all. */
+  error?: PluginError;
+}
+
+/** Optional export, parallel to {@linkcode pluginOptions}. Given a subscription's criteria (or a
+ * listing URL), returns the candidate works this source currently offers.
+ *
+ * Absence is normal: a plugin without this export simply cannot back a subscription, and the host
+ * excludes it from the sources a user may pick — stating why, rather than accepting the
+ * subscription and failing at its first check.
+ *
+ * This is the only capability that *finds* things. {@linkcode execMetadata} and
+ * {@linkcode execDownload} both act on one already-known item, which is why a subscription needs
+ * something new rather than a new way of calling them.
+ *
+ * Declare it as `export function discover(criteria: DiscoveryCriteria): Promise<DiscoveryResult>`.
+ */
+export type Discover = (criteria: DiscoveryCriteria) => Promise<DiscoveryResult>;
+
 /** One per-domain concurrency/rate-limit rule, as declared by a plugin's own {@linkcode
  * PluginOptionsResult.domain_rules} default, or as a user's persisted override
  * (`GET`/`PUT /api/plugins/{namespace}/options`) — `specs/005-download-plugin-progress/
@@ -472,6 +539,20 @@ export interface PluginOptionsResult {
    * {@linkcode DEFAULT_RELATIVE_OLDER_POLICY}. */
   relative_older_policy?: {
     default: RelativeOlderPolicy;
+    /** Human-readable explanation shown in the settings UI. */
+    description: string;
+  };
+  /** How often a subscription against this source may check (issue #55). Only meaningful for a
+   * plugin that also exports {@linkcode Discover}.
+   *
+   * Two numbers because two parties hold different knowledge: this plugin knows what its site
+   * tolerates (rate limits, ban risk), while the user knows how closely they want to follow a given
+   * creator. `suggested_secs` is a starting point the user may change; `minimum_secs` is a floor the
+   * host enforces and the user cannot go under — being rate-limited or banned is not a consequence
+   * the user should have to discover by trial. */
+  check_interval?: {
+    suggested_secs: number;
+    minimum_secs: number;
     /** Human-readable explanation shown in the settings UI. */
     description: string;
   };

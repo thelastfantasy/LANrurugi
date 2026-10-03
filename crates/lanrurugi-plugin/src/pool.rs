@@ -24,7 +24,9 @@ use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use crate::permissions::build_flags;
-use crate::protocol::{PluginInfo, PluginIntrospection, PluginOptionsResult, Request, Response};
+use crate::protocol::{
+    DiscoveryResult, PluginInfo, PluginIntrospection, PluginOptionsResult, Request, Response,
+};
 
 /// `dispatcher.ts`'s `canonicalize_source` reply shape.
 #[derive(serde::Deserialize)]
@@ -361,6 +363,28 @@ impl PluginPool {
             }));
         }
         Ok(Some(parsed.canonical))
+    }
+
+    /// Asks a source extension what it currently offers for `criteria` (issue #55).
+    ///
+    /// Returns `Ok(None)` when the plugin exports no `discover` — the same "absence is normal, not
+    /// an error" shape [`plugin_options`](Self::plugin_options) uses. Such a source cannot back a
+    /// subscription, which callers check *before* offering it rather than finding out here.
+    ///
+    /// Runs through the persistent worker (not a throwaway subprocess) because discovery performs
+    /// real network I/O under the plugin's declared permissions, exactly like a metadata or download
+    /// call. `args` must already carry whatever signed-in state the plugin declared it needs; this
+    /// method does not fetch it.
+    pub async fn discover(
+        &self,
+        namespace: &str,
+        args: serde_json::Value,
+    ) -> Result<Option<DiscoveryResult>> {
+        let value = self.execute(namespace, "discover", args).await?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(value)?))
     }
 
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
