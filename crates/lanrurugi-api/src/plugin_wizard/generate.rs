@@ -442,6 +442,10 @@ fn looks_like_plugin_code(content: &str, plugin_type: &str) -> bool {
     let entry_fn = match plugin_type {
         "metadata" => "execMetadata",
         "download" => "execDownload",
+        "discovery" => "discover",
+        // `login` and anything unrecognised. Listing `discovery` explicitly above matters: it used
+        // to fall into this arm and be checked for `execLogin`, so a correctly generated discovery
+        // plugin was rejected as malformed (issue #55).
         _ => "execLogin",
     };
     if !content.contains(entry_fn) {

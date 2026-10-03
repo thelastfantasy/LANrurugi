@@ -160,6 +160,7 @@ async fn run_trial(state: &AppState, namespace: &str, req: &TrialRunRequest) -> 
     match req.plugin_type.as_str() {
         "login" => run_login_trial(state, namespace, &info, req).await,
         "metadata" | "download" => run_link_trial(state, namespace, &info, req).await,
+        "discovery" => run_discovery_trial(state, namespace, &info, req).await,
         other => error(
             StatusCode::BAD_REQUEST,
             format!("Unknown plugin_type {other:?}."),
@@ -236,6 +237,109 @@ async fn run_login_trial(
         }
         Err(e) => Json(json!({ "outcome": "failure", "detail": e.to_string() })).into_response(),
     }
+}
+
+/// Trial-runs a generated discovery draft (issue #55, FR-029).
+///
+/// Unlike metadata/download, a discovery plugin is not given a link to act on — it is asked what
+/// *exists*. `test_links` is therefore reinterpreted: an entry that looks like a URL is passed as a
+/// `listing_url` (exercising the user-supplied-listing path), and anything else is treated as a
+/// creator name (exercising the extension's own search path). With no entries at all, the plugin is
+/// asked for an unfiltered listing, which is still enough to tell whether it parses anything.
+///
+/// Why this matters enough to exist: without it, an author learns their discovery plugin is broken
+/// at its first *scheduled* check — hours later, unattended, and reported only as "no new works",
+/// which is exactly what a working subscription with nothing new also reports.
+async fn run_discovery_trial(
+    state: &AppState,
+    namespace: &str,
+    info: &lanrurugi_plugin::protocol::PluginInfo,
+    req: &TrialRunRequest,
+) -> Response {
+    let (login_cookies, login_headers) =
+        resolve_login_credentials(state, info, req.login_credentials.as_ref()).await;
+
+    // One probe per supplied hint, or a single unfiltered probe when none were given.
+    let probes: Vec<serde_json::Value> = if req.test_links.is_empty() {
+        vec![json!({})]
+    } else {
+        req.test_links
+            .iter()
+            .map(|hint| {
+                if hint.starts_with("http://") || hint.starts_with("https://") {
+                    json!({ "listing_url": hint })
+                } else {
+                    json!({ "creator": hint })
+                }
+            })
+            .collect()
+    };
+
+    let mut results = Vec::with_capacity(probes.len());
+    for mut args in probes {
+        if let Some(cookies) = &login_cookies {
+            args["user_agent_cookies"] = cookies.clone();
+        }
+        if let Some(headers) = &login_headers {
+            args["user_agent_headers"] = headers.clone();
+        }
+        let probe_label = args.clone();
+
+        match state.plugins.execute(namespace, "discover", args).await {
+            Ok(value) if value.is_null() => {
+                results.push(json!({
+                    "probe": probe_label,
+                    "ok": false,
+                    // The single most likely mistake: generating everything else correctly but
+                    // exporting the entry function under another name.
+                    "error": "This draft exports no `discover` function, so it cannot back a subscription.",
+                }));
+            }
+            Ok(value) => {
+                let candidates = value
+                    .get("candidates")
+                    .and_then(|c| c.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let degraded = value
+                    .get("degraded")
+                    .and_then(|d| d.as_bool())
+                    .unwrap_or(false);
+                let error = value.get("error").cloned();
+                results.push(json!({
+                    "probe": probe_label,
+                    "ok": error.is_none(),
+                    "candidates": candidates,
+                    "degraded": degraded,
+                    "error": error,
+                    // Surfaced so the author can check the one thing a passing trial still hides:
+                    // whether `degraded` was set deliberately or simply never set at all. A signed-
+                    // out probe that returns candidates with `degraded: false` is the failure this
+                    // whole capability's contract warns about, and it looks like success.
+                    "sample": value
+                        .get("candidates")
+                        .and_then(|c| c.as_array())
+                        .map(|a| a.iter().take(3).cloned().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                }));
+            }
+            Err(e) => {
+                results.push(json!({
+                    "probe": probe_label,
+                    "ok": false,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    let declared_options = probe_declared_options(state, namespace).await;
+    axum::Json(json!({
+        "plugin_type": "discovery",
+        "results": results,
+        "declared_options": declared_options,
+    }))
+    .into_response()
 }
 
 async fn run_link_trial(

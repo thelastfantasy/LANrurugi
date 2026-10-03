@@ -270,6 +270,33 @@ pub(crate) fn plugin_generation_system_prompt(
                  免登录的下载方式。{login_cookie_note}\n\n{configurable_options_note}"
             )
         }
+        "discovery" => {
+            format!(
+                "重要：这是「发现」类插件，入口函数是 discover(criteria)，不是 execMetadata/\
+                 execDownload/execLogin。它的职责只有一件事：按条件列出目标站点上**现有哪些作品**，\
+                 返回候选列表。它不下载、不补元数据、不判断某个作品值不值得要。\n\n\
+                 criteria 的实际结构为 {{ creator?: string; tags?: string[]; listing_url?: string }}。\
+                 两种输入形态二选一：有 listing_url 时直接解析那个 feed 或列表页；没有时，用 creator/\
+                 tags 自行拼出该站点的搜索 URL 再解析。两种都要支持。\n\n\
+                 返回值形状为 DiscoveryResultShape = {{ candidates?: {{ source: string; title?: string; \
+                 posted_at?: string; rating?: number; tags?: string[] }}[]; degraded?: boolean; \
+                 error?: {{ error_code: string; data?: ... }} }}。\n\n\
+                 **degraded 字段是这类插件最容易写错、也最要命的一处，务必认真处理。** 很多站点在\
+                 未登录时并不会报错，而是安静地返回一个更小的结果集——请求成功了，只是看到的内容变少。\
+                 如果你不把这种情况标成 degraded: true，宿主就会把这次残缺的结果当成「站点上全部的\
+                 作品」，进而把它根本没看到的那些作品永久标记为已处理，而且全程没有任何错误信息会暴露\
+                 这一点。所以：只要怀疑这次抓取是在未登录/登录失效状态下完成的（页面出现登录表单、\
+                 跳转登录页、结果数明显异常等），就必须显式返回 degraded: true。判断依据要基于页面\
+                 特征，不要用「结果为空」去推断——「确实没有新作品」和「未登录看不到」都会表现为结果很少。\n\n\
+                 candidates[].source 必须先经过本插件自己的 canonicalizeSource() 归一化。宿主比对的是\
+                 字符串，无从察觉两边归一化方式不同，任何分歧都会让去重静默失效。title/posted_at/\
+                 rating/tags 这几个字段如果列表页上能直接读到就填上——宿主用它们做过滤，可以省去逐个\
+                 打开详情页；读不到就不填，不要猜测，填错会把用户本来想要的作品静默过滤掉。\n\n\
+                 同时请在 pluginOptions() 里声明 check_interval = {{ suggested_secs, minimum_secs, \
+                 description }}：minimum_secs 是宿主强制执行的下限，用来保护用户不被目标站点限流或封号\
+                 ——这件事只有你（了解该站点）清楚，用户无从判断。{login_cookie_note}\n\n{configurable_options_note}"
+            )
+        }
         _ => {
             "重要：execLogin(hostArgs) 的 hostArgs 实际结构为 { customargs: string[] }。customargs \
              数组按下面给出的\"登录字段列表\"顺序对应传入——你必须把这个字段列表原样声明为 pluginInfo() \
@@ -356,4 +383,82 @@ pub(crate) fn plugin_generation_system_prompt(
         直接导致格式化和加载失败。",
         plugin_type,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prompt_for(plugin_type: &str) -> String {
+        plugin_generation_system_prompt(
+            plugin_type,
+            None,
+            false,
+            Some("2.9.1"),
+            "// sample metadata",
+            "// sample download",
+            "// sdk",
+            "===EXPLANATION===",
+        )
+    }
+
+    /// A generated discovery plugin must be told to export `discover`, not one of the other entry
+    /// points. Getting this wrong produces a file that looks plausible and is rejected on save.
+    #[test]
+    fn the_discovery_prompt_names_the_right_entry_point() {
+        let p = prompt_for("discovery");
+        assert!(p.contains("discover(criteria)"));
+        assert!(
+            !p.contains("execMetadata(hostArgs) 的 hostArgs"),
+            "the discovery branch must not fall through to another type's argument description"
+        );
+    }
+
+    /// The single most consequential instruction in that prompt. A plugin that forgets `degraded`
+    /// does not fail — it quietly reports a partial listing as complete, and the host then records
+    /// works it never saw as handled. Nothing surfaces an error, so the only defence is the model
+    /// being told clearly, every time.
+    #[test]
+    fn the_discovery_prompt_explains_the_degraded_flag_and_why_it_matters() {
+        let p = prompt_for("discovery");
+        assert!(p.contains("degraded"), "the flag must be named");
+        assert!(
+            p.contains("未登录"),
+            "it must explain the signed-out case the flag exists for"
+        );
+        assert!(
+            p.contains("永久标记为已处理"),
+            "it must state the consequence, not just the rule — a model given only a rule tends to \
+             treat it as optional"
+        );
+        assert!(
+            p.contains("不要用「结果为空」去推断"),
+            "it must warn against inferring the state from an empty result, since 'nothing new' and \
+             'not signed in' look identical"
+        );
+    }
+
+    /// Candidates must be normalised by the plugin itself; the host compares strings and cannot
+    /// notice two sides normalised differently.
+    #[test]
+    fn the_discovery_prompt_requires_canonicalised_sources() {
+        let p = prompt_for("discovery");
+        assert!(p.contains("canonicalizeSource"));
+    }
+
+    /// The interval floor protects the user from a consequence only the plugin author can foresee.
+    #[test]
+    fn the_discovery_prompt_asks_for_interval_bounds() {
+        let p = prompt_for("discovery");
+        assert!(p.contains("check_interval"));
+        assert!(p.contains("minimum_secs"));
+    }
+
+    /// The other plugin types must be unaffected by the new branch.
+    #[test]
+    fn other_plugin_types_keep_their_own_entry_points() {
+        assert!(prompt_for("metadata").contains("execMetadata"));
+        assert!(prompt_for("download").contains("execDownload"));
+        assert!(prompt_for("login").contains("execLogin"));
+    }
 }
