@@ -21,6 +21,7 @@ import { ApiTokensSection } from "./ApiTokensSection"
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { SecuritySection } from "./SecuritySection"
+import { SubscriptionsSection } from "./SubscriptionsSection"
 import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
 import { TranslationSection } from "./TranslationSection"
 import { useTranslationSectionState } from "./useTranslationSectionState"
@@ -480,6 +481,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           />
 
           <ApiTokensSection />
+          <SubscriptionsSection />
 
           <ArchiveFilesSection
             tempmaxsize={tempmaxsize}

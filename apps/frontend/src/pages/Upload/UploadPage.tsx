@@ -16,6 +16,7 @@ import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
+import { ReservationGroup } from "./ReservationGroup"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 
 /** Both "Add from URL" and manual file upload stage into the same persistent server-side queue
@@ -289,6 +290,7 @@ export function Upload() {
 
         <div className="right-column" style={{ paddingLeft: 24, boxSizing: "border-box" }}>
           <DownloadQueuePanel downloadPlugins={downloadPlugins.data} metadataPlugins={metadataPlugins.data} />
+          <ReservationGroup />
         </div>
       </div>
 

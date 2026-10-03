@@ -331,6 +331,117 @@ export interface PluginOptionsUpdate {
   relative_older_policy?: RelativeOlderPolicy
 }
 
+// ── Subscriptions (issue #55) ───────────────────────────────────────────────────────────────────
+
+export interface SubscriptionCriteria {
+  creator?: string
+  tags?: string[]
+  /** A feed or index page the user supplied, for sources whose extension cannot search unaided. */
+  listing_url?: string
+}
+
+export interface SubscriptionFilters {
+  required_tags?: string[]
+  excluded_tags?: string[]
+  minimum_rating?: number
+  excluded_categories?: string[]
+}
+
+/** What a subscription does when a download fails for lack of source-side credit. Reactive: no
+ * source exposes a balance to check beforehand, so the failure itself is the only trigger. */
+export type CreditPolicy = "pause" | "continue_and_reserve"
+
+export type SubscriptionState =
+  | { state: "enabled" }
+  | { state: "disabled" }
+  /** Stopped by the system, which owes the user both a reason and a way back — unlike `disabled`,
+   * which is the user's own choice. */
+  | { state: "paused"; reason: "insufficient_credit" }
+
+export interface Subscription {
+  id: string
+  name: string
+  /** The extension namespace that discovers for this subscription. */
+  source: string
+  criteria: SubscriptionCriteria
+  filters: SubscriptionFilters
+  interval_secs: number
+  target_category?: string | null
+  enrich_metadata: boolean
+  /** Off by default — a new subscription's rules are usually still being tuned, which is exactly
+   * when an over-broad rule would spend real credit unattended. */
+  auto_download: boolean
+  credit_policy: CreditPolicy
+  state: SubscriptionState
+  last_checked_at?: number | null
+  created_at: number
+}
+
+/** How a check ended.
+ *
+ * `inconclusive` is NOT a synonym for failure: the check ran and saw real works, but without the
+ * sign-in it needed — so it saw a smaller world than the one asked about. Its findings are shown,
+ * but nothing is recorded as "seen", because works it had no access to must stay reconsiderable. */
+export type CycleOutcome =
+  | "completed"
+  | { failed: { reason: string } }
+  | { inconclusive: { reason: string } }
+
+export type CandidateVerdict =
+  | { verdict: "queued" }
+  | { verdict: "awaiting_approval" }
+  | { verdict: "reserved"; reason: string }
+  /** Carries which rule rejected it, so a too-strict subscription is diagnosable. */
+  | { verdict: "rejected"; rule: string }
+  | { verdict: "already_held" }
+  | { verdict: "already_seen" }
+
+export interface CandidateRecord {
+  source_url: string
+  title?: string | null
+  verdict: CandidateVerdict
+}
+
+export interface CheckCycle {
+  id: string
+  subscription_id: string
+  started_at: number
+  finished_at: number
+  outcome: CycleOutcome
+  candidates_seen: number
+  candidates: CandidateRecord[]
+}
+
+/** A source that can back a subscription, with the interval bounds it declares. */
+export interface SubscriptionSource {
+  namespace: string
+  suggested_secs?: number | null
+  /** A floor the server enforces — a shorter interval is refused, not silently raised. */
+  minimum_secs?: number | null
+  description?: string | null
+}
+
+export interface ReservationEntry {
+  id: string
+  subscription_id: string
+  source_url: string
+  reason: string
+  status: "waiting" | "discarded"
+  created_at: number
+}
+
+export interface SubscriptionBody {
+  name: string
+  source: string
+  criteria: SubscriptionCriteria
+  filters: SubscriptionFilters
+  interval_secs: number
+  target_category?: string
+  enrich_metadata: boolean
+  auto_download: boolean
+  credit_policy: CreditPolicy
+}
+
 export interface StatTag {
   namespace: string | null
   text: string

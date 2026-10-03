@@ -702,6 +702,17 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Subscriptions (issue #55). One scheduler owns every start, which is what keeps "is this
+    // subscription already running?" a local question instead of cross-task coordination — see
+    // `subscriptions::scheduler`. Its own tick is independent of any subscription's interval: it is
+    // the resolution at which "due" is noticed, not how often anything actually runs.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            lanrurugi_api::subscriptions::runner::scheduler_loop(state).await;
+        });
+    }
+
     // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
     // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
     // sweep's own schedule happens to line up against when it was staged.

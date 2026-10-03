@@ -41,6 +41,7 @@ import type {
   BookmarkSort,
   BookmarksPageResponse,
   CategoryMetadata,
+  CheckCycle,
   ComparisonResult,
   DownloadQueueItem,
   DownloadQueueListResponse,
@@ -60,6 +61,7 @@ import type {
   PluginSettingsUpdate,
   PublicThemeSettings,
   RandomArchivesResponse,
+  ReservationEntry,
   SearchResponse,
   ServerInfo,
   Settings,
@@ -67,6 +69,9 @@ import type {
   StampedPagesResponse,
   StampsByPageResponse,
   StatTag,
+  Subscription,
+  SubscriptionBody,
+  SubscriptionSource,
   TankBookmarkedPageResponse,
   TankoubonFullResponse,
   TankoubonListResponse,
@@ -746,6 +751,103 @@ export function useChangePassword() {
 }
 
 // --- API token management (session-protected) ---
+
+// ── Subscriptions (issue #55) ───────────────────────────────────────────────────────────────────
+
+export function useSubscriptions() {
+  return useQuery({
+    queryKey: ["subscriptions"],
+    queryFn: () =>
+      fetchJson<{ subscriptions: Subscription[] }>("/subscriptions").then((r) => r.subscriptions),
+  })
+}
+
+/** Only sources whose extension can actually discover appear here, each with the interval bounds it
+ * declares — so the form can offer viable sources and show the bounds up front, rather than
+ * teaching the user the rules through a rejection. */
+export function useSubscriptionSources() {
+  return useQuery({
+    queryKey: ["subscription-sources"],
+    queryFn: () =>
+      fetchJson<{ sources: SubscriptionSource[] }>("/subscriptions/sources").then((r) => r.sources),
+  })
+}
+
+export function useSubscriptionDetail(id: string | null) {
+  return useQuery({
+    queryKey: ["subscription", id],
+    enabled: Boolean(id),
+    queryFn: () =>
+      fetchJson<{ subscription: Subscription; cycles: CheckCycle[] }>(
+        `/subscriptions/${encodeURIComponent(id ?? "")}`,
+      ),
+  })
+}
+
+export function useCreateSubscription() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: SubscriptionBody) =>
+      sendJson<{ subscription: Subscription }>("POST", "/subscriptions", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscriptions"] }),
+  })
+}
+
+export function useUpdateSubscription(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: SubscriptionBody) =>
+      sendJson<{ subscription: Subscription }>(
+        "PUT",
+        `/subscriptions/${encodeURIComponent(id)}`,
+        body,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] })
+      queryClient.invalidateQueries({ queryKey: ["subscription", id] })
+    },
+  })
+}
+
+export function useDeleteSubscription() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<void>("DELETE", `/subscriptions/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscriptions"] }),
+  })
+}
+
+/** `enable`/`disable` are the user's own switch; `resume` clears a pause the *system* applied, which
+ * is why it is a separate action rather than another way to enable. */
+export function useSetSubscriptionState() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "enable" | "disable" | "resume" }) =>
+      sendJson<{ subscription: Subscription }>(
+        "POST",
+        `/subscriptions/${encodeURIComponent(id)}/${action}`,
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscriptions"] }),
+  })
+}
+
+export function useReservations() {
+  return useQuery({
+    queryKey: ["reservations"],
+    queryFn: () =>
+      fetchJson<{ reservations: ReservationEntry[] }>("/reservations").then((r) => r.reservations),
+  })
+}
+
+export function useDiscardReservation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<void>("POST", `/reservations/${encodeURIComponent(id)}/discard`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reservations"] }),
+  })
+}
 
 export function useApiTokens() {
   return useQuery({

@@ -150,6 +150,199 @@ pub fn build_cycle(
     }
 }
 
+// ── Running a real check ────────────────────────────────────────────────────────────────────────
+
+use crate::AppState;
+use lanrurugi_storage::download_queue::{NewQueueItem, QueueItemOrigin};
+use lanrurugi_storage::subscriptions::{ReservationEntry, ReservationStatus, SubscriptionState};
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Runs one check for one subscription: ask the source, decide, act, record.
+///
+/// Best-effort throughout. A subscription that cannot be checked right now is checked again next
+/// time; nothing here is allowed to abort the scheduler or leave the subscription wedged.
+pub async fn run_check(state: &AppState, subscription_id: &str) {
+    let Ok(Some(mut subscription)) = state.subscriptions.get(subscription_id).await else {
+        return;
+    };
+
+    let started_at = now_secs();
+
+    // Discovery runs with whatever signed-in state the source declared it needs, exactly like a
+    // metadata or download call — subscriptions introduce no second credential path.
+    let args = match state.plugins.plugin_info(&subscription.source).await {
+        Ok(info) => {
+            let base = serde_json::to_value(&subscription.criteria).unwrap_or_default();
+            crate::plugins::with_login_cookies(state, &info, base).await
+        }
+        Err(e) => {
+            tracing::warn!(%subscription_id, error = %e, "subscription source is no longer installed");
+            return;
+        }
+    };
+
+    let result = match state.plugins.discover(&subscription.source, args).await {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            tracing::warn!(
+                %subscription_id,
+                source = %subscription.source,
+                "source no longer offers discovery; skipping this check"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(%subscription_id, error = %e, "discovery call failed");
+            return;
+        }
+    };
+
+    // Gather what the decision needs, then decide purely.
+    let seen = state
+        .subscriptions
+        .seen_all(subscription_id)
+        .await
+        .unwrap_or_default();
+    let reservations = state
+        .subscriptions
+        .list_reservations()
+        .await
+        .unwrap_or_default();
+    let settled = super::reservations::settled_sources(&reservations, subscription_id);
+    let held = held_sources(state).await;
+
+    let decision = {
+        let no_categories = |_: &str| Vec::<String>::new();
+        let ctx = CycleContext {
+            already_seen: &seen,
+            already_held: &held,
+            discarded: &settled,
+            categories_for: &no_categories,
+        };
+        decide(&subscription, &result, &ctx)
+    };
+
+    // Queue (or hold for approval) whatever survived.
+    for source in &decision.actionable {
+        if !subscription.auto_download {
+            // Nothing is spent until the user approves. The candidate's verdict already records it
+            // as awaiting approval, which is what the UI reads.
+            continue;
+        }
+        let queued = state
+            .download_queue
+            .add(NewQueueItem {
+                origin: QueueItemOrigin::Download,
+                url: source.clone(),
+                plugin_namespace: subscription.source.clone(),
+                file_size: None,
+                category: subscription.target_category.clone(),
+                auto_fetch_metadata: subscription.enrich_metadata,
+                overwrite_on_duplicate: false,
+                // Enters the queue the same way a manually added URL does, so it inherits the
+                // existing start/stop/retry behaviour rather than getting a path of its own.
+                state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+            })
+            .await;
+        if let Err(e) = queued {
+            // Could not even enqueue — reserve it so the work is not silently lost.
+            let entry = ReservationEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                subscription_id: subscription_id.to_string(),
+                source_url: source.clone(),
+                reason: super::reservations::ReservationReason::DownloadFailed(e.to_string())
+                    .as_key(),
+                status: ReservationStatus::Waiting,
+                created_at: now_secs(),
+            };
+            let _ = state.subscriptions.save_reservation(&entry).await;
+        }
+    }
+
+    // The guard, enforced at the one place it matters: only an authoritative cycle may record works
+    // as seen. `decide` already returns an empty list otherwise, so this is belt and braces.
+    if decision.outcome.is_authoritative() && !decision.to_mark_seen.is_empty() {
+        let _ = state
+            .subscriptions
+            .mark_seen(subscription_id, &decision.to_mark_seen)
+            .await;
+    }
+
+    let cycle = build_cycle(
+        uuid::Uuid::new_v4().to_string(),
+        subscription_id.to_string(),
+        started_at,
+        now_secs(),
+        &decision,
+    );
+    let _ = state.subscriptions.record_cycle(&cycle).await;
+
+    // `last_checked_at` advances even for a degraded or failed cycle: the source *was* contacted,
+    // and retrying immediately would hammer a source that is already struggling. The next scheduled
+    // check will try again.
+    subscription.last_checked_at = Some(now_secs());
+    let _ = state.subscriptions.save(&subscription).await;
+
+    let _ = state
+        .subscriptions
+        .prune_reservations(super::scheduler::RESERVATION_LIMIT)
+        .await;
+}
+
+/// Normalised source URLs already in the library, so a work held under any of them is not offered
+/// again.
+async fn held_sources(state: &AppState) -> Vec<String> {
+    let Ok(archives) = state.repos.archives.list_all().await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for archive in archives {
+        for tag in archive.tags.split(',') {
+            if let Some(source) = tag.trim().strip_prefix("source:") {
+                out.push(crate::plugins::trim_url(source));
+            }
+        }
+    }
+    out
+}
+
+/// The scheduler loop: wake periodically, check whatever is due.
+///
+/// One task owns every start, which is what keeps FR-012's non-overlap a local question. A
+/// subscription still mid-check is simply skipped this tick rather than coordinated with.
+pub async fn scheduler_loop(state: AppState) {
+    let mut ticker =
+        tokio::time::interval(std::time::Duration::from_secs(super::scheduler::TICK_SECS));
+    loop {
+        ticker.tick().await;
+        let Ok(subscriptions) = state.subscriptions.list_all().await else {
+            continue;
+        };
+        let now = now_secs();
+        for subscription in subscriptions {
+            if subscription.state != SubscriptionState::Enabled || !subscription.is_due(now) {
+                continue;
+            }
+            let Some(guard) = state.subscriptions_in_flight.claim(&subscription.id).await else {
+                // Still running from a previous tick. Normal on a slow source, not a fault.
+                continue;
+            };
+            let state = state.clone();
+            let id = subscription.id.clone();
+            tokio::spawn(async move {
+                run_check(&state, &id).await;
+                drop(guard);
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
