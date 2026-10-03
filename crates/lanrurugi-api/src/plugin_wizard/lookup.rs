@@ -33,7 +33,14 @@ use serde_json::json;
 use crate::plugins::{discover_namespaces, find_plugin_by_domain};
 use crate::AppState;
 
-const PLUGIN_TYPES: &[&str] = &["login", "metadata", "download"];
+/// The plugin kinds that belong to a *domain*, and so are meaningful for a domain-coverage lookup.
+///
+/// Deliberately narrower than `plugins::PLUGIN_CATEGORIES`: `script` plugins act on the library
+/// rather than on a site, so asking "does this domain have a script plugin?" is not a question.
+/// `discovery` is here because a subscription source is very much domain-bound — omitting it was
+/// how a new capability could exist in the protocol yet stay invisible to the authoring assistant
+/// that is supposed to generate it (issue #55, FR-028).
+const DOMAIN_BOUND_PLUGIN_TYPES: &[&str] = &["login", "metadata", "download", "discovery"];
 
 #[derive(Deserialize)]
 pub(super) struct LookupRequest {
@@ -82,7 +89,7 @@ pub(super) async fn lookup(
     let mut by_kind: std::collections::HashMap<&str, Vec<String>> = Default::default();
     for ns in &all_namespaces {
         if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if let Some(kind) = PLUGIN_TYPES.iter().find(|&&k| k == info.kind) {
+            if let Some(kind) = DOMAIN_BOUND_PLUGIN_TYPES.iter().find(|&&k| k == info.kind) {
                 by_kind.entry(kind).or_default().push(ns.clone());
             }
         }

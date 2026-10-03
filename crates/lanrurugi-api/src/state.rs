@@ -21,6 +21,7 @@ use lanrurugi_storage::refresh_tokens::RefreshTokenRepository;
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, StampRepository,
 };
+use lanrurugi_storage::subscriptions::SubscriptionRepository;
 use tokio::sync::Mutex;
 
 use crate::download_manager::DownloadManager;
@@ -120,6 +121,11 @@ pub struct AppState {
     /// a queued/in-progress download survives a page refresh or a different browser tab. Also on
     /// the `config` logical DB, same placement as `plugin_options`.
     pub download_queue: Arc<DownloadQueueRepository>,
+    /// Subscriptions, their check history, and the reservation list (issue #55).
+    pub subscriptions: Arc<SubscriptionRepository>,
+    /// Subscriptions currently mid-check. One shared set is what makes "is this already running?"
+    /// a local question — see `subscriptions::scheduler`.
+    pub subscriptions_in_flight: crate::subscriptions::scheduler::InFlight,
     /// Precomputed reader-recommendation embedding vectors and per-archive Top-N similar-archive
     /// lists (issue #70) — also on the `config` logical DB, same placement as `plugin_options`
     /// and `download_queue`. See `lanrurugi_storage::recommend_cache` module docs and

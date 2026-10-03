@@ -31,6 +31,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let subscriptions = std::sync::Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+    );
     let recommend_cache = std::sync::Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -96,6 +99,8 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        subscriptions: subscriptions.clone(),
+        subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
@@ -547,6 +552,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let subscriptions = std::sync::Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+    );
     let recommend_cache = std::sync::Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -612,6 +620,8 @@ async fn static_frontend_is_served_with_spa_fallback() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        subscriptions: subscriptions.clone(),
+        subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
@@ -716,6 +726,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let subscriptions = std::sync::Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+    );
     let recommend_cache = std::sync::Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -781,6 +794,8 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        subscriptions: subscriptions.clone(),
+        subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
@@ -945,6 +960,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let subscriptions = std::sync::Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+    );
     let recommend_cache = std::sync::Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );
@@ -1042,6 +1060,8 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        subscriptions: subscriptions.clone(),
+        subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),
@@ -1125,6 +1145,9 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
     );
     let download_queue = std::sync::Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
+    );
+    let subscriptions = std::sync::Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
     );
     let recommend_cache = std::sync::Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
@@ -1246,6 +1269,8 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         plugin_options: plugin_options.clone(),
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue: download_queue.clone(),
+        subscriptions: subscriptions.clone(),
+        subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
         compare_cache: compare_cache.clone(),

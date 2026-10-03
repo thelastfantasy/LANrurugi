@@ -85,6 +85,7 @@ pub fn router() -> Router<AppState> {
         .merge(plugin_wizard::router())
         .merge(database::router())
         .merge(download_queue::router())
+        .merge(subscriptions::api::router())
         .merge(duplicates::router())
         .merge(jobs::router())
         .merge(settings::router())

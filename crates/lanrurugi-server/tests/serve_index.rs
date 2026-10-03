@@ -73,6 +73,10 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        subscriptions: Arc::new(
+            lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+        ),
+        subscriptions_in_flight: Default::default(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos,

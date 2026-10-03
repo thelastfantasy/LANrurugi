@@ -36,7 +36,14 @@ use crate::AppState;
 /// subdirectories under `plugins_dir` that ship in the repo (`plugins/metadata/`, `plugins/login/`,
 /// `plugins/download/`, `plugins/script/`). `install_plugin` trusts *only* this list (not
 /// user input) to pick the destination subdirectory for an uploaded plugin.
-pub(crate) const PLUGIN_CATEGORIES: &[&str] = &["metadata", "login", "download", "script"];
+/// Every plugin kind the host recognises — also the fixed set of subdirectories under `plugins/`.
+///
+/// **Single source of truth.** Several places used to carry their own copy of this list (the
+/// authoring assistant kept one, `upload_plugin` another), which is how `discovery` could be added
+/// to the protocol while remaining invisible to the places that enumerate kinds. Anything that needs
+/// to know "what kinds exist" reads this.
+pub(crate) const PLUGIN_CATEGORIES: &[&str] =
+    &["metadata", "login", "download", "script", "discovery"];
 
 /// Where every uploaded plugin lands, regardless of its declared category — mirrors legacy's own
 /// `lib/LANraragi/Plugin/Sideloaded/` (verified: `Controller/Plugins.pm::process_upload`), which
@@ -3864,6 +3871,10 @@ pub(crate) mod tests {
             download_queue: Arc::new(lanrurugi_storage::download_queue::DownloadQueueRepository::new(
                 redis.config.clone(),
             )),
+            subscriptions: Arc::new(lanrurugi_storage::subscriptions::SubscriptionRepository::new(
+                redis.config.clone(),
+            )),
+            subscriptions_in_flight: Default::default(),
             recommend_cache: Arc::new(lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(
                 redis.config.clone(),
             )),

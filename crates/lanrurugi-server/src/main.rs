@@ -276,6 +276,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let download_queue = Arc::new(
         lanrurugi_storage::download_queue::DownloadQueueRepository::new(redis.config.clone()),
     );
+    let subscriptions = Arc::new(
+        lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
+    );
     match download_queue.backfill_created_at().await {
         Ok(0) => {}
         Ok(n) => tracing::info!(
@@ -400,6 +403,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
+        subscriptions,
+        subscriptions_in_flight: Default::default(),
         recommend_cache,
         ignored_group_suggestions,
         compare_cache,

@@ -15,6 +15,7 @@
 //! 3. **Unattended spending is the real risk.** Matched works wait for confirmation unless the user
 //!    turned that off for a given subscription.
 
+pub mod api;
 pub mod matcher;
 pub mod reservations;
 pub mod runner;
