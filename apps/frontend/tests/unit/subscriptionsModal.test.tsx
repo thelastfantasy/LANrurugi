@@ -22,6 +22,9 @@ vi.mock("@/api/hooks", () => ({
   useDismissPending: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDiscardReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useStartQueueItem: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  // The modal also carries the queue-retention setting, so it reads (and writes) settings.
+  useSettings: () => ({ data: { download_queue_retention_days: 30 }, isPending: false }),
+  useUpdateSettings: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }))
 
 const { SubscriptionsModal } = await import("@/pages/Upload/SubscriptionsModal")
