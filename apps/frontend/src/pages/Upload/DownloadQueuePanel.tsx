@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { fetchJson, sendJson } from "@/api/client"
@@ -11,14 +11,20 @@ import {
   useStartSelectedQueue,
 } from "@/api/hooks"
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
+import { Tooltip } from "@/components/common-ui/Display"
 import { CollapsibleSection } from "@/components/Display"
 
 import { QueueItemRow } from "./QueueItemRow"
 import {
   findPluginByDomain,
   LOCAL_UPLOAD_NAMESPACE,
+  needsDecision,
+  partitionByOrigin,
   TOOLBAR_BUTTON_STYLE,
 } from "./shared"
+
+/** Which half of a group's list a tab shows. */
+type QueueTab = "manual" | "subscription"
 
 /** Right-column panel: the persistent queue, grouped by `plugin_namespace`, with bulk
  * Select All / Invert Selection / Start / Clear Completed / Delete actions. */
@@ -74,6 +80,33 @@ export function DownloadQueuePanel({
     return map
   }, [items])
 
+  /** Which tab each group is showing. Absent = the default, `manual` — a person's own paste is what
+   * they came to this page to watch, and a subscription's bulk arriving must not switch the view
+   * under them. Kept per group so a choice made for one plugin doesn't follow them to another. */
+  const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>({})
+
+  /** The tabs a group shows, and the items behind each. A group with only one kind of item has
+   * nothing to switch between, so it gets no tabs at all — the per-row "from a subscription" badge
+   * already says where those came from. */
+  const tabsFor = useCallback(
+    (groupItems: DownloadQueueItem[]) => {
+      const { manual, fromSubscriptions } = partitionByOrigin(groupItems)
+      const tabs = manual.length > 0 && fromSubscriptions.length > 0
+      return { manual, fromSubscriptions, tabs }
+    },
+    [],
+  )
+
+  const visibleItems = useMemo(() => {
+    const out: DownloadQueueItem[] = []
+    for (const [namespace, groupItems] of grouped) {
+      const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+      if (!tabs) out.push(...groupItems)
+      else out.push(...((tabByGroup[namespace] ?? "manual") === "manual" ? manual : fromSubscriptions))
+    }
+    return out
+  }, [grouped, tabByGroup, tabsFor])
+
   const itemIds = useMemo(() => new Set(items.map((i) => i.id)), [items])
   // Excludes ids whose item has since moved out of a selectable state (e.g. an auto-selected
   // fresh upload that finished before the user unchecked it) — selection must track live state,
@@ -86,9 +119,20 @@ export function DownloadQueuePanel({
       ),
     [items],
   )
+  /** Ids the active tabs are showing — what every bulk button below is allowed to touch. */
+  const visibleIds = useMemo(() => new Set(visibleItems.map((i) => i.id)), [visibleItems])
+
+  // Scoped to the visible tab: with a group split, the items behind the other tab are still in
+  // `selected` (switching back finds them as they were) but they are not part of what Start/Delete
+  // act on, and they do not count towards the buttons' own numbers.
   const effectiveSelected = useMemo(
-    () => new Set([...selected].filter((id) => itemIds.has(id) && selectableItemIds.has(id))),
-    [selected, itemIds, selectableItemIds],
+    () =>
+      new Set(
+        [...selected].filter(
+          (id) => itemIds.has(id) && selectableItemIds.has(id) && visibleIds.has(id),
+        ),
+      ),
+    [selected, itemIds, selectableItemIds, visibleIds],
   )
 
   const triggeredRef = useRef<Set<string>>(new Set())
@@ -137,8 +181,13 @@ export function DownloadQueuePanel({
 
   if (items.length === 0) return null
 
-  const selectableIds = [...selectableItemIds]
-  const cleared = items.filter((i) => i.state === "done").length
+  // The bulk buttons act on what is on screen: with a group split into tabs, "select all" meaning
+  // "every item in the queue including the ones you cannot see" would be a trap.
+  const selectableIds = [...selectableItemIds].filter((id) => visibleIds.has(id))
+  // "Completed" means the visible tab's completed items: the queue-wide endpoint would clear ones
+  // sitting behind the other tab, which the user cannot see and did not ask to lose.
+  const visibleDoneIds = visibleItems.filter((i) => i.state === "done").map((i) => i.id)
+  const doneEverywhere = items.filter((i) => i.state === "done").length
 
   function selectAll() {
     setSelected(new Set(selectableIds))
@@ -193,8 +242,13 @@ export function DownloadQueuePanel({
           type="button"
           className="stdbtn"
           style={TOOLBAR_BUTTON_STYLE}
-          disabled={cleared === 0 || clearCompleted.isPending}
-          onClick={() => void clearCompleted.mutateAsync()}
+          disabled={visibleDoneIds.length === 0 || clearCompleted.isPending || deleteSelected.isPending}
+          onClick={async () => {
+            // The queue-wide endpoint still handles the unscoped case, so its own activity record
+            // ("clear completed") is what a user who sees the whole queue generates as before.
+            if (visibleDoneIds.length === doneEverywhere) await clearCompleted.mutateAsync()
+            else await deleteSelected.mutateAsync(visibleDoneIds)
+          }}
         >
           {t("upload.clearCompleted")}
         </button>
@@ -212,7 +266,7 @@ export function DownloadQueuePanel({
         </button>
       </div>
 
-      <ul className="collapsible extensible with-right-caret" style={{ width: "100%" }}>
+      <ul className="collapsible extensible with-right-caret queue-groups" style={{ width: "100%" }}>
         {[...grouped.entries()]
           .sort(([a], [b]) => {
             if (a === LOCAL_UPLOAD_NAMESPACE) return -1
@@ -223,15 +277,53 @@ export function DownloadQueuePanel({
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
             const groupTitle = isLocalUpload ? t("upload.fromYourComputer") : (plugin?.name ?? namespace)
+            const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+            const tab: QueueTab = tabByGroup[namespace] ?? "manual"
+            const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
+            // Splitting a list must not bury the rows that need an answer, so whichever tab holds
+            // them says how many rather than leaving them one click away and unannounced.
+            const undecided: Record<QueueTab, number> = {
+              manual: manual.filter(needsDecision).length,
+              subscription: fromSubscriptions.filter(needsDecision).length,
+            }
             return (
               <CollapsibleSection
                 key={namespace}
                 icon={isLocalUpload ? "fa-upload" : "fa-cloud-download-alt"}
-                title={`${groupTitle} (${groupItems.length})`}
+                title={
+                  <span className="queue-group-title">
+                    {`${groupTitle} (${groupItems.length})`}
+                    {tabs && (
+                      // The heading itself toggles the section; a tab click must not also do that.
+                      <span className="queue-group-tabs" onClick={(e) => e.stopPropagation()}>
+                        {(["manual", "subscription"] as const).map((which) => (
+                          <button
+                            key={which}
+                            type="button"
+                            className={`stdbtn queue-tab${tab === which ? " queue-tab-active" : ""}`}
+                            aria-pressed={tab === which}
+                            onClick={() => setTabByGroup((prev) => ({ ...prev, [namespace]: which }))}
+                          >
+                            {which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}{" "}
+                            {which === "manual" ? manual.length : fromSubscriptions.length}
+                            {undecided[which] > 0 && (
+                              <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
+                                <span style={{ color: "#c79121", marginLeft: 4 }}>
+                                  <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
+                                  {undecided[which]}
+                                </span>
+                              </Tooltip>
+                            )}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                  </span>
+                }
                 caretStyle="right-down"
                 defaultOpen
               >
-                {groupItems.map((item) => (
+                {shown.map((item) => (
                   <QueueItemRow
                     key={item.id}
                     item={item}

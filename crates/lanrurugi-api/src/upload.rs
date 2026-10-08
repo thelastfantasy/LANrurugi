@@ -140,13 +140,18 @@ async fn upload_archive(
     let queue_item = match state
         .download_queue
         .add(NewQueueItem {
+            // A local upload belongs to no subscription.
+            subscription_id: None,
             origin: QueueItemOrigin::LocalUpload,
             url: file_name.clone(),
             plugin_namespace: LOCAL_UPLOAD_NAMESPACE.to_string(),
             file_size: Some(bytes.len() as u64),
             category: category.clone(),
+            metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
+            // A local upload has no subscription behind it; its collisions are resolved by hand.
+            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         })
         .await

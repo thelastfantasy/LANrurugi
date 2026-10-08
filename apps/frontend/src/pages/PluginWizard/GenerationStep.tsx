@@ -129,7 +129,9 @@ export function GenerationStep({
 /** The same-domain reference sample the lookup step fetched for a *different* type, e.g. reusing
  * an already-installed "download" plugin's source when generating "metadata". */
 function findSameDomainSample(session: WizardSession, type: PluginType): string | undefined {
-  const others: PluginType[] = (["login", "metadata", "download"] as PluginType[]).filter((t) => t !== type)
+  const others: PluginType[] = (["login", "metadata", "download", "discovery"] as PluginType[]).filter(
+    (t) => t !== type,
+  )
   for (const other of others) {
     const coverage = session.lookupResult[other]
     if (coverage.covered) return coverage.sourceCode

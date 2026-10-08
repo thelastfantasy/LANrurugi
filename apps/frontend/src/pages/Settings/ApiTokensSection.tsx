@@ -51,9 +51,6 @@ function RoleMarker({ role, t }: { role: TokenRole; t: (key: string) => string |
   )
 }
 
-/** Grid column widths — `name` fills remaining space, `id` is fixed-narrow, others size to content. */
-const TOKEN_GRID_COLUMNS = "1fr 7ch auto auto auto auto auto"
-
 /** "New Token" creation form — name + role + expiry. Local, not routed through `dialog.tsx`'s
  *  shared union, since it has exactly one call site. */
 function CreateTokenForm({
@@ -230,66 +227,68 @@ export function ApiTokensSection() {
       )}
 
       {tokens.data && tokens.data.length > 0 && (
-        // The grid's fixed-width columns overflow narrow (phone) viewports — wrapped in a
-        // horizontally-scrollable container instead of a separate mobile layout.
-        <div style={{ overflowX: "auto" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: TOKEN_GRID_COLUMNS,
-              columnGap: 16,
-              fontSize: FONT_SIZE_SM,
-              padding: "0 12px 12px",
-              minWidth: "max-content",
-            }}
-          >
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("jobs.name")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.id")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.created")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.expires")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.lastUsed")}</div>
-          <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "left" }}>{t("settings.lastUsedIp")}</div>
-          <div></div>
-
-          {tokens.data.map((token) => (
-            <div key={token.id} style={{ display: "contents" }}>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left" }}>
-                <RoleMarker role={token.role} t={t} />
-                {token.name}
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap", fontFamily: "monospace", opacity: 0.8 }}>
-                <ShortId id={token.id} />
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap" }}>
-                <DateTimeStack epochSeconds={token.created_at} />
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap" }}>
-                {token.expires_at ? <DateTimeStack epochSeconds={token.expires_at} /> : t("settings.permanent")}
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left", whiteSpace: "nowrap" }}>
-                {token.last_used_at ? <DateTimeStack epochSeconds={token.last_used_at} /> : t("settings.never")}
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", textAlign: "left" }}>
-                {token.last_used_ip ? <IpGeoLink ip={token.last_used_ip} /> : "—"}
-              </div>
-              <div style={{ padding: "10px 0", alignSelf: "center", display: "flex", gap: 6 }}>
-                <IconButton
-                  icon="fas fa-pencil"
-                  size="medium"
-                  title={t("edit.rename") ?? undefined}
-                  onClick={() => void handleRename(token.id, token.name)}
-                />
-                <IconButton
-                  icon="fas fa-trash"
-                  className="stdbtn stdbtn-danger"
-                  size="medium"
-                  title={t("settings.revoke") ?? undefined}
-                  onClick={() => void handleDelete(token.id, token.name)}
-                />
-              </div>
-            </div>
-          ))}
-          </div>
+        <div className="settings-table-scroll">
+          <table className="itg" style={{ minWidth: 760 }}>
+            <thead>
+              <tr className="jtr0">
+                <th>{t("jobs.name")}</th>
+                <th>{t("settings.id")}</th>
+                <th>{t("settings.created")}</th>
+                <th>{t("settings.expires")}</th>
+                <th>{t("settings.lastUsed")}</th>
+                <th>{t("settings.lastUsedIp")}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {tokens.data.map((token) => (
+                <tr key={token.id} className="gtr1">
+                  <td>
+                    <RoleMarker role={token.role} t={t} />
+                    {token.name}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap", fontFamily: "monospace", opacity: 0.8 }}>
+                    <ShortId id={token.id} />
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <DateTimeStack epochSeconds={token.created_at} />
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {token.expires_at ? (
+                      <DateTimeStack epochSeconds={token.expires_at} />
+                    ) : (
+                      t("settings.permanent")
+                    )}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {token.last_used_at ? (
+                      <DateTimeStack epochSeconds={token.last_used_at} />
+                    ) : (
+                      t("settings.never")
+                    )}
+                  </td>
+                  <td>
+                    {token.last_used_ip ? <IpGeoLink ip={token.last_used_ip} /> : "—"}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <IconButton
+                      icon="fas fa-pencil"
+                      size="medium"
+                      title={t("edit.rename") ?? undefined}
+                      onClick={() => void handleRename(token.id, token.name)}
+                    />{" "}
+                    <IconButton
+                      icon="fas fa-trash"
+                      className="stdbtn stdbtn-danger"
+                      size="medium"
+                      title={t("settings.revoke") ?? undefined}
+                      onClick={() => void handleDelete(token.id, token.name)}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

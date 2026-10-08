@@ -15,9 +15,14 @@ import { parseRating } from "@/lib/utils/rating"
 export function TagTable({
   tags,
   onSearchTag,
+  links = true,
 }: {
   tags: string
   onSearchTag?: (namespace: string, value: string) => void
+  /** Whether each value links to a search for it. Off in read-only contexts (the subscription
+   *  preview's tag tooltip), where a list of searchable namespaces is not what the reader wants —
+   *  they are checking what the work's metadata says, not navigating away from a modal. */
+  links?: boolean
 }) {
   const settings = useSettings()
   const timezone = settings.data?.timezone ?? ""
@@ -43,14 +48,18 @@ export function TagTable({
             {displayKey.toLowerCase() === "rating" ? (
               <div className="gt">
                 <a
-                  href={getTagSearchURL(displayKey, byNamespace[namespace][0] ?? "", timezone)}
+                  href={links ? getTagSearchURL(displayKey, byNamespace[namespace][0] ?? "", timezone) : undefined}
                   onClick={(e) => {
-                    if (!onSearchTag) return
+                    if (!links || !onSearchTag) return
                     e.preventDefault()
                     e.stopPropagation()
                     onSearchTag(displayKey, byNamespace[namespace][0] ?? "")
                   }}
-                  style={{ textDecoration: "none", cursor: onSearchTag ? "pointer" : undefined }}
+                  style={{
+                    textDecoration: "none",
+                    cursor: links && onSearchTag ? "pointer" : undefined,
+                    pointerEvents: links ? undefined : "none",
+                  }}
                 >
                   <StarRatingDisplay rating={parseRating(byNamespace[namespace][0]) ?? 0} size={14} />
                 </a>
@@ -62,7 +71,15 @@ export function TagTable({
                   className="gt"
                   style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
                 >
-                  {displayKey === "source" ? (
+                  {!links ? (
+                    // Same chip, same text, no destination: `.gt` carries the styling, so a plain
+                    // span is visually identical to the anchor it replaces.
+                    <span style={{ wordBreak: "break-all" }}>
+                      {displayKey === "source"
+                        ? value
+                        : formatTagValue(displayKey, value, timezone)}
+                    </span>
+                  ) : displayKey === "source" ? (
                     <a
                       href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
                       target="_blank"

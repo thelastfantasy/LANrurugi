@@ -940,3 +940,937 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   color: var(--theme-accent, inherit) !important;
   opacity: 0.72;
 }
+
+/* Subscription form layout (issue #55).
+ *
+ * Purely structural — no colours, so these live here rather than in the five theme files: nothing
+ * about them needs to differ per theme. The grid exists because the form was previously one
+ * `label: input` per line, which left every control starting wherever its label happened to end. */
+.sub-form-grid {
+  display: grid;
+  /* One shared minimum label column, not per-grid `max-content`: the metadata section is its own
+     grid at the bottom of the form, and `max-content` there would compute a narrower column from
+     its shorter labels and make those inputs wider than the fields above. */
+  grid-template-columns: minmax(8em, max-content) minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.sub-form-grid > label {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Fills its column instead of taking the browser's default input width, so the fields share one
+   right edge as well as one left edge. */
+.sub-form-grid > input,
+.sub-form-grid > select,
+.sub-form-grid > div > input,
+.sub-form-grid > div > select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* A control that carries its own help text is wrapped in a div to stack the two; the wrapper still
+   has to fill the column, or the control inside it falls back to `.stdinput`'s own percentage width
+   and ends up narrower than its neighbours. */
+.sub-form-grid > div {
+  min-width: 0;
+  /* The legacy `.stdinput` controls cap at 450px; a bare `TagInput` wrapper has no such cap and
+     fills the wider grid track, making it visibly wider than every other field. */
+  max-width: 450px;
+}
+
+/* The tag editor's own theme rule carries 1px side margins; remove them so its box lands on the
+   same left/right edges as the 450px `.stdinput` controls. */
+.sub-form-grid .tagger {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* A sentence or two about the chosen source. Below its control rather than trailing it, which used
+   to push the panel wider than it is. */
+.sub-form-hint {
+  margin: 4px 0 0;
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
+/* Section headings within the form. Left-aligned to match the fields they introduce — the panel
+   centres its own heading, and inheriting that put these out of line with everything below them. */
+.sub-form-section {
+  margin: 14px 0 4px;
+  text-align: left;
+  font-weight: bold;
+}
+
+/* The form overrides the settings panel's centred alignment for everything inside it. Without this
+   the grid rows sat left, the section headings and loose buttons sat centred, and the result read as
+   three different left edges in one form. */
+.sub-form {
+  text-align: left;
+}
+
+/* Centred, unlike the left-aligned fields above: these act on the form as a whole rather than on any
+   one field, so lining them up under the control column would tie them to a row they do not belong
+   to. */
+.sub-form-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Horizontally scrollable wrapper shared by the settings data tables (API tokens, subscriptions).
+ *
+ * The table's border is moved onto this wrapper so the scrollbar sits inside the framed table box
+ * instead of appearing as a detached bar below it. The table itself keeps its fixed layout and
+ * minimum width, so columns are never squeezed; the wrapper scrolls them. */
+.settings-table-scroll {
+  width: 100%;
+  /* `width: 100%` plus this wrapper's own 1px border overflowed its container by 2px under the
+     default content-box, which surfaced as a stray horizontal scrollbar on the modal that reuses
+     these tables. */
+  box-sizing: border-box;
+  max-width: 1175px;
+  margin: 0 auto;
+  overflow-x: auto;
+  border: 1px solid var(--theme-border, rgba(128, 128, 128, 0.4));
+  border-radius: 9px;
+}
+
+.settings-table-scroll > table.itg {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* A little more breathing room in the header row than the legacy 3px allows — these settings tables
+   are read as tabs/filters at a glance, and the cramped header made the whole list look pinched. */
+.settings-table-scroll > table.itg th {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  vertical-align: middle;
+}
+
+/* Separates the two alternative ways to build the same filter: ask the model, or edit the tree
+   manually. */
+.condition-method-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 8px;
+  opacity: 0.8;
+}
+
+.condition-method-separator::before,
+.condition-method-separator::after {
+  content: "";
+  flex: 1 1 auto;
+  border-top: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+.condition-method-separator > span {
+  flex: 0 0 auto;
+  font-size: 0.85em;
+  font-weight: bold;
+}
+
+/* The condition builder and its AI entry point sit in their own framed block: the manual tree can
+   grow tall, and a card makes it clear that the whole block is one filter definition. */
+.condition-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Horizontal padding belongs on the header only: the card itself stays padding-free so the AI row
+     still lines up with the inputs above, while "过滤条件" and "查看条件" no longer touch the
+     card's left/right borders. */
+  padding: 2px 10px 0;
+  margin-bottom: 12px;
+  font-weight: bold;
+}
+
+.condition-editor-card {
+  border: 1px solid var(--theme-border, rgba(128, 128, 128, 0.4));
+  border-radius: 5px;
+  /* No horizontal padding: the card border is the only offset from the form's own field grid, so
+     the AI textarea lines up with the inputs above instead of starting 10px to their right. */
+  padding: 10px 0 12px;
+  margin-top: 8px;
+}
+
+/* One condition on one line: field, operator, value. A grid rather than a flex row because
+   `.stdinput` carries its own percentage width from the legacy themes, which made three of them wrap
+   onto separate lines and left a rule looking like three unrelated controls. */
+.rule-row {
+  display: grid;
+  grid-template-columns: minmax(7em, 10em) minmax(7em, 10em) minmax(6em, 1fr);
+  gap: 6px;
+  align-items: center;
+  /* Claims the row's width and keeps it: once the action buttons carried text they were wide enough
+     to squeeze the value field out of existence entirely. `min-width: 0` lets the grid's own columns
+     shrink instead of the row refusing to. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rule-row > input,
+.rule-row > select {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* A plain list input (e.g. `language includes_none ["chinese", "japanese"]`) gets a small
+   suffix icon explaining that commas separate values; the placeholder alone disappears once the
+   field has a value. */
+.rule-row .rule-value-with-hint {
+  position: relative;
+  min-width: 0;
+}
+
+.rule-row .rule-value-with-hint > input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding-right: 22px;
+}
+
+.rule-value-hint-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  line-height: 1;
+  cursor: help;
+}
+
+.rule-value-hint-icon {
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+/* Each condition inside a group gets its own banded row, so it is visible where one ends and the next
+   begins — stacked controls with nothing between them read as one long list rather than as separate
+   conditions. The band's colour comes from the themes; this only sets the shape. */
+.rule-entry {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  /* The actions wrap below the rule rather than competing with it for width in a narrow dialog. */
+  flex-wrap: wrap;
+  /* Vertical padding only. Horizontal padding here put this row's own action buttons 6px left of
+     every other node's (a group header's, an exclusion's, the "add condition" row below), because
+     those rows are plain full-width divs while this one is a padded band — measured from a real
+     screenshot: rule actions ended at x=559, everything else at x=568. The band still reads as a
+     row from its background and its vertical padding. */
+  padding: 5px 0;
+  border-radius: 3px;
+  margin-bottom: 5px;
+}
+
+@media (max-width: 640px) {
+  /* Below this the three columns cannot hold a readable label, so the condition stacks instead. */
+  .rule-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A group's own row: just its label and the controls that act on the whole group. The connective
+   moved out of here and down between the conditions it joins — sitting up top it read as a property
+   of the group, giving no sign that it decides how any particular pair relates. */
+.group-header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.group-label {
+  font-weight: bold;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+/* Sits between two conditions and is narrow, so it reads as the word joining them rather than as
+   another field. Every one in a group edits the same value — a group has one connective, and showing
+   it at each join is a reminder, not a separate setting. */
+.group-connective {
+  /* The entry above already contributes its own 5px bottom margin, so only the gap below needs
+     supplying — setting both would leave the connective sitting closer to the condition after it than
+     to the one before it. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 7px;
+}
+
+/* A line on each side of the select turns "AND"/"OR" into a real separator between the sibling
+   conditions, instead of a lone control that can read as another field. */
+.group-connective::before,
+.group-connective::after {
+  content: "";
+  flex: 1 1 auto;
+  border-top: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+.group-connective > select {
+  width: auto;
+  min-width: 5em;
+  font-weight: bold;
+  flex: 0 0 auto;
+}
+
+/* Subscription form modal: rules on the left, what they would catch on the right.
+ *
+ * Side by side because the two are read together — a rule is written by looking at what it does, and
+ * with the preview below the form it sat off screen while the rules were being edited. */
+.sub-modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+/* A fixed height rather than a ceiling: with only `max-height` the pane collapsed to one line of
+   placeholder text and the whole dialog resized the moment the first listing arrived. Both columns
+   now claim the same height from the outset, so the dialog never changes size under the pointer. */
+/* Capped, not fixed: a pane with a definite height gives the grid inside it a definite height too,
+   which is how a ten-row list ended up in a 65vh box with a blank strip under every row. As a cap,
+   the pane hugs however many rows there are and only starts scrolling past 65vh. */
+.sub-modal-preview {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Narrow screens put the preview behind a tab instead, so neither pane is squeezed to unreadable. */
+.sub-modal-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.sub-modal-tabs > .stdbtn {
+  flex: 1;
+}
+
+.sub-modal-tabs > .stdbtn.is-active {
+  font-weight: bold;
+  /* Outline rather than a fill: the themes own the button colours, and a hardcoded background would
+     be wrong on four of the five. */
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
+/* Preview listing: one work per row, with enough room between rows to tell them apart. The rows were
+   previously flush against each other, which made a long listing read as a wall of text. */
+/* Preview listing as a grid: the number, the title, its publication time, who uploaded it, its
+ * rating, and what the rules would do.
+ *
+ * A grid rather than a table because the column widths are a layout decision, not a property of the
+ * content — with a table the browser widened the uploader and verdict columns to avoid wrapping their
+ * text, which squeezed the title into four lines. Here the title simply takes whatever is left. */
+.preview-grid {
+  display: grid;
+  /* number | title (takes the rest, but never less than its own share) | optional
+     posted/uploader/rating | verdict — mirrors `previewGridColumns` in `SubscriptionPreview.tsx`,
+     which is what actually supplies these tracks at runtime. */
+  grid-template-columns: var(
+    --preview-grid-columns,
+    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%) minmax(0, 16%)
+  );
+  align-items: start;
+  /* Rows size to their content and stack from the top. Without this, a grid whose height is
+     *definite* — the modal preview panes set one — distributes the leftover space into its row
+     tracks, so a short list (ten rows in a 65vh pane) came out with a phantom blank strip under
+     every row: the row box stayed its own height while its track grew to fill the pane. */
+  align-content: start;
+  gap: 0;
+}
+
+/* Each row spans the parent's columns, so every row's cells line up while the row itself can still
+   carry its own background band. */
+.preview-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  /* 3px, not 5: the bands paint edge to edge, so all this does is keep two lines of text from
+     touching — at 5px each row read as having a blank line of its own between it and the next. */
+  padding: 3px 0;
+  align-items: start;
+}
+
+.preview-row > * {
+  padding: 0 8px;
+  min-width: 0;
+}
+
+/* Position in the listing. Unselectable so copying a row takes the work, not the numbering. */
+.preview-index {
+  text-align: right;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.preview-title {
+  min-width: 0;
+}
+
+/* Date and time stacked by `DateTimeStack`, in the viewer's own local formatting. */
+.preview-posted {
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* Narrow on purpose: a name is worth a glance, the title is what the row is about. */
+/* The manual/subscription split inside a download-queue group heading.
+ *
+ * Compact buttons that read as a switch rather than as actions: the inactive one is dimmed, the
+ * active one carries its theme's own accent border (`.queue-tab-active`, defined per theme). */
+/* Download-queue headings, whose own `.queue-group-title` is a flex row: the legacy caret is a
+   `float: right` pseudo-element, and a block-level child (the title row) pushes that float onto a
+   line of its own — the caret ends up below the heading. Scoped to this panel's own list (rather
+   than every `.collapsible-title` in the app, or a `:has()` ancestor selector) so only these
+   headings change: the caret becomes a flex item at the row's end, which is also what puts the tabs
+   immediately to its left. */
+.queue-groups .caret-right-down {
+  display: flex;
+  align-items: center;
+  /* A flex container drops the whitespace text node between the icon and the title, so the icon and
+     the name would otherwise touch — the gap replaces that space (and covers the caret too). */
+  gap: 8px;
+}
+
+.queue-groups .caret-right-down::after {
+  float: none;
+}
+
+.queue-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-group-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.stdbtn.queue-tab {
+  min-width: 0;
+  width: auto;
+  height: auto;
+  padding: 1px 8px;
+  line-height: normal;
+  font-size: 0.9em;
+  font-weight: normal;
+  opacity: 0.6;
+}
+
+.stdbtn.queue-tab:hover,
+.stdbtn.queue-tab-active {
+  opacity: 1;
+}
+
+/* The icon-only twin of `.pill-btn`, for sitting immediately beside it: square in purpose, round
+   (and the same height) so the pair reads as one control group rather than a box next to a pill.
+   Colours stay `.stdbtn`'s own. */
+.stdbtn.icon-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border-radius: 50%;
+  line-height: normal;
+}
+
+/* An icon-and-label pair inside a `.stdbtn` anchor.
+ *
+ * `.stdbtn` is written for `<input type="button">`, where the fixed 21px height comes with the
+ * control centring its own value; the same class on an `<a>` lays its inline content out from the
+ * top of the box instead, so the icon and text sat 2px above the middle. Centres the pair
+ * explicitly. Colours stay `.stdbtn`'s own, so this needs no rule in any theme file. */
+.stdbtn.btn-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  padding: 3px 10px;
+  line-height: normal;
+  text-decoration: none;
+}
+
+/* A compact round-ended button: an icon and a small count, sitting inline beside text. Only the
+   shape and size are set here — the colours stay `.stdbtn`'s own, i.e. the legacy theme's, so this
+   adapts to all five themes without a rule in any of them. */
+.stdbtn.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  line-height: normal;
+  text-decoration: none;
+}
+
+.preview-uploader {
+  /* Block, not the default inline: as a grid item it was blockified anyway, but once wrapped in the
+     hover trigger (a block, so the cell's padding/width stay the trigger's) an inline box ignores
+     both `overflow: hidden` and `text-overflow`, so the name would spill into the next column —
+     and measure as zero-width, which made the truncation check flip back and forth forever. */
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* Rating is a compact star row; keep it on one line so its fixed five-star width does not get
+   clipped by the column. */
+.preview-rating {
+  white-space: nowrap;
+}
+
+/* `span.tags` already carries legacy's overflow/ellipsis; this only keeps it on one line and lets it
+   truncate rather than widen the column. */
+.preview-grid .tags {
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.75;
+  margin-top: 3px;
+}
+
+.preview-verdict {
+  text-align: right;
+  font-size: 0.9em;
+}
+
+/* The verdict cell can contain a "Reconsider" button. `.stdbtn` ships with a 150px min-width, which
+   makes the four-column preview wider than its pane and produces a horizontal scrollbar when that
+   button appears. Let the button size to its own label instead. */
+.preview-verdict .stdbtn {
+  min-width: 0;
+  width: auto;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+@media (max-width: 760px) {
+  /* Below this width the six-column grid stops reading as a table. The header is hidden and each
+     candidate becomes a compact card: title first, then date / uploader / rating / verdict on a
+     single wrapping metadata line. */
+  .preview-row.preview-head {
+    display: none;
+  }
+
+  .preview-grid {
+    display: block;
+  }
+
+  .preview-row {
+    display: flex;
+    grid-column: auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px 10px;
+    /* The desktop grid gives each cell its own horizontal padding; the mobile card drops that,
+       so the outer row carries it instead. */
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+  }
+
+  .preview-row > * {
+    padding: 0;
+  }
+
+  .preview-index {
+    display: none;
+  }
+
+  .preview-title {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .preview-posted,
+  .preview-uploader,
+  .preview-rating,
+  .preview-verdict {
+    flex: 0 1 auto;
+    text-align: left;
+    font-size: 0.85em;
+  }
+
+  .preview-verdict {
+    margin-left: auto;
+    text-align: right;
+  }
+}
+
+
+/* Placeholder rows while the first listing is being fetched. Shaped like the real rows so the pane
+   does not jump from one line of text to a full list once the answer arrives. */
+.preview-skeleton-row {
+  display: grid;
+  grid-template-columns: var(
+    --preview-grid-columns,
+    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%) minmax(0, 16%)
+  );
+  gap: 8px;
+  padding: 9px 8px;
+  align-items: center;
+}
+
+/* `currentColor` rather than a fixed grey, so the bars sit correctly on all five themes without one
+   rule per theme file. */
+/* One bar, wherever a placeholder stands in for real text — the preview grid's rows and the
+   subscriptions table's own (`SubscriptionsSkeleton`). Not preview-specific, hence the alias. */
+.preview-skeleton-bar,
+.skeleton-bar {
+  height: 0.85em;
+  border-radius: 3px;
+  background-color: currentColor;
+  opacity: 0.12;
+  animation: preview-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.preview-skeleton-row:nth-child(even) .preview-skeleton-bar,
+.subscriptions-skeleton-row:nth-child(even) .skeleton-bar {
+  /* Offset so the rows do not pulse in lockstep, which reads as one flashing block. */
+  animation-delay: 0.2s;
+}
+
+@keyframes preview-skeleton-pulse {
+  0%, 100% { opacity: 0.08; }
+  50% { opacity: 0.18; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-skeleton-bar,
+  .skeleton-bar {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .preview-skeleton-row {
+    grid-template-columns: 3em minmax(0, 1fr);
+  }
+
+  /* Only the index and title have columns here; the stacked uploader/rating/verdict bars would
+     otherwise wrap into extra skeleton rows. */
+  .preview-skeleton-row > :nth-child(n + 3) {
+    display: none;
+  }
+}
+
+/* Column headings. Without them the verdict column reads as a loose remark — "would ask you first"
+   says nothing on its own about what question it is answering. */
+.preview-head {
+  font-weight: bold;
+  font-size: 0.85em;
+  opacity: 0.7;
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+  position: sticky;
+  top: 0;
+  /* The opaque colour itself comes from each theme file — it has to match that theme's panel, and
+     `inherit` would be transparent here, letting rows show through as they scroll under. */
+  z-index: 1;
+}
+
+/* The heading row is not a work, so it carries none of the band colouring. */
+.preview-head .preview-index {
+  opacity: 0.7;
+}
+
+/* Ordered language preference. A list rather than a single dropdown because the order itself is the
+   setting — which language wins is decided by position, not by one choice. */
+.lang-order-list {
+  list-style: decimal;
+  margin: 0 0 8px;
+  padding-left: 2em;
+}
+
+.lang-order-item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.lang-order-name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The section heading plus the controls that belong to the section as a whole. */
+.section-title-row {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The "this work is already here, open the listing instead" icon: small, quiet, and only ever
+   beside a title that links elsewhere. */
+.preview-source-link {
+  margin-left: 4px;
+  font-size: 0.85em;
+  opacity: 0.7;
+  text-decoration: none;
+}
+
+.preview-source-link:hover {
+  opacity: 1;
+}
+
+/* The preview row's own action pair (block + reconsider), centred on each other whatever their
+   individual heights are. */
+/* The row's own actions, on a line of their own under the verdict.
+ *
+ * A block-level line rather than inline-with-the-text: a row with one button and a row with two then
+ * look the same (see the screenshots that prompted this), instead of one sitting beside the verdict
+ * and the other dropping below it whenever the column is tight. Right-aligned because the verdict
+ * column is. */
+.preview-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 4px;
+  margin-top: 2px;
+}
+
+/* `.stdbtn` carries a legacy `margin: 4px 1px 0 1px`, which makes the tooltip-wrapped icon button
+   taller than the text button beside it (and off-centre) even though both are 24px boxes. */
+.preview-row-actions .stdbtn {
+  margin: 0;
+}
+
+/* Pointer devices see them on hover only.
+ *
+ * A hundred rows of "block" and "reconsider" is a hundred repetitions of two buttons nobody wants
+ * until they are looking at that one row. `opacity` rather than `display`/`visibility`: the row
+ * keeps its height (revealing cannot shift it under the pointer) and the buttons stay focusable, so
+ * tabbing onto one reveals it through `:focus-within` instead of leaving a keyboard user with
+ * controls they can never reach. Touch devices have no hover at all, so there they stay visible. */
+@media (hover: hover) and (pointer: fine) {
+  .preview-row-actions {
+    opacity: 0;
+  }
+  .preview-row:hover .preview-row-actions,
+  .preview-row:focus-within .preview-row-actions {
+    opacity: 1;
+  }
+}
+
+/* The subscription modal's own queued records: work | which subscription | state. */
+/* The queue state beside a history row's verdict: small, quiet, and inline so the row keeps the
+   height of its text. Inherits the surrounding colour rather than introducing one. */
+.history-state-icon {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+/* Reserved whether or not the row has a state, so every title starts at the same x. */
+.history-title-state {
+  display: inline-block;
+  width: 1.2em;
+  text-align: center;
+}
+
+
+.queue-records-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 14em);
+  /* Its own scroll box rather than `.sub-modal-preview`'s fixed 65vh pane: that one is a twin of
+     the form modal's fields, and in this list it stretched every row to fill the height. */
+  max-height: 40vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* One subscription's check history: the cycle picker, then work | uploader | verdict. */
+.check-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.check-history-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 9em) minmax(0, 15em);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.check-history-uploader {
+  font-size: 0.85em;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 760px) {
+  .check-history-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Cross-subscription history: work | which subscription | when | verdict. Its own columns because it
+   answers a different question from the preview — which rule brought this in, and when. */
+.history-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 11em) minmax(0, 11em);
+  max-height: 65vh;
+}
+
+.history-subscription,
+.history-when {
+  font-size: 0.85em;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 760px) {
+  .history-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The form's fields scroll on their own, so a long condition tree does not push the buttons below
+   the viewport. The actions stay outside this box deliberately: "create" is the one control that must
+   never scroll out of reach. */
+.sub-form-fields {
+  height: 65vh;
+  overflow-y: auto;
+  /* Room for the scrollbar so it does not sit on top of the inputs. */
+  padding-right: 6px;
+}
+
+@media (max-width: 1023px) {
+  /* Single column, where the modal itself already scrolls — a second scrolling box inside it would
+     mean two bars doing the same job. */
+  .sub-form-fields {
+    height: auto;
+    overflow-y: visible;
+    padding-right: 0;
+  }
+
+  /* Behind a tab here, so it owns the whole panel rather than sharing it with the form — a fixed
+     height would leave dead space under a short list. */
+  .sub-modal-preview {
+    height: auto;
+    max-height: 70vh;
+  }
+}
+
+/* What became of a queued download, under its verdict. Smaller because the verdict is the primary
+   answer — this is what happened next. */
+.history-download {
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-top: 3px;
+}
+
+/* Which plugins a source will use. Quiet by default — it matters most when one is missing. */
+.source-plugins {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* A missing login plugin does not fail the check, it shrinks it — which is easy to miss, so this one
+   line is not dimmed like its neighbours. */
+.source-plugins-warning {
+  opacity: 1;
+  font-weight: bold;
+}
+
+.source-credentials {
+  margin-top: 6px;
+}
+
+.source-credentials > label {
+  display: block;
+  margin: 6px 0;
+}
+
+.source-credentials input,
+.source-credentials textarea {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
+  margin-top: 2px;
+}
+
+/* The enable toggle, above the fields it governs. */
+.sub-form-enable {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: bold;
+}
+
+/* Never shrinks: a button whose label is clipped is worse than one that wrapped to the next line. */
+.rule-entry-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+  /* One right edge for every node's own controls — a rule's, a group's, an exclusion's, and a
+     group's "add condition/group" row. They used to sit wherever their row happened to end (right
+     after a rule's inputs, right after a group's label), which made a nested condition read as a
+     pile of buttons instead of a tree with one action column. The line-joining AND/OR controls are
+     deliberately outside this: they belong to the connective between two conditions, not to either
+     node. */
+  margin-left: auto;
+  /* Right-aligns the block's own children where it is itself the block-level row (the "add
+     condition" row under a group); a no-op inside the flex headers, where `margin-left` does it. */
+  justify-content: flex-end;
+}
+
+.rule-entry-actions > .rule-action {
+  flex: 0 0 auto;
+}
+
+/* Condition actions carry their own label rather than relying on a hover tooltip: these change what a
+   subscription downloads, and "what does this icon do" is not a question to answer by trial. */
+.rule-action {
+  white-space: nowrap;
+  font-size: 0.85em;
+  padding: 2px 8px;
+}

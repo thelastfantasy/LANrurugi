@@ -385,6 +385,54 @@ pub(crate) fn plugin_generation_system_prompt(
     )
 }
 
+/// Natural language → subscription condition DSL.
+///
+/// The model is asked for a compact JSON DSL, not the persisted `Condition` shape: the Rust parser
+/// in `subscriptions::ai_condition` owns field/operator/value validation, so a model mistake can
+/// only produce a rejected generation, never a persisted malformed tree.
+pub(crate) fn subscription_condition_system(fields: &[String]) -> String {
+    let fields_json = serde_json::to_string(fields).unwrap_or_else(|_| "[]".to_string());
+    r#"你是 LANrurugi 订阅条件助手。把用户的中文/日文/英文自然语言转换成条件 DSL JSON。
+只输出一个 JSON 对象，不要输出 Markdown 或任何解释。
+
+可用字段（只能使用这些）: __FIELDS__
+
+节点格式：
+- {"all":[节点...]} 全部满足
+- {"any":[节点...]} 任一满足
+- {"not":节点} 取反/排除
+- {"field":"字段","operator":"操作符","value":值} 单条规则
+
+操作符：
+- 文本字段 title, category, uploader，以及未知的自定义文本字段：
+  equals/contains 的 value 为字符串；in/not_in 的 value 为字符串数组。
+- 数字字段 rating, pages：
+  gte/lte/eq 的 value 为数字。
+- 日期字段 posted_at：
+  older_than/newer_than 的 value 为 "3h"/"12h"/"1d"/"7d"/"30d" 或秒数。
+- 列表字段 language, artist, group, parody, character, female, male, other, tags：
+  includes_all/includes_none 的 value 为字符串数组；
+  is_empty/is_not_empty 不需要 value，或给空数组。
+
+语义规则：
+- 用户说“排除 A 或 B” → {"not":{"any":[A,B]}}
+- 用户说“排除 A 且 B” → {"not":{"all":[A,B]}}
+- 用户说“同时排除 X 和 Y” → 最外层 all 下放两个 not 节点；不要把多个排除直接放进 any。
+- 用户说“只保留/只下载符合……的作品”时用正向 all/any 表达。
+- 语言值用英文标签：chinese, japanese, english, spanish, translated 等。
+
+示例：
+用户：排除作者是 ExampleUploader 且带 yaoi 的作品，或者发布时间超过3小时、评分低于4且包含中文
+输出：
+{"all":[{"not":{"all":[{"field":"uploader","operator":"equals","value":"ExampleUploader"},{"field":"male","operator":"includes_all","value":["yaoi"]}]}},{"not":{"all":[{"field":"posted_at","operator":"older_than","value":"3h"},{"field":"rating","operator":"lte","value":4},{"field":"language","operator":"includes_all","value":["chinese"]}]}}]}
+
+用户：排除有语言标签但既不是中文也不是日文的
+输出：
+{"not":{"all":[{"field":"language","operator":"is_not_empty"},{"field":"language","operator":"includes_none","value":["chinese","japanese"]}]}}
+"#
+    .replace("__FIELDS__", &fields_json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

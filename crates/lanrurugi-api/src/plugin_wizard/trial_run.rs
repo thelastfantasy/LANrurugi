@@ -277,13 +277,17 @@ async fn run_discovery_trial(
 
     let mut results = Vec::with_capacity(probes.len());
     for mut args in probes {
+        // The label is the hint as the caller gave it — captured *before* credentials are folded in,
+        // because this value is echoed back to the browser and drawn as the probe's name. Echoing the
+        // post-injection args both leaked the user's cookies into the response and turned the label
+        // into a wall of JSON.
+        let probe_label = args.clone();
         if let Some(cookies) = &login_cookies {
             args["user_agent_cookies"] = cookies.clone();
         }
         if let Some(headers) = &login_headers {
             args["user_agent_headers"] = headers.clone();
         }
-        let probe_label = args.clone();
 
         match state.plugins.execute(namespace, "discover", args).await {
             Ok(value) if value.is_null() => {

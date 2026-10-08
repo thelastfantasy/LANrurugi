@@ -116,6 +116,7 @@ export function PluginWizard() {
           {session.currentStep === "sharedLinks" && (
             <SharedLinksForm
               links={session.sharedLinks}
+              selectedTypes={session.selectedTypes}
               onChange={(links) => dispatch({ kind: "sharedLinksChanged", links })}
             />
           )}

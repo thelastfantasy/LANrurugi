@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { createPortal } from "react-dom"
 
 import { IconButton } from "@/components/common-ui/Form"
 
@@ -15,7 +16,10 @@ export function Modal({
   width?: number
   textAlign?: "left" | "center"
 }) {
-  return (
+  // Rendered into `body` rather than where it was declared. A fixed-position overlay still obeys an
+  // ancestor's `display: none`, `overflow` or `transform`, so a modal opened from inside a collapsible
+  // panel vanished — or collapsed to zero width — when that panel was closed.
+  return createPortal(
     <>
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9000 }} onClick={onClose} />
       <div
@@ -54,6 +58,7 @@ export function Modal({
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }

@@ -248,25 +248,76 @@ pub struct DiscoveryCriteria {
     /// A feed or index page supplied by the user, for sources whose extension cannot search unaided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_url: Option<String>,
+    /// How many listing pages the extension may read. Set by the host, not the user.
+    ///
+    /// A ceiling rather than a target: reading one page misses works that entered the result set by
+    /// being edited (they sort by original publication date, so they land mid-list), while reading all
+    /// of a tag search means tens of thousands of requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pages: Option<u32>,
+}
+
+/// A work's titles, keyed by language tag, plus `"origin"` for the source's own wording.
+pub type Titles = std::collections::HashMap<String, String>;
+
+/// Key under which a title the source gives without naming a language is filed.
+pub const TITLE_ORIGIN: &str = "origin";
+
+/// Accepts either the map or a bare string, so an extension written before the map existed keeps
+/// working rather than silently losing its titles.
+fn titles_from_value<'de, D>(deserializer: D) -> Result<Titles, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        One(String),
+        Many(Titles),
+    }
+    Ok(match Option::<Either>::deserialize(deserializer)? {
+        None => Titles::new(),
+        Some(Either::One(s)) => Titles::from([(TITLE_ORIGIN.to_string(), s)]),
+        Some(Either::Many(m)) => m,
+    })
 }
 
 /// One work a listing offered — mirrors `plugin-sdk.ts`'s `DiscoveredCandidate`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct DiscoveredCandidate {
     /// Already normalised through the plugin's own `canonicalizeSource`.
     pub source: String,
-    #[serde(default)]
-    pub title: Option<String>,
+    /// The work's title, by language. Keys are language tags (`"ja"`, `"en"`, …) plus `"origin"` for
+    /// the title as the source itself writes it.
+    ///
+    /// A map rather than a single string because the same work legitimately has several titles, and a
+    /// viewer reading Japanese wants a different one from a viewer reading English. Naming the
+    /// languages in the protocol (`title_jpn` and friends) would mean changing it again for the next
+    /// source, so the source decides which keys it can fill.
+    ///
+    /// A plugin may still return a bare string; it is read as `{"origin": "..."}` so extensions
+    /// written against the older shape keep working.
+    #[serde(default, deserialize_with = "crate::protocol::titles_from_value")]
+    pub title: Titles,
     #[serde(default)]
     pub posted_at: Option<String>,
     #[serde(default)]
     pub rating: Option<f32>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The source's own classification (e.g. "Doujinshi", "Manga"), for the excluded-category rule.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Who posted it — what a creator-scoped subscription matches on.
+    #[serde(default)]
+    pub uploader: Option<String>,
+    /// Length, so download cost can be judged before approving.
+    #[serde(default)]
+    pub pages: Option<u32>,
 }
 
 /// `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DiscoveryResult {
     #[serde(default)]
     pub candidates: Option<Vec<DiscoveredCandidate>>,
@@ -284,7 +335,7 @@ pub struct DiscoveryResult {
 
 /// What a `plugin_introspect` dispatcher call reports about a plugin's *source code*, without
 /// running it — see `dispatcher.ts`'s own `plugin_introspect` case.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PluginIntrospection {
     /// Whether `execDownload`'s body ever returns a `version_history` key. Drives whether the
     /// settings UI offers the two relative-revision policies at all. Static analysis, not runtime
@@ -302,12 +353,18 @@ pub struct PluginIntrospection {
     /// reason, rather than accepted and failing at its first scheduled check.
     #[serde(default)]
     pub exports_discover: bool,
+    /// Which candidate fields this extension's `discover` actually writes, so the settings form offers
+    /// filters only over fields that will be populated. Static analysis for the same reason
+    /// `returns_version_history` is: a filter the UI could not offer until after a check had run would
+    /// be unavailable at exactly the moment the user is setting the subscription up.
+    #[serde(default)]
+    pub candidate_fields: Vec<String>,
 }
 
 /// A plugin-authored error — mirrors `plugin-sdk.ts`'s `PluginError` field-for-field. `error_code`
 /// doubles as an i18n lookup key (see that interface's own docs for the full naming convention);
 /// `data` is its interpolation params.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginError {
     pub error_code: String,
     #[serde(default)]

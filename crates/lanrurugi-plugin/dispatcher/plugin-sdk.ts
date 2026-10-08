@@ -415,6 +415,13 @@ export interface DiscoveryCriteria {
   tags?: string[];
   /** A feed or index page the user supplied, for sources whose extension cannot search unaided. */
   listing_url?: string;
+  /** How many listing pages to read at most, supplied by the host.
+   *
+   * An extension that pages MUST respect it rather than walking the whole result set: a tag search can
+   * run to tens of thousands of works. Reading only the first page is not enough either — an existing
+   * work edited to carry a tag enters the result set *in the middle*, ordered by its original
+   * publication date, so it never appears on page one. */
+  max_pages?: number;
 }
 
 /** One work a listing offered. */
@@ -427,10 +434,39 @@ export interface DiscoveredCandidate {
   /** Whatever the listing revealed cheaply. Supplying these lets the host apply the user's filters
    * without fetching every candidate individually — omit a field rather than guessing at it, since
    * a wrong value here silently filters out a work the user wanted. */
-  title?: string;
-  posted_at?: string;
+  /** The work's title, by language. Keys are language tags (`"ja"`, `"en"`, …) plus `"origin"` for
+   * the title as the source itself writes it.
+   *
+   * A map rather than one string because the same work legitimately has several titles, and a reader
+   * of Japanese wants a different one from a reader of English. Naming the languages in the contract
+   * (`title_jpn` and friends) would mean changing it again for the next source, so the source decides
+   * which keys it can fill.
+   *
+   * A bare string is still accepted and read as `{ origin: "..." }`. */
+  title?: string | Record<string, string>;
+  /** When the source published it, as the listing states it.
+   *
+   * May be a date string (`"YYYY-MM-DD HH:MM"`, RFC 3339, ...), a numeric string, Unix seconds, a
+   * JavaScript millisecond timestamp, or a `Date`. The dispatcher normalises numeric values and
+   * `Date` objects to a Unix-seconds string before the host receives them; date strings are parsed
+   * host-side. Declaring it here is what lets the host offer "published more than N hours ago" as a
+   * filter on *any* source carrying a date, rather than on the ones it was taught about
+   * individually. Omit it rather than guessing: a wrong value silently holds a work back, or
+   * releases one early. */
+  posted_at?: string | number | Date;
+  /** 0–5. Absent means *not yet rated*, which is not the same as rated zero — a work published
+   * minutes ago usually has no rating at all, and the host treats the two differently rather than
+   * judging it at the moment the answer is least knowable. */
   rating?: number;
+  /** Namespaced as the source writes them (`artist:foo`), not stripped — the host's tag rules compare
+   * against these verbatim. */
   tags?: string[];
+  /** The source's own classification (`"Doujinshi"`, `"Manga"`), for the excluded-category rule. */
+  category?: string;
+  /** Who posted it — what a creator-scoped subscription matches on. */
+  uploader?: string;
+  /** Length, so the host can show and filter on download cost before anything is spent. */
+  pages?: number;
 }
 
 /** `discover`'s return shape.

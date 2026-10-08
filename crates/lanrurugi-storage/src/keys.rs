@@ -46,3 +46,18 @@ pub fn archive_categories_key(archive_id: &str) -> String {
 pub fn archive_tankoubons_key(archive_id: &str) -> String {
     format!("LANRURUGI_ARCHIVE_TANKOUBONS_{archive_id}")
 }
+
+/// Additive, LANrurugi-only. One archive's own copy of its gallery's revision chain
+/// (`specs/007`-era issue #107's `version_history`), as JSON `[{source, posted_at}]`.
+///
+/// Stored rather than re-fetched because discovering a chain costs one API call *per hop* on
+/// E-Hentai (climb to the tip, then walk back to the root), and every sibling revision of the same
+/// work would otherwise pay that walk again. With it stored, "is this candidate an older revision of
+/// something the library already holds?" is answerable from Redis alone — no requests at all.
+///
+/// A chain belongs to the *family*, so each member carries its own copy; a lookup that finds the
+/// work in any stored chain sees it. A snapshot goes stale as new children appear, which is harmless:
+/// the child is itself downloaded once (paying the walk), stored, and supersedes the older copy.
+pub fn archive_version_history_key(archive_id: &str) -> String {
+    format!("LANRURUGI_ARCHIVE_VERSION_HISTORY_{archive_id}")
+}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { sendJson } from "@/api/client";
+import { fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
@@ -394,12 +394,56 @@ export function useLibrary() {
     });
   }
 
-  async function deleteArchive(archiveId: string, isTank: boolean) {
+  /** This archive's `source:` tag, from whatever the page already holds. */
+  function sourceTagOf(archiveId: string): string | undefined {
+    const tags = shown.find((a) => a.arcid === archiveId)?.tags;
+    if (!tags) return undefined;
+    for (const tag of tags.split(",")) {
+      const value = tag.trim();
+      if (value.toLowerCase().startsWith("source:")) {
+        return value.slice("source:".length).trim();
+      }
+    }
+    return undefined;
+  }
+
+  /// `blockResubscribe` defaults to blocking, which is also what doing nothing achieves: a work stays
+  /// recorded as seen, so no subscription fetches it again. Only the *opposite* choice needs an
+  /// action — telling the subscriptions to reconsider it.
+  async function deleteArchive(
+    archiveId: string,
+    isTank: boolean,
+    blockResubscribe = true,
+  ) {
+    // Read before the delete, since the archive's own tags are what name the source.
+    const source = !isTank && !blockResubscribe ? sourceTagOf(archiveId) : undefined;
+
     if (isTank) {
       await fetch(`/api/tankoubons/${archiveId}`, { method: "DELETE" });
       await tankoubons.refetch();
     } else {
       await fetch(`/api/archives/${archiveId}`, { method: "DELETE" });
+    }
+
+    if (source) {
+      // After the delete, and failures are swallowed: the archive is already gone, and a failure here
+      // only means a subscription will not re-offer the work — not something to surface as a failed
+      // delete.
+      try {
+        const { tracking } = await fetchJson<{ tracking: { id: string }[] }>(
+          `/subscriptions/tracking?source=${encodeURIComponent(source)}`,
+        );
+        await Promise.all(
+          tracking.map((s) =>
+            sendJson("POST", `/subscriptions/${encodeURIComponent(s.id)}/forget`, {
+              sources: [source],
+              all: false,
+            }),
+          ),
+        );
+      } catch {
+        // Nothing to do — the work simply stays recorded as seen.
+      }
     }
     queryClient.invalidateQueries({ queryKey: ["archive", archiveId] });
     queryClient.invalidateQueries({ queryKey: ["archives"] });

@@ -185,6 +185,8 @@ struct AddQueueItem {
     url: String,
     plugin_namespace: String,
     category: Option<String>,
+    #[serde(default)]
+    metadata_tags: Vec<String>,
     auto_fetch_metadata: bool,
     overwrite_on_duplicate: bool,
 }
@@ -280,13 +282,18 @@ async fn add_to_queue(
         match state
             .download_queue
             .add(lanrurugi_storage::download_queue::NewQueueItem {
+                // Started by the user directly, so it belongs to no subscription.
+                subscription_id: None,
                 origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
                 url: item.url.clone(),
                 plugin_namespace: item.plugin_namespace.clone(),
                 file_size: None,
                 category: item.category.clone(),
+                metadata_tags: item.metadata_tags.clone(),
                 auto_fetch_metadata: item.auto_fetch_metadata,
                 overwrite_on_duplicate: item.overwrite_on_duplicate,
+                // A manual add answers its own conflicts in the UI, like it always has.
+                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Queued,
             })
             .await
@@ -1055,6 +1062,26 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
+/// Starts a queue item on the subscription orchestrator's behalf — server-side, with no request
+/// and nobody pressing Start behind it.
+///
+/// Needed because "download automatically" means exactly that (spec FR-007a and its own Q&A: the
+/// alternative to downloading automatically is the approval list, *not* a second click on Start),
+/// and because an approval is a decision the user has already made — parking the item in `Queued`
+/// afterwards asks the same question twice. Everything else about the item is unchanged: it is a
+/// normal queue row from here on, with the same stop/retry/conflict handling.
+///
+/// Recorded by the caller, not here (`auto_download.fetch` for the unattended path), so this stays
+/// a plain "start it" with no opinion about who asked.
+pub(crate) async fn start_item_from_subscription(
+    state: &AppState,
+    item_id: &str,
+) -> Result<String, String> {
+    start_one(state, None, item_id, None, false)
+        .await
+        .map_err(|e| start_error_message(&e))
+}
+
 /// `from_revision_confirmation` is set only by `confirm_older_revision`, and means "the user just
 /// answered the older-revision prompt for this exact run" — it preserves the `revision_confirmed`
 /// flag that would otherwise be cleared here as a stale approval. See the clearing logic below.
@@ -1136,6 +1163,11 @@ async fn start_one(
     item.pending_revision_confirmation = None;
 
     item.state = DownloadQueueState::Starting;
+    // Stamped here rather than read off the job: this is the moment the item actually left the
+    // queue, and the row needs it even after the job that ran it is gone. A restart clears the
+    // previous attempt's end stamp so a retry reports its own duration, not both runs'.
+    item.started_at = Some(now_ms());
+    item.finished_at = None;
     state
         .download_queue
         .update(&item)
@@ -1386,7 +1418,8 @@ async fn overwrite_queue_item(
     };
 
     match resolve_conflict(&state, &id, ResolveAction::Overwrite).await {
-        Ok(archive_id) => {
+        Ok(ingested) => {
+            let archive_id = ingested.archive_id;
             if let Some((_, b_before)) = &existing_before {
                 migrate_archive_metadata(&state, b_before, &archive_id).await;
             }
@@ -1632,7 +1665,8 @@ async fn rename_queue_item(
         .map(|conflict| conflict.original_filename);
 
     match resolve_conflict(&state, &id, ResolveAction::Rename(body.filename.clone())).await {
-        Ok(archive_id) => {
+        Ok(ingested) => {
+            let archive_id = ingested.archive_id;
             record_manual(
                 &state,
                 auth.as_ref().map(|e| &e.0),
@@ -2702,9 +2736,13 @@ enum ResolveAction {
     Rename(String),
 }
 
+#[derive(Debug, thiserror::Error)]
 enum ResolveConflictError {
+    #[error("no such queue item")]
     NotFound,
+    #[error("this item has no pending filename conflict")]
     NoConflict,
+    #[error("storage: {0}")]
     Storage(String),
     /// The re-attempted ingest itself failed (e.g. `NoConflict`'s opposite — there *was* a
     /// conflict, but resolving it hit some other error) — plain-text summary only; the real
@@ -2712,7 +2750,97 @@ enum ResolveConflictError {
     /// `resolve_conflict` before this is returned, exactly like every other download-pipeline
     /// failure in this app (the frontend picks it up via its next `GET /download_queue` poll,
     /// not from this response body).
+    #[error("ingest: {0}")]
     Ingest(String),
+}
+
+/// The filename `ConflictPolicy::AutoRename` catalogues a collision under — `{name}_{crc}.{ext}`,
+/// the same derived name the rename popover's own default template produces (see
+/// `FilenameTemplateEditor.tsx`), so an automatic and a manual resolution of one collision land on
+/// one filename rather than two subtly different ones. The crc is already computed at staging time
+/// and makes a second collision astronomically unlikely.
+fn auto_renamed_filename(
+    conflict: &lanrurugi_storage::download_queue::PendingFilenameConflict,
+) -> String {
+    let original = conflict.original_filename.as_str();
+    // `rsplit_once` rather than `file_stem`/`extension`: a name with no dot keeps its whole self as
+    // the stem (and gains none), and a leading-dot name like `.hidden` is not an extension either.
+    match original.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            format!("{stem}_{}.{ext}", conflict.crc32)
+        }
+        _ => format!("{original}_{}", conflict.crc32),
+    }
+}
+
+/// Applies the subscription's own pre-answered conflict policy to a filename conflict that was just
+/// staged. `Some` when the policy resolved it into a catalogue-able archive; `None` when it is
+/// still the user's question to answer — the policy is `Ask`, the item belongs to nothing with an
+/// opinion, or the automatic resolution collided a second time (left staged, exactly as a manual
+/// rename that collides again is).
+///
+/// Runs *after* staging rather than instead of it, so the automatic path is literally the same code
+/// the two resolve endpoints drive. A second "resolve it automatically" implementation is how the
+/// two would eventually disagree about what an overwrite or a rename means.
+pub(crate) async fn apply_staged_conflict_policy(
+    state: &AppState,
+    item_id: &str,
+) -> Option<crate::download_manager::ingest::IngestedDownload> {
+    use lanrurugi_storage::subscriptions::ConflictPolicy;
+
+    let item = state.download_queue.get(item_id).await.ok().flatten()?;
+    let conflict = item.pending_filename_conflict.clone()?;
+    match item.conflict_policy {
+        ConflictPolicy::AutoRename => {
+            let filename = auto_renamed_filename(&conflict);
+            match resolve_conflict(state, item_id, ResolveAction::Rename(filename.clone())).await {
+                Ok(ingested) => {
+                    tracing::info!(
+                        item = %item_id,
+                        %filename,
+                        "subscription conflict policy renamed a colliding download"
+                    );
+                    Some(ingested)
+                }
+                Err(e) => {
+                    // The re-attempt staged its own fresh conflict (or failed otherwise) and is
+                    // already reflected on the item — nothing further to do here.
+                    tracing::warn!(item = %item_id, error = %e, "automatic conflict rename did not resolve the collision");
+                    None
+                }
+            }
+        }
+        ConflictPolicy::Discard => {
+            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
+                tracing::warn!(item = %item_id, path = %conflict.temp_path, error = %e, "failed to delete a discarded staged download");
+            }
+            // Cleared, so the row stops offering overwrite/rename for bytes that are gone. The item
+            // itself stays in `Error`, marked by the caller's own error record — the download
+            // genuinely produced nothing, and a retry is still the right offer.
+            if let Ok(Some(mut fresh)) = state.download_queue.get(item_id).await {
+                fresh.pending_filename_conflict = None;
+                if let Err(e) = state.download_queue.update(&fresh).await {
+                    tracing::warn!(item = %item_id, error = %e, "failed to clear a discarded conflict");
+                } else if let Some(tx) = &state.download_queue_tx {
+                    let _ = tx.send(serde_json::json!({
+                        "kind": "update",
+                        "id": item_id,
+                        "pending_filename_conflict": null,
+                    }));
+                }
+            }
+            tracing::info!(
+                item = %item_id,
+                filename = %conflict.original_filename,
+                "subscription conflict policy discarded a colliding download"
+            );
+            None
+        }
+        // `Overwrite` never reaches here: it is applied at enqueue time as the item's own
+        // `overwrite_on_duplicate`, so the collision is overwritten during ingest and no conflict is
+        // ever staged to resolve.
+        ConflictPolicy::Ask | ConflictPolicy::Overwrite => None,
+    }
 }
 
 /// Shared by both resolve endpoints — looks up the item, requires a live
@@ -2726,7 +2854,7 @@ async fn resolve_conflict(
     state: &AppState,
     id: &str,
     action: ResolveAction,
-) -> Result<String, ResolveConflictError> {
+) -> Result<crate::download_manager::ingest::IngestedDownload, ResolveConflictError> {
     let item = state
         .download_queue
         .get(id)
@@ -2778,12 +2906,25 @@ async fn resolve_conflict(
                 // succeeded above) so `archive_ids` is set first so the tag-applier
                 // can find it.
                 fresh.archive_ids = Some(vec![ingested.archive_id.clone()]);
+                if let Some(archive_ids) = &fresh.archive_ids {
+                    crate::plugins::apply_tag_list(state, archive_ids, &fresh.metadata_tags).await;
+                }
                 if fresh.auto_fetch_metadata || fresh.title.is_none() {
                     crate::plugins::ensure_metadata_cached(state, &mut fresh).await;
                 }
                 fresh.state = DownloadQueueState::Done;
                 fresh.error = None;
                 fresh.pending_filename_conflict = None;
+                fresh.finished_at = Some(now_ms());
+                // Same reason as the managed-download path: the job's own byte count does not
+                // outlive the process, and this row still has to say how big the result was.
+                if let Some(job_id) = &fresh.job_id {
+                    if let Some(job) = state.jobs.get(job_id).await {
+                        if let Some(size) = job.total_bytes.or(job.downloaded_bytes) {
+                            fresh.file_size = Some(size);
+                        }
+                    }
+                }
                 if let Err(e) = state.download_queue.update(&fresh).await {
                     tracing::warn!(%id, error = %e, "failed to update download-queue item after resolving filename conflict");
                 } else if let Some(tx) = &state.download_queue_tx {
@@ -2805,7 +2946,7 @@ async fn resolve_conflict(
             if let Err(e) = state.compare_cache.delete(id).await {
                 tracing::warn!(%id, error = %e, "failed to clear cached comparison after resolving filename conflict");
             }
-            Ok(ingested.archive_id)
+            Ok(ingested)
         }
         Err(e) => {
             let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
@@ -2936,23 +3077,38 @@ async fn clear_completed(
     )
 }
 
+/// Wall-clock milliseconds — the unit every other timestamp on the wire uses (`created_at`,
+/// `metadata_preview_at`), and the one the queue row renders its elapsed time from.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use lanrurugi_storage::download_queue::DownloadQueueItem;
+    use lanrurugi_storage::download_queue::{DownloadQueueItem, PendingFilenameConflict};
 
     use super::*;
 
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {
+            subscription_id: None,
             id: id.to_string(),
             origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
             url: url.to_string(),
             plugin_namespace: "download/ehentai".to_string(),
             file_size: None,
             category: None,
+            metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
+            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state,
+            version_history: None,
+            started_at: None,
+            finished_at: None,
             job_id: None,
             archive_ids: None,
             title: None,
@@ -2964,6 +3120,42 @@ mod tests {
             revision_confirmed: false,
             created_at: 0,
         }
+    }
+
+    /// The automatic rename must land on the same filename the rename popover's own default
+    /// template (`{filename}_{crc}.{ext}`) produces — an automatic and a manual resolution of one
+    /// collision should not leave two subtly different names behind.
+    #[test]
+    fn an_auto_renamed_conflict_matches_the_rename_popover_default() {
+        let conflict = PendingFilenameConflict {
+            temp_path: "/tmp/temp_abc_x.zip".to_string(),
+            original_filename: "x.zip".to_string(),
+            existing_id: "id".to_string(),
+            crc32: "abc".to_string(),
+            staged_at: 0,
+        };
+        assert_eq!(auto_renamed_filename(&conflict), "x_abc.zip");
+
+        // No extension: nothing to put after the dot.
+        let dotless = PendingFilenameConflict {
+            original_filename: "x".to_string(),
+            ..conflict.clone()
+        };
+        assert_eq!(auto_renamed_filename(&dotless), "x_abc");
+
+        // A leading dot is part of the name, not an extension.
+        let hidden = PendingFilenameConflict {
+            original_filename: ".hidden".to_string(),
+            ..conflict.clone()
+        };
+        assert_eq!(auto_renamed_filename(&hidden), ".hidden_abc");
+
+        // Dots inside the stem stay put.
+        let dotted = PendingFilenameConflict {
+            original_filename: "a.b.c.zip".to_string(),
+            ..conflict
+        };
+        assert_eq!(auto_renamed_filename(&dotted), "a.b.c_abc.zip");
     }
 
     #[test]

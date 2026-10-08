@@ -18,7 +18,9 @@ runnable — you can stop after any one of them and have validated something rea
 2. Press **Check now** rather than waiting for the schedule.
 3. Because confirmation-before-download is the default, matched works appear **awaiting approval**,
    not downloading.
-4. Approve them. They enter the download queue and then the library, in the chosen category.
+4. Approve them — individually, or by selecting several and approving the batch in one action
+   (FR-007b). They enter the download queue and then the library, in the chosen category.
+5. Dismiss one instead, and **Check now** again: a dismissed work is not offered a second time.
 
 **Passes when**: works arrive with no URL ever typed by hand, and nothing downloaded before approval.
 
@@ -92,6 +94,17 @@ message would reveal. Step 4 is the one that actually proves the guard works.
 
 **Passes when**: it is refused with an explanation. A silently raised interval would leave the user
 misreading every later result, believing checks are more frequent than they are.
+
+## Scenario 7a — Editing preserves history (FR-012a)
+
+1. On a subscription that has already pulled works in, press **edit** and change a filter (add an
+   exclude tag, say), then save.
+2. Press **Check now**.
+
+**Passes when**: the subscription keeps its last-checked time and its already-seen works, so the
+cycle queues nothing it had already handled. The failure this guards against is delete-and-recreate
+being the only way to change a rule — that loses the seen set and re-downloads the entire back
+catalogue, which is both expensive and invisible until the queue fills up.
 
 ## Scenario 8 — Restart safety (FR-013)
 

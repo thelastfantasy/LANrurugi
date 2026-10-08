@@ -490,16 +490,39 @@ interface DiscoveryCriteriaArgs {
   creator?: string;
   tags?: string[];
   listing_url?: string;
+  /** How many listing pages to read at most. The host supplies it; an extension that pages MUST stop
+   * at this many rather than walking the whole result set — a tag search can run to tens of thousands
+   * of works, and reading all of it on every check would be both slow and a good way to get banned.
+   *
+   * Reading only the first page is not enough on its own: an existing work edited to carry a tag
+   * enters the result set *in the middle*, ordered by its original publication date, so it is never
+   * visible from page one. */
+  max_pages?: number;
 }
 
 /** One work a listing offered — mirrors `plugin-sdk.ts`'s `DiscoveredCandidate`. */
 interface DiscoveredCandidateResult {
   /** Must already be normalised through this plugin's own `canonicalizeSource`. */
   source: string;
-  title?: string;
-  posted_at?: string;
+  /** The work's title, by language. Keys are language tags (`"ja"`, `"en"`, …) plus `"origin"` for
+   * the title as the source itself writes it.
+   *
+   * A map rather than one string because the same work legitimately has several titles, and a reader
+   * of Japanese wants a different one from a reader of English. Naming the languages in the contract
+   * (`title_jpn` and friends) would mean changing it again for the next source, so the source decides
+   * which keys it can fill.
+   *
+   * A bare string is still accepted and read as `{ origin: "..." }`. */
+  title?: string | Record<string, string>;
+  posted_at?: string | number | Date;
   rating?: number;
   tags?: string[];
+  /** The source's own classification (e.g. "Doujinshi"), for the excluded-category rule. */
+  category?: string;
+  /** Who posted it — what a creator-scoped subscription matches on. */
+  uploader?: string;
+  /** Length, so download cost can be judged before approving. */
+  pages?: number;
 }
 
 /** `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.

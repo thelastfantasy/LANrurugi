@@ -18,6 +18,7 @@ import { toast } from "@/toast"
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
 import { ReservationGroup } from "./ReservationGroup"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
+import { SubscriptionStatus } from "./SubscriptionStatus"
 
 /** Both "Add from URL" and manual file upload stage into the same persistent server-side queue
  * (`useDownloadQueue`); `DownloadQueuePanel` renders both kinds from one poll. */
@@ -289,6 +290,7 @@ export function Upload() {
         </div>
 
         <div className="right-column" style={{ paddingLeft: 24, boxSizing: "border-box" }}>
+          <SubscriptionStatus />
           <DownloadQueuePanel downloadPlugins={downloadPlugins.data} metadataPlugins={metadataPlugins.data} />
           <ReservationGroup />
         </div>

@@ -10,6 +10,7 @@ import {
   useRenameQueueItem,
   useStartQueueItem,
   useStopQueueItem,
+  useSubscriptions,
   useUpdateQueueItem,
 } from "@/api/hooks";
 import type {
@@ -19,10 +20,10 @@ import type {
 } from "@/api/types";
 import { Tooltip } from "@/components/common-ui/Display"
 ;
-import { formatBytes, JobProgressBar, STATE_COLOR } from "@/components/Display";
+import { formatBytes, formatDuration, JobProgressBar, STATE_COLOR } from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
 import { routes } from "@/lib/routes";
-import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP } from "@/theme";
+import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
 import { dismissToast, toast } from "@/toast";
 
 import { ComparisonResultModal } from "./ComparisonResultModal";
@@ -35,7 +36,98 @@ import {
 } from "./shared";
 import { useCompareStream } from "./useCompareStream";
 
-/** A `JobProgressBar` for a rate-limited download, with a hover tooltip (just the speed figure,
+/** When a download started, how long it has been running, how fast on average, and how big.
+ *
+ * Averaged over the whole run rather than the last poll: an instantaneous reading is already what
+ * the progress bar's own rate-limit tooltip shows, and "how fast has this actually been going" is a
+ * different question that only an average can answer. Every figure is optional — a local upload has
+ * no job, a queued item has no bytes yet, and a finished job whose process has since restarted is
+ * gone from the registry entirely. */
+export function RowStats({
+  item,
+  job,
+  subscriptionName,
+  onOpenSubscriptions,
+}: {
+  item: DownloadQueueItem
+  job: JobRecord | undefined
+  subscriptionName: string | undefined
+  onOpenSubscriptions: () => void
+}) {
+  const { t } = useTranslation()
+  const running = job?.state === "active"
+  /** Ticked rather than read from the clock during render: a running download's "elapsed" must
+   *  actually move (progress events can be a minute apart on a slow transfer, and a frozen `2:13`
+   *  reads as stalled), and reading `Date.now()` while rendering is not idempotent. */
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    if (!running) return
+    // Both updates happen inside callbacks, not synchronously in the effect body: the clock is an
+    // external system, so it is read *from* it rather than written into state on mount. The
+    // zero-delay timeout is what makes the first reading appear immediately instead of one second
+    // in, so a freshly started download does not briefly show a line missing its elapsed time.
+    const tick = () => setNow(Date.now())
+    const immediate = window.setTimeout(tick, 0)
+    const interval = window.setInterval(tick, 1000)
+    return () => {
+      window.clearTimeout(immediate)
+      window.clearInterval(interval)
+    }
+  }, [running])
+
+  // Both stamps are epoch milliseconds, like every other timestamp on the wire here. The item's own
+  // copies are the fallback for a download whose job has since been lost to a server restart — the
+  // same reason the completed size is persisted onto the item rather than left on the job.
+  const startedMs = job?.started_at ?? item.started_at ?? null
+  const endedMs = job?.finished_at ?? item.finished_at ?? (running && now > 0 ? now : null)
+  const durationMs = startedMs && endedMs && endedMs >= startedMs ? endedMs - startedMs : null
+  const bytes = job?.total_bytes ?? job?.downloaded_bytes ?? item.file_size ?? null
+  const average =
+    durationMs && durationMs > 0 && bytes != null
+      ? (bytes / durationMs) * 1000
+      : null
+
+  const parts = [
+    startedMs && t("upload.statStarted", { time: new Date(startedMs).toLocaleTimeString() }),
+    durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
+    average != null && t("upload.statAverage", { rate: formatBytes(average) }),
+    bytes != null && formatBytes(bytes),
+  ].filter(Boolean) as string[]
+
+  if (parts.length === 0 && !item.subscription_id) return null
+
+  return (
+    <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.75, display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {item.subscription_id && (
+        <Tooltip
+          label={
+            subscriptionName
+              ? t("upload.fromSubscription", { name: subscriptionName })
+              : t("upload.fromSubscriptionUnknown")
+          }
+          zIndex={Z_OVERLAY_TOOLTIP}
+        >
+          {/* Still the way into the rule that queued this: the label moved into the tooltip, the
+              link stayed. */}
+          <a
+            href={routes.settings("subscriptions")}
+            onClick={(e) => {
+              e.preventDefault()
+              onOpenSubscriptions()
+            }}
+            style={{ color: "inherit" }}
+            aria-label={t("upload.fromSubscriptionUnknown") ?? undefined}
+          >
+            <i className="fa fa-rss" aria-hidden="true"></i>
+          </a>
+        </Tooltip>
+      )}
+      {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+    </div>
+  )
+}
+
+/** A `JobProgressBar` for a rate-limited download, with a hover tooltip (just the speed figure,/** A `JobProgressBar` for a rate-limited download, with a hover tooltip (just the speed figure,
  * not the whole row, which would shadow the title's own metadata-preview tooltip). */
 function RateLimitedProgressBar({
   job,
@@ -108,6 +200,12 @@ export function QueueItemRow({
   const overwriteConflict = useOverwriteQueueItem();
   const renameConflict = useRenameQueueItem();
   const compareStream = useCompareStream();
+  // Shared with the subscriptions page's own list (same query key), so a queue of a dozen rows
+  // still costs one request.
+  const subscriptions = useSubscriptions();
+  const subscriptionName = item.subscription_id
+    ? subscriptions.data?.find((s) => s.id === item.subscription_id)?.name
+    : undefined;
   const [conflictMenuOpen, setConflictMenuOpen] = useState(false);
   const conflictButtonRef = useRef<HTMLButtonElement | null>(null);
   const [renamePopover, setRenamePopover] = useState<{
@@ -343,6 +441,15 @@ export function QueueItemRow({
                 />
               </span>
             )}
+            {/* One line of numbers where the subscription used to be written out: what the row is
+                doing (started at, how long, how fast, how big) is what a queue row is read for, and
+                the rule behind it is one hover away on the icon. */}
+            <RowStats
+              item={item}
+              job={job}
+              subscriptionName={subscriptionName}
+              onOpenSubscriptions={() => navigate(routes.settings("subscriptions"))}
+            />
             {item.state === "error" && item.error && (
               <div
                 style={{ fontSize: FONT_SIZE_XS, color: item.error.kind === "already_patched" ? "#c79121" : STATE_COLOR.failed }}
@@ -446,6 +553,7 @@ export function QueueItemRow({
                       setConflictMenuOpen(false);
                     }}
                     onCompare={() => void handleCompare()}
+                    stagedAt={item.pending_filename_conflict.staged_at}
                   />
                 </>
               )}

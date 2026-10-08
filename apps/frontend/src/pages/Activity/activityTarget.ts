@@ -181,6 +181,7 @@ const SETTINGS_FIELD_SECTIONS: Record<string, string> = {
   guestmode: "global",
   newbadgemode: "global",
   recommendprecision: "global",
+  download_queue_retention_days: "global",
   llm_api_key: "global",
   theme: "theme",
   access_token_lifetime_secs: "security",

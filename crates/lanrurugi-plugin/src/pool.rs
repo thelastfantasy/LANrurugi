@@ -637,6 +637,70 @@ mod tests {
         )
     }
 
+    /// Same harness, but for a `discover` body, returning which candidate fields the static analysis
+    /// found. Drives whether the settings form offers a filter over each one.
+    async fn introspects_candidate_fields(name: &str, body: &str) -> Option<Vec<String>> {
+        which_deno()?;
+        let dispatcher = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dispatcher/dispatcher.ts");
+        let dir = std::env::temp_dir().join(format!("lrr-introspect-{name}"));
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(
+            dispatcher.parent()?.join("plugin-sdk.ts"),
+            crate::PLUGIN_SDK_SCRIPT,
+        )
+        .ok()?;
+        let source = format!(
+            "export function pluginInfo() {{\n  return {{\n    namespace: \"{name}\",\n    type: \"discovery\",\n    parameters: [],\n    declared_permissions: {{ net: [], read: false, write: false }},\n    name: \"{name}\",\n    author: \"t\",\n    description: \"t\",\n    version: \"1\",\n  }};\n}}\n\nexport async function discover(_criteria) {{\n{body}\n}}\n"
+        );
+        std::fs::write(dir.join(format!("{name}.ts")), source).ok()?;
+        let pool = PluginPool::new("deno", dispatcher, dir);
+        let mut fields = pool.plugin_introspect(name).await.ok()?.candidate_fields;
+        fields.sort();
+        Some(fields)
+    }
+
+    /// A filter may only be offered over a field the extension actually writes — offering one over a
+    /// field never populated would present a rule that silently matches nothing.
+    #[tokio::test]
+    async fn candidate_fields_are_found_from_what_discover_writes() {
+        let Some(found) = introspects_candidate_fields(
+            "candfields",
+            r#"  return { candidates: [{ source: "s", title: "t", posted_at: "2026-01-01 00:00", rating: 4, tags: [] }] };"#,
+        )
+        .await
+        else {
+            eprintln!("skipping: deno not available");
+            return;
+        };
+        assert_eq!(
+            found,
+            vec![
+                "posted_at".to_string(),
+                "rating".to_string(),
+                "tags".to_string(),
+                "title".to_string()
+            ],
+            "and notably not category/uploader/pages, which this body never writes"
+        );
+    }
+
+    /// A field named only in prose must not count, or the form would offer a filter over something
+    /// never populated.
+    #[tokio::test]
+    async fn a_field_mentioned_only_in_a_string_does_not_count() {
+        let Some(found) = introspects_candidate_fields(
+            "candprose",
+            r#"  console.log("no rating or pages here");
+  return { candidates: [{ source: "s" }] };"#,
+        )
+        .await
+        else {
+            eprintln!("skipping: deno not available");
+            return;
+        };
+        assert!(found.is_empty(), "got {found:?}");
+    }
+
     /// A quote inside a regex literal has no closing partner, and a scanner that blanks "to the
     /// closing quote" would erase the rest of the file — hiding the real `version_history` key and
     /// silently reporting the plugin as unsupported. Found by review; this is the regression guard.

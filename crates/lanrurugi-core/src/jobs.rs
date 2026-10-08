@@ -65,6 +65,18 @@ pub struct JobStatus {
     /// hostname at all, to avoid a misleading catch-all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_matched_pattern: Option<String>,
+    /// When this job actually started working (epoch ms), and when it reached a terminal state.
+    ///
+    /// Absent until the job leaves `Queued`, and for a job that has not finished — the queue's own
+    /// row shows "started at / took / average speed" from these two plus `downloaded_bytes`, which
+    /// no other field can express (a speed needs a duration, and `progress` alone cannot say how
+    /// long it has been like that). Persisted nowhere: an in-process registry means a server
+    /// restart drops a finished job's timing along with the job, and the queue row falls back to
+    /// the item's own `file_size`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
     pub result: Option<serde_json::Value>,
     /// `true` only when `finish()` was handed a `result` whose serialized size exceeded
     /// `MAX_JOB_RESULT_BYTES` — `result` itself is `None` in that case (the oversized value is
@@ -81,6 +93,14 @@ pub struct JobStatus {
     pub error: Option<String>,
 }
 
+/// Wall-clock milliseconds, the unit the frontend's own `created_at`/`metadata_preview_at` use.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 impl JobStatus {
     fn new(id: String, name: &str) -> Self {
         Self {
@@ -92,6 +112,8 @@ impl JobStatus {
             total_bytes: None,
             rate_limit_bytes_per_sec: None,
             rate_limit_matched_pattern: None,
+            started_at: None,
+            finished_at: None,
             result: None,
             result_truncated: false,
             error: None,
@@ -183,6 +205,11 @@ impl JobRegistry {
     pub async fn mark_active(&self, id: &str) {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Active;
+            // Stamped on every activation, not just the first: a job restarted after a failure (the
+            // queue's own retry) begins a new attempt, and keeping the original start would report
+            // an elapsed time — and a lower average speed — that includes the failed run.
+            job.started_at = Some(now_ms());
+            job.finished_at = None;
         }
     }
 
@@ -252,6 +279,7 @@ impl JobRegistry {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Finished;
             job.progress = 1.0;
+            job.finished_at = Some(now_ms());
             job.result = result;
             job.result_truncated = result_truncated;
         }
@@ -260,6 +288,7 @@ impl JobRegistry {
     pub async fn fail(&self, id: &str, error: impl Into<String>) {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Failed;
+            job.finished_at = Some(now_ms());
             job.error = Some(error.into());
         }
     }
@@ -558,6 +587,45 @@ mod tests {
             "the oldest terminal job is the one evicted"
         );
         assert!(reg.get(&newcomer).await.is_some(), "the new job is present");
+    }
+
+    #[tokio::test]
+    async fn times_are_stamped_only_when_the_job_actually_runs_and_finishes() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download").await;
+
+        let queued = reg.get(&id).await.unwrap();
+        assert!(queued.started_at.is_none(), "a queued job has not started");
+        assert!(queued.finished_at.is_none());
+
+        reg.mark_active(&id).await;
+        let started = reg.get(&id).await.unwrap().started_at.expect("started");
+        let active = reg.get(&id).await.unwrap();
+        assert!(
+            active.finished_at.is_none(),
+            "still running, so no end stamp"
+        );
+
+        reg.finish(&id, serde_json::json!({})).await;
+        let finished = reg.get(&id).await.unwrap().finished_at.expect("finished");
+        assert!(finished >= started, "the run cannot end before it began");
+    }
+
+    #[tokio::test]
+    async fn a_retried_job_starts_its_clock_over() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download").await;
+        reg.mark_active(&id).await;
+        reg.fail(&id, "boom").await;
+        let failed = reg.get(&id).await.unwrap();
+        assert!(failed.finished_at.is_some());
+
+        reg.mark_active(&id).await;
+        let retried = reg.get(&id).await.unwrap();
+        assert!(
+            retried.finished_at.is_none(),
+            "the previous attempt's end stamp must not survive into the new one"
+        );
     }
 
     #[tokio::test]

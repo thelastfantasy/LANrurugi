@@ -59,6 +59,70 @@ why they share one capability rather than being two.
    rejected sign-in must come back as a stated reason. "Found nothing" and "could not look" are
    different answers and must remain distinguishable.
 
+7. **Filterable fields are typed on the result interface, not declared separately.** Which fields a
+   subscription may filter on follows from the SDK's own candidate type plus static analysis of what
+   the extension writes — the same two signals `version_history` already uses. See the next section.
+
+## Filterable candidate fields
+
+Declared the same way `DownloadResult.version_history` is: as a **typed field on the SDK's own result
+interface**, annotated by the extension, checked at compile time. Not as a separate runtime
+declaration the extension also has to keep in step.
+
+**Why this shape.** The host deserializes a candidate into a Rust struct that skips anything it does
+not recognise, so an unannotated return value has nothing checking it against the real contract — a
+misspelled `postedat` is silently dropped and the filter that depends on it silently matches nothing.
+Annotating `discover` with the SDK's result type (`): Promise<DiscoveryResultShape>`) makes that a
+compile error instead. This is the exact reasoning `DownloadResultShape`'s own doc comment gives, and
+the same guarantee is what filter rules need: a field the user can filter on must be a field the
+extension actually populates.
+
+**How the host knows which filters to offer.** From the same two signals it already uses for
+`version_history`:
+
+1. **The type**, from the SDK interface. Each field's declared type fixes which operators apply, so a
+   declaration cannot ask for an operator the host has no implementation for, and every operator has
+   one tested implementation shared by all sources.
+2. **Static analysis of the plugin's source**, the mechanism behind
+   `PluginIntrospection::returns_version_history` — whether the extension's `discover` body ever
+   writes a given key. A freshly-edited extension therefore takes effect on the next options request,
+   with no check ever having run. The alternative, observing it at runtime, would mean the UI could
+   not offer a filter until a check had already happened.
+
+**The fields, and the operators their types imply:**
+
+| Field | Type | Operators | Meaning the host attaches to it |
+|---|---|---|---|
+| `posted_at` | date string | `older_than`, `newer_than` (a duration before now) | Hold a work back until a chosen time after publication |
+| `rating` | number (0–5) | `gte`, `lte` | A rating floor. **Absent means not yet rated**, not zero |
+| `tags` | string list | `includes_all`, `includes_none` | Namespaced verbatim as the source writes them |
+| `category` | string | `in`, `not_in` | The source's own classification |
+| `uploader` | string | `equals`, `contains` | Also what a creator-scoped subscription matches on |
+| `pages` | number | `gte`, `lte` | Length, as a proxy for download cost |
+
+**Why `date` operators are durations rather than timestamps.** A subscription is a standing
+instruction. "Newer than 2026-10-01" means something different every day it runs and eventually matches
+everything; "published more than three hours ago" means the same thing on every check.
+
+**Why `posted_at` is a string and not a `Date`.** It crosses a JSON boundary. The host parses the
+shapes a listing actually uses (`"YYYY-MM-DD HH:MM"`, RFC 3339, a bare epoch) and **fails open** on
+anything it cannot read — treating the work as old enough. Failing closed would let one unrecognised
+date format hold an entire catalogue back with nothing in the UI explaining why.
+
+**Rules**
+
+1. A filter may only be offered for a field the extension actually writes. Offering one over a field
+   never populated would present a rule that silently matches nothing.
+2. **An absent optional field is unknown, not failed.** A rule over it neither passes nor rejects; the
+   work is held for reconsideration on a later check. A rejection is permanent, and the value may
+   simply not exist yet — which is exactly the rating case, where a work minutes old has no rating and
+   judging it then decides the question at the moment the answer is least knowable.
+3. A rule referencing a field the extension has **stopped** writing is reported as inapplicable,
+   carrying that reason — never dropped (which silently widens the subscription) and never treated as
+   satisfied (which silently narrows it). Both are changes a user notices only by what fails to arrive.
+4. An unrecognised field is ignored rather than rejected, so an extension written against a newer SDK
+   stays loadable on an older host.
+
 ## Authoring assistant
 
 The assisted authoring flow MUST be able to generate this capability (FR-027), and its list of

@@ -678,14 +678,33 @@ function usesPropertyKey(code: string, quotedCode: string, key: string): boolean
   return bare.test(code) || quoted.test(quotedCode);
 }
 
+/** Candidate fields a subscription can filter on, when the extension actually writes them.
+ *
+ * `source` is excluded: it identifies a work rather than describing it, and filtering on it would mean
+ * subscribing to one specific URL. `title` is included — "contains" over a title is a real rule. */
+const FILTERABLE_CANDIDATE_FIELDS = [
+  "title",
+  "posted_at",
+  "rating",
+  "tags",
+  "category",
+  "uploader",
+  "pages",
+];
+
 async function introspectPlugin(_mod: Record<string, unknown>) {
   let returnsVersionHistory = false;
+  let candidateFields: string[] = [];
   try {
     const source = await Deno.readTextFile(`${pluginsDir}/${namespace}.ts`);
-    returnsVersionHistory = usesPropertyKey(
-      blankCommentsAndStrings(source),
-      blankCommentsAndStrings(source, true),
-      "version_history",
+    const blanked = blankCommentsAndStrings(source);
+    const quoted = blankCommentsAndStrings(source, true);
+    returnsVersionHistory = usesPropertyKey(blanked, quoted, "version_history");
+    // Static, for the same reason `version_history` is: a freshly-edited extension takes effect on the
+    // next options request, with no check ever having run. Observing it at runtime instead would leave
+    // the settings form unable to offer a filter until a check had already happened.
+    candidateFields = FILTERABLE_CANDIDATE_FIELDS.filter((f) =>
+      usesPropertyKey(blanked, quoted, f)
     );
   } catch {
     // An unreadable plugin file just means "no evidence of support" — the plugin's own real calls
@@ -695,6 +714,7 @@ async function introspectPlugin(_mod: Record<string, unknown>) {
   return {
     returns_version_history: returnsVersionHistory,
     exports_discover: typeof _mod.discover === "function",
+    candidate_fields: candidateFields,
   };
 }
 
@@ -704,6 +724,45 @@ const encoder = new TextEncoder();
 
 function writeLine(obj: unknown) {
   Deno.stdout.writeSync(encoder.encode(JSON.stringify(obj) + "\n"));
+}
+
+/** Normalises a candidate's `posted_at` to a Unix-seconds string.
+ *
+ * Plugins may get a date string, Unix seconds, or a JavaScript `Date`/millisecond timestamp from
+ * their source. The host's rule engine only needs seconds; doing the seconds-vs-milliseconds guess
+ * here once keeps every extension from repeating it and prevents a millisecond value from being
+ * read as a date ~50,000 years in the future. */
+function normalizePostedAt(value: unknown): unknown {
+  if (value instanceof Date) return String(Math.floor(value.getTime() / 1000));
+  let epoch: number | undefined;
+  if (typeof value === "number") {
+    epoch = value;
+  } else if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+    epoch = Number(value.trim());
+  }
+  if (epoch === undefined || !Number.isFinite(epoch)) return value;
+  // Current Unix seconds are ~1.7e9; current JavaScript milliseconds are ~1.7e12. Treat values at
+  // or above 1e12 as milliseconds rather than seconds.
+  const seconds = Math.abs(epoch) >= 1e12 ? Math.round(epoch / 1000) : Math.round(epoch);
+  return String(seconds);
+}
+
+/** Applies {@link normalizePostedAt} to each candidate in a `discover` result, leaving the rest of
+ * the result shape untouched. */
+function normalizeDiscoveryResult(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  const resultObject = result as Record<string, unknown>;
+  const candidates = resultObject.candidates;
+  if (!Array.isArray(candidates)) return result;
+  return {
+    ...resultObject,
+    candidates: candidates.map((candidate) => {
+      if (!candidate || typeof candidate !== "object") return candidate;
+      const candidateObject = candidate as Record<string, unknown>;
+      if (!("posted_at" in candidateObject)) return candidate;
+      return { ...candidateObject, posted_at: normalizePostedAt(candidateObject.posted_at) };
+    }),
+  };
 }
 
 async function handleRequest(req: PluginRequest) {
@@ -726,7 +785,7 @@ async function handleRequest(req: PluginRequest) {
         // Optional, like `pluginOptions` — a plugin without it simply cannot back a subscription,
         // which the host checks for before offering the source rather than discovering here.
         result = typeof mod.discover === "function"
-          ? await mod.discover(req.args)
+          ? normalizeDiscoveryResult(await mod.discover(req.args))
           : null;
         break;
       case "canonicalize_source": {

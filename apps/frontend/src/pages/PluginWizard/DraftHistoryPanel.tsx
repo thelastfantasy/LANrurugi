@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 
-import type { TypeSession } from "./useWizardSession"
+import type { TrialRunResult as TrialRunResultData, TypeSession } from "./useWizardSession"
 
 const ORIGIN_LABEL_KEY = {
   "ai-generated": "pluginWizard.originAiGenerated",
@@ -26,9 +26,14 @@ export function DraftHistoryPanel({
       <h3 className="ih">{t("pluginWizard.draftHistory")}</h3>
       <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {typeSession.revisions.map((revision, index) => {
-          const successCount = revision.trialRuns.filter((r) =>
-            r.type === "login" ? r.outcome === "success" : r.perLink.every((l) => l.outcome === "success"),
-          ).length
+          const runSucceeded = (r: TrialRunResultData) => {
+            if (r.type === "login") return r.outcome === "success"
+            // A discovery run has probes rather than per-link results, and one probe returning
+            // nothing is not a broken draft — the plugin still works, that hint just matched nothing.
+            if (r.type === "discovery") return r.probes.some((p) => p.ok && (p.candidates ?? 0) > 0)
+            return r.perLink.every((l) => l.outcome === "success")
+          }
+          const successCount = revision.trialRuns.filter(runSucceeded).length
           return (
             <li key={revision.id} style={{ marginBottom: 4 }}>
               <label>

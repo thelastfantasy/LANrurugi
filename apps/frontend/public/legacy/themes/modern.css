@@ -1012,3 +1012,74 @@ div.id4 {
   background-color: #43464E;
   color: #3b97ea;
 }
+
+/* A nesting level in a subscription's condition tree. Legacy has no equivalent concept, so this is
+   additive rather than a change to anything legacy wrote. Reuses this theme's own accent — the same
+   hue .tankoubon-member-row uses — because a nesting level needs to read as "grouped", not as an
+   alert. A left border rather than a filled row: depth is a structural cue, and tinting every level
+   would stack into mud by the third one. */
+.field-rule-group {
+  border-left: 2px solid rgba(59, 151, 234, 0.6);
+  background-color: rgba(59, 151, 234, 0.07);
+  padding: 4px 0 4px 6px;
+  border-radius: 3px;
+}
+
+/* Preview rows: what a check would and would not take. Additive — legacy has no preview, so these
+   stay diffable against nothing. Green and red are chosen to sit with this theme rather than taken
+   from a fixed palette, and each carries a left border as well as a tint so the distinction does not
+   rest on colour alone. */
+.preview-row-match {
+  background-color: rgba(76, 175, 110, 0.2);
+  border-left: 3px solid rgba(76, 175, 110, 0.8);
+}
+.preview-row-excluded {
+  background-color: rgba(150, 90, 100, 0.16);
+  border-left: 3px solid rgba(170, 100, 115, 0.6);
+  opacity: 0.75;
+}
+/* The "already in the library" band. Deliberately not `.preview-row-excluded` (red): nothing was
+   turned away — the work is simply already here, which is a fact to read past, not a rejection. */
+/* Queue-state icons beside a history row's verdict: green once the work is in the library, blue
+   while it is still moving (or failed — the icon's shape and tooltip say which). Each theme's own
+   `.preview-row-match` / `-held` hue, so nothing is invented per theme. */
+.history-state-done {
+  color: rgb(76, 175, 110);
+}
+.history-state-running {
+  color: rgb(80, 140, 205);
+}
+
+.preview-row-held {
+  background-color: rgba(70, 140, 210, 0.16);
+  border-left: 3px solid rgba(80, 140, 205, 0.55);
+}
+.preview-row-waiting {
+  background-color: rgba(199, 145, 33, 0.14);
+  border-left: 3px solid rgba(199, 145, 33, 0.6);
+}
+
+/* One condition within a group. Banded so that where one condition ends and the next begins is
+   visible: three stacked controls with nothing between them read as one list, not as two rules.
+   Fainter than .field-rule-group's own border, since a condition sits *inside* a group and should not
+   compete with it for attention. Additive — legacy has no condition tree. */
+.rule-entry {
+  background-color: rgba(59, 151, 234, 0.08);
+  border: 1px solid rgba(59, 151, 234, 0.25);
+}
+
+/* The preview's sticky column headings. Needs this theme's own panel colour rather than `inherit`:
+   the heading sits over scrolling rows, and a transparent background lets them show through it.
+   Taken from `div.id1`, which is the panel the preview renders inside. Additive — legacy has no
+   preview listing. */
+.preview-head {
+  background-color: #43464E;
+}
+
+/* Additive — no legacy equivalent (this port's own manual/subscription tab pair inside a download
+   queue group's heading). Reuses this theme's own accent hue, the same value as
+   `#thumbs_container .id1.msm-selected`'s outline above, so the active tab reads as "selected" in
+   this theme's existing language rather than a colour that wouldn't adapt across themes. */
+.stdbtn.queue-tab-active {
+  border-color: #3b97ea;
+}

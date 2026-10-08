@@ -43,10 +43,12 @@ import type {
   CategoryMetadata,
   CheckCycle,
   ComparisonResult,
+  Condition,
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateGroup,
   ExportPatchInsertion,
+  HistoryEntry,
   HoverPageOrderResponse,
   ImportSnapshotMetadata,
   JobRecord,
@@ -54,6 +56,7 @@ import type {
   LoginSession,
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
+  PendingApproval,
   PluginInfo,
   PluginOptions,
   PluginOptionsUpdate,
@@ -71,6 +74,7 @@ import type {
   StatTag,
   Subscription,
   SubscriptionBody,
+  SubscriptionPreview,
   SubscriptionSource,
   TankBookmarkedPageResponse,
   TankoubonFullResponse,
@@ -793,6 +797,23 @@ export function useCreateSubscription() {
   })
 }
 
+/** Natural-language condition generation. The backend owns the DSL→condition conversion, so this
+ *  hook only transports the prompt and the source's available fields. */
+export function useAiCondition() {
+  return useMutation({
+    mutationFn: (body: { prompt: string; fields: string[] }) =>
+      sendJson<{ condition: Condition }>("POST", "/subscriptions/condition/ai", body),
+  })
+}
+
+/** Parses pasted condition syntax through the same backend validator used for AI output. */
+export function useParseCondition() {
+  return useMutation({
+    mutationFn: (body: { dsl: string; fields: string[] }) =>
+      sendJson<{ condition: Condition }>("POST", "/subscriptions/condition/parse", body),
+  })
+}
+
 export function useUpdateSubscription(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -829,6 +850,162 @@ export function useSetSubscriptionState() {
         `/subscriptions/${encodeURIComponent(id)}/${action}`,
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscriptions"] }),
+  })
+}
+
+/** Previews what a check would catch, optionally against unsaved rules.
+ *
+ *  Works on a disabled subscription: tuning a rule is exactly when it is switched off. A mutation
+ *  rather than a query because it contacts the source — it should run when asked, not on render. */
+export function usePreviewSubscription() {
+  return useMutation({
+    // Without an id the draft is previewed on its own — which is the case when creating one, where
+    // knowing what a rule catches matters most because nothing has been committed yet.
+    mutationFn: ({ id, draft }: { id?: string; draft?: SubscriptionBody }) =>
+      sendJson<SubscriptionPreview>(
+        "POST",
+        id ? `/subscriptions/${encodeURIComponent(id)}/preview` : "/subscriptions/preview",
+        draft,
+      ),
+  })
+}
+
+/** Re-judges a listing already fetched, against changed conditions.
+ *
+ *  Only `criteria` shapes the request to the source, so a changed condition needs no new fetch. The
+ *  judging still happens server-side: a second implementation of the condition tree in the browser
+ *  would eventually disagree with the one that actually runs. */
+export function useJudgePreview() {
+  return useMutation({
+    mutationFn: ({ subscription, listing }: { subscription: SubscriptionBody; listing: unknown }) =>
+      sendJson<SubscriptionPreview>("POST", "/subscriptions/preview/judge", {
+        subscription,
+        listing,
+      }),
+  })
+}
+
+/** Runs a real check now instead of waiting for the schedule. The result lands in the history. */
+export function useCheckSubscriptionNow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<void>("POST", `/subscriptions/${encodeURIComponent(id)}/check`),
+    onSuccess: (_d, id) => {
+      queryClient.invalidateQueries({ queryKey: ["subscription", id] })
+      queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+    },
+  })
+}
+
+/** Makes a subscription reconsider works it already handled.
+ *
+ *  Being seen is otherwise permanent — correct for a work deliberately deleted, wrong for one deleted
+ *  by mistake or for works rejected under a rule that has since been widened. */
+/** The user's own "no" about a matched work: never downloaded by this subscription again, and only
+ *  undoable on purpose (`useForgetSeen`). */
+export function useBlockSubscriptionSources() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sources }: { id: string; sources: string[] }) =>
+      sendJson<{ blocked: number }>(
+        "POST",
+        `/subscriptions/${encodeURIComponent(id)}/block`,
+        { sources },
+      ),
+    onSuccess: (_d, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["subscription", id] })
+      queryClient.invalidateQueries({ queryKey: ["subscription-blocked"] })
+    },
+  })
+}
+
+export function useForgetSeen() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sources, all }: { id: string; sources?: string[]; all?: boolean }) =>
+      sendJson<{ forgotten: number | null }>(
+        "POST",
+        `/subscriptions/${encodeURIComponent(id)}/forget`,
+        { sources: sources ?? [], all: all ?? false },
+      ),
+    onSuccess: (_d, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["subscription", id] })
+      queryClient.invalidateQueries({ queryKey: ["subscription-blocked"] })
+    },
+  })
+}
+
+/** Every subscription's recent candidates as one stream, newest first.
+ *
+ *  Separate from `useSubscriptionDetail`, which answers "what did this one rule do". The question
+ *  usually being asked is the other one — what arrived lately, and why did something expected not. */
+export function useSubscriptionHistory(limit = 300) {
+  return useQuery({
+    queryKey: ["subscription-history", limit],
+    queryFn: () =>
+      fetchJson<{ history: HistoryEntry[] }>(`/subscriptions/history?limit=${limit}`).then(
+        (r) => r.history,
+      ),
+  })
+}
+
+/** One work the user has blocked, as `GET /subscriptions/blocked` reports it. */
+export interface BlockedWork {
+  subscription_id: string
+  subscription_name: string
+  source_url: string
+  /** Epoch milliseconds, for ordering. */
+  blocked_at: number
+}
+
+/** Everything the user has explicitly blocked, across every subscription, newest first.
+ *
+ *  Its own endpoint rather than a filter over the history: the history is a log of decisions that
+ *  later cycles rewrite (a work queued and then catalogued reads `already_held` everywhere), while a
+ *  block stays exactly as the user left it — which is what makes it worth listing and undoing. */
+export function useBlockedWorks() {
+  return useQuery({
+    queryKey: ["subscription-blocked"],
+    queryFn: () =>
+      fetchJson<{ blocked: BlockedWork[] }>("/subscriptions/blocked").then((r) => r.blocked),
+  })
+}
+
+export function usePendingApprovals() {
+  return useQuery({
+    queryKey: ["subscription-pending"],
+    queryFn: () =>
+      fetchJson<{ pending: PendingApproval[] }>("/subscriptions/pending").then((r) => r.pending),
+  })
+}
+
+/** Approving puts the works in the normal download queue, so the Downloads page is where their
+ *  progress is then followed — nothing further happens on the Subscriptions page. Takes a list
+ *  because FR-007b requires approving individually *or* together; one item is a list of one. */
+export function useApprovePending() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      sendJson<{ approved: number; failures: { id: string; error: string }[] }>(
+        "POST",
+        "/subscriptions/pending/approve",
+        { ids },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+    },
+  })
+}
+
+/** Dismissing also marks the works seen, so the same question is not asked again on the next check. */
+export function useDismissPending() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      sendJson<{ dismissed: number }>("POST", "/subscriptions/pending/dismiss", { ids }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscription-pending"] }),
   })
 }
 

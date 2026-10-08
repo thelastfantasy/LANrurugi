@@ -1,7 +1,7 @@
 import type Lenis from "lenis"
 import { useCallback, useEffect, useRef } from "react"
 
-import type { PluginInfo } from "@/api/types"
+import type { DownloadQueueItem, PluginInfo } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { TagTable } from "@/components/Display"
 import { useHorizontalScroll } from "@/hooks"
@@ -162,6 +162,27 @@ export const TOOLBAR_BUTTON_STYLE: React.CSSProperties = {
   whiteSpace: "nowrap",
   fontSize: FONT_SIZE_XS,
   padding: "0 6px",
+}
+
+/** A group's items, split by who asked for them: a person pasting/uploading them, or a subscription
+ * checking on its own. Two lists rather than one filtered view so the header can count both. */
+export function partitionByOrigin(items: DownloadQueueItem[]) {
+  const manual: DownloadQueueItem[] = []
+  const fromSubscriptions: DownloadQueueItem[] = []
+  for (const item of items) (item.subscription_id ? fromSubscriptions : manual).push(item)
+  return { manual, fromSubscriptions }
+}
+
+/** Whether an item is stopped waiting on the user — a filename or revision decision, or a failure.
+ * Flags the tab that would otherwise hide it: splitting a list must not bury the rows that need an
+ * answer. */
+export function needsDecision(item: DownloadQueueItem): boolean {
+  return (
+    item.state === "error" ||
+    item.state === "awaiting_revision_confirmation" ||
+    !!item.pending_filename_conflict ||
+    !!item.pending_revision_confirmation
+  )
 }
 
 /** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body,

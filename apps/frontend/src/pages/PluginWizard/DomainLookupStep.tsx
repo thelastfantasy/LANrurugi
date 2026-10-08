@@ -19,6 +19,7 @@ interface WireDomainLookupResult {
   login: WireTypeCoverage
   metadata: WireTypeCoverage
   download: WireTypeCoverage
+  discovery: WireTypeCoverage
 }
 
 function toTypeCoverage(wire: WireTypeCoverage): TypeCoverage {
@@ -40,6 +41,7 @@ function toDomainLookupResult(wire: WireDomainLookupResult): DomainLookupResult 
     login: toTypeCoverage(wire.login),
     metadata: toTypeCoverage(wire.metadata),
     download: toTypeCoverage(wire.download),
+    discovery: toTypeCoverage(wire.discovery),
   }
 }
 

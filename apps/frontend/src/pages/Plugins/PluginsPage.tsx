@@ -18,6 +18,7 @@ import { SortablePluginGroup } from "./SortablePluginGroup"
 const LEFT_GROUPS: Array<{ type: PluginInfo["type"]; icon: string; label: string }> = [
   { type: "login", icon: "fa-plug", label: "Login Plugins" },
   { type: "download", icon: "fa-cloud-download-alt", label: "Downloaders" },
+  { type: "discovery", icon: "fa-rss", label: "Discovery Plugins" },
   { type: "script", icon: "fa-scroll", label: "Scripts" },
 ]
 const RIGHT_GROUPS: Array<{ type: PluginInfo["type"]; icon: string; label: string }> = [

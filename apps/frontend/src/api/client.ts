@@ -19,6 +19,32 @@ function invalidateLoginStatus() {
   void queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
 }
 
+/** Refetches everything whose result can differ by caller identity, leaving the identity itself
+ * (`login-status`) alone. Needed after a *recovery* refresh, not just a login: while the access
+ * token sat expired this tab was classified as a guest by the server, so guest-scoped responses
+ * can already be cached under the very keys an admin's responses use (see
+ * {@link clientClaimsAuthenticatedSession}). Not scoped to specific keys — the set of queries
+ * whose results vary by identity isn't closed (a plugin can add new admin-only ones), and a full
+ * invalidation is the only invariant that can't silently rot as more are added. */
+function invalidateIdentityDependentQueries() {
+  void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
+}
+
+/** Whether this tab currently considers itself an admin session. */
+function clientClaimsAuthenticatedSession(): boolean {
+  return queryClient.getQueryData<{ logged_in?: boolean }>(SESSION_QUERY_KEY)?.logged_in === true
+}
+
+/** `403` earns the same refresh-then-retry as `401` **only** for a tab that already believes it is
+ * signed in. With guest mode on, an access token that expires while the tab stays open makes every
+ * request look like a legitimate `guest_visitor` to the server, so admin-only endpoints answer
+ * `403` instead of `401` (issue #99) — a tab whose refresh path only ever watched for `401` then
+ * sits in that half-guest state until a full page reload. A genuine guest's `403` never gets here,
+ * so it never pays for a refresh attempt it cannot use. */
+function isRefreshWorthyStatus(status: number): boolean {
+  return status === 401 || (status === 403 && clientClaimsAuthenticatedSession())
+}
+
 /** `"network-error"` must never be treated as `"rejected"` — a connectivity blip isn't a dead session. */
 type RefreshOutcome = "ok" | "rejected" | "network-error"
 
@@ -123,6 +149,19 @@ function shouldInvalidateLoginStatus(outcome: RefreshOutcome): boolean {
   return outcome === "rejected"
 }
 
+/** Shared tail of every request helper's `401`/`403` branch: one refresh attempt, then either a
+ * retry (the caller re-issues its own request) or — when the refresh proved the session is really
+ * gone — a login-status invalidation so `RequireAuth` can route the caller to `/login`. */
+async function recoverSession(): Promise<boolean> {
+  const outcome = await tryRefreshWithRetry()
+  if (outcome === "ok") {
+    invalidateIdentityDependentQueries()
+    return true
+  }
+  if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
+  return false
+}
+
 /** Reads `{error, detail?, raw_output?}`, appending detail/raw_output when present. */
 async function readErrorBody(response: Response, path: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as
@@ -137,12 +176,10 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
   const response = await fetch(`/api${path}`)
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (isRefreshWorthyStatus(response.status)) {
       if (shouldAttemptRefresh(path, retried)) {
-        const outcome = await tryRefreshWithRetry()
-        if (outcome === "ok") return fetchJson<T>(path, true)
-        if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-      } else {
+        if (await recoverSession()) return fetchJson<T>(path, true)
+      } else if (response.status === 401) {
         invalidateLoginStatus()
       }
     }
@@ -189,15 +226,13 @@ export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean
   // and none of them depend on `login-status` in their own `queryKey`, so nothing else would
   // otherwise notice this transition and refetch. Left alone, the UI tears: an admin-only nav
   // (driven by this query) over guest-scoped content (driven by those stale ones) — confirmed
-  // live via issue #99's own repro. Not scoped to specific keys since the set of queries whose
-  // results vary by caller identity isn't closed (a plugin can add new admin-only ones); a full
-  // invalidation is the only invariant that can't silently rot as more queries are added.
-  // Fire-and-forget: awaiting the full invalidation here makes `login-status` itself wait for every
-  // identity-dependent query (search, settings, bookmarks, ...) to refetch before the admin UI is
-  // allowed to render, which is far too slow on mobile. The strict `RequireAuth`/`Layout` changes
-  // already stop the admin chrome from appearing before login-status settles; the invalidation
-  // then brings the remaining queries over to the admin view asynchronously.
-  if (refreshed.logged_in) void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
+  // live via issue #99's own repro. Fire-and-forget: awaiting the full invalidation here makes
+  // `login-status` itself wait for every identity-dependent query (search, settings, bookmarks,
+  // ...) to refetch before the admin UI is allowed to render, which is far too slow on mobile. The
+  // strict `RequireAuth`/`Layout` changes already stop the admin chrome from appearing before
+  // login-status settles; the invalidation then brings the remaining queries over to the admin
+  // view asynchronously.
+  if (refreshed.logged_in) invalidateIdentityDependentQueries()
   return refreshed
 }
 
@@ -205,12 +240,10 @@ export async function fetchText(path: string, retried = false): Promise<string> 
   const response = await fetch(`/api${path}`)
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (isRefreshWorthyStatus(response.status)) {
       if (shouldAttemptRefresh(path, retried)) {
-        const outcome = await tryRefreshWithRetry()
-        if (outcome === "ok") return fetchText(path, true)
-        if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-      } else {
+        if (await recoverSession()) return fetchText(path, true)
+      } else if (response.status === 401) {
         invalidateLoginStatus()
       }
     }
@@ -234,12 +267,10 @@ export async function sendJson<T>(
   })
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (isRefreshWorthyStatus(response.status)) {
       if (shouldAttemptRefresh(path, retried)) {
-        const outcome = await tryRefreshWithRetry()
-        if (outcome === "ok") return sendJson<T>(method, path, body, true)
-        if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-      } else {
+        if (await recoverSession()) return sendJson<T>(method, path, body, true)
+      } else if (response.status === 401) {
         invalidateLoginStatus()
       }
     }
@@ -269,12 +300,10 @@ export async function sendJsonForBlob(
   })
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (isRefreshWorthyStatus(response.status)) {
       if (shouldAttemptRefresh(path, retried)) {
-        const outcome = await tryRefreshWithRetry()
-        if (outcome === "ok") return sendJsonForBlob(method, path, body, true)
-        if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-      } else {
+        if (await recoverSession()) return sendJsonForBlob(method, path, body, true)
+      } else if (response.status === 401) {
         invalidateLoginStatus()
       }
     }
@@ -300,12 +329,10 @@ export async function sendForm<T>(
   const response = await fetch(`/api${path}`, { method, body })
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (isRefreshWorthyStatus(response.status)) {
       if (shouldAttemptRefresh(path, retried)) {
-        const outcome = await tryRefreshWithRetry()
-        if (outcome === "ok") return sendForm<T>(method, path, params, true)
-        if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-      } else {
+        if (await recoverSession()) return sendForm<T>(method, path, params, true)
+      } else if (response.status === 401) {
         invalidateLoginStatus()
       }
     }
@@ -337,12 +364,10 @@ export async function sendFormDataWithProgress<T>(
     })
 
     if (response.status < 200 || response.status >= 300) {
-      if (response.status === 401) {
+      if (isRefreshWorthyStatus(response.status)) {
         if (shouldAttemptRefresh(path, retried)) {
-          const outcome = await tryRefreshWithRetry()
-          if (outcome === "ok") return sendFormDataWithProgress<T>(method, path, formData, onProgress, true)
-          if (shouldInvalidateLoginStatus(outcome)) invalidateLoginStatus()
-        } else {
+          if (await recoverSession()) return sendFormDataWithProgress<T>(method, path, formData, onProgress, true)
+        } else if (response.status === 401) {
           invalidateLoginStatus()
         }
       }

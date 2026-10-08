@@ -37,6 +37,18 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(decimals)} ${units[unitIndex]}`
 }
 
+/** A duration as a short human-readable string (`2:13`, `1:04:07`). Minutes/seconds are zero-padded
+ * so a column of them stays readable; an hour or more switches to `h:mm:ss` rather than growing an
+ * ambiguous third number. */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const seconds = total % 60
+  const minutes = Math.floor(total / 60) % 60
+  const hours = Math.floor(total / 3600)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
+}
+
 /** Last-seen `(bytes, timestamp, speed)` per job ID. Module-level `Map`, not a `useRef`, since the
  * same job can be rendered by more than one `JobProgressBar` instance over its lifetime. */
 const lastReadings = new Map<string, { bytes: number; at: number; speed: number | null }>()

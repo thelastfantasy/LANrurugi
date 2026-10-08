@@ -16,6 +16,22 @@ import { SearchBar } from "./SearchBar";
 import { SettingsMenu } from "./SettingsMenu";
 import { SortBySelector } from "./SortBySelector";
 
+/** The archive's `source:` tag, read from the already-loaded list rather than fetched again. Absent
+ *  for a hand-uploaded file, which is how the delete dialog knows not to offer the subscription
+ *  option at all. */
+function sourceOf(
+  shown: { arcid: string; tags?: string | null }[],
+  id: string,
+): string | undefined {
+  const tags = shown.find((a) => a.arcid === id)?.tags
+  if (!tags) return undefined
+  for (const tag of tags.split(",")) {
+    const value = tag.trim()
+    if (value.toLowerCase().startsWith("source:")) return value.slice("source:".length).trim()
+  }
+  return undefined
+}
+
 export function Library() {
   const lib = useLibrary();
   const deleteTarget = lib.deleteTarget;
@@ -301,9 +317,14 @@ export function Library() {
       {deleteTarget && (
         <DeleteConfirmDialog
           isTank={deleteTarget.isTank}
+          source={sourceOf(lib.shown, deleteTarget.id)}
           onCancel={() => lib.setDeleteTarget(null)}
-          onConfirm={() => {
-            void lib.deleteArchive(deleteTarget.id, deleteTarget.isTank);
+          onConfirm={(blockResubscribe) => {
+            void lib.deleteArchive(
+              deleteTarget.id,
+              deleteTarget.isTank,
+              blockResubscribe,
+            );
             lib.setDeleteTarget(null);
           }}
         />

@@ -216,14 +216,27 @@ pub async fn ingest_downloaded_file(
                 let _ = tokio::fs::remove_file(&downloaded.path).await;
                 return Err(already);
             }
-            stage_pending_rename(
+            let staged = stage_pending_rename(
                 state,
                 &downloaded.path,
                 &downloaded.filename,
                 existing_id,
                 queue_item_id,
             )
-            .await
+            .await;
+            // A subscription that pre-answered this question (its own `ConflictPolicy`) resolves it
+            // right here, through the very same code the two resolve endpoints drive — see
+            // `download_queue::apply_staged_conflict_policy`.
+            if let (Some(item_id), Err(IngestDownloadError::PendingRename(_))) =
+                (queue_item_id, &staged)
+            {
+                if let Some(ingested) =
+                    crate::download_queue::apply_staged_conflict_policy(state, item_id).await
+                {
+                    return Ok(ingested);
+                }
+            }
+            staged
         }
         other => other,
     }
@@ -420,6 +433,10 @@ async fn stage_pending_rename(
         original_filename: filename.to_string(),
         existing_id,
         crc32,
+        staged_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
     };
 
     if let Some(item_id) = queue_item_id {

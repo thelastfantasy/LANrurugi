@@ -46,6 +46,29 @@ submits, rather than relying on a rejection to teach them the rules.
 Each entry carries the subscription that produced it, so the user can reach the rule responsible
 (FR-026) instead of hunting for which subscription keeps generating failures.
 
+## Preview and check-now
+
+| Method & path | Purpose |
+|---|---|
+| `POST /subscriptions/{id}/preview` | What a check would do, without doing any of it |
+| `POST /subscriptions/{id}/check` | Run a real check now instead of waiting for the schedule (FR-024) |
+
+Preview takes an optional body carrying an unsaved subscription, so rules can be tried before being
+committed — otherwise a rule would have to be saved to find out what it does. Only its `criteria` and
+`filters` are honoured; the saved subscription's identity and source are kept, so a preview cannot be
+used to point a subscription somewhere else.
+
+It returns every candidate the source listed with each one's verdict, not only the matches. A rule
+that is too strict looks exactly like a source with nothing new unless the works it turned away are
+visible with their reasons.
+
+Preview is explicitly allowed on a **disabled** subscription: tuning a rule is precisely when it is
+switched off. It writes nothing — nothing queued, nothing marked seen, no snapshot, no cycle logged —
+so it is safe to run repeatedly, costing one request to the source each time.
+
+Check-now is accepted and runs in the background: a check contacts the source and may page through it,
+which is longer than a request should hold open. Its result appears in the subscription's own history.
+
 ## Pending approvals
 
 Needed because confirmation-before-download is the default (FR-007a/b).
@@ -58,6 +81,13 @@ Needed because confirmation-before-download is the default (FR-007a/b).
 
 Approval is the point where unattended spending becomes attended spending. Nothing before it may
 consume credit.
+
+Both actions take `{ "ids": [...] }` rather than an id in the path, so that acting on one match and
+acting on a batch are the same call (FR-007b). Approve reports `approved` and a per-id `failures`
+list instead of rolling the batch back: with several items, one that fails to queue is no reason to
+un-approve the rest, and the caller needs to know *which* ones did not make it. An approved work
+enters the ordinary download queue, inheriting its existing start/stop/retry behaviour; a dismissed
+one is marked seen, so the same question is not raised next cycle.
 
 ## Cross-cutting
 

@@ -16,6 +16,8 @@ use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::subscriptions::ConflictPolicy;
+
 #[derive(Debug, Error)]
 pub enum DownloadQueueStorageError {
     #[error("Redis error: {0}")]
@@ -113,6 +115,13 @@ pub struct PendingFilenameConflict {
     /// name, surfaced separately as the `{crc}` template variable so the frontend doesn't need to
     /// parse it back out of the path.
     pub crc32: String,
+    /// Unix milliseconds when these bytes were staged. Purely so the UI can say when the staged
+    /// copy expires (`PENDING_RENAME_MAX_AGE`, after which the sweep deletes it and the row becomes
+    /// `DuplicateFilenameCleaned`) — an unresolved conflict with no visible deadline reads as one
+    /// that will wait forever. `#[serde(default)]`: records written before this existed simply
+    /// render no deadline.
+    #[serde(default)]
+    pub staged_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,15 +131,26 @@ pub struct DownloadQueueItem {
     /// record written before this field existed has no `origin` key in its stored JSON at all.
     #[serde(default)]
     pub origin: QueueItemOrigin,
+    /// Which subscription started this download, when one did (FR-022).
+    ///
+    /// A separate field rather than another `origin` variant: a subscription-started download is a
+    /// download in every other respect, and splitting the variant would fork every match on `origin`
+    /// for a distinction none of them care about. `#[serde(default)]` for the same
+    /// backward-compatibility reason as `origin` — records written before this existed have no such key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
     /// For a download: the source URL. For a local upload: the uploaded file's own filename —
     /// there is no real URL, but every other piece of this state machine (the completed-item
     /// title fallback, the filename-conflict `source:` tag, `resolve_conflict`'s dedup) already
     /// keys off `url`, so a local upload reuses the same field rather than growing a parallel
     /// "url or filename" special case through every one of those call sites.
     pub url: String,
-    /// Resolved once, client-side, at add-to-queue time (which download plugin's `url_pattern`
-    /// matched this URL) and fixed from then on — not re-resolved at start time, so what the user
-    /// saw when adding is what actually runs even if plugin configuration changes in between.
+    /// Resolved once, at add-to-queue time (which download plugin's `url_pattern` matched this URL)
+    /// and fixed from then on — not re-resolved at start time, so what the user saw when adding is
+    /// what actually runs even if plugin configuration changes in between. The Upload page resolves
+    /// it client-side; a subscription enqueues server-side and gets the same resolution from
+    /// `lanrurugi_api::plugins::resolve_download_plugin_for_url` (its own `source` is the
+    /// *discovery* plugin, which is not what performs the download).
     /// For a local upload: the fixed placeholder `"local_upload"` (never a real plugin
     /// namespace) — used only as this item's grouping key on the Upload page, never looked up
     /// via `PluginPool::plugin_info`.
@@ -144,8 +164,19 @@ pub struct DownloadQueueItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_size: Option<u64>,
     pub category: Option<String>,
+    /// Tags the subscription wants merged onto the archive once this download is catalogued. Empty
+    /// for all non-subscription queue origins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
+    /// The policy the subscription that queued this item pre-answered its filename conflicts with
+    /// (`ConflictPolicy::Ask` for everything else, including a manual add). Carried on the item
+    /// rather than looked up from the subscription at ingest time: the conflict is resolved long
+    /// after the decision to download, and a policy edited in between should govern the *next*
+    /// download, not retroactively re-decide one already in flight.
+    #[serde(default)]
+    pub conflict_policy: ConflictPolicy,
     pub state: DownloadQueueState,
     /// Set once `start` has launched the actual background download —
     /// `lanrurugi_core::jobs::JobRegistry` job ID, used by the frontend to look up live
@@ -197,6 +228,23 @@ pub struct DownloadQueueItem {
     /// so a later re-run of the same URL asks again instead of silently inheriting a stale yes.
     #[serde(default)]
     pub revision_confirmed: bool,
+    /// The download plugin's own revision chain for this work, as `(source, posted_at)` pairs —
+    /// carried from the download call to whichever ingestion path catalogues it (the ordinary one, or
+    /// the filename-conflict resolution that happens later) and stored onto the resulting archive
+    /// there. A loose tuple rather than the plugin protocol's own type because this crate sits below
+    /// it; the two shapes are the same two strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_history: Option<Vec<(String, String)>>,
+    /// When this item's download actually began and when it reached a terminal state (epoch ms).
+    ///
+    /// Persisted, unlike the job registry's own copies of the same instants, because a finished
+    /// job is dropped when the process restarts: without these a row that finished before the last
+    /// restart could never say how long it took or how fast it averaged. `started_at` is stamped
+    /// again on every (re)start, so a retry reports its own attempt rather than the sum of both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
     pub created_at: i64,
 }
 
@@ -220,6 +268,9 @@ pub struct PendingRevisionConfirmation {
 /// `add` itself (`id`/`created_at`).
 pub struct NewQueueItem {
     pub origin: QueueItemOrigin,
+    /// Set when a subscription started this download, so the archive it produces can be traced back
+    /// to the rule responsible (FR-022).
+    pub subscription_id: Option<String>,
     /// See [`DownloadQueueItem::url`]'s own docs — a download's source URL, or a local upload's
     /// filename.
     pub url: String,
@@ -230,8 +281,11 @@ pub struct NewQueueItem {
     /// `None` for a download, which instead reports size live through its linked job.
     pub file_size: Option<u64>,
     pub category: Option<String>,
+    pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
+    /// See [`DownloadQueueItem::conflict_policy`].
+    pub conflict_policy: ConflictPolicy,
     /// A download starts `Queued` (waiting for the user to press Start/for `start_all`). A local
     /// upload's bytes are already fully in hand by the time this is called — its own `add` call
     /// site sets this straight to whatever the synchronous ingest attempt that follows actually
@@ -265,12 +319,15 @@ impl DownloadQueueRepository {
         let item = DownloadQueueItem {
             id: uuid::Uuid::new_v4().to_string(),
             origin: new_item.origin,
+            subscription_id: new_item.subscription_id,
             url: new_item.url,
             plugin_namespace: new_item.plugin_namespace,
             file_size: new_item.file_size,
             category: new_item.category,
+            metadata_tags: new_item.metadata_tags,
             auto_fetch_metadata: new_item.auto_fetch_metadata,
             overwrite_on_duplicate: new_item.overwrite_on_duplicate,
+            conflict_policy: new_item.conflict_policy,
             state: new_item.state,
             job_id: None,
             archive_ids: None,
@@ -281,6 +338,9 @@ impl DownloadQueueRepository {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            version_history: None,
+            started_at: None,
+            finished_at: None,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
@@ -288,6 +348,21 @@ impl DownloadQueueRepository {
         };
         self.save(&item).await?;
         Ok(item)
+    }
+
+    /// Deletes every finished entry that finished before `cutoff_ms`, returning how many went.
+    ///
+    /// The retention sweep the subscription scheduler runs (see `Settings::download_queue_retention_
+    /// days`). Only `Done`/`Cancelled` rows are candidates: one is in flight, and a failed row is a
+    /// retry the user may still want. `finished_at` is what decides — falling back to `created_at` for
+    /// rows that predate it being stamped — so a long download is judged by when it *ended*.
+    pub async fn prune_finished_before(&self, cutoff_ms: i64) -> Result<usize> {
+        let candidates = self.list_all().await?;
+        let ids = finished_before(candidates, cutoff_ms);
+        for id in &ids {
+            self.delete(id).await?;
+        }
+        Ok(ids.len())
     }
 
     /// Creates or fully overwrites one item's stored record and registers its ID in the live-IDs
@@ -378,6 +453,22 @@ impl DownloadQueueRepository {
     }
 }
 
+/// The IDs [`DownloadQueueRepository::prune_finished_before`] should drop: finished rows that ended
+/// before the cutoff. Pure, so the rule — which rows count as finished, and which timestamp decides —
+/// is testable without Redis or a clock.
+fn finished_before(items: Vec<DownloadQueueItem>, cutoff_ms: i64) -> Vec<String> {
+    items
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item.state,
+                DownloadQueueState::Done | DownloadQueueState::Cancelled
+            ) && item.finished_at.unwrap_or(item.created_at) < cutoff_ms
+        })
+        .map(|item| item.id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,18 +477,85 @@ mod tests {
         crate::test_support::test_pool().await
     }
 
+    /// Retention: finished rows past the cutoff go, everything else stays.
+    #[test]
+    fn only_finished_rows_past_the_cutoff_are_swept() {
+        let item = |id: &str, created_at: i64| DownloadQueueItem {
+            id: id.to_string(),
+            created_at,
+            origin: QueueItemOrigin::Download,
+            subscription_id: Some("sub".to_string()),
+            url: "https://example.com/x".to_string(),
+            plugin_namespace: "download/x".to_string(),
+            file_size: None,
+            category: None,
+            metadata_tags: Vec::new(),
+            auto_fetch_metadata: false,
+            overwrite_on_duplicate: false,
+            conflict_policy: ConflictPolicy::Ask,
+            state: DownloadQueueState::Done,
+            job_id: None,
+            archive_ids: None,
+            title: None,
+            metadata_preview: None,
+            metadata_preview_at: None,
+            error: None,
+            pending_filename_conflict: None,
+            pending_revision_confirmation: None,
+            revision_confirmed: false,
+            version_history: None,
+            started_at: Some(created_at),
+            finished_at: Some(created_at),
+        };
+
+        let finished = |id: &str, at: i64| item(id, at);
+        let running = |id: &str, at: i64| DownloadQueueItem {
+            state: DownloadQueueState::Downloading,
+            ..item(id, at)
+        };
+
+        // `item` stamps finished_at = created_at, so the cutoff is compared against that.
+        assert!(
+            finished_before(vec![finished("recent", 2_000)], 1_000).is_empty(),
+            "anything that finished after the cutoff stays"
+        );
+        assert_eq!(
+            finished_before(vec![finished("old", 500), finished("recent", 2_000)], 1_000),
+            vec!["old".to_string()],
+            "only the expired one goes"
+        );
+        assert!(
+            finished_before(vec![running("in-flight", 500)], 1_000).is_empty(),
+            "an in-flight row is never a candidate, however old it looks"
+        );
+        assert!(
+            finished_before(
+                vec![DownloadQueueItem {
+                    state: DownloadQueueState::Error,
+                    ..item("failed", 500)
+                }],
+                1_000
+            )
+            .is_empty(),
+            "a failed row is a retry the user may still want"
+        );
+    }
+
     /// A `NewQueueItem` for a plain download, with only `url`/`plugin_namespace` varying by
     /// caller — every other field left at these tests' shared defaults, so a test only spells out
     /// the one or two fields it actually cares about.
     fn new_download(url: &str, plugin_namespace: &str) -> NewQueueItem {
         NewQueueItem {
             origin: QueueItemOrigin::Download,
+            subscription_id: None,
             url: url.to_string(),
             plugin_namespace: plugin_namespace.to_string(),
             file_size: None,
             category: None,
+            metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
+            conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         }
     }
@@ -465,12 +623,15 @@ mod tests {
         let item = repo
             .add(NewQueueItem {
                 origin: QueueItemOrigin::LocalUpload,
+                subscription_id: None,
                 url: "manga volume 1.zip".to_string(),
                 plugin_namespace: "local_upload".to_string(),
                 file_size: Some(123_456),
                 category: None,
+                metadata_tags: Vec::new(),
                 auto_fetch_metadata: false,
                 overwrite_on_duplicate: false,
+                conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Done,
             })
             .await

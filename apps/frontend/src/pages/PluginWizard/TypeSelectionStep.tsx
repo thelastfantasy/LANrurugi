@@ -2,9 +2,9 @@ import { useTranslation } from "react-i18next"
 
 import type { DomainLookupResult, PluginType, TypeSession } from "./useWizardSession"
 
-const PLUGIN_TYPES: PluginType[] = ["login", "metadata", "download"]
+const PLUGIN_TYPES: PluginType[] = ["login", "metadata", "download", "discovery"]
 
-/** Renders each of the three types' coverage state. An uncovered type can be multi-selected
+/** Renders each of the four types' coverage state. An uncovered type can be multi-selected
  * freely; a covered type's checkbox is disabled but gets follow-up action button(s) per `coverageSource`. */
 export function TypeSelectionStep({
   lookupResult,

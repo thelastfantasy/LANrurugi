@@ -43,6 +43,8 @@ pub(crate) const DEFAULT_PAGE_SIZE: i64 = 100;
 /// multi-megabyte PNG/webtoon strip still gets compressed for the reader).
 pub(crate) const DEFAULT_SIZE_THRESHOLD: i64 = 1536;
 pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
+/// See `NUMBER_FIELDS`' own entry for what this bounds.
+pub(crate) const DEFAULT_QUEUE_RETENTION_DAYS: i64 = 30;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 
 pub fn router() -> Router<AppState> {
@@ -208,6 +210,21 @@ async fn is_guest_eligible_request(state: &AppState, headers: &axum::http::Heade
 /// Reads `LRR_CONFIG`'s `newbadgemode` (see that field's own doc in [`STRING_FIELDS`]),
 /// defaulting to `until_opened` when unset — the one mode that matches legacy's own behavior, so
 /// a fresh/legacy-shared Redis starts with the exact badge semantics legacy has.
+/// How many days a finished download-queue entry is kept. `0` means it is kept indefinitely; the
+/// default is [`DEFAULT_QUEUE_RETENTION_DAYS`]. Read by the subscription scheduler's hourly sweep.
+pub(crate) async fn read_queue_retention_days(state: &AppState) -> i64 {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "download_queue_retention_days")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(DEFAULT_QUEUE_RETENTION_DAYS),
+        Err(_) => DEFAULT_QUEUE_RETENTION_DAYS,
+    }
+}
+
 pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     match state.redis.config.get().await {
         Ok(mut conn) => conn
@@ -319,6 +336,11 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // subdomains.
     ("trusted_origins", ""),
     ("cookie_domain", ""),
+    // An ordered preference list, comma-separated (`"zh,ja,en"`), not a single choice: the interface
+    // takes the first language it has translations for, and a work's title takes the first its source
+    // supplied. `"auto"` keeps deferring to the browser. Stored in the existing field rather than a
+    // new one so a value written before this was a list still reads correctly — one language is just
+    // a list of length one.
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
     ("motd", "Welcome to this Library running LANrurugi!"),
@@ -384,6 +406,14 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     (
         "max_login_devices",
         lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES as i64,
+    ),
+    // Finished download-queue entries older than this are swept away by the subscription scheduler.
+    // A queue that never forgets anything grows for as long as the server runs, and its rows are a
+    // record of what happened rather than anything the library needs — the archive itself is either
+    // in the library or it is not. `0` means "keep them all" for anyone who wants the full log.
+    (
+        "download_queue_retention_days",
+        DEFAULT_QUEUE_RETENTION_DAYS,
     ),
 ];
 

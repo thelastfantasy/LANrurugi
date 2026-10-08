@@ -158,7 +158,11 @@ export function TypeWizardPanel({
           {type !== "login" &&
             (() => {
               const lastRun = activeRevision?.trialRuns[activeRevision.trialRuns.length - 1]
-              const suggestion = lastRun && lastRun.type !== "login" ? lastRun.loginSuggestion : undefined
+              // Only the link-based runs carry a login suggestion; a discovery probe never does.
+              const suggestion =
+                lastRun && (lastRun.type === "metadata" || lastRun.type === "download")
+                  ? lastRun.loginSuggestion
+                  : undefined
               if (!suggestion) return null
               return (
                 <LoginSuggestionPanel

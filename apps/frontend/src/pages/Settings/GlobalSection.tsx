@@ -6,10 +6,10 @@ import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
-import { SUPPORTED_LANGUAGES } from "@/i18n"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM } from "@/theme"
 
+import { LanguageOrderEditor } from "./LanguageOrderEditor"
 import { ActionRow, CheckboxRow, Row } from "./shared"
 
 export function GlobalSection({
@@ -111,14 +111,7 @@ export function GlobalSection({
             {t("settings.slangForMessageOfThe")}
           </Row>
           <Row label={t("settings.language")}>
-            <select className="stdinput" style={{ width: "100%" }} value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="auto">{t("settings.automaticBrowserDefault")}</option>
-              {SUPPORTED_LANGUAGES.map(({ code, nativeName }) => (
-                <option key={code} value={code}>
-                  {nativeName}
-                </option>
-              ))}
-            </select>
+            <LanguageOrderEditor value={language} onChange={setLanguage} />
             <br />
             {t("settings.selectTheLanguageForThe")}
           </Row>

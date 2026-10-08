@@ -15,6 +15,12 @@
 // literals in the original Perl source, before this plugin can actually reach them
 // (Deno's --allow-net grant is scoped to exactly this list).
 
+/** A browser-shaped User-Agent for the session-refresh request. E-Hentai serves its member layout to
+ * any client that is properly signed in (verified with a bare `Mozilla/5.0`), but the front-end
+ * markup it returns is the browser one — so this stays browser-shaped rather than inventing one. */
+const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0";
+
 export function pluginInfo() {
   return {
     namespace: "ehlogin",
@@ -26,6 +32,15 @@ export function pluginInfo() {
       { name: "param2", description: "ipb_pass_hash cookie", required: false, type: "string" },
       { name: "param3", description: "star cookie (optional, if present you can view fjorded content without exhentai)", required: false, type: "string" },
       { name: "param4", description: "igneous cookie(optional, if present you can view exhentai without Europe and America IP)", required: false, type: "string" },
+      // Added by LANrurugi, not present in the converted legacy plugin. Without these two, E-Hentai
+      // serves the *guest-shaped* listing (25 results per page) even with valid member cookies — it
+      // does not error, it just answers with a smaller page. Measured against a signed-in browser
+      // capture: `ipb_member_id`/`ipb_pass_hash`/`star` alone → 25 links/page, adding `sk` +
+      // `hath_perks` → 100 links/page and byte-identical HTML to the browser's own request.
+      // `hath_perks` is stable per account; `sk` rotates with the browser session, so it goes stale
+      // silently — refresh it from the browser when the listing starts looking thin.
+      { name: "param5", description: "sk cookie (optional fallback — refreshed automatically on every login; only fill this in if the automatic refresh cannot reach the site)", required: false, type: "string" },
+      { name: "param6", description: "hath_perks cookie (optional fallback — refreshed automatically on every login, same as sk)", required: false, type: "string" },
     ],
     // TODO(perl-convert): source used an HTTP client (Mojo::UserAgent/LWP/etc.) — 
     // fill in the actual host(s) this plugin needs so Deno's --allow-net grant 
@@ -40,12 +55,80 @@ export function pluginInfo() {
 
 
 export async function execLogin(hostArgs: { customargs: string[] }) {
-  const [ipb_member_id, ipb_pass_hash, star, igneous] = hostArgs.customargs;
-  return get_user_agent(ipb_member_id, ipb_pass_hash, star, igneous);
+  const [ipb_member_id, ipb_pass_hash, star, igneous, sk, hath_perks] = hostArgs.customargs;
+  const ua = get_user_agent(ipb_member_id, ipb_pass_hash, star, igneous, sk, hath_perks);
+  // Only when they are not configured. The host runs this plugin before *every* metadata/download/
+  // discovery call, so an unconditional refresh would be one extra request per archive in a batch —
+  // and both cookies are account-scoped with a one-year lifetime (a value captured from one browser
+  // was still valid from a different client days later), so re-fetching them buys nothing. Configured
+  // values therefore mean zero extra requests; leave them empty and the refresh keeps itself current.
+  if (ipb_member_id && ipb_pass_hash && !(sk && hath_perks)) {
+    await refresh_session_cookies(ua, ipb_member_id, ipb_pass_hash, star);
+  }
+  return ua;
+}
+
+/** Fetches the two cookies E-Hentai will only hand out in answer to a *browsing* request.
+ *
+ * `sk` (session key) and `hath_perks` (H@H perks) are what switch a listing to its full member shape
+ * — 100 works per page instead of the guest 25 — and neither can be derived from the account
+ * password: the site issues them, `sk` rotates with the session, and a pasted copy goes stale
+ * silently (the listing simply gets thinner, with no error). Measured against a live signed-in
+ * session: a request to `/favorites.php` carrying only `ipb_member_id`/`ipb_pass_hash` answers with
+ * `Set-Cookie: sk=…; Max-Age=31536000` and `Set-Cookie: hath_perks=…`, while requesting the front
+ * page hands out nothing.
+ *
+ * `/favorites.php` rather than a neutral page for a second reason: it only renders for a valid
+ * session, so a bad pair shows up here instead of as a quietly smaller listing later.
+ *
+ * Failure is swallowed — the seeds from `customargs` (and any manual values) still apply, and a
+ * login that works but returns no `sk` is better than no session at all. */
+async function refresh_session_cookies(
+  ua: ReturnType<typeof legacyCompat.userAgent>,
+  ipb_member_id: string,
+  ipb_pass_hash: string,
+  star: string,
+) {
+  const logger = legacyCompat.getLogger("E-Hentai Login", "plugins");
+  const cookie = [
+    `ipb_member_id=${ipb_member_id}`,
+    `ipb_pass_hash=${ipb_pass_hash}`,
+    star ? `star=${star}` : "",
+    "nw=1",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  try {
+    const response = await fetch("https://e-hentai.org/favorites.php", {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Cookie: cookie,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
+    });
+    let refreshed: string[] = [];
+    for (const raw of response.headers.getSetCookie()) {
+      const pair = raw.split(";")[0] ?? "";
+      const eq = pair.indexOf("=");
+      if (eq <= 0) continue;
+      const name = pair.slice(0, eq).trim();
+      const value = pair.slice(eq + 1).trim();
+      if (!name || !value) continue;
+      // Both domains: the same value is what the browser sends to either host, and a download or
+      // discovery call may target exhentai.org for the same account.
+      ua.cookie_jar.add({ name, value, domain: "e-hentai.org", path: "/" });
+      ua.cookie_jar.add({ name, value, domain: "exhentai.org", path: "/" });
+      refreshed.push(name);
+    }
+    logger.info(`session cookies refreshed: ${refreshed.join(", ") || "none"}`);
+  } catch (e) {
+    logger.warn(`could not refresh the session cookies, continuing with what was configured: ${String(e)}`);
+  }
 }
 
 function get_user_agent(...args: any[]) {
-  let [ipb_member_id, ipb_pass_hash, star, igneous] = args.slice(0);
+  let [ipb_member_id, ipb_pass_hash, star, igneous, sk, hath_perks] = args.slice(0);
   let logger = legacyCompat.getLogger("E-Hentai Login", "plugins");
   let ua = legacyCompat.userAgent();
   if (ipb_member_id !== "" && ipb_pass_hash !== "") {
@@ -58,6 +141,16 @@ function get_user_agent(...args: any[]) {
     ua.cookie_jar.add({name: 'igneous', value: igneous, domain: 'exhentai.org', path: '/'});
     ua.cookie_jar.add({name: 'star', value: star, domain: 'e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'igneous', value: igneous, domain: 'e-hentai.org', path: '/'});
+    // Only when set: sending `sk=` empty is not the same request as not sending it at all, and the
+    // point of these two is to make the request look like the browser's.
+    if (sk) {
+      ua.cookie_jar.add({name: 'sk', value: sk, domain: 'e-hentai.org', path: '/'});
+      ua.cookie_jar.add({name: 'sk', value: sk, domain: 'exhentai.org', path: '/'});
+    }
+    if (hath_perks) {
+      ua.cookie_jar.add({name: 'hath_perks', value: hath_perks, domain: 'e-hentai.org', path: '/'});
+      ua.cookie_jar.add({name: 'hath_perks', value: hath_perks, domain: 'exhentai.org', path: '/'});
+    }
     ua.cookie_jar.add({name: 'ipb_coppa', value: '0', domain: 'forums.e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'nw', value: '1', domain: 'exhentai.org', path: '/'});
     ua.cookie_jar.add({name: 'nw', value: '1', domain: 'e-hentai.org', path: '/'});

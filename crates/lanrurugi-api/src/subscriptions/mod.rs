@@ -15,8 +15,61 @@
 //! 3. **Unattended spending is the real risk.** Matched works wait for confirmation unless the user
 //!    turned that off for a given subscription.
 
+pub mod ai_condition;
 pub mod api;
 pub mod matcher;
 pub mod reservations;
 pub mod runner;
 pub mod scheduler;
+pub mod snapshot;
+
+/// Layers a subscription's own [`ConflictPolicy`] onto the download plugin's resolved
+/// `overwrite_on_duplicate` — the value frozen onto the queue item at enqueue time.
+///
+/// `AutoRename`/`Discard` force it *off* rather than leaving the plugin's own answer in place: the
+/// plugin option and the global `replacedupe` both resolve byte-level collisions silently, so with
+/// either of them on, a collision never becomes a staged conflict and the policy would never run.
+/// A subscription that asked to rename or drop is asking for exactly that decision point.
+pub fn overwrite_under_conflict_policy(
+    policy: lanrurugi_storage::subscriptions::ConflictPolicy,
+    plugin_resolved: bool,
+) -> bool {
+    use lanrurugi_storage::subscriptions::ConflictPolicy;
+    match policy {
+        ConflictPolicy::Overwrite => true,
+        ConflictPolicy::AutoRename | ConflictPolicy::Discard => false,
+        ConflictPolicy::Ask => plugin_resolved,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lanrurugi_storage::subscriptions::ConflictPolicy;
+
+    /// `Overwrite` forces the overwrite on; `AutoRename`/`Discard` force it *off*, or the plugin's
+    /// own option (and the global `replacedupe`) would resolve the collision silently and the
+    /// policy would never see a conflict to act on. `Ask` leaves the plugin's answer alone.
+    #[test]
+    fn a_conflict_policy_decides_whether_a_collision_reaches_it() {
+        assert!(super::overwrite_under_conflict_policy(
+            ConflictPolicy::Overwrite,
+            false
+        ));
+        assert!(!super::overwrite_under_conflict_policy(
+            ConflictPolicy::AutoRename,
+            true
+        ));
+        assert!(!super::overwrite_under_conflict_policy(
+            ConflictPolicy::Discard,
+            true
+        ));
+        assert!(super::overwrite_under_conflict_policy(
+            ConflictPolicy::Ask,
+            true
+        ));
+        assert!(!super::overwrite_under_conflict_policy(
+            ConflictPolicy::Ask,
+            false
+        ));
+    }
+}

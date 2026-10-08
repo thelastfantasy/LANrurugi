@@ -76,6 +76,28 @@ void i18n
     },
   })
 
+/** Splits the stored preference into an ordered list of language codes.
+ *
+ * Stored comma-separated in the one `language` setting, so a value written when this was a single
+ * choice still reads correctly — one language is a list of length one. */
+export function languageOrder(stored: string | undefined): string[] {
+  if (!stored || stored === "auto") return []
+  return stored
+    .split(",")
+    .map((code) => code.trim())
+    .filter(Boolean)
+}
+
+/** The first preferred language this build actually ships translations for. */
+export function preferredInterfaceLanguage(
+  stored: string | undefined,
+): (typeof SUPPORTED_LANGUAGES)[number]["code"] | undefined {
+  const codes = SUPPORTED_LANGUAGES.map((l) => l.code)
+  return languageOrder(stored).find((code): code is (typeof codes)[number] =>
+    (codes as readonly string[]).includes(code),
+  )
+}
+
 /** Applies the server-side `language` setting on top of i18next's own detection, which has no
  * idea it exists. Falls back to the public `/theme` endpoint's `language` field while logged out. */
 export function useApplySettingsLanguage() {
@@ -92,8 +114,12 @@ export function useApplySettingsLanguage() {
       void i18n.changeLanguage()
       return
     }
-    if (i18n.language === language) return
-    void i18n.changeLanguage(language)
+    // An ordered preference list: the first one actually shipped wins. Falling through rather than
+    // taking the head means a preference for a language with no translations yet does not blank the
+    // interface — it simply defers to the next choice.
+    const chosen = preferredInterfaceLanguage(language)
+    if (!chosen || i18n.language === chosen) return
+    void i18n.changeLanguage(chosen)
   }, [language])
 }
 

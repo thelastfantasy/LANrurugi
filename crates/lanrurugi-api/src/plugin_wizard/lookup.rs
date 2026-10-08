@@ -150,5 +150,21 @@ pub(super) async fn lookup(
         serde_json::to_value(login_entry).unwrap_or(json!(null)),
     );
 
+    // `discovery` last, and deliberately not folded into the loop above: its coverage question is
+    // "does a subscription source for this domain already exist", which is what
+    // `DOMAIN_BOUND_PLUGIN_TYPES` already claims — an earlier revision of this function declared
+    // `discovery` there but never filled the entry in, so the authoring assistant could not see a
+    // capability the protocol had (issue #55, FR-028).
+    let discovery_candidates = by_kind.get("discovery").cloned().unwrap_or_default();
+    let discovery_entry =
+        match find_plugin_by_domain(&state, &discovery_candidates, &req.domain).await {
+            Some((ns, info)) => coverage_for(&state, &ns, &info).await,
+            None => TypeCoverage::missing(),
+        };
+    coverage.insert(
+        "discovery".to_string(),
+        serde_json::to_value(discovery_entry).unwrap_or(json!(null)),
+    );
+
     (StatusCode::OK, Json(serde_json::Value::Object(coverage))).into_response()
 }

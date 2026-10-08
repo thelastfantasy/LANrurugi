@@ -23,6 +23,7 @@ export function Select<Value extends string>({
   showItemIndicator = true,
   style,
   size,
+  popupZIndex = Z_OVERLAY_CONTENT,
   ...rootProps
 }: {
   value: Value
@@ -39,6 +40,9 @@ export function Select<Value extends string>({
   /** Size preset for the trigger *and* popup item text — the popup is a portal-mounted sibling
    * that doesn't inherit the trigger's own `style`. Omit for the default inherited size. */
   size?: keyof typeof SELECT_SIZES
+  /** The popup is portalled to `body`, so a Select inside a dialog needs a z-index above that
+   * dialog's own (`Z_OVERLAY_ABOVE_LEGACY_MODAL`) or its menu opens behind it. */
+  popupZIndex?: number
 } & Omit<ComponentProps<typeof BaseSelect.Root>, "value" | "onValueChange" | "items" | "children">) {
   const palette = useMenuPalette()
   const sizeStyle = size ? SELECT_SIZES[size] : undefined
@@ -59,7 +63,7 @@ export function Select<Value extends string>({
           sideOffset={4}
           alignItemWithTrigger={false}
           className="outline-none"
-          style={{ zIndex: Z_OVERLAY_CONTENT }}
+          style={{ zIndex: popupZIndex }}
         >
           <BaseSelect.Popup
             // text-left resets legacy's body { text-align: center }, which inherits into the portal.

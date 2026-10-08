@@ -2,7 +2,7 @@ import { useCallback, useReducer } from "react"
 
 /** Every entity here is frontend-only state; nothing in this file is ever persisted server-side. */
 
-export type PluginType = "login" | "metadata" | "download"
+export type PluginType = "login" | "metadata" | "download" | "discovery"
 
 /** `WizardSession.sharedLinks` stores raw, unfiltered textarea lines; every consumer calls this
  * once at the point of use rather than filtering the stored list itself. */
@@ -54,6 +54,9 @@ export interface DomainLookupResult {
   login: TypeCoverage
   metadata: TypeCoverage
   download: TypeCoverage
+  /** A subscription source for this domain. Added later than the other three (issue #55, FR-028):
+   *  the protocol had `discover` while the assistant could not see it at all. */
+  discovery: TypeCoverage
 }
 
 export interface LoginAssociation {
@@ -93,7 +96,27 @@ export interface TrialRunResultLinks {
   loginSuggestion?: LoginSuggestion
 }
 
-export type TrialRunResult = TrialRunResultLogin | TrialRunResultLinks
+/** One probe of a discovery draft: what was asked for, and what came back.
+ *
+ * There is no link to act on here — a discovery plugin is asked what *exists* — so `link`/`perLink`
+ * (the shapes the other two types use) do not apply. */
+export interface DiscoveryProbe {
+  /** `listing_url` when the hint looked like a URL, `creator` when it did not, and `{}` for the
+   *  unfiltered probe the server runs when given nothing. */
+  probe: { listing_url?: string; creator?: string }
+  ok: boolean
+  candidates?: number
+  degraded?: boolean
+  error?: string | null
+  sample?: unknown[]
+}
+
+export interface TrialRunResultDiscovery {
+  type: "discovery"
+  probes: DiscoveryProbe[]
+}
+
+export type TrialRunResult = TrialRunResultLogin | TrialRunResultLinks | TrialRunResultDiscovery
 
 export interface DraftRevision {
   id: string
@@ -416,8 +439,19 @@ export function canSaveFor(session: WizardSession, typeSession: TypeSession): bo
     return activeRevision.trialRuns.some((r) => r.type === "login")
   }
 
+  // A discovery trial is a single call probing whatever hints were given, not one call per shared
+  // link, so "every link was tried" is not the gate here: one probe that actually returned
+  // candidates is.
+  if (typeSession.type === "discovery") {
+    return activeRevision.trialRuns.some(
+      (r) => r.type === "discovery" && r.probes.some((p) => p.ok && (p.candidates ?? 0) > 0),
+    )
+  }
+
   const triedLinks = new Set(
-    activeRevision.trialRuns.flatMap((r) => (r.type === "login" ? [] : r.perLink.map((l) => l.link))),
+    activeRevision.trialRuns.flatMap((r) =>
+      r.type === "login" || r.type === "discovery" ? [] : r.perLink.map((l) => l.link),
+    ),
   )
   const links = cleanLinks(session.sharedLinks)
   return links.length > 0 && links.every((link) => triedLinks.has(link))
@@ -432,6 +466,9 @@ export function isFormComplete(session: WizardSession, typeSession: TypeSession)
       .filter((p) => p.required)
       .every((p) => typeSession.loginFieldValues[p.name]?.trim())
   }
+  // Discovery asks what exists, so one concrete hint (a listing URL or a creator) is a usable
+  // sample — demanding three would invent a requirement the trial run does not have.
+  if (typeSession.type === "discovery") return cleanLinks(session.sharedLinks).length >= 1
   return cleanLinks(session.sharedLinks).length >= 3
 }
 
@@ -439,7 +476,15 @@ export function isFormComplete(session: WizardSession, typeSession: TypeSession)
 export function isSharedLinksStepComplete(session: WizardSession): boolean {
   const linkDependentTypes = session.selectedTypes.filter((t) => t !== "login")
   if (linkDependentTypes.length === 0) return true
-  return cleanLinks(session.sharedLinks).length >= 3
+  // One hint is enough only when every link-dependent type selected is discovery.
+  const need = linkDependentTypes.every((t) => t === "discovery") ? 1 : 3
+  return cleanLinks(session.sharedLinks).length >= need
+}
+
+/** How a probe reads in one line: what was asked, or the empty-string sentinel for the unfiltered
+ * probe the server runs when given no hints at all (the caller substitutes a translated label). */
+export function probeLabel(probe: { listing_url?: string; creator?: string }): string {
+  return probe.listing_url ?? (probe.creator ? `creator: ${probe.creator}` : "")
 }
 
 /** Cap on consecutive AI auto-fix attempts for one type. */
@@ -457,6 +502,13 @@ export function latestFailureSummary(typeSession: TypeSession): string | undefin
 
   if (lastRun.type === "login") {
     return lastRun.outcome === "failure" ? lastRun.detail : undefined
+  }
+  if (lastRun.type === "discovery") {
+    const failures = lastRun.probes.filter((p) => !p.ok)
+    if (failures.length === 0) return undefined
+    return failures
+      .map((p) => `${probeLabel(p.probe)}: ${p.error ?? "unknown error"}`)
+      .join("\n")
   }
   const failures = lastRun.perLink.filter((l) => l.outcome === "failure")
   if (failures.length === 0) return undefined

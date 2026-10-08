@@ -26,7 +26,23 @@ import {
   cleanLinks,
   latestFailureSummary,
   loginPluginFilePathNamespace,
+  probeLabel,
 } from "./useWizardSession"
+
+/** One line for a sampled candidate: its title in whichever language the source carried, or the
+ *  source URL when it has no title at all. The wizard shows a sample of three; it does not offer to
+ *  browse the listing, which is what the subscription preview is for. */
+function sampleLabel(entry: unknown): string {
+  if (typeof entry !== "object" || entry === null) return String(entry)
+  const e = entry as { title?: unknown; source?: unknown }
+  if (typeof e.title === "object" && e.title !== null) {
+    const titled = e.title as Record<string, unknown>
+    const first = Object.values(titled).find((v) => typeof v === "string" && v)
+    if (typeof first === "string") return first
+  }
+  if (typeof e.title === "string" && e.title) return e.title
+  return typeof e.source === "string" ? e.source : JSON.stringify(entry)
+}
 
 /** Default save filename: domain's alphanumeric characters only, matching
  * `save.rs::is_safe_filename`'s allowed charset. */
@@ -66,6 +82,22 @@ interface LinkTrialRunResponse {
 interface LoginTrialRunResponse {
   outcome: "success" | "failure"
   detail: string
+}
+
+/** A discovery probe's outcome, as `trial_run.rs::run_discovery_trial` reports it. */
+interface DiscoveryProbeResponse {
+  probe: { listing_url?: string; creator?: string }
+  ok: boolean
+  candidates?: number
+  degraded?: boolean
+  error?: string | null
+  sample?: unknown[]
+}
+
+interface DiscoveryTrialRunResponse {
+  plugin_type: "discovery"
+  results: DiscoveryProbeResponse[]
+  declared_options?: PluginOptions
 }
 
 /** Triggers `POST /plugin-wizard/trial-run` for the type's active revision and renders every
@@ -134,6 +166,21 @@ export function TrialRunResult({
           credentials: { fields: typeSession.loginFieldValues },
         })
         onTrialRunAppended({ type: "login", outcome: response.outcome, detail: response.detail })
+      } else if (type === "discovery") {
+        // The server interprets each hint itself: a URL becomes a `listing_url` probe, anything
+        // else a `creator` probe, and an empty list one unfiltered probe. Sending them as-is is
+        // what keeps this branch from having to know which is which.
+        const response = await sendJson<DiscoveryTrialRunResponse>("POST", "/plugin-wizard/trial-run", {
+          plugin_type: type,
+          code: activeRevision.code,
+          test_links: cleanLinks(session.sharedLinks),
+          plugin_parameter_values: pluginParameterValues,
+        })
+        setDeclaredOptions(response.declared_options)
+        onTrialRunAppended({
+          type: "discovery",
+          probes: response.results,
+        })
       } else {
         // A login plugin generated this session was never persisted to Redis, so supply its
         // field values directly rather than relying on trial_run.rs's normal Redis lookup.
@@ -290,7 +337,11 @@ export function TrialRunResult({
       {type !== "login" && typeSession.dependsOnLogin && (
         <AssociatedLoginPluginSettings filePathNamespace={loginFilePathNamespace} />
       )}
-      {type !== "login" && declaredOptions && (
+      {type !== "login" &&
+        declaredOptions &&
+        (declaredOptions.domain_rules.length > 0 ||
+          declaredOptions.bundle_as_archive ||
+          declaredOptions.overwrite_on_duplicate) && (
         <div className="ptbox" style={{ padding: 8, marginBottom: 8 }}>
           <h3 className="ih">{t("pluginWizard.declaredOptionsPreviewHeading")}</h3>
           <p style={{ fontStyle: "italic", margin: "0 0 6px" }}>
@@ -381,7 +432,12 @@ export function TrialRunResult({
         style={{ marginLeft: 8 }}
         value={t(isEditingExisting ? "pluginWizard.confirmOverwrite" : "pluginWizard.confirmSave") ?? ""}
         disabled={!canSave || isInFlight || !filename}
-        title={!canSave ? (t("pluginWizard.saveGateHint") ?? undefined) : undefined}
+        title={
+          !canSave
+            ? (t(type === "discovery" ? "pluginWizard.saveGateHintDiscovery" : "pluginWizard.saveGateHint") ??
+              undefined)
+            : undefined
+        }
         onClick={() => void triggerSave()}
       />
 
@@ -391,6 +447,37 @@ export function TrialRunResult({
             <p>
               <strong>{t(`pluginWizard.outcome.${result.outcome}`)}</strong>: {result.detail}
             </p>
+          ) : result.type === "discovery" ? (
+            <>
+              {result.probes.map((probe, j) => (
+                <p key={j}>
+                  <strong>{t(`pluginWizard.outcome.${probe.ok ? "success" : "failure"}`)}</strong> —{" "}
+                  {probeLabel(probe.probe) || t("pluginWizard.discoveryUnfilteredProbe")}
+                  {probe.ok
+                    ? ` — ${t("pluginWizard.discoveryCandidateCount", { count: probe.candidates ?? 0 })}`
+                    : `: ${probe.error ?? ""}`}
+                  {/* The one thing a passing probe still hides — and the failure mode this whole
+                      capability warns about, because it looks exactly like success. */}
+                  {probe.ok && probe.degraded && (
+                    <span className="ptbox" style={{ display: "block", marginTop: 4, padding: 6 }}>
+                      {t("pluginWizard.discoveryDegradedWarning")}
+                    </span>
+                  )}
+                </p>
+              ))}
+              {result.probes.some((p) => p.ok && (p.sample?.length ?? 0) > 0) && (
+                <div style={{ marginTop: 4 }}>
+                  {result.probes
+                    .flatMap((probe) => probe.sample ?? [])
+                    .slice(0, 3)
+                    .map((entry, k) => (
+                      <p key={k} style={{ fontStyle: "italic", margin: "0 0 2px" }}>
+                        {sampleLabel(entry)}
+                      </p>
+                    ))}
+                </div>
+              )}
+            </>
           ) : (
             <>
               {result.perLink.map((link, j) => (

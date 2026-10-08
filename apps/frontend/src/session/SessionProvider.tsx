@@ -33,11 +33,22 @@ export interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
+/** How often an *already signed-in* tab re-asks the server who it is. The access token is
+ * short-lived (4h by default) and an open tab has no other reason to notice it expiring — with
+ * guest mode on the server then treats its requests as a guest's, and guest-eligible pages (the
+ * library, the reader) answer `200` with guest-scoped content rather than an error anything could
+ * react to. React Query's own focus/reconnect refetch covers coming back to the tab; this covers a
+ * tab that never lost focus (a suspended machine resuming, a window left open). A tick that finds
+ * the session still valid costs one `GET /login/status` and nothing else; guests aren't polled at
+ * all, since they have no session to renew. Exported for the test that pins the polling gate. */
+export const AUTHENTICATED_RECHECK_INTERVAL_MS = 10 * 60 * 1000
+
 /** Owns the single `login-status` query and derives every session/guest boolean from it. */
 export function SessionProvider({ children }: { children: ReactNode }) {
   const query = useQuery({
     queryKey: SESSION_QUERY_KEY,
     queryFn: () => fetchLoginStatusWithRefresh<LoginStatus>(),
+    refetchInterval: (q) => (q.state.data?.logged_in ? AUTHENTICATED_RECHECK_INTERVAL_MS : false),
   })
 
   const value = useMemo<SessionContextValue>(() => {

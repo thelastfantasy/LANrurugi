@@ -166,7 +166,9 @@ that reason.
 - A source returns a *valid but smaller* listing when signed out (rather than an error), so the check
   appears to succeed while missing works that are only visible to a signed-in account.
 - A listing contains entries that are not works at all (ads, pagination links, site notices).
-- The user edits a subscription's rules while one of its cycles is mid-flight.
+- A bot challenge or anti-automation interstitial answers the request instead of the listing, with a
+  success status code. (Resolved by FR-002i.)
+- The user edits a subscription's rules while one of its cycles is mid-flight. (Resolved by FR-012a.)
 - The server restarts between "candidate matched" and "download queued".
 - A reservation entry's source URL no longer resolves when retried much later.
 - The reservation list grows without bound because nobody ever clears it.
@@ -214,6 +216,17 @@ that reason.
   treated as inconclusive rather than as a completed check: the system MUST NOT record its candidates
   as "everything that exists", MUST NOT let it mark works as seen-and-dismissed, and MUST surface the
   degraded state to the user.
+- **FR-002i**: A check that was answered by an interposed bot challenge or anti-automation
+  interstitial instead of the source's own listing MUST be treated as a **failure**, not as a
+  completed check and not as a merely degraded one, and MUST NOT mark any work as seen. This is
+  distinct from FR-002h: the check was not signed out, it was never served a listing at all. The
+  dangerous case is a challenge delivered with a success status code, where the response parses to
+  zero candidates and so is otherwise indistinguishable from a genuinely empty result.
+- **FR-002j**: A discovery capability MUST return the fields the system filters on — at minimum the
+  tags, and the title and rating where the listing carries them — for every candidate it reports.
+  Returning only an identifier makes every required-tag rule reject every candidate, which the system
+  would then report as "rejected for a missing tag": indistinguishable, to the user, from a rule that
+  is simply too strict.
 - **FR-002b**: A source whose extension offers no discovery capability MUST NOT be selectable when
   creating a subscription, and the reason MUST be visible to the user rather than failing silently
   at the first check.
@@ -265,6 +278,122 @@ that reason.
 - **FR-011**: The system MUST record, per candidate it rejected, which rule rejected it, and expose
   that to the user.
 - **FR-012**: The system MUST NOT run overlapping cycles for the same subscription.
+- **FR-012a**: Editing a subscription MUST NOT disturb a cycle already in flight for it, and MUST
+  preserve everything the user did not edit — in particular the works it has already seen, so an edit
+  never causes the back catalogue to be re-downloaded. The in-flight cycle finishes under the rules
+  it started with; the next one uses the new rules.
+- **FR-011a**: Which candidate fields a subscription may filter on MUST follow from the source's own
+  candidate type together with which of those fields its extension actually populates — not from a
+  fixed list built into the system. Every filter the system hard-codes is an assumption about what
+  sources expose: a rating floor presumes ratings exist, a publication-age rule presumes a publication
+  date is listed. A source carrying a page count, a view count, or a language MUST become filterable on
+  those without the system being changed.
+- **FR-012f**: A subscription MUST NOT run its first check immediately after its settings are written,
+  whether on creation or on edit. A short settling period applies, and the interface MUST say that it
+  is in effect. Saving is not the same as being sure: an over-broad rule is usually noticed moments
+  after saving, by which time an immediate check would already have queued downloads against it —
+  spending real credit on works the user is about to decide they did not want. The window MUST also
+  hold back a subscription that is otherwise long overdue, since that is exactly the case where an
+  edit is followed instantly by a check.
+- **FR-011n**: Match history MUST show what became of a work it queued, not only the decision to queue
+  it. A cycle records the decision and nothing afterwards revisits it, so a download that later failed
+  would otherwise read as "queued" forever. Where the failed download can be started again, the
+  history MUST offer that directly.
+- **FR-011o**: When a subscription is being created, the interface MUST state which login and download
+  plugins its source will actually use, and MUST say so when no installed plugin answers the source's
+  declared login. A missing sign-in does not fail a check — the source answers with a *smaller*
+  listing — so a subscription built on one silently tracks less than the user believes.
+- **FR-011p**: Where no login plugin covers a source, the user MUST be able to supply cookies or
+  headers for that subscription's own checks. These are folded in exactly where a login plugin's own
+  result goes, so an extension cannot tell them apart. The interface MUST state that, unlike a plugin,
+  they do not refresh themselves.
+- **FR-011m**: Users MUST be able to see, in one place, what every subscription has matched and
+  turned away recently — interleaved by time rather than read one subscription at a time. The question
+  being asked is usually about the library as a whole ("what arrived, and why did something expected
+  not"), which per-subscription history answers only by being visited repeatedly. It MUST be possible
+  to narrow that stream to what was taken and to what was turned away, since those are the two
+  questions actually asked of it.
+- **FR-011k**: Where a work carries titles in several languages, the one shown MUST be chosen by the
+  viewer's own ordered language preference — the same preference that chooses the interface language,
+  so the two never disagree about what a work is called. The system MUST NOT privilege any particular
+  language in its own code: which language is the "original" is a property of the source, not of the
+  system, and hard-coding one would be wrong for the next source added.
+- **FR-011l**: That preference MUST be an ordered list rather than a single choice, because one answer
+  cannot serve both jobs it is asked to do: the interface needs a language the build has translations
+  for, while a title needs one its source happened to supply. Each falls through the list to the first
+  acceptable answer rather than jumping straight to a default.
+- **FR-011i**: Users MUST be able to see what a subscription's rules would catch **before** acting on
+  them, against the source as it is now, and MUST be able to do so while the subscription is switched
+  off — tuning a rule is precisely when it is disabled. The preview MUST show everything the source
+  listed, visibly distinguishing what would be taken from what the rules turned away and why: a rule
+  that is too strict is indistinguishable from a source with nothing new unless the rejected works and
+  their reasons are shown alongside. A preview MUST NOT download anything, record anything as seen, or
+  otherwise change what a later real check would do.
+- **FR-011j**: A preview MUST be computed by the same evaluation the real check uses. A preview
+  produced by a separate path would eventually disagree with the check it claims to preview, and the
+  disagreement would surface as a subscription behaving unlike its own preview.
+- **FR-011f**: Conditions MUST be expressible as a tree, with each group deciding independently
+  whether its own members must all hold or any one of them suffices, and with any single condition or
+  whole group able to be stated as an exclusion. A single flat list joined by one connective cannot
+  express ordinary intent such as "by this creator, and either well rated or long, but not already
+  translated".
+- **FR-011g**: When any part of a condition cannot yet be answered, the whole candidate MUST be held
+  for reconsideration — even where another branch of an "any one of" group already holds. A rejection
+  records the work as handled and it is never looked at again, whereas an unanswerable part may answer
+  itself on the next check; waiting costs one further check, while deciding early cannot be undone.
+  Negating something unanswerable likewise stays unanswerable, since excluding a work on the strength
+  of a value that has not arrived would exclude it for the wrong reason.
+- **FR-011i** (2026-10-07 revision): A rejection MUST be treated as *provisional* whenever what
+  decided it can change on its own — a community rating that rises as people vote, a tag added to a
+  work after publication, a page count filled in later. Such a work is recorded as rejected for the
+  cycle that decided it, and remembered as **reconsiderable**: every later check decides it afresh,
+  and only a verdict that actually changes (it now qualifies) is acted on and recorded. A work the
+  user *answered* — downloaded, approved, reserved, or discarded — stays settled and is never
+  re-offered, because that decision was theirs and re-deciding it would ask again what they already
+  said. Rationale, in the user's own terms: "不要过于草率就标记为拒绝" — a rule that rejects on a value
+  the source keeps revising is guessing at the future, and the failure mode is invisible (a work that
+  was never offered is reported nowhere). This does not weaken FR-011g: an answered-and-final
+  rejection is still never looked at again, and a still-failing reconsidered work is recorded as
+  *already seen* rather than rejected again, so the history does not repeat the same rows every hour.
+- **FR-011h**: An empty group MUST match nothing rather than everything, and the interface MUST say
+  so. An unfinished condition that quietly matched everything would widen a subscription at precisely
+  the moment the user believed they were narrowing it.
+- **FR-011b**: A rule MUST only use an operator the system implements for that field's type, so a rule
+  can never name a comparison with no implementation behind it, and each comparison has one
+  implementation shared by every source.
+- **FR-011c**: A rule over a value a candidate does not currently carry MUST hold the work for
+  reconsideration on a later check, NOT reject it. A rejection is permanent while the value may simply
+  not exist yet. This is why a rating floor alone cannot express "download only what scored well": a
+  work published minutes ago usually carries no rating, so the rule would be applied at the one moment
+  the answer is least knowable. Pairing it with a publication-age condition is what makes the intent
+  expressible — and after that waiting period, an absent rating becomes informative rather than merely
+  premature.
+- **FR-011d**: A rule referencing a field the source has stopped providing MUST be reported as
+  inapplicable with its reason — never silently dropped (which widens the subscription) and never
+  treated as satisfied (which narrows it). Both are changes the user would notice only by what fails to
+  arrive.
+- **FR-011e**: A condition expressed against time MUST be relative (an elapsed duration), not an
+  absolute instant. A subscription is a standing instruction: "newer than a fixed date" would mean
+  something different on every run and would eventually match everything.
+- **FR-012b**: The system MUST retain, per subscription, a snapshot of what its source last listed,
+  so that a later check can tell what is newly present and what has disappeared. Deciding what is new
+  MUST be done by comparing against what has already been handled, NOT by treating only works newer
+  than the most recent previous result as new: a work already published long ago can enter a
+  tag-or-keyword result set at any time by being edited, and would otherwise never be considered.
+- **FR-012c**: Each subscription MUST let the user choose what happens when a work it already tracks
+  changes at the source (title or tags) and when such a work disappears from the listing. These are
+  user decisions, not fixed behaviour, because the right answer differs between a narrow
+  creator-scoped subscription and a broad tag search. Defaults MUST be the least destructive option.
+- **FR-012d**: No option under FR-012c may delete, or overwrite the metadata of, an archive already in
+  the library. Cached listing data MUST NOT be written onto a held archive, because a listing row
+  truncates its tag list and writing it would remove real tags; where a user opts to act on a detected
+  change, the system MUST route it through the existing metadata-enrichment path rather than copying
+  cached values. A changed title MUST be surfaced with both values for the user to accept, never
+  applied silently, since the local title may be their own edit.
+- **FR-012e**: Before recording a work as removed, the system MUST require that the check was
+  authoritative (not failed, inconclusive, or blocked) and that the work was absent across several
+  consecutive checks. One absence MUST NOT be treated as removal, because a single partial or throttled
+  response would otherwise mark many works at once.
 - **FR-013**: The system MUST survive restart without re-downloading works it had already handled,
   and without losing subscriptions or their state.
 

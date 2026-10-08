@@ -29,6 +29,12 @@ pub enum RepositoryError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("malformed JSON in Redis key {key:?}: {source}")]
+    JsonValue {
+        key: String,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("{0} {1:?} not found")]
     NotFound(&'static str, String),
     #[error("parallel hashing task failed: {0}")]
@@ -247,7 +253,83 @@ impl ArchiveRepository {
     pub async fn delete(&self, id: &ArchiveId) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let _: () = conn.del(id.as_str()).await?;
+        // Its revision chain is part of the archive's own record and would otherwise outlive it —
+        // the same orphan class issue #102 dealt with.
+        let _: () = conn
+            .del(crate::keys::archive_version_history_key(id.as_str()))
+            .await?;
         Ok(())
+    }
+
+    /// Stores this archive's revision chain — see `keys::archive_version_history_key` for why it is
+    /// kept at all. Written at ingestion from the chain the download plugin itself reported, so it
+    /// costs nothing beyond a Redis write.
+    pub async fn set_version_history(
+        &self,
+        id: &ArchiveId,
+        entries: &[(String, String)],
+    ) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let key = crate::keys::archive_version_history_key(id.as_str());
+        if entries.is_empty() {
+            let _: () = conn.del(&key).await?;
+        } else {
+            let payload =
+                serde_json::to_string(entries).map_err(|source| RepositoryError::JsonValue {
+                    key: key.clone(),
+                    source,
+                })?;
+            let _: () = conn.set(&key, payload).await?;
+        }
+        Ok(())
+    }
+
+    /// The stored chains for many archives at once, as `(archive_id, chain)` pairs.
+    ///
+    /// Pipelined into a single round trip because the caller (revision classification) asks about the
+    /// whole library: one `GET` per archive would be thousands of round trips for a large library,
+    /// and this path runs once per download.
+    pub async fn version_histories_for(
+        &self,
+        ids: &[ArchiveId],
+    ) -> Result<Vec<(ArchiveId, Vec<(String, String)>)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.get().await?;
+        let mut pipe = deadpool_redis::redis::pipe();
+        for id in ids {
+            pipe.get(crate::keys::archive_version_history_key(id.as_str()));
+        }
+        let payloads: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+        let mut out = Vec::with_capacity(payloads.len());
+        for (id, payload) in ids.iter().zip(payloads) {
+            let Some(p) = payload else { continue };
+            let chain: Vec<(String, String)> =
+                serde_json::from_str(&p).map_err(|source| RepositoryError::JsonValue {
+                    key: crate::keys::archive_version_history_key(id.as_str()),
+                    source,
+                })?;
+            out.push((id.clone(), chain));
+        }
+        Ok(out)
+    }
+
+    /// This archive's stored chain, if any. `None` covers both "never recorded" and "the plugin
+    /// reported no history for it" — a caller that needs to tell them apart has no reason to.
+    pub async fn version_history(&self, id: &ArchiveId) -> Result<Option<Vec<(String, String)>>> {
+        let mut conn = self.pool.get().await?;
+        let key = crate::keys::archive_version_history_key(id.as_str());
+        let payload: Option<String> = conn.get(&key).await?;
+        match payload {
+            Some(p) => Ok(Some(serde_json::from_str(&p).map_err(|source| {
+                RepositoryError::JsonValue {
+                    key: key.clone(),
+                    source,
+                }
+            })?)),
+            None => Ok(None),
+        }
     }
 
     /// Reading-progress accessors: legacy stores this as plain fields on the Archive hash, not a
@@ -1218,6 +1300,49 @@ mod tests {
     /// archive record, so archive deletion has to clear them explicitly or they pile up as
     /// orphans. `delete_many_raw` skips the per-stamp rewrite of the owning archive's `stamps`
     /// list that `delete` does — that list is about to vanish with the record anyway.
+    /// The chain has to survive exactly as written, because a later check decides "is this an older
+    /// revision of something held?" from it without asking the source again.
+    #[tokio::test]
+    async fn a_stored_revision_chain_reads_back_and_dies_with_its_archive() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool);
+        let id = ArchiveId("0".repeat(40));
+        let chain = vec![
+            (
+                "e-hentai.org/g/1/aaaaaaaaaa".to_string(),
+                "2026-10-01T00:00:00Z".to_string(),
+            ),
+            (
+                "e-hentai.org/g/2/bbbbbbbbbb".to_string(),
+                "2026-10-02T00:00:00Z".to_string(),
+            ),
+        ];
+        repo.set_version_history(&id, &chain).await.unwrap();
+
+        assert_eq!(
+            repo.version_history(&id).await.unwrap(),
+            Some(chain.clone())
+        );
+        let batch = repo
+            .version_histories_for(std::slice::from_ref(&id))
+            .await
+            .unwrap();
+        assert_eq!(batch, vec![(id.clone(), chain)]);
+
+        // An empty chain clears the record rather than storing `[]`, and deletion takes it with the
+        // archive — a chain outliving its archive would be the orphan class issue #102 dealt with.
+        repo.set_version_history(&id, &[]).await.unwrap();
+        assert!(repo.version_history(&id).await.unwrap().is_none());
+        repo.set_version_history(&id, &[("a".to_string(), "b".to_string())])
+            .await
+            .unwrap();
+        repo.delete(&id).await.unwrap();
+        assert!(repo.version_history(&id).await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn delete_many_raw_drops_stamp_entities_without_touching_the_archive() {
         let Some(pool) = test_pool().await else {

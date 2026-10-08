@@ -100,6 +100,9 @@ export interface Settings {
   recommendprecision: string
   /** JWT access-token lifetime in seconds; an expired request transparently refreshes. */
   access_token_lifetime_secs: number
+  /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the
+   *  subscription scheduler. */
+  download_queue_retention_days: number
   /** Absolute refresh-token lifetime in seconds — the hard cap anchored to the original login.
    *  Silent refreshes never extend this. */
   refresh_token_lifetime_secs: number
@@ -221,7 +224,7 @@ export type DuplicateGroup = DuplicateArchive[]
 
 export interface PluginInfo {
   namespace: string
-  type: "metadata" | "login" | "download" | "script"
+  type: "metadata" | "login" | "download" | "script" | "discovery"
   name: string
   author: string
   description: string
@@ -340,16 +343,80 @@ export interface SubscriptionCriteria {
   listing_url?: string
 }
 
+/** The operators the host implements. Which ones apply to a field follows from that field's type on
+ *  the SDK's own candidate interface, so a rule can never name an operator with no implementation. */
+export type FieldOperator =
+  | "gte"
+  | "lte"
+  | "eq"
+  /** Published at least `value` seconds ago. A duration, not a timestamp: a subscription is a standing
+   *  instruction, and a fixed date would mean something different every day it ran. */
+  | "older_than"
+  | "newer_than"
+  | "equals"
+  | "contains"
+  | "in"
+  | "not_in"
+  | "includes_all"
+  | "includes_none"
+  /** The field carries no values at all — a work with no language tag, say. Not expressible with the
+   *  two above: excluding specific values cannot say "none of this kind". */
+  | "is_empty"
+  | "is_not_empty"
+  | "is"
+
+export type RuleValue = boolean | number | string | string[]
+
+/** One rule over a candidate field. The set of *available* fields is not stored — it is derived from
+ *  the source's own candidate type plus which keys its extension writes. */
+export interface FieldRule {
+  field: string
+  operator: FieldOperator
+  value: RuleValue
+}
+
+/** One node of a subscription's condition tree.
+ *
+ * A tree rather than a flat list because real intent nests: "by this artist, AND (rated 4+ OR over 100
+ * pages), AND NOT already translated" cannot be written as one list joined by a single connective. */
+export type Condition =
+  | { kind: "all"; children: Condition[] }
+  | { kind: "any"; children: Condition[] }
+  /** An exclusion. Its own node rather than a per-rule flag, so a whole group can be negated. */
+  | { kind: "not"; child: Condition }
+  | ({ kind: "rule" } & FieldRule)
+
 export interface SubscriptionFilters {
   required_tags?: string[]
   excluded_tags?: string[]
   minimum_rating?: number
   excluded_categories?: string[]
+  /** The condition a candidate must satisfy. Absent matches everything.
+   *
+   *  Rules over whatever fields this source's candidates actually carry — a page count, a publication
+   *  date, an uploader — so a new source needs no host change to become filterable. */
+  condition?: Condition
 }
 
 /** What a subscription does when a download fails for lack of source-side credit. Reactive: no
  * source exposes a balance to check beforehand, so the failure itself is the only trigger. */
 export type CreditPolicy = "pause" | "continue_and_reserve"
+
+/** What a subscription's downloads do when a filename collides with an archive the library already
+ * has. A subscription downloads unattended, so the default (`ask`) can park bytes nobody is there
+ * to decide about — see `PENDING_RENAME_TTL_HOURS`. */
+export type ConflictPolicy = "ask" | "auto_rename" | "overwrite" | "discard"
+
+/** What to do when a tracked work's title or tags change at the source.
+ *
+ * `refetch_metadata` re-runs the metadata capability rather than copying the listing's own tags onto
+ * the archive: a listing truncates its tag list, so writing those would delete real tags. */
+export type SourceChangePolicy = "notify_only" | "refetch_metadata" | "ignore"
+
+/** What to do when a tracked work disappears from the listing. No option deletes a held archive —
+ *  removal has innocent causes (a tag edited off, a takedown, a throttled partial listing) and
+ *  deletion is irreversible. */
+export type SourceRemovalPolicy = "mark_only" | "notify" | "ignore"
 
 export type SubscriptionState =
   | { state: "enabled" }
@@ -367,14 +434,24 @@ export interface Subscription {
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string | null
+  /** Extra tags merged onto every archive this subscription downloads. Omitted on records written
+   *  before the field existed. */
+  metadata_tags?: string[]
   enrich_metadata: boolean
   /** Off by default — a new subscription's rules are usually still being tuned, which is exactly
    * when an over-broad rule would spend real credit unattended. */
   auto_download: boolean
   credit_policy: CreditPolicy
+  conflict_policy: ConflictPolicy
+  on_source_changed: SourceChangePolicy
+  on_source_removed: SourceRemovalPolicy
   state: SubscriptionState
   last_checked_at?: number | null
   created_at: number
+  /** When its settings were last written. A short window after this, checks are held — a rule saved a
+   *  moment ago is the one most likely to be wrong, and a check would otherwise already have queued
+   *  downloads against it. */
+  settings_changed_at?: number | null
 }
 
 /** How a check ended.
@@ -394,11 +471,34 @@ export type CandidateVerdict =
   /** Carries which rule rejected it, so a too-strict subscription is diagnosable. */
   | { verdict: "rejected"; rule: string }
   | { verdict: "already_held" }
+  /** An older revision of a work the library already holds, decided from the revision chain stored
+   *  with that work — no download, and no round trip to the source to find out. */
+  | { verdict: "superseded"; newer_source: string }
   | { verdict: "already_seen" }
+  /** Inside its waiting period. Deliberately not a rejection — it is reconsidered on a later check and
+   *  is not recorded as seen, so it must never be shown as "already seen". */
+  | { verdict: "too_soon" }
+
+/** A work's titles by language tag, plus `origin` for the source's own wording. */
+export type Titles = Record<string, string>
 
 export interface CandidateRecord {
   source_url: string
-  title?: string | null
+  /** Optional for the same reason as `tags`: records predating the map have no such field. */
+  title?: Titles
+  /** Who posted it, and what the listing tagged it — most of what a work is judged by at a glance.
+   *  Absent for a source whose listing does not reveal them. */
+  uploader?: string | null
+  /** Source-side rating 0–5, when the listing exposes one. Optional because not every source rates
+   *  works and older records predate the field. */
+  rating?: number | null
+  /** Publication time as Unix seconds, already timezone-normalised by the backend. Optional for
+   *  old records and sources that do not expose a date. */
+  posted_at?: number | null
+  /** Optional on the wire: a record written before this field existed, or a source whose listing does
+   *  not reveal tags, simply omits it. Declaring it required made the compiler vouch for something
+   *  the server does not guarantee. */
+  tags?: string[]
   verdict: CandidateVerdict
 }
 
@@ -413,8 +513,47 @@ export interface CheckCycle {
 }
 
 /** A source that can back a subscription, with the interval bounds it declares. */
+/** What a check would do, without doing it. Nothing is queued or recorded. */
+export interface SubscriptionPreview {
+  outcome: CycleOutcome
+  candidates: CandidateRecord[]
+  /** The raw listing this preview read, replayed when only a condition changed — conditions are
+   *  judged locally, so re-fetching the source would be wasted work and one more rate-limited hit. */
+  listing?: unknown
+  /** How many would actually be acted on — queued or sent for approval. */
+  would_act_on: number
+}
+
+/** One candidate as some subscription's check saw it, for the cross-subscription history. */
+export interface HistoryEntry {
+  subscription_id: string
+  subscription_name: string
+  checked_at: number
+  outcome: CycleOutcome
+  candidate: CandidateRecord
+  /** What became of it once queued. Absent for anything never queued — rejected, still waiting, or
+   *  already held. A cycle records only the decision, so without this a download that later failed
+   *  still reads as "queued". */
+  download?: {
+    id: string
+    state: DownloadQueueState
+    error?: unknown
+    /** Whether the queue would accept starting it again. */
+    can_retry: boolean
+  } | null
+}
+
 export interface SubscriptionSource {
   namespace: string
+  /** Which login plugin this source would use, and whether anything installed answers to it.
+   *  `resolved: null` means the check runs signed out — which returns a *smaller* listing rather
+   *  than failing, so it is worth saying before a subscription is created rather than after. */
+  login_plugin?: { declared: string; resolved: string | null } | null
+  /** Which download plugin matches this source's own domain. */
+  download_plugin?: string | null
+  /** Which candidate fields this source actually populates, so the form offers filters only over
+   *  fields that will be there. Derived from the extension's own code, not configured. */
+  candidate_fields?: string[]
   suggested_secs?: number | null
   /** A floor the server enforces — a shorter interval is refused, not silently raised. */
   minimum_secs?: number | null
@@ -430,6 +569,17 @@ export interface ReservationEntry {
   created_at: number
 }
 
+/** A matched work waiting for the user's go-ahead, because its subscription has `auto_download`
+ * off. Kept as its own record rather than read back out of cycle history — history ages out, but an
+ * unanswered question should not disappear on its own. */
+export interface PendingApproval {
+  id: string
+  subscription_id: string
+  source_url: string
+  title?: string | null
+  created_at: number
+}
+
 export interface SubscriptionBody {
   name: string
   source: string
@@ -437,9 +587,20 @@ export interface SubscriptionBody {
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string
+  metadata_tags: string[]
   enrich_metadata: boolean
   auto_download: boolean
   credit_policy: CreditPolicy
+  /** What this subscription's downloads do about a filename collision. */
+  conflict_policy: ConflictPolicy
+  /** Whether it starts enabled. Defaults on — but a rule can be written now and switched on once its
+   *  preview looks right. Only meaningful on create; an existing one is toggled from its row. */
+  enabled?: boolean
+  /** Cookies/headers for a source no login plugin covers. An escape hatch, not a replacement — a
+   *  plugin refreshes its own session, a pasted cookie goes stale and the check then sees less. */
+  credentials?: { cookies?: string; headers?: string }
+  on_source_changed: SourceChangePolicy
+  on_source_removed: SourceRemovalPolicy
 }
 
 export interface StatTag {
@@ -467,6 +628,11 @@ export interface JobRecord {
   downloaded_bytes?: number
   /** May stay absent even with `downloaded_bytes` present — render indeterminate, not 0/NaN. */
   total_bytes?: number
+  /** When the job actually started working, and when it reached a terminal state (epoch ms). Both
+   *  absent until they happen; the second stays absent while the job runs, which is how a row tells
+   *  "still going" from "finished" when it wants to show an elapsed time rather than a duration. */
+  started_at?: number
+  finished_at?: number
   /** Absent means unlimited (or non-download job). */
   rate_limit_bytes_per_sec?: number
   rate_limit_matched_pattern?: string
@@ -525,6 +691,9 @@ export interface PendingFilenameConflict {
   original_filename: string
   existing_id: string
   crc32: string
+  /** Unix ms when these bytes were staged, so the UI can show when the sweep reclaims them.
+   *  Absent on records written before the field existed. */
+  staged_at?: number
 }
 
 /** One aligned page pair's sharpness scores. `a`/`b` stay symmetric even though the only current
@@ -645,6 +814,8 @@ export type QueueItemOrigin = "download" | "local_upload"
 export interface DownloadQueueItem {
   id: string
   origin?: QueueItemOrigin
+  /** Which subscription queued this item, when one did — absent for a manual add or an upload. */
+  subscription_id?: string | null
   /** Source URL for a download, or the uploaded filename for a local upload. */
   url: string
   /** Resolved once at add-to-queue time. `'local_upload'` placeholder for a local upload. */
@@ -654,7 +825,14 @@ export interface DownloadQueueItem {
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean
+  /** The subscription's own pre-answered conflict policy; `ask` for anything else. */
+  conflict_policy?: ConflictPolicy
   state: DownloadQueueState
+  /** When this item's download began and finished (epoch ms), persisted rather than only held on
+   *  the job — a finished job is dropped when the process restarts, and a finished row still owes
+   *  the reader its duration. Re-stamped on every (re)start, so a retry reports its own attempt. */
+  started_at?: number | null
+  finished_at?: number | null
   job_id: string | null
   /** Set once a managed download completes, so the reader link survives a server restart. */
   archive_ids?: string[] | null

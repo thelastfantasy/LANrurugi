@@ -34,8 +34,14 @@ function useAnchoredFloating(rect: DOMRect, placement: Placement) {
   return { refs, floatingStyles, isPositioned }
 }
 
-const TEMPLATE_VARS = [
-  "filename",
+/** Hours left before the staged copy is swept, rounded up so a nonzero remainder never reads as
+ *  "0 hours". Mirrors `PENDING_RENAME_MAX_AGE` (`download_manager/ingest.rs`). */
+function conflictHoursLeft(stagedAt: number): number {
+  const expiresAt = stagedAt + 24 * 60 * 60 * 1000
+  return Math.max(0, Math.ceil((expiresAt - Date.now()) / (60 * 60 * 1000)))
+}
+
+const TEMPLATE_VARS = [  "filename",
   "crc",
   "title",
   "ext",
@@ -72,10 +78,16 @@ export function ConflictMenu({
   onOverwrite,
   onRename,
   onCompare,
+  stagedAt,
 }: {
   onOverwrite: () => void
   onRename: () => void
   onCompare?: () => void
+  /** When these bytes were staged (unix ms). Shown as a deadline, because an unresolved conflict
+   *  is not waiting indefinitely: the periodic sweep deletes the staged copy after
+   *  `PENDING_RENAME_MAX_AGE` (`download_manager/ingest.rs`, 24h) and the row then reads "expired,
+   *  download again". Kept in sync by hand, like the other Rust constants the frontend mirrors. */
+  stagedAt?: number
 }) {
   const { t } = useTranslation()
   const menuRef = useRef<HTMLUListElement | null>(null)
@@ -104,6 +116,20 @@ export function ConflictMenu({
         zIndex: Z_OVERLAY_CONTENT,
       }}
     >
+      {/* Above the actions rather than below them: this qualifies the whole choice ("decide before
+          this, or the bytes are gone"), so it has to be read first. */}
+      {stagedAt != null && stagedAt > 0 && (
+        <li
+          style={{
+            padding: "2px 8px 6px",
+            fontSize: FONT_SIZE_XS,
+            opacity: 0.75,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {t("upload.conflictExpiresIn", { hours: conflictHoursLeft(stagedAt) })}
+        </li>
+      )}
       {onCompare && (
         <PopupMenuItem onClick={onCompare}>
           <i className="fa fa-robot" aria-hidden="true" style={{ marginRight: 6 }}></i>

@@ -926,16 +926,43 @@ async fn active_login_devices_can_be_listed_renamed_and_revoked_by_a_session() {
     .await;
     assert_eq!(revoke_resp.status(), axum::http::StatusCode::OK);
 
+    // Revoking *this* device is a logout, and revocation propagates immediately (see
+    // `revoke_session`'s own `is_current` branch: it also clears both cookies, exactly like
+    // `POST /logout`). This request deliberately keeps sending the now-dead cookie — what a browser
+    // that ignored the clearing `Set-Cookie` would do — so the answer is an authentication failure,
+    // not an empty list. Same shape as the logout test's own refresh-after-logout assertion.
     let list_after_revoke = request(&app, "GET", "/api/sessions", Some(&cookie), None).await;
-    assert_eq!(list_after_revoke.status(), axum::http::StatusCode::OK);
-    let body = axum::body::to_bytes(list_after_revoke.into_body(), usize::MAX)
+    assert_eq!(
+        list_after_revoke.status(),
+        axum::http::StatusCode::UNAUTHORIZED,
+        "a revoked session's cookie must stop working immediately"
+    );
+
+    // The revoked device is gone from the list, not merely unusable: a fresh login sees only
+    // itself, under a different family.
+    let relogin = request(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some("password=kamimamita"),
+    )
+    .await;
+    assert_eq!(relogin.status(), axum::http::StatusCode::OK);
+    let new_cookie = cookie_header(&set_cookie_values(&relogin));
+    let list_after_relogin = request(&app, "GET", "/api/sessions", Some(&new_cookie), None).await;
+    assert_eq!(list_after_relogin.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(list_after_relogin.into_body(), usize::MAX)
         .await
         .unwrap();
     let sessions: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        sessions.as_array().is_some_and(Vec::is_empty),
-        "revoking the only family must empty the active-device list"
+    let sessions = sessions.as_array().expect("GET /sessions returns an array");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "the revoked device must no longer be listed"
     );
+    assert_ne!(sessions[0]["family_id"].as_str(), Some(family_id.as_str()));
 
     purge_all_refresh_and_api_tokens(&redis).await;
 }

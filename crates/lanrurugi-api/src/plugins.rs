@@ -275,18 +275,32 @@ pub(crate) async fn with_login_cookies(
     };
     let customargs = get_plugin_customargs(state, &login_ns, &login_info.parameters).await;
     let login_args = json!({ "customargs": customargs });
+
+    // Reuse a recent login result instead of re-running the plugin for every call.
+    //
+    // This path runs before *every* metadata/download/discovery call, so a batch operation used to
+    // mean one login per archive. The TTL is long (see `LOGIN_CACHE_TTL`) because the credentials
+    // this deployment actually uses are long-lived — E-Hentai's `sk`/`hath_perks` are account-scoped
+    // with a one-year lifetime on the cookie itself — so re-running the plugin buys nothing. Changing
+    // any configured value produces a different cache key, and restarting the process clears the
+    // cache entirely; those are the two escape hatches if a plugin's credentials do turn out to
+    // expire mid-run.
+    // `\u{0}` cannot appear in a namespace or in serialised JSON, so it separates the two halves
+    // without any chance of one plugin's key colliding with another's.
+    let cache_key = format!("{login_ns}\u{0}{login_args}");
+    if let Some(cached) = login_cache_get(&cache_key) {
+        apply_login_credentials(&mut args, &cached);
+        return args;
+    }
+
     match state
         .plugins
         .execute(&login_ns, "exec_login", login_args)
         .await
     {
         Ok(result) => {
-            if let Some(cookies) = result.get("cookies") {
-                args["user_agent_cookies"] = cookies.clone();
-            }
-            if let Some(headers) = result.get("headers") {
-                args["user_agent_headers"] = headers.clone();
-            }
+            apply_login_credentials(&mut args, &result);
+            login_cache_put(cache_key, result);
         }
         Err(e) => {
             tracing::warn!(
@@ -297,6 +311,63 @@ pub(crate) async fn with_login_cookies(
         }
     }
     args
+}
+
+/// How long a login plugin's own result is reused across calls — see `with_login_cookies`.
+///
+/// Six months, not minutes: a login here yields account-scoped credentials that the sites themselves
+/// keep valid for a year (E-Hentai's `sk`/`hath_perks`), and a process restart or any configuration
+/// change invalidates the entry anyway. The cost of being wrong is one stale login serving a batch —
+/// cleared by changing a value or restarting — against a per-archive login on every bulk run.
+const LOGIN_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(180 * 24 * 60 * 60);
+
+/// Process-wide cache of login results, keyed by login plugin + its configured values.
+fn login_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Value)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Value)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn login_cache_get(key: &str) -> Option<Value> {
+    let mut cache = login_cache().lock().ok()?;
+    match cache.get(key) {
+        Some((at, value)) if at.elapsed() < LOGIN_CACHE_TTL => Some(value.clone()),
+        Some(_) => {
+            cache.remove(key);
+            None
+        }
+        None => None,
+    }
+}
+
+fn login_cache_put(key: String, value: Value) {
+    if let Ok(mut cache) = login_cache().lock() {
+        // Bounded: entries are keyed by one login plugin's configured values, and a stale entry is
+        // dropped the moment it is looked up again, so growth needs a plugin whose configuration
+        // keeps changing mid-run — at which point dropping the oldest is the right answer anyway.
+        if cache.len() > 64 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(key, (std::time::Instant::now(), value));
+    }
+}
+
+/// Folds a login plugin's returned cookies/headers into the arguments of the call being made.
+fn apply_login_credentials(args: &mut Value, login_result: &Value) {
+    if let Some(cookies) = login_result.get("cookies") {
+        args["user_agent_cookies"] = cookies.clone();
+    }
+    if let Some(headers) = login_result.get("headers") {
+        args["user_agent_headers"] = headers.clone();
+    }
 }
 
 /// Resolves `info.sidecar_files` (see its own docs) against the archive at `file_path`, adding
@@ -621,6 +692,33 @@ async fn classify_revision(
         return RevisionRelation::Unrelated;
     };
 
+    // Prefer a chain already stored with a library archive over the one this download just fetched:
+    // the stored copy cost nothing to read, while obtaining a fresh one costs one E-Hentai API call
+    // *per hop* (climb to the tip, walk back to the root). Stored chains are taken together, because
+    // the family's members each carry their own snapshot and any of them may know the node being
+    // looked for. Only when none of them does — a work whose relatives have never been downloaded —
+    // is the freshly fetched chain used at all.
+    let owners: Vec<lanrurugi_core::ids::ArchiveId> =
+        archives.iter().map(|a| a.id.clone()).collect();
+    let stored: Vec<Vec<lanrurugi_plugin::protocol::VersionHistoryEntry>> =
+        match state.repos.archives.version_histories_for(&owners).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(_, chain)| {
+                    chain
+                        .into_iter()
+                        .map(|(source, posted_at)| {
+                            lanrurugi_plugin::protocol::VersionHistoryEntry { source, posted_at }
+                        })
+                        .collect()
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read stored revision chains");
+                Vec::new()
+            }
+        };
+
     // Every `source:` tag in the library, plus this download's own URL, canonicalized in one batch
     // — one plugin round-trip for the whole comparison rather than one per archive.
     let mut raw: Vec<String> = vec![source_url.to_string()];
@@ -645,7 +743,16 @@ async fn classify_revision(
         .map(|(archive_id, source)| CataloguedSource { archive_id, source })
         .collect();
 
-    classify(&downloaded_source, history, &catalogued)
+    // Whichever stored chain knows this download (by canonical source) is the authoritative one for
+    // it; otherwise fall back to what the plugin reported just now.
+    let known = stored
+        .iter()
+        .find(|chain| chain.iter().any(|e| e.source == downloaded_source));
+    classify(
+        &downloaded_source,
+        known.map_or(history, |c| c.as_slice()),
+        &catalogued,
+    )
 }
 
 /// Fetches `namespace`'s declared `pluginOptions()` fresh from the plugin, alongside what static
@@ -1941,6 +2048,74 @@ pub struct DownloadUrlParams {
     catid: Option<String>,
 }
 
+/// Wall-clock milliseconds, matching `created_at`/`metadata_preview_at` on the wire and the unit
+/// `lanrurugi_storage::download_queue` stamps its own `started_at`/`finished_at` in.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Which in-library archives are older revisions of the ones just catalogued.
+///
+/// Read from the revision chains stored with those archives (written moments earlier by this same
+/// download), compared by the chain's own `posted_at` — the only field that orders a chain. Used to
+/// finish the job `always_overwrite` starts before the bytes move, for the case that decision cannot
+/// see: a sibling revision fetched concurrently in the same listing.
+async fn older_chain_members_in_library(state: &AppState, new_ids: &[String]) -> Vec<String> {
+    if new_ids.is_empty() {
+        return Vec::new();
+    }
+    let Ok(archives) = state.repos.archives.list_all().await else {
+        return Vec::new();
+    };
+    // Every in-library archive, by the canonical source it was fetched from.
+    let mut held_by_source: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for archive in &archives {
+        for tag in archive.tags.split(',') {
+            if let Some(source) = tag.trim().strip_prefix("source:") {
+                held_by_source
+                    .entry(source.trim().to_string())
+                    .or_insert_with(|| archive.id.to_string());
+            }
+        }
+    }
+    if held_by_source.is_empty() {
+        return Vec::new();
+    }
+
+    let ids: Vec<lanrurugi_core::ids::ArchiveId> = new_ids
+        .iter()
+        .map(|id| lanrurugi_core::ids::ArchiveId(id.clone()))
+        .collect();
+    let Ok(chains) = state.repos.archives.version_histories_for(&ids).await else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for (_, chain) in chains {
+        if chain.is_empty() {
+            continue;
+        }
+        let newest = chain
+            .iter()
+            .map(|(_, posted)| posted.as_str())
+            .max()
+            .unwrap_or_default();
+        for (source, posted) in &chain {
+            if posted.as_str() >= newest {
+                continue;
+            }
+            if let Some(archive_id) = held_by_source.get(source) {
+                out.push(archive_id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// `POST /download_url` — finds an enabled download-type plugin whose `url_regex` matches `url`
 /// and queues it as a background job (verified shape: `~/LANraragi/tools/openapi.yaml`'s
 /// `downloadUrl` operation). No `url_regex` field exists on `protocol::PluginInfo` yet (only
@@ -2265,7 +2440,29 @@ pub(crate) async fn start_download(
             // Set when `always_overwrite` decided an in-library archive is superseded by this
             // download; acted on only after the new revision is actually catalogued.
             let mut supersedes_archive_id: Option<String> = None;
+            // Whether this plugin is configured to replace an older revision (its own
+            // `relative_newer_policy`, default `always_overwrite`). Resolved here, where the plugin's
+            // options are read anyway, and consulted again after ingestion by the sweep below — which
+            // must respect the same setting, including for a sibling downloaded in this same cycle
+            // that no pre-transfer decision could see.
+            let mut overwrite_superseded = false;
             if let Some(history) = parsed.version_history.as_deref().filter(|h| !h.is_empty()) {
+                // Recorded on the queue item before anything else uses it: whichever path ends up
+                // cataloguing this download (here, or a filename-conflict resolution minutes later)
+                // then stores the chain onto the archive without re-asking the site for it.
+                if let Some((repo, item_id)) = &queue_link {
+                    if let Ok(Some(mut item)) = repo.get(item_id).await {
+                        item.version_history = Some(
+                            history
+                                .iter()
+                                .map(|e| (e.source.clone(), e.posted_at.clone()))
+                                .collect(),
+                        );
+                        if let Err(e) = repo.update(&item).await {
+                            tracing::warn!(item_id, error = %e, "could not record the revision chain on the queue item");
+                        }
+                    }
+                }
                 use crate::download_manager::version_history::RevisionRelation;
                 let relation = classify_revision(
                     &state_for_task,
@@ -2291,6 +2488,10 @@ pub(crate) async fn start_download(
                     .get(&plugin_namespace_for_task)
                     .await
                     .unwrap_or_default();
+                overwrite_superseded = crate::download_manager::settings::resolve_relative_newer_policy(
+                    &declared,
+                    stored_override.as_ref(),
+                ) == lanrurugi_plugin::protocol::RelativeNewerPolicy::AlwaysOverwrite;
 
                 match relation {
                     RevisionRelation::NewerThan { archive_id, .. } => {
@@ -2430,9 +2631,21 @@ pub(crate) async fn start_download(
                         // resolved *onto* that same archive — a same-filename overwrite reuses the
                         // existing ID, and deleting it here would throw away the very bytes just
                         // downloaded.
-                        if let Some(superseded) = supersedes_archive_id
-                            .filter(|superseded| !ids.contains(superseded))
-                        {
+                        // Post-ingestion sweep, on top of the pre-transfer decision above: two
+                        // revisions of one work downloaded in the same cycle each classify as
+                        // "unrelated" while neither is catalogued yet, so the decision made before
+                        // the bytes moved cannot see the other. Now that this one *is* in the
+                        // library, anything older in its own revision chain is exactly the
+                        // superseded duplicate `always_overwrite` promises not to leave behind.
+                        let mut superseded_ids: Vec<String> =
+                            supersedes_archive_id.into_iter().collect();
+                        if overwrite_superseded {
+                            superseded_ids
+                                .extend(older_chain_members_in_library(&state_for_task, &ids).await);
+                        }
+                        superseded_ids.retain(|superseded| !ids.contains(superseded));
+                        superseded_ids.dedup();
+                        for superseded in superseded_ids {
                             // Full user-delete path (file, search index, thumbnails, ...), not a
                             // bare record removal.
                             match crate::archives::delete_one_archive(
@@ -2479,8 +2692,43 @@ pub(crate) async fn start_download(
                                 if item.auto_fetch_metadata || item.title.is_none() {
                                     ensure_metadata_cached(&state_for_task, &mut item).await;
                                 }
+                                // Configured extra tags are applied independently of whether a
+                                // metadata plugin ran: they are the subscription's own explicit
+                                // instruction, not an enrichment opportunity.
+                                apply_tag_list(&state_for_task, &ids, &item.metadata_tags).await;
                                 activity_title = item.title.clone();
                                 activity_metadata = item.metadata_preview.clone();
+                                // The revision chain this download came with, now that there is an
+                                // archive to hang it on: every later "is this candidate an older
+                                // revision of something we hold?" is then answerable from Redis, with
+                                // no E-Hentai round trips at all.
+                                if let Some(chain) = item.version_history.clone() {
+                                    for archive_id in &ids {
+                                        if let Err(e) = state_for_task
+                                            .repos
+                                            .archives
+                                            .set_version_history(
+                                                &lanrurugi_core::ids::ArchiveId(archive_id.clone()),
+                                                &chain,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(archive_id, error = %e, "could not store the revision chain");
+                                        }
+                                    }
+                                }
+                                // Persisted onto the item here, not just left on the job: a
+                                // finished job is dropped when the process restarts, and "how big
+                                // was this" is exactly what a finished row still has to answer.
+                                if let Some(job) = jobs.get(&job_id_for_task).await {
+                                    let size = job.total_bytes.or(job.downloaded_bytes);
+                                    if let Some(size) = size {
+                                        item.file_size = Some(size);
+                                        if let Err(e) = repo.update(&item).await {
+                                            tracing::warn!(item_id, error = %e, "failed to persist completed download size");
+                                        }
+                                    }
+                                }
                             }
                             update_queue_item_state(
                                 repo,
@@ -2689,6 +2937,17 @@ pub(crate) async fn update_queue_item_state(
         match repo.get(item_id).await {
             Ok(Some(mut item)) => {
                 item.state = new_state;
+                // Terminal states get an end stamp (and a fresh start drops any stale one, so a
+                // retried item reports its own run). The size is written by the completion paths
+                // themselves, which are the only places that know the job's final byte count.
+                if matches!(
+                    new_state,
+                    lanrurugi_storage::download_queue::DownloadQueueState::Done
+                        | lanrurugi_storage::download_queue::DownloadQueueState::Error
+                        | lanrurugi_storage::download_queue::DownloadQueueState::Cancelled
+                ) {
+                    item.finished_at = Some(now_ms());
+                }
                 if attempt == RETRIES {
                     item.job_id = job_id.take();
                     item.archive_ids = archive_ids.take();
@@ -2853,6 +3112,76 @@ pub(crate) async fn find_matching_plugin(
     None
 }
 
+/// Which installed *download* plugin owns `url` — the server-side counterpart of the Upload page's
+/// own client-side resolution (`UploadPage.tsx`'s `findMatchingPlugin(downloadPlugins, url)`).
+///
+/// A subscription enqueues server-side (`subscriptions::runner`/`api`), with no client to do that
+/// resolution for it — so without this its queue item carried the *discovery* plugin's own
+/// namespace, and starting it called `exec_download` on a plugin that exports no such function.
+/// Filtered to download-kind plugins first: several other kinds (login, metadata, discovery) declare
+/// an overlapping `url_pattern` for the same domains.
+pub(crate) async fn resolve_download_plugin_for_url(
+    state: &AppState,
+    url: &str,
+) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
+    let namespaces = download_namespaces(state).await;
+    find_matching_plugin(state, &namespaces, url).await
+}
+
+/// The same question asked about a bare domain rather than a full URL — used to *name* the download
+/// plugin a source would use, before any concrete URL exists (`subscriptions::api`'s source list).
+/// Domain semantics matter here for the same reason [`find_plugin_by_domain`]'s own docs give.
+pub(crate) async fn resolve_download_plugin_for_domain(
+    state: &AppState,
+    domain: &str,
+) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
+    let namespaces = download_namespaces(state).await;
+    find_plugin_by_domain(state, &namespaces, domain).await
+}
+
+/// Every installed namespace declaring `type: "download"`, in `discover_namespaces` order — the
+/// candidate set both resolvers above narrow down by URL/domain.
+async fn download_namespaces(state: &AppState) -> Vec<String> {
+    let mut out = Vec::new();
+    for ns in discover_namespaces(&state.plugins_dir).await {
+        if let Ok(info) = state.plugins.plugin_info(&ns).await {
+            if info.kind == "download" {
+                out.push(ns);
+            }
+        }
+    }
+    out
+}
+
+/// The effective `overwrite_on_duplicate` a server-side enqueue must freeze onto its queue item —
+/// the same resolution the Upload page performs at add-to-queue time: the plugin's own option
+/// (user override, else declared default), else the global `replacedupe` setting.
+pub(crate) async fn resolve_queue_overwrite_on_duplicate(
+    state: &AppState,
+    namespace: &str,
+) -> bool {
+    let (declared, _) = fetch_declared_options(state, namespace)
+        .await
+        .unwrap_or_default();
+    let override_ = state
+        .plugin_options
+        .get(namespace)
+        .await
+        .unwrap_or_default();
+    if let Some(value) = crate::download_manager::settings::resolve_overwrite_on_duplicate(
+        &declared,
+        override_.as_ref(),
+    ) {
+        return value;
+    }
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return false;
+    };
+    let fields: std::collections::HashMap<String, String> =
+        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+    fields.get("replacedupe").map(|v| v != "0").unwrap_or(false)
+}
+
 /// Case-insensitive, `www.`-insensitive containment check — does `info.domain_match` (or, when
 /// empty, a loose regex-as-domain-containment fallback derived from `info.url_pattern`) consider
 /// `domain` covered? `domain` is a bare hostname (no scheme/path) — NOT the precise-trigger check
@@ -2907,6 +3236,18 @@ pub(crate) async fn find_plugin_by_domain(
         }
     }
     None
+}
+
+/// Applies a subscription's configured extra tags to each archive it produced. A small wrapper over
+/// [`apply_metadata_tags`] so every ingestion path can share one dedup/merge implementation.
+pub(crate) async fn apply_tag_list(state: &AppState, archive_ids: &[String], tags: &[String]) {
+    if tags.is_empty() || archive_ids.is_empty() {
+        return;
+    }
+    let joined = tags.join(", ");
+    for archive_id in archive_ids {
+        apply_metadata_tags(state, archive_id, &joined).await;
+    }
 }
 
 /// Ensures a queue item has fresh `metadata_preview` data cached — checks the 10-min TTL on
@@ -3032,7 +3373,7 @@ pub(crate) async fn ensure_metadata_cached(
 
 /// Merges `metadata_tags` into an archive's existing tag string — appends tags that aren't
 /// already present, leaves existing ones untouched. Updates the archive record + search index.
-async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: &str) {
+pub(crate) async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: &str) {
     let mut archive = match state
         .repos
         .archives
@@ -3049,10 +3390,13 @@ async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: 
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .collect();
+    // `seen` starts from the archive's own tags and then absorbs each accepted input tag, so a
+    // duplicated value inside `metadata_tags` is written once instead of twice.
+    let mut seen = existing.clone();
     let new_tags: Vec<&str> = metadata_tags
         .split(',')
         .map(|t| t.trim())
-        .filter(|t| !t.is_empty() && !existing.contains(t))
+        .filter(|t| !t.is_empty() && seen.insert(t))
         .collect();
 
     if new_tags.is_empty() {
@@ -3639,6 +3983,59 @@ async fn upload_plugin(
 }
 
 #[cfg(test)]
+pub(crate) mod login_cache_tests {
+    use super::*;
+
+    /// The two properties the cache has to have: a hit inside the TTL, and nothing after it. A cache
+    /// that outlived short-lived credentials would be worse than no cache at all.
+    #[test]
+    fn a_login_result_is_reused_only_inside_its_ttl() {
+        let key = "login/ehentai\u{0}[\"a\"]".to_string();
+        login_cache_put(
+            key.clone(),
+            json!({ "cookies": [{ "name": "sk", "value": "fresh" }] }),
+        );
+
+        let hit = login_cache_get(&key).expect("hit inside the TTL");
+        assert_eq!(hit["cookies"][0]["value"], "fresh");
+
+        // Backdate the entry past the TTL: the next read must miss *and* drop it.
+        {
+            let mut cache = login_cache().lock().unwrap();
+            let (_, value) = cache.get(&key).cloned().unwrap();
+            cache.insert(
+                key.clone(),
+                (
+                    std::time::Instant::now() - LOGIN_CACHE_TTL - std::time::Duration::from_secs(1),
+                    value,
+                ),
+            );
+        }
+        assert!(
+            login_cache_get(&key).is_none(),
+            "expired entries must not be served"
+        );
+        assert!(
+            !login_cache().lock().unwrap().contains_key(&key),
+            "an expired entry is dropped on read, not merely ignored"
+        );
+    }
+
+    /// Cookies and headers are both carried through, and a result without them leaves the arguments
+    /// alone rather than clearing what an earlier branch set.
+    #[test]
+    fn credentials_are_folded_into_the_call_arguments() {
+        let mut args = json!({ "criteria": {} });
+        apply_login_credentials(
+            &mut args,
+            &json!({ "cookies": [{ "name": "sk" }], "headers": { "Authorization": "Key x" } }),
+        );
+        assert_eq!(args["user_agent_cookies"][0]["name"], "sk");
+        assert_eq!(args["user_agent_headers"]["Authorization"], "Key x");
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use lanrurugi_plugin::protocol::PluginParameter;
@@ -4021,13 +4418,16 @@ pub(crate) mod tests {
             state
                 .download_queue
                 .add(lanrurugi_storage::download_queue::NewQueueItem {
+                    subscription_id: None,
                     origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
                     url,
                     plugin_namespace: plugin_namespace.to_string(),
                     file_size: None,
                     category: None,
+                    metadata_tags: Vec::new(),
                     auto_fetch_metadata: false,
                     overwrite_on_duplicate: false,
+                    conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                     state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
                 })
                 .await
@@ -4521,6 +4921,91 @@ pub(crate) mod tests {
             .cloned()
             .expect("LoginResult.headers must be present for a header-authenticated login plugin");
         assert_eq!(headers["Authorization"], "Key fake-test-key");
+
+        tokio::fs::remove_file(&dispatcher_path).await.ok();
+    }
+
+    /// The two server-side resolutions a *subscription*'s enqueue needs and used to lack
+    /// (`subscriptions::runner`/`api`): which download plugin owns the source URL, and which
+    /// `overwrite_on_duplicate` that plugin's settings yield.
+    ///
+    /// Regression: the queue item carried the subscription's own `source` — the *discovery* plugin,
+    /// which exports no `execDownload` — so starting it failed outright, and every download-plugin
+    /// setting (domain rules, revision policies, parameters) was read off that wrong namespace.
+    ///
+    /// Drives the real repo `plugins/` dir through the real dispatcher, like the tests above.
+    #[tokio::test]
+    async fn subscription_source_url_resolves_to_its_download_plugin() {
+        let deno_on_path = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| dir.join("deno").is_file())
+        });
+        if !deno_on_path {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        }
+        let Some(mut state) = test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+
+        let plugins_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins")
+            .canonicalize()
+            .expect("repo's real plugins/ dir must exist");
+        let dispatcher_path =
+            std::env::temp_dir().join("lrr-download-plugin-resolution-test-dispatcher.ts");
+        std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)
+            .expect("failed to write out the real dispatcher script");
+        std::fs::write(
+            std::env::temp_dir().join("plugin-sdk.ts"),
+            lanrurugi_plugin::PLUGIN_SDK_SCRIPT,
+        )
+        .expect("failed to write out the real plugin SDK script");
+        state.plugins = Arc::new(lanrurugi_plugin::pool::PluginPool::new(
+            "deno",
+            dispatcher_path.clone(),
+            plugins_dir.clone(),
+        ));
+        state.plugins_dir = plugins_dir;
+
+        // A synthetic gallery id/token: every kind of e-hentai plugin declares the same domain, so
+        // this also pins down that the *download* one is what comes back.
+        let (namespace, info) =
+            resolve_download_plugin_for_url(&state, "https://e-hentai.org/g/1/deadbeef00/")
+                .await
+                .expect("download/ehentai must match an e-hentai gallery URL");
+        assert_eq!(namespace, "download/ehentai");
+        assert_eq!(info.kind, "download");
+
+        // The display-only variant the subscription source list names ("使用下载插件 …"), asked
+        // about a bare domain before any URL exists.
+        let (by_domain, _) = resolve_download_plugin_for_domain(&state, "e-hentai.org")
+            .await
+            .expect("download/ehentai must claim e-hentai.org by domain");
+        assert_eq!(by_domain, "download/ehentai");
+
+        // e-hentai declares `overwrite_on_duplicate: false`; chaika declares the option not at all.
+        // The global `replacedupe` is switched on for the middle of this test, so a resolution that
+        // ignored the plugin's own option would flip both answers.
+        let lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.config,
+            "replacedupe",
+        )
+        .await;
+        let mut conn = state.redis.config.get().await.expect("Redis connection");
+        assert!(!resolve_queue_overwrite_on_duplicate(&state, "download/ehentai").await);
+        let _: () = conn.hset(CONFIG_KEY, "replacedupe", "1").await.unwrap();
+        assert!(
+            !resolve_queue_overwrite_on_duplicate(&state, "download/ehentai").await,
+            "the plugin's own declared default must win over the global setting"
+        );
+        assert!(
+            resolve_queue_overwrite_on_duplicate(&state, "download/chaika").await,
+            "a plugin declaring no opinion falls back to the global setting"
+        );
+        let _: () = conn.hset(CONFIG_KEY, "replacedupe", "0").await.unwrap();
+        drop(conn);
+        lock.release().await;
 
         tokio::fs::remove_file(&dispatcher_path).await.ok();
     }

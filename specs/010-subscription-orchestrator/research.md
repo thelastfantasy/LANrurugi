@@ -58,6 +58,47 @@ no error message would reveal. Hence FR-002g/h.
   (constitution Principle V) to support "several accounts on one site", which this feature does not
   need.
 
+## 3a. Bot challenges are a hard failure, not a degraded check
+
+**Decision**: A discovery extension must detect an interposed bot challenge and report it as an
+**error**, never as `degraded` and never as a successful empty listing.
+
+**Rationale**: Verified live against e-hentai.org (2026-10-04): the site answers from behind
+Cloudflare (`server: cloudflare`, `cf-ray` present). A challenge can arrive two ways, and only one of
+them is safe by default:
+
+- **HTTP 403/503** — caught by the existing `!response.ok` check, reported as an error, cycle recorded
+  as `Failed`, nothing marked seen. Safe.
+- **HTTP 200 carrying a challenge page** — the request "succeeds", the gallery-link pattern matches
+  nothing, and a sign-in check looking only for the *site's own* login prompt sees nothing wrong. The
+  cycle would be recorded as `Completed` with zero candidates, and **every work it never saw would be
+  marked seen and permanently hidden**. This is the exact failure §3 guards against, reached by a
+  route §3 did not cover: not signed out, but never served the listing at all.
+
+Reported as an error rather than `degraded` because `degraded` means "a real answer to a smaller
+question" — a challenge page is not a smaller answer, it is no answer. Treating it as degraded would
+still surface its zero candidates as findings.
+
+**Alternatives considered**:
+- *Solving the challenge.* Rejected outright: out of scope, and an explicit non-goal.
+- *Inferring it from an empty result.* Rejected — indistinguishable from a genuinely empty search,
+  which is a legitimate outcome that must stay distinguishable (FR-002f).
+
+## 3b. Listings must supply the fields the host filters on
+
+**Decision**: A discovery extension returns `title`, `rating`, and namespaced `tags` whenever its
+listing carries them — not just `source`.
+
+**Rationale**: The host's tag rules are evaluated against `candidate.tags`. An extension returning
+only `source` therefore makes **every required-tag rule reject everything**, and the rejection is
+recorded as "missing required tag X" — indistinguishable, to the user, from a rule that is merely too
+strict. Verified live: e-hentai's listing carries all three per gallery row (25 rows, 25 titles, 25
+ratings, 7–12 tags each), so the data was available and simply unread.
+
+Fields are read **per row** (the `gl2c` container), not by scanning the page once per field: the
+latter pairs the Nth title with the Mth rating as soon as any row omits one, and the host would then
+filter one work on another work's tags — a silent mis-filter with no failing test.
+
 ## 4. Scheduling: interval ownership and catch-up
 
 **Decision**: The extension declares a suggested interval and a hard minimum; the subscription picks

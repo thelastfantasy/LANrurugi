@@ -25,7 +25,10 @@ export function TypeDetailsForm({
   showLoginDependencyQuestion: boolean
 }) {
   const { t } = useTranslation()
-  const needsLinks = typeSession.type === "metadata" || typeSession.type === "download"
+  // Discovery reads the same shared input for the same reason (it is asked what exists, from a
+  // listing URL or a creator name) — it is not the login type's reference-URL form.
+  const needsLinks =
+    typeSession.type === "metadata" || typeSession.type === "download" || typeSession.type === "discovery"
   const [analyzing, setAnalyzing] = useState(false)
   const [loginReferenceUrlOverride, setLoginReferenceUrlOverride] = useState("")
   const loginReferenceUrl = loginReferenceUrlOverride || cleanLinks(session.sharedLinks)[0] || ""
