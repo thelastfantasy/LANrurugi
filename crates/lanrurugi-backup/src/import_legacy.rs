@@ -1087,6 +1087,13 @@ mod tests {
         assert_eq!(minimize_legacy_tags(""), "");
     }
 
+    /// The import tests all write into the same logical database, and several of them assert on
+    /// exact catalogue state (a category reference rewritten, an id remapped). `cargo test` runs
+    /// them in parallel, so without this they race each other — CI caught it, in
+    /// `unambiguous_basename_match_remaps_id_and_rewrites_category_reference`, which passes when run
+    /// on its own. They take turns.
+    static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     async fn test_pool() -> Option<deadpool_redis::Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
         let url = format!("{}/0", base.trim_end_matches('/'));
@@ -1121,6 +1128,7 @@ mod tests {
 
     #[tokio::test]
     async fn basename_match_overwrite_mode_replaces_metadata() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1194,6 +1202,7 @@ mod tests {
     /// `_snapshot`.
     #[tokio::test]
     async fn snapshot_captures_pre_write_values_and_skips_freshly_created_records() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1300,6 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn basename_match_merge_mode_unions_tags_keeps_current_title() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1361,6 +1371,7 @@ mod tests {
 
     #[tokio::test]
     async fn basename_match_merge_mode_takes_legacy_rating_when_current_has_none() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1416,6 +1427,7 @@ mod tests {
 
     #[tokio::test]
     async fn basename_match_skip_mode_leaves_metadata_untouched() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1472,6 +1484,7 @@ mod tests {
 
     #[tokio::test]
     async fn unambiguous_basename_match_remaps_id_and_rewrites_category_reference() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1548,6 +1561,7 @@ mod tests {
 
     #[tokio::test]
     async fn ambiguous_basename_match_is_excluded_not_guessed() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1629,6 +1643,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_match_at_all_is_skipped() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1681,6 +1696,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_IMPORT_LEGACY_FIXTURE_PATH not set");
             return;
         };
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
