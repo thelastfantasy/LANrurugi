@@ -140,8 +140,15 @@ export interface Settings {
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   enableresize: boolean
+  /** Keep a JXL-native reader page as original `.jxl` when the browser advertises JXL decode
+   *  support, instead of decoding/re-encoding it to WebP. JPEG/PNG/WebP sources are unaffected. */
+  preferjxl: boolean
   hqthumbpages: boolean
   enablewebp: boolean
+  /** Generate thumbnail files as JPEG XL; non-JXL browsers fall back to on-demand WebP/JPEG. */
+  jxlthumbpages: boolean
+  /** Public one-field thumbnail format contract: "jxl", "webp", or "jpeg". */
+  thumbnail_format: "jxl" | "webp" | "jpeg"
   replacedupe: boolean
   tagruleson: boolean
   usedateadded: boolean

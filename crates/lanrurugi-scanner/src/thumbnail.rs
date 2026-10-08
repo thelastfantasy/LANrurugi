@@ -2,9 +2,10 @@
 //! `rayon`/`spawn_blocking` per constitution Principle III — never run inline in an async handler.
 //!
 //! Legacy resizes to a fixed height of 500px (verified: `Utils/Archive.pm::generate_thumbnail`).
-//! Format (JPEG or WebP) and quality are a library-wide setting (`enablewebp`/`webpquality`/
-//! `hqthumbpages` in `lanrurugi-api::settings`, read via [`read_settings`]) rather than baked in
-//! here — this module just encodes whatever [`ThumbFormat`] and quality it's given. Cover
+//! Format (JPEG / WebP / JPEG XL) and quality/effort are library-wide settings (`enablewebp`/
+//! `jxlthumbpages`/`webpquality`/`hqthumbpages` in `lanrurugi-api::settings`, read via
+//! [`read_settings`]) rather than baked in here — this module just encodes whatever [`ThumbFormat`]
+//! and quality it's given. Cover
 //! thumbnails land at `<thumb_dir>/<id[0:2]>/<id>.<ext>`; this module writes that file —
 //! sharding/placement itself is the caller's concern (`lanrurugi-api::archives::get_archive_thumbnail`
 //! reads it back).
@@ -35,18 +36,20 @@ pub const JPEG_QUALITY_HQ: u8 = 80;
 pub enum ThumbFormat {
     Jpeg,
     Webp,
+    Jxl,
 }
 
 impl ThumbFormat {
-    /// Read-back probe order (`archives::get_archive_thumbnail`,
-    /// `tankoubons::get_tankoubon_thumbnail`): WebP first since it's the default going forward,
-    /// JPEG second for thumbnails written before a format switch's regen job has caught up.
-    pub const ALL: [ThumbFormat; 2] = [ThumbFormat::Webp, ThumbFormat::Jpeg];
+    /// Every on-disk format, used by cleanup/regen sweeps. Per-request read order is now chosen by
+    /// the client's advertised capability (`archives::thumbnail_formats_for`) rather than this
+    /// constant, because JXL must only be offered to browsers that can decode it.
+    pub const ALL: [ThumbFormat; 3] = [ThumbFormat::Jxl, ThumbFormat::Webp, ThumbFormat::Jpeg];
 
     pub const fn extension(self) -> &'static str {
         match self {
             ThumbFormat::Jpeg => "jpg",
             ThumbFormat::Webp => "webp",
+            ThumbFormat::Jxl => "jxl",
         }
     }
 
@@ -54,6 +57,7 @@ impl ThumbFormat {
         match self {
             ThumbFormat::Jpeg => "image/jpeg",
             ThumbFormat::Webp => "image/webp",
+            ThumbFormat::Jxl => "image/jxl",
         }
     }
 }
@@ -64,11 +68,11 @@ pub struct ThumbSettings {
     pub quality: u8,
 }
 
-/// Reads the live `enablewebp`/`webpquality`/`hqthumbpages` values from the same `LRR_CONFIG`
-/// hash `lanrurugi-api::settings` reads/writes, so a setting change takes effect on the very next
-/// thumbnail generated without a server restart. Missing/unparsable values fall back to the same
-/// defaults `settings::get_settings` reports (`enablewebp = true`, `webpquality = 85`,
-/// `hqthumbpages = false`).
+/// Reads the live `enablewebp`/`jxlthumbpages`/`webpquality`/`hqthumbpages` values from the same
+/// `LRR_CONFIG` hash `lanrurugi-api::settings` reads/writes, so a setting change takes effect on
+/// the very next thumbnail generated without a server restart. Missing/unparsable values fall back
+/// to the same defaults `settings::get_settings` reports (`enablewebp = true`,
+/// `jxlthumbpages = true`, `webpquality = 85`, `hqthumbpages = false`).
 /// `lanrurugi-api::settings::DEFAULT_WEBP_QUALITY`'s own value — duplicated here (rather than
 /// imported) since `lanrurugi-scanner` can't depend on `lanrurugi-api` (the dependency runs the
 /// other way), but the two must still be kept in sync by hand if the Settings page's own default
@@ -85,6 +89,10 @@ where
     let fields: std::collections::HashMap<String, String> =
         conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
     let enablewebp = fields.get("enablewebp").map(|v| v != "0").unwrap_or(true);
+    let jxlthumbpages = fields
+        .get("jxlthumbpages")
+        .map(|v| v != "0")
+        .unwrap_or(true);
     let hqthumbpages = fields
         .get("hqthumbpages")
         .map(|v| v != "0")
@@ -94,7 +102,14 @@ where
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_WEBP_QUALITY);
 
-    if enablewebp {
+    if jxlthumbpages {
+        ThumbSettings {
+            format: ThumbFormat::Jxl,
+            // The pure-Rust JXL encoder maps this value to encoding effort; the reader's
+            // `readerquality`-style visual-quality semantics do not apply to its lossless output.
+            quality: webpquality,
+        }
+    } else if enablewebp {
         ThumbSettings {
             format: ThumbFormat::Webp,
             quality: webpquality,
@@ -127,6 +142,8 @@ pub enum ThumbnailError {
     Join(#[from] lanrurugi_core::concurrency::BlockingTaskError),
     #[error("webp encode error: {0:?}")]
     Webp(webp::WebPEncodingError),
+    #[error("jxl encode error: {0}")]
+    Jxl(#[from] crate::jxl::JxlEncodeError),
 }
 
 /// Generates a thumbnail from `page` (1-indexed) of `archive_path` and writes it to
@@ -186,7 +203,7 @@ fn generate_sync(
         hex_encode(&hasher.finalize())
     });
 
-    let img = image::load_from_memory(&bytes)?;
+    let img = crate::image_decode::load_from_memory(&bytes)?;
     let ratio = THUMBNAIL_HEIGHT as f64 / img.height() as f64;
     let target_width = (img.width() as f64 * ratio).round() as u32;
     let resized = img.resize(
@@ -216,6 +233,10 @@ fn generate_sync(
                 .encode_simple(false, quality as f32)
                 .map_err(ThumbnailError::Webp)?;
             std::fs::write(output_path, &*encoded)?;
+        }
+        ThumbFormat::Jxl => {
+            let encoded = crate::jxl::encode_rgb(&rgb, quality).map_err(ThumbnailError::Jxl)?;
+            std::fs::write(output_path, encoded)?;
         }
     }
     Ok(cover_hash)
@@ -300,6 +321,27 @@ mod tests {
         .unwrap();
 
         let generated = image::open(&output).unwrap();
+        assert_eq!(generated.height(), THUMBNAIL_HEIGHT);
+    }
+
+    #[tokio::test]
+    async fn generates_a_resized_jxl_thumbnail() {
+        let archive = make_test_zip_with_image();
+        let out_dir = tempfile::tempdir().unwrap();
+        let output = out_dir.path().join("thumb.jxl");
+
+        generate(
+            archive.path().to_path_buf(),
+            1,
+            output.clone(),
+            ThumbFormat::Jxl,
+            85,
+        )
+        .await
+        .unwrap();
+
+        let bytes = std::fs::read(&output).unwrap();
+        let generated = crate::image_decode::load_from_memory(&bytes).unwrap();
         assert_eq!(generated.height(), THUMBNAIL_HEIGHT);
     }
 

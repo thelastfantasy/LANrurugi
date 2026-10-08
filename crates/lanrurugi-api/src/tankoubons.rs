@@ -11,6 +11,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::Router;
+use deadpool_redis::redis::AsyncCommands;
 use futures_util::future::join_all;
 use lanrurugi_core::entities::Grouping;
 use lanrurugi_core::ids::{ArchiveId, TankId};
@@ -24,6 +25,7 @@ use crate::common::{error, not_found, ok};
 use crate::AppState;
 use lanrurugi_llm::LlmClient;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
+use lanrurugi_storage::keys::CONFIG_KEY;
 
 /// Matches legacy's default `archives_per_page` (verified: `ServerInfo` example in
 /// `tools/openapi.yaml`).
@@ -434,9 +436,19 @@ pub(crate) fn is_valid_tankoubon_id(id: &str) -> bool {
 /// it's needed (bounded via [`AppState::thumbnail_singleflight`]) — mirroring that here is a
 /// strictly better user experience than porting legacy's own job-queue-and-202 flow, not just a
 /// simplification, since the thumbnail is already correct on the very first paint.
+#[derive(Debug, Deserialize)]
+pub struct GetTankoubonThumbnailParams {
+    /// Optional explicit capability override (`jxl`/`webp`/`source`), same contract as the
+    /// archive thumbnail/reader endpoints.
+    #[serde(default)]
+    format: Option<String>,
+}
+
 async fn get_tankoubon_thumbnail(
     State(state): State<AppState>,
     Path(id): Path<TankId>,
+    Query(params): Query<GetTankoubonThumbnailParams>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     // See `is_valid_tankoubon_id`'s docs: this endpoint (like `archives::get_archive_thumbnail`)
     // builds a filesystem path directly from `id` without a repository lookup first, so an
@@ -444,12 +456,15 @@ async fn get_tankoubon_thumbnail(
     if !is_valid_tankoubon_id(id.as_str()) {
         return ([(header::CONTENT_TYPE, "image/png")], PLACEHOLDER_THUMBNAIL).into_response();
     }
+    let client_support =
+        crate::archives::ClientImageSupport::from_request(&headers, params.format.as_deref());
     if let Some((content_type, bytes)) =
-        read_tankoubon_thumbnail_from_disk(&state, id.as_str()).await
+        read_tankoubon_thumbnail_from_disk(&state, id.as_str(), client_support).await
     {
         return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
     }
-    if let Some((content_type, bytes)) = regenerate_tankoubon_thumbnail_on_demand(&state, &id).await
+    if let Some((content_type, bytes)) =
+        regenerate_tankoubon_thumbnail_on_demand(&state, &id, client_support).await
     {
         return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
     }
@@ -459,8 +474,9 @@ async fn get_tankoubon_thumbnail(
 async fn read_tankoubon_thumbnail_from_disk(
     state: &AppState,
     id: &str,
+    support: crate::archives::ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
-    for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+    for format in crate::archives::thumbnail_formats_for(support) {
         let path = state
             .library
             .thumb_dir
@@ -494,9 +510,29 @@ async fn generate_tankoubon_cover(
     id: &str,
     archive: &lanrurugi_core::entities::Archive,
     local_page: u32,
+    client_support: Option<crate::archives::ClientImageSupport>,
 ) -> Result<std::path::PathBuf, String> {
     let thumb_settings = match state.redis.config.get().await {
-        Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+        Ok(mut conn) => {
+            let fields: std::collections::HashMap<String, String> =
+                conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+            let settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
+            if settings.format == lanrurugi_scanner::thumbnail::ThumbFormat::Jxl
+                && client_support.is_some_and(|support| !support.jxl)
+            {
+                let enablewebp = fields.get("enablewebp").map(|v| v != "0").unwrap_or(true);
+                lanrurugi_scanner::thumbnail::ThumbSettings {
+                    format: if enablewebp {
+                        lanrurugi_scanner::thumbnail::ThumbFormat::Webp
+                    } else {
+                        lanrurugi_scanner::thumbnail::ThumbFormat::Jpeg
+                    },
+                    quality: settings.quality,
+                }
+            } else {
+                settings
+            }
+        }
         Err(e) => return Err(e.to_string()),
     };
     let dir = state.library.thumb_dir.join("TA");
@@ -523,6 +559,7 @@ async fn generate_tankoubon_cover(
 async fn regenerate_tankoubon_thumbnail_on_demand(
     state: &AppState,
     id: &TankId,
+    client_support: crate::archives::ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
     let grouping = state.repos.groupings.get(id).await.ok().flatten()?;
     let first_arc_id = grouping.archives.first()?;
@@ -536,12 +573,12 @@ async fn regenerate_tankoubon_thumbnail_on_demand(
 
     state
         .thumbnail_singleflight
-        .run(format!("tank:{id}"), {
+        .run(format!("tank:{id}:{}", client_support.key()), {
             let state = state.clone();
             let id = id.clone();
             move || async move {
-                match generate_tankoubon_cover(&state, id.as_str(), &archive, 1).await {
-                    Ok(_) => read_tankoubon_thumbnail_from_disk(&state, id.as_str()).await,
+                match generate_tankoubon_cover(&state, id.as_str(), &archive, 1, Some(client_support)).await {
+                    Ok(_) => read_tankoubon_thumbnail_from_disk(&state, id.as_str(), client_support).await,
                     Err(e) => {
                         tracing::warn!(%id, error = %e, "on-demand tank thumbnail generation failed");
                         None
@@ -651,7 +688,7 @@ async fn force_apply_first_archive_cover(
                 return;
             };
             if let Err(e) =
-                generate_tankoubon_cover(state, grouping.tankid.as_str(), &archive, 1).await
+                generate_tankoubon_cover(state, grouping.tankid.as_str(), &archive, 1, None).await
             {
                 tracing::warn!(id = %grouping.tankid, error = %e, "failed to sync tank thumbnail with new first archive");
             }
@@ -787,10 +824,11 @@ async fn update_tankoubon_thumbnail(
         }
     };
 
-    let output = match generate_tankoubon_cover(&state, id.as_str(), &archive, local_page).await {
-        Ok(path) => path,
-        Err(e) => return error(StatusCode::BAD_REQUEST, "update_tankoubon_thumbnail", e),
-    };
+    let output =
+        match generate_tankoubon_cover(&state, id.as_str(), &archive, local_page, None).await {
+            Ok(path) => path,
+            Err(e) => return error(StatusCode::BAD_REQUEST, "update_tankoubon_thumbnail", e),
+        };
 
     grouping.thumbnail_manual = true;
     grouping.thumbnail_source_archive = Some(arc_id);

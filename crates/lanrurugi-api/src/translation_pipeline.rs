@@ -232,7 +232,7 @@ pub(crate) async fn load_page_image(
     .map_err(|e| PipelineError::PageUnavailable(e.to_string()))?;
 
     let image = lanrurugi_core::concurrency::run_blocking(move || {
-        image::load_from_memory(&raw).map(|img| img.to_rgb8())
+        lanrurugi_scanner::image_decode::load_from_memory(&raw).map(|img| img.to_rgb8())
     })
     .await
     .map_err(|e| PipelineError::PageUnavailable(e.to_string()))?

@@ -178,6 +178,10 @@ struct BenchArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Register the JPEG XL decoder with `image` once at process start. Every production decode
+    // path already goes through `lanrurugi_scanner::image_decode`, but this keeps any future direct
+    // `image::open`/`ImageReader` use (or a dependency's own call) JXL-aware too.
+    lanrurugi_scanner::image_decode::register_image_decoders();
     let cli = Cli::parse();
     match &cli.command {
         Command::Serve(args) => telemetry::init(Some(&args.log_dir)),

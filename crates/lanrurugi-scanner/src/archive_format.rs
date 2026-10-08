@@ -531,7 +531,7 @@ pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32
         .into_iter()
         .map(|name| {
             found.remove(&name).and_then(|bytes| {
-                image::ImageReader::new(std::io::Cursor::new(bytes))
+                crate::image_decode::image_reader(std::io::Cursor::new(bytes))
                     .with_guessed_format()
                     .ok()
                     .and_then(|reader| reader.into_dimensions().ok())

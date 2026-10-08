@@ -595,7 +595,7 @@ async fn find_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> Vec<
 const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
 
 /// Enforces the `tempmaxsize` setting (MB, Redis `LRR_CONFIG` hash field) against
-/// `temp_dir/resize_page/` — the reader's WebP resize cache (`archives.rs::resize_cache_path`),
+/// `temp_dir/resize_page/` — the reader's WebP/JXL resize cache (`archives.rs::resize_cache_path`),
 /// the only unbounded, self-regenerating content under `temp_dir` (a cache miss just re-resizes
 /// from the archive; nothing is lost). Deliberately does not touch anything else in `temp_dir`:
 /// `temp_*`-prefixed pending-rename staging files are unresolved user decisions, not a cache, and
@@ -642,9 +642,14 @@ pub async fn sweep_resize_cache_size(state: &AppState) {
             break;
         }
         // The `.dims` sidecar (see `resize_cache_path`'s doc comment) has no independent size
-        // tracked above; delete it alongside its `.webp` so a future cache hit doesn't try to
-        // read stale dimensions for a file that no longer exists.
-        let sidecar = entry.path.with_extension("webp.dims");
+        // tracked above; delete it alongside its image so a future cache hit doesn't try to read
+        // stale dimensions for a file that no longer exists.
+        let extension = entry
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let sidecar = entry.path.with_extension(format!("{extension}.dims"));
         let _ = tokio::fs::remove_file(&sidecar).await;
         match tokio::fs::remove_file(&entry.path).await {
             Ok(()) => {
@@ -669,9 +674,9 @@ struct ResizeCacheEntry {
     modified: std::time::SystemTime,
 }
 
-/// Recursively lists every `.webp` file under `resize_page/<id>/…` with its size and mtime.
-/// Returns `None` (rather than an empty vec) when the directory doesn't exist yet — a fresh
-/// install with no resize activity yet, not a cache to trim.
+/// Recursively lists every `.webp` / `.jxl` file under `resize_page/<id>/…` with its size and
+/// mtime. Returns `None` (rather than an empty vec) when the directory doesn't exist yet — a
+/// fresh install with no resize activity yet, not a cache to trim.
 async fn list_resize_cache_entries(resize_cache_dir: &Path) -> Option<Vec<ResizeCacheEntry>> {
     let mut per_archive_dirs = match tokio::fs::read_dir(resize_cache_dir).await {
         Ok(entries) => entries,
@@ -705,11 +710,11 @@ async fn list_resize_cache_entries(resize_cache_dir: &Path) -> Option<Vec<Resize
                 Ok(None) => break,
                 Err(_) => break,
             };
-            let is_webp = file
+            let is_resize_cache = file
                 .file_name()
                 .to_str()
-                .is_some_and(|name| name.ends_with(".webp"));
-            if !is_webp {
+                .is_some_and(|name| name.ends_with(".webp") || name.ends_with(".jxl"));
+            if !is_resize_cache {
                 continue;
             }
             let Ok(metadata) = file.metadata().await else {

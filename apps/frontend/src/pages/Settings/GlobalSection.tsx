@@ -7,6 +7,7 @@ import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { routes } from "@/lib/routes"
+import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { LanguageOrderEditor } from "./LanguageOrderEditor"
@@ -23,6 +24,8 @@ export function GlobalSection({
   setPagesize,
   enableresize,
   setEnableresize,
+  preferjxl,
+  setPreferjxl,
   sizethreshold,
   setSizethreshold,
   readerquality,
@@ -62,6 +65,8 @@ export function GlobalSection({
   setPagesize: (v: number) => void
   enableresize: boolean
   setEnableresize: (v: boolean) => void
+  preferjxl: boolean
+  setPreferjxl: (v: boolean) => void
   sizethreshold: number
   setSizethreshold: (v: number) => void
   readerquality: number
@@ -93,6 +98,13 @@ export function GlobalSection({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const browserSupport = getImageFormatSupport()
+  const browserSupportLabel =
+    browserSupport === "jxl"
+      ? t("settings.browserFormatJxl")
+      : browserSupport === "webp"
+        ? t("settings.browserFormatWebp")
+        : t("settings.browserFormatSource")
   const [editingKey, setEditingKey] = useState(false)
   const cleanDatabase = useCleanDatabase()
   const dropDatabase = useDropDatabase()
@@ -219,6 +231,18 @@ export function GlobalSection({
               </Row>
             </>
           )}
+          <CheckboxRow
+            id="preferjxl"
+            checked={preferjxl}
+            onChange={setPreferjxl}
+            label={t("settings.preferJpegXlInReader")}
+          >
+            {t("settings.whenABrowserSupportsJpegXl")}
+            <br />
+            <span style={{ opacity: 0.75 }}>
+              {t("settings.currentBrowserFormat", { format: browserSupportLabel })}
+            </span>
+          </CheckboxRow>
           <CheckboxRow
             id="localprogress"
             checked={localprogress}

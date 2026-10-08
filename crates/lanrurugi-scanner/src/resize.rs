@@ -1,8 +1,9 @@
 //! Reader page resizing — verified against legacy `Model/Archive.pm::serve_page` +
 //! `Model/Reader.pm::resize_image` + `Utils/ImageMagickResizer.pm::resize_page`: when a page's
 //! *raw byte size* (not its pixel dimensions) exceeds `sizethreshold` KB, it's downscaled and
-//! re-encoded as **WebP** at `readerquality` (deviation from legacy's JPEG — WebP at the same
-//! quality is smaller, and the `webp` crate is already a dependency for thumbnails). A page
+//! re-encoded as **WebP or JPEG XL** depending on the client's capability and the `preferjxl`
+//! setting. WebP remains the universal fallback; JXL uses the pure-Rust lossless encoder in
+//! [`crate::jxl`]. A page
 //! already under the threshold is served unmodified — this module returns `None` for that case
 //! rather than a no-op re-encode, so the caller can skip writing a cache entry identical to the
 //! source file.
@@ -22,6 +23,30 @@
 use lanrurugi_core::concurrency::run_blocking;
 use thiserror::Error;
 
+/// Output codec for the reader's re-encode path. WebP remains the universal fallback; JXL is only
+/// selected after the frontend advertises JXL decode support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeFormat {
+    Webp,
+    Jxl,
+}
+
+impl EncodeFormat {
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Webp => "webp",
+            Self::Jxl => "jxl",
+        }
+    }
+
+    pub const fn content_type(self) -> &'static str {
+        match self {
+            Self::Webp => "image/webp",
+            Self::Jxl => "image/jxl",
+        }
+    }
+}
+
 /// Cap applied to an image's shorter dimension (see module docs for why this isn't legacy's
 /// width-only check). Same numeric value as legacy's fixed 1064px cap — only which dimension it's
 /// measured against has changed.
@@ -39,6 +64,8 @@ pub enum ResizeError {
     Decode(#[from] image::ImageError),
     #[error("webp encode error: {0:?}")]
     Webp(webp::WebPEncodingError),
+    #[error("jxl encode error: {0}")]
+    Jxl(#[from] crate::jxl::JxlEncodeError),
     #[error("blocking task failed: {0}")]
     Join(#[from] lanrurugi_core::concurrency::BlockingTaskError),
 }
@@ -54,13 +81,14 @@ pub async fn resize_if_over_threshold(
     max_short_edge: u32,
     max_long_edge: Option<u32>,
     preview_full_short_edge: Option<u32>,
+    format: EncodeFormat,
 ) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
     run_blocking(move || {
         let size_kb = (content.len() / 1024) as i64;
         if size_kb <= threshold_kb {
             return Ok(None);
         }
-        let img = image::load_from_memory(&content)?;
+        let img = crate::image_decode::load_from_memory(&content)?;
         let (orig_width, orig_height) = (img.width(), img.height());
         let out = resize_sync(
             &img,
@@ -68,24 +96,26 @@ pub async fn resize_if_over_threshold(
             max_short_edge,
             max_long_edge,
             preview_full_short_edge,
+            format,
         )?;
         Ok(Some((out, orig_width, orig_height)))
     })
     .await?
 }
 
-/// Unconditional WebP conversion (no byte-size threshold) — for formats browsers can't render
-/// at all (BMP/TIFF/unknown), where "serve the original" isn't an option. Returns the converted
-/// bytes plus the original dimensions, same shape as `resize_if_over_threshold`'s success case.
-pub async fn convert_to_webp(
+/// Unconditional conversion (no byte-size threshold) — for formats browsers can't render at all
+/// (BMP/TIFF/unknown), where "serve the original" isn't an option. Returns the converted bytes
+/// plus the original dimensions, same shape as `resize_if_over_threshold`'s success case.
+pub async fn convert_to_format(
     content: Vec<u8>,
     quality: u8,
     max_short_edge: u32,
     max_long_edge: Option<u32>,
     preview_full_short_edge: Option<u32>,
+    format: EncodeFormat,
 ) -> Result<(Vec<u8>, u32, u32), ResizeError> {
     run_blocking(move || {
-        let img = image::load_from_memory(&content)?;
+        let img = crate::image_decode::load_from_memory(&content)?;
         let (orig_width, orig_height) = (img.width(), img.height());
         let out = resize_sync(
             &img,
@@ -93,6 +123,7 @@ pub async fn convert_to_webp(
             max_short_edge,
             max_long_edge,
             preview_full_short_edge,
+            format,
         )?;
         Ok((out, orig_width, orig_height))
     })
@@ -105,6 +136,7 @@ fn resize_sync(
     max_short_edge: u32,
     max_long_edge: Option<u32>,
     preview_full_short_edge: Option<u32>,
+    format: EncodeFormat,
 ) -> Result<Vec<u8>, ResizeError> {
     let short_edge = img.width().min(img.height());
     let long_edge = img.width().max(img.height());
@@ -152,11 +184,16 @@ fn resize_sync(
     };
 
     let rgb = final_image.to_rgb8();
-    let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
-    let encoded = encoder
-        .encode_simple(false, quality as f32)
-        .map_err(ResizeError::Webp)?;
-    Ok(encoded.to_vec())
+    match format {
+        EncodeFormat::Webp => {
+            let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
+            let encoded = encoder
+                .encode_simple(false, quality as f32)
+                .map_err(ResizeError::Webp)?;
+            Ok(encoded.to_vec())
+        }
+        EncodeFormat::Jxl => crate::jxl::encode_rgb(&rgb, quality).map_err(ResizeError::from),
+    }
 }
 
 #[cfg(test)]
@@ -184,6 +221,7 @@ mod tests {
             MAX_SHORT_EDGE_DESKTOP,
             None,
             None,
+            EncodeFormat::Webp,
         )
         .await
         .unwrap();
@@ -195,11 +233,19 @@ mod tests {
         // Portrait page: short edge is width (2000 > 1064), so it drives the resize; height
         // scales down proportionally rather than being clamped directly.
         let content = make_test_jpeg(2000, 3000);
-        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
-            .await
-            .unwrap();
+        let result = resize_if_over_threshold(
+            content,
+            50,
+            0,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+            EncodeFormat::Webp,
+        )
+        .await
+        .unwrap();
         let (resized, ..) = result.expect("over threshold must resize");
-        let decoded = image::load_from_memory(&resized).unwrap();
+        let decoded = crate::image_decode::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), MAX_SHORT_EDGE_DESKTOP);
         assert_eq!(decoded.height(), 1596); // round(3000 * 1064 / 2000)
     }
@@ -215,11 +261,19 @@ mod tests {
         // above and the wide-webtoon test below. This test pins the still-correct "well within
         // bounds" case so a regression can't sneak in via the short-edge computation itself.
         let content = make_test_jpeg(800, 8000);
-        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
-            .await
-            .unwrap();
+        let result = resize_if_over_threshold(
+            content,
+            50,
+            0,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+            EncodeFormat::Webp,
+        )
+        .await
+        .unwrap();
         let (resized, ..) = result.expect("over byte threshold must still re-encode");
-        let decoded = image::load_from_memory(&resized).unwrap();
+        let decoded = crate::image_decode::load_from_memory(&resized).unwrap();
         assert_eq!(
             decoded.width(),
             800,
@@ -235,11 +289,19 @@ mod tests {
         // the short edge's ratio (preserving aspect ratio, not distorting) rather than crushing
         // width to exactly 1064 regardless of which edge that constrains.
         let content = make_test_jpeg(1200, 12000);
-        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
-            .await
-            .unwrap();
+        let result = resize_if_over_threshold(
+            content,
+            50,
+            0,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+            EncodeFormat::Webp,
+        )
+        .await
+        .unwrap();
         let (resized, ..) = result.expect("over threshold must resize");
-        let decoded = image::load_from_memory(&resized).unwrap();
+        let decoded = crate::image_decode::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), MAX_SHORT_EDGE_DESKTOP);
         assert_eq!(decoded.height(), MAX_SHORT_EDGE_DESKTOP * 12000 / 1200);
     }
@@ -247,11 +309,19 @@ mod tests {
     #[tokio::test]
     async fn over_threshold_but_under_short_edge_still_reencodes() {
         let content = make_test_jpeg(500, 500);
-        let result = resize_if_over_threshold(content, 50, 0, MAX_SHORT_EDGE_DESKTOP, None, None)
-            .await
-            .unwrap();
+        let result = resize_if_over_threshold(
+            content,
+            50,
+            0,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+            EncodeFormat::Webp,
+        )
+        .await
+        .unwrap();
         let (resized, ..) = result.expect("over threshold must re-encode even without downscaling");
-        let decoded = image::load_from_memory(&resized).unwrap();
+        let decoded = crate::image_decode::load_from_memory(&resized).unwrap();
         assert_eq!(decoded.width(), 500);
     }
 }

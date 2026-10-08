@@ -432,8 +432,18 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("localprogress", false),
     ("authprogress", false),
     ("enableresize", true),
+    // Reader page format preference. When a page's source bytes are JPEG XL and the browser
+    // advertises JXL decode support (the frontend writes that capability to `lrr_img_support`),
+    // serve the original `.jxl` instead of decoding and re-encoding it. JPEG/PNG/WebP sources are
+    // unaffected — this workspace has no permissive JXL encoder, so the fallback remains
+    // jxl-source > WebP > original bytes.
+    ("preferjxl", true),
     ("hqthumbpages", false),
     ("enablewebp", true),
+    // Use JPEG XL as the generated thumbnail format. JXL > WebP > JPEG for clients that advertise
+    // JXL, with on-demand fallback generation for clients that do not; animated sources still use
+    // animated WebP when re-encoding. Defaults on to match the intended format priority.
+    ("jxlthumbpages", true),
     ("replacedupe", false),
     ("tagruleson", true),
     // `Model/Config.pm::enable_dateadded`/`use_lastmodified` — consumed by
@@ -578,6 +588,37 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     }
 }
 
+/// Expands the public one-field `thumbnail_format` contract into the two legacy booleans actually
+/// stored in Redis. Split out of `put_settings` so the mapping can be unit-tested without Redis.
+fn expand_thumbnail_format(fields: &mut serde_json::Map<String, Value>) -> Result<(), String> {
+    let Some(format) = fields.remove("thumbnail_format") else {
+        return Ok(());
+    };
+    let Some(format) = format.as_str() else {
+        return Err("Field \"thumbnail_format\" must be a string.".to_string());
+    };
+    match format {
+        "jxl" => {
+            fields.insert("jxlthumbpages".to_string(), json!(true));
+            fields.insert("enablewebp".to_string(), json!(true));
+        }
+        "webp" => {
+            fields.insert("jxlthumbpages".to_string(), json!(false));
+            fields.insert("enablewebp".to_string(), json!(true));
+        }
+        "jpeg" => {
+            fields.insert("jxlthumbpages".to_string(), json!(false));
+            fields.insert("enablewebp".to_string(), json!(false));
+        }
+        _ => {
+            return Err(format!(
+                "Invalid thumbnail_format: {format}. Must be one of jxl, webp, jpeg."
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// The only `STRING_FIELDS` entries a `guest_visitor` may see — everything else in the full
 /// payload (`pagesize`, `access_token_lifetime_secs`, `tagrules`, `llm_api_key_set`, etc.) is
 /// admin-session configuration a guest has no business reading, even though `route_policy.csv`
@@ -661,6 +702,24 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
         let value = fields.get(*key).map(|v| v != "0").unwrap_or(*default);
         body.insert((*key).to_string(), json!(value));
     }
+    // Public settings API exposes the thumbnail format as one enum instead of the two legacy
+    // booleans (`enablewebp`/`jxlthumbpages`). The booleans remain in the response for
+    // compatibility, but the UI and new API clients should send/read this field.
+    let thumbnail_jxl = fields
+        .get("jxlthumbpages")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let thumbnail_webp = fields.get("enablewebp").map(|v| v != "0").unwrap_or(true);
+    body.insert(
+        "thumbnail_format".to_string(),
+        json!(if thumbnail_jxl {
+            "jxl"
+        } else if thumbnail_webp {
+            "webp"
+        } else {
+            "jpeg"
+        }),
+    );
     // The real API key is NEVER sent to the frontend (security: even a password field's
     // `$0.value` is readable by any browser extension / console). The frontend only gets
     // a boolean so it can show "已设置" vs. the empty input.
@@ -701,13 +760,19 @@ async fn put_settings(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     axum::Json(body): axum::Json<Value>,
 ) -> Response {
-    let Value::Object(fields) = body else {
+    let Value::Object(mut fields) = body else {
         return error(
             StatusCode::BAD_REQUEST,
             "put_settings",
             "Expected a JSON object.",
         );
     };
+    // Accept the public one-field `thumbnail_format` contract and expand it into the two legacy
+    // booleans actually stored in `LRR_CONFIG`; this keeps old Redis state/legacy instances and
+    // the scanner's `read_settings` working while giving API/UI a single radio-style value.
+    if let Err(message) = expand_thumbnail_format(&mut fields) {
+        return error(StatusCode::BAD_REQUEST, "put_settings", message);
+    }
 
     if auth
         .as_ref()
@@ -739,13 +804,21 @@ async fn put_settings(
     };
 
     // Captured before `fields` is consumed by the write loop below — used afterwards to decide
-    // whether this request actually flips the thumbnail format (`enablewebp`), which needs a full
-    // regen so the library stays in one uniform format rather than a jpg/webp mix. A quality-only
-    // change (`webpquality`/`hqthumbpages`) intentionally does *not* trigger this — it only
-    // affects thumbnails generated from here on.
+    // whether this request actually flips the thumbnail format (`enablewebp` or
+    // `jxlthumbpages`), which needs a full regen so the library stays in one uniform format rather
+    // than a mixed bag. A quality-only change (`webpquality`/`hqthumbpages`) intentionally does
+    // *not* trigger this — it only affects thumbnails generated from here on.
     let new_enablewebp = fields.get("enablewebp").and_then(Value::as_bool);
     let previous_enablewebp = conn
         .hget::<_, _, Option<String>>(CONFIG_KEY, "enablewebp")
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let new_jxlthumbpages = fields.get("jxlthumbpages").and_then(Value::as_bool);
+    let previous_jxlthumbpages = conn
+        .hget::<_, _, Option<String>>(CONFIG_KEY, "jxlthumbpages")
         .await
         .ok()
         .flatten()
@@ -860,7 +933,9 @@ async fn put_settings(
         .await;
     }
 
-    if new_enablewebp.is_some_and(|v| v != previous_enablewebp) {
+    let enablewebp_changed = new_enablewebp.is_some_and(|v| v != previous_enablewebp);
+    let jxlthumbpages_changed = new_jxlthumbpages.is_some_and(|v| v != previous_jxlthumbpages);
+    if enablewebp_changed || jxlthumbpages_changed {
         let thumb_settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
         if let Ok(archives) = state.repos.archives.list_all().await {
             crate::archives::spawn_regen_thumbnails_job(&state, archives, thumb_settings, true)
@@ -1107,5 +1182,27 @@ mod validate_setting_field_tests {
     fn rejects_a_non_string_theme_value() {
         let err = validate_setting_field("theme", &json!(42)).unwrap_err();
         assert!(err.contains("Invalid theme"));
+    }
+    #[test]
+    fn expands_thumbnail_format_to_legacy_booleans() {
+        for (format, jxl, webp) in [
+            ("jxl", true, true),
+            ("webp", false, true),
+            ("jpeg", false, false),
+        ] {
+            let mut fields = serde_json::Map::new();
+            fields.insert("thumbnail_format".to_string(), json!(format));
+            expand_thumbnail_format(&mut fields).unwrap();
+            assert_eq!(fields.get("jxlthumbpages"), Some(&json!(jxl)));
+            assert_eq!(fields.get("enablewebp"), Some(&json!(webp)));
+            assert!(!fields.contains_key("thumbnail_format"));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_thumbnail_format() {
+        let mut fields = serde_json::Map::new();
+        fields.insert("thumbnail_format".to_string(), json!("avif"));
+        assert!(expand_thumbnail_format(&mut fields).is_err());
     }
 }

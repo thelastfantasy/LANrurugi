@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next"
 
 import { useRegenThumbnails } from "@/api/hooks"
-import { NumberInput } from "@/components/common-ui/Form"
+import { NumberInput, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
+import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, Row } from "./shared"
@@ -37,8 +38,8 @@ function isKnownTimezone(tz: string): boolean {
 export function TagsThumbnailsSection({
   hqthumbpages,
   setHqthumbpages,
-  enablewebp,
-  setEnablewebp,
+  thumbnailFormat,
+  setThumbnailFormat,
   webpquality,
   setWebpquality,
   excludednamespaces,
@@ -57,8 +58,8 @@ export function TagsThumbnailsSection({
 }: {
   hqthumbpages: boolean
   setHqthumbpages: (v: boolean) => void
-  enablewebp: boolean
-  setEnablewebp: (v: boolean) => void
+  thumbnailFormat: "jxl" | "webp" | "jpeg"
+  setThumbnailFormat: (v: "jxl" | "webp" | "jpeg") => void
   webpquality: number
   setWebpquality: (v: number) => void
   excludednamespaces: string
@@ -77,6 +78,13 @@ export function TagsThumbnailsSection({
 }) {
   const { t } = useTranslation()
   const regenThumbnails = useRegenThumbnails()
+  const browserSupport = getImageFormatSupport()
+  const browserSupportLabel =
+    browserSupport === "jxl"
+      ? t("settings.browserFormatJxl")
+      : browserSupport === "webp"
+        ? t("settings.browserFormatWebp")
+        : t("settings.browserFormatSource")
 
   return (
     <CollapsibleSection id="tags-thumbnails" icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
@@ -86,14 +94,28 @@ export function TagsThumbnailsSection({
             <br />
             {t("settings.ifThisOptionIsChecked")}
           </CheckboxRow>
-          <CheckboxRow id="enablewebp" checked={enablewebp} onChange={setEnablewebp} label={t("settings.useWebpForThumbnails")}>
-            {t("settings.ifCheckedThumbnailsAreGenerated")}
+          <Row label={t("settings.thumbnailFormat")}>
+            <RadioGroup
+              value={thumbnailFormat}
+              onValueChange={setThumbnailFormat}
+              style={{ display: "flex", flexDirection: "column", gap: 6 }}
+            >
+              <RadioItem value="jxl">{t("settings.thumbnailFormatJxl")}</RadioItem>
+              <RadioItem value="webp">{t("settings.thumbnailFormatWebp")}</RadioItem>
+              <RadioItem value="jpeg">{t("settings.thumbnailFormatJpeg")}</RadioItem>
+            </RadioGroup>
+            <br />
+            {t("settings.thumbnailFormatHint")}
+            <br />
+            <span style={{ opacity: 0.75 }}>
+              {t("settings.currentBrowserFormat", { format: browserSupportLabel })}
+            </span>
             <br />
             <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
             {t("settings.changingThisRegeneratesEveryThumbnail")}
-          </CheckboxRow>
-          {enablewebp && (
-            <Row label={t("settings.webpQuality")}>
+          </Row>
+          {thumbnailFormat !== "jpeg" && (
+            <Row label={t("settings.thumbnailQuality")}>
               <NumberInput
                 style={{ width: "100%" }}
                 min={0}
@@ -102,7 +124,7 @@ export function TagsThumbnailsSection({
                 onValueChange={setWebpquality}
               />
               <br />
-              {t("settings.qualityOfGeneratedWebpThumbnails")}
+              {t("settings.thumbnailQualityDescription")}
             </Row>
           )}
           <ActionRow

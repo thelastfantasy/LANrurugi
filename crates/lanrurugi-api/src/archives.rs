@@ -28,6 +28,7 @@ use crate::common::{error, not_found, ok};
 use crate::settings::{DEFAULT_READER_QUALITY, DEFAULT_SIZE_THRESHOLD};
 use crate::state::FetchedPage;
 use crate::AppState;
+use lanrurugi_scanner::resize::EncodeFormat;
 use lanrurugi_storage::id::ARCHIVE_ID_LEN;
 use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
 
@@ -1373,6 +1374,10 @@ pub struct GetThumbnailParams {
     /// archive-overview page grid (`ArchiveOverviewOverlay.tsx`) relies on to show a distinct
     /// thumbnail per page rather than the cover repeated for every page.
     page: Option<u32>,
+    /// Optional explicit capability override (`jxl`/`webp`/`source`), same contract as the reader
+    /// page endpoint. Normally absent, in which case the capability cookie/header is used.
+    #[serde(default)]
+    format: Option<String>,
 }
 
 async fn get_archive_thumbnail(
@@ -1380,6 +1385,7 @@ async fn get_archive_thumbnail(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<GetThumbnailParams>,
+    headers: HeaderMap,
 ) -> Response {
     // Archive IDs are always a 40-char lowercase-hex SHA-1 digest (`lanrurugi_storage::id`) —
     // enforcing that shape here, before `id` ever reaches a path-join, closes a path-traversal
@@ -1395,8 +1401,11 @@ async fn get_archive_thumbnail(
         return not_found("serve_thumbnail", format!("{id} does not exist."));
     }
     let page = params.page.unwrap_or(0);
+    let client_support = ClientImageSupport::from_request(&headers, params.format.as_deref());
     const THUMB_CACHE: &str = "private, max-age=3600";
-    if let Some((content_type, bytes)) = read_thumbnail_from_disk(&state, id.as_str(), page).await {
+    if let Some((content_type, bytes)) =
+        read_thumbnail_from_disk(&state, id.as_str(), page, client_support).await
+    {
         return (
             [
                 (header::CONTENT_TYPE, content_type),
@@ -1407,7 +1416,7 @@ async fn get_archive_thumbnail(
             .into_response();
     }
     if let Some((content_type, bytes)) =
-        regenerate_thumbnail_on_demand(&state, id.as_str(), page).await
+        regenerate_thumbnail_on_demand(&state, id.as_str(), page, client_support).await
     {
         return (
             [
@@ -1455,14 +1464,31 @@ async fn read_thumbnail_from_disk(
     state: &AppState,
     id: &str,
     page: u32,
+    support: ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
-    for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+    for format in thumbnail_formats_for(support) {
         let path = thumbnail_disk_path(state, id, page, format);
         if let Ok(contents) = tokio::fs::read(&path).await {
             return Some((format.content_type(), bytes::Bytes::from(contents)));
         }
     }
     None
+}
+
+/// Preferred probe order for the client's advertised capabilities. JXL is only offered when the
+/// browser says it can decode it; otherwise the existing WebP/JPEG files are used (and generated
+/// on demand if an admin switched the stored format to JXL).
+pub(crate) fn thumbnail_formats_for(
+    support: ClientImageSupport,
+) -> Vec<lanrurugi_scanner::thumbnail::ThumbFormat> {
+    use lanrurugi_scanner::thumbnail::ThumbFormat;
+    if support.jxl {
+        vec![ThumbFormat::Jxl, ThumbFormat::Webp, ThumbFormat::Jpeg]
+    } else if support.webp {
+        vec![ThumbFormat::Webp, ThumbFormat::Jpeg]
+    } else {
+        vec![ThumbFormat::Jpeg]
+    }
 }
 
 /// Generates a missing cover or per-page thumbnail on the spot and returns it, or `None` if
@@ -1476,6 +1502,7 @@ async fn regenerate_thumbnail_on_demand(
     state: &AppState,
     id: &str,
     page: u32,
+    support: ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
     let archive = state
         .repos
@@ -1487,12 +1514,39 @@ async fn regenerate_thumbnail_on_demand(
 
     state
         .thumbnail_singleflight
-        .run(format!("{id}:{page}"), {
+        .run(format!("{id}:{page}:{}", support.key()), {
             let state = state.clone();
             let id = id.to_string();
             move || async move {
                 let thumb_settings = match state.redis.config.get().await {
-                    Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+                    Ok(mut conn) => {
+                        // `read_settings` consumes a fresh HGETALL internally, but the fallback
+                        // decision below still needs the raw `enablewebp` value. Read both off the
+                        // same connection to keep the generation path simple.
+                        let fields: HashMap<String, String> =
+                            conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+                        let settings =
+                            lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
+                        if settings.format
+                            == lanrurugi_scanner::thumbnail::ThumbFormat::Jxl
+                            && !support.jxl
+                        {
+                            let enablewebp = fields
+                                .get("enablewebp")
+                                .map(|v| v != "0")
+                                .unwrap_or(true);
+                            lanrurugi_scanner::thumbnail::ThumbSettings {
+                                format: if enablewebp {
+                                    lanrurugi_scanner::thumbnail::ThumbFormat::Webp
+                                } else {
+                                    lanrurugi_scanner::thumbnail::ThumbFormat::Jpeg
+                                },
+                                quality: settings.quality,
+                            }
+                        } else {
+                            settings
+                        }
+                    }
                     Err(_) => return None,
                 };
                 let output = thumbnail_disk_path(&state, &id, page, thumb_settings.format);
@@ -1506,7 +1560,7 @@ async fn regenerate_thumbnail_on_demand(
                 )
                 .await;
                 match result {
-                    Ok(_) => read_thumbnail_from_disk(&state, &id, page).await,
+                    Ok(_) => read_thumbnail_from_disk(&state, &id, page, support).await,
                     Err(e) => {
                         tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
                         None
@@ -2034,10 +2088,12 @@ pub struct PageParams {
     /// the archive file, as before patches existed."
     #[serde(default)]
     source: Option<String>,
-    /// `"1"`/`"true"` explicitly asks for the resize-optimized WebP version (`/files` sets this on
-    /// every URL it generates when `enableresize` is on) — the URL is the contract here, so the
-    /// browser caches the original and optimized variants as distinct resources. Absent means
-    /// "serve the original bytes" (reader "view original" affordances and non-reader callers).
+    /// `"1"`/`"true"` explicitly asks for the resize/format-optimized variant (`/files` sets this
+    /// on every URL it generates when `enableresize` is on). Depending on the source and the
+    /// caller's advertised capabilities this can be a WebP re-encode, a JXL-native passthrough, or
+    /// the original bytes; the URL is still the contract, so the browser caches the original and
+    /// optimized variants as distinct resources. Absent means "serve the original bytes" (reader
+    /// "view original" affordances and non-reader callers).
     #[serde(default)]
     optimize: Option<String>,
     /// Frontend hint for the server-side reader page queue: `"1"`/`"current"` means this is the
@@ -2050,10 +2106,118 @@ pub struct PageParams {
     /// full-resolution blob finishes loading, the reader swaps it in seamlessly.
     #[serde(default)]
     variant: Option<String>,
-    /// Optional device-derived short-edge cap for the full WebP variant (clamped server-side).
+    /// Optional device-derived short-edge cap for the full re-encoded variant (clamped server-side).
     /// Lets a phone send its actual DPR/viewport-derived target instead of relying on UA alone.
     #[serde(default)]
     max_short_edge: Option<u32>,
+    /// Explicit image-format capability override used by tests/API clients:
+    /// `jxl`, `webp`, or `source`. Normally absent, in which case
+    /// [`ClientImageSupport::from_request`] reads the frontend's capability cookie/header.
+    #[serde(default)]
+    format: Option<String>,
+}
+
+/// What the caller can actually decode. The frontend JavaScript feature-detects this once per
+/// browser and writes it to a cookie, so both the reader's blob-loading `fetch()` calls and its
+/// plain optimized `<img>` requests carry the same answer without every page URL needing a format
+/// parameter (the reader's tiny-preview requests also use it, though previews deliberately stay on
+/// the WebP path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClientImageSupport {
+    pub(crate) jxl: bool,
+    pub(crate) webp: bool,
+}
+
+impl ClientImageSupport {
+    const fn source() -> Self {
+        Self {
+            jxl: false,
+            webp: false,
+        }
+    }
+
+    const fn webp() -> Self {
+        Self {
+            jxl: false,
+            webp: true,
+        }
+    }
+
+    const fn jxl_and_webp() -> Self {
+        Self {
+            jxl: true,
+            webp: true,
+        }
+    }
+
+    fn from_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            // A browser that advertises JXL almost always ships WebP too; treating this as
+            // "both" keeps the fallback chain jxl > webp > source meaningful even if a page's
+            // source format is not JXL.
+            "jxl" => Some(Self::jxl_and_webp()),
+            "webp" => Some(Self::webp()),
+            "source" | "original" | "none" => Some(Self::source()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn from_request(headers: &HeaderMap, explicit: Option<&str>) -> Self {
+        if let Some(support) = explicit.and_then(Self::from_value) {
+            return support;
+        }
+        if let Some(support) = headers
+            .get("x-lrr-image-support")
+            .and_then(|value| value.to_str().ok())
+            .and_then(Self::from_value)
+        {
+            return support;
+        }
+        if let Some(value) = cookie_value(headers, "lrr_img_support").and_then(Self::from_value) {
+            return value;
+        }
+        // No JS/cookie signal: fall back to the `Accept` header. Legacy behavior for anything
+        // that simply asks for `*/*` remains WebP conversion (the previous hard-coded pipeline).
+        if let Some(accept) = headers
+            .get(header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+        {
+            let accept = accept.to_ascii_lowercase();
+            if accept.contains("image/jxl") {
+                return Self::jxl_and_webp();
+            }
+            if accept.contains("image/webp") {
+                return Self::webp();
+            }
+        }
+        Self::webp()
+    }
+
+    /// Stable singleflight/cache discriminator. Two callers with different format support must
+    /// never share an in-flight conversion result (e.g. a JXL-passthrough request and a
+    /// WebP-conversion request for the same page).
+    pub(crate) const fn key(self) -> &'static str {
+        match (self.jxl, self.webp) {
+            (true, true) => "jxl+webp",
+            (false, true) => "webp",
+            (false, false) => "source",
+            // JXL-only is not produced by [`Self::from_value`], but keep the match total for a
+            // future browser that decodes JXL without WebP.
+            (true, false) => "jxl",
+        }
+    }
+}
+
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            (key.trim() == name).then_some(value.trim())
+        })
 }
 
 /// `<temp_dir>/resize_page/<id>/<sha1(path)>_<threshold>_<quality>.webp` — matches legacy's own
@@ -2062,6 +2226,7 @@ pub struct PageParams {
 /// `/`, `..`, or other filesystem-unsafe characters can't affect the cache file's location. A
 /// `<same name>.dims` sidecar ("WxH") records the original dimensions at encode time so a cache
 /// hit can still report them without re-decoding the original.
+#[allow(clippy::too_many_arguments)]
 fn resize_cache_path(
     temp_dir: &std::path::Path,
     id: &str,
@@ -2070,13 +2235,17 @@ fn resize_cache_path(
     max_short_edge: u32,
     quality: i64,
     preview_upscale: bool,
+    format: EncodeFormat,
+    animated: bool,
 ) -> std::path::PathBuf {
     let mut hasher = Sha1::new();
     hasher.update(path.as_bytes());
     let path_hash = hex_encode(&hasher.finalize());
     let suffix = if preview_upscale { "_up" } else { "" };
+    let animated_suffix = if animated { "_anim" } else { "" };
     temp_dir.join("resize_page").join(id).join(format!(
-        "{path_hash}_{threshold}_{max_short_edge}_{quality}{suffix}.webp"
+        "{path_hash}_{threshold}_{max_short_edge}_{quality}{suffix}{animated_suffix}.{}",
+        format.extension()
     ))
 }
 
@@ -2127,6 +2296,7 @@ async fn get_page(
 
     let is_patch = params.source.as_deref() == Some("patch");
     let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
+    let client_support = ClientImageSupport::from_request(&headers, params.format.as_deref());
     // Mobile user-agents get an aggressive resize threshold so reader pages are transferred as
     // compact WebP instead of multi-hundred-KB originals. On a phone over WiFi this is usually the
     // dominant factor in "images load one by one / slowly" — the LAN itself is not the bottleneck.
@@ -2193,17 +2363,22 @@ async fn get_page(
     // they change the encoded dimensions/quality, and collapsing a preview request together with a
     // full-resolution request would let one caller receive the other caller's image bytes (the
     // reader deliberately fetches both for the same page nearly simultaneously).
+    //
+    // `client_support.key()` is part of the key for the same reason: whether a JXL source page is
+    // served as-is or converted to WebP changes the bytes/Content-Type entirely, so a JXL-capable
+    // request and a WebP-only request for the same entry must not collapse onto each other.
     let short_edge_key = requested_short_edge
         .map(|n| format!(":short{n}"))
         .unwrap_or_default();
     let cache_key_path = format!(
-        "{}:{}{}{}{}{}",
+        "{}:{}{}{}{}{}:{}",
         if is_patch { "patch" } else { "orig" },
         params.path,
         if optimize { ":opt" } else { "" },
         if mobile { ":mob" } else { "" },
         if preview_variant { ":preview" } else { "" },
         short_edge_key,
+        client_support.key(),
     );
     let result = state
         .page_singleflight
@@ -2225,6 +2400,7 @@ async fn get_page(
                     mobile,
                     preview_variant,
                     requested_short_edge,
+                    client_support,
                 )
                 .await
             }
@@ -2257,12 +2433,18 @@ async fn get_page(
                 }
             }
             if page.resized {
-                // Lets the reader's file-info bar show "converted WebP" vs the original entry
-                // (the URL's own `path` still carries the original name — e.g. `foo.png` — which
-                // is the page's identity in the archive, not a claim about the served format).
+                // Lets the reader's file-info bar show the actual converted format vs the original
+                // entry (the URL's own `path` still carries the original name — e.g. `foo.png` —
+                // which is the page's identity in the archive, not a claim about the served
+                // format).
+                let resized_format = if page.content_type == "image/jxl" {
+                    "jxl"
+                } else {
+                    "webp"
+                };
                 header_map.insert(
                     header::HeaderName::from_static("x-lrr-resized"),
-                    header::HeaderValue::from_static("webp"),
+                    header::HeaderValue::from_static(resized_format),
                 );
                 header_map.insert(
                     header::HeaderName::from_static("x-lrr-original-size"),
@@ -2315,7 +2497,7 @@ async fn get_page(
 
 /// Generates a stable weak ETag from a file's size + mtime + a discriminator key. Since the
 /// content comes from either the original archive or the on-disk resize cache, this is cheap and
-/// lets the browser revalidate with 304 instead of re-downloading unchanged WebP/original pages.
+/// lets the browser revalidate with 304 instead of re-downloading unchanged WebP/JXL/original pages.
 async fn page_file_etag(path: &str, key: &str) -> Option<String> {
     let meta = tokio::fs::metadata(path).await.ok()?;
     let mtime = meta
@@ -2347,6 +2529,7 @@ async fn fetch_page(
     mobile: bool,
     preview: bool,
     requested_short_edge: Option<u32>,
+    client_support: ClientImageSupport,
 ) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
@@ -2419,6 +2602,10 @@ async fn fetch_page(
         .get("readerquality")
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
+    // Controls the output side of the JXL > WebP > source chain: with this on and a JXL-capable
+    // browser, JXL-native pages are served untouched and every other still image is re-encoded
+    // to JXL (lossless pure-Rust encoder; see `lanrurugi_scanner::jxl`).
+    let prefer_jxl = fields.get("preferjxl").map(|v| v != "0").unwrap_or(true);
 
     // Mobile pages use a much lower threshold, and a smaller pixel dimension cap. Quality is
     // intentionally NOT lowered: 85 is the user-accepted minimum and the visual difference on a
@@ -2450,12 +2637,127 @@ async fn fetch_page(
     let preview_full_short_edge = None;
 
     let content_type = image_content_type(&raw);
+    let source_is_jxl = content_type == "image/jxl";
+
+    // Preferred-format chain. A JXL-native page is served untouched when the browser can decode
+    // JXL; every other source (and every preview/tiny request, which exists to be small) goes
+    // through the re-encode path below using whichever output codec the client advertised.
+    let jxl_passthrough = source_is_jxl && client_support.jxl && prefer_jxl && !preview;
+    if jxl_passthrough {
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+    }
+
+    // `None` means this client can decode neither WebP nor JXL; serve source bytes. For preview
+    // requests prefer WebP when both are available because the tiny placeholder should stay tiny.
+    let output_format = if preview {
+        if client_support.webp {
+            Some(EncodeFormat::Webp)
+        } else if client_support.jxl {
+            Some(EncodeFormat::Jxl)
+        } else {
+            None
+        }
+    } else if client_support.jxl && prefer_jxl {
+        Some(EncodeFormat::Jxl)
+    } else if client_support.webp {
+        Some(EncodeFormat::Webp)
+    } else {
+        None
+    };
+    let Some(output_format) = output_format else {
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+    };
+
+    // Animated sources must never fall through to the still-image pipeline below (it would keep
+    // only the first frame). Conversion is WebP-only for now; formats without a frame-safe decoder
+    // return `None` and are served as original bytes.
+    if lanrurugi_scanner::animation::is_animated(content_type, &raw) {
+        if !client_support.webp || (!enable_resize && !preview) {
+            return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+        }
+        let over_threshold = preview || (raw.len() / 1024) as i64 > effective_threshold;
+        if !over_threshold {
+            return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+        }
+
+        let cache_path = resize_cache_path(
+            &state.library.temp_dir,
+            id,
+            path,
+            effective_threshold,
+            effective_max_short_edge,
+            effective_quality,
+            false,
+            EncodeFormat::Webp,
+            true,
+        );
+        if let Ok(cached) = tokio::fs::read(&cache_path).await {
+            let dims = read_cache_dims(&cache_path, EncodeFormat::Webp).await;
+            let etag = page_file_etag(&cache_path.to_string_lossy(), "webp-anim").await;
+            return Ok(FetchedPage {
+                content_type: EncodeFormat::Webp.content_type(),
+                bytes: bytes::Bytes::from(cached),
+                resized: true,
+                orig_size: raw.len() as u64,
+                orig_width: dims.map(|d| d.0).unwrap_or(0),
+                orig_height: dims.map(|d| d.1).unwrap_or(0),
+                etag,
+            });
+        }
+
+        let converted = lanrurugi_scanner::animation::convert_to_animated_webp(
+            raw.clone(),
+            content_type,
+            effective_quality as u8,
+            effective_max_short_edge,
+            if preview {
+                Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
+            } else {
+                None
+            },
+        )
+        .await;
+        return match converted {
+            Ok(Some(animated)) => {
+                if let Some(parent) = cache_path.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                let _ = tokio::fs::write(&cache_path, &animated.bytes).await;
+                let _ = tokio::fs::write(
+                    cache_path.with_extension("webp.dims"),
+                    format!("{}x{}", animated.orig_width, animated.orig_height),
+                )
+                .await;
+                let etag = page_file_etag(&cache_path.to_string_lossy(), "webp-anim").await;
+                Ok(FetchedPage {
+                    content_type: EncodeFormat::Webp.content_type(),
+                    bytes: bytes::Bytes::from(animated.bytes),
+                    resized: true,
+                    orig_size: raw.len() as u64,
+                    orig_width: animated.orig_width,
+                    orig_height: animated.orig_height,
+                    etag,
+                })
+            }
+            Ok(None) => Ok(serve_original_page(archive_file, path, raw, content_type).await),
+            Err(error) => {
+                tracing::warn!(
+                    %id,
+                    path = %path,
+                    error = %error,
+                    "animated WebP conversion failed; serving original animation"
+                );
+                Ok(serve_original_page(archive_file, path, raw, content_type).await)
+            }
+        };
+    }
+
     // Formats browsers render natively — BMP included (Chrome/Firefox/Edge all decode it; it just
     // wastes bandwidth, so it still goes through the *threshold-based* resize path like any other
-    // renderable format). Everything else (TIFF/unknown — Safari-only TIFF aside, no mainstream
-    // browser) gets a *forced* WebP conversion under `optimize=1`, regardless of the resize
-    // setting, since serving those bytes as-is would just show a broken image. A client-side
-    // `img.onError` retry in the reader covers any format this list misses per-browser.
+    // renderable format). JXL input is decoded through the registered image hook and then
+    // re-encoded into `output_format`. Everything else (TIFF/unknown — Safari-only TIFF aside, no
+    // mainstream browser) is also force-converted under `optimize=1` because serving those bytes
+    // as-is would just show a broken image.
     let renderable = matches!(
         content_type,
         "image/jpeg"
@@ -2471,33 +2773,13 @@ async fn fetch_page(
     // `optimize` is the per-request contract (set by `/files`'s own generated URLs); without it,
     // serve the original bytes. A renderable page with resize disabled also passes through.
     if !optimize || (!enable_resize && renderable) {
-        let orig_size = raw.len() as u64;
-        let etag = page_file_etag(archive_file, path).await;
-        return Ok(FetchedPage {
-            content_type,
-            bytes: bytes::Bytes::from(raw),
-            resized: false,
-            orig_size,
-            orig_width: 0,
-            orig_height: 0,
-            etag,
-        });
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
     // Byte-size check first (no decode needed) — under-threshold *renderable* pages pass through
     // untouched; a forced conversion skips this gate entirely.
     if !force_convert && (raw.len() / 1024) as i64 <= effective_threshold {
-        let orig_size = raw.len() as u64;
-        let etag = page_file_etag(archive_file, path).await;
-        return Ok(FetchedPage {
-            content_type,
-            bytes: bytes::Bytes::from(raw),
-            resized: false,
-            orig_size,
-            orig_width: 0,
-            orig_height: 0,
-            etag,
-        });
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
     let cache_path = resize_cache_path(
@@ -2508,21 +2790,18 @@ async fn fetch_page(
         effective_max_short_edge,
         effective_quality,
         false,
+        output_format,
+        false,
     );
-    // Cache hit: the webp bytes plus the `.dims` sidecar (original "WxH") written at encode
+    // Cache hit: the encoded bytes plus the `.dims` sidecar (original "WxH") written at encode
     // time — no re-decode of the original needed. A missing sidecar (older cache entry) just
     // degrades to zero dims in the headers.
     if let Ok(cached) = tokio::fs::read(&cache_path).await {
-        let dims = tokio::fs::read_to_string(cache_path.with_extension("webp.dims"))
-            .await
-            .ok()
-            .and_then(|s| {
-                let (w, h) = s.trim().split_once('x')?;
-                Some((w.parse().ok()?, h.parse().ok()?))
-            });
-        let etag = page_file_etag(&cache_path.to_string_lossy(), "webp").await;
+        let dims = read_cache_dims(&cache_path, output_format).await;
+        let etag =
+            page_file_etag(&cache_path.to_string_lossy(), output_format.content_type()).await;
         return Ok(FetchedPage {
-            content_type: "image/webp",
+            content_type: output_format.content_type(),
             bytes: bytes::Bytes::from(cached),
             resized: true,
             orig_size: raw.len() as u64,
@@ -2533,23 +2812,25 @@ async fn fetch_page(
     }
 
     // `raw` is still needed after this call regardless of which branch runs below (`Ok(Some(_))`
-    // reads its length; `Ok(None)` serves it back as-is), while `convert_to_webp`/
-    // `resize_if_over_threshold` both take their input by value (they `move` it into
-    // `run_blocking`) — so the source bytes have to be cloned into the conversion call either
-    // way. `orig_size` is captured up front so the `Ok(None)` branch can move the original `raw`
-    // out directly instead of cloning it a second time.
+    // reads its length; `Ok(None)` serves it back as-is), while the conversion functions both take
+    // their input by value (they `move` it into `run_blocking`) — so the source bytes have to be
+    // cloned into the conversion call either way. `orig_size` is captured up front so the
+    // `Ok(None)` branch can move the original `raw` out directly instead of cloning it a second
+    // time.
     let orig_size = raw.len() as u64;
+    let max_long_edge = if preview {
+        Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
+    } else {
+        None
+    };
     let converted = if force_convert {
-        lanrurugi_scanner::resize::convert_to_webp(
+        lanrurugi_scanner::resize::convert_to_format(
             raw.clone(),
             effective_quality as u8,
             effective_max_short_edge,
-            if preview {
-                Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
-            } else {
-                None
-            },
+            max_long_edge,
             preview_full_short_edge,
+            output_format,
         )
         .await
         .map(Some)
@@ -2559,12 +2840,9 @@ async fn fetch_page(
             effective_quality as u8,
             effective_threshold,
             effective_max_short_edge,
-            if preview {
-                Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
-            } else {
-                None
-            },
+            max_long_edge,
             preview_full_short_edge,
+            output_format,
         )
         .await
     };
@@ -2575,13 +2853,14 @@ async fn fetch_page(
             }
             let _ = tokio::fs::write(&cache_path, &resized).await;
             let _ = tokio::fs::write(
-                cache_path.with_extension("webp.dims"),
+                cache_path.with_extension(format!("{}.dims", output_format.extension())),
                 format!("{orig_width}x{orig_height}"),
             )
             .await;
-            let etag = page_file_etag(&cache_path.to_string_lossy(), "webp").await;
+            let etag =
+                page_file_etag(&cache_path.to_string_lossy(), output_format.content_type()).await;
             Ok(FetchedPage {
-                content_type: "image/webp",
+                content_type: output_format.content_type(),
                 bytes: bytes::Bytes::from(resized),
                 resized: true,
                 orig_size,
@@ -2590,21 +2869,38 @@ async fn fetch_page(
                 etag,
             })
         }
-        Ok(None) => {
-            let content_type = image_content_type(&raw);
-            let etag = page_file_etag(archive_file, path).await;
-            Ok(FetchedPage {
-                content_type,
-                bytes: bytes::Bytes::from(raw),
-                resized: false,
-                orig_size,
-                orig_width: 0,
-                orig_height: 0,
-                etag,
-            })
-        }
+        Ok(None) => Ok(serve_original_page(archive_file, path, raw, content_type).await),
         Err(e) => Err(e.to_string()),
     }
+}
+
+async fn serve_original_page(
+    archive_file: &str,
+    path: &str,
+    raw: Vec<u8>,
+    content_type: &'static str,
+) -> FetchedPage {
+    let orig_size = raw.len() as u64;
+    let etag = page_file_etag(archive_file, path).await;
+    FetchedPage {
+        content_type,
+        bytes: bytes::Bytes::from(raw),
+        resized: false,
+        orig_size,
+        orig_width: 0,
+        orig_height: 0,
+        etag,
+    }
+}
+
+async fn read_cache_dims(cache_path: &std::path::Path, format: EncodeFormat) -> Option<(u32, u32)> {
+    tokio::fs::read_to_string(cache_path.with_extension(format!("{}.dims", format.extension())))
+        .await
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.trim().split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
 }
 
 /// Detects an image's MIME type from its magic bytes so the browser displays it inline rather
@@ -2615,25 +2911,36 @@ async fn fetch_page(
 /// (issue #77), which needs the exact same "show inline, don't download" behavior for a page
 /// pulled from a not-yet-cataloged staged download, not just an already-cataloged archive.
 pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
-    if raw.len() < 8 {
+    // JXL bare codestreams are only two bytes (`FF 0A`), so the old blanket `< 8` guard can no
+    // longer be the first thing checked. Each branch below still length-checks only what it
+    // actually indexes.
+    if raw.len() < 2 {
         return "application/octet-stream";
     }
+    // JPEG must be checked before the JXL codestream signature: both start with `FF`, but only
+    // JPEG has `D8` as the second byte.
     if &raw[..2] == b"\xFF\xD8" {
         "image/jpeg"
-    } else if &raw[..8] == b"\x89PNG\r\n\x1A\n" {
+    } else if raw.len() >= 2 && &raw[..2] == b"\xFF\x0A" {
+        // Bare JPEG XL codestream signature.
+        "image/jxl"
+    } else if raw.len() >= 12 && &raw[..12] == b"\x00\x00\x00\x0CJXL \x0D\x0A\x87\x0A" {
+        // ISO-BMFF container box signature used by `.jxl` files.
+        "image/jxl"
+    } else if raw.len() >= 8 && &raw[..8] == b"\x89PNG\r\n\x1A\n" {
         "image/png"
-    } else if &raw[..4] == b"GIF8" {
+    } else if raw.len() >= 4 && &raw[..4] == b"GIF8" {
         "image/gif"
-    } else if &raw[..4] == b"RIFF" && raw.len() >= 12 && &raw[8..12] == b"WEBP" {
+    } else if raw.len() >= 12 && &raw[..4] == b"RIFF" && &raw[8..12] == b"WEBP" {
         "image/webp"
-    } else if &raw[..2] == b"BM" {
+    } else if raw.len() >= 2 && &raw[..2] == b"BM" {
         "image/bmp"
     } else if raw.len() >= 12
         && &raw[4..8] == b"ftyp"
         && (&raw[8..12] == b"avif" || &raw[8..12] == b"avis")
     {
         "image/avif"
-    } else if (&raw[..4] == b"II*\0") || (&raw[..4] == b"MM\0*") {
+    } else if raw.len() >= 4 && ((&raw[..4] == b"II*\0") || (&raw[..4] == b"MM\0*")) {
         "image/tiff"
     } else if raw.starts_with(b"<svg") || raw.starts_with(b"<?xml") {
         "image/svg+xml"
@@ -2673,10 +2980,10 @@ async fn get_files(
         }
     };
     let archive_path = std::path::Path::new(&archive.file);
-    // `optimize=1` is stamped on every generated URL — the reader then gets the WebP variant
-    // where `fetch_page` decides it's warranted (setting-enabled + over-threshold, or a format
-    // browsers can't render at all), while a caller hitting the same URL without the param gets
-    // the original bytes.
+    // `optimize=1` is stamped on every generated URL — the reader then gets whatever
+    // `fetch_page` decides is best for its advertised capabilities (JXL-native passthrough,
+    // WebP re-encode, or original bytes), while a caller hitting the same URL without the param
+    // gets the original bytes.
     let opt_suffix = "&optimize=1";
     match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
@@ -3090,6 +3397,89 @@ mod tests {
         assert_eq!(
             image_content_type(b"BM\x00\x00\x00\x00\x00\x00\x00\x00"),
             "image/bmp"
+        );
+    }
+
+    #[test]
+    fn image_content_type_detects_jxl_codestream_and_container() {
+        // Bare codestream (`FF 0A`) is only two bytes long, so this also guards the "don't reject
+        // everything shorter than the old 8-byte blanket guard" path.
+        assert_eq!(image_content_type(b"\xFF\x0A"), "image/jxl");
+        assert_eq!(
+            image_content_type(b"\x00\x00\x00\x0CJXL \x0D\x0A\x87\x0A"),
+            "image/jxl"
+        );
+    }
+
+    #[test]
+    fn image_content_type_prefers_jpeg_over_jxl_when_second_byte_is_d8() {
+        // Both signatures begin `FF`; `FF D8` must stay JPEG.
+        assert_eq!(image_content_type(b"\xFF\xD8\xFF\xE0"), "image/jpeg");
+    }
+
+    #[test]
+    fn client_image_support_parses_query_header_cookie_and_accept() {
+        assert_eq!(
+            ClientImageSupport::from_value("jxl"),
+            Some(ClientImageSupport::jxl_and_webp())
+        );
+        assert_eq!(
+            ClientImageSupport::from_value("SOURCE"),
+            Some(ClientImageSupport::source())
+        );
+        assert_eq!(ClientImageSupport::from_value("bogus"), None);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-lrr-image-support", "source".parse().unwrap());
+        assert_eq!(
+            ClientImageSupport::from_request(&headers, Some("webp")),
+            ClientImageSupport::webp(),
+            "explicit query parameter wins"
+        );
+        assert_eq!(
+            ClientImageSupport::from_request(&headers, None),
+            ClientImageSupport::source()
+        );
+
+        let mut cookie_headers = HeaderMap::new();
+        cookie_headers.insert(
+            header::COOKIE,
+            "theme=modern.css; lrr_img_support=jxl; other=1"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            ClientImageSupport::from_request(&cookie_headers, None),
+            ClientImageSupport::jxl_and_webp()
+        );
+
+        let mut accept_headers = HeaderMap::new();
+        accept_headers.insert(
+            header::ACCEPT,
+            "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            ClientImageSupport::from_request(&accept_headers, None),
+            ClientImageSupport::webp()
+        );
+    }
+
+    #[test]
+    fn thumbnail_format_order_follows_client_capabilities() {
+        use lanrurugi_scanner::thumbnail::ThumbFormat;
+        assert_eq!(
+            thumbnail_formats_for(ClientImageSupport::jxl_and_webp()),
+            vec![ThumbFormat::Jxl, ThumbFormat::Webp, ThumbFormat::Jpeg]
+        );
+        assert_eq!(
+            thumbnail_formats_for(ClientImageSupport::webp()),
+            vec![ThumbFormat::Webp, ThumbFormat::Jpeg]
+        );
+        assert_eq!(
+            thumbnail_formats_for(ClientImageSupport::source()),
+            vec![ThumbFormat::Jpeg]
         );
     }
 

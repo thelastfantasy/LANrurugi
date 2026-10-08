@@ -749,11 +749,12 @@ fn load_pages(path: &Path, entries: &[String]) -> Result<Vec<(DynamicImage, u64)
                     )),
                 })?;
                 let file_size = bytes.len() as u64;
-                let image =
-                    image::load_from_memory(&bytes).map_err(|source| ImgCompareError::Decode {
+                let image = lanrurugi_scanner::image_decode::load_from_memory(&bytes).map_err(
+                    |source| ImgCompareError::Decode {
                         entry: entry.clone(),
                         source,
-                    })?;
+                    },
+                )?;
                 Ok((image, file_size))
             })
             .collect()

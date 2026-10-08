@@ -48,6 +48,10 @@ import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
 import { fileInfoText } from "@/lib/utils/fileInfoText";
 import {
+  getImageFormatSupport,
+  IMAGE_FORMAT_SUPPORT_HEADER,
+} from "@/lib/utils/imageFormatSupport";
+import {
   fetchContentLengthKb,
   fetchResizedPageInfo,
   type ResizedPageInfo,
@@ -404,7 +408,10 @@ export function Reader() {
       const fullUrl = new URL(url, window.location.origin);
       fullUrl.searchParams.set("max_short_edge", String(readerFullShortEdge()));
       fetch(fullUrl.toString(), {
-        headers: { "X-LRR-Priority": priority },
+        headers: {
+          "X-LRR-Priority": priority,
+          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageFormatSupport(),
+        },
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -469,7 +476,10 @@ export function Reader() {
       const tinyUrl = new URL(url, window.location.origin);
       tinyUrl.searchParams.set("variant", "tiny");
       fetch(tinyUrl.toString(), {
-        headers: { "X-LRR-Priority": "preview" },
+        headers: {
+          "X-LRR-Priority": "preview",
+          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageFormatSupport(),
+        },
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -1877,7 +1887,7 @@ export function Reader() {
     resizedFileInfo = (
       <>
         <span className="file-info-opt">
-          {pageEntryName} → WebP :: {resizedDims.width} x {resizedDims.height} ::{" "}
+          {pageEntryName} → {leftResizeInfo.servedFormat.toUpperCase()} :: {resizedDims.width} x {resizedDims.height} ::{" "}
           {servedKb} KB
         </span>
         {" · "}
