@@ -195,6 +195,13 @@ mod tests {
     use super::*;
     use crate::build::BackupArchive;
 
+    /// Every test below uses the same logical database and this module's own fixed keys, while
+    /// `cargo test` runs them in parallel — so an exact-count assertion here is a race against
+    /// whichever sibling happens to be saving or deleting a snapshot at that moment. CI caught it:
+    /// `saving_beyond_the_retention_limit_trims_the_oldest` failed there and passed locally. They
+    /// take turns instead.
+    static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     async fn test_pool() -> Option<Pool> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
         let url = format!("{}/0", base.trim_end_matches('/'));
@@ -229,6 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn saves_gets_lists_and_deletes_a_snapshot() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -253,6 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_metadata_is_newest_first() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -276,6 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn saving_beyond_the_retention_limit_trims_the_oldest() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -313,6 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn increment_import_count_increases_and_persists() {
+        let _serial = TESTS.lock().await;
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
