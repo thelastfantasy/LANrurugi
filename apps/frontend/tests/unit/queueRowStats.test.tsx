@@ -47,7 +47,10 @@ describe("RowStats", () => {
     })
 
     const line = screen.getByText(/started/).textContent ?? ""
-    expect(line).toMatch(/started 14:32:05/)
+    // Deliberately format-agnostic: the clock is rendered through the browser's own
+    // `toLocaleTimeString`, so CI (en-US) prints `2:32:05 PM` where a 24-hour locale prints
+    // `14:32:05`. Asserting one of the two made this test pass locally and fail in CI.
+    expect(line).toMatch(/started \d{1,2}:32:05/)
     expect(line).toMatch(/2:01 elapsed/)
     // 1 GB over 2 minutes is ~8.5 MB/s: the run's own average, not a last-poll reading.
     expect(line).toMatch(/8\.5 MB\/s avg/)
