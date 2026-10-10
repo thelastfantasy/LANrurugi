@@ -3,6 +3,8 @@ import "./UsagePanel.css"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
+
 import { fetchUsage, updateBudget } from "../api"
 import type { UsageSnapshot } from "../types"
 
@@ -101,13 +103,15 @@ export function UsagePanel({ archiveId, page }: { archiveId?: string; page?: num
 
       <label className="translation-usage__limit">
         {t("translation.usage.limit")}
-        <input
-          type="number"
+        <NullableNumberInput
+          className="stdinput"
+          style={{ width: "8em" }}
           min={0}
-          className="number-input-no-native-spinner"
-          value={limitDraft}
+          // Blank is the normal state until someone sets a limit (and `onSaveLimit` treats an empty
+          // draft as "no limit", so the field really does hold "" rather than a stand-in zero).
+          value={limitDraft === "" ? "" : Number(limitDraft)}
+          onValueChange={(v) => setLimitDraft(v === "" ? "" : String(v))}
           placeholder={usage.limit === null ? "" : String(usage.limit)}
-          onChange={(e) => setLimitDraft(e.target.value)}
         />
         <button type="button" className="stdbtn" onClick={() => void onSaveLimit()}>
           {t("translation.usage.setLimit")}

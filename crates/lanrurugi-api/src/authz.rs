@@ -459,6 +459,10 @@ mod tests {
             "GET"
         ));
         assert!(check_route(&e, Some(&guest), "/api/search", "GET"));
+        // The title-autocomplete endpoint the Library search box calls while typing — a guest
+        // reaches that same search box, so it stays on the whitelist (scoped in application code,
+        // same as `/search` itself).
+        assert!(check_route(&e, Some(&guest), "/api/search/suggest", "GET"));
         assert!(check_route(&e, Some(&guest), "/api/auth/config", "GET"));
         assert!(check_route(
             &e,

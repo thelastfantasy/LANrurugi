@@ -6,7 +6,7 @@ import { CollapsibleSection } from "@/components/Display"
 import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 import { FONT_SIZE_SM } from "@/theme"
 
-import { ActionRow, CheckboxRow, Row } from "./shared"
+import { ActionRow, CheckboxRow, ImageSupportBadge, Row } from "./shared"
 
 // Full IANA timezone list, grouped by continent (phpBB-style), built from
 // `Intl.supportedValuesOf('timeZone')` so it stays in sync with the backend's `chrono-tz`.
@@ -36,8 +36,6 @@ function isKnownTimezone(tz: string): boolean {
 }
 
 export function TagsThumbnailsSection({
-  hqthumbpages,
-  setHqthumbpages,
   thumbnailFormat,
   setThumbnailFormat,
   webpquality,
@@ -56,8 +54,6 @@ export function TagsThumbnailsSection({
   setTimezone,
   onStatus,
 }: {
-  hqthumbpages: boolean
-  setHqthumbpages: (v: boolean) => void
   thumbnailFormat: "jxl" | "webp" | "jpeg"
   setThumbnailFormat: (v: "jxl" | "webp" | "jpeg") => void
   webpquality: number
@@ -79,21 +75,22 @@ export function TagsThumbnailsSection({
   const { t } = useTranslation()
   const regenThumbnails = useRegenThumbnails()
   const browserSupport = getImageFormatSupport()
-  const browserSupportLabel =
-    browserSupport === "jxl"
-      ? t("settings.browserFormatJxl")
-      : browserSupport === "webp"
-        ? t("settings.browserFormatWebp")
-        : t("settings.browserFormatSource")
+  const effectiveThumbnailFormat =
+    thumbnailFormat === "jpeg"
+      ? "JPEG"
+      : thumbnailFormat === "webp"
+        ? browserSupport === "webp"
+          ? "WebP"
+          : "JPEG"
+        : browserSupport === "jxl"
+          ? "JXL"
+          : browserSupport === "webp"
+            ? "WebP"
+            : "JPEG"
 
   return (
     <CollapsibleSection id="tags-thumbnails" icon="fa-tags" title={t("settings.tagsAndThumbnails")}>
       <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
-          <CheckboxRow id="hqthumbpages" checked={hqthumbpages} onChange={setHqthumbpages} label={t("settings.useHighqualityThumbnailsForPages")}>
-            {t("settings.lanraragiGeneratesLowerqualityThumbnailsFor")}
-            <br />
-            {t("settings.ifThisOptionIsChecked")}
-          </CheckboxRow>
           <Row label={t("settings.thumbnailFormat")}>
             <RadioGroup
               value={thumbnailFormat}
@@ -107,9 +104,25 @@ export function TagsThumbnailsSection({
             <br />
             {t("settings.thumbnailFormatHint")}
             <br />
-            <span style={{ opacity: 0.75 }}>
-              {t("settings.currentBrowserFormat", { format: browserSupportLabel })}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span>{t("settings.currentBrowserSupport")}</span>
+              <ImageSupportBadge support={browserSupport} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span>{t("settings.effectiveThumbnailFormat")}</span>
+              <strong
+                style={{
+                  color:
+                    effectiveThumbnailFormat === "JXL"
+                      ? "#1a73e8"
+                      : effectiveThumbnailFormat === "WebP"
+                        ? "#b45309"
+                        : "#dc2626",
+                }}
+              >
+                {effectiveThumbnailFormat}
+              </strong>
+            </div>
             <br />
             <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
             {t("settings.changingThisRegeneratesEveryThumbnail")}

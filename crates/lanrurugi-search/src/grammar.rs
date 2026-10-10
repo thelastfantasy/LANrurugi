@@ -22,7 +22,9 @@
 //!   quotes can wrap either the *whole* token (`"female:anal intercourse"`) or, matching
 //!   e-hentai's own literal syntax, just the value half of a namespaced tag
 //!   (`female:"anal intercourse"`, colon outside the quotes) — both spellings produce the exact
-//!   same token.
+//!   same token. On the *title* side the same token means "this phrase appears anywhere in the
+//!   title" (see `engine.rs::token_matches` — deliberately looser than legacy's whole-title
+//!   equality, which made quoting useless for the title-phrase lookup it looks like it serves).
 //! - `?`/`_` become single-character glob wildcards; `*`/`%` become multi-character wildcards.
 //! - Tags are lowercased and trimmed.
 //! - Inside a quoted value, `\"` is a literal quote and `\\` a literal backslash — a tag value

@@ -40,16 +40,9 @@ export function NumberInput({
   step = 1,
   className,
   style,
+  inputStyle,
   ...props
-}: {
-  value: number
-  onValueChange: (value: number) => void
-  min?: number
-  max?: number
-  step?: number
-  className?: string
-  style?: React.CSSProperties
-} & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type" | "min" | "max" | "step" | "className" | "style">) {
+}: NumberInputProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const step_ = (direction: 1 | -1) => {
@@ -64,7 +57,7 @@ export function NumberInput({
   }
 
   return (
-    <span className="number-input-wrapper" style={{ position: "relative", display: "inline-block", ...style }}>
+    <NumberInputShell style={style} step_={step_}>
       <Input
         ref={inputRef}
         type="number"
@@ -72,7 +65,7 @@ export function NumberInput({
         max={max}
         step={step}
         className={`number-input-no-native-spinner${className ? ` ${className}` : ""}`}
-        style={{ width: "100%", boxSizing: "border-box", paddingRight: 16 }}
+        style={{ width: "100%", boxSizing: "border-box", paddingRight: 16, ...inputStyle }}
         value={String(value)}
         onValueChange={(next) => {
           if (next === "" || next === "-") return
@@ -81,6 +74,101 @@ export function NumberInput({
         }}
         {...props}
       />
+    </NumberInputShell>
+  )
+}
+
+/**
+ * The same field, except that "no value" is a state it can actually hold: an empty box, with
+ * `onValueChange("")` while it is empty. Needed wherever a blank field *means* something rather
+ * than being a half-finished number — a per-domain limit left unset (no cap at all), a usage limit
+ * that has never been set — and `NumberInput` cannot express it (`value: number` would render a
+ * blank draft as `0`, which those callers must not send).
+ *
+ * Pressing a stepper button on an empty field starts from `min` (or 0), which is the browser's own
+ * `stepUp`/`stepDown` behaviour for an empty `type="number"` input.
+ */
+export function NullableNumberInput({
+  value,
+  onValueChange,
+  min,
+  max,
+  step = 1,
+  className,
+  style,
+  inputStyle,
+  ...props
+}: NullableNumberInputProps) {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const step_ = (direction: 1 | -1) => {
+    const el = inputRef.current
+    if (!el) return
+    if (direction === 1) el.stepUp()
+    else el.stepDown()
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+
+  return (
+    <NumberInputShell style={style} step_={step_}>
+      <Input
+        ref={inputRef}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        className={`number-input-no-native-spinner${className ? ` ${className}` : ""}`}
+        style={{ width: "100%", boxSizing: "border-box", paddingRight: 16, ...inputStyle }}
+        value={value === "" ? "" : String(value)}
+        onValueChange={(next) => {
+          if (next === "" || next === "-") {
+            onValueChange("")
+            return
+          }
+          const parsed = Number(next)
+          if (Number.isFinite(parsed)) onValueChange(parsed)
+        }}
+        {...props}
+      />
+    </NumberInputShell>
+  )
+}
+
+type NumberInputProps = {
+  value: number
+  onValueChange: (value: number) => void
+  min?: number
+  max?: number
+  /** `"any"` is legitimate (an HTML `step` value) — a byte-rate field takes fractions. */
+  step?: number | "any"
+  className?: string
+  style?: React.CSSProperties
+  /** Applied to the `<input>` itself; `style` above goes to the positioning wrapper. */
+  inputStyle?: React.CSSProperties
+} & Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "type" | "min" | "max" | "step" | "className" | "style"
+>
+
+type NullableNumberInputProps = Omit<NumberInputProps, "value" | "onValueChange"> & {
+  /** `""` renders an empty field. */
+  value: number | ""
+  onValueChange: (value: number | "") => void
+}
+
+/** The positioned wrapper plus the stepper both variants share; the caller passes the `<input>`. */
+function NumberInputShell({
+  style,
+  step_,
+  children,
+}: {
+  style?: React.CSSProperties
+  step_: (direction: 1 | -1) => void
+  children: React.ReactNode
+}) {
+  return (
+    <span className="number-input-wrapper" style={{ position: "relative", display: "inline-block", ...style }}>
+      {children}
       <span className="number-input-stepper">
         <button
           type="button"

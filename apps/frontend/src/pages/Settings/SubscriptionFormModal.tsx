@@ -70,18 +70,27 @@ export function PreviewSkeleton({ fields }: { fields?: string[] }) {
           className="preview-skeleton-row"
           style={{ "--preview-grid-columns": columns } as CSSProperties}
         >
-          <span className="preview-skeleton-bar" style={{ width: "2em" }} />
-          <span className="preview-skeleton-bar" style={{ width: `${55 + ((i * 7) % 35)}%` }} />
+          {/* `maxWidth: "100%"` is what keeps a bar inside its own column: the posted/uploader
+              tracks are `minmax(0, 10%)`/`minmax(0, 12%)`, which on the modal's ~640px pane are
+              narrower than the 5em (80px) a bar asked for — so the bar spilled over the next
+              column instead of stopping at the track edge (reported live, 2026-10-09: columns 3
+              and 4 appeared to overlap). Real rows never did this only because their text is
+              truncated; a fixed-width placeholder needs the clamp. */}
+          <span className="preview-skeleton-bar" style={{ width: "2em", maxWidth: "100%" }} />
+          <span
+            className="preview-skeleton-bar"
+            style={{ width: `${55 + ((i * 7) % 35)}%`, maxWidth: "100%" }}
+          />
           {includeField("posted_at") && (
-            <span className="preview-skeleton-bar" style={{ width: "5em" }} />
+            <span className="preview-skeleton-bar" style={{ width: "5em", maxWidth: "100%" }} />
           )}
           {includeField("uploader") && (
-            <span className="preview-skeleton-bar" style={{ width: "5em" }} />
+            <span className="preview-skeleton-bar" style={{ width: "5em", maxWidth: "100%" }} />
           )}
           {includeField("rating") && (
-            <span className="preview-skeleton-bar" style={{ width: "4em" }} />
+            <span className="preview-skeleton-bar" style={{ width: "4em", maxWidth: "100%" }} />
           )}
-          <span className="preview-skeleton-bar" style={{ width: "6em" }} />
+          <span className="preview-skeleton-bar" style={{ width: "6em", maxWidth: "100%" }} />
         </div>
       ))}
     </div>

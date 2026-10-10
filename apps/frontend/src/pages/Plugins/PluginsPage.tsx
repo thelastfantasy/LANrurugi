@@ -27,6 +27,15 @@ const RIGHT_GROUPS: Array<{ type: PluginInfo["type"]; icon: string; label: strin
 
 // Mirrors legacy's plugins.html.tt2 — plugins grouped into flyouts by type, each a card. No
 // "run this plugin against an archive" affordance — that's Edit.tsx's job, matching legacy.
+/** One repairable field as the backend reports it (`crate::mojibake::RepairFinding`). */
+type MojibakeFinding = {
+  kind: string
+  id: string
+  field: string
+  before: string
+  after: string
+}
+
 export function Plugins() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -36,6 +45,9 @@ export function Plugins() {
   const queryClient = useQueryClient()
   const [running, setRunning] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
+  /** A dry run's findings, held back until the user confirms — the repair endpoint writes nothing
+   *  without `apply=1`, and this is where that confirmation is collected. */
+  const [pendingRepair, setPendingRepair] = useState<MojibakeFinding[] | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -56,6 +68,27 @@ export function Plugins() {
       await queryClient.invalidateQueries({ queryKey: ["categories"] })
       await queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
       await queryClient.invalidateQueries({ queryKey: ["search"] })
+    } finally {
+      setRunning(null)
+    }
+  }
+
+  async function runMojibakeRepair(apply: boolean) {
+    setRunning("repair-mojibake")
+    setResult(null)
+    try {
+      const response = await fetch(`/api/database/scripts/repair-mojibake${apply ? "?apply=1" : ""}`, {
+        method: "POST",
+      })
+      const data = (await response.json()) as { findings?: MojibakeFinding[] }
+      setResult(JSON.stringify(data, null, 2))
+      setPendingRepair(apply || !data.findings?.length ? null : data.findings)
+      if (apply) {
+        await queryClient.invalidateQueries({ queryKey: ["archives"] })
+        await queryClient.invalidateQueries({ queryKey: ["categories"] })
+        await queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+        await queryClient.invalidateQueries({ queryKey: ["search"] })
+      }
     } finally {
       setRunning(null)
     }
@@ -161,6 +194,49 @@ export function Plugins() {
                   value={t("plugins.run") ?? undefined}
                 />
               </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
+                <span>
+                  <b>{t("plugins.repairMojibakeNames")}</b>
+                  <br />
+                  {t("plugins.repairMojibakeNamesDescription")}
+                </span>
+                <input
+                  type="button"
+                  className="stdbtn"
+                  disabled={running === "repair-mojibake"}
+                  onClick={() => void runMojibakeRepair(false)}
+                  value={t("plugins.run") ?? undefined}
+                />
+              </div>
+              {pendingRepair && (
+                <div style={{ padding: "4px 0" }}>
+                  <div>{t("plugins.repairMojibakeFound", { count: pendingRepair.length })}</div>
+                  {/* Examples, not the whole list: the log panel below already prints the complete
+                      report, and this is only here so the confirmation isn't blind. */}
+                  <ul style={{ margin: "4px 0", paddingLeft: 18 }}>
+                    {pendingRepair.slice(0, 5).map((finding) => (
+                      <li key={`${finding.kind}-${finding.id}-${finding.field}`}>
+                        {finding.before} → {finding.after}
+                      </li>
+                    ))}
+                  </ul>
+                  <input
+                    type="button"
+                    className="stdbtn"
+                    disabled={running === "repair-mojibake"}
+                    onClick={() => void runMojibakeRepair(true)}
+                    value={t("plugins.repairMojibakeApply") ?? undefined}
+                  />
+                  {" "}
+                  <input
+                    type="button"
+                    className="stdbtn"
+                    onClick={() => setPendingRepair(null)}
+                    value={t("common.cancel") ?? undefined}
+                  />
+                </div>
+              )}
           </CollapsibleSection>
         </ul>
       </div>

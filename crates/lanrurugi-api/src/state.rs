@@ -97,6 +97,15 @@ pub struct AppState {
     pub library: LibraryPaths,
     pub scanner: ScannerHandle,
     pub plugins: Arc<PluginPool>,
+    /// Collapses concurrent identical discovery calls onto one source fetch (no time-based reuse —
+    /// see `subscriptions::runner::fetch_listing`'s own docs). Keyed by source + criteria + page
+    /// budget, one shared map for every subscription.
+    pub discovery_singleflight: Arc<
+        lanrurugi_core::singleflight::Singleflight<
+            String,
+            Arc<Result<lanrurugi_plugin::protocol::DiscoveryResult, String>>,
+        >,
+    >,
     /// Directory of installed plugin `.ts` files (one per namespace), scanned by
     /// `GET /plugins/{type}` to discover what's available.
     pub plugins_dir: PathBuf,

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 import { useAiCondition, useLlmKeyStatus, useParseCondition } from "@/api/hooks"
 import type { Condition, FieldOperator, RuleValue } from "@/api/types"
 import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { CodeBlock } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { toast } from "@/toast"
@@ -114,6 +115,12 @@ function RuleRow({
   tagSuggestions: string[]
   onChange: (next: Condition) => void
 }) {
+  // The numeric value field's own draft: blank is a legitimate mid-edit state, and committing a
+  // blank still writes 0 (what this field always did) — `NumberInput` alone would fight the typist
+  // by snapping an emptied box back to a number on the next keystroke.
+  const [numberDraft, setNumberDraft] = useState<number | "">(
+    typeof rule.value === "number" ? rule.value : "",
+  )
   const { t } = useTranslation()
   const kind = kindOf(rule.field)
   const wantsList = kind === "list" || rule.operator === "in" || rule.operator === "not_in"
@@ -172,13 +179,17 @@ function RuleRow({
           ))}
         </select>
       ) : kind === "number" ? (
-        <input
+        // A draft, so clearing the box mid-edit does not slam the rule's value to 0 and fight the
+        // typist; committing a blank still writes 0, which is what this field always did.
+        <NullableNumberInput
           className="stdinput"
-          type="number"
-          step="0.1"
           style={{ width: 90 }}
-          value={String(rule.value)}
-          onChange={(e) => onChange({ ...rule, value: Number(e.target.value) })}
+          step={0.1}
+          value={numberDraft}
+          onValueChange={(v) => {
+            setNumberDraft(v);
+            onChange({ ...rule, value: Number(v) || 0 });
+          }}
         />
       ) : (
         rule.field === "tags" ? (

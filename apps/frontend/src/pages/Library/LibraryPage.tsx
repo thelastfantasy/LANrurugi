@@ -77,7 +77,7 @@ export function Library() {
           <SearchBar
             filterInput={lib.filterInput}
             autocompleteOpen={lib.autocompleteOpen}
-            tagSuggestions={lib.tagSuggestions}
+            suggestions={lib.suggestions}
             multiSelect={lib.multiSelect}
             searchInputRef={lib.searchInputRef}
             onFilterInputChange={(value, open) => {
@@ -93,11 +93,7 @@ export function Library() {
               lib.setFilterInputOverride(null);
               lib.navigateSearch({ appliedFilter: "", page: 0 });
             }}
-            onSuggestionSelect={(insertValue) => {
-              const upToCursor = lib.filterInput.replace(/[^,\s-]*$/, "");
-              lib.setFilterInputOverride(`${upToCursor}${insertValue}`);
-              lib.searchInputRef.current?.focus();
-            }}
+            onSuggestionSelect={lib.applySuggestion}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
             onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
             loggedIn={lib.loggedIn}

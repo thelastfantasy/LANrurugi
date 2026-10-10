@@ -19,6 +19,8 @@ use lanrurugi_ocr::entities::PageNumber;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::composite::TranslationImageFormat;
+
 #[derive(Debug, Error)]
 pub enum CacheError {
     #[error("failed to read/write the translation cache: {0}")]
@@ -26,13 +28,17 @@ pub enum CacheError {
 }
 
 /// Identifies one cached rendering. Every component matters: a change to any of them MUST NOT reuse
-/// an entry keyed under a different combination (FR-016).
+/// an entry keyed under a different combination (FR-016). `format` joined that list once composited
+/// pages started following the browser's own `jxl > webp` preference — a JXL rendering and a WebP
+/// one are different bytes for the same page, and the HTTP layer serves whichever the requesting
+/// browser advertised.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TranslationCacheKey {
     pub archive_id: ArchiveId,
     pub page_number: PageNumber,
     pub target_language: String,
     pub provider: String,
+    pub format: TranslationImageFormat,
 }
 
 impl TranslationCacheKey {
@@ -41,12 +47,14 @@ impl TranslationCacheKey {
         page_number: PageNumber,
         target_language: impl Into<String>,
         provider: impl Into<String>,
+        format: TranslationImageFormat,
     ) -> Self {
         Self {
             archive_id,
             page_number,
             target_language: target_language.into(),
             provider: provider.into(),
+            format,
         }
     }
 
@@ -98,13 +106,15 @@ impl TranslationImageCache {
         }
     }
 
-    /// Path for a key. Mirrors the reader's `resize_page/<archive_id>/<file>.webp` layout so the
-    /// existing sweep — which walks exactly that shape and matches `.webp` — picks these up with
-    /// no changes of its own.
+    /// Path for a key. Mirrors the reader's `resize_page/<archive_id>/<file>.<ext>` layout so the
+    /// existing sweep — which walks exactly that shape and matches `.webp`/`.jxl` — picks these up
+    /// with no changes of its own. The output format is the *extension* rather than another token in
+    /// the stem, which keeps every already-cached `.webp` rendering at the exact path it had before
+    /// the format existed.
     pub fn path_for(&self, key: &TranslationCacheKey) -> PathBuf {
         self.resize_cache_dir
             .join(sanitize(key.archive_id.as_str()))
-            .join(format!("{}.webp", key.file_stem()))
+            .join(format!("{}.{}", key.file_stem(), key.format.extension()))
     }
 
     /// Reads a cached rendering, or `None` on a miss. A miss is always safe — the caller
@@ -119,14 +129,16 @@ impl TranslationImageCache {
             tokio::fs::create_dir_all(parent).await?;
         }
         // Write-then-rename so a concurrent reader never observes a half-written image.
-        let tmp = path.with_extension("webp.part");
+        let tmp = path.with_extension(format!("{}.part", key.format.extension()));
         tokio::fs::write(&tmp, bytes).await?;
         tokio::fs::rename(&tmp, &path).await?;
         Ok(())
     }
 
-    /// Drops every cached rendering for one page across all languages/providers — used when a
-    /// page's regions are re-translated and previous renderings are stale.
+    /// Drops every cached rendering for one page across all languages/providers/formats — used when
+    /// a page's regions are re-translated and previous renderings are stale. The prefix match is
+    /// what makes this format-agnostic: a rendering cached as JXL must not survive as the "current"
+    /// image just because the invalidation only knew about `.webp`.
     pub async fn invalidate_page(&self, archive_id: &ArchiveId, page_number: PageNumber) {
         let dir = self.resize_cache_dir.join(sanitize(archive_id.as_str()));
         let prefix = format!("translated_{}_", page_number.get());
@@ -137,7 +149,8 @@ impl TranslationImageCache {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with(&prefix) && name.ends_with(".webp") {
+            let known_format = name.ends_with(".webp") || name.ends_with(".jxl");
+            if name.starts_with(&prefix) && known_format {
                 let _ = tokio::fs::remove_file(entry.path()).await;
             }
         }
@@ -149,7 +162,13 @@ mod tests {
     use super::*;
 
     fn key(page: u32, lang: &str, provider: &str) -> TranslationCacheKey {
-        TranslationCacheKey::new(ArchiveId::from("abc123"), PageNumber(page), lang, provider)
+        TranslationCacheKey::new(
+            ArchiveId::from("abc123"),
+            PageNumber(page),
+            lang,
+            provider,
+            TranslationImageFormat::Webp,
+        )
     }
 
     #[test]
@@ -169,10 +188,21 @@ mod tests {
         let path = cache.path_for(&key(1, "en", "deepseek"));
 
         assert!(path.starts_with("/tmp/lrr/resize_page"));
+        // The sweep walks this shape and matches `.webp`/`.jxl`; the output format is exactly the
+        // extension, so neither codec needs a second sweep of its own.
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("webp"));
+        let jxl = cache.path_for(&TranslationCacheKey::new(
+            ArchiveId::from("abc123"),
+            PageNumber(1),
+            "en",
+            "deepseek",
+            TranslationImageFormat::Jxl,
+        ));
+        assert_eq!(jxl.extension().and_then(|e| e.to_str()), Some("jxl"));
         assert_eq!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("webp"),
-            "the sweep only matches .webp files"
+            jxl.file_stem().and_then(|s| s.to_str()),
+            path.file_stem().and_then(|s| s.to_str()),
+            "only the extension carries the format, so an existing WebP entry keeps its path"
         );
     }
 
@@ -184,6 +214,7 @@ mod tests {
             PageNumber(1),
             "../../../etc/passwd",
             "p",
+            TranslationImageFormat::Jxl,
         );
         let path = cache.path_for(&evil);
         assert!(path.starts_with("/tmp/lrr/resize_page"));
@@ -198,6 +229,7 @@ mod tests {
             PageNumber(1),
             "",
             "",
+            TranslationImageFormat::Webp,
         ));
         assert!(path.to_string_lossy().contains("unknown"));
     }

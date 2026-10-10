@@ -507,9 +507,36 @@ pub enum CandidateVerdict {
         newer_archive_id: String,
     },
     AlreadySeen,
-    /// Inside its `minimum_age_secs` waiting period. Deliberately not a rejection: it will be
-    /// reconsidered on a later check, so it must not be recorded as seen.
-    TooSoon,
+    /// Not settled yet. Deliberately not a rejection: it will be reconsidered on a later check, so
+    /// it must not be recorded as seen.
+    ///
+    /// `reason` is `None` only on records written before it existed — the UI falls back to its own
+    /// generic wording for those.
+    TooSoon {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<PendingReason>,
+    },
+}
+
+/// Why a candidate is still waiting.
+///
+/// Two quite different situations share the `TooSoon` verdict, and a reader has to be told which one
+/// it is: the clock (published too recently — this resolves itself on a later check) or the source (a
+/// field a rule needs was not in the listing at all). The second case is what a rule over a field a
+/// source never provides looks like, and it waits forever — reporting it as "published too recently"
+/// sends someone looking at their clock instead of at their condition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingReason {
+    /// A date rule that becomes true on its own once enough time passes.
+    Age {
+        field: String,
+        /// How much longer until the rule could hold — what the reader is actually waiting for.
+        remaining_secs: i64,
+    },
+    /// The field was missing from what the source supplied, so the rule cannot be answered at all
+    /// right now (and may never be).
+    UnknownField { field: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

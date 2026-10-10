@@ -497,7 +497,6 @@
   "settings.useLastModifiedTime": "\"Zuletzt bearbeitet\"-Zeit nutzen",
   "batch.usePlugin": "Nutze Erweiterungen",
   "settings.useWebpForThumbnails": "WebP für Thumbnails verwenden",
-  "settings.useHighqualityThumbnailsForPages": "Hochqualitative Thumbnails nutzen",
   "batch.usePluginLabel": "Nutze Erweiterung :",
   "Version %1 %2": "Version %1 - %2",
   "View LANrurugi Logs": "LANrurugi-Logs ansehen",

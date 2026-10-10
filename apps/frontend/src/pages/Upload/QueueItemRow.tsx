@@ -36,6 +36,17 @@ import {
 } from "./shared";
 import { useCompareStream } from "./useCompareStream";
 
+/** Whether `ms` falls on today's own calendar day. */
+function isToday(ms: number): boolean {
+  const then = new Date(ms)
+  const now = new Date()
+  return (
+    then.getFullYear() === now.getFullYear() &&
+    then.getMonth() === now.getMonth() &&
+    then.getDate() === now.getDate()
+  )
+}
+
 /** When a download started, how long it has been running, how fast on average, and how big.
  *
  * Averaged over the whole run rather than the last poll: an instantaneous reading is already what
@@ -88,7 +99,12 @@ export function RowStats({
       : null
 
   const parts = [
-    startedMs && t("upload.statStarted", { time: new Date(startedMs).toLocaleTimeString() }),
+    // Today reads as "today <time>"; anything older carries its real date, so a row from two days
+    // ago can never be mistaken for one that just started.
+    startedMs &&
+      (isToday(startedMs)
+        ? t("upload.statStartedToday", { time: new Date(startedMs).toLocaleTimeString() })
+        : t("upload.statStarted", { time: new Date(startedMs).toLocaleString() })),
     durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
     average != null && t("upload.statAverage", { rate: formatBytes(average) }),
     bytes != null && formatBytes(bytes),

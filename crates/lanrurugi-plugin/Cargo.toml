@@ -6,9 +6,11 @@ license.workspace = true
 
 [dependencies]
 lanrurugi-core.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+url.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true

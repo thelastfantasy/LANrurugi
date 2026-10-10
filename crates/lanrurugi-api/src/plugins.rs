@@ -1084,11 +1084,11 @@ async fn export_plugin(
         [
             (
                 axum::http::header::CONTENT_TYPE,
-                "application/zip".to_string(),
+                axum::http::HeaderValue::from_static("application/zip"),
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{zip_name}\""),
+                crate::archives::attachment_header(&zip_name),
             ),
         ],
         zip_bytes,
@@ -1165,11 +1165,11 @@ async fn export_plugins_batch(
         [
             (
                 axum::http::header::CONTENT_TYPE,
-                "application/zip".to_string(),
+                axum::http::HeaderValue::from_static("application/zip"),
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"plugins.zip\"".to_string(),
+                crate::archives::attachment_header("plugins.zip"),
             ),
         ],
         zip_bytes,
@@ -2276,15 +2276,15 @@ pub(crate) async fn start_download(
         (async move {
             jobs.mark_active(&job_id_for_task).await;
             if let Some((repo, item_id)) = &queue_link {
-                // `Starting`, not `Waiting` — this covers the plugin's own `exec_download` call
-                // (resolving the real download URL(s), e.g. `ehentai.ts`'s own archiver.php
-                // round-trip, which can genuinely take several seconds to tens of seconds waiting
-                // on the *source site*, nothing to do with this host's own concurrency limits at
-                // all). `Waiting` is reserved for the real, distinct phase once
-                // `run_managed_downloads` actually calls `DownloadManager::acquire` and is blocked
-                // on a busy domain's own semaphore (see that state's own docs) — conflating the two
-                // made every download look concurrency-limited even when the delay was entirely a
-                // slow upstream site response.
+                // `Starting` covers the plugin's own `exec_download` call — resolving the real
+                // download URL(s), e.g. `ehentai.ts`'s own archiver.php round-trip, which can
+                // genuinely take seconds to tens of seconds waiting on the *source site*. That wait
+                // is still `Starting` when it is the site being slow; it becomes `Waiting` only for
+                // the part this host actually queues (a domain rule for the source host, and then
+                // the transfer phase's own per-download-host permit) — see the negotiation gate
+                // below and `DownloadManager::is_saturated`'s own docs. Conflating the two was a
+                // real bug in the other direction: showing `Waiting` for pure upstream latency made
+                // every download look concurrency-limited.
                 update_queue_item_state(
                     repo,
                     state_for_task.download_queue_tx.as_ref(),
@@ -2344,6 +2344,57 @@ pub(crate) async fn start_download(
                 )
                 .await;
             }
+            // ── The download's own concurrency, from the download plugin's own rules ────────────
+            // A download job has two network phases — this plugin's `execDownload` (E-Hentai's
+            // archiver.php, a token handshake, a site's api/search endpoint) and the byte transfer
+            // of whatever `downloads[]` it returns — and the rules a user actually writes are for
+            // the *second* one (e.g. `*.hath.network: 10`, "ten files at a time"). Which hosts the
+            // transfer will use is only known after the plugin has run, so the only up-front cap
+            // that can honour those rules is the plugin's own tightest declared concurrency
+            // (`job_capacity`): with one rule at 10, at most ten downloads run at once — plugin
+            // phase included — which is exactly what "ten at a time" has to mean when the user
+            // queues a hundred. Without this, ten configured transfers still meant an unbounded
+            // number of concurrent negotiations against the source site.
+            //
+            // The transfer phase keeps its own per-host permits on top (a rule that names a
+            // wildcard covering several CDN hosts still resolves per host); this permit only bounds
+            // how many *jobs* may be inside that network phase at all.
+            let negotiation_rules = {
+                let declared = state_for_task
+                    .plugins
+                    .plugin_options(&plugin_namespace_for_task)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let override_ = state_for_task
+                    .plugin_options
+                    .get(&plugin_namespace_for_task)
+                    .await
+                    .unwrap_or_default();
+                resolve_domain_rules(&declared, override_.as_ref())
+            };
+            let job_capacity = crate::download_manager::domain_rules::job_capacity(&negotiation_rules);
+            let negotiation_manager =
+                download_manager_for(&state_for_task, &plugin_namespace_for_task).await;
+            // Labelled `Waiting` only when the plugin's own limit is actually full right now: writing
+            // it unconditionally would flicker every download through `Waiting` for no reason (most
+            // plugins declare no rule at all, and an uncontended one has a free slot).
+            let negotiation_waits = negotiation_manager.is_job_saturated(job_capacity).await;
+            if negotiation_waits {
+                if let Some((repo, item_id)) = &queue_link {
+                    update_queue_item_state(
+                        repo,
+                        state_for_task.download_queue_tx.as_ref(),
+                        item_id,
+                        lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                        Some(job_id_for_task.clone()),
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+            }
             let args = json!({ "url": url, "category": category, "customargs": customargs });
             let args = with_login_cookies(&state_for_task, &info, args).await;
             // Diagnostic only: this call covers the whole `Starting` phase (the plugin's own
@@ -2353,10 +2404,39 @@ pub(crate) async fn start_download(
             // diagnostic for the *next* phase, `Waiting` — this repo had no log coverage for
             // either half of a slow download until both were added together).
             let exec_start = std::time::Instant::now();
-            let plugin_result = match plugins
-                .execute(&plugin_namespace_for_task, "exec_download", args)
-                .await
-            {
+            // The permit lives exactly as long as this call: dropped the moment `execute` returns,
+            // on the error path too (the block owns it).
+            // Bound to a `let` rather than written as a `match { … } { … }` scrutinee: clippy's
+            // `blocks_in_conditions` (denied workspace-wide) rejects a block there, and the named
+            // value reads better than the alternative of threading the permit through by hand.
+            let plugin_call = {
+                // A cancelled acquire falls through to the plugin call rather than returning early:
+                // this task's own cancellation handling (the transfer phase's, and the
+                // `Err(_) if cancel_for_task.is_cancelled()` branch below) is what writes the item's
+                // terminal state, and a bare `return` here would leave the row stuck in `Starting`.
+                let _job_permit = negotiation_manager
+                    .acquire_job(job_capacity, &cancel_for_task)
+                    .await
+                    .ok();
+                if negotiation_waits {
+                    if let Some((repo, item_id)) = &queue_link {
+                        update_queue_item_state(
+                            repo,
+                            state_for_task.download_queue_tx.as_ref(),
+                            item_id,
+                            lanrurugi_storage::download_queue::DownloadQueueState::Starting,
+                            Some(job_id_for_task.clone()),
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
+                }
+                plugins
+                    .execute(&plugin_namespace_for_task, "exec_download", args)
+                    .await
+            };
+            let plugin_result = match plugin_call {
                 Ok(data) => {
                     let elapsed = exec_start.elapsed();
                     if elapsed.as_millis() > 500 {
@@ -4238,6 +4318,9 @@ pub(crate) mod tests {
         let repos = crate::Repositories::new(&redis);
         Some(AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
             redis: redis.clone(),
             repos,
             jobs: lanrurugi_core::jobs::JobRegistry::new(),

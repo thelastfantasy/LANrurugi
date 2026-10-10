@@ -914,7 +914,9 @@ async fn download_archive(
 /// encoded>` (RFC 5987) carrying the real title byte-for-byte — every modern browser prefers the
 /// `filename*` form when both are present, so a title like this nHentai archive's own Japanese
 /// name still round-trips correctly instead of being discarded down to the ASCII fallback.
-fn content_disposition_for(archive: &Archive) -> String {
+/// The `filename`/`filename*` pair both of this module's `Content-Disposition` builders need —
+/// ASCII fallback first, then the RFC 5987 extended form carrying the real name.
+fn disposition_filename(name: &str) -> String {
     use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
     // RFC 5987's own `attr-char` grammar excludes everything not explicitly listed as safe —
@@ -941,12 +943,7 @@ fn content_disposition_for(archive: &Archive) -> String {
         .add(b'{')
         .add(b'}');
 
-    let extension = std::path::Path::new(&archive.file)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("zip");
-    let real_name = format!("{}.{extension}", archive.name);
-    let ascii_fallback: String = real_name
+    let ascii_fallback: String = name
         .chars()
         .map(|c| {
             if c.is_ascii() && c != '"' && c != '\\' {
@@ -956,8 +953,150 @@ fn content_disposition_for(archive: &Archive) -> String {
             }
         })
         .collect();
-    let encoded = utf8_percent_encode(&real_name, RFC5987_UNSAFE);
-    format!("attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
+    let encoded = utf8_percent_encode(name, RFC5987_UNSAFE);
+    format!("filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+fn content_disposition_for(archive: &Archive) -> String {
+    let extension = std::path::Path::new(&archive.file)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("zip");
+    let real_name = format!("{}.{extension}", archive.name);
+    format!("attachment; {}", disposition_filename(&real_name))
+}
+
+/// Canonical extension for a served image `Content-Type`, or `None` for anything this module can't
+/// name (in which case the entry's own name is kept verbatim).
+fn canonical_extension(content_type: &str) -> Option<&'static str> {
+    match content_type {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/jxl" => Some("jxl"),
+        "image/gif" => Some("gif"),
+        "image/avif" => Some("avif"),
+        "image/bmp" => Some("bmp"),
+        "image/svg+xml" => Some("svg"),
+        _ => None,
+    }
+}
+
+/// Extensions that already describe `content_type` — a name ending in one of these is served
+/// unmodified, every other extension is rewritten to [`canonical_extension`].
+fn extensions_for_content_type(content_type: &str) -> &'static [&'static str] {
+    match content_type {
+        "image/jpeg" => &["jpg", "jpeg", "jpe", "jfif"],
+        "image/png" => &["png"],
+        "image/webp" => &["webp"],
+        "image/jxl" => &["jxl"],
+        "image/gif" => &["gif"],
+        "image/avif" => &["avif"],
+        "image/bmp" => &["bmp", "dib"],
+        "image/svg+xml" => &["svg"],
+        _ => &[],
+    }
+}
+
+/// The name a browser should suggest when saving a single reader page. Without a
+/// `Content-Disposition` the browser derives it from the URL's own last segment, which is the
+/// literal word `page` for every page of every archive — so a page opened in its own tab saved as
+/// `page.jpg` no matter what the entry inside the archive is actually called.
+///
+/// The entry's basename is reused as-is while it still describes the served bytes; a page
+/// re-encoded through the format chain (`jxl`/`webp`) gets that format's extension instead, so the
+/// saved file opens in an image viewer rather than lying about being a JPEG (the reader itself is
+/// told about the swap separately, via the `x-lrr-resized` header).
+fn served_page_filename(entry_path: &str, content_type: &str) -> String {
+    let basename = entry_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(entry_path)
+        .trim();
+    let basename = if basename.is_empty() {
+        "page"
+    } else {
+        basename
+    };
+    let Some(canonical) = canonical_extension(content_type) else {
+        return basename.to_string();
+    };
+    let path = std::path::Path::new(basename);
+    let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+        return format!("{basename}.{canonical}");
+    };
+    if extensions_for_content_type(content_type)
+        .iter()
+        .any(|known| extension.eq_ignore_ascii_case(known))
+    {
+        return basename.to_string();
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(basename);
+    format!("{stem}.{canonical}")
+}
+
+fn page_disposition_for(entry_path: &str, content_type: &str) -> String {
+    format!(
+        "inline; {}",
+        disposition_filename(&served_page_filename(entry_path, content_type))
+    )
+}
+
+/// `Content-Disposition` for a served thumbnail: `<archive name>_t<edge>.<ext>` for a cover,
+/// `<archive name>_<page>_t<edge>.<ext>` for a per-page one, where `<edge>` is the fixed edge every
+/// thumbnail is resized to ([`lanrurugi_scanner::thumbnail::THUMBNAIL_HEIGHT`], the other edge
+/// following the source's aspect ratio). A thumbnail opened in its own tab would otherwise save as
+/// the generic `thumbnail.jpg`, since its URL carries only the opaque ID.
+pub(crate) fn thumbnail_disposition_for(
+    name: &str,
+    page: Option<u32>,
+    content_type: &str,
+) -> String {
+    let extension = canonical_extension(content_type).unwrap_or("png");
+    let edge = lanrurugi_scanner::thumbnail::THUMBNAIL_HEIGHT;
+    let stem = match page {
+        Some(page) => format!("{name}_{page}_t{edge}"),
+        None => format!("{name}_t{edge}"),
+    };
+    format!(
+        "inline; {}",
+        disposition_filename(&format!("{stem}.{extension}"))
+    )
+}
+
+/// The header value for one of this module's `Content-Disposition` strings — see
+/// [`disposition_filename`] for why these are always valid header values in the first place.
+pub(crate) fn disposition_header(disposition: &str) -> header::HeaderValue {
+    header::HeaderValue::from_str(disposition).unwrap_or(header::HeaderValue::from_static("inline"))
+}
+
+/// `Content-Disposition: inline` for an arbitrary served filename — the shared tail every per-image
+/// naming rule in this API ends in (see [`page_disposition_for`] and [`thumbnail_disposition_for`],
+/// plus the composited translation page in `crate::translation`).
+pub(crate) fn inline_disposition_for(filename: &str) -> header::HeaderValue {
+    disposition_header(&format!("inline; {}", disposition_filename(filename)))
+}
+
+/// `Content-Disposition: attachment` for an arbitrary filename, in the same dual ASCII/RFC 5987
+/// form [`content_disposition_for`] uses. A hand-built `format!("attachment; filename=\"{name}\"")`
+/// is an *invalid* header value the moment the name contains a non-ASCII character, which for any
+/// filename-derived name in this library is the common case rather than the edge — the response
+/// then fails to build at all.
+pub(crate) fn attachment_header(filename: &str) -> header::HeaderValue {
+    disposition_header(&format!("attachment; {}", disposition_filename(filename)))
+}
+
+/// `<stem>.<ext>` for a served image whose content type is only known at response time — for the
+/// endpoints whose URLs carry no filename of their own (the download-conflict comparison page, the
+/// OPDS page stream), so a save still lands on a name an image viewer will open.
+pub(crate) fn image_filename(stem: &str, content_type: &str) -> String {
+    format!(
+        "{stem}.{}",
+        canonical_extension(content_type).unwrap_or("bin")
+    )
 }
 
 /// `DELETE /archives/{id}/patch` — deletes the sidecar `.patch.zip` (if any) and clears the
@@ -1402,39 +1541,78 @@ async fn get_archive_thumbnail(
     }
     let page = params.page.unwrap_or(0);
     let client_support = ClientImageSupport::from_request(&headers, params.format.as_deref());
-    const THUMB_CACHE: &str = "private, max-age=3600";
+    // `no-cache`, not a positive max-age: the same thumbnail URL can now serve JXL to one
+    // browser and WebP/JPEG to another, and the selected format can change independently of the
+    // URL. A cached WebP must be revalidated/refetched rather than pinning the old format for an
+    // hour after the admin switches the library-wide thumbnail format.
+    const THUMB_CACHE: &str = "private, no-cache";
+    // Naming a saved thumbnail needs the archive's own title — the URL carries only the opaque ID,
+    // so a direct navigation would save as `thumbnail.jpg`. Best-effort: an orphaned thumbnail
+    // whose archive row is already gone still serves, just named after its ID.
+    let archive_name = match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => archive.name,
+        _ => id.to_string(),
+    };
+    let page_param = params.page.filter(|page| *page > 0);
+    let thumbnail_response = |content_type: &'static str, bytes: bytes::Bytes| {
+        (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static(content_type),
+                ),
+                (
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static(THUMB_CACHE),
+                ),
+                (
+                    header::CONTENT_DISPOSITION,
+                    disposition_header(&thumbnail_disposition_for(
+                        &archive_name,
+                        page_param,
+                        content_type,
+                    )),
+                ),
+            ],
+            bytes,
+        )
+            .into_response()
+    };
+    let thumb_settings = match state.redis.config.get().await {
+        Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+        Err(_) => lanrurugi_scanner::thumbnail::ThumbSettings {
+            format: lanrurugi_scanner::thumbnail::ThumbFormat::Webp,
+            quality: 85,
+        },
+    };
+    let desired_format = desired_thumbnail_format(client_support, thumb_settings.format);
+    if let Some((content_type, bytes)) =
+        read_thumbnail_format(&state, id.as_str(), page, desired_format).await
+    {
+        return thumbnail_response(content_type, bytes);
+    }
+    if let Some((content_type, bytes)) = regenerate_thumbnail_on_demand(
+        &state,
+        id.as_str(),
+        page,
+        desired_format,
+        thumb_settings.quality,
+    )
+    .await
+    {
+        return thumbnail_response(content_type, bytes);
+    }
+    // Generation failed or the desired format could not be produced; fall back to whatever other
+    // format already exists rather than forcing a 500/placeholder.
     if let Some((content_type, bytes)) =
         read_thumbnail_from_disk(&state, id.as_str(), page, client_support).await
     {
-        return (
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, THUMB_CACHE),
-            ],
-            bytes,
-        )
-            .into_response();
+        return thumbnail_response(content_type, bytes);
     }
-    if let Some((content_type, bytes)) =
-        regenerate_thumbnail_on_demand(&state, id.as_str(), page, client_support).await
-    {
-        return (
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, THUMB_CACHE),
-            ],
-            bytes,
-        )
-            .into_response();
-    }
-    (
-        [
-            (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, THUMB_CACHE),
-        ],
-        PLACEHOLDER_THUMBNAIL,
+    thumbnail_response(
+        "image/png",
+        bytes::Bytes::from_static(PLACEHOLDER_THUMBNAIL),
     )
-        .into_response()
 }
 
 fn thumbnail_disk_path(
@@ -1457,6 +1635,37 @@ fn thumbnail_disk_path(
             .join(shard)
             .join(id)
             .join(format!("{page}.{}", format.extension()))
+    }
+}
+
+async fn read_thumbnail_format(
+    state: &AppState,
+    id: &str,
+    page: u32,
+    format: lanrurugi_scanner::thumbnail::ThumbFormat,
+) -> Option<(&'static str, bytes::Bytes)> {
+    let path = thumbnail_disk_path(state, id, page, format);
+    if let Ok(contents) = tokio::fs::read(&path).await {
+        return Some((format.content_type(), bytes::Bytes::from(contents)));
+    }
+    None
+}
+
+/// The format a client should actually receive for the currently configured thumbnail mode.
+/// Unlike [`thumbnail_formats_for`] (a fallback probe order), this honours an explicit JPEG/WebP
+/// selection and only substitutes formats when the client cannot decode the configured one.
+pub(crate) fn desired_thumbnail_format(
+    support: ClientImageSupport,
+    configured: lanrurugi_scanner::thumbnail::ThumbFormat,
+) -> lanrurugi_scanner::thumbnail::ThumbFormat {
+    use lanrurugi_scanner::thumbnail::ThumbFormat;
+    match configured {
+        ThumbFormat::Jxl if support.jxl => ThumbFormat::Jxl,
+        ThumbFormat::Jxl if support.webp => ThumbFormat::Webp,
+        ThumbFormat::Webp if support.webp => ThumbFormat::Webp,
+        ThumbFormat::Webp if support.jxl => ThumbFormat::Jxl,
+        ThumbFormat::Jpeg => ThumbFormat::Jpeg,
+        _ => ThumbFormat::Jpeg,
     }
 }
 
@@ -1502,7 +1711,8 @@ async fn regenerate_thumbnail_on_demand(
     state: &AppState,
     id: &str,
     page: u32,
-    support: ClientImageSupport,
+    format: lanrurugi_scanner::thumbnail::ThumbFormat,
+    quality: u8,
 ) -> Option<(&'static str, bytes::Bytes)> {
     let archive = state
         .repos
@@ -1514,60 +1724,32 @@ async fn regenerate_thumbnail_on_demand(
 
     state
         .thumbnail_singleflight
-        .run(format!("{id}:{page}:{}", support.key()), {
-            let state = state.clone();
-            let id = id.to_string();
-            move || async move {
-                let thumb_settings = match state.redis.config.get().await {
-                    Ok(mut conn) => {
-                        // `read_settings` consumes a fresh HGETALL internally, but the fallback
-                        // decision below still needs the raw `enablewebp` value. Read both off the
-                        // same connection to keep the generation path simple.
-                        let fields: HashMap<String, String> =
-                            conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
-                        let settings =
-                            lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
-                        if settings.format
-                            == lanrurugi_scanner::thumbnail::ThumbFormat::Jxl
-                            && !support.jxl
-                        {
-                            let enablewebp = fields
-                                .get("enablewebp")
-                                .map(|v| v != "0")
-                                .unwrap_or(true);
-                            lanrurugi_scanner::thumbnail::ThumbSettings {
-                                format: if enablewebp {
-                                    lanrurugi_scanner::thumbnail::ThumbFormat::Webp
-                                } else {
-                                    lanrurugi_scanner::thumbnail::ThumbFormat::Jpeg
-                                },
-                                quality: settings.quality,
-                            }
-                        } else {
-                            settings
+        .run(
+            format!("{id}:{page}:{}:{quality}", format.extension()),
+            {
+                let state = state.clone();
+                let id = id.to_string();
+                move || async move {
+                    let output = thumbnail_disk_path(&state, &id, page, format);
+                    let source_page = if page == 0 { 1 } else { page as usize };
+                    let result = lanrurugi_scanner::thumbnail::generate(
+                        std::path::PathBuf::from(&archive.file),
+                        source_page,
+                        output,
+                        format,
+                        quality,
+                    )
+                    .await;
+                    match result {
+                        Ok(_) => read_thumbnail_format(&state, &id, page, format).await,
+                        Err(e) => {
+                            tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
+                            None
                         }
                     }
-                    Err(_) => return None,
-                };
-                let output = thumbnail_disk_path(&state, &id, page, thumb_settings.format);
-                let source_page = if page == 0 { 1 } else { page as usize };
-                let result = lanrurugi_scanner::thumbnail::generate(
-                    std::path::PathBuf::from(&archive.file),
-                    source_page,
-                    output,
-                    thumb_settings.format,
-                    thumb_settings.quality,
-                )
-                .await;
-                match result {
-                    Ok(_) => read_thumbnail_from_disk(&state, &id, page, support).await,
-                    Err(e) => {
-                        tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
-                        None
-                    }
                 }
-            }
-        })
+            },
+        )
         .await
 }
 
@@ -2117,6 +2299,24 @@ pub struct PageParams {
     format: Option<String>,
 }
 
+impl PageParams {
+    /// The optimized variant for a caller that names the entry directly rather than through a URL
+    /// `/files` generated — the OPDS page stream, which resolves the entry from `list_pages` and then
+    /// wants exactly what the web reader would get (`~/LANraragi`'s own `serve_opds_page` calls
+    /// `Model::Archive::serve_page` for the same reason).
+    pub(crate) fn optimized(entry: String) -> Self {
+        Self {
+            path: entry,
+            source: None,
+            optimize: Some("1".to_string()),
+            priority: None,
+            variant: None,
+            max_short_edge: None,
+            format: None,
+        }
+    }
+}
+
 /// What the caller can actually decode. The frontend JavaScript feature-detects this once per
 /// browser and writes it to a cookie, so both the reader's blob-loading `fetch()` calls and its
 /// plain optimized `<img>` requests carry the same answer without every page URL needing a format
@@ -2258,11 +2458,16 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// Reader resize (legacy `enable_resize`/`Model/Archive.pm::serve_page`): pages over
-/// `sizethreshold` KB get downscaled/recompressed to WebP at `readerquality` and cached under
-/// `temp_dir`, rather than served as their original bytes every time. Enabled by default
-/// (`enableresize = true` — WebP re-encode is cheap enough that the old JPEG-era caution no
+/// Reader resize (legacy `enable_resize`/`Model/Archive.pm::serve_page`): pages get downscaled and
+/// recompressed at `readerquality` into whichever codec the client prefers (`jxl > webp > source`)
+/// and cached under `temp_dir`, rather than served as their original bytes every time. Enabled by
+/// default (`enableresize = true` — the re-encode is cheap enough that the old JPEG-era caution no
 /// longer applies).
+///
+/// Deliberate deviation from legacy: `sizethreshold` no longer gates *whether* a page is
+/// converted — the client's preferred codec wins even for a page far below the threshold (see
+/// `effective_threshold_for_output` below). A page already in the target codec is the one case
+/// that still passes through untouched, since recompressing it could only lose quality.
 ///
 /// The actual archive read (and optional resize) is collapsed through
 /// [`AppState::page_singleflight`], keyed by `(id, entry path)` — the reader requests several
@@ -2279,10 +2484,24 @@ async fn get_page(
     Query(params): Query<PageParams>,
     headers: HeaderMap,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    serve_page(&state, auth.as_deref(), &id, params, &headers).await
+}
+
+/// The page pipeline itself, callable outside the `/archives/{id}/page` handler — the OPDS page
+/// stream needs exactly this (`~/LANraragi`'s own `serve_opds_page` calls `Model::Archive::serve_page`
+/// too, so routing OPDS through here is what keeps third-party readers on the same behaviour as the
+/// web reader rather than a second, unoptimized byte-serving path).
+pub(crate) async fn serve_page(
+    state: &AppState,
+    auth: Option<&crate::auth_context::AuthContext>,
+    id: &lanrurugi_core::ids::ArchiveId,
+    params: PageParams,
+    headers: &HeaderMap,
+) -> Response {
+    if guest_scope_denies(state, auth, id).await {
         return not_found("serve_page", format!("{id} does not exist."));
     }
-    let archive = match state.repos.archives.get(&id).await {
+    let archive = match state.repos.archives.get(id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("serve_page", format!("{id} does not exist.")),
         Err(e) => {
@@ -2296,7 +2515,7 @@ async fn get_page(
 
     let is_patch = params.source.as_deref() == Some("patch");
     let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
-    let client_support = ClientImageSupport::from_request(&headers, params.format.as_deref());
+    let client_support = ClientImageSupport::from_request(headers, params.format.as_deref());
     // Mobile user-agents get an aggressive resize threshold so reader pages are transferred as
     // compact WebP instead of multi-hundred-KB originals. On a phone over WiFi this is usually the
     // dominant factor in "images load one by one / slowly" — the LAN itself is not the bottleneck.
@@ -2419,6 +2638,22 @@ async fn get_page(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("private, no-cache"),
             );
+            // `inline` (not `attachment`): a page opened in its own tab must still render, this
+            // header only supplies the name a save-as would use — see `served_page_filename`.
+            header_map.insert(
+                header::CONTENT_DISPOSITION,
+                disposition_header(&page_disposition_for(&params.path, page.content_type)),
+            );
+            // An archive-supplied SVG is markup, not pixels: opened directly it runs in *this*
+            // origin's context, and SVG can carry `<script>`. `sandbox` (with no `allow-scripts`)
+            // keeps such a page inert — the reader's own `<img>` use is unaffected either way,
+            // since scripts never run in an image context.
+            if page.content_type == "image/svg+xml" {
+                header_map.insert(
+                    header::CONTENT_SECURITY_POLICY,
+                    header::HeaderValue::from_static("sandbox"),
+                );
+            }
             if let Some(etag) = &page.etag {
                 header_map.insert(
                     header::ETAG,
@@ -2602,11 +2837,6 @@ async fn fetch_page(
         .get("readerquality")
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
-    // Controls the output side of the JXL > WebP > source chain: with this on and a JXL-capable
-    // browser, JXL-native pages are served untouched and every other still image is re-encoded
-    // to JXL (lossless pure-Rust encoder; see `lanrurugi_scanner::jxl`).
-    let prefer_jxl = fields.get("preferjxl").map(|v| v != "0").unwrap_or(true);
-
     // Mobile pages use a much lower threshold, and a smaller pixel dimension cap. Quality is
     // intentionally NOT lowered: 85 is the user-accepted minimum and the visual difference on a
     // phone screen is not worth lowering it. Reducing dimensions is where the bandwidth win is.
@@ -2639,10 +2869,18 @@ async fn fetch_page(
     let content_type = image_content_type(&raw);
     let source_is_jxl = content_type == "image/jxl";
 
+    // SVG is served as-is, always, before any threshold or codec decision: browsers render it
+    // natively, and nothing in this pipeline can decode it (`resize_if_over_threshold` would fail
+    // in `load_from_memory`, turning a page that renders fine into a 500 — issue #114). It is also
+    // why the forced-conversion threshold below never has to exclude it.
+    if content_type == "image/svg+xml" {
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+    }
+
     // Preferred-format chain. A JXL-native page is served untouched when the browser can decode
     // JXL; every other source (and every preview/tiny request, which exists to be small) goes
     // through the re-encode path below using whichever output codec the client advertised.
-    let jxl_passthrough = source_is_jxl && client_support.jxl && prefer_jxl && !preview;
+    let jxl_passthrough = source_is_jxl && client_support.jxl && !preview;
     if jxl_passthrough {
         return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
@@ -2657,7 +2895,7 @@ async fn fetch_page(
         } else {
             None
         }
-    } else if client_support.jxl && prefer_jxl {
+    } else if client_support.jxl {
         Some(EncodeFormat::Jxl)
     } else if client_support.webp {
         Some(EncodeFormat::Webp)
@@ -2752,12 +2990,24 @@ async fn fetch_page(
         };
     }
 
+    // The client's preferred codec wins over the source format even below the byte threshold (the
+    // reader's `jxl > webp > source` chain) — the threshold only still decides whether an *already
+    // matching* page is worth recompressing, since re-encoding a page that is already in the target
+    // format could only lose a generation of quality. SVG never reaches this point (see above).
+    let already_in_target_format = content_type == output_format.content_type();
+    let effective_threshold_for_output = if already_in_target_format {
+        effective_threshold
+    } else {
+        0
+    };
+
     // Formats browsers render natively — BMP included (Chrome/Firefox/Edge all decode it; it just
     // wastes bandwidth, so it still goes through the *threshold-based* resize path like any other
     // renderable format). JXL input is decoded through the registered image hook and then
-    // re-encoded into `output_format`. Everything else (TIFF/unknown — Safari-only TIFF aside, no
-    // mainstream browser) is also force-converted under `optimize=1` because serving those bytes
-    // as-is would just show a broken image.
+    // re-encoded into `output_format`. SVG is listed because browsers do render it, but it has
+    // already returned as-is above — this pipeline has no decoder for it. Everything else
+    // (TIFF/unknown — Safari-only TIFF aside, no mainstream browser) is force-converted under
+    // `optimize=1` because serving those bytes as-is would just show a broken image.
     let renderable = matches!(
         content_type,
         "image/jpeg"
@@ -2777,8 +3027,15 @@ async fn fetch_page(
     }
 
     // Byte-size check first (no decode needed) — under-threshold *renderable* pages pass through
-    // untouched; a forced conversion skips this gate entirely.
-    if !force_convert && (raw.len() / 1024) as i64 <= effective_threshold {
+    // untouched; a forced conversion skips this gate entirely. The `> 0` guard mirrors
+    // `resize_if_over_threshold`'s own: a zero threshold means "always convert", and without it
+    // this gate would instead read as "anything under 1 KB passes through" (raw bytes are divided
+    // by 1024, so a sub-kilobyte page is 0 KB and satisfies `<= 0`) — caught live on a 160-byte
+    // JPEG that a JXL-advertising browser was served unconverted.
+    if !force_convert
+        && effective_threshold_for_output > 0
+        && (raw.len() / 1024) as i64 <= effective_threshold_for_output
+    {
         return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
@@ -2786,7 +3043,7 @@ async fn fetch_page(
         &state.library.temp_dir,
         id,
         path,
-        effective_threshold,
+        effective_threshold_for_output,
         effective_max_short_edge,
         effective_quality,
         false,
@@ -2838,7 +3095,7 @@ async fn fetch_page(
         lanrurugi_scanner::resize::resize_if_over_threshold(
             raw.clone(),
             effective_quality as u8,
-            effective_threshold,
+            effective_threshold_for_output,
             effective_max_short_edge,
             max_long_edge,
             preview_full_short_edge,
@@ -3364,6 +3621,88 @@ mod tests {
     }
 
     #[test]
+    fn served_page_filename_keeps_an_entry_name_that_still_matches_the_served_format() {
+        assert_eq!(served_page_filename("000.jpg", "image/jpeg"), "000.jpg");
+        assert_eq!(
+            served_page_filename("folder/002.PNG", "image/png"),
+            "002.PNG"
+        );
+        assert_eq!(
+            served_page_filename("a\\b\\003.webp", "image/webp"),
+            "003.webp"
+        );
+    }
+
+    #[test]
+    fn served_page_filename_uses_the_converted_format_extension() {
+        // A page re-encoded through the reader's format chain must not keep claiming to be a
+        // JPEG — the saved file would then fail to open in viewers that trust the extension.
+        assert_eq!(served_page_filename("000.jpg", "image/webp"), "000.webp");
+        assert_eq!(served_page_filename("000.jpg", "image/jxl"), "000.jxl");
+        assert_eq!(
+            served_page_filename("スキャン 001.jpeg", "image/webp"),
+            "スキャン 001.webp"
+        );
+    }
+
+    #[test]
+    fn served_page_filename_appends_an_extension_when_the_entry_has_none() {
+        assert_eq!(served_page_filename("page", "image/webp"), "page.webp");
+    }
+
+    #[test]
+    fn served_page_filename_falls_back_to_the_verbatim_basename_for_unknown_formats() {
+        assert_eq!(served_page_filename("dir/000.tif", "image/tiff"), "000.tif");
+    }
+
+    #[test]
+    fn attachment_headers_survive_a_non_ascii_filename() {
+        // The regression this guards: a hand-built `format!("attachment; filename=\"{name}\"")`
+        // is not a valid header value once the name has a non-ASCII character in it, and the whole
+        // response fails to build (a 500 on an otherwise fine patch/plugin export).
+        let value = attachment_header("[作者] 標題 テスト.patch.zip");
+        let rendered = value.to_str().expect("header value must be valid");
+        assert!(rendered.starts_with("attachment; "));
+        assert!(rendered.contains("filename*="));
+    }
+
+    #[test]
+    fn image_filename_uses_the_served_formats_extension() {
+        assert_eq!(image_filename("item_a_3", "image/jxl"), "item_a_3.jxl");
+        assert_eq!(image_filename("item_a_3", "image/webp"), "item_a_3.webp");
+        // An unrecognized content type keeps the stem rather than claiming a format.
+        assert_eq!(
+            image_filename("item_a_3", "application/octet-stream"),
+            "item_a_3.bin"
+        );
+    }
+
+    #[test]
+    fn page_disposition_is_inline_and_carries_both_filename_forms() {
+        let value = page_disposition_for("000.jpg", "image/webp");
+        assert!(value.starts_with("inline; "));
+        assert!(value.contains("filename=\"000.webp\""));
+        assert!(value.contains("filename*=UTF-8''000.webp"));
+        let non_ascii = page_disposition_for("スキャン 001.jpg", "image/webp");
+        assert!(non_ascii.contains("filename*=UTF-8''"));
+        assert!(!non_ascii.contains("スキャン"));
+    }
+
+    #[test]
+    fn thumbnail_disposition_names_the_cover_and_each_page_separately() {
+        assert_eq!(
+            thumbnail_disposition_for("Some Title", None, "image/webp"),
+            "inline; filename=\"Some Title_t500.webp\"; \
+             filename*=UTF-8''Some%20Title_t500.webp"
+        );
+        assert_eq!(
+            thumbnail_disposition_for("Some Title", Some(3), "image/jxl"),
+            "inline; filename=\"Some Title_3_t500.jxl\"; \
+             filename*=UTF-8''Some%20Title_3_t500.jxl"
+        );
+    }
+
+    #[test]
     fn image_content_type_detects_jpeg_from_magic_bytes() {
         assert_eq!(
             image_content_type(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"),
@@ -3480,6 +3819,27 @@ mod tests {
         assert_eq!(
             thumbnail_formats_for(ClientImageSupport::source()),
             vec![ThumbFormat::Jpeg]
+        );
+    }
+
+    #[test]
+    fn desired_thumbnail_format_prefers_the_configured_format_when_decodable() {
+        use lanrurugi_scanner::thumbnail::ThumbFormat;
+        assert_eq!(
+            desired_thumbnail_format(ClientImageSupport::jxl_and_webp(), ThumbFormat::Jxl),
+            ThumbFormat::Jxl
+        );
+        assert_eq!(
+            desired_thumbnail_format(ClientImageSupport::webp(), ThumbFormat::Jxl),
+            ThumbFormat::Webp
+        );
+        assert_eq!(
+            desired_thumbnail_format(ClientImageSupport::jxl_and_webp(), ThumbFormat::Webp),
+            ThumbFormat::Webp
+        );
+        assert_eq!(
+            desired_thumbnail_format(ClientImageSupport::source(), ThumbFormat::Jpeg),
+            ThumbFormat::Jpeg
         );
     }
 

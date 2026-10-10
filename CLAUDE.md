@@ -145,23 +145,20 @@ similar-looking icons in the same region and the visual difference at screenshot
 subtle enough to miss by eye). A claim of "matches legacy" is not valid until this comparison has
 actually been run and the values shown to agree — not assumed, not eyeballed from a screenshot.
 
-## Cross-session issue tracking (GitHub Issues, not memos)
+## Issue tracking: never open a new issue
 
-Problems that surface mid-session but aren't resolved in that same turn (a bug spotted while
-working on something else, a design question deferred, a regression noticed but not yet
-root-caused) get tracked in a GitHub issue via `gh`, not a local memo/scratch file — durable across
-context compaction and visible outside this tool.
+**Do not create GitHub issues — under any circumstances** (stated directly by the user,
+2026-10-09: "任何情况都不要新开issue"). A problem that surfaces mid-session but isn't resolved in
+that same turn is either fixed now or reported in the conversation itself; "file it and move on" is
+not an option, and neither is a local memo/scratch file.
 
-Before creating a new issue, run `gh issue list --state open` and check whether an existing open
-issue can hold the new item instead — append to it (`gh issue edit <number> --body-file <path>` to
-rewrite the checklist, or `gh issue comment` for supplementary notes/screenshots) rather than
-opening a new issue per problem. Only create a new issue when no suitable open one exists.
-Resolved items are checked off (`- [x]`) with a short note on the actual root cause, not deleted —
-the issue is a running log, not a todo list that gets wiped clean.
+Adding a comment to, or closing, an *already existing* issue is not opening one — but ask before
+touching issue bookkeeping at all, since the point of this rule is to stop spending turns on it
+rather than to move that work somewhere else. Any content that does end up on an existing issue
+must be in Chinese.
 
-All *future* issue content (new entries, comments, edits) must be written in Chinese — the user's
-own working language. Do not retroactively translate existing English entries already in the
-issue; only new content going forward needs to be in Chinese.
+Earlier revisions of this file told the agent to open an issue per mid-session problem (and to
+prefer appending to an existing one); that instruction is superseded by the rule above.
 
 ## GitHub milestones — `m0` (first release) and `m1` (future plan)
 
@@ -177,11 +174,9 @@ which is now archived/closed and superseded — do not add new content to #2):
 
 When the user references "an issue" without a number, or asks what's left before release, check
 `gh issue list --milestone m0 --state open` first — that list *is* the release-blocking work.
-`gh issue list --milestone m1 --state open` is backlog, not urgent. When triaging a *new* problem
-found mid-session (per the tracking rule above), decide `m0` vs `m1` by the same test used when
-the split was made: does this affect the baseline shippable state (→ `m0`), or is it an
-independent/long-horizon addition (→ `m1`)? Assign the milestone at creation time
-(`gh issue create --milestone m0` or `m1`), don't leave new issues unmilestoned.
+`gh issue list --milestone m1 --state open` is backlog, not urgent. Reading these lists is fine;
+*adding* to them is not — see the rule above, which supersedes the milestone-at-creation-time
+instruction this paragraph used to carry.
 
 ## Dev container rebuild — frontend-only changes don't need one
 

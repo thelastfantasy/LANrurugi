@@ -23,9 +23,11 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
+use crate::http::{HostHttp, RelayRequest};
 use crate::permissions::build_flags;
 use crate::protocol::{
-    DiscoveryResult, PluginInfo, PluginIntrospection, PluginOptionsResult, Request, Response,
+    DiscoveryResult, HostHttpCall, HostHttpResult, PluginInfo, PluginIntrospection,
+    PluginOptionsResult, Request, Response,
 };
 
 /// `dispatcher.ts`'s `canonicalize_source` reply shape.
@@ -77,6 +79,26 @@ fn is_safe_namespace(namespace: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// What one worker may relay to the network: the shared relay plus the hosts *its* plugin declared
+/// (`declared_permissions.net`). Bundled rather than threaded as two more arguments, and so an
+/// introspection worker — which gets no permission flags at all — visibly gets no hosts either.
+#[derive(Clone)]
+pub struct RelayAccess {
+    pub http: Arc<HostHttp>,
+    pub allowed_hosts: Vec<String>,
+}
+
+impl RelayAccess {
+    /// Introspection (`plugin_info`/`plugin_options`) runs with zero permissions: a plugin has no
+    /// business fetching anything just to describe itself, exactly as before this was relayed.
+    fn none(http: Arc<HostHttp>) -> Self {
+        Self {
+            http,
+            allowed_hosts: Vec::new(),
+        }
+    }
+}
+
 /// A plugin `.ts` file's current `mtime` — used both to stamp a freshly spawned [`Worker`] and,
 /// on every later [`PluginPool::execute`] call, to detect whether the file has changed since that
 /// worker's own `import()` last read it.
@@ -85,7 +107,8 @@ fn plugin_mtime(plugin_module: &Path) -> Result<std::time::SystemTime> {
 }
 
 struct Worker {
-    stdin: ChildStdin,
+    /// Shared with the reader task, which writes relay answers back to the same stream.
+    stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
     _child: Child,
     /// The plugin file's `mtime` when this worker last `import()`ed it — `execute` respawns if
@@ -101,6 +124,7 @@ impl Worker {
         namespace: &str,
         extra_flags: &[String],
         declared_read: bool,
+        relay: RelayAccess,
     ) -> Result<Self> {
         let plugin_module = plugins_dir.join(format!("{namespace}.ts"));
         // Read before spawning: worst case is one extra harmless respawn later, never a missed edit.
@@ -152,10 +176,62 @@ impl Worker {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_for_reader = pending.clone();
 
+        let stdin = Arc::new(Mutex::new(stdin));
+        let stdin_for_reader = stdin.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(response) = serde_json::from_str::<Response>(&line) else {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                // A plugin's own `fetch()` arrives on the same stream as its results; serving it in
+                // its own task (not inline) is what keeps a slow upstream request from blocking the
+                // plugin's other, unrelated calls.
+                if value.get("type").and_then(|t| t.as_str()) == Some("host_http") {
+                    let Ok(call) = serde_json::from_value::<HostHttpCall>(value) else {
+                        continue;
+                    };
+                    let http = relay.http.clone();
+                    let allowed = relay.allowed_hosts.clone();
+                    let stdin = stdin_for_reader.clone();
+                    tokio::spawn(async move {
+                        let request = RelayRequest {
+                            method: call.method,
+                            url: call.url,
+                            headers: call.headers,
+                            body: call.body,
+                            redirect_limit: call.redirect_limit,
+                        };
+                        let result = match http.relay(&allowed, request).await {
+                            Ok(response) => HostHttpResult {
+                                line_type: "host_http_result",
+                                call_id: call.call_id,
+                                ok: true,
+                                status: Some(response.status),
+                                headers: Some(response.headers),
+                                url: Some(response.url),
+                                body: Some(response.body),
+                                error: None,
+                            },
+                            Err(error) => HostHttpResult {
+                                line_type: "host_http_result",
+                                call_id: call.call_id,
+                                ok: false,
+                                status: None,
+                                headers: None,
+                                url: None,
+                                body: None,
+                                error: Some(error),
+                            },
+                        };
+                        if let Ok(mut line) = serde_json::to_string(&result) {
+                            line.push('\n');
+                            let _ = stdin.lock().await.write_all(line.as_bytes()).await;
+                        }
+                    });
+                    continue;
+                }
+                let Ok(response) = serde_json::from_value::<Response>(value) else {
                     continue;
                 };
                 if let Some(sender) = pending_for_reader.lock().await.remove(&response.request_id) {
@@ -193,7 +269,7 @@ impl Worker {
 
         let mut line = serde_json::to_string(&request)?;
         line.push('\n');
-        self.stdin.write_all(line.as_bytes()).await?;
+        self.stdin.lock().await.write_all(line.as_bytes()).await?;
 
         match tokio::time::timeout(DEFAULT_TIMEOUT, rx).await {
             Ok(Ok(response)) => Ok(response),
@@ -211,6 +287,9 @@ pub struct PluginPool {
     dispatcher_path: PathBuf,
     plugins_dir: PathBuf,
     workers: Arc<Mutex<HashMap<String, Worker>>>,
+    /// Shared by every worker this pool spawns: one revalidation store and one coalescing map for
+    /// the whole process, not one per plugin namespace.
+    http: Arc<HostHttp>,
 }
 
 impl PluginPool {
@@ -224,6 +303,7 @@ impl PluginPool {
             dispatcher_path,
             plugins_dir,
             workers: Arc::new(Mutex::new(HashMap::new())),
+            http: Arc::new(HostHttp::new()),
         }
     }
 
@@ -253,6 +333,7 @@ impl PluginPool {
             namespace,
             &[],
             false,
+            RelayAccess::none(self.http.clone()),
         )
         .await?;
         let response = worker
@@ -281,6 +362,7 @@ impl PluginPool {
             namespace,
             &[],
             false,
+            RelayAccess::none(self.http.clone()),
         )
         .await?;
         let response = worker
@@ -315,6 +397,7 @@ impl PluginPool {
             namespace,
             &[],
             false,
+            RelayAccess::none(self.http.clone()),
         )
         .await?;
         let response = worker
@@ -422,6 +505,10 @@ impl PluginPool {
                 namespace,
                 &flags,
                 info.declared_permissions.read,
+                RelayAccess {
+                    http: self.http.clone(),
+                    allowed_hosts: info.declared_permissions.net.clone(),
+                },
             )
             .await?;
             workers.insert(namespace.to_string(), worker);

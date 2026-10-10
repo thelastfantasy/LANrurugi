@@ -2,7 +2,7 @@
 //! verified against `~/LANraragi/tools/openapi.yaml`'s examples.
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -10,6 +10,7 @@ use lanrurugi_core::entities::Archive;
 use lanrurugi_search::engine::{search, SearchParams};
 use serde::Deserialize;
 
+use crate::archives::{desired_thumbnail_format, PageParams};
 use crate::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -34,7 +35,53 @@ fn first_tag_value(tags: &str, namespace: &str) -> String {
         .to_string()
 }
 
-fn entry_xml(archive: &Archive) -> String {
+/// The image types this *request's* client will actually be served, so the feed's own `type=`
+/// attributes describe what the linked endpoints return rather than a hardcoded guess. Both are
+/// negotiated per request (capability cookie/`Accept`), which is what a feed fetched by that same
+/// client can be honest about — see [`negotiated_data_types`].
+#[derive(Clone, Copy)]
+struct DataTypes {
+    thumbnail: &'static str,
+    page: &'static str,
+}
+
+/// Resolves the two declared types for a feed request.
+///
+/// The thumbnails endpoint picks from the library's configured `thumbnail_format` filtered through
+/// what the client can decode, so the answer here has to consult the same settings; the page stream
+/// re-encodes into whatever [`ClientImageSupport::from_request`] resolves for this request, whose
+/// own fallback for a client with no capability signal at all is WebP — so a real OPDS reader, which
+/// sends `Accept: image/*` and no cookie, is declared `image/webp` and served WebP.
+///
+/// `image/jpeg` is therefore only reached by a client that explicitly asked for `source` bytes
+/// (the capability cookie's own `source` value, set by the web frontend when it can decode neither
+/// modern codec): those responses carry the archive's real per-page type in their own
+/// `Content-Type`, which is as honest as a single feed-level declaration can be.
+async fn negotiated_data_types(
+    state: &AppState,
+    support: crate::archives::ClientImageSupport,
+) -> DataTypes {
+    let configured = match state.redis.config.get().await {
+        Ok(mut conn) => {
+            lanrurugi_scanner::thumbnail::read_settings(&mut conn)
+                .await
+                .format
+        }
+        Err(_) => lanrurugi_scanner::thumbnail::ThumbFormat::Webp,
+    };
+    DataTypes {
+        thumbnail: desired_thumbnail_format(support, configured).content_type(),
+        page: if support.jxl {
+            "image/jxl"
+        } else if support.webp {
+            "image/webp"
+        } else {
+            "image/jpeg"
+        },
+    }
+}
+
+fn entry_xml(archive: &Archive, types: DataTypes) -> String {
     let title = xml_escape(&archive.title);
     let id = &archive.id;
     let author = xml_escape(&first_tag_value(&archive.tags, "artist"));
@@ -61,13 +108,15 @@ fn entry_xml(archive: &Archive) -> String {
     <category term="{category}" />
     <summary>{summary}</summary>
     <link rel="alternate" href="/api/opds/{id}" type="application/atom+xml;type=entry;profile=opds-catalog" />
-    <link rel="http://opds-spec.org/image" href="/api/archives/{id}/thumbnail" type="image/jpeg" />
-    <link rel="http://opds-spec.org/image/thumbnail" href="/api/archives/{id}/thumbnail" type="image/jpeg" />
+    <link rel="http://opds-spec.org/image" href="/api/archives/{id}/thumbnail" type="{thumbnail_type}" />
+    <link rel="http://opds-spec.org/image/thumbnail" href="/api/archives/{id}/thumbnail" type="{thumbnail_type}" />
     <link rel="http://opds-spec.org/acquisition" href="/api/archives/{id}/download" title="Download/Read" type="application/x-{extension}" />
-    <link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" href="/api/opds/{id}/pse?page={{pageNumber}}" pse:count="{pagecount}" />
+    <link rel="http://vaemendis.net/opds-pse/stream" type="{page_type}" href="/api/opds/{id}/pse?page={{pageNumber}}" pse:count="{pagecount}" />
     <link type="text/html" rel="alternate" title="Open in LANrurugi" href="/reader?id={id}" />
 </entry>"#,
         pagecount = archive.pagecount,
+        thumbnail_type = types.thumbnail,
+        page_type = types.page,
     )
 }
 
@@ -76,7 +125,16 @@ pub struct OpdsQuery {
     category: Option<String>,
 }
 
-async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>) -> Response {
+async fn opds_catalog(
+    State(state): State<AppState>,
+    Query(q): Query<OpdsQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let types = negotiated_data_types(
+        &state,
+        crate::archives::ClientImageSupport::from_request(&headers, None),
+    )
+    .await;
     let category = match &q.category {
         Some(id) => state
             .repos
@@ -121,7 +179,7 @@ async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>)
             .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
             .await
         {
-            entries.push_str(&entry_xml(&a));
+            entries.push_str(&entry_xml(&a, types));
             entries.push('\n');
         }
     }
@@ -160,7 +218,13 @@ async fn opds_catalog(State(state): State<AppState>, Query(q): Query<OpdsQuery>)
 async fn opds_item(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    headers: HeaderMap,
 ) -> Response {
+    let types = negotiated_data_types(
+        &state,
+        crate::archives::ClientImageSupport::from_request(&headers, None),
+    )
+    .await;
     match state.repos.archives.get(&id).await {
         Ok(Some(a)) => {
             let xml = format!(
@@ -170,7 +234,7 @@ async fn opds_item(
 <link rel="self" href="/api/opds/{id}" type="application/atom+xml;type=entry;profile=opds-catalog" />
 {entry}
 </entry>"#,
-                entry = entry_xml(&a),
+                entry = entry_xml(&a, types),
             );
             ([(header::CONTENT_TYPE, "application/xml")], xml).into_response()
         }
@@ -184,11 +248,20 @@ pub struct PseQuery {
     page: Option<u32>,
 }
 
-/// Serves the raw image for `page` (1-indexed), matching the `pse:stream` link's contract.
+/// Serves `page` (1-indexed) for a page-streaming reader, through the *same* pipeline the web
+/// reader uses — legacy parity (`~/LANraragi/lib/LANraragi/Model/Opds.pm::render_archive_page` ends
+/// its own comment with "Use the same code as /api/page to serve the file"), and the only way a
+/// third-party reader gets a codec it can actually decode, a real `Content-Type`, and the resize
+/// cache the web reader already pays for.
+///
+/// This used to stream the entry's raw bytes as `application/octet-stream`: an AVIF/JXL page reached
+/// a reader that could not decode it, nothing was resized, and a save from the stream had no name.
 async fn opds_page(
     State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(q): Query<PseQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -204,9 +277,12 @@ async fn opds_page(
     let Some(entry) = pages.get((page - 1) as usize) else {
         return (StatusCode::BAD_REQUEST, "Page out of range.").into_response();
     };
-    match lanrurugi_scanner::archive_format::read_entry(std::path::Path::new(&archive.file), entry)
-    {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    crate::archives::serve_page(
+        &state,
+        auth.as_deref(),
+        &id,
+        PageParams::optimized(entry.clone()),
+        &headers,
+    )
+    .await
 }

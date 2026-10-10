@@ -65,6 +65,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
     );
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
@@ -586,6 +589,9 @@ async fn static_frontend_is_served_with_spa_fallback() {
     );
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis,
         repos,
         jobs: JobRegistry::new(),
@@ -760,6 +766,9 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
     );
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis,
         repos,
         jobs: JobRegistry::new(),
@@ -1026,6 +1035,9 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
 
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),
@@ -1235,6 +1247,9 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
 
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),

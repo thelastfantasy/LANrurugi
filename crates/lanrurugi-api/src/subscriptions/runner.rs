@@ -11,6 +11,8 @@
 //! smaller world than the one asked about; recording its candidates as "seen" would mark every work
 //! it had no access to as handled, hiding them permanently with no error anywhere to reveal it.
 
+use std::sync::Arc;
+
 use lanrurugi_plugin::protocol::{DiscoveredCandidate, DiscoveryResult};
 use lanrurugi_storage::subscriptions::{
     CandidateRecord, CandidateVerdict, CheckCycle, CycleOutcome, Subscription,
@@ -116,7 +118,14 @@ pub fn revision_lookup(
 /// its original publication date — mid-list, never on page one. Four rather than unbounded because a
 /// tag search can run to tens of thousands of works, and reading all of it on every check is both slow
 /// and a good way to be rate-limited.
-const MAX_LISTING_PAGES: u32 = 4;
+pub(crate) const MAX_LISTING_PAGES: u32 = 4;
+/// Pages a *preview* asks for. A preview answers "what would this rule catch right now", so it
+/// reads the newest page only: every page is a separate request to the source (and, on a signed-in
+/// E-Hentai query, four more `gdata` batches per page), so asking for four to show a pane that
+/// displays a couple of dozen rows was four times the work for the same answer. The scheduled
+/// check still reads all [`MAX_LISTING_PAGES`] — catching an edit that landed mid-list is exactly
+/// what its wider window is for, and it runs hourly rather than per keystroke.
+pub(crate) const PREVIEW_LISTING_PAGES: u32 = 1;
 
 /// Turns a discovery result into a decision. Pure: no I/O, no clock, no Redis.
 pub fn decide(
@@ -202,7 +211,9 @@ pub fn decide(
                 }
                 // Pulled back out of `seen_candidates`: recording it as seen would make the waiting
                 // period permanent, since a seen work is never looked at again.
-                matcher::Outcome::TooSoon => CandidateVerdict::TooSoon,
+                matcher::Outcome::TooSoon(reason) => CandidateVerdict::TooSoon {
+                    reason: Some(reason),
+                },
                 matcher::Outcome::Accepted => {
                     actionable.push(source.clone());
                     // Whatever it was rejected for before no longer applies; it is handled now.
@@ -221,7 +232,7 @@ pub fn decide(
         // Recorded as seen only once a verdict is final. A work still inside its waiting period is
         // deliberately left out: marking it seen would make the wait permanent, since a seen work is
         // never reconsidered.
-        if verdict != CandidateVerdict::TooSoon {
+        if !matches!(verdict, CandidateVerdict::TooSoon { .. }) {
             seen_candidates.push(source.clone());
         }
 
@@ -406,7 +417,7 @@ pub async fn preview_check_raw(
     state: &AppState,
     subscription: &Subscription,
 ) -> Result<(CycleDecision, lanrurugi_plugin::protocol::DiscoveryResult), String> {
-    let result = fetch_listing(state, subscription).await?;
+    let result = fetch_listing(state, subscription, PREVIEW_LISTING_PAGES).await?;
     let decision = preview_decide(state, subscription, &result).await;
     Ok((decision, result))
 }
@@ -465,6 +476,32 @@ fn apply_manual_credentials(
 async fn fetch_listing(
     state: &AppState,
     subscription: &Subscription,
+    pages: u32,
+) -> Result<lanrurugi_plugin::protocol::DiscoveryResult, String> {
+    // Concurrent identical discoveries collapse onto one source fetch. Unlike a time-based cache
+    // this can never serve data the source has not just produced: only calls that are in flight at
+    // the same moment share, and they would have been asking for the same thing anyway.
+    let key = format!(
+        "{}\n{}\n{pages}",
+        subscription.source,
+        serde_json::to_string(&subscription.criteria).unwrap_or_default()
+    );
+    let singleflight = state.discovery_singleflight.clone();
+    let state = state.clone();
+    let subscription = subscription.clone();
+    Arc::unwrap_or_clone(
+        singleflight
+            .run(key, || async move {
+                Arc::new(fetch_listing_uncached(&state, &subscription, pages).await)
+            })
+            .await,
+    )
+}
+
+async fn fetch_listing_uncached(
+    state: &AppState,
+    subscription: &Subscription,
+    pages: u32,
 ) -> Result<lanrurugi_plugin::protocol::DiscoveryResult, String> {
     let info = state
         .plugins
@@ -474,7 +511,7 @@ async fn fetch_listing(
 
     let mut base = serde_json::to_value(&subscription.criteria).unwrap_or_default();
     if let Some(obj) = base.as_object_mut() {
-        obj.insert("max_pages".into(), serde_json::json!(MAX_LISTING_PAGES));
+        obj.insert("max_pages".into(), serde_json::json!(pages));
     }
     let mut args = crate::plugins::with_login_cookies(state, &info, base).await;
     apply_manual_credentials(&mut args, &subscription.credentials);

@@ -27,10 +27,12 @@ pub mod llm_prompts;
 pub mod login;
 pub mod logs;
 pub mod misc;
+pub mod mojibake;
 pub mod opds;
 pub mod opensearch;
 pub mod plugin_wizard;
 pub mod plugins;
+pub mod preferences;
 pub mod procedure;
 pub mod recommend;
 pub mod recommend_llm;
@@ -83,6 +85,7 @@ pub fn router() -> Router<AppState> {
         .merge(opds::router())
         .merge(plugins::router())
         .merge(plugin_wizard::router())
+        .merge(preferences::router())
         .merge(database::router())
         .merge(download_queue::router())
         .merge(subscriptions::api::router())

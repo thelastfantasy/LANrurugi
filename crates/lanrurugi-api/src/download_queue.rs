@@ -2282,6 +2282,60 @@ struct CompareQueueItemPageParams {
     index: usize,
 }
 
+/// Quality for a comparison image that had to be re-encoded. Higher than the reader's own default:
+/// this view exists to judge fine detail between two candidates, and the encode is on top of an
+/// already-published rendering, so compression artefacts here would be read as a difference in the
+/// works themselves. Still lossy — a side that could not be decoded at all would be worse.
+const COMPARISON_ENCODE_QUALITY: u8 = 92;
+
+/// Whether a source codec has to be re-encoded before this client can display it. JPEG/PNG/GIF/BMP
+/// (and anything unrecognized, which the browser will either decode or fail on identically either
+/// way) are left alone — only the codecs a browser can genuinely lack are considered.
+fn source_needs_conversion(detected: &str, support: crate::archives::ClientImageSupport) -> bool {
+    match detected {
+        "image/jxl" => !support.jxl,
+        "image/webp" | "image/avif" => !support.webp,
+        _ => false,
+    }
+}
+
+/// Re-encodes a comparison page when the client cannot decode its source codec, or `None` when no
+/// conversion is needed (or none is possible).
+///
+/// `u32::MAX` for the short-edge cap means "codec only, no downscale" — the overlay is read at
+/// pixel level, so changing the resolution would change what is being compared.
+async fn convert_unless_decodable(
+    bytes: &[u8],
+    detected: &'static str,
+    support: crate::archives::ClientImageSupport,
+) -> Option<(&'static str, Vec<u8>)> {
+    if !source_needs_conversion(detected, support) {
+        return None;
+    }
+    let format = if support.jxl {
+        lanrurugi_scanner::resize::EncodeFormat::Jxl
+    } else if support.webp {
+        lanrurugi_scanner::resize::EncodeFormat::Webp
+    } else {
+        // The client advertised neither codec: converting could not help it.
+        return None;
+    };
+    let converted = lanrurugi_scanner::resize::convert_to_format(
+        bytes.to_vec(),
+        COMPARISON_ENCODE_QUALITY,
+        u32::MAX,
+        None,
+        None,
+        format,
+    )
+    .await
+    .inspect_err(|e| {
+        tracing::warn!(error = %e, "comparison page re-encode failed; serving the source bytes");
+    })
+    .ok()?;
+    Some((format.content_type(), converted.0))
+}
+
 /// `GET /download_queue/{id}/compare/page?side=a|b&index=N` — the actual page image behind one
 /// `PageComparison` sample from `.../compare`'s own response, for the frontend's
 /// overlay/shift-to-toggle comparison view. `side=a` reads from the still-uncatalogued staged
@@ -2295,6 +2349,7 @@ async fn compare_queue_item_page(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<CompareQueueItemPageParams>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let item = match state.download_queue.get(&id).await {
         Ok(Some(item)) => item,
@@ -2339,7 +2394,27 @@ async fn compare_queue_item_page(
 
     match result {
         Ok(Ok(bytes)) => {
-            let content_type = crate::archives::image_content_type(&bytes);
+            let support = crate::archives::ClientImageSupport::from_request(&headers, None);
+            let detected = crate::archives::image_content_type(&bytes);
+            // A source codec this browser cannot decode would arrive as a broken image — and a
+            // side-by-side *visual* answer is the entire point of this view. Both sides go through
+            // the identical conversion, so the comparison stays apples-to-apples; the verdicts shown
+            // alongside are computed server-side from the originals and are unaffected either way.
+            let (content_type, bytes) =
+                match convert_unless_decodable(&bytes, detected, support).await {
+                    Some(converted) => converted,
+                    // Conversion unavailable (no advertised codec, or the encode failed): the original is
+                    // still the best answer available, and never a 500 on a comparison view.
+                    None => (detected, bytes),
+                };
+            // The URL's own last segment is `page`, so without this every comparison image saves
+            // under that generic name — the side and page index are what identifies it.
+            let stem = format!(
+                "{}_{}_{}",
+                item.title.as_deref().unwrap_or(id.as_str()),
+                params.side,
+                params.index
+            );
             // No `Cache-Control` at all meant the browser re-fetched this same page's bytes over
             // the network every single time anything (StrictMode double-invoke, a re-render that
             // recreates the preload `<img>`, a plain page reload) asked for it again — including,
@@ -2353,10 +2428,20 @@ async fn compare_queue_item_page(
             // serving different bytes at the same URL.
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, content_type),
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static(content_type),
+                    ),
                     (
                         axum::http::header::CACHE_CONTROL,
-                        "private, max-age=86400, immutable",
+                        axum::http::HeaderValue::from_static("private, max-age=86400, immutable"),
+                    ),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        crate::archives::inline_disposition_for(&crate::archives::image_filename(
+                            &stem,
+                            content_type,
+                        )),
                     ),
                 ],
                 bytes,
@@ -2583,11 +2668,11 @@ async fn export_compare_patch(
                 [
                     (
                         axum::http::header::CONTENT_TYPE,
-                        "application/zip".to_string(),
+                        axum::http::HeaderValue::from_static("application/zip"),
                     ),
                     (
                         axum::http::header::CONTENT_DISPOSITION,
-                        format!("attachment; filename=\"{filename}\""),
+                        crate::archives::attachment_header(&filename),
                     ),
                 ],
                 bytes,
@@ -3091,6 +3176,44 @@ mod tests {
     use lanrurugi_storage::download_queue::{DownloadQueueItem, PendingFilenameConflict};
 
     use super::*;
+
+    /// The comparison overlay is a visual answer, so a source codec the requesting browser cannot
+    /// decode has to be re-encoded; nothing else may be touched (a lossy re-encode of a page the
+    /// browser could already read would degrade exactly the detail being compared).
+    #[test]
+    fn only_an_undecodable_source_codec_is_re_encoded_for_the_comparison_view() {
+        let both = crate::archives::ClientImageSupport {
+            jxl: true,
+            webp: true,
+        };
+        let webp_only = crate::archives::ClientImageSupport {
+            jxl: false,
+            webp: true,
+        };
+        let neither = crate::archives::ClientImageSupport {
+            jxl: false,
+            webp: false,
+        };
+
+        assert!(!source_needs_conversion("image/jxl", both));
+        assert!(source_needs_conversion("image/jxl", webp_only));
+        assert!(source_needs_conversion("image/jxl", neither));
+        assert!(source_needs_conversion("image/webp", neither));
+        assert!(!source_needs_conversion("image/webp", webp_only));
+        // Universally readable: never re-encoded, whichever codecs were advertised.
+        for ct in [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/bmp",
+            "application/octet-stream",
+        ] {
+            assert!(
+                !source_needs_conversion(ct, neither),
+                "{ct} needs no conversion"
+            );
+        }
+    }
 
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {

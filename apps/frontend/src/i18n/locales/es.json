@@ -443,7 +443,6 @@
   "settings.useLastModifiedTime": "Utilizar tiempo de última modificación del archivo",
   "batch.usePlugin": "Usar complemento",
   "settings.useWebpForThumbnails": "Usar WebP para las miniaturas",
-  "settings.useHighqualityThumbnailsForPages": "Utilizar miniaturas de alta calidad para las páginas",
   "batch.usePluginLabel": "Utilizar complemento:",
   "Version %1 %2": "Versión %1 - %2",
   "View LANrurugi Logs": "Ver registros de LANrurugi",

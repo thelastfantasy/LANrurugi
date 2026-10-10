@@ -1470,6 +1470,13 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   font-size: 0.9em;
 }
 
+/* The verdict cell's short label (`SubscriptionPreview.tsx`'s `Reason`): one line by construction.
+   Its full sentence lives in the tooltip, so letting this wrap would just re-create the wide column
+   the short label exists to avoid. */
+.preview-verdict-short {
+  white-space: nowrap;
+}
+
 /* The verdict cell can contain a "Reconsider" button. `.stdbtn` ships with a 150px min-width, which
    makes the four-column preview wider than its pane and produces a horizontal scrollbar when that
    button appears. Let the button size to its own label instead. */

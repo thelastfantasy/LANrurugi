@@ -41,7 +41,9 @@ use lanrurugi_ocr::entities::{BoundingBox, DetectedTextRegion, PageNumber, Volum
 use lanrurugi_translate::adapter::TranslationError;
 use lanrurugi_translate::budget::BudgetRepository;
 use lanrurugi_translate::cache::{TranslationCacheKey, TranslationImageCache};
-use lanrurugi_translate::composite::{encode_webp, finish_composite_page, prepare_page_erase};
+use lanrurugi_translate::composite::{
+    encode_webp, finish_composite_page, prepare_page_erase, TranslationImageFormat,
+};
 use lanrurugi_translate::fonts::FontLibrary;
 use lanrurugi_translate::glossary::GlossaryRepository;
 use lanrurugi_translate::pipeline::{translate_batch, PageWork};
@@ -57,6 +59,24 @@ use crate::AppState;
 /// WebP quality for composited pages — matches the reader's own default so a translated page and
 /// an untranslated one look consistent and cost comparable disk space.
 const COMPOSITE_QUALITY: f32 = 90.0;
+
+/// Encodes a composited page in the format the requesting browser asked for.
+///
+/// Both arms are lossy at the same nominal quality: JXL is the smaller of the two on the pages this
+/// was benchmarked against, which is the entire reason the reader negotiates it in the first place.
+fn encode_composite(
+    image: &RgbImage,
+    format: TranslationImageFormat,
+) -> Result<Vec<u8>, PipelineError> {
+    match format {
+        TranslationImageFormat::Webp => encode_webp(image, COMPOSITE_QUALITY)
+            .map_err(|e| PipelineError::Composite(e.to_string())),
+        TranslationImageFormat::Jxl => {
+            lanrurugi_scanner::jxl::encode_rgb(image, COMPOSITE_QUALITY as u8)
+                .map_err(|e| PipelineError::Composite(e.to_string()))
+        }
+    }
+}
 
 /// Upper bound on one LLM translation HTTP call (connect + send + receive), across every cloud
 /// provider — see `translate_with_configured_provider`'s own doc comment on the real silent-hang
@@ -79,6 +99,11 @@ pub struct TranslationContextHandles {
     pub fonts_repo: FontPatternRepository,
     pub budget: BudgetRepository,
     pub cache: TranslationImageCache,
+    /// Output codec every page composited under this context is rendered in — taken from the
+    /// requesting browser's own `jxl > webp` advertisement, and carried here so the look-ahead
+    /// pages a request spawns come out in the same format the reader is polling for (a prefetch in
+    /// the other codec would leave the reader's next request a cache miss).
+    pub format: TranslationImageFormat,
     pub engine: Arc<OcrEngine>,
     pub font_library: Arc<FontLibrary>,
     /// GPU EP integration plan v9 (issue #103): whether the inpainting/bubble-segmentation models
@@ -1321,6 +1346,7 @@ async fn composite_and_cache(
     // call via `GpuWorkerClient`'s own `Handle::block_on` — see that type's trait impls) runs in
     // the same blocking closure for the same reason; `spawn_blocking`'s own thread is exactly the
     // kind of thread `block_on` is safe to call from (never the async reactor itself).
+    let output_format = ctx.format;
     let (bytes, changed) = lanrurugi_core::concurrency::run_blocking(move || {
         use lanrurugi_inpaint::InpainterHandle;
 
@@ -1366,8 +1392,7 @@ async fn composite_and_cache(
         finish_composite_page(&mut image, plan, &font_set, erased)
             .map_err(|e| PipelineError::Composite(e.to_string()))?;
         let changed = image != before;
-        let bytes = encode_webp(&image, COMPOSITE_QUALITY)
-            .map_err(|e| PipelineError::Composite(e.to_string()))?;
+        let bytes = encode_composite(&image, output_format)?;
         Ok::<(Vec<u8>, bool), PipelineError>((bytes, changed))
     })
     .await
@@ -1401,6 +1426,7 @@ async fn composite_and_cache(
         page,
         ctx.target_language.clone(),
         ctx.provider.as_str(),
+        ctx.format,
     );
     ctx.cache
         .put(&key, &bytes)
@@ -1435,17 +1461,18 @@ async fn cache_original_page(
 ) -> Result<(), PipelineError> {
     let (image, _is_cover, _total) = load_page_image(state, archive_id, page).await?;
 
-    let bytes = lanrurugi_core::concurrency::run_blocking(move || {
-        encode_webp(&image, COMPOSITE_QUALITY).map_err(|e| PipelineError::Composite(e.to_string()))
-    })
-    .await
-    .map_err(|e| PipelineError::Composite(e.to_string()))??;
+    let output_format = ctx.format;
+    let bytes =
+        lanrurugi_core::concurrency::run_blocking(move || encode_composite(&image, output_format))
+            .await
+            .map_err(|e| PipelineError::Composite(e.to_string()))??;
 
     let key = TranslationCacheKey::new(
         archive_id.clone(),
         page,
         ctx.target_language.clone(),
         ctx.provider.as_str(),
+        ctx.format,
     );
     ctx.cache
         .put(&key, &bytes)
@@ -1849,6 +1876,7 @@ pub async fn build_handles(
     settings: TranslationSettings,
     provider: CloudProvider,
     target_language: String,
+    format: TranslationImageFormat,
 ) -> Result<TranslationContextHandles, RuntimeError> {
     let runtime = state.translation_runtime.get().await?;
 
@@ -1861,6 +1889,7 @@ pub async fn build_handles(
         fonts_repo: FontPatternRepository::new(state.redis.config.clone()),
         budget: BudgetRepository::new(state.redis.config.clone()),
         cache: TranslationImageCache::new(&state.library.temp_dir),
+        format,
         engine: Arc::clone(&runtime.engine),
         font_library: Arc::clone(&runtime.fonts),
         image_worker: Arc::clone(&runtime.image_worker),

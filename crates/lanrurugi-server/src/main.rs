@@ -393,6 +393,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         scanner: scanner.clone(),
         plugins,
         plugins_dir,
+        // One source fetch serves every concurrent caller asking for the same discovery (see
+        // `subscriptions::runner::fetch_listing`); eight in flight is plenty for a handful of
+        // previews and an hourly check, and bounds what a burst can do to a source.
+        discovery_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(8)),
         download_managers: Default::default(),
         thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
             std::thread::available_parallelism()

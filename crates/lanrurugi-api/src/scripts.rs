@@ -38,6 +38,47 @@ pub fn router() -> Router<AppState> {
             "/database/scripts/subfolders-to-tankoubons",
             post(subfolders_to_tankoubons),
         )
+        .route(
+            "/database/scripts/repair-mojibake",
+            post(repair_mojibake_metadata),
+        )
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RepairMojibakeParams {
+    /// Writes the repairs back. Absent/`false` reports the candidates only — the detector exists
+    /// precisely so a human looks at the before/after pairs before any stored text is rewritten.
+    ///
+    /// A string rather than `bool`: axum's own bool deserialization rejects `?apply=1` outright
+    /// ("provided string was not `true` or `false`"), and `=1` is the flag form every other query
+    /// parameter in this API uses (`optimize=1`, `source=patch`).
+    #[serde(default)]
+    apply: Option<String>,
+}
+
+/// `POST /database/scripts/repair-mojibake` — see `crate::mojibake`'s own docs for why stored
+/// records can still hold doubly-encoded text long after the importer learned to repair it.
+async fn repair_mojibake_metadata(
+    State(state): State<AppState>,
+    Query(params): Query<RepairMojibakeParams>,
+) -> Response {
+    let apply = matches!(params.apply.as_deref(), Some("1" | "true"));
+    match crate::mojibake::run(&state, apply).await {
+        Ok(report) => axum::Json(json!({
+            "operation": "repair-mojibake",
+            "success": 1,
+            "applied": report.applied,
+            "scanned": report.scanned,
+            "repaired": report.repaired_fields,
+            "findings": report.findings,
+        }))
+        .into_response(),
+        Err(e) => error(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "repair-mojibake",
+            e,
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

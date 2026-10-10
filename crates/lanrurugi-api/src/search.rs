@@ -199,6 +199,7 @@ pub fn router() -> Router<AppState> {
         // changing that default would break every existing grouped-search caller.
         .route("/search/archives", get(search_archives_ungrouped))
         .route("/search/ids", get(search_archive_ids))
+        .route("/search/suggest", get(search_suggest))
         .route("/search/random", get(search_random))
         .route("/search/cache", delete(discard_search_cache))
 }
@@ -542,6 +543,138 @@ async fn search_archive_ids(
     }
 }
 
+/// Same filter fields as [`SearchQuery`], spelled out rather than `#[serde(flatten)]`-ed into it:
+/// axum's `Query` goes through `serde_urlencoded`, which has no way to feed a flattened inner
+/// struct — the outer deserializer then hands every field over as a *string*, so `newonly=true`
+/// fails outright ("invalid type: string \"true\", expected a boolean") instead of being parsed.
+/// [`RandomQuery`] below duplicates its own subset of these fields for the same reason.
+#[derive(Debug, Deserialize, Default)]
+pub struct SuggestQuery {
+    filter: Option<String>,
+    limit: Option<usize>,
+    category: Option<String>,
+    sortby: Option<String>,
+    order: Option<String>,
+    newonly: Option<bool>,
+    untaggedonly: Option<bool>,
+    hidecompleted: Option<bool>,
+    groupby_tanks: Option<bool>,
+    tankonly: Option<bool>,
+}
+
+/// Additive, lightweight endpoint backing the Library search box's title autocomplete. Unlike
+/// `/search`, it returns only `arcid` + `title` for the first few matches — no tags, progress, or
+/// size — because the frontend calls it on every (debounced) keystroke, where a full `/search`
+/// page of 100 archive records would be a few hundred KB of JSON that a suggestion list
+/// immediately discards. Same query syntax, same filters, and the same default `title` ordering as
+/// `/search` (which is exactly what a suggestion list wants), plus the same guest scoping:
+/// `restrict_to_archive_ids` is applied here too, so a `guest_visitor` can never be shown an
+/// out-of-scope title through this endpoint that `/search` would refuse to return.
+async fn search_suggest(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(q): Query<SuggestQuery>,
+) -> Response {
+    let Some(fragment) = q
+        .filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+    else {
+        return axum::Json(json!({ "data": [] })).into_response();
+    };
+    // Bounded so this can't become an unbounded fan-out of per-id Redis lookups.
+    let limit = q.limit.unwrap_or(8).clamp(1, 20);
+
+    let search_q = SearchQuery {
+        filter: Some(fragment),
+        category: q.category,
+        sortby: q.sortby,
+        order: q.order,
+        start: None,
+        newonly: q.newonly,
+        untaggedonly: q.untaggedonly,
+        hidecompleted: q.hidecompleted,
+        groupby_tanks: q.groupby_tanks,
+        tankonly: q.tankonly,
+    };
+    let mut params = match build_params(&state, &search_q).await {
+        Ok(p) => p,
+        Err(e) => {
+            return error(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "search_suggest",
+                e.to_string(),
+            )
+        }
+    };
+    if matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(crate::auth_context::AuthMethod::GuestVisitor)
+    ) {
+        params.restrict_to_archive_ids = match guest_visible_archive_ids(&state).await {
+            Ok(ids) => Some(ids),
+            Err(e) => {
+                return error(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "search_suggest",
+                    e.to_string(),
+                )
+            }
+        };
+    }
+
+    let result = match search(
+        &state.redis.archive,
+        &state.redis.search,
+        &state.equivalence,
+        &params,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return error(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "search_suggest",
+                e.to_string(),
+            )
+        }
+    };
+
+    let page: Vec<String> = result.ids.iter().take(limit).cloned().collect();
+    let titles = join_all(page.iter().map(|id| suggest_title(&state, id))).await;
+    axum::Json(json!({
+        "data": titles.into_iter().flatten().collect::<Vec<_>>(),
+        "recordsFiltered": result.filtered_count,
+    }))
+    .into_response()
+}
+
+/// One suggestion row's title — a Tankoubon aggregate's own name, or a real archive's `title`.
+/// Deliberately *not* [`resolve_search_entry`]: that builds the full card (tags, badges, split
+/// suggestions, and for a tank a per-member fan-out), all of which this endpoint exists to avoid
+/// paying for on every keystroke.
+async fn suggest_title(state: &AppState, id: &str) -> Option<serde_json::Value> {
+    if id.starts_with("TANK_") {
+        let grouping = state
+            .repos
+            .groupings
+            .get(&lanrurugi_core::ids::TankId(id.to_string()))
+            .await
+            .ok()??;
+        return Some(json!({ "arcid": grouping.tankid, "title": grouping.name }));
+    }
+    let archive = state
+        .repos
+        .archives
+        .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
+        .await
+        .ok()??;
+    Some(json!({ "arcid": id, "title": archive.title }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RandomQuery {
     category: Option<String>,
@@ -647,4 +780,32 @@ async fn search_random(
 /// contract (a client calling this always gets a fresh/uncached search either way).
 async fn discard_search_cache() -> Response {
     axum::Json(json!({ "operation": "clear_cache", "success": 1 })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the one shape `SuggestQuery` cannot take: `#[serde(flatten)]`-ing `SearchQuery` into it.
+    /// axum extracts query strings through `serde_urlencoded`, which hands a flattened inner struct
+    /// every value as a *string* — so `newonly=true` was rejected outright ("invalid type: string
+    /// \"true\", expected a boolean", a 400) rather than parsed. The frontend sends exactly these
+    /// booleans whenever a filter selector is active, so the flattened version broke autocomplete
+    /// in the "New only"/"Untagged" views. Verified live before this test existed.
+    #[test]
+    fn suggest_query_parses_the_boolean_filters_it_shares_with_search() {
+        let uri: axum::http::Uri = "/api/search/suggest?filter=pink+album&limit=3&category=SET_1&newonly=true&untaggedonly=false&groupby_tanks=false&tankonly=true"
+            .parse()
+            .expect("valid uri");
+        let axum::extract::Query(q): axum::extract::Query<SuggestQuery> =
+            axum::extract::Query::try_from_uri(&uri).expect("query string must deserialize");
+
+        assert_eq!(q.filter.as_deref(), Some("pink album"));
+        assert_eq!(q.limit, Some(3));
+        assert_eq!(q.category.as_deref(), Some("SET_1"));
+        assert_eq!(q.newonly, Some(true));
+        assert_eq!(q.untaggedonly, Some(false));
+        assert_eq!(q.groupby_tanks, Some(false));
+        assert_eq!(q.tankonly, Some(true));
+    }
 }

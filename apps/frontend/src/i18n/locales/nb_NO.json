@@ -453,7 +453,6 @@
   "settings.useLastModifiedTime": "Bruk \"Sist Endret\"-tidspunkt",
   "batch.usePlugin": "Bruk programvaretillegg",
   "settings.useWebpForThumbnails": "Bruk WebP for miniatyrbilder",
-  "settings.useHighqualityThumbnailsForPages": "Bruk høykvalitets miniatyrbilder for sider",
   "batch.usePluginLabel": "Bruk programvaretillegg :",
   "Version %1 %2": "Versjon %1 - %2",
   "View LANrurugi Logs": "Se LANrurugi-loggene",

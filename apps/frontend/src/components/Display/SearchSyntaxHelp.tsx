@@ -36,6 +36,9 @@ export function SearchSyntaxHelp() {
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxExactMatch")} <SyntaxExample>&quot;tag&quot;</SyntaxExample> / <SyntaxExample>tag$</SyntaxExample>
         </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxTitlePhrase")} <SyntaxExample>&quot;two words&quot;</SyntaxExample>
+        </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxSpaceNeedsQuotes")}</li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxQuoteExactCombo")} <SyntaxExample>&quot;tag with spaces&quot;$</SyntaxExample>

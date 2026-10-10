@@ -27,6 +27,35 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgb as ImageRgb, RgbImage};
 use lanrurugi_ocr::bubble_segment::DetectedBubble;
 use lanrurugi_ocr::entities::{BoundingBox, DetectedTextRegion, Rgb, WritingDirection};
+use serde::{Deserialize, Serialize};
+
+/// Output codec for a server-composited translation page.
+///
+/// Mirrors the reader's own `jxl > webp > source` chain minus the "source" arm: a composited page
+/// is always a re-encode of the original, so WebP stays the fallback for a browser that advertised
+/// neither codec — the same bytes every render used before this choice existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranslationImageFormat {
+    Webp,
+    Jxl,
+}
+
+impl TranslationImageFormat {
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Webp => "webp",
+            Self::Jxl => "jxl",
+        }
+    }
+
+    pub const fn content_type(self) -> &'static str {
+        match self {
+            Self::Webp => "image/webp",
+            Self::Jxl => "image/jxl",
+        }
+    }
+}
 
 /// Fallback text colour when the heuristic couldn't estimate one (FR-008a) — near-black, matching
 /// the overwhelmingly common case for manga dialogue.

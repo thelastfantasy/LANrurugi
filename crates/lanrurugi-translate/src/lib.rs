@@ -38,6 +38,7 @@ pub use budget::{BudgetRepository, UsageSnapshot};
 pub use cache::{TranslationCacheKey, TranslationImageCache};
 pub use composite::{
     encode_webp, finish_composite_page, prepare_page_erase, FontSet, PageErasePlan,
+    TranslationImageFormat,
 };
 pub use credentials::{CredentialRef, CredentialStore};
 pub use deepseek::DeepSeekAdapter;

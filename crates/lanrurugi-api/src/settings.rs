@@ -432,13 +432,6 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("localprogress", false),
     ("authprogress", false),
     ("enableresize", true),
-    // Reader page format preference. When a page's source bytes are JPEG XL and the browser
-    // advertises JXL decode support (the frontend writes that capability to `lrr_img_support`),
-    // serve the original `.jxl` instead of decoding and re-encoding it. JPEG/PNG/WebP sources are
-    // unaffected — this workspace has no permissive JXL encoder, so the fallback remains
-    // jxl-source > WebP > original bytes.
-    ("preferjxl", true),
-    ("hqthumbpages", false),
     ("enablewebp", true),
     // Use JPEG XL as the generated thumbnail format. JXL > WebP > JPEG for clients that advertise
     // JXL, with on-demand fallback generation for clients that do not; animated sources still use
@@ -806,8 +799,8 @@ async fn put_settings(
     // Captured before `fields` is consumed by the write loop below — used afterwards to decide
     // whether this request actually flips the thumbnail format (`enablewebp` or
     // `jxlthumbpages`), which needs a full regen so the library stays in one uniform format rather
-    // than a mixed bag. A quality-only change (`webpquality`/`hqthumbpages`) intentionally does
-    // *not* trigger this — it only affects thumbnails generated from here on.
+    // than a mixed bag. A quality-only change (`webpquality`) intentionally does *not* trigger
+    // this — it only affects thumbnails generated from here on.
     let new_enablewebp = fields.get("enablewebp").and_then(Value::as_bool);
     let previous_enablewebp = conn
         .hget::<_, _, Option<String>>(CONFIG_KEY, "enablewebp")

@@ -35,6 +35,14 @@ export function pluginOptions() {
         max_concurrent: 2,
         description: "Limit simultaneous downloads from Pixiv's CDN",
       },
+      // The images themselves are served from `i.pximg.net`, which `*.pixiv.net` does *not* match
+      // (`pximg.net` is a separate registrable domain) — without this rule every page of every
+      // artwork was fetched outside any limit at all, whatever `*.pixiv.net` said.
+      {
+        pattern: "*.pximg.net",
+        max_concurrent: 4,
+        description: "Limit simultaneous page downloads from the Pixiv image CDN",
+      },
     ],
     bundle_as_archive: {
       default: true,

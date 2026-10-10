@@ -1,9 +1,8 @@
 //! Reader page resizing — verified against legacy `Model/Archive.pm::serve_page` +
 //! `Model/Reader.pm::resize_image` + `Utils/ImageMagickResizer.pm::resize_page`: when a page's
 //! *raw byte size* (not its pixel dimensions) exceeds `sizethreshold` KB, it's downscaled and
-//! re-encoded as **WebP or JPEG XL** depending on the client's capability and the `preferjxl`
-//! setting. WebP remains the universal fallback; JXL uses the pure-Rust lossless encoder in
-//! [`crate::jxl`]. A page
+//! re-encoded as **WebP or JPEG XL** depending on the client's capability. WebP remains the
+//! universal fallback; JXL uses the pure-Rust lossy encoder in [`crate::jxl`]. A page
 //! already under the threshold is served unmodified — this module returns `None` for that case
 //! rather than a no-op re-encode, so the caller can skip writing a cache entry identical to the
 //! source file.
@@ -85,7 +84,10 @@ pub async fn resize_if_over_threshold(
 ) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
     run_blocking(move || {
         let size_kb = (content.len() / 1024) as i64;
-        if size_kb <= threshold_kb {
+        // A zero threshold means "always re-encode" (preview output, and any page whose source
+        // codec differs from the format the client prefers); only a positive threshold gives the
+        // usual raw-byte-size pass-through.
+        if threshold_kb > 0 && size_kb <= threshold_kb {
             return Ok(None);
         }
         let img = crate::image_decode::load_from_memory(&content)?;
@@ -226,6 +228,23 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn zero_threshold_always_reencodes() {
+        let content = make_test_jpeg(50, 50);
+        let result = resize_if_over_threshold(
+            content,
+            50,
+            0,
+            MAX_SHORT_EDGE_DESKTOP,
+            None,
+            None,
+            EncodeFormat::Webp,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_some(), "threshold 0 must force a re-encode");
     }
 
     #[tokio::test]

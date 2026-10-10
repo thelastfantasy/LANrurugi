@@ -77,6 +77,7 @@ p, guest_visitor, /api/settings, GET, allow
 p, guest_visitor, /api/database/stats, GET, allow
 p, guest_visitor, /api/search, GET, allow
 p, guest_visitor, /api/search/ids, GET, allow
+p, guest_visitor, /api/search/suggest, GET, allow
 p, guest_visitor, /api/search/random, GET, allow
 p, guest_visitor, /api/archives/:id/metadata, GET, allow
 p, guest_visitor, /api/archives/:id/files, GET, allow

@@ -12,6 +12,7 @@ import {
 } from "@/api/hooks"
 import type { DownloadQueueItem, DownloadQueueState } from "@/api/types"
 import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { NumberInput } from "@/components/common-ui/Form/NumberInput"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_XS } from "@/theme"
 import { toast } from "@/toast"
@@ -221,13 +222,12 @@ export function SubscriptionsModal({ onClose }: { onClose: () => void }) {
         <label style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <i className="fa fa-broom" aria-hidden="true"></i>
           {t("subscriptions.queueRetentionLabel")}
-          <input
+          <NumberInput
             className="stdinput"
-            type="number"
             min={0}
             value={retentionDays}
             disabled={updateSettings.isPending || settings.isPending}
-            onChange={(e) => setRetentionDraft(Math.max(0, Number(e.target.value) || 0))}
+            onValueChange={(v) => setRetentionDraft(Math.max(0, v))}
             onBlur={() => {
               if (!settings.data || retentionDays === settings.data.download_queue_retention_days) return
               void updateSettings
@@ -237,7 +237,7 @@ export function SubscriptionsModal({ onClose }: { onClose: () => void }) {
                   toast({ text: t("subscriptions.queueRetentionSaved") ?? undefined, icon: "success" })
                 })
             }}
-            style={{ width: 64 }}
+            style={{ width: 64, height: 21 }}
           />
           {t("subscriptions.queueRetentionUnit")}
         </label>

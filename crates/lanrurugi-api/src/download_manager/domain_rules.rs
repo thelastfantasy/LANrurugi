@@ -81,6 +81,23 @@ pub fn resolve(rules: &[DomainRule], hostname: &str) -> ResolvedLimits {
     }
 }
 
+/// The plugin's own **job concurrency**: the tightest `max_concurrent` any of its rules declares, or
+/// `None` when none of them declares one (unlimited).
+///
+/// A download job occupies this for its whole network phase — negotiation *and* transfer — because
+/// which of the plugin's declared hosts a job will actually use is only known *after* its
+/// `execDownload` has run. That ordering is exactly why a rule written for the host the bytes come
+/// from (the one a user configures, e.g. `*.hath.network`) has to bound the job as a whole rather
+/// than only the transfer half of it: without it, ten configured transfers still meant an unbounded
+/// number of concurrent negotiations against the source site.
+///
+/// The tightest declared value, not the loosest: with `*.hath.network: 10` alone this reads as "at
+/// most ten downloads at a time", and a user who additionally caps a negotiation host at 1 gets that
+/// tightening applied to the job too — the same rule list, read the way it was written.
+pub fn job_capacity(rules: &[DomainRule]) -> Option<u32> {
+    rules.iter().filter_map(|r| r.max_concurrent).min()
+}
+
 /// Deterministic string key identifying which `Arc<Semaphore>`/rate-limiter instance a resolved
 /// set of rules should share (`download_manager::mod`'s concurrency/rate-limit maps are keyed by
 /// this, not the raw hostname, so e.g. two different subdomains matching the same wildcard rule
@@ -122,6 +139,30 @@ mod tests {
             max_bytes_per_sec,
             description: None,
         }
+    }
+
+    #[test]
+    fn job_capacity_is_the_tightest_concurrency_the_plugin_declares() {
+        // The user's own single rule: "ten downloads at a time", nothing else declared.
+        assert_eq!(
+            job_capacity(&[rule(Some("*.hath.network"), Some(10), None)]),
+            Some(10)
+        );
+        // A tighter rule anywhere in the list tightens the job: a negotiation host capped at one
+        // serializes the jobs, which is what that rule asks for.
+        assert_eq!(
+            job_capacity(&[
+                rule(Some("*.hath.network"), Some(10), None),
+                rule(Some("e-hentai.org"), Some(1), None),
+            ]),
+            Some(1)
+        );
+        // Rules that only set a byte rate say nothing about concurrency.
+        assert_eq!(
+            job_capacity(&[rule(Some("example.com"), None, Some(1024))]),
+            None
+        );
+        assert_eq!(job_capacity(&[]), None);
     }
 
     #[test]

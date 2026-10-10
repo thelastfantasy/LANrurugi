@@ -3,8 +3,8 @@
 //!
 //! Legacy resizes to a fixed height of 500px (verified: `Utils/Archive.pm::generate_thumbnail`).
 //! Format (JPEG / WebP / JPEG XL) and quality/effort are library-wide settings (`enablewebp`/
-//! `jxlthumbpages`/`webpquality`/`hqthumbpages` in `lanrurugi-api::settings`, read via
-//! [`read_settings`]) rather than baked in here — this module just encodes whatever [`ThumbFormat`]
+//! `jxlthumbpages`/`webpquality` in `lanrurugi-api::settings`, read via [`read_settings`]) rather
+//! than baked in here — this module just encodes whatever [`ThumbFormat`]
 //! and quality it's given. Cover
 //! thumbnails land at `<thumb_dir>/<id[0:2]>/<id>.<ext>`; this module writes that file —
 //! sharding/placement itself is the caller's concern (`lanrurugi-api::archives::get_archive_thumbnail`
@@ -20,12 +20,23 @@ use thiserror::Error;
 
 use crate::archive_format::{self, ArchiveFormatError};
 
-const THUMBNAIL_HEIGHT: u32 = 500;
+/// The target edge every thumbnail is resized *down* to (legacy: `Utils/Archive.pm::generate_thumbnail`
+/// resizes to a fixed *height*), the other edge following the source's aspect ratio. `pub` so
+/// callers naming a saved thumbnail after the target edge (`_t500.jpg`) can't drift from the number
+/// generation actually uses.
+///
+/// A source shorter than this keeps its own height (never enlarged), and a source whose bytes the
+/// target edge can't beat gets a smaller one — so the `_t500` name is the library's thumbnail
+/// standard, not a promise about every stored file's exact dimensions.
+pub const THUMBNAIL_HEIGHT: u32 = 500;
 
-/// Legacy's own HQ-switch quality numbers (`Utils/Archive.pm::generate_thumbnail`: `quality = 50`
-/// normally / `80` for `use_hq`), reused verbatim for the JPEG format's `hqthumbpages` setting.
-pub const JPEG_QUALITY_NORMAL: u8 = 50;
-pub const JPEG_QUALITY_HQ: u8 = 80;
+/// Quality steps tried after the configured one, in order, when an attempt encodes to at least as
+/// many bytes as the source page — see [`generate`]'s own docs on the size invariant.
+const QUALITY_FALLBACKS: [u8; 3] = [70, 50, 30];
+
+/// The lowest target edge the size invariant's last-resort shrink will go to. Only reached by a
+/// source whose own bytes are already at the encoder's floor.
+const MIN_THUMBNAIL_HEIGHT: u32 = 96;
 
 /// Which codec a thumbnail is written/served as. Format is a per-library-wide setting
 /// (`enablewebp` in `lanrurugi-api::settings`), not per-file, so every thumbnail on disk is the
@@ -68,16 +79,22 @@ pub struct ThumbSettings {
     pub quality: u8,
 }
 
-/// Reads the live `enablewebp`/`jxlthumbpages`/`webpquality`/`hqthumbpages` values from the same
-/// `LRR_CONFIG` hash `lanrurugi-api::settings` reads/writes, so a setting change takes effect on
-/// the very next thumbnail generated without a server restart. Missing/unparsable values fall back
-/// to the same defaults `settings::get_settings` reports (`enablewebp = true`,
-/// `jxlthumbpages = true`, `webpquality = 85`, `hqthumbpages = false`).
+/// Reads the live `enablewebp`/`jxlthumbpages`/`webpquality` values from the same `LRR_CONFIG`
+/// hash `lanrurugi-api::settings` reads/writes, so a setting change takes effect on the very next
+/// thumbnail generated without a server restart. Missing/unparsable values fall back to the same
+/// defaults `settings::get_settings` reports (`enablewebp = true`, `jxlthumbpages = true`,
+/// `webpquality = 85`).
+///
+/// The one quality setting covers all three output formats: JPEG and WebP as encoder quality, JXL
+/// as encoding effort (its output is lossless). Legacy's separate `hqthumbpages` toggle — JPEG page
+/// thumbnails at quality 50 instead of the cover's 80, meaningless for the other two codecs — was
+/// removed rather than kept as a control that does nothing whenever the format isn't JPEG.
+///
 /// `lanrurugi-api::settings::DEFAULT_WEBP_QUALITY`'s own value — duplicated here (rather than
 /// imported) since `lanrurugi-scanner` can't depend on `lanrurugi-api` (the dependency runs the
 /// other way), but the two must still be kept in sync by hand if the Settings page's own default
-/// ever changes.
-const DEFAULT_WEBP_QUALITY: u8 = 85;
+/// ever changes. `pub` so the bench and this module's own tests can generate at the real default.
+pub const DEFAULT_WEBP_QUALITY: u8 = 85;
 
 pub async fn read_settings<C>(conn: &mut C) -> ThumbSettings
 where
@@ -88,42 +105,34 @@ where
 
     let fields: std::collections::HashMap<String, String> =
         conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+    settings_from_fields(&fields)
+}
+
+/// The pure half of [`read_settings`] — which format to write and at what quality — split out so
+/// the mapping is unit-testable without a Redis connection.
+fn settings_from_fields(fields: &std::collections::HashMap<String, String>) -> ThumbSettings {
     let enablewebp = fields.get("enablewebp").map(|v| v != "0").unwrap_or(true);
     let jxlthumbpages = fields
         .get("jxlthumbpages")
         .map(|v| v != "0")
         .unwrap_or(true);
-    let hqthumbpages = fields
-        .get("hqthumbpages")
-        .map(|v| v != "0")
-        .unwrap_or(false);
-    let webpquality: u8 = fields
+    let quality: u8 = fields
         .get("webpquality")
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_WEBP_QUALITY);
 
-    if jxlthumbpages {
-        ThumbSettings {
-            format: ThumbFormat::Jxl,
-            // The pure-Rust JXL encoder maps this value to encoding effort; the reader's
-            // `readerquality`-style visual-quality semantics do not apply to its lossless output.
-            quality: webpquality,
-        }
+    // Every format takes that one quality value: JPEG/WebP as encoder quality, JXL as encoding
+    // effort (its output is lossless, so the reader's `readerquality`-style semantics don't apply).
+    // A stale `hqthumbpages` key left behind by an older config or a legacy import is deliberately
+    // ignored — see this module's own docs.
+    let format = if jxlthumbpages {
+        ThumbFormat::Jxl
     } else if enablewebp {
-        ThumbSettings {
-            format: ThumbFormat::Webp,
-            quality: webpquality,
-        }
+        ThumbFormat::Webp
     } else {
-        ThumbSettings {
-            format: ThumbFormat::Jpeg,
-            quality: if hqthumbpages {
-                JPEG_QUALITY_HQ
-            } else {
-                JPEG_QUALITY_NORMAL
-            },
-        }
-    }
+        ThumbFormat::Jpeg
+    };
+    ThumbSettings { format, quality }
 }
 
 #[derive(Debug, Error)]
@@ -204,21 +213,76 @@ fn generate_sync(
     });
 
     let img = crate::image_decode::load_from_memory(&bytes)?;
-    let ratio = THUMBNAIL_HEIGHT as f64 / img.height() as f64;
-    let target_width = (img.width() as f64 * ratio).round() as u32;
-    let resized = img.resize(
-        target_width,
-        THUMBNAIL_HEIGHT,
-        image::imageops::FilterType::Lanczos3,
-    );
+    // A thumbnail exists to be *smaller* than the page it stands in for — in pixels and in bytes.
+    // Both halves of that are enforced here, because neither is guaranteed by the encoder:
+    //
+    //   * `min(THUMBNAIL_HEIGHT, height)` never enlarges. Legacy's ImageMagick geometry
+    //     (`500x1000`, `Utils/ImageMagickResizer.pm`) enlarges a source shorter than the target
+    //     edge, which adds no detail and can easily outweigh the source once re-encoded.
+    //   * every candidate must encode to fewer bytes than the page itself, or the reader would be
+    //     served *more* data than the original for the same picture. Quality drops first (cheap,
+    //     and the usual reason an attempt overshoots); if even the floor quality doesn't fit, the
+    //     target edge halves and the ladder runs again.
+    let source_len = bytes.len();
+    let mut target_height = THUMBNAIL_HEIGHT.min(img.height()).max(1);
+    let mut smallest: Option<Vec<u8>> = None;
+
+    loop {
+        let ratio = target_height as f64 / img.height() as f64;
+        let target_width = ((img.width() as f64) * ratio).round().max(1.0) as u32;
+        let rgb = if target_width == img.width() && target_height == img.height() {
+            // Already at or under the target edge: re-encoding it at a different size would only
+            // throw detail away, so this attempt uses the decoded pixels as-is.
+            img.to_rgb8()
+        } else {
+            img.resize(
+                target_width,
+                target_height,
+                image::imageops::FilterType::Lanczos3,
+            )
+            .to_rgb8()
+        };
+
+        for attempt_quality in std::iter::once(quality).chain(QUALITY_FALLBACKS.iter().copied()) {
+            let encoded = encode_thumbnail(&rgb, format, attempt_quality)?;
+            let fits = encoded.len() < source_len;
+            let is_smallest = smallest.as_ref().is_none_or(|s| encoded.len() < s.len());
+            if is_smallest {
+                // Keep the smallest thing produced so far: if every attempt overshoots (a source of
+                // a few hundred bytes, already at the encoder's own floor), storing the smallest
+                // attempt is still the best available answer.
+                smallest = Some(encoded);
+            }
+            if fits {
+                break;
+            }
+        }
+        if smallest.as_ref().is_some_and(|s| s.len() < source_len) {
+            break;
+        }
+        if target_height <= MIN_THUMBNAIL_HEIGHT {
+            break;
+        }
+        target_height = (target_height / 2).max(MIN_THUMBNAIL_HEIGHT);
+    }
 
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let rgb = resized.to_rgb8();
+    std::fs::write(output_path, smallest.ok_or(ThumbnailError::NoPages)?)?;
+    Ok(cover_hash)
+}
+
+/// Encodes `rgb` as `format` at `quality`, in memory — so a candidate that turns out larger than
+/// the source page can be discarded instead of already sitting on disk.
+fn encode_thumbnail(
+    rgb: &image::RgbImage,
+    format: ThumbFormat,
+    quality: u8,
+) -> Result<Vec<u8>, ThumbnailError> {
     match format {
         ThumbFormat::Jpeg => {
-            let mut out = std::fs::File::create(output_path)?;
+            let mut out = Vec::new();
             let encoder = JpegEncoder::new_with_quality(&mut out, quality);
             encoder.write_image(
                 rgb.as_raw(),
@@ -226,20 +290,17 @@ fn generate_sync(
                 rgb.height(),
                 image::ExtendedColorType::Rgb8,
             )?;
+            Ok(out)
         }
         ThumbFormat::Webp => {
             let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
             let encoded = encoder
                 .encode_simple(false, quality as f32)
                 .map_err(ThumbnailError::Webp)?;
-            std::fs::write(output_path, &*encoded)?;
+            Ok(encoded.to_vec())
         }
-        ThumbFormat::Jxl => {
-            let encoded = crate::jxl::encode_rgb(&rgb, quality).map_err(ThumbnailError::Jxl)?;
-            std::fs::write(output_path, encoded)?;
-        }
+        ThumbFormat::Jxl => crate::jxl::encode_rgb(rgb, quality).map_err(ThumbnailError::Jxl),
     }
-    Ok(cover_hash)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -258,6 +319,54 @@ mod tests {
 
     fn make_test_zip_with_image() -> tempfile::NamedTempFile {
         make_test_zip_with_image_format("page1.jpg", "page2.jpg", image::ImageFormat::Jpeg)
+    }
+
+    /// A source comfortably *larger* than [`THUMBNAIL_HEIGHT`], so the resize-on-the-way-down path
+    /// is what the assertions exercise (the default 200×300 fixture is smaller than the target edge
+    /// and must never be enlarged — see that test).
+    fn make_large_test_zip_with_image() -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
+        let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        for (name, color) in [("page1.jpg", [255, 0, 0]), ("page2.jpg", [0, 255, 0])] {
+            writer.start_file(name, options).unwrap();
+            let img = image::RgbImage::from_pixel(900, 1200, image::Rgb(color));
+            let mut bytes = Vec::new();
+            img.write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        file
+    }
+
+    /// An archive whose page is a *tiny* file (a flat colour at low JPEG quality comes out to a few
+    /// hundred bytes) plus that page's own byte length — the case the size invariant exists for:
+    /// re-encoding it as any thumbnail format at the configured quality easily produces *more*
+    /// bytes than the page itself. Returns `(archive, page_bytes)`.
+    fn make_tiny_source_zip() -> (tempfile::NamedTempFile, usize) {
+        let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
+        let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let img = image::RgbImage::from_pixel(200, 300, image::Rgb([12, 34, 56]));
+        let mut page = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut page, 30);
+        encoder
+            .write_image(
+                img.as_raw(),
+                img.width(),
+                img.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        writer.start_file("page1.jpg", options).unwrap();
+        writer.write_all(&page).unwrap();
+        writer.finish().unwrap();
+        let len = page.len();
+        (file, len)
     }
 
     /// Builds a single-entry-pair archive whose pages are encoded as `format` (source format
@@ -284,9 +393,64 @@ mod tests {
         file
     }
 
+    /// The quality/format mapping (and the removal of the legacy `hqthumbpages` toggle): the one
+    /// quality setting covers all three formats, and a stale `hqthumbpages` key changes nothing.
+    #[test]
+    fn every_thumbnail_format_takes_the_one_quality_setting() {
+        let fields = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<std::collections::HashMap<String, String>>()
+        };
+
+        // Empty config: this repo's own defaults (JXL, default quality).
+        let defaults = settings_from_fields(&fields(&[]));
+        assert_eq!(defaults.format, ThumbFormat::Jxl);
+        assert_eq!(defaults.quality, DEFAULT_WEBP_QUALITY);
+
+        // WebP, then plain JPEG (both modern formats off) — same quality value in each case.
+        for (pairs, expected) in [
+            (
+                vec![("jxlthumbpages", "0"), ("webpquality", "70")],
+                ThumbFormat::Webp,
+            ),
+            (
+                vec![
+                    ("jxlthumbpages", "0"),
+                    ("enablewebp", "0"),
+                    ("webpquality", "70"),
+                ],
+                ThumbFormat::Jpeg,
+            ),
+        ] {
+            let settings = settings_from_fields(&fields(&pairs));
+            assert_eq!(settings.format, expected);
+            assert_eq!(
+                settings.quality, 70,
+                "{expected:?} takes the same quality setting"
+            );
+        }
+
+        // The removed legacy toggle is inert, whichever way it was left set.
+        for stale in ["0", "1"] {
+            let settings = settings_from_fields(&fields(&[
+                ("jxlthumbpages", "0"),
+                ("enablewebp", "0"),
+                ("webpquality", "70"),
+                ("hqthumbpages", stale),
+            ]));
+            assert_eq!(settings.format, ThumbFormat::Jpeg);
+            assert_eq!(
+                settings.quality, 70,
+                "stale hqthumbpages={stale} must be ignored"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn generates_a_resized_jpeg_thumbnail() {
-        let archive = make_test_zip_with_image();
+        let archive = make_large_test_zip_with_image();
         let out_dir = tempfile::tempdir().unwrap();
         let output = out_dir.path().join("thumb.jpg");
 
@@ -295,7 +459,7 @@ mod tests {
             1,
             output.clone(),
             ThumbFormat::Jpeg,
-            JPEG_QUALITY_NORMAL,
+            DEFAULT_WEBP_QUALITY,
         )
         .await
         .unwrap();
@@ -306,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn generates_a_resized_webp_thumbnail() {
-        let archive = make_test_zip_with_image();
+        let archive = make_large_test_zip_with_image();
         let out_dir = tempfile::tempdir().unwrap();
         let output = out_dir.path().join("thumb.webp");
 
@@ -326,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn generates_a_resized_jxl_thumbnail() {
-        let archive = make_test_zip_with_image();
+        let archive = make_large_test_zip_with_image();
         let out_dir = tempfile::tempdir().unwrap();
         let output = out_dir.path().join("thumb.jxl");
 
@@ -374,7 +538,77 @@ mod tests {
 
             let generated = image::open(&output)
                 .unwrap_or_else(|e| panic!("output for {ext} source isn't a valid image: {e}"));
-            assert_eq!(generated.height(), THUMBNAIL_HEIGHT);
+            // The fixture is 200x300 — shorter than the target edge, so it keeps its own height
+            // rather than being enlarged (see the dedicated test below).
+            assert!(
+                generated.height() <= 300,
+                "{ext} source must not be enlarged"
+            );
+        }
+    }
+
+    /// A source shorter than the target edge keeps its own dimensions: enlarging it adds bytes
+    /// without adding detail, and is exactly how a "smaller than the original" thumbnail stops
+    /// being smaller than the original.
+    #[tokio::test]
+    async fn a_source_smaller_than_the_target_edge_is_never_enlarged() {
+        let archive = make_test_zip_with_image();
+        let out_dir = tempfile::tempdir().unwrap();
+        for (format, name) in [
+            (ThumbFormat::Jpeg, "thumb.jpg"),
+            (ThumbFormat::Webp, "thumb.webp"),
+            (ThumbFormat::Jxl, "thumb.jxl"),
+        ] {
+            let output = out_dir.path().join(name);
+            generate(
+                archive.path().to_path_buf(),
+                1,
+                output.clone(),
+                format,
+                DEFAULT_WEBP_QUALITY,
+            )
+            .await
+            .unwrap();
+            let bytes = std::fs::read(&output).unwrap();
+            let generated = crate::image_decode::load_from_memory(&bytes).unwrap();
+            assert!(
+                generated.height() <= 300,
+                "{format:?} thumbnail of a 300px-tall source came out {}px tall",
+                generated.height()
+            );
+        }
+    }
+
+    /// The invariant the whole pipeline exists for: the stored thumbnail must be *fewer bytes* than
+    /// the page it replaces, whatever format and quality the library is configured for — otherwise
+    /// the list/overview view would be served more data than the original page.
+    #[tokio::test]
+    async fn a_thumbnail_is_never_larger_than_the_page_it_replaces() {
+        let (archive, page_bytes) = make_tiny_source_zip();
+        let out_dir = tempfile::tempdir().unwrap();
+        for (format, name) in [
+            (ThumbFormat::Jpeg, "thumb.jpg"),
+            (ThumbFormat::Webp, "thumb.webp"),
+            (ThumbFormat::Jxl, "thumb.jxl"),
+        ] {
+            let output = out_dir.path().join(name);
+            generate(
+                archive.path().to_path_buf(),
+                1,
+                output.clone(),
+                format,
+                // The configured quality is deliberately the highest the UI allows, so the size
+                // guard — not a lucky default — is what has to hold here.
+                100,
+            )
+            .await
+            .unwrap();
+            let stored = std::fs::read(&output).unwrap();
+            assert!(
+                stored.len() < page_bytes,
+                "{format:?} thumbnail is {} bytes for a {page_bytes}-byte page",
+                stored.len()
+            );
         }
     }
 
@@ -389,7 +623,7 @@ mod tests {
             1,
             output,
             ThumbFormat::Jpeg,
-            JPEG_QUALITY_NORMAL,
+            DEFAULT_WEBP_QUALITY,
         )
         .await
         .unwrap();
@@ -409,7 +643,7 @@ mod tests {
             2,
             output,
             ThumbFormat::Jpeg,
-            JPEG_QUALITY_NORMAL,
+            DEFAULT_WEBP_QUALITY,
         )
         .await
         .unwrap();
@@ -442,7 +676,7 @@ mod tests {
             1,
             output,
             ThumbFormat::Jpeg,
-            JPEG_QUALITY_NORMAL,
+            DEFAULT_WEBP_QUALITY,
         )
         .await;
 

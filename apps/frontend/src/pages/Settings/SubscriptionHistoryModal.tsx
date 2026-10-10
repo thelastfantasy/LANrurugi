@@ -16,6 +16,7 @@ import { ICON_BUTTON_STYLE } from "@/pages/Upload/shared"
 import { toast } from "@/toast"
 
 import { CandidateTitleLink } from "./CandidateTitleLink"
+import { tooSoonText } from "./subscriptionVerdicts"
 
 /** Which band a candidate falls into — the same three the preview uses, so a verdict reads the same
  *  wherever it appears. */
@@ -115,7 +116,7 @@ function Verdict({ record }: { record: CandidateRecord }) {
     case "awaiting_approval":
       return <>{t("subscriptions.verdictAwaitingApproval")}</>
     case "too_soon":
-      return <>{t("subscriptions.verdictTooSoon")}</>
+      return <>{tooSoonText(t, v.reason)}</>
     case "rejected":
       return <>{t("subscriptions.verdictRejected", { rule: v.rule })}</>
     case "reserved":

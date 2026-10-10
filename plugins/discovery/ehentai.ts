@@ -153,10 +153,11 @@ function decodeEntities(text: string): string {
 /** Fills in each candidate's own-language title and authoritative post time from the JSON API.
  *
  * The listing carries exactly one title per work — whichever the uploader chose — and its visible
- * posted-at text has no timezone attached. `gdata` supplies both the Japanese title and `posted` as
- * a Unix timestamp, so using that timestamp removes any dependence on how the listing rendered a
- * local date. `gdata` takes up to 25 works per call, which is one listing page, so this costs one
- * extra request per page rather than one per work.
+ * posted-at text has no timezone attached. `gdata` supplies the Japanese title, `posted` as a Unix
+ * timestamp (so no dependence on how the listing rendered a local date), and the **uploader** —
+ * which the signed-in listing itself does not carry at all (only the guest 25-per-page layout links
+ * `uploader/<name>`, and a check runs signed in). Reading it from here is what keeps `uploader`
+ * populated for the layout a subscription actually sees, at no extra request.
  *
  * Failure is swallowed: a missing original title is worth less than the listing itself, and losing
  * the whole check over it would be the wrong trade. */
@@ -173,15 +174,24 @@ async function addOriginalTitles(
   if (pairs.length === 0) return;
 
   // E-Hentai's `gdata` endpoint rejects a `gidlist` longer than 25 with a 200-level
-  // `{error: "too many gidlist requests"}` body. A subscription can page through up to four
-  // listings (100 candidates), so sending them all at once silently lost every original title
-  // and left only the English `origin` that the listing itself carried. Batch by the endpoint's
-  // own limit instead.
+  // `{error: "too many gidlist requests"}` body. A subscription pages through up to four listings
+  // (400 candidates on a broad query), so sending them all at once silently lost every original
+  // title and left only the English `origin` that the listing itself carried. Batch by the
+  // endpoint's own limit instead.
   const GDATA_BATCH_SIZE = 25;
-  const metaByGid = new Map<string, { jpn?: string; posted?: string }>();
+  // Batches in flight at once. Awaiting all sixteen batches of a 400-candidate listing one after
+  // another cost ~5.6s of pure round-trip latency (measured: a 7.7s preview), while an unbounded
+  // `Promise.all` would fire them all at a site that rate-limits this endpoint — a small fixed
+  // window gets most of the saving without inviting that.
+  const GDATA_CONCURRENCY = 4;
+  const metaByGid = new Map<string, { jpn?: string; posted?: string; uploader?: string }>();
 
+  const batches: [number, string][][] = [];
   for (let offset = 0; offset < pairs.length; offset += GDATA_BATCH_SIZE) {
-    const batch = pairs.slice(offset, offset + GDATA_BATCH_SIZE);
+    batches.push(pairs.slice(offset, offset + GDATA_BATCH_SIZE));
+  }
+
+  const fetchBatch = async (batch: [number, string][]): Promise<void> => {
     try {
       const response = await fetch("https://api.e-hentai.org/api.php", {
         method: "POST",
@@ -192,7 +202,7 @@ async function addOriginalTitles(
         // `namespace: 0` strips them, and copying that choice here would mislead the next reader.
         body: JSON.stringify({ method: "gdata", gidlist: batch, namespace: 1 }),
       });
-      if (!response.ok) continue;
+      if (!response.ok) return;
       const data = await response.json();
       for (const entry of data?.gmetadata ?? []) {
         const gid = String(entry.gid);
@@ -200,12 +210,17 @@ async function addOriginalTitles(
         if (entry?.title_jpn) meta.jpn = entry.title_jpn;
         // Always seconds since the Unix epoch in UTC, irrespective of the listing's own display.
         if (entry?.posted) meta.posted = String(entry.posted);
+        if (entry?.uploader) meta.uploader = String(entry.uploader);
         metaByGid.set(gid, meta);
       }
     } catch (e) {
       // One batch failing should not discard titles already collected from the others.
       logger.warn(`could not read original titles or posted timestamps: ${String(e)}`);
     }
+  };
+
+  for (let offset = 0; offset < batches.length; offset += GDATA_CONCURRENCY) {
+    await Promise.all(batches.slice(offset, offset + GDATA_CONCURRENCY).map(fetchBatch));
   }
 
   for (const c of candidates) {
@@ -213,6 +228,9 @@ async function addOriginalTitles(
     const meta = gid ? metaByGid.get(gid) : undefined;
     if (meta?.jpn && c.title && typeof c.title === "object") c.title.ja = meta.jpn;
     if (meta?.posted) c.posted_at = meta.posted;
+    // The listing's own `uploader/<name>` link is kept when it had one (guest layout); the API is
+    // authoritative otherwise. A rule over `uploader` is only answerable if this is populated.
+    if (meta?.uploader) c.uploader = meta.uploader;
   }
 }
 
@@ -314,9 +332,10 @@ export async function discover(
     // "published more than N hours ago" — see `DiscoveredCandidate.posted_at`.
     const posted = row.match(/id="posted_\d+">([^<]+)</)?.[1];
     const category = row.match(/class="cn[^"]*"[^>]*>([^<]+)</)?.[1];
-    // The grid layout carries no uploader at all, and a linked one is `uploader/<name>`; the
-    // `?uploader=` form appears on some listing variants. Left undefined when neither is present —
-    // the host treats a missing uploader as "unknown", never as "no uploader".
+    // Best-effort from the row: the guest layout links `uploader/<name>` (and some variants carry
+    // `?uploader=`), while the signed-in grid carries none. `addOriginalTitles` fills the gap from
+    // the API, which has the uploader for every work either way — a missing one here is therefore
+    // not final, and the host treats it as "unknown" rather than as "no uploader" regardless.
     const uploader = row.match(/uploader\/([^"'<>]+)/)?.[1] ?? row.match(/[?&]uploader=([^"'&<>]+)/)?.[1];
     const pages = row.match(/(\d+)\s*pages?/i)?.[1];
     // Namespaced exactly as the host's tag rules expect (`artist:foo`), so no translation is needed

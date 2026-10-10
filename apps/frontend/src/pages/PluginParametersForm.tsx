@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { CustomArgValue, PluginSettings } from "@/api/types"
+import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { toast } from "@/toast"
 
 // Per-plugin custom-parameter settings — one input per `PluginInfo.parameters` entry. Rendered
@@ -96,6 +97,26 @@ function PluginParametersFormBody({
                   checked={values[i] === true}
                   disabled={update.isPending}
                   onChange={(e) => setBoolAndSave(i, e.target.checked)}
+                />
+              </td>
+            </tr>
+          ) : param.type === "int" ? (
+            // Legacy's own `SWITCH param.type` renders an `int` parameter as a number input
+            // (`~/LANraragi/templates/plugins.html.tt2`); it was falling through to the plain-text
+            // branch below along with `string`. The saved customarg stays a string — the host hands
+            // the array to the plugin as-is.
+            <tr key={param.name}>
+              <td style={{ verticalAlign: "middle" }}>
+                <b>{t(param.desc)} :</b>
+              </td>
+              <td>
+                <NullableNumberInput
+                  className="stdinput"
+                  style={{ maxWidth: 200 }}
+                  step={1}
+                  value={values[i] === "" || values[i] === undefined ? "" : Number(values[i])}
+                  onValueChange={(v) => setValue(i, v === "" ? "" : String(v))}
+                  disabled={update.isPending}
                 />
               </td>
             </tr>

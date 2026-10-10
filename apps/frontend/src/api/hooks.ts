@@ -82,6 +82,7 @@ import type {
   TankoubonMetadata,
   TokenRole,
   UpdateQueueItemBody,
+  UserPreferences,
   VersionCheckResponse,
 } from "./types"
 
@@ -152,6 +153,27 @@ export function useUpdateSettings() {
   return useMutation({
     mutationFn: (partial: Partial<Settings>) => sendJson("PUT", "/settings", partial),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+  })
+}
+
+export function usePreferences(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["preferences"],
+    queryFn: () => fetchJson<UserPreferences>("/preferences"),
+    enabled: options?.enabled,
+  })
+}
+
+export function useUpdatePreferences() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (partial: Partial<UserPreferences>) => sendJson("PUT", "/preferences", partial),
+    onSuccess: (_data, variables) => {
+      queryClient.setQueryData<UserPreferences>(["preferences"], (previous) => ({
+        library_sortby: variables.library_sortby ?? previous?.library_sortby ?? "title",
+        library_sortdir: variables.library_sortdir ?? previous?.library_sortdir ?? "asc",
+      }))
+    },
   })
 }
 
@@ -232,6 +254,74 @@ export function useStats(minWeight = 1) {
   })
 }
 
+export interface SearchSuggestEntry {
+  arcid: string
+  title: string
+}
+
+export interface SearchSuggestResponse {
+  data: SearchSuggestEntry[]
+  recordsFiltered: number
+}
+
+/** Shared by `useSearch` and the suggestion hooks below, so a suggestion is always scoped by
+ *  exactly the filters the applied search would use — a candidate's own hit count has to mean "how
+ *  many results would this give *here*", not a library-wide number that contradicts the page after
+ *  clicking it. */
+function searchParams(options: SearchOptions): URLSearchParams {
+  const params = new URLSearchParams()
+  if (options.filter) params.set("filter", options.filter)
+  if (options.category) params.set("category", options.category)
+  if (options.sortby) params.set("sortby", options.sortby)
+  if (options.order) params.set("order", options.order)
+  if (options.start !== undefined) params.set("start", String(options.start))
+  if (options.newonly) params.set("newonly", "true")
+  if (options.untaggedonly) params.set("untaggedonly", "true")
+  if (options.tankonly) params.set("tankonly", "true")
+  if (options.hidecompleted) params.set("hidecompleted", "true")
+  if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
+  return params
+}
+
+/** Title autocomplete for the Library search box. Deliberately not `useSearch`: it returns only
+ * `arcid` + `title` for a handful of matches, because it fires on every debounced keystroke, where
+ * a full `/search` page of 100 archive records would be a few hundred KB of JSON the suggestion
+ * list immediately throws away aside from the titles. Caller must debounce `options.filter`. */
+export function useSearchSuggest(options: SearchOptions, limit = 8) {
+  const params = searchParams(options)
+  params.set("limit", String(limit))
+  const filter = options.filter ?? ""
+  return useQuery({
+    queryKey: ["search-suggest", params.toString()],
+    queryFn: () => fetchJson<SearchSuggestResponse>(`/search/suggest?${params.toString()}`),
+    enabled: filter.trim().length > 0 && (options.enabled ?? true),
+  })
+}
+
+/** Hit counts for candidate filters the user has *not* applied — the same endpoint with `limit=1`,
+ * one request per distinct filter, all inside a single query so React Query caches them together
+ * and the suggestion list can show a candidate's real result count before it is picked. */
+export function useFilterCounts(filters: readonly string[], base: SearchOptions) {
+  const distinct = [...new Set(filters)].filter((f) => f.trim() !== "")
+  const requests = distinct.map((filter) => {
+    const params = searchParams({ ...base, filter, start: undefined, enabled: undefined })
+    params.set("limit", "1")
+    return params.toString()
+  })
+  return useQuery({
+    queryKey: ["filter-counts", requests],
+    queryFn: async () => {
+      const responses = await Promise.all(
+        requests.map((query) => fetchJson<SearchSuggestResponse>(`/search/suggest?${query}`)),
+      )
+      return Object.fromEntries(
+        distinct.map((filter, index) => [filter, responses[index].recordsFiltered]),
+      ) as Record<string, number>
+    },
+    enabled: distinct.length > 0,
+  })
+}
+
 export function useArchiveMetadata(id: string | null) {
   return useQuery({
     queryKey: ["archive", id],
@@ -299,17 +389,7 @@ export interface SearchOptions {
 }
 
 export function useSearch(options: SearchOptions) {
-  const params = new URLSearchParams()
-  if (options.filter) params.set("filter", options.filter)
-  if (options.category) params.set("category", options.category)
-  if (options.sortby) params.set("sortby", options.sortby)
-  if (options.order) params.set("order", options.order)
-  if (options.start !== undefined) params.set("start", String(options.start))
-  if (options.newonly) params.set("newonly", "true")
-  if (options.untaggedonly) params.set("untaggedonly", "true")
-  if (options.tankonly) params.set("tankonly", "true")
-  if (options.hidecompleted) params.set("hidecompleted", "true")
-  if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
+  const params = searchParams(options)
   return useQuery({
     queryKey: ["search", options],
     queryFn: () => fetchJson<SearchResponse>(`/search?${params.toString()}`),

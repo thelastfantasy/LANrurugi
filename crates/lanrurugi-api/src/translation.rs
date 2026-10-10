@@ -14,7 +14,7 @@
 //! work is scheduled — a reader who never enables translation takes no extra code path at all.
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -25,11 +25,13 @@ use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_fontcache::FontPatternRepository;
 use lanrurugi_ocr::entities::{PageNumber, VolumeId};
 use lanrurugi_storage::activity::action_types;
+use lanrurugi_translate::composite::TranslationImageFormat;
 use lanrurugi_translate::context_assembly::{assemble, capture_terms, TranslatedNeighbor};
 use lanrurugi_translate::glossary::GlossaryRepository;
 use lanrurugi_translate::regions::RegionRepository;
 use lanrurugi_translate::settings::TranslationSettingsRepository;
 
+use crate::archives::{inline_disposition_for, ClientImageSupport};
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::AppState;
@@ -235,10 +237,46 @@ async fn clear_page_translation(
         .into_response()
 }
 
+/// The composited page's output codec for a given client — `jxl > webp`, with WebP as the fallback
+/// exactly as it was before the codec became negotiable.
+fn translation_image_format(support: ClientImageSupport) -> TranslationImageFormat {
+    if support.jxl {
+        TranslationImageFormat::Jxl
+    } else {
+        TranslationImageFormat::Webp
+    }
+}
+
+/// `Content-Disposition` for a composited page: `<archive title>_<page>_translated.<ext>`. Without
+/// it a direct navigation to the endpoint saves the browser's own generic name derived from the
+/// URL's last segment.
+async fn translated_page_disposition(
+    state: &AppState,
+    archive_id: &ArchiveId,
+    page: PageNumber,
+    format: TranslationImageFormat,
+) -> header::HeaderValue {
+    let name = state
+        .repos
+        .archives
+        .get(archive_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|archive| archive.name)
+        .unwrap_or_else(|| archive_id.to_string());
+    inline_disposition_for(&format!(
+        "{name}_{}_translated.{}",
+        page.get(),
+        format.extension()
+    ))
+}
+
 async fn get_page_translation(
     State(state): State<AppState>,
     Path((id, page)): Path<(String, u32)>,
     Query(q): Query<TranslationQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let archive_id = ArchiveId::from(id);
     let member_of = tankoubon_memberships(&state, &archive_id).await;
@@ -281,17 +319,36 @@ async fn get_page_translation(
         return translation_unavailable("no_target_language", "no target language selected");
     };
 
+    // Same `jxl > webp` preference the reader's own page requests are served with, read from the
+    // capability cookie the frontend sets once at startup. A composited page is always a re-encode,
+    // so there is no "source" arm here: WebP is the fallback for a browser that advertised neither.
+    let format = translation_image_format(ClientImageSupport::from_request(&headers, None));
+
     let cache = lanrurugi_translate::cache::TranslationImageCache::new(&state.library.temp_dir);
     let key = lanrurugi_translate::cache::TranslationCacheKey::new(
         archive_id.clone(),
         page_number,
         target_language.clone(),
         provider.as_str(),
+        format,
     );
 
     if let Some(bytes) = cache.get(&key).await {
         state.translation_telemetry.record_lookahead(true);
-        return ([(header::CONTENT_TYPE, "image/webp")], bytes).into_response();
+        return (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static(format.content_type()),
+                ),
+                (
+                    header::CONTENT_DISPOSITION,
+                    translated_page_disposition(&state, &archive_id, page_number, format).await,
+                ),
+            ],
+            bytes,
+        )
+            .into_response();
     }
 
     // An already-failed page must surface as FR-019's per-page "unavailable", not as a fresh 202
@@ -316,6 +373,7 @@ async fn get_page_translation(
         settings,
         provider,
         target_language,
+        format,
     )
     .await
     {
@@ -451,13 +509,20 @@ async fn trigger_local_path_detection(
         .unwrap_or(lanrurugi_translate::settings::CloudProvider::OpenAiCompatible);
     let target_language = settings.target_language.clone().unwrap_or_default();
 
-    let handles =
-        crate::translation_pipeline::build_handles(state, settings, provider, target_language)
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, "OCR runtime unavailable for the local-backend path");
-                translation_unavailable("runtime_unavailable", e.to_string())
-            })?;
+    // This path only ever runs detection — it composites nothing, so the output codec is never
+    // read; WebP is passed as the neutral value rather than inventing a second constructor.
+    let handles = crate::translation_pipeline::build_handles(
+        state,
+        settings,
+        provider,
+        target_language,
+        lanrurugi_translate::composite::TranslationImageFormat::Webp,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "OCR runtime unavailable for the local-backend path");
+        translation_unavailable("runtime_unavailable", e.to_string())
+    })?;
 
     // One up-front bubble-segmentation call, same as the cloud path (`translate_page`'s own doc
     // comment covers why this must not run a second time inside `ensure_detected` itself — a real

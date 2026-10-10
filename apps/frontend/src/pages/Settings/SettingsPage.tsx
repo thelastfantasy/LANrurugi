@@ -107,8 +107,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
   const [replacedupe, setReplacedupe] = useState(settings.replacedupe)
 
-  const [hqthumbpages, setHqthumbpages] = useState(settings.hqthumbpages)
-  const [preferjxl, setPreferjxl] = useState(settings.preferjxl)
   // Normalize the API value so the radio group is always selectable across the `"auto"` ->
   // `"jxl"` rename and older backends that don't return the one-field contract yet. Saving writes
   // the normalized value back on the next save.
@@ -184,8 +182,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
       replacedupe !== settings.replacedupe ||
-      hqthumbpages !== settings.hqthumbpages ||
-      preferjxl !== settings.preferjxl ||
       thumbnailFormat !== savedThumbnailFormat ||
       webpquality !== settings.webpquality ||
       excludednamespaces !== settings.excludednamespaces ||
@@ -204,7 +200,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       guestmode, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, cookieDomain, ssoAutoRedirect, enablecors, tempmaxsize,
-      replacedupe, hqthumbpages, preferjxl, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
+      replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings, translationIsDirty,
     ],
@@ -247,8 +243,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       enablecors,
       tempmaxsize,
       replacedupe,
-      hqthumbpages,
-      preferjxl,
       thumbnail_format: thumbnailFormat,
       webpquality,
       excludednamespaces,
@@ -363,8 +357,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setPagesize={setPagesize}
             enableresize={enableresize}
             setEnableresize={setEnableresize}
-            preferjxl={preferjxl}
-            setPreferjxl={setPreferjxl}
             sizethreshold={sizethreshold}
             setSizethreshold={setSizethreshold}
             readerquality={readerquality}
@@ -505,8 +497,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           />
 
           <TagsThumbnailsSection
-            hqthumbpages={hqthumbpages}
-            setHqthumbpages={setHqthumbpages}
             thumbnailFormat={thumbnailFormat}
             setThumbnailFormat={setThumbnailFormat}
             webpquality={webpquality}

@@ -210,7 +210,6 @@
   "plugins.uploadFailed": "Upload failed.",
   "batch.usePlugin": "Usa Plugin",
   "settings.useWebpForThumbnails": "Usa WebP per le miniature",
-  "settings.useHighqualityThumbnailsForPages": "Usa miniature ad alta qualità per le pagine",
   "batch.usePluginLabel": "Usa plugin :",
   "Version %1 %2": "Versione %1 - %2",
   "reader.visible": "Visibile",

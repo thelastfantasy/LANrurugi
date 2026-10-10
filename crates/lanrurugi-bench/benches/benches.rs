@@ -69,7 +69,7 @@ fn bench_thumbnail(c: &mut Criterion) {
                     1,
                     output,
                     lanrurugi_scanner::thumbnail::ThumbFormat::Jpeg,
-                    lanrurugi_scanner::thumbnail::JPEG_QUALITY_NORMAL,
+                    lanrurugi_scanner::thumbnail::DEFAULT_WEBP_QUALITY,
                 )
                 .await
                 .unwrap();

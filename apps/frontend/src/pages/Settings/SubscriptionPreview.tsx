@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { type CSSProperties, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -12,6 +13,7 @@ import { useLanguageOrder } from "@/i18n/useLanguageOrder"
 import { ICON_BUTTON_STYLE } from "@/pages/Upload/shared"
 
 import { CandidateTitleLink } from "./CandidateTitleLink"
+import { tooSoonText } from "./subscriptionVerdicts"
 
 /** Which of the three bands a candidate falls into.
  *
@@ -71,45 +73,93 @@ const ROW_CLASS = {
  * 12%), which is what makes the remaining slack go to the title. */
 export function previewGridColumns(fields?: string[]): string {
   const includes = (field: string) => fields === undefined || fields.includes(field)
-  const columns = ["2.5em", "minmax(45%, 1fr)"]
+  // The title keeps a *share*, not a fixed width, so it cannot starve the columns beside it.
+  const columns = ["2.5em", "minmax(40%, 1fr)"]
   if (includes("posted_at")) columns.push("minmax(0, 10%)")
-  if (includes("uploader")) columns.push("minmax(0, 12%)")
-  if (includes("rating")) columns.push("minmax(0, 12%)")
-  // The verdict column holds its text *and* this row's two actions (block + reconsider) on one line:
-  // as `minmax(0, 16%)` a narrow pane (the edit modal's own preview, ~560px) could not fit both, and
-  // the pair either overflowed the panel or stacked into a second row of wasted height. The floor is
-  // the pair's own width (88px) plus the cell's padding and the pair's own left margin; the
-  // percentage stays the cap it always was, and the
-  // `flex-wrap` on `.preview-row-actions` remains the fallback for anything narrower still.
-  columns.push("minmax(112px, 16%)")
+  // A real floor, not `minmax(0, …)`: with only a zero minimum the uploader track was squeezed to
+  // nothing whenever the title's own share and the rating's/verdict's fixed floors took the pane
+  // (reported live, 2026-10-09: "上传者栏太窄了"). 100px covers an ordinary handle — longer ones
+  // still ellipsize into `UploaderCell`'s tooltip, which is the intended behaviour.
+  if (includes("uploader")) columns.push("minmax(100px, 18%)")
+  // The five-star row is 70px of fixed-width sprites (5 × 14px, `StarRatingDisplay`'s own `size`),
+  // and a bare `minmax(0, 12%)` let the track shrink below that on the form's own split pane: the
+  // stars then overflowed their cell and landed on top of the verdict's long, right-aligned first
+  // line (confirmed live, 2026-10-09). The floor is that 70px plus the cell's own 16px padding —
+  // the same "floor at the content's own width" rule the verdict column below records.
+  if (includes("rating")) columns.push("minmax(86px, 12%)")
+  // The verdict column holds a *short* label (see `Reason`, which moved the full sentence into a
+  // tooltip) plus this row's two actions (block + reconsider) on one line. Sizing it for the old
+  // full sentence was what forced the long wraps this column used to show; the floor now only has
+  // to fit the two icon buttons (≈56px) and the label beside them, and `flex-wrap` on
+  // `.preview-row-actions` remains the fallback for anything narrower still.
+  columns.push("minmax(80px, 11%)")
   return columns.join(" ")
 }
 
-/** Why this candidate landed where it did, in the user's own terms. */
+/** Why this candidate landed where it did: a short label in the column, the sentence in a tooltip.
+ *
+ * The full sentences ("先前检查中已见过", "被规则跳过：…") are what made this column wide enough to
+ * wrap — or to squeeze the uploader track to nothing, since both are competing for the same pane
+ * (reported live, 2026-10-09). The label answers "what happens to this row" at a glance; the reason
+ * itself is one hover away, unchanged. */
 function Reason({ record }: { record: CandidateRecord }) {
   const { t } = useTranslation()
+  const { short, full } = reasonText(t, record)
+  return (
+    // Above `Modal`'s own 9001 — see this file's other in-dialog tooltips.
+    <Tooltip label={full} zIndex={9700} wrapperStyle={{ display: "inline-flex", minWidth: 0 }}>
+      <span className="preview-verdict-short">{short}</span>
+    </Tooltip>
+  )
+}
+
+/** The short column label and the full sentence behind it, for one verdict. */
+function reasonText(
+  t: TFunction,
+  record: CandidateRecord,
+): { short: string; full: string } {
   const v = record.verdict
   switch (v.verdict) {
     case "queued":
-      return <>{t("subscriptions.previewWouldDownload")}</>
+      return {
+        short: t("subscriptions.verdictShort.queued"),
+        full: t("subscriptions.previewWouldDownload"),
+      }
     case "awaiting_approval":
-      return <>{t("subscriptions.previewWouldAsk")}</>
+      return {
+        short: t("subscriptions.verdictShort.awaitingApproval"),
+        full: t("subscriptions.previewWouldAsk"),
+      }
     case "too_soon":
-      return <>{t("subscriptions.verdictTooSoon")}</>
+      return {
+        short: t("subscriptions.verdictShort.tooSoon"),
+        full: tooSoonText(t, v.reason),
+      }
     case "rejected":
-      return <>{t("subscriptions.verdictRejected", { rule: v.rule })}</>
+      return {
+        short: t("subscriptions.verdictShort.rejected"),
+        full: t("subscriptions.verdictRejected", { rule: v.rule }),
+      }
     case "reserved":
-      return <>{t("subscriptions.verdictReserved", { reason: v.reason })}</>
+      return {
+        short: t("subscriptions.verdictShort.reserved"),
+        full: t("subscriptions.verdictReserved", { reason: v.reason }),
+      }
     case "already_held":
-      return <>{t("subscriptions.verdictAlreadyHeld")}</>
+      return {
+        short: t("subscriptions.verdictShort.alreadyHeld"),
+        full: t("subscriptions.verdictAlreadyHeld"),
+      }
     case "superseded":
-      return (
-        <span style={{ opacity: 0.85 }}>
-          {t("subscriptions.verdictSuperseded", { source: v.newer_source })}
-        </span>
-      )
+      return {
+        short: t("subscriptions.verdictShort.superseded"),
+        full: t("subscriptions.verdictSuperseded", { source: v.newer_source }),
+      }
     default:
-      return <>{t("subscriptions.verdictAlreadySeen")}</>
+      return {
+        short: t("subscriptions.verdictShort.alreadySeen"),
+        full: t("subscriptions.verdictAlreadySeen"),
+      }
   }
 }
 
@@ -215,6 +265,17 @@ export function SubscriptionPreview({
         {counts.waiting > 0 && ` ${t("subscriptions.previewWaitingCount", { count: counts.waiting })}`}
       </p>
 
+      {preview.listing_pages !== undefined && preview.check_listing_pages !== undefined && (
+        // Why this list is shorter than a check's: a preview fetches only the newest listing page
+        // (each page is another request to the source), while the hourly check reads them all.
+        <p className="sub-form-hint" style={{ margin: "0 0 6px" }}>
+          {t("subscriptions.previewWindow", {
+            pages: preview.listing_pages,
+            checkPages: preview.check_listing_pages,
+          })}
+        </p>
+      )}
+
       {preview.outcome !== "completed" && (
         // An incomplete view must not read as "this is everything that exists" — the preview is a
         // smaller answer than the one asked for.
@@ -240,7 +301,17 @@ export function SubscriptionPreview({
           {includeField("rating") && (
             <span className="preview-rating">{t("subscriptions.field.rating")}</span>
           )}
-          <span className="preview-verdict">{t("subscriptions.colVerdict")}</span>
+          <span className="preview-verdict">
+            {/* Short for the same reason the column's own values are: the full wording is the
+                tooltip, so the header cannot be what sets this track's minimum width. */}
+            <Tooltip
+              label={t("subscriptions.colVerdict")}
+              zIndex={9700}
+              wrapperStyle={{ display: "inline-flex", minWidth: 0 }}
+            >
+              <span className="preview-verdict-short">{t("subscriptions.colVerdictShort")}</span>
+            </Tooltip>
+          </span>
         </div>
         {rows.map((r, i) => (
           <div key={r.source_url} className={`preview-row ${ROW_CLASS[bandOf(r)]}`}>

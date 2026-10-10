@@ -75,6 +75,15 @@ export function pluginOptions() {
       // The real archive download itself is served by an H@H (Hentai@Home) client node, not
       // e-hentai.org/exhentai.org (those only negotiate the final URL via archiver.php) — the
       // `downloads[]` URL this plugin returns always points here.
+      //
+      // This one rule is also what bounds how many of this plugin's downloads run *at once*,
+      // negotiation included: the host reads a plugin's tightest declared `max_concurrent` as its
+      // job concurrency (`domain_rules::job_capacity`), because which host a job will transfer from
+      // is only known after `execDownload` has already talked to the site. So "10" here means ten
+      // downloads in flight — not ten transfers plus however many archiver.php calls the queue
+      // happened to start. Adding a rule for `e-hentai.org` (the archiver/`gdata` host) tightens
+      // that job cap further, without needing to; `max_bytes_per_sec` on such a rule is meaningless
+      // (the plugin's own requests are not this host's bytes to count).
       {
         pattern: "*.hath.network",
         max_concurrent: 10,

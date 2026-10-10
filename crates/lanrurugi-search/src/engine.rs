@@ -558,21 +558,30 @@ async fn token_matches(
         }
     }
 
-    // Fuzzy title match: LRR_TITLES_FOLDED members are "<folded title>\0id".
-    let name_pattern = if token.isexact {
-        format!("{folded}\0*")
-    } else {
-        format!("*{folded}*")
-    };
+    // Title match: LRR_TITLES_FOLDED members are "<folded title>\0id". `isexact` deliberately does
+    // *not* narrow this to the legacy whole-title-equality behavior (legacy's own
+    // `$isexact ? "$tag\x00*" : "*$tag*"` on a `"<title>\x00id"` member only ever matched a title
+    // equal to the quoted string, since `\0` had to follow the tag immediately) — a quoted query
+    // now means "this exact phrase appears anywhere in the title", which is what a user typing
+    // `"tari tari"` is actually asking for. Real titles in this library are shaped
+    // `[circle] Title [DL版]`, so whole-title equality made quoting useless for exactly the
+    // title-phrase lookup it looks like it should serve; see `grammar.rs`'s own docs. Strictly
+    // additive: every title the old form matched still contains that same text.
+    let name_pattern = format!("*{folded}*");
     let title_members: Vec<String> = search_conn
         .zrangebyscore(TITLES_FOLDED_KEY, "-inf", "+inf")
         .await
         .unwrap_or_default();
     for member in title_members {
-        if glob_match(&name_pattern, &member) {
-            if let Some(pos) = member.find('\0') {
-                ids.insert(member[pos + 1..].to_string());
-            }
+        // Glob only the title half, never the "\0<id>" tail: matching the whole member let a
+        // query like `dead` hit any archive whose 40-char hex id happened to contain it, and the
+        // id it then "found" was extracted from the very substring that matched. The split point
+        // is the same first `\0` the id is read from below, so this can't disagree with it.
+        let Some(pos) = member.find('\0') else {
+            continue;
+        };
+        if glob_match(&name_pattern, &member[..pos]) {
+            ids.insert(member[pos + 1..].to_string());
         }
     }
 
@@ -603,20 +612,19 @@ async fn token_matches(
             }
         }
 
-        let raw_name_pattern = if token.isexact {
-            format!("{}\0*", token.tag)
-        } else {
-            format!("*{}*", token.tag)
-        };
+        // Same title semantics as the canonical branch above (phrase anywhere in the title), and
+        // the same title-only glob — see that branch's own comments.
+        let raw_name_pattern = format!("*{}*", token.tag);
         let raw_titles: Vec<String> = search_conn
             .zrangebyscore(TITLES_KEY, "-inf", "+inf")
             .await
             .unwrap_or_default();
         for member in raw_titles {
-            if glob_match(&raw_name_pattern, &member) {
-                if let Some(pos) = member.find('\0') {
-                    ids.insert(member[pos + 1..].to_string());
-                }
+            let Some(pos) = member.find('\0') else {
+                continue;
+            };
+            if glob_match(&raw_name_pattern, &member[..pos]) {
+                ids.insert(member[pos + 1..].to_string());
             }
         }
     }
@@ -1354,6 +1362,92 @@ mod tests {
             .zrem(TITLES_KEY, "book c\0".to_string() + &id)
             .await
             .unwrap();
+    }
+
+    // A quoted multi-word query is a *title/phrase* lookup for most real uses ("find the work
+    // called Tari Tari"), and real titles here are shaped `[circle] Title [DL版]` — so the phrase
+    // sits in the middle of the title, never as the whole of it. Legacy's `"<title>\0id"`-with-a-
+    // trailing-`\0` pattern only ever matched a title *equal* to the quoted string, which made
+    // quoting return nothing for exactly this case (verified live: `"pink album"` → 0 against a
+    // title stored as `[新堂エル] the pink album [dl版]`, while the bare `pink album` → 1). The
+    // canonical branch now matches on "title contains the phrase" for both exact and fuzzy tokens,
+    // while the tag half of an exact token still goes through the literal `INDEX_<tag>` key.
+    #[tokio::test]
+    async fn quoted_phrase_matches_a_title_that_only_contains_it_mid_string() {
+        let Some((archive_pool, search_pool)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+
+        let eq = test_eq();
+        let id = "7".repeat(40);
+        // Deliberately no tag containing the phrase, so a match can only come from the title.
+        let tags = "artist:jane";
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        let _: () = aconn
+            .hset_multiple(
+                &id,
+                &[("tags", tags), ("pagecount", "10"), ("progress", "0")],
+            )
+            .await
+            .unwrap();
+
+        crate::indexer::index_new_archive(&search_pool, &eq, &id, "[circle] Tari Tari [DL版]")
+            .await
+            .unwrap();
+        crate::indexer::update_tag_indexes(&search_pool, &eq, &id, "", tags)
+            .await
+            .unwrap();
+
+        for filter in [
+            // The phrase, quoted — the case legacy returned nothing for.
+            "\"tari tari\"",
+            // Same phrase via the `$` spelling, which is the same token as far as the parser is
+            // concerned.
+            "tari tari$",
+            // And the plain AND spelling keeps working (it matched before this change too).
+            "tari tari",
+        ] {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &eq, &params)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.ids,
+                vec![id.clone()],
+                "filter {filter:?} should match the mid-title phrase"
+            );
+        }
+
+        // A quoted phrase that is not present must still not match — "contains" is not "matches
+        // loosely".
+        let params = SearchParams {
+            filter: "\"tari tokoyo\"".to_string(),
+            groupby_tanks: true,
+            ..Default::default()
+        };
+        let result = search(&archive_pool, &search_pool, &eq, &params)
+            .await
+            .unwrap();
+        assert!(result.ids.is_empty());
+
+        let _: () = aconn.del(&id).await.unwrap();
+        // `remove_archive_index` builds the title members with the same helpers the indexer wrote
+        // them with, so this test can't drift on the folded form of `[circle] Tari Tari [DL版]`.
+        crate::indexer::remove_archive_index(
+            &search_pool,
+            &eq,
+            &id,
+            "[circle] Tari Tari [DL版]",
+            tags,
+        )
+        .await
+        .unwrap();
     }
 
     // `parse_rating_filter` is a pure function — no Redis needed, unlike the `token_matches`-level

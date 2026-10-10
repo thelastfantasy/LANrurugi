@@ -12,6 +12,45 @@ pub struct Request {
     pub args: Value,
 }
 
+/// A plugin's own HTTP request, relayed to the host over the same stdin/stdout channel as plugin
+/// calls (`dispatcher.ts` overrides `globalThis.fetch` to write one of these). Distinguished from a
+/// normal response line by `type`, since both directions share the stream.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HostHttpCall {
+    pub call_id: String,
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub redirect_limit: Option<usize>,
+}
+
+/// The host's answer to a [`HostHttpCall`]. `ok: false` carries `error` and is turned into a
+/// rejected `fetch()` promise plugin-side.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HostHttpResult {
+    /// Always `"host_http_result"`. Both directions share one stream, so the dispatcher tells this
+    /// apart from a plugin request by this tag alone — leaving it off made every relayed `fetch()`
+    /// hang forever (the answer was parsed as a normal request and dropped).
+    #[serde(rename = "type")]
+    pub line_type: &'static str,
+    pub call_id: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Response {
     pub request_id: String,

@@ -140,10 +140,6 @@ export interface Settings {
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   enableresize: boolean
-  /** Keep a JXL-native reader page as original `.jxl` when the browser advertises JXL decode
-   *  support, instead of decoding/re-encoding it to WebP. JPEG/PNG/WebP sources are unaffected. */
-  preferjxl: boolean
-  hqthumbpages: boolean
   enablewebp: boolean
   /** Generate thumbnail files as JPEG XL; non-JXL browsers fall back to on-demand WebP/JPEG. */
   jxlthumbpages: boolean
@@ -160,6 +156,12 @@ export interface Settings {
  * theme for the current request (the guest theme when the request is guest-eligible, otherwise
  * the admin theme). `admin_theme` is always the administrator's own theme and is exported for
  * screens like `/login` that should not follow the guest-theme setting. */
+/** `GET/PUT /preferences` — account-scoped display preferences persisted in Redis. */
+export interface UserPreferences {
+  library_sortby: string
+  library_sortdir: "asc" | "desc"
+}
+
 export interface PublicThemeSettings {
   theme: string
   admin_theme: string
@@ -482,9 +484,16 @@ export type CandidateVerdict =
    *  with that work — no download, and no round trip to the source to find out. */
   | { verdict: "superseded"; newer_source: string }
   | { verdict: "already_seen" }
-  /** Inside its waiting period. Deliberately not a rejection — it is reconsidered on a later check and
-   *  is not recorded as seen, so it must never be shown as "already seen". */
-  | { verdict: "too_soon" }
+  /** Not settled yet. Deliberately not a rejection — it is reconsidered on a later check and is not
+   *  recorded as seen, so it must never be shown as "already seen". `reason` is absent on records
+   *  written before it existed. */
+  | { verdict: "too_soon"; reason?: PendingReason }
+
+/** Why a candidate is still waiting: the clock (an age rule that resolves itself) or the source (a
+ *  field the condition needs was not in the listing at all, and may never be). */
+export type PendingReason =
+  | { kind: "age"; field: string; remaining_secs: number }
+  | { kind: "unknown_field"; field: string }
 
 /** A work's titles by language tag, plus `origin` for the source's own wording. */
 export type Titles = Record<string, string>
@@ -529,6 +538,11 @@ export interface SubscriptionPreview {
   listing?: unknown
   /** How many would actually be acted on — queued or sent for approval. */
   would_act_on: number
+  /** Listing pages this preview read, and how many a scheduled check reads. A preview asks for
+   *  less on purpose — fewer requests to the source — so the pane states the window instead of
+   *  letting the shorter list look like everything the source has. */
+  listing_pages?: number
+  check_listing_pages?: number
 }
 
 /** One candidate as some subscription's check saw it, for the cross-subscription history. */

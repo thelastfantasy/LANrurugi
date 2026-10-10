@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
+import { useTranslation } from "react-i18next"
 
 import { Switch } from "@/components/common-ui/Form/Switch"
+import type { ImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 
 export function Row({
   label,
@@ -80,5 +82,44 @@ export function ActionRow({
       </div>
       <div className="config-td">{children}</div>
     </div>
+  )
+}
+
+/** Small high-contrast status badge for the one-time browser image-format detection result. */
+export function ImageSupportBadge({ support }: { support: ImageFormatSupport }) {
+  const { t } = useTranslation()
+  const isJxl = support === "jxl"
+  const isSource = support === "source"
+  const label = isJxl
+    ? t("settings.browserFormatJxl")
+    : support === "webp"
+      ? t("settings.browserFormatWebp")
+      : t("settings.browserFormatSource")
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 7px",
+        borderRadius: 999,
+        background: isJxl
+          ? "rgba(26, 115, 232, 0.12)"
+          : isSource
+            ? "rgba(220, 38, 38, 0.10)"
+            : "rgba(245, 158, 11, 0.16)",
+        color: isJxl ? "#1a73e8" : isSource ? "#dc2626" : "#b45309",
+        fontWeight: 700,
+        lineHeight: 1.4,
+      }}
+    >
+      <i
+        className={`fas ${
+          isJxl ? "fa-bolt" : isSource ? "fa-triangle-exclamation" : "fa-image"
+        }`}
+        style={{ fontSize: 9 }}
+      />
+      {label}
+    </span>
   )
 }

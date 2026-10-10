@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { useCleanTempfolder, useClearNewFlags, useDiscardSearchCache, useShinobuAction } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form/NumberInput"
 import { CollapsibleSection } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
@@ -40,13 +41,12 @@ export function ArchiveFilesSection({
             {t("settings.clickThisButtonToTrigger")}
           </ActionRow>
           <Row label={t("settings.maximumReaderCacheSize")}>
-            <input
+            <NumberInput
               className="stdinput"
               style={{ width: "100%" }}
-              maxLength={255}
+              min={0}
               value={tempmaxsize}
-              onChange={(e) => setTempmaxsize(Number(e.target.value))}
-              type="text"
+              onValueChange={setTempmaxsize}
             />
             <br />
             {t("settings.inMbsThisLimitsThe")}

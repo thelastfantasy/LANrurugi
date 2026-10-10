@@ -10,6 +10,7 @@ import { useLanguageOrder } from "@/i18n/useLanguageOrder"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 
 import { CandidateTitleLink } from "./CandidateTitleLink"
+import { tooSoonText } from "./subscriptionVerdicts"
 
 /** Which band a candidate falls into — the same three the preview and the cross-subscription
  *  history use, so a verdict reads the same wherever it appears. */
@@ -67,7 +68,7 @@ function Verdict({ record }: { record: CandidateRecord }) {
     // Distinct from "already seen", which it would otherwise fall through to: the two look alike but
     // mean opposite things — one will be looked at again, the other never will.
     case "too_soon":
-      return <span style={{ color: "#c79121" }}>{t("subscriptions.verdictTooSoon")}</span>
+      return <span style={{ color: "#c79121" }}>{tooSoonText(t, v.reason)}</span>
     default:
       return <span style={{ opacity: 0.8 }}>{t("subscriptions.verdictAlreadySeen")}</span>
   }

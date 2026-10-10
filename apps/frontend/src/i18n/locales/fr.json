@@ -510,7 +510,6 @@
   "settings.useLastModifiedTime": "Utiliser le temps de \"Dernière modification\"",
   "batch.usePlugin": "Utiliser un plugin",
   "settings.useWebpForThumbnails": "Utiliser WebP pour les miniatures",
-  "settings.useHighqualityThumbnailsForPages": "Utiliser des miniatures haute qualité pour les pages",
   "batch.usePluginLabel": "Utiliser le plugin :",
   "Version %1 %2": "Version %1 - %2",
   "View LANrurugi Logs": "Voir les Logs LANrurugi",

@@ -46,11 +46,11 @@ describe("RowStats", () => {
       vi.advanceTimersByTime(1000)
     })
 
-    const line = screen.getByText(/started/).textContent ?? ""
+    const line = screen.getByText(/started today/).textContent ?? ""
     // Deliberately format-agnostic: the clock is rendered through the browser's own
     // `toLocaleTimeString`, so CI (en-US) prints `2:32:05 PM` where a 24-hour locale prints
     // `14:32:05`. Asserting one of the two made this test pass locally and fail in CI.
-    expect(line).toMatch(/started \d{1,2}:32:05/)
+    expect(line).toMatch(/started today at \d{1,2}:32:05/)
     expect(line).toMatch(/2:01 elapsed/)
     // 1 GB over 2 minutes is ~8.5 MB/s: the run's own average, not a last-poll reading.
     expect(line).toMatch(/8\.5 MB\/s avg/)
@@ -59,18 +59,40 @@ describe("RowStats", () => {
 
   it("uses the item's own persisted timings once the job is gone", () => {
     const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    // Pinned to the same day as `started`: a stamp from another day renders with a date too, which
+    // the dedicated case below covers.
+    vi.setSystemTime(started + 3_600_000)
     renderStats(
       item({ started_at: started, finished_at: started + 90_000, file_size: 90 * 1024 * 1024 }),
       undefined,
     )
 
-    const line = screen.getByText(/started/).textContent ?? ""
-    expect(line).toMatch(/started 10:00:00/)
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/started today at 10:00:00/)
     expect(line).toMatch(/1:30 elapsed/)
     // 90 MB in 90 s = 1 MB/s
     expect(line).toMatch(/1\.0 MB\/s avg/)
     // `file_size` is the completed size, and the average divides *that* by the persisted duration.
     expect(line).toMatch(/1\.0 MB\/s avg/)
+    expect(line).not.toContain(new Date(started).toLocaleDateString())
+  })
+
+  it("adds the date to a start stamp from an earlier day", () => {
+    const started = new Date(2026, 9, 6, 23, 10, 18).getTime()
+    // Two days later, same wall-clock-ish time: only the date can tell the two apart.
+    vi.setSystemTime(new Date(2026, 9, 8, 7, 30, 10).getTime())
+    renderStats(
+      item({ started_at: started, finished_at: started + 130 * 60_000, file_size: 130 * 1024 * 1024 }),
+      undefined,
+    )
+
+    const line = screen.getByText(/started/).textContent ?? ""
+    // Locale-proof: the expected date string is whatever this browser would print for that local
+    // date, so CI's en-US and a 24-hour locale both agree the date is present.
+    expect(line).toContain(new Date(started).toLocaleDateString())
+    // ...and the today marker is the thing it must *not* say about an older run.
+    expect(line).not.toMatch(/today/)
+    expect(line).toMatch(/23:10:18|11:10:18/)
   })
 
   it("renders only the subscription mark when there is nothing to measure", () => {

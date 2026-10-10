@@ -443,6 +443,9 @@ globalThis.legacyCompat = {
       }
     };
 
+    // `max_redirects(n)` used to be reduced to a follow/manual boolean; the host honours the real
+    // count now (see the relay below), so it is kept here and passed per request.
+    let redirectLimit = 10;
     const ua: LegacyUserAgent = {
       cookie_jar: {
         add(cookie: LegacyCookie) {
@@ -452,6 +455,7 @@ globalThis.legacyCompat = {
       cookies,
       max_redirects(n: number): LegacyUserAgent {
         followRedirects = n > 0;
+        redirectLimit = Math.max(0, Math.floor(n));
         return ua;
       },
       transactor: {
@@ -475,7 +479,8 @@ globalThis.legacyCompat = {
         const res = await fetch(url, {
           headers: { ...defaultHeaders, ...headers, Cookie: cookieHeaderFor(url) },
           redirect: followRedirects ? "follow" : "manual",
-        });
+          redirectLimit,
+        } as RequestInit);
         captureSetCookies(url, res);
         return { result: makeHttpResult(await res.text(), res.status, res.headers) };
       },
@@ -492,7 +497,8 @@ globalThis.legacyCompat = {
             ? JSON.stringify(data)
             : new URLSearchParams(data as Record<string, string>).toString(),
           redirect: followRedirects ? "follow" : "manual",
-        });
+          redirectLimit,
+        } as RequestInit);
         captureSetCookies(url, res);
         return { result: makeHttpResult(await res.text(), res.status, res.headers) };
       },
@@ -718,6 +724,123 @@ async function introspectPlugin(_mod: Record<string, unknown>) {
   };
 }
 
+/**
+ * Plugin HTTP is performed by the *host*, not by this process.
+ *
+ * Every `fetch()` — the plugin's own calls and the `legacyCompat.userAgent()` helpers alike —
+ * writes one `host_http` line back to the host and waits for its answer. Two things that are
+ * impossible from inside a fresh subprocess become possible there: identical concurrent requests
+ * collapse onto one upstream request, and a response the host already holds is revalidated
+ * (`If-None-Match`/`If-Modified-Since`) rather than blindly reused — a 304 means the plugin still
+ * gets current data without a body crossing the wire. It also turns `declared_permissions.net`
+ * into a check the host performs, instead of only a Deno flag.
+ *
+ * Bodies are relayed as text, which is what this corpus reads (`res.text()`/`res.json()`).
+ */
+interface HostHttpResultLine {
+  type: "host_http_result";
+  call_id: string;
+  ok: boolean;
+  status?: number;
+  headers?: Record<string, string>;
+  url?: string;
+  body?: string;
+  error?: string;
+}
+
+const pendingRelay = new Map<
+  string,
+  { resolve: (result: HostHttpResultLine) => void; reject: (error: Error) => void }
+>();
+
+function normalizeRequestHeaders(input: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input) return out;
+  if (input instanceof Headers) {
+    input.forEach((value, name) => {
+      out[name] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(input)) {
+    for (const [name, value] of input) out[String(name)] = String(value);
+    return out;
+  }
+  for (const [name, value] of Object.entries(input as Record<string, string>)) {
+    out[name] = String(value);
+  }
+  return out;
+}
+
+/** The subset of `Response` the plugin corpus uses (`ok`/`status`/`url`/`headers.get[SetCookie]`/
+ *  `text()`/`json()`), over one relayed answer. */
+function relayResponse(result: HostHttpResultLine): Response {
+  const raw = result.headers ?? {};
+  const body = result.body ?? "";
+  const status = result.status ?? 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: "",
+    url: result.url ?? "",
+    headers: {
+      get: (name: string) => raw[String(name).toLowerCase()] ?? null,
+      has: (name: string) => Object.prototype.hasOwnProperty.call(raw, String(name).toLowerCase()),
+      // Repeated headers arrive newline-joined (see the host's `collect_headers`).
+      getSetCookie: () => (raw["set-cookie"] ?? "").split("\n").filter(Boolean),
+    },
+    text: async () => body,
+    json: async () => JSON.parse(body),
+    arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    clone: () => relayResponse(result),
+  } as unknown as Response;
+}
+
+function relayFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const request = init ?? {};
+  const extra = request as { redirectLimit?: number };
+  const body =
+    typeof request.body === "string"
+      ? request.body
+      : request.body instanceof URLSearchParams
+        ? request.body.toString()
+        : undefined;
+  const callId = crypto.randomUUID();
+  writeLine({
+    type: "host_http",
+    call_id: callId,
+    method: (request.method ?? "GET").toUpperCase(),
+    url: String(input),
+    headers: normalizeRequestHeaders(request.headers),
+    body,
+    // `manual`/`error` mean "hand me the 3xx"; otherwise the plugin's own `max_redirects` count.
+    redirect_limit: request.redirect === "manual" || request.redirect === "error" ? 0 : extra.redirectLimit,
+  });
+  return new Promise<Response>((resolve, reject) => {
+    const settle = (fn: () => void) => {
+      pendingRelay.delete(callId);
+      fn();
+    };
+    pendingRelay.set(callId, {
+      resolve: (result) => settle(() => resolve(relayResponse(result))),
+      reject: (error) => settle(() => reject(error)),
+    });
+    // A plugin's own `AbortSignal.timeout(...)` must still abort its `fetch` — the relayed request
+    // itself is left to finish host-side (its result is then simply dropped), since cancelling an
+    // upstream request mid-flight buys nothing: the response would be thrown away either way, and
+    // letting it land keeps the host's stored copy revalidatable.
+    const signal = request.signal;
+    if (signal) {
+      const onAbort = () =>
+        settle(() => reject(signal.reason ?? new Error("The request was aborted")));
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+globalThis.fetch = relayFetch as unknown as typeof fetch;
+
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);
 
 const encoder = new TextEncoder();
@@ -861,8 +984,18 @@ while (true) {
     const line = buffer.slice(0, newlineIndex);
     buffer = buffer.slice(newlineIndex + 1);
     if (line.trim().length === 0) continue;
-    const request = JSON.parse(line) as PluginRequest;
+    const request = JSON.parse(line) as PluginRequest | HostHttpResultLine;
+    if ((request as HostHttpResultLine).type === "host_http_result") {
+      const answer = request as HostHttpResultLine;
+      const pending = pendingRelay.get(answer.call_id);
+      if (pending) {
+        pendingRelay.delete(answer.call_id);
+        if (answer.ok) pending.resolve(answer);
+        else pending.reject(new Error(answer.error ?? "the host could not complete this request"));
+      }
+      continue;
+    }
     // Intentionally not awaited: lets requests run concurrently.
-    handleRequest(request);
+    handleRequest(request as PluginRequest);
   }
 }

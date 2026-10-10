@@ -8,12 +8,16 @@ import { fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
+  useFilterCounts,
+  usePreferences,
   useSearch,
+  useSearchSuggest,
   useServerInfo,
   useSetArchiveProgress,
   useSettings,
   useStats,
   useTankoubons,
+  useUpdatePreferences,
 } from "@/api/hooks";
 import type { ArchiveMetadata } from "@/api/types";
 import { confirmDialog, promptDialog } from "@/dialog";
@@ -24,6 +28,12 @@ import {
   UNTAGGED_ONLY,
 } from "@/lib/constants";
 import { routes } from "@/lib/routes";
+import {
+  phraseSuggestions,
+  type SearchSuggestion,
+  tagSuggestions,
+  titleFilterFragment,
+} from "@/lib/searchSuggestions";
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -36,7 +46,6 @@ import {
   MSM_SELECTION_KEY,
 } from "@/lib/storageKeys";
 import {
-  buildSearchToken,
   buildTagList,
   splitTagsByNamespace,
 } from "@/lib/tagFormat";
@@ -60,6 +69,8 @@ export function useLibrary() {
   const tankoubons = useTankoubons();
   const createTankoubon = useCreateTankoubon();
   const { isAuthenticated: loggedIn, usingDefaultPassword } = useSession();
+  const preferences = usePreferences({ enabled: loggedIn });
+  const updatePreferences = useUpdatePreferences();
   const settings = useSettings();
   const stats = useStats(2);
   const queryClient = useQueryClient();
@@ -100,10 +111,17 @@ export function useLibrary() {
   const selectedCategory = urlParams.get("c") ?? "";
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
   const sortby =
-    urlParams.get("sort") ?? localStorage.getItem(INDEX_SORT_KEY) ?? "title";
+    urlParams.get("sort") ??
+    preferences.data?.library_sortby ??
+    localStorage.getItem(INDEX_SORT_KEY) ??
+    "title";
   const order: "asc" | "desc" = (() => {
     const fromUrl = urlParams.get("sortdir");
     if (fromUrl === "asc" || fromUrl === "desc") return fromUrl;
+    const fromPreferences = preferences.data?.library_sortdir;
+    if (fromPreferences === "asc" || fromPreferences === "desc") {
+      return fromPreferences;
+    }
     return (
       (localStorage.getItem(INDEX_ORDER_KEY) as "asc" | "desc" | null) ?? "asc"
     );
@@ -117,10 +135,23 @@ export function useLibrary() {
     appliedFilter?: string;
     selectedCategory?: string;
   }) {
-    if (overrides.sortby !== undefined)
+    const nextSortby = overrides.sortby ?? sortby;
+    const nextOrder = overrides.order ?? order;
+    if (overrides.sortby !== undefined) {
       localStorage.setItem(INDEX_SORT_KEY, overrides.sortby);
-    if (overrides.order !== undefined)
+    }
+    if (overrides.order !== undefined) {
       localStorage.setItem(INDEX_ORDER_KEY, overrides.order);
+    }
+    if (
+      loggedIn &&
+      (overrides.sortby !== undefined || overrides.order !== undefined)
+    ) {
+      updatePreferences.mutate({
+        library_sortby: nextSortby,
+        library_sortdir: nextOrder,
+      });
+    }
     navigate({ search: buildSearch(overrides) });
   }
   const [viewMode, setViewModeState] = useState<"thumbnail" | "compact">(() =>
@@ -225,18 +256,23 @@ export function useLibrary() {
     selectedCategory === NEW_ONLY ||
     selectedCategory === UNTAGGED_ONLY ||
     selectedCategory === TANKOUBON_ONLY;
-  const search = useSearch({
-    filter: appliedFilter,
+  /** The filters every search-shaped request shares — the applied search *and* the autocomplete's
+   *  own hit counts, so a candidate's stated count is the number the page will actually show. */
+  const searchContext = {
     category:
       !isBuiltinSelector && selectedCategory ? selectedCategory : undefined,
-    sortby,
-    order,
-    start: page * PAGE_SIZE,
     newonly: selectedCategory === NEW_ONLY,
     untaggedonly: selectedCategory === UNTAGGED_ONLY,
     tankonly: selectedCategory === TANKOUBON_ONLY,
     hidecompleted: hideCompleted,
     groupbyTanks,
+  };
+  const search = useSearch({
+    filter: appliedFilter,
+    sortby,
+    order,
+    start: page * PAGE_SIZE,
+    ...searchContext,
   });
 
   const shown = search.data?.data ?? [];
@@ -251,20 +287,75 @@ export function useLibrary() {
     [categories.data],
   );
 
-  const currentFragment = filterInput.match(/[^,\s-]*$/)?.[0] ?? "";
-  const tagSuggestions = useMemo(() => {
-    if (!currentFragment) return [];
-    const needle = currentFragment.toLowerCase();
-    return (stats.data ?? [])
-      .map((s) => ({
-        label: s.namespace ? `${s.namespace}:${s.text}` : s.text,
-        insertValue: buildSearchToken(s.namespace ?? "", s.text),
-        weight: s.weight,
-      }))
-      .filter((s) => s.label.toLowerCase().includes(needle))
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, 15);
-  }, [stats.data, currentFragment]);
+  // Title and phrase suggestions both need the backend for something (a title lookup, a candidate's
+  // hit count), so they read a debounced copy of the input — the same 250ms pattern the tankoubon
+  // editor's archive search already uses (`TankoubonEdit.tsx`). Tag completion stays instant: it's
+  // computed locally off the already-fetched tag stats.
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedFilter(filterInput), 250);
+    return () => clearTimeout(timeout);
+  }, [filterInput]);
+
+  const titleFragment = titleFilterFragment(debouncedFilter);
+  const titleSuggest = useSearchSuggest(
+    { filter: titleFragment ?? "", ...searchContext },
+    6,
+  );
+  const phraseRows = useMemo(
+    () => phraseSuggestions(debouncedFilter),
+    [debouncedFilter],
+  );
+  const phraseCounts = useFilterCounts(
+    phraseRows.map((p) => p.insertValue),
+    searchContext,
+  );
+
+  /** Merged autocomplete list: existing tag completions first (unchanged, so nothing a user
+   *  already relies on moves), then real archive titles, then the quoted-phrase rewrites for the
+   *  bare runs in what they typed — see `lib/searchSuggestions.ts` for why those are only ever
+   *  offered as rows and never applied on their own. */
+  const suggestions: SearchSuggestion[] = useMemo(() => {
+    const tags = tagSuggestions(filterInput, stats.data ?? [], 8);
+    const titles: SearchSuggestion[] = (titleSuggest.data?.data ?? []).map((entry) => ({
+      kind: "title",
+      label: entry.title,
+      arcid: entry.arcid,
+    }));
+    const phrases: SearchSuggestion[] = phraseRows.map((row) => ({
+      ...row,
+      count: phraseCounts.data?.[row.insertValue],
+    }));
+    return [...tags, ...titles, ...phrases];
+  }, [filterInput, stats.data, titleSuggest.data, phraseRows, phraseCounts.data]);
+
+  /** Applies one autocomplete row. A title row is an archive the input already matches, so it
+   *  opens that archive instead of editing the filter; every other row replaces exactly the span it
+   *  was built from, leaving the rest of the query (an already-quoted tag, a negation, another
+   *  span's wording) untouched. Never applied automatically — only from a picked row. */
+  function applySuggestion(suggestion: SearchSuggestion) {
+    if (suggestion.kind === "title") {
+      setAutocompleteOpen(false);
+      navigate(routes.reader(suggestion.arcid));
+      return;
+    }
+    // A phrase row is built from the *debounced* input (its hit count needs a request), so its
+    // range can be a keystroke or two behind what is on screen — recompute it against the live
+    // input rather than splicing at a stale offset. Matching on `insertValue` keeps this to the
+    // same row the user actually clicked.
+    const target =
+      suggestion.kind === "phrase"
+        ? (phraseSuggestions(filterInput).find(
+            (row) => row.insertValue === suggestion.insertValue,
+          ) ?? suggestion)
+        : suggestion;
+    const { start, end } = target.replaceRange;
+    setFilterInputOverride(
+      `${filterInput.slice(0, start)}${target.insertValue}${filterInput.slice(end)}`,
+    );
+    setAutocompleteOpen(false);
+    searchInputRef.current?.focus();
+  }
 
   function toggleCategory(id: string) {
     navigateSearch({
@@ -538,7 +629,8 @@ export function useLibrary() {
     clearSelection,
     handleToggleMultiSelect,
     sortedCategories,
-    tagSuggestions,
+    suggestions,
+    applySuggestion,
     contextMenu,
     setContextMenu,
     deleteTarget,

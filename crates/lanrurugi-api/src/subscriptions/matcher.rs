@@ -9,6 +9,7 @@
 //! filter that silently drops things is indistinguishable from a broken subscription.
 
 use lanrurugi_plugin::protocol::DiscoveredCandidate;
+use lanrurugi_storage::subscriptions::PendingReason;
 use lanrurugi_storage::subscriptions::{Condition, FieldOperator, FieldRule, Filters, RuleValue};
 
 /// Why a candidate was rejected, in terms the user can act on.
@@ -48,15 +49,17 @@ impl RejectionRule {
 pub enum Outcome {
     Accepted,
     Rejected(RejectionRule),
-    /// Published too recently; reconsider once `minimum_age_secs` has elapsed.
-    TooSoon,
+    /// Not settled yet — either too recently published, or a rule over a field this listing never
+    /// carried. Carries which of the two it is: they are indistinguishable in a verdict list
+    /// otherwise, and only one of them is about the clock.
+    TooSoon(PendingReason),
 }
 
 /// Parses the `posted_at` shapes a listing may use, to unix seconds.
 ///
-/// Returns `None` for anything unrecognised, and the age rule then treats the work as old enough —
-/// failing open on purpose. Failing closed would make one unparsed date format hold a subscription's
-/// entire catalogue back indefinitely, with nothing in the UI explaining why.
+/// Returns `None` for anything unrecognised. An age rule over such a value is *unsettled*, not
+/// satisfied: the verdict carries `PendingReason::UnknownField` so the UI can say the date could not
+/// be read, rather than either silently downloading on an unverified age or blaming the clock.
 pub fn parse_posted_at(raw: &str) -> Option<i64> {
     let raw = raw.trim();
     // E-Hentai's listing format, verified live: "2026-10-03 13:25" (UTC).
@@ -287,7 +290,7 @@ enum Verdict {
     /// naming the specific tag that was excluded needs the candidate's own tag list.
     Fails(RejectionRule),
     /// Premature or not yet knowable. Propagates to the whole tree — see `evaluate_condition`.
-    Pending,
+    Pending(PendingReason),
 }
 
 /// Why one rule failed, phrased so the user can act on it.
@@ -354,19 +357,29 @@ fn evaluate_condition(
 ) -> Verdict {
     match condition {
         Condition::Rule(rule) => {
-            match rule_holds(
-                &field_value(candidate, &rule.field),
-                rule.operator,
-                &rule.value,
-                now,
-                fold,
-            ) {
+            let value = field_value(candidate, &rule.field);
+            match rule_holds(&value, rule.operator, &rule.value, now, fold) {
                 Some(true) => Verdict::Holds,
-                Some(false) if rule.operator == FieldOperator::OlderThan => Verdict::Pending,
+                // An age rule that is merely premature becomes true on its own, and how much longer
+                // is exactly what the reader is waiting for — so it travels with the verdict.
+                Some(false) if rule.operator == FieldOperator::OlderThan => {
+                    let remaining_secs = match (&value, &rule.value) {
+                        (FieldValue::Date(posted), RuleValue::Number(secs)) => {
+                            (*secs as i64 - (now - *posted)).max(0)
+                        }
+                        _ => 0,
+                    };
+                    Verdict::Pending(PendingReason::Age {
+                        field: rule.field.clone(),
+                        remaining_secs,
+                    })
+                }
                 Some(false) => Verdict::Fails(rejection_for(rule, candidate, fold)),
                 // The field is absent — on this candidate, or because the source stopped providing
                 // it. Either way the answer may differ later, and a rejection would not.
-                None => Verdict::Pending,
+                None => Verdict::Pending(PendingReason::UnknownField {
+                    field: rule.field.clone(),
+                }),
             }
         }
 
@@ -375,7 +388,7 @@ fn evaluate_condition(
             for child in children {
                 match evaluate_condition(child, candidate, now, fold) {
                     Verdict::Holds => {}
-                    Verdict::Pending => return Verdict::Pending,
+                    Verdict::Pending(reason) => return Verdict::Pending(reason),
                     Verdict::Fails(f) => {
                         // Kept rather than returned at once: a later child may still be pending, and
                         // pending outranks a failure.
@@ -395,12 +408,14 @@ fn evaluate_condition(
                 return Verdict::Fails(RejectionRule::FieldRule("any".into()));
             }
             let mut holds = false;
-            let mut pending = false;
+            let mut pending: Option<PendingReason> = None;
             let mut first_failure = None;
             for child in children {
                 match evaluate_condition(child, candidate, now, fold) {
                     Verdict::Holds => holds = true,
-                    Verdict::Pending => pending = true,
+                    // First one wins: the earliest unsettled rule in document order is the one the
+                    // reader wrote first, and naming one reason beats naming all of them.
+                    Verdict::Pending(reason) => pending = pending.or(Some(reason)),
                     Verdict::Fails(f) => {
                         if first_failure.is_none() {
                             first_failure = Some(f);
@@ -410,8 +425,8 @@ fn evaluate_condition(
             }
             // Pending first even when a sibling already holds: the pending branch might also come to
             // hold, and the tree as a whole is not settled until nothing in it can still change.
-            if pending {
-                Verdict::Pending
+            if let Some(reason) = pending {
+                Verdict::Pending(reason)
             } else if holds {
                 Verdict::Holds
             } else {
@@ -426,7 +441,7 @@ fn evaluate_condition(
             Verdict::Fails(_) => Verdict::Holds,
             // Negating an unknown gives an unknown: a work excluded on the strength of a value that
             // has not arrived yet would be excluded for the wrong reason.
-            Verdict::Pending => Verdict::Pending,
+            Verdict::Pending(reason) => Verdict::Pending(reason),
         },
     }
 }
@@ -452,7 +467,7 @@ pub fn evaluate_outcome(
     if let Some(condition) = filters.effective_condition() {
         match evaluate_condition(&condition, candidate, now, fold) {
             Verdict::Holds => {}
-            Verdict::Pending => return Outcome::TooSoon,
+            Verdict::Pending(reason) => return Outcome::TooSoon(reason),
             Verdict::Fails(rule) => return Outcome::Rejected(rule),
         }
     }
@@ -538,10 +553,18 @@ mod tests {
         let f = with(Condition::All {
             children: vec![age(3.0 * 3600.0), rating_at_least(4.0)],
         });
-        assert_eq!(
-            evaluate_outcome(&dated("2023-11-14 22:00", Some(5.0)), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+        // Premature by ~13 minutes: the reason says so, and how much longer is left.
+        match evaluate_outcome(&dated("2023-11-14 22:00", Some(5.0)), &f, &[], NOW, &plain) {
+            Outcome::TooSoon(PendingReason::Age {
+                field,
+                remaining_secs,
+            }) => {
+                assert_eq!(field, "posted_at");
+                // NOW is 13m20s after the work was posted, so 3h minus that is what is left.
+                assert_eq!(remaining_secs, 3 * 3600 - (13 * 60 + 20));
+            }
+            other => panic!("expected an age wait, got {other:?}"),
+        }
     }
 
     #[test]
@@ -694,10 +717,10 @@ mod tests {
             children: vec![age(3.0 * 3600.0), rating_at_least(1.0)],
         });
         // Rating passes outright, but the age branch is merely premature.
-        assert_eq!(
+        assert!(matches!(
             evaluate_outcome(&dated("2023-11-14 22:00", Some(5.0)), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+            Outcome::TooSoon(PendingReason::Age { .. })
+        ));
     }
 
     #[test]
@@ -707,10 +730,10 @@ mod tests {
         });
         // Rating fails AND the age is premature — the premature answer must win, since the rating
         // itself may still change.
-        assert_eq!(
+        assert!(matches!(
             evaluate_outcome(&dated("2023-11-14 22:00", Some(1.0)), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+            Outcome::TooSoon(PendingReason::Age { .. })
+        ));
     }
 
     /// Negating an unknown gives an unknown: excluding a work on the strength of a value that has not
@@ -720,19 +743,55 @@ mod tests {
         let f = with(Condition::Not {
             child: Box::new(rating_at_least(4.0)),
         });
-        assert_eq!(
+        assert!(matches!(
             evaluate_outcome(&candidate(&["a"], None), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+            Outcome::TooSoon(PendingReason::UnknownField { ref field }) if field == "rating"
+        ));
     }
 
     #[test]
     fn a_rule_over_an_absent_value_holds_rather_than_rejects() {
         let f = with(rating_at_least(4.0));
-        assert_eq!(
+        assert!(matches!(
             evaluate_outcome(&candidate(&["a"], None), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+            Outcome::TooSoon(PendingReason::UnknownField { ref field }) if field == "rating"
+        ));
+    }
+
+    /// The reported shape behind issue #115's sibling report: a condition of the form
+    /// `not(uploader equals X and male includes_all [yaoi])` over a listing that carries no uploader
+    /// at all. Every candidate waits, and the UI blamed the publish time — which sent the reader
+    /// looking at their clock instead of at the field their condition needed.
+    #[test]
+    fn an_unknown_field_inside_a_negation_is_reported_as_the_field_not_as_age() {
+        let f = with(Condition::Not {
+            child: Box::new(Condition::All {
+                children: vec![
+                    rule(
+                        "uploader",
+                        FieldOperator::Equals,
+                        RuleValue::Text("someone".into()),
+                    ),
+                    rule(
+                        "male",
+                        FieldOperator::IncludesAll,
+                        RuleValue::List(vec!["yaoi".into()]),
+                    ),
+                ],
+            }),
+        });
+        match evaluate_outcome(
+            &candidate(&["language:chinese"], Some(5.0)),
+            &f,
+            &[],
+            NOW,
+            &plain,
+        ) {
+            Outcome::TooSoon(PendingReason::UnknownField { field }) => {
+                assert_eq!(field, "uploader")
+            }
+            other => panic!("expected an unknown-field wait, got {other:?}"),
+        }
     }
 
     #[test]
@@ -754,10 +813,10 @@ mod tests {
     fn an_unparseable_posted_at_does_not_hold_a_work_back() {
         let f = with(age(3.0 * 3600.0));
         // Unparseable reads as absent; an absent date is not evidence that the work is new.
-        assert_eq!(
+        assert!(matches!(
             evaluate_outcome(&dated("sometime last tuesday", None), &f, &[], NOW, &plain),
-            Outcome::TooSoon
-        );
+            Outcome::TooSoon(PendingReason::UnknownField { ref field }) if field == "posted_at"
+        ));
     }
 
     #[test]

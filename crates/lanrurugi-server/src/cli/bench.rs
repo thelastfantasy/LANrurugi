@@ -124,6 +124,9 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
 
     let state = AppState {
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis,
         repos,
         jobs: JobRegistry::new(),

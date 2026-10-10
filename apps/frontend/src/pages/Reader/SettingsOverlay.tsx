@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Settings } from "@/api/types";
+import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { RadioGroup, RadioItem } from "@/components/common-ui/Form/Radio";
 import { Switch } from "@/components/common-ui/Form/Switch";
 import {
@@ -104,6 +105,20 @@ export function SettingsOverlay({
   loggedIn: boolean;
 }) {
   const { t } = useTranslation();
+
+  // The two numeric fields below are drafts with an explicit Apply (and Enter) — legacy's own
+  // shape for these, kept here — so they hold the in-progress text rather than writing on every
+  // keystroke. Blank is allowed mid-edit; committing falls back to the old `|| 2` /
+  // `|| current` defaults, unchanged.
+  const [preloadDraft, setPreloadDraft] = useState<number | "">(settings.preloadCount);
+  const [jScrollDraft, setJScrollDraft] = useState<number | "">(settings.jScrollAmount);
+  const [autoNextDraft, setAutoNextDraft] = useState<number | "">(settings.autoNextPageInterval);
+  // Deliberately *not* re-seeded from `settings` afterwards: the fields these replace were
+  // uncontrolled (`defaultValue`), so they never re-synced either — and re-seeding would need a
+  // setState-in-effect, which this repo's lint (rightly) rejects.
+  const commitPreload = () => Number(preloadDraft) || 2;
+  const commitJScroll = () => Number(jScrollDraft) || settings.jScrollAmount;
+  const commitAutoNext = () => Number(autoNextDraft) || 10;
 
   useEffect(() => {
     ensureLink(CONFIG_CSS_ID, "/legacy/config.css");
@@ -246,21 +261,19 @@ export function SettingsOverlay({
                 title={t("reader.howManyImagesToPreload") ?? ""}
                 description={t("reader.theDefaultIsTwoImages") ?? undefined}
               >
-                <input
+                <NullableNumberInput
                   id="preload-input"
-                  className="stdinput number-input-no-native-spinner"
-                  style={{
-                    width: "4em",
-                    height: CONTROL_HEIGHT,
-                    boxSizing: "border-box",
-                  }}
-                  type="number"
-                  defaultValue={settings.preloadCount}
+                  className="stdinput"
+                  // The wrapper carries the width; the input itself keeps this overlay's own control
+                  // height (25px, taller than the settings tables' 21px) — the stepper positions
+                  // itself against whatever height it actually gets.
+                  style={{ width: "4em" }}
+                  inputStyle={{ height: CONTROL_HEIGHT }}
+                  min={0}
+                  value={preloadDraft}
+                  onValueChange={setPreloadDraft}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter")
-                      update({
-                        preloadCount: Number(e.currentTarget.value) || 2,
-                      });
+                    if (e.key === "Enter") update({ preloadCount: commitPreload() });
                   }}
                 />
                 <input
@@ -268,11 +281,7 @@ export function SettingsOverlay({
                   type="button"
                   style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
                   value={t("reader.apply") ?? undefined}
-                  onClick={(e) => {
-                    const input = e.currentTarget
-                      .previousElementSibling as HTMLInputElement;
-                    update({ preloadCount: Number(input.value) || 2 });
-                  }}
+                  onClick={() => update({ preloadCount: commitPreload() })}
                 />
               </SettingSection>
 
@@ -361,21 +370,16 @@ export function SettingsOverlay({
             title={t("reader.autoNextPageIntervalIn") ?? ""}
             description={t("reader.theDefaultIs10Seconds") ?? undefined}
           >
-            <input
+            <NullableNumberInput
               id="auto-next-page-input"
               className="stdinput"
-              style={{
-                width: "8em",
-                height: CONTROL_HEIGHT,
-                boxSizing: "border-box",
-              }}
-              defaultValue={settings.autoNextPageInterval}
+              style={{ width: "8em" }}
+              inputStyle={{ height: CONTROL_HEIGHT }}
+              min={1}
+              value={autoNextDraft}
+              onValueChange={setAutoNextDraft}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  update({
-                    autoNextPageInterval: Number(e.currentTarget.value) || 10,
-                  });
-                }
+                if (e.key === "Enter") update({ autoNextPageInterval: commitAutoNext() });
               }}
             />
             <input
@@ -383,11 +387,7 @@ export function SettingsOverlay({
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.apply") ?? undefined}
-              onClick={(e) => {
-                const input = e.currentTarget
-                  .previousElementSibling as HTMLInputElement;
-                update({ autoNextPageInterval: Number(input.value) || 10 });
-              }}
+              onClick={() => update({ autoNextPageInterval: commitAutoNext() })}
             />
           </SettingSection>
 
@@ -408,23 +408,16 @@ export function SettingsOverlay({
               </option>
               <option value={J_SCROLL_UNIT.PX}>{t("reader.pixels")}</option>
             </select>
-            <input
+            <NullableNumberInput
               id="j-scroll-amount-input"
-              className="stdinput number-input-no-native-spinner"
-              type="number"
-              style={{
-                width: "6em",
-                height: CONTROL_HEIGHT,
-                boxSizing: "border-box",
-              }}
-              defaultValue={settings.jScrollAmount}
+              className="stdinput"
+              style={{ width: "6em" }}
+              inputStyle={{ height: CONTROL_HEIGHT }}
+              min={0}
+              value={jScrollDraft}
+              onValueChange={setJScrollDraft}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  update({
-                    jScrollAmount:
-                      Number(e.currentTarget.value) || settings.jScrollAmount,
-                  });
-                }
+                if (e.key === "Enter") update({ jScrollAmount: commitJScroll() });
               }}
             />
             <input
@@ -432,13 +425,7 @@ export function SettingsOverlay({
               type="button"
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.apply") ?? undefined}
-              onClick={(e) => {
-                const input = e.currentTarget
-                  .previousElementSibling as HTMLInputElement;
-                update({
-                  jScrollAmount: Number(input.value) || settings.jScrollAmount,
-                });
-              }}
+              onClick={() => update({ jScrollAmount: commitJScroll() })}
             />
           </SettingSection>
 

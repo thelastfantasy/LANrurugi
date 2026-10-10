@@ -460,7 +460,6 @@
   "settings.useLastModifiedTime": "Dùng thời gian \"Sửa đổi lần cuối\"",
   "batch.usePlugin": "Dùng Plugin",
   "settings.useWebpForThumbnails": "Dùng WebP cho ảnh thu nhỏ",
-  "settings.useHighqualityThumbnailsForPages": "Dùng ảnh thu nhỏ chất lượng cao cho các trang",
   "batch.usePluginLabel": "Dùng plugin :",
   "Version %1 %2": "Phiên bản %1 - %2",
   "View LANrurugi Logs": "Xem nhật ký LANrurugi",

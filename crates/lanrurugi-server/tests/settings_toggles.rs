@@ -92,6 +92,9 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         ),
         subscriptions_in_flight: Default::default(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
+        discovery_singleflight: std::sync::Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(8),
+        ),
         redis: redis.clone(),
         repos,
         jobs: JobRegistry::new(),

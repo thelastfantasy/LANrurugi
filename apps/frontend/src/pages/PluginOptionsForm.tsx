@@ -11,6 +11,7 @@ import type {
 } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
+import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { toast } from "@/toast"
 
 import { ICON_BUTTON_STYLE } from "./Upload/shared"
@@ -174,22 +175,26 @@ function PluginOptionsFormBody({
                 />
               </td>
               <td>
-                <input
-                  className="stdinput number-input-no-native-spinner"
-                  type="number"
+                <NullableNumberInput
+                  className="stdinput"
+                  style={{ width: "100%" }}
+                  // A whole number of simultaneous downloads is the only thing this rule can mean.
+                  step={1}
                   min={1}
-                  value={row.max_concurrent}
-                  onChange={(e) => updateRow(i, { max_concurrent: e.target.value })}
+                  // Blank is a real state here: the row may set only a byte rate, or only a pattern.
+                  value={row.max_concurrent === "" ? "" : Number(row.max_concurrent)}
+                  onValueChange={(v) => updateRow(i, { max_concurrent: v === "" ? "" : String(v) })}
                 />
               </td>
               <td>
-                <input
-                  className="stdinput number-input-no-native-spinner"
-                  type="number"
+                <NullableNumberInput
+                  className="stdinput"
+                  style={{ width: "100%" }}
                   min={0}
+                  // Fractional KB/s is legitimate here, so `any` rather than an integer step.
                   step="any"
-                  value={row.max_bytes_per_sec}
-                  onChange={(e) => updateRow(i, { max_bytes_per_sec: e.target.value })}
+                  value={row.max_bytes_per_sec === "" ? "" : Number(row.max_bytes_per_sec)}
+                  onValueChange={(v) => updateRow(i, { max_bytes_per_sec: v === "" ? "" : String(v) })}
                 />
               </td>
               <td>

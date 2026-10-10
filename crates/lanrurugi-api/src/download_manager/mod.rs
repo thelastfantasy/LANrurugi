@@ -45,6 +45,11 @@ pub struct DownloadManager {
     /// *start*, not per byte).
     semaphores: Mutex<HashMap<String, SizedSemaphore>>,
     rate_limiters: RateLimiterMap,
+    /// One permit pool for this plugin's download *jobs* — see
+    /// [`domain_rules::job_capacity`] for the capacity's own derivation and why the job (not just
+    /// the transfer) needs one. Per-`DownloadManager` rather than per-key: there is already one
+    /// manager per plugin, which is the granularity the capacity is derived at.
+    job_semaphore: Mutex<Option<SizedSemaphore>>,
 }
 
 /// A concurrency permit plus the initial resolved rate limit (kept for caller convenience — the
@@ -95,6 +100,75 @@ impl DownloadManager {
     /// `cancel.is_cancelled()` on its own. Returns `Err(DownloadError::Cancelled)` — the same
     /// variant every other cancellation point in this pipeline already produces — rather than a
     /// new error kind, so callers don't need a second cancellation check.
+    /// Whether a job permit is unavailable right now, i.e. [`Self::acquire_job`] would block.
+    /// Read-only, and the same "not built yet, or built at a stale capacity, reads as free" rule the
+    /// per-host probe used to carry.
+    ///
+    /// Exists so a queue item can be labelled `Waiting` *before* a download blocks — otherwise
+    /// "running the plugin" and "queued behind this plugin's own concurrency limit" look identical
+    /// to the user.
+    pub async fn is_job_saturated(&self, capacity: Option<u32>) -> bool {
+        let Some(capacity) = capacity else {
+            return false;
+        };
+        let semaphores = self.job_semaphore.lock().await;
+        match semaphores.as_ref() {
+            Some(entry) if entry.capacity == capacity.max(1) as usize => {
+                entry.semaphore.available_permits() == 0
+            }
+            _ => false,
+        }
+    }
+
+    /// Acquires one of the plugin's `capacity` job permits, held for as long as the returned permit
+    /// lives — a download's whole network phase. `None` capacity means the plugin declares no
+    /// concurrency limit at all, and the returned permit then holds nothing.
+    ///
+    /// Cancel-safe in the same way [`Self::acquire`] is: a Stop while queued takes effect
+    /// immediately rather than after some other job finishes.
+    pub async fn acquire_job(
+        &self,
+        capacity: Option<u32>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<DownloadPermit, crate::download_manager::stream::DownloadError> {
+        let Some(capacity) = capacity else {
+            return Ok(DownloadPermit {
+                _permit: None,
+                max_bytes_per_sec: None,
+                matched_pattern: String::new(),
+            });
+        };
+        let capacity = capacity.max(1) as usize;
+        let sem = {
+            let mut slot = self.job_semaphore.lock().await;
+            let entry = slot.get_or_insert_with(|| SizedSemaphore {
+                semaphore: Arc::new(Semaphore::new(capacity)),
+                capacity,
+            });
+            if entry.capacity != capacity {
+                // Same FR-006 rule as the per-domain pools: a capacity change replaces the pool
+                // rather than resizing it in place, and a permit already held stays valid.
+                *entry = SizedSemaphore {
+                    semaphore: Arc::new(Semaphore::new(capacity)),
+                    capacity,
+                };
+            }
+            entry.semaphore.clone()
+        };
+        let acquired = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return Err(crate::download_manager::stream::DownloadError::Cancelled);
+            }
+            permit = sem.acquire_owned() => permit.expect("semaphore is never closed"),
+        };
+        Ok(DownloadPermit {
+            _permit: Some(acquired),
+            max_bytes_per_sec: None,
+            matched_pattern: String::new(),
+        })
+    }
+
     pub async fn acquire(
         &self,
         hostname: &str,
@@ -187,6 +261,37 @@ mod tests {
 
     fn no_cancel() -> tokio_util::sync::CancellationToken {
         tokio_util::sync::CancellationToken::new()
+    }
+
+    /// The job gate's own read-only probe: saturated only for a plugin that declares a limit, and
+    /// only while that limit is fully held.
+    #[tokio::test]
+    async fn job_saturation_is_only_reported_while_a_declared_limit_is_fully_held() {
+        let mgr = DownloadManager::new();
+
+        // No declared concurrency at all: never saturated.
+        assert!(!mgr.is_job_saturated(None).await);
+        // Declared, but nothing holds it yet — including before the pool is even built.
+        assert!(!mgr.is_job_saturated(Some(1)).await);
+
+        let held = mgr.acquire_job(Some(1), &no_cancel()).await.unwrap();
+        assert!(mgr.is_job_saturated(Some(1)).await);
+        drop(held);
+        assert!(
+            !mgr.is_job_saturated(Some(1)).await,
+            "releasing the only permit must clear the saturation"
+        );
+    }
+
+    /// A plugin that declares no limit gets an unmanaged (empty) job permit rather than a pool.
+    #[tokio::test]
+    async fn an_unlimited_plugin_never_queues_on_the_job_gate() {
+        let mgr = DownloadManager::new();
+        let mut permits = Vec::new();
+        for _ in 0..4 {
+            permits.push(mgr.acquire_job(None, &no_cancel()).await.unwrap());
+        }
+        assert_eq!(permits.len(), 4);
     }
 
     #[tokio::test]

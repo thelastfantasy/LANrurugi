@@ -509,3 +509,15 @@ confirm that with a metered backend selected, look-ahead activity respects a con
 - Interface localization (User Story 7) covers UI chrome only (menus, labels, messages), not the
   content of user-supplied archive metadata or extension-fetched tags/summaries, which remain in
   whatever language the source data/extension provides.
+- **Deliberate search-semantics deviation (recorded 2026-10-10, per the constitution's
+  compatibility-affecting-change sign-off rule).** The *title* half of a quoted (or `$`-suffixed)
+  token no longer reproduces legacy's whole-title equality — legacy's `"$tag\x00*"` pattern against
+  a `"<title>\x00id"` member could only ever match a title identical to the quoted string, so
+  quoting was useless for the title-phrase lookup it looks like it should serve (verified live
+  before the change: `"pink album"` returned 0 against a title stored as `[新堂エル] the pink album
+  [dl版]`, while the bare `pink album` returned 1). It now means "this phrase appears anywhere in
+  the title", a strict superset of the previous match set — no archive a quoted query used to find
+  is lost, though additional ones can now match. The *tag* half of an exact token is untouched
+  (still the literal `INDEX_<tag>` key first, then the existing glob fallback). Additive to the API
+  surface alongside it: `GET /api/search/suggest` (title autocomplete; same filters, same
+  `restrict_to_archive_ids` guest scoping, `guest_visitor`-whitelisted in `route_policy.csv`).

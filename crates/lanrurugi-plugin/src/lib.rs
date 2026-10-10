@@ -1,3 +1,4 @@
+pub mod http;
 pub mod permissions;
 pub mod pool;
 pub mod protocol;
