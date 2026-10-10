@@ -20,6 +20,11 @@ export const DEFAULT_CUSTOM_COLUMNS = ["artist", "series"]
 // The remaining keys below all mirror legacy's own Library-index `localStorage` keys 1:1, so a
 // value a user already set through legacy keeps meaning the same thing in this app.
 
+/** The search panel's own recent-search list (most recent first, capped) — this app's stand-in for
+ * the history/bookmarks rows an address bar shows before you type. Not a legacy key: legacy's
+ * search box had no history. */
+export const RECENT_SEARCHES_KEY = "recentSearches"
+
 /** Recently Added carousel open/closed state — `"1"`/`"0"` string, not a real boolean (matches
  * legacy's own storage exactly). */
 export const CAROUSEL_OPEN_KEY = "carouselOpen"

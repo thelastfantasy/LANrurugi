@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  appendToken,
+  buildDateRangeToken,
   type FilterSuggestion,
   parseSearchTerms,
   phraseSuggestions,
+  QUICK_FILTER_TOKENS,
   tagSuggestions,
   titleFilterFragment,
 } from "@/lib/searchSuggestions"
@@ -148,5 +151,44 @@ describe("tagSuggestions", () => {
   it("offers nothing after a delimiter or an empty input", () => {
     expect(tagSuggestions("", stats, 8)).toEqual([])
     expect(tagSuggestions("artist:jane ", stats, 8)).toEqual([])
+  })
+})
+
+describe("buildDateRangeToken", () => {
+  it("emits two half-open bounds for a range", () => {
+    expect(buildDateRangeToken("2026-01-01", "2026-03-31")).toBe(
+      "date_added:>=2026-01-01 date_added:<=2026-03-31",
+    )
+  })
+
+  it("swaps an inverted range instead of returning something that matches nothing", () => {
+    expect(buildDateRangeToken("2026-03-31", "2026-01-01")).toBe(
+      "date_added:>=2026-01-01 date_added:<=2026-03-31",
+    )
+  })
+
+  it("accepts a single bound and skips an unusable one", () => {
+    expect(buildDateRangeToken("2026-01-01", "")).toBe("date_added:>=2026-01-01")
+    expect(buildDateRangeToken("", "2026-01-01")).toBe("date_added:<=2026-01-01")
+    expect(buildDateRangeToken("2026-01-01", "not-a-date")).toBe("date_added:>=2026-01-01")
+    expect(buildDateRangeToken("", "")).toBeNull()
+  })
+})
+
+describe("appendToken", () => {
+  it("separates with exactly one space and never fuses onto a half-typed word", () => {
+    expect(appendToken("artist:jane", "is:new")).toBe("artist:jane is:new")
+    expect(appendToken("artist:jane ", "is:new")).toBe("artist:jane is:new")
+    expect(appendToken("", "is:new")).toBe("is:new")
+  })
+})
+
+describe("QUICK_FILTER_TOKENS", () => {
+  it("only offers operators the engine actually implements", () => {
+    // Guards against a chip being added here for a namespace nothing answers: every token is an
+    // `is:`/`has:`/`in:` operator, which `engine.rs::attribute_filter` owns.
+    for (const token of QUICK_FILTER_TOKENS) {
+      expect(token).toMatch(/^(is|has|in):[a-z-]+$/)
+    }
   })
 })

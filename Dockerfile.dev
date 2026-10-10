@@ -51,9 +51,17 @@ COPY crates ./crates
 # rebuilds, but their contents are NOT part of the image layer — the binary
 # must be copied out explicitly for the `COPY --from` in the runtime stage
 # to find it.
+# `CARGO_BUILD_JOBS` default is deliberately low: this is a *release* build of the whole workspace
+# (linker- and rustc-heavy), and cargo's default is "one job per core" — confirmed live (2026-10-10)
+# that it can drive the host's user slice past `systemd-oomd`'s 50% sustained-pressure threshold and
+# get an unrelated process killed, which is exactly what `mise run dev-rebuild`'s own
+# `host-pressure-gate.sh` pre-check can't prevent on its own (it only sees the pressure *before* the
+# build starts). Raise it per-machine with `LANRURUGI_BUILD_JOBS=<n> mise run dev-rebuild-auto` if
+# you know your host has headroom.
+ARG CARGO_BUILD_JOBS=2
 RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lrr-cargo-target,target=/build/target \
-    cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker && \
+    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker && \
     cp /build/target/release/lanrurugi-server /build/lanrurugi-server && \
     cp /build/target/release/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker && \
     cp /build/target/release/lanrurugi-embed-worker /build/lanrurugi-embed-worker

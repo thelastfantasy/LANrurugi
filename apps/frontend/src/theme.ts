@@ -96,6 +96,17 @@ export const FLOATING_POPUP_SHADOW = "0 8px 24px rgba(0,0,0,0.35), 0 2px 6px rgb
 export const FLOATING_POPUP_TRANSITION_CLASSES =
   "transition-[transform,opacity] duration-150 ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0"
 
+// Same Base UI hooks, but a top-down *reveal* rather than a corner scale: the Library search panel
+// unfolds downward from the bar it wraps, which is the effect an address bar's own dropdown has.
+// `clip-path` (not `scale-y`) because a vertical scale visibly squashes the row text on the way in,
+// and this keeps the panel's top edge — the part sitting behind the bar — fixed while the rest
+// reveals. Pair with the panel's own `borderRadius: 0`: the inset has no radius to match.
+// The *settled* state spells its clip-path out as `inset(0 0 0 0)` rather than leaving it unset:
+// `clip-path` cannot interpolate to or from `none`, so without it the browser jumps straight to the
+// final value and only the opacity actually animates (verified by sampling mid-transition).
+export const FLOATING_POPUP_REVEAL_DOWN_CLASSES =
+  "transition-[clip-path,opacity] duration-150 ease-out [clip-path:inset(0_0_0_0_round_4px)] data-[starting-style]:opacity-0 data-[starting-style]:[clip-path:inset(0_0_100%_0_round_4px)] data-[ending-style]:opacity-0 data-[ending-style]:[clip-path:inset(0_0_100%_0_round_4px)]"
+
 // Legacy's `.base-overlay` (the Archive Overview modal) hardcodes `z-index: 9000` — anything
 // rendering on top of that modal itself (not just a popup triggered from inside it) must clear it.
 export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500

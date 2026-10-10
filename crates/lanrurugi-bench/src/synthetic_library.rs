@@ -51,14 +51,27 @@ fn mix64(mut x: u64) -> u64 {
 /// catalogue N *distinct* archives) rather than exercising it, since legacy would never report
 /// more than a couple of distinct IDs no matter how long a scan runs. Real manga volumes each
 /// have distinct cover art for the same reason.
-fn page_jpeg_bytes(index: usize) -> Vec<u8> {
+/// The page appearance `index` maps to: a solid RGB colour plus pixel dimensions, all derived from
+/// `mix64(index)`. Split out of [`page_jpeg_bytes`] so the property that actually matters —
+/// distinct indices never producing the same page — can be asserted directly, and against the
+/// specific short-period failure modes this generator really had, instead of only being inferable
+/// from a large sample of generated JPEGs (see the module's own regression tests).
+fn page_spec(index: usize) -> (u32, u32, [u8; 3]) {
     let h = mix64(index as u64);
-    let r = (h & 0xFF) as u8;
-    let g = ((h >> 8) & 0xFF) as u8;
-    let b = ((h >> 16) & 0xFF) as u8;
-    let width = 800 + ((h >> 24) % 64) as u32;
-    let height = 1200 + ((h >> 32) % 64) as u32;
-    let img = image::RgbImage::from_pixel(width, height, image::Rgb([r, g, b]));
+    (
+        800 + ((h >> 24) % 64) as u32,
+        1200 + ((h >> 32) % 64) as u32,
+        [
+            (h & 0xFF) as u8,
+            ((h >> 8) & 0xFF) as u8,
+            ((h >> 16) & 0xFF) as u8,
+        ],
+    )
+}
+
+fn page_jpeg_bytes(index: usize) -> Vec<u8> {
+    let (width, height, rgb) = page_spec(index);
+    let img = image::RgbImage::from_pixel(width, height, image::Rgb(rgb));
     let mut bytes = Vec::new();
     img.write_to(
         &mut std::io::Cursor::new(&mut bytes),
@@ -143,22 +156,53 @@ mod tests {
         assert!(sizes.len() > 1);
     }
 
+    // Regression guard for the false-merge trap this generator fell into *twice*: first with one
+    // shared image across every archive, then again with a naive `index * odd_constant % 256` pixel
+    // derivation that turned out to be a bijection mod 256 — i.e. it silently repeated with period
+    // 256 (verified against the real difegue/lanraragi image: that version produced only 481
+    // distinct legacy archive records out of 2000 files).
+    //
+    // Asserted against `page_spec` directly rather than through generated JPEGs, because that turns
+    // a probabilistic large-sample check into a *deterministic* one: asserting `spec(i) !=
+    // spec(i+p)` for a specific small `p` fails outright on the exact old formula, while a
+    // "2000 generated archives are all distinct" check only samples the collision space and would
+    // silently pass a formula whose period happened to exceed the sample size. The old version of
+    // this test generated 2000 archives x 20 JPEG pages (~110s, 63% of the whole workspace test
+    // suite's runtime) to get there; this runs in microseconds and covers strictly more periods.
+    #[test]
+    fn page_specs_never_repeat_with_a_short_period() {
+        const SAMPLE: usize = 5_000;
+        for i in 0..SAMPLE {
+            // Not one shared page for every archive.
+            assert_ne!(
+                page_spec(i),
+                page_spec(i + 1),
+                "index {i} repeated its neighbour"
+            );
+            // Not the documented period-256 collapse, plus the small powers of two around it that a
+            // bit-mixing bug (e.g. a shift/mask mistake) would produce.
+            for period in [2usize, 4, 8, 16, 32, 64, 128, 256, 512] {
+                assert_ne!(
+                    page_spec(i),
+                    page_spec(i + period),
+                    "index {i} repeated with period {period}"
+                );
+            }
+        }
+    }
+
+    /// The end-to-end half of the same property, through the real zip write + read path: the bytes
+    /// legacy's 512KB-leading-bytes hash samples must differ per archive. Deliberately small — the
+    /// *derivation* is what the deterministic test above pins; this only has to prove the generated
+    /// files actually reflect it.
     #[test]
     fn distinct_archives_have_distinct_leading_512000_bytes() {
-        // Regression guard for the false-merge trap this generator fell into *twice*: first with
-        // one shared image across every archive, then again with a naive
-        // `index * odd_constant % 256` pixel derivation that turned out to be a bijection mod
-        // 256 — i.e. it silently repeated with period 256. 2000 (not 20) is the point: this test
-        // originally used a sample too small to span even one period, so it passed while the bug
-        // was still live. Verified against the real difegue/lanraragi image: this exact
-        // scale/config combination produced only 481 distinct legacy archive records out of 2000
-        // files before the `mix64` fix.
-        const COUNT: usize = 2000;
+        const COUNT: usize = 32;
         let dir = tempfile::tempdir().unwrap();
         let config = GenerateConfig {
             output_dir: dir.path().to_path_buf(),
             archive_count: COUNT,
-            pages_per_archive: 20,
+            pages_per_archive: 2,
         };
         generate(&config).unwrap();
 

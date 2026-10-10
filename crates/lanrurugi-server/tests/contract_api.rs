@@ -955,8 +955,23 @@ async fn settings_defaults_then_roundtrips_through_shared_config_hash() {
 /// `SET_??????????` key-discovery glob (exactly a 10-digit timestamp) — the category was created
 /// correctly and directly `GET`-able by id, but invisible to `GET /categories` and everything else
 /// that lists categories. This exercises the real discovery path, not just direct lookup.
+/// Serializes the two `subfolders_to_*` tests below — the only tests in this file that read a
+/// *global* listing (`/api/categories`, `/api/tankoubons`) right after creating an entry in it.
+/// Cargo runs this file's tests on parallel threads against one shared Redis, so whichever one
+/// asserts while the other has already created its own subfolder-derived entry can see it.
+///
+/// The window is real, not theoretical: `create_category` mirrors legacy's `SET_<now>` id
+/// allocation with a check-then-save loop (`lanrurugi-api/src/categories.rs`), so two creations in
+/// the same second where *both checks run before either save* pick the same id and one clobbers the
+/// other. Holding this for the whole test body removes the concurrency (each one then sees the
+/// other's key on its own check and bumps to `SET_<now+1>`, exactly as legacy's loop intends).
+/// The same check-then-save race between two genuinely concurrent HTTP requests stays a
+/// product-side, legacy-inherited property — deliberately not changed here.
+static GLOBAL_LISTING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
+    let _serial = GLOBAL_LISTING_LOCK.lock().await;
     let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;
@@ -1146,6 +1161,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
 /// Tankoubon, and the created Tankoubons are visible through the normal listing endpoint.
 #[tokio::test]
 async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
+    let _serial = GLOBAL_LISTING_LOCK.lock().await;
     let Some(redis) = lanrurugi_storage::test_support::test_redis_dbs().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
         return;

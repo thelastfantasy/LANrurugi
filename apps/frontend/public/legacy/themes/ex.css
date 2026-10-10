@@ -1073,3 +1073,25 @@ div.id4 {
 .stdbtn.queue-tab-active {
   border-color: #3b97ea;
 }
+
+
+/* `.search-panel-item-highlighted`: the Library search box's autocomplete panel — its own name for
+   the keyboard/pointer-highlighted row (Base UI's `data-highlighted`), per this file's own
+   convention that a shared color still gets one class name per component rather than a class
+   reused across components. Same value this theme's own `.activity-combobox-item-highlighted` uses,
+   so "the row you are about to pick" reads identically everywhere. */
+.search-panel-item-highlighted[data-highlighted] {
+  background-color: rgba(240, 165, 0, 0.18);
+}
+
+
+/* `.search-input-focus`: the Library search bar's own focus ring. Legacy's `.stdinput:focus` only
+   changes background and text color, so what a user actually sees while typing is the browser's
+   default blue outline — a color that belongs to no theme here. Same hue as this file's own
+   `.search-panel-item-highlighted`, so "the bar I am typing in" and "the row I am about to pick"
+   read as one state rather than two unrelated accents. */
+.search-input-focus:focus,
+.search-input-focus:focus-visible {
+  outline: 2px solid #F0A500;
+  outline-offset: 0;
+}

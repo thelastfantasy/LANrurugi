@@ -357,7 +357,7 @@ async fn build_params(
             .unwrap_or_else(|| "UTC".to_string()),
         Err(_) => "UTC".to_string(),
     };
-    Ok(SearchParams {
+    let mut params = SearchParams {
         filter: q.filter.clone().unwrap_or_default(),
         category,
         sortby: q.sortby.clone(),
@@ -369,12 +369,38 @@ async fn build_params(
         tankonly: q.tankonly.unwrap_or(false),
         timezone,
         new_badge_mode: crate::settings::read_new_badge_mode(state).await,
+        // Computed just below, and only when the query mentions the operator.
+        split_suggestion_archive_ids: None,
         // 007-guest-restricted-access: populated by the caller (search_archives/
         // search_archive_ids) when the request is from a guest_visitor, not computed here —
         // build_params has no access to the request's AuthContext. See those two handlers' own
         // call sites.
         restrict_to_archive_ids: None,
-    })
+    };
+
+    // `has:split-suggestion` is the one operator whose data lives outside the pools the search
+    // engine holds: split-suggestion records are in the *config* logical DB, so the caller supplies
+    // the id set (`SearchParams::split_suggestion_archive_ids`). Fetched only when the parsed query
+    // actually mentions the operator — every other search would otherwise pay a config-DB round
+    // trip it never reads. A failure here propagates (a 500) rather than leaving the field `None`,
+    // which would silently answer "no archive has a suggestion".
+    if lanrurugi_search::engine::mentions_split_suggestion(&params.filter) {
+        use lanrurugi_storage::archive_split_suggestions::{
+            ArchiveSplitSuggestionsError, ArchiveSplitSuggestionsRepository,
+        };
+        use lanrurugi_storage::repository::RepositoryError;
+        let suggestions = ArchiveSplitSuggestionsRepository::new(state.redis.config.clone())
+            .list_all()
+            .await
+            .map_err(|e| match e {
+                ArchiveSplitSuggestionsError::Redis(e) => RepositoryError::from(e),
+                ArchiveSplitSuggestionsError::Pool(e) => RepositoryError::from(e),
+            })?;
+        params.split_suggestion_archive_ids =
+            Some(suggestions.into_iter().map(|s| s.archive_id).collect());
+    }
+
+    Ok(params)
 }
 
 fn paginate(ids: &[String], start: Option<i64>) -> Vec<String> {

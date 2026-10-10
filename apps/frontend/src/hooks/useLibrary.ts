@@ -29,6 +29,7 @@ import {
 } from "@/lib/constants";
 import { routes } from "@/lib/routes";
 import {
+  appendToken,
   phraseSuggestions,
   type SearchSuggestion,
   tagSuggestions,
@@ -44,6 +45,7 @@ import {
   INDEX_SORT_KEY,
   INDEX_VIEW_MODE_KEY,
   MSM_SELECTION_KEY,
+  RECENT_SEARCHES_KEY,
 } from "@/lib/storageKeys";
 import {
   buildTagList,
@@ -128,6 +130,29 @@ export function useLibrary() {
   })();
   // Every field being changed must go through a single call, since `buildSearch()` reads
   // un-overridden fields from stale closure values — two separate calls would clobber each other.
+  /** Most-recent-first applied filters, persisted locally — the panel's "history" rows. No server
+   *  state: this is per-browser convenience, like an address bar's own history, not user data worth
+   *  syncing. */
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+
+  function rememberSearch(filter: string) {
+    const trimmed = filter.trim();
+    if (!trimmed) return;
+    setRecentSearches((previous) => {
+      const next = [trimmed, ...previous.filter((entry) => entry !== trimmed)].slice(0, 8);
+      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   function navigateSearch(overrides: {
     page?: number;
     sortby?: string;
@@ -152,6 +177,9 @@ export function useLibrary() {
         library_sortdir: nextOrder,
       });
     }
+    // Only a genuinely *applied* filter is history-worthy — paging, sorting and category clicks
+    // all route through here without carrying an `appliedFilter`.
+    if (overrides.appliedFilter !== undefined) rememberSearch(overrides.appliedFilter);
     navigate({ search: buildSearch(overrides) });
   }
   const [viewMode, setViewModeState] = useState<"thumbnail" | "compact">(() =>
@@ -328,6 +356,23 @@ export function useLibrary() {
     }));
     return [...tags, ...titles, ...phrases];
   }, [filterInput, stats.data, titleSuggest.data, phraseRows, phraseCounts.data]);
+
+  /** Appends one filter token (a quick-filter chip, or the date range the panel compiled) without
+   *  closing the panel: these are meant to be stacked before the user presses Enter. */
+  function insertToken(token: string) {
+    setFilterInputOverride(appendToken(filterInput, token));
+    searchInputRef.current?.focus();
+  }
+
+  /** Runs a history row outright. Unlike {@link insertToken} (a fragment the user is still
+   *  composing) and unlike a plain text edit, a recent search is a *complete* query the user
+   *  already ran once — picking it should show those results immediately, which is also what
+   *  clicking a history entry in an address bar does. */
+  function applyRecentFilter(filter: string) {
+    setFilterInputOverride(filter);
+    setAutocompleteOpen(false);
+    navigateSearch({ appliedFilter: filter, page: 0 });
+  }
 
   /** Applies one autocomplete row. A title row is an archive the input already matches, so it
    *  opens that archive instead of editing the filter; every other row replaces exactly the span it
@@ -630,7 +675,10 @@ export function useLibrary() {
     handleToggleMultiSelect,
     sortedCategories,
     suggestions,
+    recentSearches,
     applySuggestion,
+    insertToken,
+    applyRecentFilter,
     contextMenu,
     setContextMenu,
     deleteTarget,

@@ -22,9 +22,21 @@ tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
 base64 = "0.22"
 time = { version = "0.3", features = ["formatting"] }
+# Criterion (and the `plotters`/`ciborium` tree behind it) is used *only* by `benches/benches.rs`,
+# i.e. only with this crate's `bench` feature on — the lib/bin targets never reference it. It sits
+# here as an optional normal dependency rather than in `[dev-dependencies]` for one reason: a
+# dev-dependency is compiled for *every* test target of the package, so `cargo test --workspace`
+# and `clippy --workspace --all-targets` both paid for the whole tree while never running a single
+# benchmark (`harness = false` means the bench target isn't a test target). And it cannot simply be
+# an *optional dev*-dependency — cargo rejects that outright ("dev-dependencies are not allowed to
+# be optional"). With the feature off (every default test/clippy run) nothing here is compiled;
+# `mise run bench` enables it.
+criterion = { workspace = true, features = ["async_tokio"], optional = true }
+
+[features]
+bench = ["dep:criterion"]
 
 [dev-dependencies]
-criterion = { workspace = true, features = ["async_tokio"] }
 tempfile = "3"
 
 [[bin]]
@@ -39,3 +51,4 @@ path = "src/bin/compare.rs"
 name = "microbenches"
 path = "benches/benches.rs"
 harness = false
+required-features = ["bench"]

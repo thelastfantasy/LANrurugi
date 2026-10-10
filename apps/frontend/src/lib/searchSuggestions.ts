@@ -287,3 +287,66 @@ export function tagSuggestions(
     replaceRange: { start: trailing.start, end: trailing.end },
   }))
 }
+
+/**
+ * Quick-filter tokens the panel offers as one-click chips. All of them are operators the engine
+ * answers from archive state (`is:`/`has:`/`in:`), so a chip is a genuine filter, not a shortcut
+ * that happens to look like one.
+ */
+export const QUICK_FILTER_TOKENS = [
+  "is:new",
+  "is:completed",
+  "is:incomplete",
+  "is:read",
+  "has:patch",
+  "has:bookmark",
+  "has:category",
+  "has:split-suggestion",
+  "in:tank",
+] as const
+
+/**
+ * Builds the filter text for an "added between" range — `date_added:>=2026-01-01
+ * date_added:<=2026-03-31` — from the two `YYYY-MM-DD` values a native `<input type="date">`
+ * produces. Returns `null` when neither bound is usable, and skips an unusable bound rather than
+ * emitting a token that would match nothing; an inverted range is swapped rather than silently
+ * returning zero results, since that is what a user who typed the two dates backwards meant.
+ */
+export function buildDateRangeToken(from: string, to: string): string | null {
+  const valid = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+  const hasFrom = valid(from)
+  const hasTo = valid(to)
+  if (!hasFrom && !hasTo) return null
+  if (hasFrom && hasTo) {
+    const [start, end] = from <= to ? [from, to] : [to, from]
+    return `date_added:>=${start} date_added:<=${end}`
+  }
+  return hasFrom ? `date_added:>=${from}` : `date_added:<=${to}`
+}
+
+/**
+ * Stable React key for a suggestion row (a title row is identified by its archive, everything else
+ * by the text it would insert).
+ */
+export function suggestionKey(suggestion: SearchSuggestion): string {
+  return suggestion.kind === "title"
+    ? `title:${suggestion.arcid}`
+    : `${suggestion.kind}:${suggestion.insertValue}`
+}
+
+/**
+ * The text Base UI's Autocomplete fills the input with when a row is picked — and therefore also
+ * the key the search bar uses to tell "the user typed this" from "a row was picked". Titles use
+ * their label because that is what a title row *is*; the pick itself navigates rather than editing
+ * the query.
+ */
+export function suggestionSelectionText(suggestion: SearchSuggestion): string {
+  return suggestion.label
+}
+
+/** Appends a token to a filter string with exactly one separating space, so a chip clicked after a
+ *  half-typed word can't silently fuse into it. */
+export function appendToken(filter: string, token: string): string {
+  const trimmed = filter.trimEnd()
+  return trimmed === "" ? token : `${trimmed} ${token}`
+}

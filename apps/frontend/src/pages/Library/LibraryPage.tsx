@@ -78,6 +78,7 @@ export function Library() {
             filterInput={lib.filterInput}
             autocompleteOpen={lib.autocompleteOpen}
             suggestions={lib.suggestions}
+            recentSearches={lib.recentSearches}
             multiSelect={lib.multiSelect}
             searchInputRef={lib.searchInputRef}
             onFilterInputChange={(value, open) => {
@@ -94,6 +95,8 @@ export function Library() {
               lib.navigateSearch({ appliedFilter: "", page: 0 });
             }}
             onSuggestionSelect={lib.applySuggestion}
+            onInsertToken={lib.insertToken}
+            onPickRecent={lib.applyRecentFilter}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
             onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
             loggedIn={lib.loggedIn}

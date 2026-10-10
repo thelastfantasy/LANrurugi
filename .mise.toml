@@ -62,7 +62,40 @@ description = "cargo test --workspace --no-fail-fast inside the dev container (s
 # point — confirmed live: new lanrurugi-llm unit tests added across several sessions had only ever
 # been compile-checked, never executed, because this exact task never got past lanrurugi-api's
 # test binary.
-run = "scripts/cargo-container-run.sh cargo test --workspace --no-fail-fast"
+#
+# What this deliberately does *not* pull in: `lanrurugi-bench`'s criterion benchmarks. Criterion (and
+# the `plotters`/`ciborium` tree behind it) used to be compiled by every `cargo test --workspace` —
+# a dev-dependency is built for each test target of its package — even though the `harness = false`
+# bench target is never executed by a test run. It now sits behind `lanrurugi-bench`'s optional
+# `bench` feature (`mise run bench`), which cut the heaviest non-test dependency tree out of both
+# this task and `mise run clippy --all-targets` (both were being killed by `systemd-oomd` on a
+# desktop-sized host during a full-workspace compile; see scripts/cargo-container-run.sh's own docs
+# on why parallelism alone isn't the whole story).
+run = "scripts/cargo-container-run.sh cargo test --workspace --no-fail-fast --lib --bins --tests"
+
+[tasks.test-crate]
+description = "cargo test -p <crate> [<crate> ...] inside the dev container — the test-side counterpart to check-crate, for iterating on one crate instead of paying for a full-workspace compile+link. Extra cargo args after a second `--` are not supported; use `mise run test` for the whole workspace"
+# Named target selection (`--lib --bins --tests`) rather than a bare `cargo test` for a reason it
+# took a log audit to see: the workspace has exactly *one* runnable doc test in total, but every
+# crate still builds and links a `--doc` target, so 19 of those 20 rustdoc+link invocations
+# existed purely to run zero tests. `--doc` is still available on demand
+# (`cargo test --doc -p <crate>`), and CI keeps running a bare `cargo test --workspace` so the one
+# real doc test stays covered there.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for c in "$@"; do args+=(-p "$c"); done
+scripts/cargo-container-run.sh cargo test --no-fail-fast --lib --bins --tests "${args[@]}"
+"""
+
+[tasks.bench]
+description = "Run lanrurugi-bench's criterion microbenchmarks (the only task that compiles criterion — see [tasks.test]'s own note). Pass criterion flags after `--`, e.g. `mise run bench -- --test` for a compile-and-run-each-once smoke pass"
+# Trailing `--` is deliberate: mise appends any extra args after this string, and criterion's own
+# flags (`--test`, a benchmark-name filter, ...) have to reach the bench binary rather than cargo —
+# without it, `mise run bench -- --test` would be parsed as cargo's own `--test` (bench every test
+# target).
+run = "scripts/cargo-container-run.sh cargo bench -p lanrurugi-bench --features bench --"
 
 [tasks.clippy]
 description = "cargo clippy --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
@@ -178,7 +211,12 @@ description = "Rebuild the dev image after a *backend* source change (frontend c
 # (context `.`, `dockerfile: Dockerfile.dev`, image tag `localhost/lanrurugi-dev-full:latest`) if
 # that ever changes.
 run = """
-podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
+# Same pressure gate the guardrailed cargo runs use, and for the same reason — this path compiles
+# the whole workspace too, with `podman build` (so none of cargo-container-run.sh's cgroup/flock/
+# cooldown machinery applies). See scripts/host-pressure-gate.sh's own header for the 2026-10-10
+# incident that made this necessary.
+scripts/host-pressure-gate.sh
+podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" --build-arg CARGO_BUILD_JOBS="${LANRURUGI_BUILD_JOBS:-2}" -t localhost/lanrurugi-dev-full:latest .
 # Re-tagging `latest` above orphans the previous image under this tag as a dangling `<none>`
 # layer — with no automatic GC, these silently accumulate one per rebuild (confirmed live,
 # 2026-08-28: 733 images / 41.77GB before a first manual `podman image prune` cut it to 52 / 9.8GB).
@@ -202,8 +240,12 @@ description = "One-shot backend dev rebuild: rebuild image, replace the running 
 # order is therefore: build -> remove old container -> prune dangling images -> start new container.
 run = """
 set -euo pipefail
+# 0. Refuse to start under existing host memory pressure (see scripts/host-pressure-gate.sh —
+#    without this, an unattended dev rebuild drove the user slice to 72% and got a Firefox scope
+#    killed by systemd-oomd, 2026-10-10).
+scripts/host-pressure-gate.sh
 # 1. Rebuild the dev image (direct podman build so Dockerfile.dev cache mounts work).
-podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" -t localhost/lanrurugi-dev-full:latest .
+podman build -f Dockerfile.dev --build-arg LANRURUGI_GIT_SHA="$(git rev-parse --short HEAD)" --build-arg CARGO_BUILD_JOBS="${LANRURUGI_BUILD_JOBS:-2}" -t localhost/lanrurugi-dev-full:latest .
 # 2. Remove the existing dev container (not just stop it) so the old image reference is released.
 podman rm -f lrr-dev
 # 3. Now the old image is no longer referenced by a container; clean dangling images.

@@ -102,15 +102,11 @@ fi
 # a single command's wall-clock time unpredictable and hides the real signal (the host needs
 # something to actually finish or be closed) behind a script that just looks "slow" instead.
 PSI_AVG60_THRESHOLD=20
-if [ -r /proc/pressure/memory ]; then
-  avg60="$(awk -F'avg60=' '/^some/ {split($2,a," "); print a[1]}' /proc/pressure/memory)"
-  if [ -n "$avg60" ] && awk -v v="$avg60" -v t="$PSI_AVG60_THRESHOLD" 'BEGIN{exit !(v>t)}'; then
-    echo "error: host memory pressure too high to start a new build (avg60=${avg60}%, threshold=${PSI_AVG60_THRESHOLD}%)." >&2
-    echo "       Close some memory-heavy apps or wait for current load to settle, then retry." >&2
-    echo "       (see /proc/pressure/memory, or 'journalctl -u systemd-oomd' for recent kills)" >&2
-    exit 1
-  fi
-fi
+export PSI_AVG60_THRESHOLD
+# The check itself lives in `host-pressure-gate.sh` — shared with the dev *image* build
+# (`mise run dev-rebuild`), which used to have no gate at all while compiling the same workspace
+# with cargo's default full-core parallelism; see that script's own header.
+"$REPO_ROOT/scripts/host-pressure-gate.sh"
 
 # A single-snapshot PSI check (above) is not enough on its own — confirmed live (2026-08-14):
 # several back-to-back invocations (`check`, `clippy`, `fmt-check`, `fmt`) each individually passed
@@ -165,14 +161,27 @@ if command -v jq >/dev/null 2>&1; then
     | jq -r '.[] | "\(.Id)\t\(.Created)"')
 fi
 
-# 20GB soft cap on the persistent target cache — comfortably above one full workspace build's
-# incremental footprint, well below the 86GB an earlier unbounded version reached. `cargo clean`,
-# not deletion, so `.cargo-target`'s own directory structure stays intact.
+# Soft cap on the persistent target cache — comfortably above one full workspace build's
+# incremental footprint, well below the 86GB an earlier unbounded version reached. Two corrections
+# to this step (2026-10-10, both found after it tripped for real):
+#
+# 1. The cap was 20GB, but a full dev-profile workspace build (check + clippy + test targets for
+#    every crate) measures ~24GB today — so the cap was guaranteed to trip on every rebuild, and
+#    did. 40GB keeps the "not unbounded" intent while leaving room for incremental growth; the host
+#    had 348GB free when this was raised, so disk space was never the real constraint.
+# 2. It used to `cargo clean` *inside* a container bind-mounting this directory at
+#    `/workspace/target`. `cargo clean` deletes the target directory itself, and a bind-mount point
+#    cannot be removed — so it wiped all 24GB of artifacts and *then* failed with "Device or
+#    resource busy", aborting the whole run and leaving the cache empty, i.e. forcing exactly the
+#    from-scratch `--workspace` compile this cap exists to avoid. Deleting the *contents* from the
+#    host, keeping the directory and this script's own two files in it, is what was meant:
+#    `.container-run.lock` (the flock target — replacing it with a new inode would silently break
+#    the single-invocation mutex) and `.last-container-run` (the cooldown stamp) must survive.
 size_kb="$(du -sk .cargo-target 2>/dev/null | cut -f1 || echo 0)"
-if [ -n "$size_kb" ] && [ "$size_kb" -gt 20971520 ]; then
-  echo "note: .cargo-target exceeded 20GB ($(du -sh .cargo-target | cut -f1)) — running cargo clean first" >&2
-  "$CMD" run --rm -v "$REPO_ROOT":/workspace -v "$REPO_ROOT/.cargo-target":/workspace/target \
-    -w /workspace lanrurugi-dev cargo clean
+if [ -n "$size_kb" ] && [ "$size_kb" -gt 41943040 ]; then
+  echo "note: .cargo-target exceeded 40GB ($(du -sh .cargo-target | cut -f1)) — deleting cached build artifacts first" >&2
+  find "$REPO_ROOT/.cargo-target" -mindepth 1 -maxdepth 1 \
+    ! -name '.container-run.lock' ! -name '.last-container-run' -exec rm -rf {} + 2>/dev/null || true
 fi
 
 # Foreground-app-aware step-down: if a process named in `$CARGO_CONTAINER_YIELD_TO` (comma-
@@ -239,6 +248,26 @@ fi
 # since this script didn't start it and has no business stopping someone else's service) in the
 # same trap, since bash only honors the most recently registered handler for a given signal.
 trap '[ -n "$REDIS_TEST_CONTAINER" ] && "$CMD" stop -t 5 "$REDIS_TEST_CONTAINER" >/dev/null 2>&1; date +%s > "$COOLDOWN_STAMP"' EXIT
+
+# Reset the scratch Redis the tests point at, before the test container starts.
+#
+# `.env.local` points tests at a *persistent* scratch instance (`LANRURUGI_TEST_REDIS_URL`, kept
+# separate from the app's real Redis on purpose — see that file's own comment), so without this
+# every run silently inherits whatever the previous one left behind. Confirmed live (2026-10-10):
+# three unrelated `auth_flow`/`contract_api` tests failed purely on accumulated state (leftover
+# sessions/devices/categories) and every one of them went green immediately after a `FLUSHALL`.
+# Best-effort and configuration-driven: if `.env.local` defines no `:PORT` URL, or the scratch
+# container isn't named the way that file's own setup comment prescribes, this does nothing and the
+# run behaves exactly as it did before.
+if [ "$1" = "cargo" ] && [ "${2:-}" = "test" ]; then
+  test_redis_port="$(sed -n 's|^LANRURUGI_TEST_REDIS_URL=.*:\([0-9][0-9]*\)/*$|\1|p' \
+    "$REPO_ROOT/.env.local" 2>/dev/null | tail -1)"
+  if [ -n "$test_redis_port" ]; then
+    if "$CMD" exec lrr-test-redis redis-cli -p "$test_redis_port" flushall >/dev/null 2>&1; then
+      echo "note: flushed the scratch test Redis (port $test_redis_port) before this run" >&2
+    fi
+  fi
+fi
 
 "$CMD" run --rm --network host --cpus="$cpus" \
   -v "$REPO_ROOT":/workspace \

@@ -31,6 +31,10 @@ export function SearchSyntaxHelp() {
       <ul style={{ margin: 0, paddingLeft: 18 }}>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxAndSeparator")}</li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxOr")} <SyntaxExample>a | b</SyntaxExample>,{" "}
+          <SyntaxExample>(a b) | c</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxNegation")} <SyntaxExample>-tag</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
@@ -53,12 +57,39 @@ export function SearchSyntaxHelp() {
           {t("library.searchSyntaxEscapedQuote")}{" "}
           <SyntaxExample>artist:&quot;foo\&quot;bar&quot;</SyntaxExample>
         </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxTitleField")} <SyntaxExample>title:tari</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxAttributes")} <SyntaxExample>is:new</SyntaxExample>,{" "}
+          <SyntaxExample>is:completed</SyntaxExample>, <SyntaxExample>has:patch</SyntaxExample>,{" "}
+          <SyntaxExample>in:tank</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxBookmarkName")}{" "}
+          <SyntaxExample>bookmark:&quot;chapter one&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxPhrase")}{" "}
+          <SyntaxExample>phrase:&quot;tari tari&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxCategory")} <SyntaxExample>category:cosplay</SyntaxExample>,{" "}
+          <SyntaxExample>category:SET_1784896712</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxSizeRead")} <SyntaxExample>size:&gt;=100M</SyntaxExample>,{" "}
+          <SyntaxExample>read:&gt;=80%</SyntaxExample>
+        </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxWildcard")}</li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxDateAdded")} <SyntaxExample>date_added:2026-08-20</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxNumericCompare")} <SyntaxExample>pages:&gt;100</SyntaxExample>, <SyntaxExample>read:&lt;5</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxRelevance")} <SyntaxExample>sortby=relevance</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc" }}>
           {t("library.searchSyntaxRating")} <SyntaxExample>rating:&gt;=4</SyntaxExample>, <SyntaxExample>rating:&lt;3</SyntaxExample>, <SyntaxExample>rating:=5</SyntaxExample>
