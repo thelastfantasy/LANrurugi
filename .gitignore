@@ -65,3 +65,6 @@ dump.rdb
 # Ad-hoc debug scratch space for manual investigation (e.g. dumping a real page image to feed
 # a standalone debug example against) — never committed, may contain copyrighted manga content.
 /.debug-scratch/
+# A code-review report written into the repo root for a one-off read (its findings are fixed in code
+# and summarized in the commit that fixes them) — a local artifact, not a repository document.
+/CODE_REVIEW.md
