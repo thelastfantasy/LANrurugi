@@ -143,25 +143,27 @@ export function useLibrary() {
     }
   });
 
+  // Persisted from one effect rather than from inside each updater: a `setState` updater must stay
+  // pure (React invokes it twice under StrictMode), while this write is a side effect of the list
+  // *changing*. Keeping it here also means two edits in the same tick compose — each updater sees
+  // the previous one's result — instead of the second overwriting the first from stale render state.
+  useEffect(() => {
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(recentSearches));
+  }, [recentSearches]);
+
   function rememberSearch(filter: string) {
     const trimmed = filter.trim();
     if (!trimmed) return;
-    setRecentSearches((previous) => {
-      const next = [trimmed, ...previous.filter((entry) => entry !== trimmed)].slice(0, 8);
-      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
-      return next;
-    });
+    setRecentSearches((previous) =>
+      [trimmed, ...previous.filter((entry) => entry !== trimmed)].slice(0, 8),
+    );
   }
 
   /** Drops one entry from the recent-search list — what the panel's `Delete` key calls on the
    *  highlighted history row. The cap in {@link rememberSearch} only ever *pushes* the oldest entry
    *  out on its own, so without this a stale query stays until eight newer ones replace it. */
   function removeRecentFilter(filter: string) {
-    setRecentSearches((previous) => {
-      const next = previous.filter((entry) => entry !== filter);
-      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
-      return next;
-    });
+    setRecentSearches((previous) => previous.filter((entry) => entry !== filter));
   }
 
   function navigateSearch(overrides: {
