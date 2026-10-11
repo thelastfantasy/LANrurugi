@@ -57,6 +57,66 @@ describe("RowStats", () => {
     expect(line).toMatch(/1\.0 GB/)
   })
 
+  it("averages the bytes actually transferred, not the total size", async () => {
+    // Regression guard for a live-reported bug: `total_bytes / elapsed` reports the rate a transfer
+    // would need to *finish* in the time already spent. The pre-existing case above could not catch
+    // it because it passes `downloaded_bytes === total_bytes` (both 1GB), where the wrong formula
+    // and the right one agree.
+    const started = new Date(2026, 9, 7, 14, 32, 5).getTime()
+    vi.setSystemTime(started + 120_000)
+    renderStats(
+      item({ state: "downloading" }),
+      job({
+        state: "active",
+        started_at: started,
+        downloaded_bytes: 100 * 1024 * 1024,
+        total_bytes: 1024 * 1024 * 1024,
+      }),
+    )
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+    })
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    // 100MB in 2 minutes is ~0.83MB/s; the total (1GB) over the same 2 minutes would be ~8.5MB/s.
+    expect(line).toMatch(/KB\/s avg/)
+    expect(line).not.toMatch(/MB\/s avg/)
+    // The trailing size stays the whole payload, so "how big is this download" is still answerable.
+    expect(line).toMatch(/1\.0 GB/)
+  })
+
+  it("estimates the time remaining while a download is running", async () => {
+    // 100MB of 1GB transferred in the 2:01 the tick below produces: the fallback (this run's own
+    // average) predicts the remaining 924MB at that same ~846KB/s, i.e. 18:38 more.
+    const started = new Date(2026, 9, 7, 14, 32, 5).getTime()
+    vi.setSystemTime(started + 120_000)
+    renderStats(
+      item({ state: "downloading" }),
+      job({
+        state: "active",
+        started_at: started,
+        downloaded_bytes: 100 * 1024 * 1024,
+        total_bytes: 1024 * 1024 * 1024,
+      }),
+    )
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+    })
+
+    expect(screen.getByText(/started today/).textContent ?? "").toMatch(/18:38 left/)
+  })
+
+  it("shows no time remaining once the job is no longer running", () => {
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({ started_at: started, finished_at: started + 90_000, file_size: 90 * 1024 * 1024 }),
+      undefined,
+    )
+
+    expect(screen.getByText(/started today/).textContent ?? "").not.toMatch(/left/)
+  })
+
   it("uses the item's own persisted timings once the job is gone", () => {
     const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
     // Pinned to the same day as `started`: a stamp from another day renders with a date too, which

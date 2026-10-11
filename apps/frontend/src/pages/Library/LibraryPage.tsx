@@ -97,6 +97,7 @@ export function Library() {
             onSuggestionSelect={lib.applySuggestion}
             onInsertToken={lib.insertToken}
             onPickRecent={lib.applyRecentFilter}
+            onRemoveRecent={lib.removeRecentFilter}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
             onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
             loggedIn={lib.loggedIn}

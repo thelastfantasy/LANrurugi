@@ -13,6 +13,7 @@ import {
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { CollapsibleSection } from "@/components/Display"
+import { useIsNarrowViewport } from "@/hooks"
 
 import { QueueItemRow } from "./QueueItemRow"
 import {
@@ -84,6 +85,10 @@ export function DownloadQueuePanel({
    * they came to this page to watch, and a subscription's bulk arriving must not switch the view
    * under them. Kept per group so a choice made for one plugin doesn't follow them to another. */
   const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>({})
+  /** On a phone the two tab labels ("Manual" / "From subscriptions") eat the heading's whole width,
+   *  squeezing the group name and the counts. The icon carries the same distinction there, with the
+   *  count kept beside it and the label moved to a tooltip / `aria-label`. */
+  const narrow = useIsNarrowViewport()
 
   /** The tabs a group shows, and the items behind each. A group with only one kind of item has
    * nothing to switch between, so it gets no tabs at all — the per-row "from a subscription" badge
@@ -302,9 +307,25 @@ export function DownloadQueuePanel({
                             type="button"
                             className={`stdbtn queue-tab${tab === which ? " queue-tab-active" : ""}`}
                             aria-pressed={tab === which}
+                            // The accessible name never depends on the icon being understood, and it
+                            // stays present in both layouts.
+                            aria-label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
                             onClick={() => setTabByGroup((prev) => ({ ...prev, [namespace]: which }))}
                           >
-                            {which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}{" "}
+                            {narrow ? (
+                              <Tooltip
+                                label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
+                              >
+                                <i
+                                  className={`fa ${which === "manual" ? "fa-download" : "fa-rss"}`}
+                                  aria-hidden="true"
+                                ></i>
+                              </Tooltip>
+                            ) : which === "manual" ? (
+                              t("upload.tabManual")
+                            ) : (
+                              t("upload.tabSubscription")
+                            )}{" "}
                             {which === "manual" ? manual.length : fromSubscriptions.length}
                             {undecided[which] > 0 && (
                               <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>

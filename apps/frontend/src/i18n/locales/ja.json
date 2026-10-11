@@ -1973,6 +1973,7 @@
   "upload.statStartedToday": "今日 {{time}} 開始",
   "upload.statElapsed": "経過 {{duration}}",
   "upload.statAverage": "平均 {{rate}}/s",
+  "upload.statRemaining": "残り {{duration}}",
   "subscriptions.blockWork": "ブロック：この作品は今後ダウンロードしない",
   "subscriptions.outcomeCatalogued": "ライブラリに追加済み",
   "subscriptions.outcomeDownloadFailed": "ダウンロード失敗",

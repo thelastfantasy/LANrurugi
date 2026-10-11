@@ -1973,6 +1973,7 @@
   "upload.statStartedToday": "started today at {{time}}",
   "upload.statElapsed": "{{duration}} elapsed",
   "upload.statAverage": "{{rate}}/s avg",
+  "upload.statRemaining": "{{duration}} left",
   "subscriptions.blockWork": "Never download this work",
   "subscriptions.outcomeCatalogued": "In the library",
   "subscriptions.outcomeDownloadFailed": "Download failed",

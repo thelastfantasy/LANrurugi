@@ -1973,6 +1973,7 @@
   "upload.statStartedToday": "今天 {{time}} 开始",
   "upload.statElapsed": "耗时 {{duration}}",
   "upload.statAverage": "平均 {{rate}}/s",
+  "upload.statRemaining": "剩余 {{duration}}",
   "subscriptions.blockWork": "拉黑：不再下载这个作品",
   "subscriptions.outcomeCatalogued": "已入库",
   "subscriptions.outcomeDownloadFailed": "下载失败",

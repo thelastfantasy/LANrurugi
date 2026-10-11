@@ -1,6 +1,6 @@
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import type { RefObject } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button, IconButtonWithTooltip } from "@/components/common-ui/Form";
@@ -32,6 +32,7 @@ export function SearchBar({
   onSuggestionSelect,
   onInsertToken,
   onPickRecent,
+  onRemoveRecent,
   onToggleMultiSelect,
   onAiSmartTankoubon,
   loggedIn,
@@ -50,6 +51,8 @@ export function SearchBar({
   onInsertToken: (token: string) => void;
   /** Runs a recent-search row as a complete query rather than filling the bar with it. */
   onPickRecent: (filter: string) => void;
+  /** Forgets one recent-search row (the panel's `Delete` key on a highlighted history entry). */
+  onRemoveRecent: (filter: string) => void;
   onToggleMultiSelect: () => void;
   onAiSmartTankoubon: () => void;
   /** 007: batch selection and AI tankoubon creation are write/admin workflows — hidden for a
@@ -57,6 +60,10 @@ export function SearchBar({
   loggedIn: boolean;
 }) {
   const { t } = useTranslation();
+  /** Which row the keyboard is on, as Base UI reports it — the `Delete` handler below needs to know
+   *  whether that row is a history entry (a `string` present in `recentSearches`) or one of the
+   *  quick-filter tokens (also a `string`, but never removable). */
+  const [highlighted, setHighlighted] = useState<SearchSuggestion | string | null>(null);
   const palette = useMenuPalette();
 
   /**
@@ -112,6 +119,9 @@ export function SearchBar({
           }}
           filter={null}
           open={autocompleteOpen}
+          onItemHighlighted={(item: SearchSuggestion | string | undefined) =>
+            setHighlighted(item ?? null)
+          }
           onOpenChange={onAutocompleteOpenChange}
           // Address-bar feel: the panel opens on click, and the first row is already highlighted so
           // Enter alone takes the most likely suggestion.
@@ -150,6 +160,22 @@ export function SearchBar({
                 // reads as a new field rather than the old square one showing through.
               }}
               onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
+                // `Delete` forgets the highlighted history row; `Backspace` does the same but only
+                // while the bar is empty, so it stays an ordinary text edit otherwise (which is also
+                // what makes this reachable on a keyboard whose only delete key is Backspace).
+                const forgetsHighlighted =
+                  event.key === "Delete" ||
+                  (event.key === "Backspace" && filterInput === "");
+                if (
+                  forgetsHighlighted &&
+                  autocompleteOpen &&
+                  typeof highlighted === "string" &&
+                  recentSearches.includes(highlighted)
+                ) {
+                  event.preventDefault();
+                  onRemoveRecent(highlighted);
+                  return;
+                }
                 if (event.key === "Enter" && !event.defaultPrevented) onApplyFilter()
                 if (event.key === "Escape") onAutocompleteOpenChange(false)
               }}

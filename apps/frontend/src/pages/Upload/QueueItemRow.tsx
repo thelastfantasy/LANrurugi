@@ -20,7 +20,13 @@ import type {
 } from "@/api/types";
 import { Tooltip } from "@/components/common-ui/Display"
 ;
-import { formatBytes, formatDuration, JobProgressBar, STATE_COLOR } from "@/components/Display";
+import {
+  computeSpeed,
+  formatBytes,
+  formatDuration,
+  JobProgressBar,
+  STATE_COLOR,
+} from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
 import { routes } from "@/lib/routes";
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
@@ -92,10 +98,37 @@ export function RowStats({
   const startedMs = job?.started_at ?? item.started_at ?? null
   const endedMs = job?.finished_at ?? item.finished_at ?? (running && now > 0 ? now : null)
   const durationMs = startedMs && endedMs && endedMs >= startedMs ? endedMs - startedMs : null
-  const bytes = job?.total_bytes ?? job?.downloaded_bytes ?? item.file_size ?? null
+  // The average is "bytes actually transferred ÷ time spent so far", so its numerator is
+  // `downloaded_bytes` — *not* `total_bytes`. Preferring the total made a still-running download
+  // report the rate it would need to finish in the time already spent: a 4%-complete 7.7GB transfer
+  // sitting at 783 KB/s displayed "30.3 MB/s average" (reported live). A total is only a valid
+  // stand-in once the transfer has ended, when the two are equal anyway.
+  const transferred =
+    job?.downloaded_bytes ??
+    (endedMs != null ? job?.total_bytes ?? item.file_size ?? null : null)
   const average =
-    durationMs && durationMs > 0 && bytes != null
-      ? (bytes / durationMs) * 1000
+    durationMs && durationMs > 0 && transferred != null
+      ? (transferred / durationMs) * 1000
+      : null
+  // Kept separate for the trailing size: that one really is the whole payload.
+  const bytes = job?.total_bytes ?? item.file_size ?? job?.downloaded_bytes ?? null
+  // Time remaining, shown only while the transfer is actually running: the rate is the same
+  // instantaneous one the progress bar prints (`computeSpeed`), falling back to this run's own
+  // average before it has two samples to work with — the average is smoother but lags a rate change
+  // by the whole run, so it is only the fallback. Unknown/zero/complete sizes yield no estimate
+  // rather than a made-up one.
+  const rate =
+    job?.downloaded_bytes != null
+      ? computeSpeed(job.id, job.downloaded_bytes) ?? average
+      : average
+  const remainingMs =
+    running &&
+    rate != null &&
+    rate > 0 &&
+    bytes != null &&
+    job?.downloaded_bytes != null &&
+    bytes > job.downloaded_bytes
+      ? ((bytes - job.downloaded_bytes) / rate) * 1000
       : null
 
   const parts = [
@@ -107,6 +140,7 @@ export function RowStats({
         : t("upload.statStarted", { time: new Date(startedMs).toLocaleString() })),
     durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
     average != null && t("upload.statAverage", { rate: formatBytes(average) }),
+    remainingMs != null && t("upload.statRemaining", { duration: formatDuration(remainingMs) }),
     bytes != null && formatBytes(bytes),
   ].filter(Boolean) as string[]
 

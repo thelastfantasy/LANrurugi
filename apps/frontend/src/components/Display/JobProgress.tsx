@@ -1,9 +1,10 @@
-import type { ReactNode } from "react"
+import type { CSSProperties, ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useJobProgressOverride } from "@/api/hooks"
 import type { JobRecord, JobRecordState } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { useIsNarrowViewport } from "@/hooks"
 import { FONT_SIZE_SM } from "@/theme"
 
 /** State → color, shared between the Jobs page's badges/borders and this component's default bar
@@ -49,13 +50,25 @@ export function formatDuration(ms: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
 }
 
+/**
+ * Fixed width of the numeric label that sits beside every track below.
+ *
+ * It has to be *fixed*: sizing the label to its own text moved the track's right edge every time the
+ * reading changed shape (`999.9 MB` → `1.0 GB`, `(9.9%)` → `(13.1%)`, a speed that gains a digit),
+ * which reads as the progress bar itself growing and shrinking while a download runs (reported
+ * live). 224px fits the widest reading any of these branches produces at `FONT_SIZE_SM`, measured
+ * in the browser rather than estimated: `1000.0 MB / 1023.9 MB (99.9%) · 999.9 KB/s` = 218px.
+ */
+const LABEL_WIDTH = 224
+
+
 /** Last-seen `(bytes, timestamp, speed)` per job ID. Module-level `Map`, not a `useRef`, since the
  * same job can be rendered by more than one `JobProgressBar` instance over its lifetime. */
 const lastReadings = new Map<string, { bytes: number; at: number; speed: number | null }>()
 
 /** Bytes/sec since this job's last-seen reading, or `null` with no usable prior sample. Called
  * from render (most renders see byte-identical `bytes`), so "unchanged" returns the last speed. */
-function computeSpeed(jobId: string, bytes: number): number | null {
+export function computeSpeed(jobId: string, bytes: number): number | null {
   const now = Date.now()
   const previous = lastReadings.get(jobId)
   if (previous && previous.bytes === bytes) {
@@ -94,6 +107,11 @@ export function JobProgressBar({
   speedTooltip?: ReactNode
 }) {
   const { t } = useTranslation()
+  // Below `useIsNarrowViewport`'s 640px the label goes *under* the track instead of beside it: 224px
+  // of fixed label on a phone-width row would leave the track a sliver and start clipping the
+  // numbers, so the narrow layout keeps the track full-width and puts the reading on its own line —
+  // still a constant-length bar, with nothing truncated.
+  const narrow = useIsNarrowViewport()
   const barColor = color ?? STATE_COLOR.active
   // SSE-pushed progress merged over the polled fields — the 1s poll alone can miss a short download.
   const override = useJobProgressOverride(job.id)
@@ -106,23 +124,52 @@ export function JobProgressBar({
   const speedColor = isRateLimited ? RATE_LIMITED_SPEED_COLOR : undefined
   const speedNode = <span style={speedColor ? { color: speedColor } : undefined}>{speedLabel}</span>
 
+  /** The numeric label's own style: fixed and right-aligned beside the track on a wide row, plain
+   *  full-width under it on a narrow one. Either way the *track* never resizes because of it. */
+  // Narrow: no fixed width and no `nowrap`, so a reading wider than the row wraps onto a second
+  // line instead of hiding a speed or a byte count.
+  const labelStyle: CSSProperties = narrow
+    ? { fontSize: FONT_SIZE_SM }
+    : {
+        fontSize: FONT_SIZE_SM,
+        width: LABEL_WIDTH,
+        flex: "0 0 auto",
+        textAlign: "right",
+        whiteSpace: "nowrap",
+        // Degrades by clipping rather than by pushing the track: an over-long reading must never
+        // change the bar's length.
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }
+  /** The track itself. `flex: 1` only in the row layout: the narrow layout is a *column*, where
+   *  `flex: 1` applies to the vertical axis, whose `flex-basis: 0` overrides `height` and collapses
+   *  the track to nothing — the bar disappeared entirely on a phone (reported live). Width comes
+   *  from the column's own `align-items: stretch` there. */
+  const trackStyle: CSSProperties = {
+    height: BAR_HEIGHT,
+    background: BAR_BACKGROUND,
+    borderRadius: 4,
+    overflow: "hidden",
+    ...(narrow ? { width: "100%" } : { flex: 1 }),
+  }
+  /** Row wrapper shared by every branch — column on a narrow viewport, so the track keeps the full
+   *  row width and the label is never squeezed. */
+  const rowStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: narrow ? "column" : "row",
+    alignItems: narrow ? "stretch" : "center",
+    gap: ROW_GAP,
+  }
+
   if (job.downloaded_bytes != null && job.total_bytes != null && job.total_bytes > 0) {
     const ratio = Math.min(1, job.downloaded_bytes / job.total_bytes)
     const pctLabel = (ratio * 100).toFixed(1)
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP }}>
-        <div
-          style={{
-            flex: 1,
-            height: BAR_HEIGHT,
-            background: BAR_BACKGROUND,
-            borderRadius: 4,
-            overflow: "hidden",
-          }}
-        >
+      <div style={rowStyle}>
+        <div style={trackStyle}>
           <div style={{ width: `${ratio * 100}%`, height: "100%", background: barColor }} />
         </div>
-        <span style={{ fontSize: FONT_SIZE_SM, minWidth: 120, textAlign: "right", whiteSpace: "nowrap" }}>
+        <span style={labelStyle}>
           {formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} ({pctLabel}%)
           {speedLabel && (
             <>
@@ -143,16 +190,8 @@ export function JobProgressBar({
 
   if (job.downloaded_bytes != null) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP }}>
-        <div
-          style={{
-            flex: 1,
-            height: BAR_HEIGHT,
-            background: BAR_BACKGROUND,
-            borderRadius: 4,
-            overflow: "hidden",
-          }}
-        >
+      <div style={rowStyle}>
+        <div style={trackStyle}>
           <div
             style={{
               width: "30%",
@@ -163,7 +202,7 @@ export function JobProgressBar({
             }}
           />
         </div>
-        <span style={{ fontSize: FONT_SIZE_SM, whiteSpace: "nowrap" }}>
+        <span style={labelStyle}>
           {t("components.display.downloaded", { size: formatBytes(job.downloaded_bytes) })}
           {speedLabel && (
             <>
@@ -185,19 +224,11 @@ export function JobProgressBar({
 
   const pct = Math.round(job.progress * 100)
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: ROW_GAP }}>
-      <div
-        style={{
-          flex: 1,
-          height: BAR_HEIGHT,
-          background: BAR_BACKGROUND,
-          borderRadius: 4,
-          overflow: "hidden",
-        }}
-      >
+    <div style={rowStyle}>
+      <div style={trackStyle}>
         <div style={{ width: `${pct}%`, height: "100%", background: barColor }} />
       </div>
-      <span style={{ fontSize: FONT_SIZE_SM, minWidth: 34, textAlign: "right" }}>{pct}%</span>
+      <span style={labelStyle}>{pct}%</span>
     </div>
   )
 }

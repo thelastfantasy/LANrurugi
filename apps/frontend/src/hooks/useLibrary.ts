@@ -153,6 +153,17 @@ export function useLibrary() {
     });
   }
 
+  /** Drops one entry from the recent-search list — what the panel's `Delete` key calls on the
+   *  highlighted history row. The cap in {@link rememberSearch} only ever *pushes* the oldest entry
+   *  out on its own, so without this a stale query stays until eight newer ones replace it. */
+  function removeRecentFilter(filter: string) {
+    setRecentSearches((previous) => {
+      const next = previous.filter((entry) => entry !== filter);
+      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   function navigateSearch(overrides: {
     page?: number;
     sortby?: string;
@@ -679,6 +690,7 @@ export function useLibrary() {
     applySuggestion,
     insertToken,
     applyRecentFilter,
+    removeRecentFilter,
     contextMenu,
     setContextMenu,
     deleteTarget,
