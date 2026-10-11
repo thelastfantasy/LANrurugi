@@ -1,0 +1,20 @@
+[package]
+name = "lanrurugi-gpu-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lanrurugi-gpu-worker"
+path = "src/main.rs"
+
+[dependencies]
+futures.workspace = true
+image.workspace = true
+lanrurugi-gpu-ipc.workspace = true
+lanrurugi-inpaint.workspace = true
+lanrurugi-ocr.workspace = true
+tarpc.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

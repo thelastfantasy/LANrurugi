@@ -1,0 +1,95 @@
+<diagram program="umletino" version="15.1"><zoom_level>10</zoom_level><element><id>UMLClass</id><coordinates><x>60</x><y>40</y><w>300</w><h>270</h></coordinates><panel_attributes>JobStatus
+--
+id: String
+name: String
+state: JobState
+progress: f32
+downloaded_bytes: Option&lt;u64&gt;
+total_bytes: Option&lt;u64&gt;
+rate_limit_bytes_per_sec: Option&lt;u64&gt;
+rate_limit_matched_pattern: Option&lt;String&gt;
+result: Option&lt;serde_json::Value&gt;
+error: Option&lt;String&gt;
+--
+前端对这一个 Rust 类型有两套并存的
+线上投影：模拟 legacy Minion 的
+JobStatus（/minion/{id}）和原生的
+JobRecord（/jobs）—— 详见 analysis.md</panel_attributes><additional_attributes></additional_attributes></element><element><id>UMLClass</id><coordinates><x>420</x><y>40</y><w>180</w><h>110</h></coordinates><panel_attributes>&lt;&lt;enum&gt;&gt;
+JobState
+--
+Queued
+Active
+Finished
+Failed</panel_attributes><additional_attributes></additional_attributes></element><element><id>Relation</id><coordinates><x>360</x><y>60</y><w>80</w><h>30</h></coordinates><panel_attributes>lt=-&gt;</panel_attributes><additional_attributes>10;10;60;10</additional_attributes></element><element><id>UMLClass</id><coordinates><x>60</x><y>330</y><w>340</w><h>340</h></coordinates><panel_attributes>DownloadQueueItem
+--
+id: String
+origin: QueueItemOrigin
+url: String
+plugin_namespace: String
+file_size: Option&lt;u64&gt;
+category: Option&lt;String&gt;
+auto_fetch_metadata: bool
+overwrite_on_duplicate: bool
+state: DownloadQueueState
+job_id: Option&lt;String&gt;
+archive_ids: Option&lt;Vec&lt;String&gt;&gt;
+title: Option&lt;String&gt;
+metadata_preview: Option&lt;Value&gt;
+error: Option&lt;QueueError&gt;
+pending_filename_conflict:
+  Option&lt;PendingFilenameConflict&gt;
+created_at: i64
+--
+Redis key: LANRURUGI_DOWNLOAD_
+QUEUE_ITEM_&lt;id&gt;
+前端镜像类型逐字段核对完全一致
+（详见 docs/uml/data-model-analysis.md）</panel_attributes><additional_attributes></additional_attributes></element><element><id>UMLClass</id><coordinates><x>460</x><y>330</y><w>200</w><h>90</h></coordinates><panel_attributes>&lt;&lt;enum&gt;&gt;
+QueueItemOrigin
+--
+Download（默认）
+LocalUpload</panel_attributes><additional_attributes></additional_attributes></element><element><id>UMLClass</id><coordinates><x>460</x><y>440</y><w>200</w><h>140</h></coordinates><panel_attributes>&lt;&lt;enum&gt;&gt;
+DownloadQueueState
+--
+Queued
+Starting
+Downloading
+Done
+Error
+Cancelled</panel_attributes><additional_attributes></additional_attributes></element><element><id>Relation</id><coordinates><x>400</x><y>350</y><w>80</w><h>30</h></coordinates><panel_attributes>lt=-&gt;</panel_attributes><additional_attributes>10;10;60;10</additional_attributes></element><element><id>Relation</id><coordinates><x>400</x><y>460</y><w>80</w><h>60</h></coordinates><panel_attributes>lt=-&gt;</panel_attributes><additional_attributes>10;10;60;40</additional_attributes></element><element><id>UMLClass</id><coordinates><x>720</x><y>330</y><w>260</w><h>110</h></coordinates><panel_attributes>PendingFilenameConflict
+--
+temp_path: String
+original_filename: String
+existing_id: String
+crc32: String</panel_attributes><additional_attributes></additional_attributes></element><element><id>Relation</id><coordinates><x>400</x><y>560</y><w>370</w><h>60</h></coordinates><panel_attributes>lt=&lt;-&gt;
+m1=1
+m2=0..1</panel_attributes><additional_attributes>10;40;10;10;350;10</additional_attributes></element><element><id>UMLClass</id><coordinates><x>720</x><y>40</y><w>340</w><h>420</h></coordinates><panel_attributes>&lt;&lt;enum, tag="kind"&gt;&gt;
+QueueError
+--
+PluginReported{plugin,error_code,data}
+PluginExecutionFailed{plugin}
+MalformedPluginResponse{plugin}
+EmptyPluginResult{plugin}
+InvalidUrl{url}
+InvalidHttpMethod{method}
+HttpRequestFailed{url}
+HttpStatus{url,status}
+WriteFailed
+BundleFailed
+DuplicateArchive{existing_id,reason}
+DuplicateFilename{existing_id,filename}
+DuplicateFilenameCleaned{existing_id,
+  filename}
+Internal
+StaleAfterRestart
+--
++code(): u16
+--
+前端联合类型核对确认 15/15 个
+变体全部存在——两侧完整类型化，
+没有缺口</panel_attributes><additional_attributes></additional_attributes></element><element><id>Relation</id><coordinates><x>400</x><y>330</y><w>350</w><h>280</h></coordinates><panel_attributes>lt=&lt;-&gt;
+m1=1
+m2=0..1
+error</panel_attributes><additional_attributes>10;260;10;20;330;20</additional_attributes></element><element><id>UMLNote</id><coordinates><x>60</x><y>720</y><w>640</w><h>90</h></coordinates><panel_attributes>图 2/3 —— 后台任务与下载队列子系统
+这一组（JobStatus/JobRecord + DownloadQueueItem/QueueError）是整个
+代码库里类型化程度最好的部分：后端有真实 Rust struct，前端有完全
+对应的 TS interface，逐字段核对过完全一致。</panel_attributes><additional_attributes></additional_attributes></element></diagram>

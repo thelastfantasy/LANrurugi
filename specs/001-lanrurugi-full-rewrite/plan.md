@@ -134,36 +134,37 @@ crates/
 ├── lanrurugi-search/              # Search query grammar/index over Redis (US3's search syntax
 │                                  # compatibility)
 │   └── tests/
-└── lanrurugi-backup/              # Backup/export + restore, JSON shape derived from legacy
-                                    # Model/Backup.pm (US5)
-    └── tests/
+├── lanrurugi-backup/              # Backup/export + restore, JSON shape derived from legacy
+│                                   # Model/Backup.pm (US5)
+│   └── tests/
+└── lanrurugi-bench/           # US8 deliverable: synthetic-library generator, criterion
+                                # microbenchmarks, and a compare/ harness orchestrating both
+                                # LANraragi (legacy) and LANrurugi against the same synthetic
+                                # library on the same hardware; emits the SC-011 comparison report
+    └── benches/
 
-bench/                       # US8 deliverable — not a crate's unit tests, a standalone harness
-├── synthetic-library/       # Generator for a ~100k-archive synthetic test library (SC-008 scale)
-├── criterion/                # In-process Rust microbenchmarks (hashing, thumbnailing)
-└── compare/                  # Orchestrates both LANraragi (legacy) and LANrurugi against the
-                               # same synthetic library on the same hardware; emits the SC-011
-                               # comparison report
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   ├── state/               # Zustand stores
-│   ├── api/                 # TanStack Query hooks, typed from contracts/openapi.yaml
-│   └── i18n/                 # Locale JSON converted from legacy locales/template/*.po (US7)
-└── tests/                    # Vitest + Testing Library, mirroring ~/jellyfin-suite conventions
+apps/
+└── frontend/
+    ├── src/
+    │   ├── components/
+    │   ├── pages/
+    │   ├── state/               # Zustand stores
+    │   ├── api/                 # TanStack Query hooks, typed from contracts/openapi.yaml
+    │   └── i18n/                 # Locale JSON converted from legacy locales/template/*.po (US7)
+    └── tests/                    # Vitest + Testing Library, mirroring ~/jellyfin-suite conventions
 ```
 
 **Structure Decision**: Web application layout (Option 2), adapted to a Cargo workspace of
 focused crates rather than one flat `backend/src/`, so each crate has a single clear
 responsibility and can be unit-tested independently — while still producing exactly **one**
 deployable binary (`lanrurugi-server`, exposing `serve`/`rebuild-index`/`bench` as `clap`
-subcommands) per constitution Principle III. `bench/` sits outside `crates/` because US8 requires
-driving *both* the legacy Perl system and the new binary side by side, which is an external
-orchestration concern, not an in-crate unit test. Frontend follows a standard Vite/React layout
-with `i18n/` called out explicitly since US7 depends on porting real legacy locale content, not a
-greenfield i18n setup.
+subcommands) per constitution Principle III. `lanrurugi-bench` lives alongside every other crate
+under `crates/` (it's still just a Cargo package in the same workspace) even though US8 drives
+*both* the legacy Perl system and the new binary side by side — that external-orchestration
+concern doesn't warrant a separate top-level directory. `apps/` holds deployable applications as
+a sibling to `crates/`'s libraries; `frontend/` is the sole member today, following a standard
+Vite/React layout with `i18n/` called out explicitly since US7 depends on porting real legacy
+locale content, not a greenfield i18n setup.
 
 ## Complexity Tracking
 

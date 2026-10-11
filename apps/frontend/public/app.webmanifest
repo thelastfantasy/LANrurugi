@@ -1,0 +1,24 @@
+{
+  "name": "LANrurugi",
+  "short_name": "LANrurugi",
+  "start_url": "/",
+  "display": "standalone",
+  "description": "Web application for archival and reading of manga/doujinshi.",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "type": "image/x-icon",
+      "sizes": "256x256"
+    },
+    {
+      "src": "favicon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "favicon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}
