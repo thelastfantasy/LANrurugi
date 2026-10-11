@@ -82,9 +82,11 @@ struct Stored {
 /// every plugin namespace this host runs.
 pub struct HostHttp {
     client: reqwest::Client,
-    /// One client per redirect limit: `reqwest`'s policy is client-level, so a plugin's own
-    /// `max_redirects(n)` needs a client built at that limit (`0` = hand the 3xx back).
-    redirecting_clients: Mutex<HashMap<usize, reqwest::Client>>,
+    /// One client per (redirect limit, declared-host set): `reqwest`'s redirect policy is
+    /// client-level, and that policy now enforces the plugin's own declared hosts on **every** hop,
+    /// so keying by limit alone would hand a plugin a client built from another plugin's allow-list
+    /// (`0` = hand the 3xx back, which needs no client of its own).
+    redirecting_clients: Mutex<HashMap<(usize, Vec<String>), reqwest::Client>>,
     store: Mutex<HashMap<String, Stored>>,
     inflight: Singleflight<String, Arc<Result<RelayResponse, String>>>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
@@ -127,18 +129,29 @@ impl HostHttp {
             ));
         }
 
+        // The redirect policy needs the declaration too (every hop is checked), and the singleflight
+        // closure outlives this borrow, so it takes its own canonical copy.
+        let allow_list = normalized_hosts(allowed_hosts);
+
         // Concurrent identical requests are one upstream request: the plugin's own sequential
         // awaits (E-Hentai's sixteen `gdata` batches, say) still cost one round trip each, but two
         // plugins — or a preview and a check — asking for the same page at the same moment do not.
         let key = request_key(&request);
         Arc::unwrap_or_clone(
             self.inflight
-                .run(key, || async { Arc::new(self.send(&host, request).await) })
+                .run(key, || async {
+                    Arc::new(self.send(&host, &allow_list, request).await)
+                })
                 .await,
         )
     }
 
-    async fn send(&self, host: &str, request: RelayRequest) -> Result<RelayResponse, String> {
+    async fn send(
+        &self,
+        host: &str,
+        allowed_hosts: &[String],
+        request: RelayRequest,
+    ) -> Result<RelayResponse, String> {
         let key = request_key(&request);
 
         // Revalidate rather than guess: whatever was stored for this exact request is only reused
@@ -155,7 +168,7 @@ impl HostHttp {
         };
 
         let limit = request.redirect_limit.unwrap_or(DEFAULT_REDIRECT_LIMIT);
-        let client = self.client_for(limit).await;
+        let client = self.client_for(limit, allowed_hosts).await;
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|e| format!("invalid HTTP method {:?}: {e}", request.method))?;
         let mut builder = client.request(method.clone(), request.url.clone());
@@ -248,16 +261,40 @@ impl HostHttp {
         Ok(relayed)
     }
 
-    async fn client_for(&self, limit: usize) -> reqwest::Client {
+    async fn client_for(&self, limit: usize, allowed_hosts: &[String]) -> reqwest::Client {
         if limit == 0 {
             return self.client.clone();
         }
+        let allow_list = normalized_hosts(allowed_hosts);
         let mut clients = self.redirecting_clients.lock().await;
         clients
-            .entry(limit)
+            .entry((limit, allow_list.clone()))
             .or_insert_with(|| {
                 reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::limited(limit))
+                    .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                        // The declared-host check has to happen *per hop*: validating only the URL
+                        // the plugin asked for let any 3xx carry the request to a host the plugin
+                        // never declared, which is exactly what a plugin's `net` permission is
+                        // supposed to prevent.
+                        //
+                        // `previous` includes the initial URL, and `limited` compares with `>`
+                        // (reqwest 0.13's own `PolicyKind::Limit` arm), so the bound is checked
+                        // first and identically — an over-long chain must still fail as
+                        // "too many redirects" rather than silently becoming a stopped 3xx.
+                        if attempt.previous().len() > limit {
+                            attempt.error("too many redirects")
+                        } else if attempt
+                            .url()
+                            .host_str()
+                            .is_none_or(|host| !host_allowed(&allow_list, host))
+                        {
+                            // `stop()` hands the 3xx itself back, so the plugin can see it was not
+                            // followed; `storable()` keeps a non-2xx out of the revalidation store.
+                            attempt.stop()
+                        } else {
+                            attempt.follow()
+                        }
+                    }))
                     .connect_timeout(CONNECT_TIMEOUT)
                     .timeout(REQUEST_TIMEOUT)
                     .build()
@@ -290,6 +327,18 @@ impl Default for HostHttp {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The declared hosts in a canonical shape (`host_allowed` trims and lowercases on every
+/// comparison anyway) so two declarations that mean the same thing share one cached client.
+fn normalized_hosts(allowed_hosts: &[String]) -> Vec<String> {
+    let mut hosts: Vec<String> = allowed_hosts
+        .iter()
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// Whether a plugin declaring `allowed_hosts` may reach `host`. An entry covers itself and any
@@ -449,6 +498,85 @@ mod tests {
             elapsed < Duration::from_secs(15),
             "took {elapsed:?} (should be bounded by the connect budget): {error}"
         );
+    }
+
+    /// A one-shot local HTTP server: each accepted connection is answered with the next scripted
+    /// response, and the returned counter is how many connections actually arrived. Blocking
+    /// `std::net` on its own thread deliberately — the tests only need "did a second request
+    /// happen, and what did it get", and this keeps the plugin crate's tokio features untouched.
+    fn spawn_server(
+        responses: Vec<&'static str>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().expect("local addr").port();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let index = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let response = responses
+                    .get(index)
+                    .or_else(|| responses.last())
+                    .copied()
+                    .unwrap_or("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                // Drain the request head first: answering before the client finishes sending makes
+                // some clients report a connection error instead of the response.
+                let mut scratch = [0u8; 4096];
+                let _ = stream.read(&mut scratch);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (port, seen)
+    }
+
+    /// The security fix this test exists for: a plugin's `net` declaration has to hold on *every*
+    /// hop, not just the URL it asked for. The redirect target is `.invalid`, so a followed
+    /// redirect could not even resolve — `Ok` with the 3xx itself is only reachable by stopping
+    /// before the request is made.
+    #[tokio::test]
+    async fn a_redirect_to_an_undeclared_host_is_not_followed() {
+        let (port, seen) = spawn_server(vec![
+            "HTTP/1.1 302 Found\r\nLocation: http://blocked.invalid/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ]);
+        let http = HostHttp::new();
+        let mut req = request("GET", &format!("http://127.0.0.1:{port}/start"), None);
+        req.redirect_limit = Some(10);
+
+        let response = http
+            .relay(&["127.0.0.1".to_string()], req)
+            .await
+            .expect("a stopped redirect must not turn into an error");
+        assert_eq!(response.status, 302, "the 3xx itself is handed back");
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the declared host may be contacted"
+        );
+    }
+
+    /// Positive control: the same setup, redirecting to a host the plugin *did* declare, must still
+    /// be followed — otherwise "deny everything" would pass the test above.
+    #[tokio::test]
+    async fn a_redirect_within_a_declared_host_is_still_followed() {
+        let (port, seen) = spawn_server(vec![
+            "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+        ]);
+        let http = HostHttp::new();
+        let mut req = request("GET", &format!("http://127.0.0.1:{port}/start"), None);
+        req.redirect_limit = Some(10);
+
+        let response = http
+            .relay(&["127.0.0.1".to_string()], req)
+            .await
+            .expect("a declared-host redirect must succeed");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, "ok");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]

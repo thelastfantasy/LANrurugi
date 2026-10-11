@@ -218,6 +218,12 @@ export function SearchBar({
             <Autocomplete.Positioner
               side="bottom"
               align="start"
+              // Never flip above the bar: on a phone the virtual keyboard can shrink the viewport
+              // until nothing fits below, and the default `side: 'flip'` then opened the panel
+              // *upwards* (reported live). `side: 'none'` keeps the requested side and
+              // `fallbackAxisSide: 'none'` forbids the perpendicular fallback; `align: 'shift'`
+              // still nudges it horizontally to stay on screen, which is the part worth keeping.
+              collisionAvoidance={{ side: "none", align: "shift", fallbackAxisSide: "none" }}
               // `side="bottom"` + a *negative* offset is measured from the anchor's **bottom** edge,
               // so "8px above the bar's top" is `-(barHeight + 8)` — read off the anchor's measured
               // rect rather than a literal, because the bar's height comes from each theme's own
@@ -251,7 +257,13 @@ export function SearchBar({
                   // 10px this started with).
                   width: "calc(var(--anchor-width) + 12px)",
                   marginLeft: -6,
-                  maxHeight: "min(70vh, 460px)",
+                  // `--available-height` is what the positioner measures on the chosen side, so a
+                  // short viewport (keyboard up) shortens the panel instead of hiding it. Border-box
+                  // because `max-height` defaults to the content box: without it the box still
+                  // overflowed the viewport by exactly its own top padding (measured on a 390x430
+                  // mobile viewport: panel bottom 460 vs viewport 437).
+                  maxHeight: "min(70vh, 460px, var(--available-height))",
+                  boxSizing: "border-box",
                   overflowY: "auto",
                   overscrollBehavior: "contain",
                   fontSize: FONT_SIZE_SM,

@@ -154,6 +154,7 @@ async fn opds_catalog(
         &state.redis.archive,
         &state.redis.search,
         &state.equivalence,
+        &state.bookmarks,
         &params,
     )
     .await

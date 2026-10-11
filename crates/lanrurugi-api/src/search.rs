@@ -237,6 +237,7 @@ pub(crate) async fn guest_has_any_visible_archive(
                     &state.redis.archive,
                     &state.redis.search,
                     &state.equivalence,
+                    &state.bookmarks,
                     predicate,
                     "UTC",
                 )
@@ -282,6 +283,7 @@ pub(crate) async fn guest_visible_archive_ids(
                     &state.redis.archive,
                     &state.redis.search,
                     &state.equivalence,
+                    &state.bookmarks,
                     &params,
                 )
                 .await
@@ -482,6 +484,7 @@ async fn search_archives_with_mode(
         &state.redis.archive,
         &state.redis.search,
         &state.equivalence,
+        &state.bookmarks,
         &params,
     )
     .await
@@ -548,6 +551,7 @@ async fn search_archive_ids(
         &state.redis.archive,
         &state.redis.search,
         &state.equivalence,
+        &state.bookmarks,
         &params,
     )
     .await
@@ -655,6 +659,7 @@ async fn search_suggest(
         &state.redis.archive,
         &state.redis.search,
         &state.equivalence,
+        &state.bookmarks,
         &params,
     )
     .await
@@ -764,6 +769,7 @@ async fn search_random(
         &state.redis.archive,
         &state.redis.search,
         &state.equivalence,
+        &state.bookmarks,
         &params,
     )
     .await

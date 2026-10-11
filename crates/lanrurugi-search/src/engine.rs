@@ -14,6 +14,7 @@ use deadpool_redis::Pool;
 use lanrurugi_core::entities::Category;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_equivalence::Equivalence;
+use lanrurugi_storage::bookmarks::BookmarksRepository;
 use thiserror::Error;
 
 use crate::grammar::{parse_query, Expr, Field, Token};
@@ -108,14 +109,23 @@ pub struct SearchEngine {
     archive_pool: Pool,
     search_pool: Pool,
     equivalence: Arc<Equivalence>,
+    /// See [`EvalCtx::bookmarks`] — the caller supplies it so the engine never picks the logical DB
+    /// itself.
+    bookmarks: Arc<BookmarksRepository>,
 }
 
 impl SearchEngine {
-    pub fn new(archive_pool: Pool, search_pool: Pool, equivalence: Arc<Equivalence>) -> Self {
+    pub fn new(
+        archive_pool: Pool,
+        search_pool: Pool,
+        equivalence: Arc<Equivalence>,
+        bookmarks: Arc<BookmarksRepository>,
+    ) -> Self {
         Self {
             archive_pool,
             search_pool,
             equivalence,
+            bookmarks,
         }
     }
 
@@ -128,6 +138,7 @@ impl SearchEngine {
             &self.archive_pool,
             &self.search_pool,
             &self.equivalence,
+            &self.bookmarks,
             params,
         )
         .await
@@ -138,6 +149,7 @@ impl SearchEngine {
             &self.archive_pool,
             &self.search_pool,
             &self.equivalence,
+            &self.bookmarks,
             filter,
             timezone,
         )
@@ -169,6 +181,7 @@ pub async fn search_exists(
     archive_pool: &Pool,
     search_pool: &Pool,
     eq: &Equivalence,
+    bookmarks: &BookmarksRepository,
     filter: &str,
     timezone: &str,
 ) -> Result<bool> {
@@ -195,6 +208,7 @@ pub async fn search_exists(
 
     let mut ctx = EvalCtx {
         archive_pool,
+        bookmarks,
         archive_conn: &mut archive_conn,
         search_conn: &mut search_conn,
         eq,
@@ -214,6 +228,12 @@ pub async fn search_exists(
 /// individually.
 struct EvalCtx<'a> {
     archive_pool: &'a Pool,
+    /// Page-level bookmarks (`has:bookmark`, `bookmark:"name"`). Supplied by the caller rather than
+    /// constructed here from a pool: bookmarks live on the **config** logical DB while `archive_pool`
+    /// above is the archive DB (categories need that one), and the engine picking the pool itself is
+    /// exactly how both bookmark operators silently matched nothing — every lookup hit db0's empty
+    /// `LANRURUGI_BOOKMARKS` hash while the real data sat in db2.
+    bookmarks: &'a BookmarksRepository,
     archive_conn: &'a mut deadpool_redis::Connection,
     search_conn: &'a mut deadpool_redis::Connection,
     eq: &'a Equivalence,
@@ -318,6 +338,7 @@ pub async fn search(
     archive_pool: &Pool,
     search_pool: &Pool,
     eq: &Equivalence,
+    bookmarks: &BookmarksRepository,
     params: &SearchParams,
 ) -> Result<SearchResult> {
     let mut archive_conn = archive_pool.get().await?;
@@ -472,6 +493,7 @@ pub async fn search(
     let filtered = {
         let mut ctx = EvalCtx {
             archive_pool,
+            bookmarks,
             archive_conn: &mut archive_conn,
             search_conn: &mut search_conn,
             eq,
@@ -551,6 +573,7 @@ async fn attribute_filter(
             has_filter(
                 archive_pool,
                 archive_conn,
+                ctx.bookmarks,
                 ctx.split_suggestions,
                 &value,
                 scope,
@@ -627,11 +650,12 @@ async fn state_filter(
 ///
 /// `patch` reads the archive hash directly. `bookmark` is the one operator here that needs another
 /// repository (see its own arm below for why that is still one lookup and not a new index).
-/// Category / split-suggestion membership stays unimplemented: those would mean reaching further
-/// into storage from the query evaluator, which is a design decision rather than a missing line.
+/// `category` (static membership only — see that arm) and `split-suggestion` (a caller-supplied id
+/// set, since split-suggestion records live on the config DB) complete the set.
 async fn has_filter(
     archive_pool: &Pool,
     archive_conn: &mut deadpool_redis::Connection,
+    bookmarks: &BookmarksRepository,
     split_suggestions: Option<&HashSet<String>>,
     value: &str,
     scope: &HashSet<String>,
@@ -679,10 +703,7 @@ async fn has_filter(
                 .collect())
         }
         "bookmark" => {
-            let bookmarked =
-                lanrurugi_storage::bookmarks::BookmarksRepository::new(archive_pool.clone())
-                    .latest_bookmark_per_archive()
-                    .await?;
+            let bookmarked = bookmarks.latest_bookmark_per_archive().await?;
             Ok(scope
                 .iter()
                 .filter(|id| !id.starts_with("TANK") && bookmarked.contains_key(id.as_str()))
@@ -882,10 +903,7 @@ async fn bookmark_name_filter(
 ) -> Result<HashSet<String>> {
     let folded = ctx.eq.fold_pattern(value);
     let pattern = format!("*{folded}*");
-    let bookmarks =
-        lanrurugi_storage::bookmarks::BookmarksRepository::new(ctx.archive_pool.clone())
-            .list_all()
-            .await?;
+    let bookmarks = ctx.bookmarks.list_all().await?;
     Ok(bookmarks
         .into_iter()
         .filter(|b| !b.archive_id.starts_with("TANK") && scope.contains(&b.archive_id))
@@ -1625,13 +1643,18 @@ async fn tank_date_sort_value(
 mod tests {
     use super::*;
 
-    async fn test_pools() -> Option<(Pool, Pool)> {
+    /// The three things every test here needs: the archive DB, the search DB, and a bookmark
+    /// repository bound to the **config** DB — the same split production uses, so a test can no
+    /// longer pass by writing bookmarks into one DB and having the engine read that same wrong one.
+    async fn test_pools() -> Option<(Pool, Pool, BookmarksRepository)> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
         let archive_url = format!("{}/0", base.trim_end_matches('/'));
         let search_url = format!("{}/3", base.trim_end_matches('/'));
+        let config_url = format!("{}/2", base.trim_end_matches('/'));
         let archive = lanrurugi_storage::test_support::test_pool_for_url(&archive_url).await?;
         let search = lanrurugi_storage::test_support::test_pool_for_url(&search_url).await?;
-        Some((archive, search))
+        let config = lanrurugi_storage::test_support::test_pool_for_url(&config_url).await?;
+        Some((archive, search, BookmarksRepository::new(config)))
     }
 
     fn test_eq() -> Equivalence {
@@ -1645,7 +1668,7 @@ mod tests {
     /// the back regardless of direction.
     #[tokio::test]
     async fn date_added_descending_keeps_unkeyed_tankoubons_at_the_back() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, _bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -1717,7 +1740,7 @@ mod tests {
     /// tank participates in keyed ordering instead of always trailing as unkeyed.
     #[tokio::test]
     async fn date_added_sort_imputes_tank_value_from_member_archives() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, _bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -1780,7 +1803,7 @@ mod tests {
 
     #[tokio::test]
     async fn finds_archive_by_tag_and_respects_negation() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -1831,7 +1854,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let result = search(&archive_pool, &search_pool, &eq, &params)
+        let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
             .await
             .unwrap();
         assert_eq!(result.ids, vec![id_a.clone()]);
@@ -1841,7 +1864,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let neg_result = search(&archive_pool, &search_pool, &eq, &neg_params)
+        let neg_result = search(&archive_pool, &search_pool, &eq, &bookmarks, &neg_params)
             .await
             .unwrap();
         assert!(neg_result.ids.contains(&id_b));
@@ -1881,7 +1904,7 @@ mod tests {
     /// a non-empty set narrows correctly alongside an active keyword filter.
     #[tokio::test]
     async fn restrict_to_archive_ids_narrows_the_candidate_set() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -1919,7 +1942,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let result = search(&archive_pool, &search_pool, &eq, &unrestricted)
+        let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &unrestricted)
             .await
             .unwrap();
         assert!(result.ids.contains(&id_a));
@@ -1931,7 +1954,7 @@ mod tests {
             restrict_to_archive_ids: Some([ArchiveId(id_a.clone())].into_iter().collect()),
             ..Default::default()
         };
-        let scoped_result = search(&archive_pool, &search_pool, &eq, &scoped)
+        let scoped_result = search(&archive_pool, &search_pool, &eq, &bookmarks, &scoped)
             .await
             .unwrap();
         assert!(scoped_result.ids.contains(&id_a));
@@ -1943,7 +1966,7 @@ mod tests {
             restrict_to_archive_ids: Some(HashSet::new()),
             ..Default::default()
         };
-        let empty_result = search(&archive_pool, &search_pool, &eq, &empty_scope)
+        let empty_result = search(&archive_pool, &search_pool, &eq, &bookmarks, &empty_scope)
             .await
             .unwrap();
         assert!(!empty_result.ids.contains(&id_a));
@@ -1976,7 +1999,7 @@ mod tests {
     // Redis indexes, the same way a live request does.
     #[tokio::test]
     async fn multi_word_tag_value_is_findable_both_quoted_forms_and_ands_with_a_second_term() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -2015,7 +2038,7 @@ mod tests {
                 groupby_tanks: true,
                 ..Default::default()
             };
-            let result = search(&archive_pool, &search_pool, &eq, &params)
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
                 .await
                 .unwrap();
             assert_eq!(
@@ -2046,9 +2069,15 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let negated_result = search(&archive_pool, &search_pool, &eq, &negated_params)
-            .await
-            .unwrap();
+        let negated_result = search(
+            &archive_pool,
+            &search_pool,
+            &eq,
+            &bookmarks,
+            &negated_params,
+        )
+        .await
+        .unwrap();
         assert!(!negated_result.ids.contains(&id));
 
         let _: () = aconn.del(&id).await.unwrap();
@@ -2077,7 +2106,7 @@ mod tests {
     // while the tag half of an exact token still goes through the literal `INDEX_<tag>` key.
     #[tokio::test]
     async fn quoted_phrase_matches_a_title_that_only_contains_it_mid_string() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -2117,7 +2146,7 @@ mod tests {
                 groupby_tanks: true,
                 ..Default::default()
             };
-            let result = search(&archive_pool, &search_pool, &eq, &params)
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
                 .await
                 .unwrap();
             assert_eq!(
@@ -2134,7 +2163,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let result = search(&archive_pool, &search_pool, &eq, &params)
+        let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
             .await
             .unwrap();
         assert!(result.ids.is_empty());
@@ -2157,7 +2186,7 @@ mod tests {
     // integration tests above.
     #[tokio::test]
     async fn canonical_folding_makes_cn_jp_kana_and_latin_variants_findable() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -2202,7 +2231,7 @@ mod tests {
                 groupby_tanks: true,
                 ..Default::default()
             };
-            let result = search(&archive_pool, &search_pool, &eq, &params)
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
                 .await
                 .unwrap();
             assert!(
@@ -2307,7 +2336,7 @@ mod tests {
     // (never a single-character repeat, per this file's own collision history).
     #[tokio::test]
     async fn boolean_structure_and_attribute_operators() {
-        let Some((archive_pool, search_pool)) = test_pools().await else {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
@@ -2389,6 +2418,7 @@ mod tests {
             archive_pool: &Pool,
             search_pool: &Pool,
             eq: &Equivalence,
+            bookmarks: &BookmarksRepository,
             filter: &str,
             groupby_tanks: bool,
         ) -> Vec<String> {
@@ -2397,7 +2427,7 @@ mod tests {
                 groupby_tanks,
                 ..Default::default()
             };
-            let mut result = search(archive_pool, search_pool, eq, &params)
+            let mut result = search(archive_pool, search_pool, eq, bookmarks, &params)
                 .await
                 .unwrap()
                 .ids;
@@ -2406,9 +2436,13 @@ mod tests {
         }
 
         let search_ids = |filter: &'static str| {
-            let (archive_pool, search_pool, eq) =
-                (archive_pool.clone(), search_pool.clone(), test_eq());
-            async move { ids_for(&archive_pool, &search_pool, &eq, filter, true).await }
+            let (archive_pool, search_pool, eq, bookmarks) = (
+                archive_pool.clone(),
+                search_pool.clone(),
+                test_eq(),
+                bookmarks.clone(),
+            );
+            async move { ids_for(&archive_pool, &search_pool, &eq, &bookmarks, filter, true).await }
         };
 
         // `|` is OR; adjacency is still AND, and binds tighter.
@@ -2457,8 +2491,6 @@ mod tests {
         // search-side index), so it is asserted through a real add/remove round trip rather than a
         // hand-written Redis key. `beta` gets two bookmarked pages (pinning "at least one"), and is
         // cleaned up again so a repeat run starts where this one did.
-        let bookmarks =
-            lanrurugi_storage::bookmarks::BookmarksRepository::new(archive_pool.clone());
         assert!(search_ids("artist:beta has:bookmark").await.is_empty());
         bookmarks.add(&id_b, 1, 1_700_000_000).await.unwrap();
         bookmarks.add(&id_b, 4, 1_700_000_060).await.unwrap();
@@ -2572,10 +2604,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            search(&archive_pool, &search_pool, &eq, &with_suggestion)
-                .await
-                .unwrap()
-                .ids,
+            search(
+                &archive_pool,
+                &search_pool,
+                &eq,
+                &bookmarks,
+                &with_suggestion
+            )
+            .await
+            .unwrap()
+            .ids,
             vec![id_a.clone()]
         );
         let wrong_archive = SearchParams {
@@ -2584,11 +2622,13 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        assert!(search(&archive_pool, &search_pool, &eq, &wrong_archive)
-            .await
-            .unwrap()
-            .ids
-            .is_empty());
+        assert!(
+            search(&archive_pool, &search_pool, &eq, &bookmarks, &wrong_archive)
+                .await
+                .unwrap()
+                .ids
+                .is_empty()
+        );
 
         // `sortby=relevance` — opt-in, and the only sort whose order depends on the query. `orword`
         // matches id_a through its *title* and id_b through a *tag*, so a title hit outranking a tag
@@ -2599,7 +2639,7 @@ mod tests {
             groupby_tanks: true,
             ..Default::default()
         };
-        let ordered = search(&archive_pool, &search_pool, &eq, &params)
+        let ordered = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
             .await
             .unwrap()
             .ids;
@@ -2692,6 +2732,7 @@ mod tests {
                 &archive_pool,
                 &search_pool,
                 &eq,
+                &bookmarks,
                 "artist:alpha in:tank",
                 false
             )
@@ -2705,6 +2746,7 @@ mod tests {
                 &archive_pool,
                 &search_pool,
                 &eq,
+                &bookmarks,
                 "artist:alpha is:new",
                 false
             )

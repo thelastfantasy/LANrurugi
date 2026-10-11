@@ -586,6 +586,12 @@ mod tests {
             .unwrap();
         state.bookmarks.add(&archive_id, 4, 0).await.unwrap();
 
+        // A stamp's id is `STAMPS_<page>_<milliseconds>` (legacy's own `Model/Stamp.pm` format),
+        // so two calls landing in the *same* millisecond produce one id twice: the archive's list
+        // still holds two entries, but only one stamp exists, and deleting it is *supposed* to drop
+        // the bookmark — which made this test fail roughly 2 runs in 5, apparently at random.
+        // Waiting out the millisecond is what makes "two stamps" actually true here, and the
+        // distinctness assert below is what keeps a future timing change from hiding the same trap.
         for _ in 0..2 {
             add_stamp(
                 State(state.clone()),
@@ -594,6 +600,7 @@ mod tests {
                 Query(StampParams::default()),
             )
             .await;
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let remaining = state
             .repos
@@ -604,6 +611,10 @@ mod tests {
             .unwrap()
             .stamp_ids;
         assert_eq!(remaining.len(), 2);
+        assert_ne!(
+            remaining[0], remaining[1],
+            "this test needs two *distinct* stamps on the page"
+        );
 
         let resp = delete_stamp(State(state.clone()), None, Path(remaining[0].clone())).await;
         assert_eq!(resp.into_response().status(), StatusCode::OK);
