@@ -1,22 +1,72 @@
 version: 2
+
+# NOTE, and the reason nothing here has ever run: Dependabot reads this file **only from the
+# repository's default branch**. It currently sits at the repository's first commit while all real
+# work lives elsewhere, so the dependency graph is empty and no update — version or security — can be
+# produced until that is addressed. See the repository's own notes before editing this file's shape.
+#
+# Grouping policy, applied to both language ecosystems below:
+#   - minor + patch updates are batched into one PR per ecosystem per week. CI here takes ~12 minutes
+#     per run, so one reviewable batch beats a dozen queued runs.
+#   - majors are deliberately left ungrouped: they get one PR each, because a major bump is exactly
+#     the case that needs its own build log rather than being buried in a batch.
+#   - security updates get their own group per ecosystem (`applies-to: security-updates`), so a
+#     published advisory is actionable on its own instead of waiting for the weekly batch. This
+#     complements repository-level Dependabot alerts/security updates, which are what actually open
+#     those PRs; the groups here only control how they are batched.
+#
+# `commit-message` follows this repository's conventional-commit history (`chore: …`).
+
 updates:
-  # Rust workspace (crates/lanrurugi-*) — one root Cargo.toml covers every workspace member.
+  # Rust workspace (crates/lanrurugi-*) — one root Cargo.toml/Cargo.lock covers every member.
+  #
+  # A red `cargo check` on one of these PRs can mean the crate now requires a newer rustc than the
+  # pinned toolchain. That pin lives in two places that must agree — `.mise.toml` (what CI installs)
+  # and every Dockerfile's `RUST_VERSION` ARG (what contributors build in). The `docker` entry below
+  # is what proposes raising the latter; raise the former in the same PR.
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
     groups:
-      cargo-dependencies:
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      cargo-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
-  # Frontend (apps/frontend) — pnpm-lock.yaml lives here per the pnpm workspace layout.
+  # Whole pnpm workspace — one entry, not one per package.
+  #
+  # There is exactly ONE lockfile in this repository (`/pnpm-lock.yaml`) and `/pnpm-workspace.yaml`
+  # declares the members (`apps/*`, `docs`). Dependabot updates workspace members' manifests from the
+  # entry that points at the lockfile's directory, so a per-member entry would both duplicate work and
+  # have Dependabot looking for a lockfile that is not in the directory it was given.
   - package-ecosystem: npm
-    directory: /apps/frontend
+    directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
     groups:
-      frontend-dependencies:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      npm-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
@@ -31,6 +81,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
 
   # compose.dev.yaml — NOT covered by the `docker` ecosystem entry above (Dependabot only
   # auto-detects YAML there if it structurally looks like a Kubernetes manifest/Helm chart); Compose
@@ -39,9 +92,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
 
-  # GitHub Actions workflow versions (.github/workflows/ci.yml).
+  # GitHub Actions workflow versions (.github/workflows/*.yml).
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
