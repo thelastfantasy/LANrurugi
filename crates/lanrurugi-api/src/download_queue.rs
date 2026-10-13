@@ -2242,6 +2242,10 @@ fn cached_result_to_events(
 /// existing library archive this conflict is against. Shared by every `.../compare/*` endpoint
 /// that needs one side's own archive path (`compare_queue_item_page`, [`list_compare_pages`]),
 /// pulled out once those grew to two identical copies of the same match arm.
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 async fn resolve_compare_side_path(
     state: &AppState,
     conflict: &lanrurugi_storage::download_queue::PendingFilenameConflict,
@@ -2292,11 +2296,13 @@ const COMPARISON_ENCODE_QUALITY: u8 = 92;
 /// (and anything unrecognized, which the browser will either decode or fail on identically either
 /// way) are left alone — only the codecs a browser can genuinely lack are considered.
 fn source_needs_conversion(detected: &str, support: crate::archives::ClientImageSupport) -> bool {
-    match detected {
-        "image/jxl" => !support.jxl,
-        "image/webp" | "image/avif" => !support.webp,
-        _ => false,
-    }
+    // Shared with the reader's own necessity rule (see `ClientImageSupport::can_decode`): convert
+    // only a codec the client cannot decode *and* this server can — the comparison overlay exists to
+    // be looked at, so a format we cannot decode must be left as-is rather than replaced by an
+    // error. The previous `image/avif => !support.webp` shorthand wrongly assumed AVIF support
+    // tracks WebP support.
+    !support.can_decode(detected, false)
+        && crate::archives::ClientImageSupport::server_can_decode_still(detected)
 }
 
 /// Re-encodes a comparison page when the client cannot decode its source codec, or `None` when no
@@ -3185,14 +3191,23 @@ mod tests {
         let both = crate::archives::ClientImageSupport {
             jxl: true,
             webp: true,
+            avif: true,
+            avif_anim: true,
+            jxl_anim: true,
         };
         let webp_only = crate::archives::ClientImageSupport {
             jxl: false,
             webp: true,
+            avif: false,
+            avif_anim: false,
+            jxl_anim: false,
         };
         let neither = crate::archives::ClientImageSupport {
             jxl: false,
             webp: false,
+            avif: false,
+            avif_anim: false,
+            jxl_anim: false,
         };
 
         assert!(!source_needs_conversion("image/jxl", both));

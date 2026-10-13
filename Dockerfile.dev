@@ -17,7 +17,7 @@
 # rebuilt) — this doesn't attempt Rust hot-reload, only the frontend, matching what was actually
 # asked for.
 
-ARG RUST_VERSION=1.97.1
+ARG RUST_VERSION=1.99.0
 ARG NODE_VERSION=24.18.0
 ARG PNPM_VERSION=11.10.0
 ARG REDIS_VERSION=7.4.9
@@ -43,7 +43,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd-dev \
         liblz4-dev \
         libxml2-dev \
+        libopenjp2-7-dev \
         libacl1-dev \
+        nasm \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
@@ -111,6 +113,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd1 \
         liblz4-1 \
         libxml2 \
+        libopenjp2-7 \
         libacl1 \
         libssl3t64 \
         geoipupdate \

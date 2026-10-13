@@ -154,6 +154,10 @@ async fn stats(
     axum::Json(result).into_response()
 }
 
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Response> {
     let mut doc = lanrurugi_backup::build::build(
         &state.repos.archives,

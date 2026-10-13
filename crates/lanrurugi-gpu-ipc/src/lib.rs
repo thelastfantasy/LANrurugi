@@ -29,10 +29,52 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/lanrurugi-gpu-worker.sock";
 
 /// Both client and server sides must set this on their transport's length-delimited codec —
-/// `tokio_util`'s own default is 8MiB, too small for a real page (a 2048px `MAX_INPAINT_SIZE` RGB
-/// page alone is ~12.6MB raw, before `erase_page`'s request also carries two same-sized masks
-/// alongside it). 64MiB is generous headroom over that, not a measured tight bound.
+/// `tokio_util`'s own default is 8MiB, which one real page can exceed by itself.
+///
+/// 64MiB was chosen against the assumption that the page crossing this boundary had already been
+/// reduced to `Inpainter`'s own working resolution (1024 on its longer edge). That assumption did
+/// not hold: the reduction ran *inside* the worker, after the transfer, so a page above roughly
+/// 13.4 megapixels produced an over-limit request that `tokio_util` rejected on the **encode** side
+/// before sending a byte — and the erase then failed in a way indistinguishable from a model
+/// failure. Feature `012-large-page-translation` makes the client reduce first, for exactly those
+/// pages; see [`erase_request_provably_fits`]. This limit itself is deliberately unchanged, and is
+/// not a measured tight bound.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
+/// Fixed per-request bytes an `erase_page` request adds on top of its arguments' own payloads: three
+/// wire structs (page, model mask, paste mask), each `4 + 4` bytes of dimensions plus an 8-byte
+/// `Vec` length prefix — `3 * 16 = 48`. The RPC envelope is accounted for separately, by
+/// [`ERASE_REQUEST_FRAMING_SLACK`].
+const ERASE_REQUEST_OVERHEAD_BYTES: u64 = 48;
+
+/// Envelope allowance, kept separate from the exact argument arithmetic above so the two are not
+/// confused: the `48 + 5*w*h` term is pinned against real serialization by a test, this term is a
+/// deliberate over-estimate. Over-estimating costs a page a trip through the reduced path, which
+/// still produces a correct result; under-estimating costs the silent failure this arithmetic
+/// exists to prevent. Those costs are not symmetric, so this errs high.
+pub const ERASE_REQUEST_FRAMING_SLACK: u64 = 1024;
+
+// The band this slack can misclassify is a fraction of a pixel row at 5 bytes per pixel, not a
+// second undocumented threshold. Asserted at compile time so it cannot drift silently.
+const _: () = assert!(ERASE_REQUEST_FRAMING_SLACK / 5 < 256);
+
+/// Total bytes an `erase_page` request for a `width` x `height` page occupies on the wire: the page
+/// at 3 bytes/pixel plus a model mask and a paste mask at 1 byte/pixel each
+/// (`bincode`'s default configuration is fixed-width, so this part is exact), plus framing.
+pub fn erase_request_bytes(width: u32, height: u32) -> u64 {
+    let pixels = u64::from(width) * u64::from(height);
+    ERASE_REQUEST_OVERHEAD_BYTES + pixels * 5 + ERASE_REQUEST_FRAMING_SLACK
+}
+
+/// Whether an `erase_page` request for a `width` x `height` page can be sent at its full resolution
+/// without exceeding [`MAX_FRAME_BYTES`].
+///
+/// Deliberately conservative in one direction only — see [`erase_request_bytes`]. A page for which
+/// this returns `false` must be reduced to `lanrurugi_inpaint::work_dims` before being sent, so that
+/// the client and the worker agree on the reduced dimensions rather than each deriving them.
+pub fn erase_request_provably_fits(width: u32, height: u32) -> bool {
+    erase_request_bytes(width, height) <= MAX_FRAME_BYTES as u64
+}
 
 /// A row-major RGB image, dimensions carried alongside the raw bytes rather than assumed —
 /// serializing an `image::RgbImage` directly would pull the `image` crate's own (de)serialization
@@ -135,4 +177,114 @@ pub trait GpuWorker {
     async fn segment_bubbles(page: RawRgbImage) -> Result<Vec<DetectedBubbleWire>, WorkerError>;
     /// Cheap liveness probe — used by the client's health check, does not touch any model.
     async fn ping() -> ();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact byte length of the three values an `erase_page` request carries as arguments,
+    /// serialized with `bincode`'s default (fixed-width) configuration — the same library and
+    /// configuration `tarpc`'s bincode transport uses. A tuple, not a struct, because that is what
+    /// the argument list serializes as: three values back to back with no extra framing.
+    fn serialize_arguments(width: u32, height: u32) -> u64 {
+        let pixels = (width as usize) * (height as usize);
+        let page = RawRgbImage {
+            width,
+            height,
+            rgb: vec![0u8; pixels * 3],
+        };
+        let mask = RawMask {
+            width,
+            height,
+            mask: vec![false; pixels],
+        };
+        bincode::serialize(&(page, mask.clone(), mask))
+            .expect("serializing erase_page's arguments")
+            .len() as u64
+    }
+
+    #[test]
+    fn erase_request_bytes_matches_real_serialization() {
+        // Small sizes only: this asserts the *formula*, and serializing a real 60-megapixel page
+        // here would allocate hundreds of megabytes to prove the same arithmetic.
+        for (w, h) in [(1u32, 1u32), (3, 5), (17, 23), (1024, 1536)] {
+            let arguments = serialize_arguments(w, h);
+            assert_eq!(
+                arguments,
+                ERASE_REQUEST_OVERHEAD_BYTES + u64::from(w) * u64::from(h) * 5,
+                "the 48 + 5*w*h term no longer matches bincode's real framing for {w}x{h}"
+            );
+            assert_eq!(
+                erase_request_bytes(w, h),
+                arguments + ERASE_REQUEST_FRAMING_SLACK,
+                "erase_request_bytes({w}, {h}) drifted from the wire format"
+            );
+        }
+    }
+
+    #[test]
+    fn request_size_scales_five_bytes_per_pixel() {
+        // Page (3 bytes/pixel) plus two masks (1 each). If a future change adds a field to either
+        // wire type, this is what notices.
+        let base = erase_request_bytes(100, 100);
+        let bigger = erase_request_bytes(200, 100);
+        assert_eq!(bigger - base, 100 * 100 * 5);
+    }
+
+    #[test]
+    fn surveyed_large_pages_do_not_fit_at_full_resolution() {
+        // The dimensions this feature was written for: real archives whose erase request exceeded
+        // the boundary limit and were therefore never translated at all.
+        for (w, h) in [
+            (6336u32, 9504u32),
+            (5400, 8100),
+            (6084, 3943),
+            (4535, 6307),
+            (4000, 6000),
+        ] {
+            assert!(
+                !erase_request_provably_fits(w, h),
+                "{w}x{h} ({:.1} MiB) must be routed through the reduced path",
+                erase_request_bytes(w, h) as f64 / (1024.0 * 1024.0)
+            );
+        }
+    }
+
+    #[test]
+    fn the_predicate_errs_toward_the_reduced_path() {
+        // A page whose *arguments alone* would fit, but only within the framing slack, must still be
+        // reported as not provably fitting — the envelope's exact size is not knowable without
+        // serializing. Getting this backwards means the client attempts a transfer the codec then
+        // rejects on the encode side, which is precisely the silent failure this feature removes.
+        //
+        // 3800 x 3532: arguments are 48 + 5*13_421_600 = 67_108_048 <= 67_108_864, so without the
+        // slack this page would be sent whole; with it, 67_109_064 > 67_108_864, so it is reduced.
+        let (w, h) = (3800u32, 3532u32);
+        assert!(
+            ERASE_REQUEST_OVERHEAD_BYTES + u64::from(w) * u64::from(h) * 5
+                <= MAX_FRAME_BYTES as u64,
+            "this test's premise: the arguments alone fit"
+        );
+        assert!(
+            !erase_request_provably_fits(w, h),
+            "the framing slack must push {w}x{h} onto the reduced path"
+        );
+
+        // ...and the next size down is safely inside the fitting range, so the conservative
+        // direction costs at most that band and never reclassifies a comfortably-fitting page.
+        // (The band's own bound is a compile-time assertion next to `ERASE_REQUEST_FRAMING_SLACK`.)
+        assert!(erase_request_provably_fits(3600, 3300));
+    }
+
+    #[test]
+    fn framing_slack_is_the_only_inexact_term() {
+        // Guards the documentation's own claim: exactly one term of erase_request_bytes is an
+        // over-estimate, and it does not scale with the page.
+        let small = erase_request_bytes(10, 10) - (ERASE_REQUEST_OVERHEAD_BYTES + 10 * 10 * 5);
+        let large =
+            erase_request_bytes(1000, 1000) - (ERASE_REQUEST_OVERHEAD_BYTES + 1000 * 1000 * 5);
+        assert_eq!(small, ERASE_REQUEST_FRAMING_SLACK);
+        assert_eq!(large, ERASE_REQUEST_FRAMING_SLACK);
+    }
 }

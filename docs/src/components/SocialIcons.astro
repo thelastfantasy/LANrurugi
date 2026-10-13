@@ -1,0 +1,98 @@
+---
+// Top-bar navigation, replacing Starlight's icon-only social links with text links.
+//
+// Why: the reference documentation site this project's site is modelled on puts *named* links in the
+// top bar (Github / Demo / Docker Hub / Discord Server), and a reader looking for "where do I file
+// this" reads words faster than it identifies a glyph. Three of those four do not exist for this
+// project — there is no published Docker image (`README.md` says `docker build -t lanrurugi .`), no
+// project Discord, and no public demo (a deliberate decision: the API-testing page has readers point
+// the request panel at *their own* instance). Inventing URLs to fill the row would ship four links
+// where three 404, so this renders only the links that resolve.
+//
+// Two upstream LANraragi links (its docs site and its repository) were here briefly, on the argument
+// that LANrurugi is API-compatible with it so its docs answer questions ours does not restate.
+// Removed on request: this is LANrurugi's documentation, and sending readers to a different project's
+// site from its own top bar is a decision the maintainer makes, not one to justify in a comment.
+import config from 'virtual:starlight/user-config'
+
+type Locale = 'zh' | 'en'
+const locale: Locale = Astro.currentLocale === 'en' ? 'en' : 'zh'
+
+const LINKS: Record<Locale, { label: string; href: string; external: boolean }[]> = {
+  zh: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
+  en: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
+}
+
+// Versions offered by the picker. There is exactly one today: the repository has no release tags
+// (`git tag` is empty), so "which version of the docs am I reading" currently has a single honest
+// answer. Kept as a list so the day a release is tagged this is a one-line change — and so the
+// selector is the reference site's *shape* rather than a fabricated second option.
+const VERSIONS: Record<Locale, { value: string; label: string }[]> = {
+  zh: [{ value: 'current', label: '当前版本' }],
+  en: [{ value: 'current', label: 'Current Release' }],
+}
+
+// Fail loudly at build time if a configured `social` entry is not represented here, so adding one in
+// `astro.config.mjs` and forgetting this component cannot silently drop it.
+const configured = (config.social ?? []).map((entry) => entry.href)
+const rendered = new Set(LINKS[locale].map((link) => link.href))
+const dropped = configured.filter((href) => !rendered.has(href))
+if (dropped.length > 0) {
+  throw new Error(
+    `SocialIcons override: astro.config.mjs declares ${dropped.join(', ')} but this component does ` +
+      `not render it. Either add it to LINKS or drop it from the config — a configured link that ` +
+      `never appears is worse than no config entry at all.`,
+  )
+}
+
+const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
+---
+
+<nav class="nav-links" aria-label={locale === 'zh' ? '外部链接' : 'External links'}>
+  {
+    LINKS[locale].map((link) => (
+      <a href={link.href} class="nav-links__item" rel={link.external ? 'noreferrer' : undefined}>
+        {link.label}
+      </a>
+    ))
+  }
+  <label class="nav-links__version">
+    <span class="sr-only">{versionLabel}</span>
+    <select>
+      {VERSIONS[locale].map((version) => (
+        <option value={version.value}>{version.label}</option>
+      ))}
+    </select>
+  </label>
+</nav>
+
+<style>
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .nav-links__item {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .nav-links__item:hover {
+    color: var(--sl-color-white);
+  }
+
+  /* The reference site puts its version picker above the sidebar; Starlight keeps its global
+     pickers (theme, language) in this bar, so a third one belongs beside them rather than in a
+     second, separately-positioned control. */
+  .nav-links__version select {
+    font-size: var(--sl-text-sm);
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 6px;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-white);
+  }
+</style>

@@ -174,6 +174,45 @@ fn rpc_context(timeout: Duration) -> tarpc::context::Context {
     ctx
 }
 
+/// Which path an erase call takes, decided from the page's dimensions alone.
+///
+/// Kept as a pure function over two `u32`s — rather than inline in the async call — so the decision
+/// that governs whether an already-working page keeps its existing code path can be tested without
+/// a worker, a model, a GPU, or a socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErasePlan {
+    /// The full-resolution request provably fits within the boundary's limit: send the page whole,
+    /// exactly as this code did before the reduced path existed.
+    FullResolution,
+    /// The full-resolution request does not provably fit, so the page and its model mask are
+    /// reduced to these dimensions before being sent.
+    Reduced { width: u32, height: u32 },
+    /// The request does not provably fit and cannot be reduced, because the page is already at the
+    /// working resolution. Unreachable for any real page — a page at the working resolution is far
+    /// under the limit — but reported rather than attempted, since attempting it is the silent
+    /// failure this decision exists to prevent.
+    CannotBound { attempted_bytes: u64 },
+}
+
+fn erase_plan(width: u32, height: u32) -> ErasePlan {
+    if lanrurugi_gpu_ipc::erase_request_provably_fits(width, height) {
+        return ErasePlan::FullResolution;
+    }
+    // `lanrurugi_inpaint::work_dims`, not a copy of it: the worker reduces by this same rule, and a
+    // divergence would hand the model a differently-shaped page and mask without ever erroring.
+    let (work_width, work_height) = lanrurugi_inpaint::work_dims(width, height);
+    if (work_width, work_height) == (width, height) {
+        ErasePlan::CannotBound {
+            attempted_bytes: lanrurugi_gpu_ipc::erase_request_bytes(width, height),
+        }
+    } else {
+        ErasePlan::Reduced {
+            width: work_width,
+            height: work_height,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GpuWorkerError {
     #[error("failed to spawn lanrurugi-gpu-worker: {0}")]
@@ -198,6 +237,18 @@ pub enum GpuWorkerError {
     /// transient from the caller's point of view: the next call spawns a fresh worker.
     #[error("lanrurugi-gpu-worker reported an error: {0}")]
     WorkerFatal(String),
+    /// The full-resolution erase request would exceed the worker boundary's message limit and could
+    /// not be reduced to fit. Carries both numbers, and is distinct by *variant* rather than by
+    /// message text, so a size problem can never be read as a model-side verdict — exactly the
+    /// confusion that let this defect go unnoticed until the boundary was measured.
+    #[error(
+        "erase_page request of {attempted_bytes} bytes exceeds the worker boundary's {limit_bytes} \
+         byte message limit and cannot be reduced to fit"
+    )]
+    PayloadTooLarge {
+        attempted_bytes: u64,
+        limit_bytes: u64,
+    },
     #[error("could not locate the lanrurugi-gpu-worker binary next to the running executable")]
     BinaryNotFound,
 }
@@ -703,23 +754,145 @@ impl GpuWorkerClient {
 
     /// Uses [`ERASE_PAGE_TIMEOUT`], not [`CALL_TIMEOUT`] — see that constant's own doc comment for
     /// the real cold-start measurement that showed 60s isn't enough for this specific call.
+    ///
+    /// Two paths, chosen by [`erase_plan`] from the page's dimensions alone. A page whose
+    /// full-resolution request provably fits takes the original path unchanged — that is what makes
+    /// "pages that already worked are pixel-identical" true by construction rather than by
+    /// argument. A page that does not fit is reduced first (see [`Self::erase_page_reduced`]).
     pub async fn erase_page(
         &self,
         page: RawRgbImage,
         model_mask: RawMask,
         paste_mask: RawMask,
     ) -> Result<RawRgbImage, GpuWorkerError> {
-        self.call(ERASE_PAGE_TIMEOUT, |client| async move {
-            client
-                .erase_page(
-                    rpc_context(ERASE_PAGE_TIMEOUT),
-                    page,
-                    model_mask,
-                    paste_mask,
-                )
+        match erase_plan(page.width, page.height) {
+            ErasePlan::FullResolution => {
+                self.call(ERASE_PAGE_TIMEOUT, |client| async move {
+                    client
+                        .erase_page(
+                            rpc_context(ERASE_PAGE_TIMEOUT),
+                            page,
+                            model_mask,
+                            paste_mask,
+                        )
+                        .await
+                })
                 .await
+            }
+            ErasePlan::Reduced { width, height } => {
+                self.erase_page_reduced(page, model_mask, paste_mask, width, height)
+                    .await
+            }
+            ErasePlan::CannotBound { attempted_bytes } => {
+                let limit_bytes = lanrurugi_gpu_ipc::MAX_FRAME_BYTES as u64;
+                tracing::error!(
+                    width = page.width,
+                    height = page.height,
+                    attempted_bytes,
+                    limit_bytes,
+                    "erase_page request exceeds the worker boundary's message limit and cannot be \
+                     reduced to fit — this is a size-limit failure, not a model failure"
+                );
+                Err(GpuWorkerError::PayloadTooLarge {
+                    attempted_bytes,
+                    limit_bytes,
+                })
+            }
+        }
+    }
+
+    /// The over-limit path: reduce the page and its model mask to the working resolution, let the
+    /// worker run the whole model call on that, then restore the model's output to the page's
+    /// original dimensions and composite there against the **original full-resolution** paste mask,
+    /// which never crosses the boundary.
+    ///
+    /// The reduced request carries an all-covering paste mask, which asks
+    /// `Inpainter::erase_page` for the model's output over the whole working image rather than also
+    /// compositing it: that function starts from a clone of its input and overwrites only where the
+    /// mask is set, so covering everything means exactly "give me the model's result". This is why
+    /// the worker, the RPC trait and the wire protocol need no change at all.
+    ///
+    /// Memory, stated plainly: a full-resolution page necessarily exists in this process either way,
+    /// because the caller needs one back and the input already is one. What changes is that the
+    /// message assembled for the boundary — previously the page plus two full-resolution masks, at
+    /// up to ~287MiB for a 60-megapixel page — becomes bounded by the working resolution, and the
+    /// composite writes into the buffer this call already owns rather than a fresh copy. Total
+    /// process memory therefore falls by the size of the eliminated message and masks, **not** by
+    /// the page's own size.
+    async fn erase_page_reduced(
+        &self,
+        page: RawRgbImage,
+        model_mask: RawMask,
+        paste_mask: RawMask,
+        work_width: u32,
+        work_height: u32,
+    ) -> Result<RawRgbImage, GpuWorkerError> {
+        let (width, height) = (page.width, page.height);
+        // The full-resolution path gets this check from the worker; this path composites locally, so
+        // it must not index a short mask — and must not spend a worker round trip finding out.
+        check_paste_mask_len(width, height, &paste_mask.mask).map_err(GpuWorkerError::Worker)?;
+
+        tracing::info!(
+            width,
+            height,
+            full_request_bytes = lanrurugi_gpu_ipc::erase_request_bytes(width, height),
+            work_width,
+            work_height,
+            "page exceeds the worker boundary's message limit at full resolution; reducing it to \
+             the model's working resolution before the erase call"
+        );
+
+        let full_page = raw_to_rgb_image(page).map_err(GpuWorkerError::Worker)?;
+        let (work_page, work_mask) =
+            lanrurugi_inpaint::downscale_to_work(&full_page, &model_mask.mask)
+                .map_err(|e| GpuWorkerError::Worker(e.to_string()))?;
+        debug_assert_eq!(work_page.dimensions(), (work_width, work_height));
+
+        // `Nearest` reduction leaves exactly 0 or 255, so any mid threshold recovers the same
+        // booleans — the same convention `Inpainter::erase_page` uses when it feeds this mask to
+        // the model.
+        let work_mask: Vec<bool> = work_mask.pixels().map(|p| p.0[0] > 127).collect();
+
+        let work_raw = rgb_image_to_raw(&work_page);
+        let work_mask_raw = RawMask {
+            width: work_width,
+            height: work_height,
+            mask: work_mask,
+        };
+        let all_covering = RawMask {
+            width: work_width,
+            height: work_height,
+            mask: vec![true; (work_width as usize) * (work_height as usize)],
+        };
+        drop(work_page);
+
+        let erased_small = self
+            .call(ERASE_PAGE_TIMEOUT, |client| async move {
+                client
+                    .erase_page(
+                        rpc_context(ERASE_PAGE_TIMEOUT),
+                        work_raw,
+                        work_mask_raw,
+                        all_covering,
+                    )
+                    .await
+            })
+            .await?;
+
+        let small = raw_to_rgb_image(erased_small).map_err(GpuWorkerError::Worker)?;
+
+        // Composite at full resolution, into the buffer this call already owns. Only paste-mask
+        // pixels may come from the model; every other pixel stays the original page's own — the
+        // invariant `finish_composite_page` depends on when it replaces the page wholesale.
+        let mut result = full_page;
+        composite_restored_output(&mut result, &small, &paste_mask.mask)
+            .map_err(GpuWorkerError::Worker)?;
+
+        Ok(RawRgbImage {
+            width,
+            height,
+            rgb: result.into_raw(),
         })
-        .await
     }
 
     pub async fn segment_bubbles(
@@ -780,6 +953,54 @@ fn rgb_image_to_raw(img: &image::RgbImage) -> RawRgbImage {
 fn raw_to_rgb_image(raw: RawRgbImage) -> Result<image::RgbImage, String> {
     image::RgbImage::from_raw(raw.width, raw.height, raw.rgb)
         .ok_or_else(|| "worker returned a RawRgbImage whose byte length didn't match its own declared dimensions".to_string())
+}
+
+/// One entry per pixel of a `width` x `height` page is a precondition of every composite in this
+/// module. Checked in two places for two different reasons: early in the reduced path so a
+/// malformed mask never costs a worker round trip, and again inside
+/// [`composite_restored_output`] so that function is safe to call on its own.
+fn check_paste_mask_len(width: u32, height: u32, paste_mask: &[bool]) -> Result<(), String> {
+    let expected = (width as usize) * (height as usize);
+    if paste_mask.len() != expected {
+        return Err(format!(
+            "paste mask length {} does not match page dimensions {width}x{height}",
+            paste_mask.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Rescales a working-resolution model output back to `full_page`'s dimensions and writes it into
+/// `full_page` at exactly the pixels `paste_mask` covers, leaving every other pixel as it was.
+///
+/// Split out of [`GpuWorkerClient::erase_page_reduced`] so the invariant the whole feature's
+/// equivalence argument rests on — that no pixel outside the paste mask is ever taken from the model
+/// — is testable without a worker, a model, or a GPU. A model-gated version of that test would have
+/// to build a CUDA session inside `cargo test`, and *dropping* one is a documented ~35-60% process
+/// crash on this project's hardware, which is why real-model checks live in `examples/` instead.
+fn composite_restored_output(
+    full_page: &mut image::RgbImage,
+    model_output_small: &image::RgbImage,
+    paste_mask: &[bool],
+) -> Result<(), String> {
+    let (width, height) = full_page.dimensions();
+    check_paste_mask_len(width, height, paste_mask)?;
+
+    let restored = image::imageops::resize(
+        model_output_small,
+        width,
+        height,
+        image::imageops::FilterType::CatmullRom,
+    );
+    for y in 0..height {
+        for x in 0..width {
+            let i = (y as usize) * (width as usize) + (x as usize);
+            if paste_mask[i] {
+                full_page.put_pixel(x, y, *restored.get_pixel(x, y));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Bridges this type's own `async fn` methods (`recognize`/`erase_page`/`segment_bubbles` above)
@@ -923,5 +1144,278 @@ mod tests {
             }
             other => panic!("expected a content rejection, got {other:?}"),
         }
+    }
+
+    /// Real archives whose erase request used to exceed the boundary's message limit and were
+    /// therefore never translated. These are the dimensions the feature exists for.
+    const SURVEYED_OVER_LIMIT: &[(u32, u32)] = &[
+        (6336, 9504),
+        (5400, 8100),
+        (9918, 4000),
+        (6084, 3943),
+        (4535, 6307),
+        (4000, 6000),
+        (3974, 5964),
+    ];
+
+    #[test]
+    fn over_limit_pages_are_routed_through_the_reduced_path() {
+        for &(w, h) in SURVEYED_OVER_LIMIT {
+            match erase_plan(w, h) {
+                ErasePlan::Reduced { width, height } => {
+                    assert_eq!(
+                        (width, height),
+                        lanrurugi_inpaint::work_dims(w, h),
+                        "{w}x{h} must be reduced by the worker's own rule, not a second one"
+                    );
+                    assert_eq!(
+                        width.max(height),
+                        lanrurugi_inpaint::MAX_INPAINT_SIZE,
+                        "{w}x{h} reduced to {width}x{height}, whose longest edge is not the cap — \
+                         the worker would reduce it a second time"
+                    );
+                }
+                other => panic!("{w}x{h} should be reduced, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn fitting_pages_keep_the_existing_path() {
+        // A dense sweep across the whole fitting range, plus the pages that already worked and are
+        // closest to the limit. A predicate that were merely *approximately* right would move one
+        // of these onto the reduced path and silently change its output.
+        for &(w, h) in &[
+            (1u32, 1u32),
+            (800, 1200),
+            (1024, 1536),
+            (1024, 1024),
+            (2400, 3500),
+            (2480, 3508),
+            (3000, 4000),
+            (1057, 1500),
+            (2160, 3064),
+        ] {
+            assert_eq!(
+                erase_plan(w, h),
+                ErasePlan::FullResolution,
+                "{w}x{h} should keep the pre-existing code path"
+            );
+        }
+
+        // Sweep the band immediately below the limit, where the framing slack makes the decision
+        // conservative. Every one of these must still take the existing path — the slack's cost is
+        // a small band of page area, not a reclassification of pages that comfortably fit.
+        let cap_pixels = (lanrurugi_gpu_ipc::MAX_FRAME_BYTES as u64
+            - lanrurugi_gpu_ipc::ERASE_REQUEST_FRAMING_SLACK
+            - 48)
+            / 5;
+        let side = (cap_pixels as f64).sqrt() as u32;
+        assert!(
+            side > 64,
+            "the sweep assumes a side comfortably larger than its own range"
+        );
+        for delta in 0..64u32 {
+            let (w, h) = (side - delta, side - delta);
+            assert_eq!(
+                erase_plan(w, h),
+                ErasePlan::FullResolution,
+                "{w}x{h} is below the limit and must not be reduced"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_at_the_working_resolution_is_never_resampled() {
+        // The plan's `CannotBound` arm must be unreachable for a real page, because a page at the
+        // working resolution is a small fraction of the limit. If that ever stops being true, the
+        // feature would start refusing pages that used to work.
+        for &(w, h) in &[(1024u32, 1024u32), (688, 1024), (1, 1024), (1024, 1)] {
+            assert_eq!(
+                lanrurugi_inpaint::work_dims(w, h),
+                (w, h),
+                "{w}x{h} is at or below the working resolution and must not be reduced"
+            );
+            assert_eq!(erase_plan(w, h), ErasePlan::FullResolution);
+        }
+    }
+
+    #[test]
+    fn the_reduced_request_is_bounded_and_an_order_of_magnitude_smaller() {
+        // SC-004, and the reason the transport question became moot: whatever the source page's
+        // size, what crosses the boundary is bounded by the working resolution.
+        for &(w, h) in SURVEYED_OVER_LIMIT {
+            let ErasePlan::Reduced { width, height } = erase_plan(w, h) else {
+                panic!("{w}x{h} should be reduced");
+            };
+            let full = lanrurugi_gpu_ipc::erase_request_bytes(w, h);
+            let reduced = lanrurugi_gpu_ipc::erase_request_bytes(width, height);
+
+            assert!(
+                lanrurugi_gpu_ipc::erase_request_provably_fits(width, height),
+                "{w}x{h} reduced to {width}x{height} still does not fit"
+            );
+            assert!(
+                full >= reduced * 10,
+                "{w}x{h}: {full} -> {reduced} bytes is not an order of magnitude"
+            );
+            assert!(
+                reduced < 16 * 1024 * 1024,
+                "{w}x{h} reduced request is {reduced} bytes, not a small constant"
+            );
+        }
+    }
+
+    #[test]
+    fn a_size_limit_failure_is_distinguishable_from_a_model_failure() {
+        // FR-013/FR-014: an operator must be able to tell a size problem from a model verdict
+        // without reproducing it. Distinct by variant, and the message carries both numbers.
+        let err = GpuWorkerError::PayloadTooLarge {
+            attempted_bytes: 300_647_080,
+            limit_bytes: 67_108_864,
+        };
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("300647080"),
+            "message must name the attempted size: {rendered}"
+        );
+        assert!(
+            rendered.contains("67108864"),
+            "message must name the limit: {rendered}"
+        );
+        assert!(
+            !matches!(
+                err,
+                GpuWorkerError::Worker(_) | GpuWorkerError::WorkerFatal(_)
+            ),
+            "a size failure must not be reported as a model failure"
+        );
+        assert!(
+            !matches!(
+                err.classify_for_recognition(),
+                RecognizeHandleError::Content(_)
+            ),
+            "a size failure is not a content verdict, so a retry must not be cached as final"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_reduced_path_rejects_a_mismatched_paste_mask() {
+        // This path composites locally, so unlike the worker-side path nothing else would catch a
+        // short mask before it is indexed. It must error rather than panic, and it must do so
+        // *before* any worker is contacted — which is what makes this testable with no GPU, no
+        // model, and no socket. Deliberately small dimensions: the guard runs before any
+        // page-sized work, and the routing for real over-limit pages is covered separately by
+        // `over_limit_pages_are_routed_through_the_reduced_path`.
+        let client = GpuWorkerClient::new(WorkerKind::Image);
+
+        let result = client
+            .erase_page_reduced(
+                RawRgbImage {
+                    width: 64,
+                    height: 64,
+                    rgb: vec![0; 64 * 64 * 3],
+                },
+                RawMask {
+                    width: 64,
+                    height: 64,
+                    mask: vec![false; 64 * 64],
+                },
+                RawMask {
+                    width: 64,
+                    height: 64,
+                    mask: vec![false; 16],
+                },
+                32,
+                32,
+            )
+            .await;
+
+        match result {
+            Err(GpuWorkerError::Worker(msg)) => assert!(
+                msg.contains("paste mask length"),
+                "expected a mask-length complaint, got: {msg}"
+            ),
+            other => panic!("expected a mask-length error, got {other:?}"),
+        }
+    }
+
+    /// The single invariant the whole feature's "pages that already worked are unchanged" argument
+    /// rests on: restoring the reduced model output may write *only* the pixels the original
+    /// full-resolution paste mask covers. Every other pixel must still be the original page's own.
+    ///
+    /// Tested here, without a worker or a model, on the half of that invariant this feature actually
+    /// authored. The other half — that `Inpainter::erase_page` itself writes only where its own
+    /// paste mask is set — is pre-existing behaviour guarded by this crate's `examples/`, not by a
+    /// test that would have to build and then drop a CUDA session inside `cargo test`.
+    #[test]
+    fn restoring_the_reduced_output_touches_only_paste_mask_pixels() {
+        let (width, height) = (97u32, 61u32);
+        let mut page = image::RgbImage::new(width, height);
+        for (x, y, px) in page.enumerate_pixels_mut() {
+            *px = image::Rgb([
+                (x % 251) as u8,
+                (y % 241) as u8,
+                ((x * 7 + y * 13) % 239) as u8,
+            ]);
+        }
+        let original = page.clone();
+
+        // A working-resolution stand-in for the model's output, deliberately a different size so the
+        // restore step is exercised rather than trivially identity.
+        let mut small = image::RgbImage::new(31, 19);
+        for (x, y, px) in small.enumerate_pixels_mut() {
+            *px = image::Rgb([255, (x % 256) as u8, (y % 256) as u8]);
+        }
+
+        // Two disjoint patches, so the test covers both "inside the mask" and "outside it" in one
+        // pass rather than relying on the mask being empty or full.
+        let mut paste_mask = vec![false; (width as usize) * (height as usize)];
+        let mut masked = Vec::new();
+        for y in 10..20u32 {
+            for x in 5..15u32 {
+                paste_mask[(y as usize) * (width as usize) + (x as usize)] = true;
+                masked.push((x, y));
+            }
+        }
+
+        composite_restored_output(&mut page, &small, &paste_mask).unwrap();
+
+        let mut masked_pixels_that_changed = 0usize;
+        for y in 0..height {
+            for x in 0..width {
+                let i = (y as usize) * (width as usize) + (x as usize);
+                let before = original.get_pixel(x, y);
+                let after = page.get_pixel(x, y);
+                if paste_mask[i] {
+                    if after != before {
+                        masked_pixels_that_changed += 1;
+                    }
+                } else if after != before {
+                    // This is the requirement, stated as an assertion: outside the paste mask, the
+                    // returned page must consist of the original page's own pixels.
+                    panic!(
+                        "pixel ({x}, {y}) is outside the paste mask but changed from {before:?} to \
+                         {after:?}"
+                    );
+                }
+            }
+        }
+
+        assert_eq!(
+            masked_pixels_that_changed,
+            masked.len(),
+            "every masked pixel should have taken the restored output's value — if none did, the \
+             loop above proves nothing about what happens *inside* the mask"
+        );
+    }
+
+    #[test]
+    fn restoring_the_reduced_output_rejects_a_mismatched_mask() {
+        let mut page = image::RgbImage::new(16, 16);
+        let small = image::RgbImage::new(8, 8);
+        let err = composite_restored_output(&mut page, &small, &[false; 10]).unwrap_err();
+        assert!(err.contains("paste mask length"), "got: {err}");
     }
 }

@@ -1,8 +1,23 @@
 <!-- SPECKIT START -->
-Seven feature specs exist. Phase 1 (001) is implemented; 002, 003, and 005 (all additive addenda
-to Phase 1) are also fully implemented (verified via each spec's own `tasks.md` — all checkboxes
-complete, no outstanding items). Phase 2 (004), 006, and 007 remain planned but not yet
-implemented.
+Twelve feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+not from memory — a spec's header status is worth re-checking against its task list whenever this
+block is regenerated, because it has gone stale before.
+
+- **Implemented (all tasks complete)**: `001-lanrurugi-full-rewrite` (96/96), `002-job-console`
+  (23/23), `003-ui-test-automation` (52/52), `005-download-plugin-progress` (41/41),
+  `006-ai-plugin-wizard` (53/53), `011-api-docs-site` (this feature's own list).
+- **Code implemented, some tasks outstanding** — in every case the remainder is real-deployment
+  or real-asset verification rather than unbuilt code: `004-ocr-manga-translation` (70/76,
+  awaiting the `quickstart.md` scenarios that need real OCR model files),
+  `007-guest-restricted-access` (52/54, awaiting its `quickstart.md` run against a real
+  deployment), `010-subscription-orchestrator` (88/98), `012-large-page-translation` (20/21 —
+  implemented and verified end to end against a real `lanrurugi-gpu-worker` with real LaMa weights,
+  including a byte-for-byte pre-change/post-change capture of the erase output for a page that
+  already worked; its one open task is the repo-wide `mise run clippy` gate, blocked by
+  pre-existing `result_large_err` warnings in crates this feature never touched. Its `tasks.md`
+  Implementation Record states exactly what was and was not verified — notably that the
+  reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised).
+- **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -10,17 +25,33 @@ ingestion, third-party API compatibility, plugin metadata enrichment, backup/exp
 repair, UI localization, concurrency benchmarking vs. the legacy Perl system. Design artifacts:
 `specs/001-lanrurugi-full-rewrite/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
-**Phase 1 addendum — `002-job-console`** (additive to Phase 1, planned but not yet implemented):
-plan at `specs/002-job-console/plan.md`. Background job management console (a
+**Phase 1 addendum — `011-api-docs-site`** (additive to Phase 1, implemented): plan at
+`specs/011-api-docs-site/plan.md`. Two deliverables, one pipeline: (a) `crates/lanrurugi-api-docgen`,
+a build-time binary that recovers the route table by parsing `crates/lanrurugi-api/src/**` with `syn`
+— axum's `Router` cannot be asked what was registered, so the source is the source of truth — and
+merges it with the vendored upstream LANraragi OpenAPI document (`docs/api/legacy-openapi.yaml`,
+which supplies field-level documentation for the ~55 paths the two projects share) and hand-written
+fragments (`docs/api/sidecar/`), emitting one OpenAPI 3.1 JSON document; (b) a Starlight +
+`@scalar/starlight` documentation site under `docs/`, published from CI to Cloudflare Pages and
+shipped inside the image at `/docs` (`LANRURUGI_DOCS_DIR`) for offline reading. The route scan is
+applied *last* as the completeness authority, which makes "documented but not served" and "served but
+not documented" structurally impossible; the gates catch the residue (an unresolvable route, an
+unknown mount prefix, a sidecar entry for a route that does not exist). `cors.rs`'s
+`Access-Control-Allow-Headers` gained `Content-Type` here (FR-016) — without it `application/json`
+is not a CORS-safelisted value, so every JSON-bodied cross-origin request was preflighted and
+refused. Design artifacts:
+`specs/011-api-docs-site/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
+
+**Phase 1 addendum — `002-job-console`** (additive to Phase 1, implemented): plan at
+`specs/002-job-console/plan.md`. Background job management console (a
 Minion-admin-console equivalent) surfacing the existing in-process job registry
 (`lanrurugi_core::jobs`) — list/monitor/inspect/clear queued, active, finished, and failed jobs
 (thumbnail regen, backup/restore, rescans, duplicate scans, index rebuilds) via new additive
 `/api/jobs*` endpoints, deliberately separate from the legacy-mimicking `/api/minion/*` contract.
 Retry is explicitly out of scope. Design artifacts:
-`specs/002-job-console/{research.md,data-model.md,contracts/,quickstart.md}` (no `tasks.md` yet).
+`specs/002-job-console/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
-**Phase 1 addendum — `003-ui-test-automation`** (additive to Phase 1, planned but not yet
-implemented): plan at `specs/003-ui-test-automation/plan.md`. Two-layer automated frontend test
+**Phase 1 addendum — `003-ui-test-automation`** (additive to Phase 1, implemented): plan at `specs/003-ui-test-automation/plan.md`. Two-layer automated frontend test
 coverage the Phase 1 plan called for but never implemented — Vitest + React Testing Library for
 fast unit-level logic (reader settings/navigation hooks, cross-archive navigation resolution,
 metadata formatting/decoding helpers), and Playwright (Chromium + Firefox) for end-to-end coverage
@@ -39,15 +70,15 @@ user-selectable translation backend (cloud, proxied server-side, vs. locally-hos
 originated), volume-level font-matching cache, sliding-window prefetch with cost-aware budgeting.
 Design artifacts:
 `specs/004-ocr-manga-translation/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}` —
-tasks.md exists (65 tasks, none yet checked off — implementation has not started). A 2026-09-06
+tasks.md records 70 of 76 complete; the remainder is `quickstart.md` verification against real OCR
+model files, not unbuilt code. A 2026-09-06
 `/speckit-analyze` re-check against constitution 1.8.0 (ratified 2026-08-03, after this spec's
 2026-07-06 authoring) found and fixed two real gaps: `data-model.md`'s ID fields needed a note
 requiring the newtype-ID constraint added by that constitution version, and tasks.md's T009 needed
 its `rayon`-batching wording tightened against that same version's new loop-of-single-item-
 `spawn_blocking` anti-pattern bullet — see tasks.md's own 2026-09-06 revision note for detail.
 
-**Phase 1 addendum — `005-download-plugin-progress`** (additive to Phase 1, planned but not yet
-implemented): plan at `specs/005-download-plugin-progress/plan.md`. Moves the download-plugin
+**Phase 1 addendum — `005-download-plugin-progress`** (additive to Phase 1, implemented): plan at `specs/005-download-plugin-progress/plan.md`. Moves the download-plugin
 pipeline's actual byte-level HTTP transfer (currently performed nowhere — `execDownload`'s
 `download_url` result is stored as-is and never fetched) into Rust itself via streaming `reqwest`,
 which is what makes real progress reporting, per-domain concurrency limiting, and rate limiting
@@ -61,11 +92,9 @@ new `/api/plugins/{namespace}/options` endpoints. `JobStatus` gains `downloaded_
 `total_bytes`, rendered as a real progress bar on the existing Jobs page. Three existing
 hand-written plugins (`chaika.ts`, `ehentai.ts`, `pixiv.ts`) are migrated to the new contract as
 part of this feature. Design artifacts:
-`specs/005-download-plugin-progress/{research.md,data-model.md,contracts/,quickstart.md}` (no
-`tasks.md` yet).
+`specs/005-download-plugin-progress/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
-**Phase 1 addendum — `006-ai-plugin-wizard`** (additive to Phase 1, planned but not yet
-implemented): plan at `specs/006-ai-plugin-wizard/plan.md`. A wizard that generates login/metadata/
+**Phase 1 addendum — `006-ai-plugin-wizard`** (additive to Phase 1, implemented): plan at `specs/006-ai-plugin-wizard/plan.md`. A wizard that generates login/metadata/
 download plugins from a natural-language description of a target site, gated by an up-front domain
 lookup (reusing `find_matching_plugin`'s `url_pattern` matching) so a user only ever fills in the
 types genuinely missing for that domain. Generation runs through a new `lanrurugi-llm::tool_chat()`
@@ -81,11 +110,10 @@ reuses `upload_plugin`'s own validate/move/rollback path). Login test credential
 the LLM under any circumstance (FR-012) — only a sanitized outcome is. All wizard session/draft-
 history state is frontend-only (no new Redis schema, no server-held session) per the spec's own
 assumption that history need not survive a page refresh. Design artifacts:
-`specs/006-ai-plugin-wizard/{research.md,data-model.md,contracts/,quickstart.md}` (no `tasks.md`
-yet).
+`specs/006-ai-plugin-wizard/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
-**Phase 1 addendum — `007-guest-restricted-access`** (additive to Phase 1, planned but not yet
-implemented): plan at `specs/007-guest-restricted-access/plan.md`. Replaces the legacy
+**Phase 1 addendum — `007-guest-restricted-access`** (additive to Phase 1, code implemented; its
+`quickstart.md` real-deployment run is the outstanding task): plan at `specs/007-guest-restricted-access/plan.md`. Replaces the legacy
 `enablepass`/`nofunmode` on/off password toggles (which only ever produced "fully open" or "fully
 locked", with no in-between) with a strict, non-configurable password requirement for every
 administrative function, paired with a new opt-in **restricted guest access** mode: a site-wide
@@ -109,8 +137,7 @@ Settings page entirely and replaced by a deploy-time `--disable-update-check` CL
 pattern already established in this codebase. `/api/info`'s `has_password` field stays present
 (now hardcoded `true`) and `nofun_mode` is removed entirely — a documented, spec-mandated
 constitution Principle II exception (research.md §5), not an oversight. Design artifacts:
-`specs/007-guest-restricted-access/{research.md,data-model.md,contracts/,quickstart.md}` (no
-`tasks.md` yet).
+`specs/007-guest-restricted-access/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
 Stack: Rust (Tokio/Axum/Rayon) backend as a Cargo workspace under `crates/` producing one binary
 (`lanrurugi-server`, with `serve`/`rebuild-index`/`bench` subcommands), Redis reused as-is from
@@ -255,6 +282,20 @@ process during a workspace build (2026-08-13), and two more `systemd-oomd` kills
 window itself on 2026-08-14 (the second confirmed caused by several of these invocations
 overlapping — each individually passing its own point-in-time PSI check — before the cooldown/mutex
 above existed to prevent it).
+
+**`memory.high` in that containers.conf must sit above where a build settles, not at it.** Diagnosed
+2026-10-11 after `mise run test-crate` started dying with exit 137 and no completion record: the
+setting was `memory.high=3G`, and a build's cgroup footprint — which is *ceiling-bound*, since
+`memory.current` counts page cache and cache expands to fill whatever room exists — parked on that
+ceiling for the entire run. Continuous cgroup-local reclaim followed (~9,990 throttle events in one
+run, with `memory.max` events at **0**), and because reclaim stalls propagate to every ancestor,
+`user@1000.service`'s PSI hit 70.98% against systemd's default `ManagedOOMMemoryPressureLimit` of 50%
+for 20s, so `systemd-oomd` killed the build container. The limit meant to contain the build was what
+killed it. Raising it to 6G took the same full `mise run test` to a clean pass (1,312 cases, 44
+binaries) with session PSI at 36.6%/11.0% (avg10/avg60) instead of 77.6%/41.6%. Two lessons worth
+keeping: don't size that value from a run that was itself capped, and don't read "the build peak is
+~3GB" (a real figure, but for build-script anonymous memory) as the cgroup's total footprint.
+`scripts/cargo-container-run.sh` now prints these pointers itself on any exit 137.
 
 ## `mise run test`/`dev-rebuild` must run detached from the agent/VSCode process tree
 

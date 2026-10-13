@@ -1,0 +1,25 @@
+---
+title: SDK 参考
+description: 插件运行时实际加载的那份 TypeScript 的 API 参考。
+---
+
+插件作者可用的每个类型与函数，都由 `deno doc` 直接从**插件运行时实际加载的那份 TypeScript**
+（`crates/lanrurugi-plugin/dispatcher/` 下的 `plugin-sdk.ts`、`dispatcher.ts`，以及
+`plugins/legacy-globals.d.ts`）生成，所以它不会和真实行为脱节。
+
+<p>
+  <a class="sdk-launch" href={import.meta.env.DOCS_SDK_URL}>打开 SDK 参考 →</a>
+</p>
+
+那份参考里可以搜索符号、按类型/接口/函数分组浏览，也能看到每个符号自身的文档注释。同一份内容还有一个
+机器可读的 JSON 版本（`plugin-sdk.json`），便于工具消费。
+
+:::note[为什么它不在这个侧栏的页面体系里]
+`deno doc --html` 产出的是**自成一体的静态站点**（有自己的搜索、暗色模式和符号索引）。把它塞进 Starlight
+的布局里意味着重写一遍这些，而不是复用。所以它作为本站的子路径提供，链接固定指向 `sdk/`。
+:::
+
+## 相关
+
+- [插件开发入门](../getting-started/)——最小插件、权限模型、调试。
+- [API 参考](../../api/)——`/api/plugins*` 下的端点。

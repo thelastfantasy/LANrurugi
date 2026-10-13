@@ -350,6 +350,10 @@ fn minimize_legacy_tags(tags: &str) -> String {
 /// were written before this failed" to the user and the partial snapshot is still available as a
 /// rollback point for whatever *did* get written, rather than silently losing that information to
 /// an early return.
+// The `Err` payload is deliberately rich (the partial summary plus the snapshot the caller
+// turns into a rollback point), and it has a single caller; boxing it would only move the
+// bytes behind a pointer on a path that has already failed.
+#[allow(clippy::result_large_err)]
 pub async fn import_from_legacy(
     mut doc: LegacyBackupDocument,
     on_existing: ImportConflictMode,

@@ -196,17 +196,6 @@ fn not_ready() -> Response {
         .into_response()
 }
 
-/// Serves the composited, translated page for the cloud-backend path (T028).
-///
-/// Returns the cached rendering when one exists. On a miss it **triggers** the real orchestration —
-/// OCR → font routing → batched translation → compositing → cache write
-/// (`translation_pipeline::translate_page`) — for this page and its look-ahead window, then reports
-/// not-ready immediately.
-///
-/// The work is deliberately not awaited here: a full OCR + LLM cycle takes tens of seconds, and
-/// FR-012 requires the reader to keep showing the original page with a non-blocking indicator
-/// meanwhile. The client polls; a later poll finds the cache entry this triggered. Reading must
-/// never wait on translation (SC-007).
 /// Reader's "重新翻译": drops this page's detection cache, every translated record and the
 /// rendered image, so the next `GET .../translation` re-runs the whole OCR -> translate ->
 /// composite pipeline instead of reusing a stale cache (e.g. one produced by an old pipeline
@@ -272,6 +261,17 @@ async fn translated_page_disposition(
     ))
 }
 
+/// Serves the composited, translated page for the cloud-backend path (T028).
+///
+/// Returns the cached rendering when one exists. On a miss it **triggers** the real orchestration —
+/// OCR → font routing → batched translation → compositing → cache write
+/// (`translation_pipeline::translate_page`) — for this page and its look-ahead window, then reports
+/// not-ready immediately.
+///
+/// The work is deliberately not awaited here: a full OCR + LLM cycle takes tens of seconds, and
+/// FR-012 requires the reader to keep showing the original page with a non-blocking indicator
+/// meanwhile. The client polls; a later poll finds the cache entry this triggered. Reading must
+/// never wait on translation (SC-007).
 async fn get_page_translation(
     State(state): State<AppState>,
     Path((id, page)): Path<(String, u32)>,
@@ -495,6 +495,10 @@ async fn get_page_text_regions(
 ///
 /// `Err` carries an already-formed response: OCR being unavailable (no model installed) is FR-019's
 /// "translation unavailable", not a server error.
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 async fn trigger_local_path_detection(
     state: &AppState,
     archive_id: &ArchiveId,

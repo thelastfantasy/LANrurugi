@@ -1,47 +1,51 @@
-// LANrurugi plugin dispatcher (constitution Principle IV, contracts/plugin-protocol.md).
-//
-// One dispatcher process is dedicated to exactly one plugin namespace (started with that
-// plugin's own declared Deno permissions — see lanrurugi-plugin::pool). It reads
-// newline-delimited JSON requests from stdin and dynamically import()s the plugin module on
-// demand rather than being started fresh per call (research.md §7).
-//
-// Requests are dispatched without awaiting the previous one to finish, so multiple in-flight
-// requests (e.g. metadata lookups for several archives at once) run concurrently within this one
-// process — real concurrency for I/O-bound plugin work without needing multiple OS processes per
-// plugin.
-//
-// No external module imports (not even Deno's own std streams helpers) so that a plugin's
-// `--allow-net` grant is never implicitly widened by the dispatcher's own startup needs. Same
-// reasoning is why `legacyCompat`/`PluginErrorException` below are plain global assignments rather
-// than something a plugin would need to `import`: a plugin file lives under `plugins_dir`, which
-// has no fixed relative path to this file's own directory (both are independent, runtime-supplied
-// CLI args — `--plugins-dir`/`--temp-dir`) — a plugin file's own top-level `import` specifier has
-// to be a static string, so it can't reach into a path it won't know until runtime. A global needs
-// no such path and no extra `--allow-read` grant at all, since it's set in this same
-// already-trusted process before the plugin module loads.
-//
-// `PluginErrorException` itself is `import`ed for real from `plugin-sdk.ts` right below (needing
-// its own `--allow-read` grant — `lanrurugi_plugin::pool::Worker::spawn` grants `plugin-sdk.ts`'s
-// path, written as `dispatcher_path`'s own sibling by every `DISPATCHER_SCRIPT` write site) since
-// *this* import's specifier can be a static relative path (`dispatcher.ts` and `plugin-sdk.ts`
-// always share one directory, `temp_dir`) — only a *plugin* file's own import of it would have the
-// unresolvable-path problem above. Re-exposed as a global (`globalThis.PluginErrorException`
-// below) purely so every plugin file can `throw new PluginErrorException(...)` without its own
-// import at all (issue #86) — every plugin file still gets the exact same class reference this
-// process's `catch` below checks with `instanceof`, since both paths ultimately go through this
-// one already-imported module.
-//
-// The `/// <reference types="../../../plugins/legacy-globals.d.ts" />` directive right below is a
-// *type-checker-only* hint — it costs nothing at runtime (erased entirely by the time `deno run`
-// executes this file, same as any other `.d.ts`-style ambient declaration). It's what lets
-// `plugins/legacy-globals.d.ts` (the canonical home for `Legacy*`/`legacyCompat`/
-// `PluginErrorException`'s own ambient types — see that file's own docs) actually type-check this
-// file's `globalThis.legacyCompat = {...}`/`globalThis.PluginErrorException = ...` assignments
-// below. Every plugin file under `plugins/` sees the same declarations with no reference line of
-// its own at all (`plugins/tsconfig.json` makes that file ambiently visible project-wide) — this
-// file needs its own explicit line only because it lives outside `plugins/`, so that project
-// boundary doesn't cover it.
 /// <reference types="../../../plugins/legacy-globals.d.ts" />
+/**
+ * LANrurugi plugin dispatcher (constitution Principle IV, contracts/plugin-protocol.md).
+ *
+ * One dispatcher process is dedicated to exactly one plugin namespace (started with that
+ * plugin's own declared Deno permissions — see lanrurugi-plugin::pool). It reads
+ * newline-delimited JSON requests from stdin and dynamically import()s the plugin module on
+ * demand rather than being started fresh per call (research.md §7).
+ *
+ * Requests are dispatched without awaiting the previous one to finish, so multiple in-flight
+ * requests (e.g. metadata lookups for several archives at once) run concurrently within this one
+ * process — real concurrency for I/O-bound plugin work without needing multiple OS processes per
+ * plugin.
+ *
+ * No external module imports (not even Deno's own std streams helpers) so that a plugin's
+ * `--allow-net` grant is never implicitly widened by the dispatcher's own startup needs. Same
+ * reasoning is why `legacyCompat`/`PluginErrorException` below are plain global assignments rather
+ * than something a plugin would need to `import`: a plugin file lives under `plugins_dir`, which
+ * has no fixed relative path to this file's own directory (both are independent, runtime-supplied
+ * CLI args — `--plugins-dir`/`--temp-dir`) — a plugin file's own top-level `import` specifier has
+ * to be a static string, so it can't reach into a path it won't know until runtime. A global needs
+ * no such path and no extra `--allow-read` grant at all, since it's set in this same
+ * already-trusted process before the plugin module loads.
+ *
+ * `PluginErrorException` itself is `import`ed for real from `plugin-sdk.ts` right below (needing
+ * its own `--allow-read` grant — `lanrurugi_plugin::pool::Worker::spawn` grants `plugin-sdk.ts`'s
+ * path, written as `dispatcher_path`'s own sibling by every `DISPATCHER_SCRIPT` write site) since
+ * *this* import's specifier can be a static relative path (`dispatcher.ts` and `plugin-sdk.ts`
+ * always share one directory, `temp_dir`) — only a *plugin* file's own import of it would have the
+ * unresolvable-path problem above. Re-exposed as a global (`globalThis.PluginErrorException`
+ * below) purely so every plugin file can `throw new PluginErrorException(...)` without its own
+ * import at all (issue #86) — every plugin file still gets the exact same class reference this
+ * process's `catch` below checks with `instanceof`, since both paths ultimately go through this
+ * one already-imported module.
+ *
+ * The `/// <reference types="../../../plugins/legacy-globals.d.ts" />` directive at the top of this
+ * file is a
+ * *type-checker-only* hint — it costs nothing at runtime (erased entirely by the time `deno run`
+ * executes this file, same as any other `.d.ts`-style ambient declaration). It's what lets
+ * `plugins/legacy-globals.d.ts` (the canonical home for `Legacy*`/`legacyCompat`/
+ * `PluginErrorException`'s own ambient types — see that file's own docs) actually type-check this
+ * file's `globalThis.legacyCompat = {...}`/`globalThis.PluginErrorException = ...` assignments
+ * below. Every plugin file under `plugins/` sees the same declarations with no reference line of
+ * its own at all (`plugins/tsconfig.json` makes that file ambiently visible project-wide) — this
+ * file needs its own explicit line only because it lives outside `plugins/`, so that project
+ * boundary doesn't cover it.
+ */
+
 import { PluginErrorException } from "./plugin-sdk.ts";
 
 interface PluginRequest {

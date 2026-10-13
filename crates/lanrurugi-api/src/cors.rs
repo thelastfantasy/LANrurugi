@@ -26,7 +26,15 @@ use lanrurugi_storage::keys::CONFIG_KEY;
 
 const ALLOW_ORIGIN: &str = "*";
 const ALLOW_METHODS: &str = "GET, OPTIONS, POST, DELETE, PUT";
-const ALLOW_HEADERS: &str = "Authorization";
+// `Content-Type` is here because `application/json` is **not** one of the three values
+// (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) for which `Content-Type`
+// counts as a CORS-safelisted request header. Every JSON-bodied cross-origin POST/PUT therefore
+// triggers a preflight naming `content-type`, and without it in this list the browser refuses to
+// send the real request — so before this, enabling the setting only ever helped requests that
+// carried no body. `Accept` is deliberately absent: it is safelisted and never named in a preflight.
+// No wildcard either — the origin allowed by `ALLOW_ORIGIN` is already `*`, and `*` here would admit
+// arbitrary headers on top of that for no stated need.
+const ALLOW_HEADERS: &str = "Authorization, Content-Type";
 
 async fn cors_enabled(state: &AppState) -> bool {
     let Ok(mut conn) = state.redis.config.get().await else {

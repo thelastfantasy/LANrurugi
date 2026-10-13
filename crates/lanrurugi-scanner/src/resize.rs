@@ -61,8 +61,8 @@ pub const MAX_LONG_EDGE_PREVIEW: u32 = 600;
 pub enum ResizeError {
     #[error("failed to decode image: {0}")]
     Decode(#[from] image::ImageError),
-    #[error("webp encode error: {0:?}")]
-    Webp(webp::WebPEncodingError),
+    #[error("webp encode error: {0}")]
+    Webp(String),
     #[error("jxl encode error: {0}")]
     Jxl(#[from] crate::jxl::JxlEncodeError),
     #[error("blocking task failed: {0}")]
@@ -187,13 +187,10 @@ fn resize_sync(
 
     let rgb = final_image.to_rgb8();
     match format {
-        EncodeFormat::Webp => {
-            let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
-            let encoded = encoder
-                .encode_simple(false, quality as f32)
-                .map_err(ResizeError::Webp)?;
-            Ok(encoded.to_vec())
-        }
+        EncodeFormat::Webp => webpx::Encoder::new_rgb(rgb.as_raw(), rgb.width(), rgb.height())
+            .quality(quality as f32)
+            .encode(webpx::Unstoppable)
+            .map_err(|error| ResizeError::Webp(error.to_string())),
         EncodeFormat::Jxl => crate::jxl::encode_rgb(&rgb, quality).map_err(ResizeError::from),
     }
 }

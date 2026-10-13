@@ -59,6 +59,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            nasm libopenjp2-7-dev \
             redis-server perl cpanminus
           sudo cpanm --notest PPI JSON::PP
 
@@ -82,7 +83,7 @@ jobs:
         run: |
           sudo systemctl stop redis-server || true
           redis-server --daemonize yes --databases 64 --save "" --appendonly no
-          for i in $(seq 1 10); do
+          for _ in $(seq 1 10); do
             redis-cli ping && break
             sleep 1
           done
@@ -163,3 +164,150 @@ jobs:
 
       - name: vitest (unit)
         run: pnpm --filter lanrurugi-frontend run test:unit
+
+  # 011-api-docs-site. Split into generate and build on purpose rather than run as one job:
+  # `docs-generate` is the enforceable gate — a cheap Rust-only run whose failure means the
+  # generated API reference and the server's own route table disagree — while `docs-build` owns the
+  # Node/Astro toolchain and publishing. Keeping them apart means a red run immediately names which
+  # half broke, and the gate can be a required check without pulling a JS toolchain into it.
+  docs-generate:
+    name: Docs (generate + gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      # The generator links nothing from the product, so this job never compiles Redis, the OCR
+      # stack, or any model asset — which is the whole reason the gate is affordable as its own job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+
+      # `--check` writes nothing and runs every gate: a route the scanner cannot resolve, a mount
+      # point the mount table does not know, or a sidecar fragment describing an endpoint that does
+      # not exist all fail here, naming the offending file and line.
+      # `cargo run` directly, never `mise run docs-api`: that task routes through
+      # `scripts/cargo-container-run.sh`, which runs a `lanrurugi-dev` image only `mise run
+      # dev-rebuild` builds on a contributor's machine. CI has no such image, so the task could never
+      # have run here. The `rust` job below sets the same convention. The generator's defaults
+      # (`--policy`, `--access-notes`, `--output`) come from its own CLI, so nothing is lost.
+      - name: Gate — the reference must match the route table
+        run: cargo run -p lanrurugi-api-docgen -- --check
+
+      # A second, writing invocation for the artefact the site build consumes. The gates are not
+      # conditional on `--check` (they run either way), so this cannot publish something the gate
+      # rejected — the two invocations differ only in whether the JSON is written.
+      - name: Generate the API document
+        run: cargo run -p lanrurugi-api-docgen
+
+      - name: Generate the plugin SDK reference
+        run: mise run docs-sdk
+
+      # Uploaded so the publishing jobs consume exactly the bytes this job validated, generated from
+      # the same revision, rather than regenerating them under a different toolchain. Both paths are
+      # consumed as-is: `docs-build` deliberately does not re-run `docs-sdk`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-generated
+          if-no-files-found: error
+          path: |
+            docs/public/openapi.json
+            docs/dist-sdk/
+
+  docs-build:
+    name: Docs (build + publish all three)
+    runs-on: ubuntu-latest
+    # `always()` with an explicit result check, rather than a bare `needs:` list: adding
+    # `rust`/`frontend` as dependencies would otherwise *skip this job entirely* whenever either is
+    # red, hiding a docs problem behind an unrelated Rust failure. Building still happens either way;
+    # the publish steps below additionally require those two to have passed, so nothing ships from a
+    # commit whose tests failed.
+    needs: [docs-generate, rust, frontend]
+    if: always() && needs.docs-generate.result == 'success'
+    # Job-level so the `if:` on the deploy step below can see it: a step's own `env` is not
+    # available to that step's `if` condition, but the job-level `env` context is.
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      # `path: .`, not `path: docs/public`. With multiple paths in the upload, the artifact's root
+      # is their *least common ancestor* — here `docs/` — so its entries are `public/openapi.json`
+      # and `dist-sdk/…`. Extracting into `docs/public` nests them one level too deep and the docs
+      # build then cannot find `docs/public/openapi.json` at all.
+      - uses: actions/download-artifact@v4
+        with:
+          name: docs-generated
+          path: .
+
+      # Same rule the frontend job documents at length: every pnpm invocation runs from the repo
+      # root with `--filter`, never with cwd inside a workspace package.
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      # The three deliverables are built and published independently, each to its own Cloudflare
+      # Pages project. They are separate because they answer separate questions for separate
+      # audiences: the guides and per-group prose reference; a Swagger UI over the same document,
+      # which can show schemas and send requests where a prose reference cannot; and the plugin SDK's
+      # `deno doc` tree. Bundling them would put a Swagger bundle in front of someone reading the
+      # install guide.
+      #
+      # `DOCS_SITE_URL` is what puts canonical URLs and `sitemap-index.xml` in the docs build; without
+      # it Astro skips the sitemap and only logs a warning (the build still succeeds, which is why
+      # this is easy to miss). `DOCS_SDK_URL` points the docs sidebar's SDK entry at the SDK project.
+      # Set both as repository variables once the projects' own domains exist.
+      - name: Build — docs site
+        env:
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://lanrurugi-docs.pages.dev' }}
+          DOCS_SDK_URL: ${{ vars.DOCS_SDK_URL || 'https://lanrurugi-sdk.pages.dev/' }}
+        run: mise run docs-build
+
+      - name: Build — Swagger UI
+        run: mise run docs-swagger
+
+      # Publishing is skipped, never failed, when the deployment credentials are absent — a fork, a
+      # pull request, or anyone else's clone must still get a green pipeline from the build alone.
+      # Cloudflare Pages receives prebuilt directories: it is not asked to build anything, because it
+      # cannot see this job's generated artefacts or this repository's pinned toolchain.
+      - name: Publish docs site
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/dist --project-name=lanrurugi-docs
+
+      - name: Publish Swagger UI
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/dist-swagger --project-name=lanrurugi-api-swagger
+
+      - name: Publish plugin SDK reference
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/dist-sdk --project-name=lanrurugi-sdk

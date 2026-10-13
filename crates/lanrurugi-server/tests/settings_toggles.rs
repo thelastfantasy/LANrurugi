@@ -233,6 +233,12 @@ async fn cors_headers_absent_when_disabled() {
 /// With `enablecors` on: a real request carries the three headers, and an `OPTIONS` preflight is
 /// answered directly (204, no auth required) rather than falling through to `require_api_key` and
 /// 401ing — see `cors::apply_cors`'s own docs on why a preflight must never reach the auth check.
+///
+/// The expected `Access-Control-Allow-Headers` value is asserted in full, on purpose. `Content-Type`
+/// is in it because `application/json` is not a CORS-safelisted value for that header, so every
+/// JSON-bodied cross-origin request preflights on `content-type` and was being refused before it was
+/// added (spec `011-api-docs-site` FR-016). Asserting the whole string means any future change to
+/// this list has to be deliberate rather than incidental.
 #[tokio::test]
 async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     let _guard = config_field_lock().lock().await;
@@ -254,7 +260,7 @@ async fn cors_headers_present_and_preflight_bypasses_auth_when_enabled() {
     );
     assert_eq!(
         resp.headers().get("Access-Control-Allow-Headers").unwrap(),
-        "Authorization"
+        "Authorization, Content-Type"
     );
 
     // A real (non-OPTIONS) request still needs to actually authenticate — CORS headers are added

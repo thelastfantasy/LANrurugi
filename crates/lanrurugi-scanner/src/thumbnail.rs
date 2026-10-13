@@ -149,8 +149,8 @@ pub enum ThumbnailError {
     Io(#[from] std::io::Error),
     #[error("blocking task failed: {0}")]
     Join(#[from] lanrurugi_core::concurrency::BlockingTaskError),
-    #[error("webp encode error: {0:?}")]
-    Webp(webp::WebPEncodingError),
+    #[error("webp encode error: {0}")]
+    Webp(String),
     #[error("jxl encode error: {0}")]
     Jxl(#[from] crate::jxl::JxlEncodeError),
 }
@@ -292,13 +292,10 @@ fn encode_thumbnail(
             )?;
             Ok(out)
         }
-        ThumbFormat::Webp => {
-            let encoder = webp::Encoder::from_rgb(rgb.as_raw(), rgb.width(), rgb.height());
-            let encoded = encoder
-                .encode_simple(false, quality as f32)
-                .map_err(ThumbnailError::Webp)?;
-            Ok(encoded.to_vec())
-        }
+        ThumbFormat::Webp => webpx::Encoder::new_rgb(rgb.as_raw(), rgb.width(), rgb.height())
+            .quality(quality as f32)
+            .encode(webpx::Unstoppable)
+            .map_err(|error| ThumbnailError::Webp(error.to_string())),
         ThumbFormat::Jxl => crate::jxl::encode_rgb(rgb, quality).map_err(ThumbnailError::Jxl),
     }
 }

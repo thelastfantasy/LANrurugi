@@ -54,3 +54,10 @@ woothee.workspace = true
 sha2.workspace = true
 maxminddb.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+# Test-only. The `tests/gpu_worker_*.rs` integration tests drive a real `lanrurugi-gpu-worker`
+# subprocess, and that client forwards the worker's own stdout/stderr through `tracing` — so without
+# a subscriber installed in the test process, a worker refusal such as "no inpainting model loaded
+# in this worker" arrives with its explanation discarded. No shipped code path needs this.
+tracing-subscriber.workspace = true

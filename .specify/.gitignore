@@ -7,3 +7,6 @@ feature.json
 
 # Per-machine extension config overrides.
 extensions/*/local-config.yml
+
+# Cached integration catalogs, fetched per machine by the discovery commands.
+integrations/.cache/

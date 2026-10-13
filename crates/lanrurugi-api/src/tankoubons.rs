@@ -809,6 +809,10 @@ async fn resolve_global_page(
 /// `Response` to send back directly (a `404`/`400`/`500`) on any resolution failure, so call sites
 /// can `let (archive_id, local_page) = match resolve_tank_page(...).await { Ok(v) => v, Err(r) =>
 /// return r };` without duplicating the same three failure branches at every call site.
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 pub(crate) async fn resolve_tank_page(
     state: &AppState,
     tank_id: &TankId,

@@ -3047,8 +3047,10 @@ fn blend_pixel(page: &mut RgbImage, x: i32, y: i32, color: Rgb, coverage: f32) {
 /// Encodes a composited page as WebP — the same format (and therefore the same quota accounting)
 /// the reader's resize cache already uses (research.md §18).
 pub fn encode_webp(page: &RgbImage, quality: f32) -> Result<Vec<u8>, CompositeError> {
-    let encoder = webp::Encoder::from_rgb(page.as_raw(), page.width(), page.height());
-    Ok(encoder.encode(quality).to_vec())
+    webpx::Encoder::new_rgb(page.as_raw(), page.width(), page.height())
+        .quality(quality)
+        .encode(webpx::Unstoppable)
+        .map_err(|error| CompositeError::Encode(error.to_string()))
 }
 
 #[cfg(test)]

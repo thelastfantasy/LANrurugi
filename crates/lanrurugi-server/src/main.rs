@@ -42,6 +42,9 @@ enum Command {
     /// Run the concurrency/throughput benchmark against a synthetic library (User Story 8 — not
     /// yet implemented).
     Bench(BenchArgs),
+    /// Census the library's page formats and report the ones nothing can display (a format no
+    /// mainstream browser renders *and* this server cannot decode).
+    Formats(lanrurugi_server::cli::formats::FormatsArgs),
 }
 
 #[derive(clap::Args)]
@@ -191,6 +194,9 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Serve(args) => serve(args).await,
         Command::RebuildIndex(args) => rebuild_index(args).await,
+        Command::Formats(args) => {
+            tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
+        }
         Command::Bench(args) => {
             lanrurugi_server::cli::bench::run(lanrurugi_server::cli::bench::BenchArgs {
                 legacy_url: args.legacy_url,

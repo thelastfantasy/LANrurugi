@@ -63,6 +63,21 @@ if [ -z "${MISE_TASK_NAME:-}" ]; then
   exit 1
 fi
 
+# Refuses outright in CI. This script exists to cap resource use on a *contributor's* machine, and
+# the image it runs (`lanrurugi-dev`) is built locally by `mise run dev-rebuild` — no workflow builds
+# it. A workflow that reaches this script therefore fails on a missing image at best. That is exactly
+# what happened: `.github/workflows/ci.yml`'s docs job called `mise run docs-api`, whose task routes
+# through here, so the job could never have run once. CI invokes `cargo` directly (as the `rust` job
+# already did); failing loudly here names the cause instead of surfacing "image not found" from a
+# container runtime the reader has no reason to connect to this script.
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "error: scripts/cargo-container-run.sh must not be used in CI (CI=${CI:-unset}, GITHUB_ACTIONS=${GITHUB_ACTIONS:-unset})." >&2
+  echo "       The container image it runs is built locally by 'mise run dev-rebuild'." >&2
+  echo "       Call cargo directly from the workflow instead — see the 'rust' job in" >&2
+  echo "       .github/workflows/ci.yml for the convention." >&2
+  exit 1
+fi
+
 CMD="$(command -v podman || command -v docker || true)"
 [ -n "$CMD" ] || { echo "error: podman/docker not found on PATH" >&2; exit 1; }
 
@@ -274,4 +289,43 @@ fi
   -v "$REPO_ROOT/.cargo-target":/workspace/target \
   -v "$REPO_ROOT/.cargo-registry":/usr/local/cargo/registry \
   -w /workspace -e CARGO_BUILD_JOBS="$cargo_jobs" "${ENV_FILE_ARGS[@]}" \
-  lanrurugi-dev "$@"
+  lanrurugi-dev "$@" || run_status=$?
+
+# `set -e` would exit here on failure, so the diagnostic below has to be reachable only after the
+# status is captured. Deliberately re-exits with the original code.
+run_status="${run_status:-0}"
+if [ "$run_status" -eq 137 ]; then
+  # 137 = 128 + SIGKILL. Every observed instance of this on this project (2026-08-25, and again
+  # 2026-10-11 when this message was added) was `systemd-oomd` killing the container mid-build, not
+  # anything the build itself did — and the failure is otherwise *silent*: `cargo` gets no chance to
+  # print a reason, so the run looks like it simply stopped, sometimes with no completion record at
+  # all. Two facts make that reachable, and both are outside this repo's control:
+  #
+  # - `~/.config/containers/containers.conf`'s `cgroup_conf` *overrides* any `--memory` this script
+  #   could pass (see this script's own header), so the container's ceiling is whatever that
+  #   personal file says.
+  # - If that ceiling's `memory.high` sits at or below where a build naturally settles, the cgroup
+  #   parks on its ceiling for the whole run and reclaim becomes *continuous* instead of occasional.
+  #   Those stalls propagate up to `user@1000.service`, and once its memory PSI exceeds systemd's
+  #   default `ManagedOOMMemoryPressureLimit` (50% for 20s), oomd kills the biggest unprotected
+  #   cgroup under it — the build container. Measured 2026-10-11: `memory.high=3G` gave ~9,990
+  #   throttle events and a 137; `6G` gave 1,734 and a clean pass, with the session's PSI at 37%/11%
+  #   (avg10/avg60) instead of 78%/42%. Note that a build's cgroup footprint is *ceiling-bound* —
+  #   `memory.current` includes page cache, and cache expands to fill whatever room exists — so
+  #   "how much does a build need" cannot be read off a run that was itself capped.
+  #
+  # Printing the two commands that answer "was it oomd, and what was the ceiling?" turns a
+  # ten-minute mystery into a two-line check.
+  {
+    echo "error: the build was SIGKILLed (exit 137) — on this project that has always meant" >&2
+    echo "       systemd-oomd killed the container, not a build failure. Check both of:" >&2
+    echo "         journalctl -u systemd-oomd -n 20 --no-pager" >&2
+    echo "         grep -A3 cgroup_conf ~/.config/containers/containers.conf" >&2
+    echo "       If oomd's log names this build's container, that file's 'memory.high' is the" >&2
+    echo "       prime suspect: a value a build settles onto makes reclaim continuous, which is" >&2
+    echo "       what drives the session's PSI over oomd's 50% limit. Watch the next run's" >&2
+    echo "       container cgroup — 'memory.peak' and 'memory.events' — and keep raising" >&2
+    echo "       memory.high until 'max' stays 0 and the session's PSI stays under 50%." >&2
+  }
+fi
+exit "$run_status"

@@ -3877,6 +3877,10 @@ fn sanitize_plugin_filename(name: &str) -> String {
 /// grants blanket permission to overwrite an arbitrary same-named file. `rename` over an existing
 /// file is an atomic replace on the same filesystem, so no separate remove-then-rename step is
 /// needed for the `true` case.
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 pub(crate) async fn move_into_category(
     staging_dir: &std::path::Path,
     staged_path: &std::path::Path,

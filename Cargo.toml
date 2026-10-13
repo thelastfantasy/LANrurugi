@@ -6,6 +6,7 @@ members = [
     "crates/lanrurugi-scanner",
     "crates/lanrurugi-plugin",
     "crates/lanrurugi-api",
+    "crates/lanrurugi-api-docgen",
     "crates/lanrurugi-search",
     "crates/lanrurugi-equivalence",
     "crates/lanrurugi-backup",
@@ -73,7 +74,21 @@ libarchive2-sys = "0.2"
 chardetng = "1.0"
 encoding_rs = "0.8"
 libc = "0.2"
-webp = "0.3"
+# libwebp wrapper with a *streaming* animation API (`AnimationDecoder::next_frame` /
+# `AnimationEncoder::add_frame_rgba`). The previous `webp` crate exposed only an eager
+# decode-every-frame API, which cost ~4 GB on a 304-frame 1040x1568 page and OOM-killed the server.
+webpx = { version = "0.4", features = ["animation"] }
+# Pure-Rust JPEG XL decoder (`jxl-rs`, the implementation Chrome/Firefox use). Its animation API
+# is what lets an animated JXL be re-encoded for clients that cannot decode JXL at all.
+jxl = "0.7"
+tiff = "0.11"
+# JPEG 2000 via OpenJPEG. The pure-Rust `openjp2` port aborts the process on a null component
+# buffer (an unchecked `from_raw_parts` in `ImageComponent::data()`), so this uses the C library —
+# `libopenjp2-7-dev` is installed by the Dockerfiles.
+jpeg2k = { version = "0.10", default-features = false, features = ["image", "openjpeg-sys"] }
+# Still-AVIF decoding via `rav1d`, the pure-Rust port of dav1d. Requires rustc >= 1.98, which is
+# why `RUST_VERSION` in the Dockerfiles tracks current stable (1.99) rather than an older pin.
+avif-decode = "3"
 clap = { version = "4.6", features = ["derive", "env"] }
 criterion = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart", "stream", "gzip", "brotli", "deflate"] }
@@ -144,6 +159,15 @@ ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-c
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = "0.10"
 sysinfo = "0.33"
+# `011-api-docs-site`: `syn` parses Rust source (never runs it) to recover the route table, since
+# axum's `Router` exposes no way to enumerate what was registered; `serde-saphyr` reads the vendored
+# upstream OpenAPI YAML and the hand-written sidecar fragments — chosen over the deprecated
+# `serde_yaml`/`serde_yml`, which point users elsewhere in their own crate descriptions.
+syn = { version = "3.0", features = ["full", "visit"] }
+# `span-locations` is what makes `syn`'s spans carry line numbers — the route scanner's error
+# messages ("this route is not a string literal") are useless without them.
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+serde-saphyr = "1.3"
 
 [profile.release]
 lto = "thin"

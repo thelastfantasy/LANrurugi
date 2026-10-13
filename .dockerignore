@@ -5,6 +5,17 @@ target/
 node_modules/
 apps/frontend/dist/
 apps/frontend/node_modules/
+# 011-api-docs-site: the docs stage builds everything it needs from source inside the image, so a
+# developer's local build output and generated inputs must not ride along in the build context —
+# these are gitignored for the same reason. `docs/api/` (the vendored upstream OpenAPI document and
+# the hand-written sidecar) IS an input and is copied explicitly by the Dockerfile.
+docs/dist/
+docs/.astro/
+docs/node_modules/
+docs/public/openapi.json
+docs/dist-swagger/
+docs/dist-sdk/
+docs/public/favicon.svg
 .git/
 .github/
 specs/

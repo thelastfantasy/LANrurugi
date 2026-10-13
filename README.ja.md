@@ -402,6 +402,19 @@ mise run test-frontend-e2e    # Playwright — 実際のバックエンド + Red
 
 ## ドキュメント
 
+**HTTP API リファレンスは手書きではありません。** サーバー自身のルート登録から
+`crates/lanrurugi-api-docgen` が生成し（OpenAPI 3.1 の単一成果物）、`docs/` のドキュメントサイトが
+描画します。LANraragi と共通のエンドポイントは上流の `tools/openapi.yaml` が持つフィールド単位の記述を
+そのまま使い、それ以外は `docs/api/sidecar/` に手で補い、リクエスト/レスポンスの形がまだ書かれていない
+エンドポイントはスキーマを捏造せずその旨を明示します。CI の `docs-generate` ジョブが毎回「コードにある
+ルートは必ずドキュメントにもある」というゲートを実行するため、手書きドキュメントのようにコードから
+静かに遅れていくことはありません。サイトは同じリポジトリ内でビルドされ、イメージに同梱されてインスタンス
+自身の `/docs` からオフラインでも読めます（`mise run docs-api` / `docs-sdk` / `docs-build` /
+`docs-dev`）。
+
+- [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) — Phase 1 追加分（増分追加、実装済み）：
+  上記の生成器とドキュメントサイト。ブラウザから自分のインスタンスに対して API を試す機能と、
+  `deno doc` が生成するプラグイン SDK リファレンスを含みます。
 - [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) — Phase 1 の仕様、
   計画、リサーチによる決定事項、データモデル、API コントラクト、および `quickstart.md`
   （8 つのユーザーストーリーすべてに対するエンドツーエンドの検証手順）。

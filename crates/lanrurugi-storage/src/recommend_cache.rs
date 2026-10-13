@@ -101,9 +101,12 @@ fn decode_vector(key: &str, bytes: &[u8]) -> Result<(String, Vec<f32>)> {
             ),
         ));
     }
+    // `as_chunks` (Rust 1.88+) replaced `chunks_exact` for constant chunk sizes under clippy 1.99.
     let vector: Vec<f32> = vector_bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     Ok((title, vector))
 }

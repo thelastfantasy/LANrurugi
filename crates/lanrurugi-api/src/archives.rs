@@ -53,6 +53,18 @@ fn low_priority_page_semaphore() -> Arc<tokio::sync::Semaphore> {
         .clone()
 }
 
+/// Bounded gate for animated-page conversions. Each one may hold hundreds of MB of decoded frame
+/// buffers (`lanrurugi_scanner::animation` bounds a single conversion), and the reader requests the
+/// tiny placeholder, the full page and its neighbours' prefetches practically simultaneously — that
+/// burst is what pushed the server past its memory cgroup limit.
+static ANIMATED_CONVERSION_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn animated_conversion_semaphore() -> Arc<tokio::sync::Semaphore> {
+    ANIMATED_CONVERSION_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
+        .clone()
+}
+
 /// Computes whether an archive's "new" badge should be *shown*, applying `LRR_CONFIG`'s
 /// `newbadgemode` setting (see `settings::STRING_FIELDS`'s `newbadgemode` doc): `until_opened`
 /// shows it whenever the flag is set (legacy's own behavior); `until_finished` hides it once
@@ -197,10 +209,14 @@ pub fn router() -> Router<AppState> {
             get(list_archives).delete(batch_delete_archives),
         )
         .route("/archives/untagged", get(untagged_archives))
-        .route(
-            "/archives/{id}",
-            get(get_archive_deprecated).delete(delete_archive),
-        )
+        // DELETE only. This used to also carry a `get(get_archive_deprecated)` — a verbatim copy of
+        // `/archives/{id}/metadata`, kept solely so clients written against the legacy LANraragi
+        // path kept working. Removed deliberately (2026-10-12): the search syntax, filtering and
+        // response shapes have diverged far enough that path-level compatibility is no longer worth
+        // maintaining, and nothing in this repository ever called it — the frontend fetches
+        // `/archives/{id}/metadata` in all four places it needs an archive's metadata. A `GET` here
+        // now returns 405, which is the honest answer: the path exists, that method does not.
+        .route("/archives/{id}", delete(delete_archive))
         .route(
             "/archives/{id}/metadata",
             get(get_archive_metadata).put(update_archive_metadata),
@@ -368,16 +384,6 @@ async fn get_archive_metadata(
         Some(json) => axum::Json(json).into_response(),
         None => not_found("get_archive_metadata", format!("{id} does not exist.")),
     }
-}
-
-/// `GET /archives/{id}` — deprecated alias of `/archives/{id}/metadata` (verified: both map to
-/// `api-archive#serve_metadata` in the legacy router).
-async fn get_archive_deprecated(
-    state: State<AppState>,
-    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
-    path: Path<lanrurugi_core::ids::ArchiveId>,
-) -> Response {
-    get_archive_metadata(state, auth, path).await
 }
 
 /// Outcome of deleting one archive's DB record + best-effort on-disk/index/cache cleanup — shared
@@ -2326,6 +2332,17 @@ impl PageParams {
 pub(crate) struct ClientImageSupport {
     pub(crate) jxl: bool,
     pub(crate) webp: bool,
+    /// AVIF is the one format in the reader's list whose support is neither universal nor uniform
+    /// across still/animated: Firefox decodes still AVIF from 93 but sequences only from 113
+    /// (111-112 behind a pref), Safari/iOS need 16.4 for sequences but 16.1/16.0 for stills. Both
+    /// halves are tracked. Still AVIF is convertible here (`image`'s `avif-native` decoder);
+    /// sequences are not, so those fall back to their original bytes.
+    pub(crate) avif: bool,
+    /// AVIF *sequences* (`ftyp` brand `avis`), which is a strictly narrower capability than `avif`.
+    pub(crate) avif_anim: bool,
+    /// JXL sequences. The mirror image of `avif_anim`: Safari (through 27.x) and older Chrome/Firefox
+    /// decode still JXL but not JXL sequences; Chrome 155+/Firefox 158+ play both.
+    pub(crate) jxl_anim: bool,
 }
 
 impl ClientImageSupport {
@@ -2333,6 +2350,9 @@ impl ClientImageSupport {
         Self {
             jxl: false,
             webp: false,
+            avif: false,
+            avif_anim: false,
+            jxl_anim: false,
         }
     }
 
@@ -2340,6 +2360,9 @@ impl ClientImageSupport {
         Self {
             jxl: false,
             webp: true,
+            avif: false,
+            avif_anim: false,
+            jxl_anim: false,
         }
     }
 
@@ -2347,19 +2370,110 @@ impl ClientImageSupport {
         Self {
             jxl: true,
             webp: true,
+            avif: false,
+            avif_anim: false,
+            jxl_anim: false,
         }
     }
 
+    /// Parses the frontend's capability signal. Current frontends send an explicit
+    /// comma-separated list (`jxl,webp,avif`); the older single-value forms are still accepted,
+    /// where `jxl` implied WebP.
     fn from_value(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
+        let value = value.trim().to_ascii_lowercase();
+        if value.contains(',') {
+            let mut support = Self::source();
+            for part in value.split(',') {
+                match part.trim() {
+                    "jxl" => support.jxl = true,
+                    "webp" => support.webp = true,
+                    "avif" => support.avif = true,
+                    // Sequence support implies still support.
+                    "avif-anim" => {
+                        support.avif = true;
+                        support.avif_anim = true;
+                    }
+                    "jxl-anim" => {
+                        support.jxl = true;
+                        support.jxl_anim = true;
+                    }
+                    // A client that can decode nothing else still renders the universal formats;
+                    // `source` is how the frontend spells "no preference-able codec".
+                    "source" | "original" | "none" | "" => {}
+                    _ => return None,
+                }
+            }
+            return Some(support);
+        }
+        match value.as_str() {
             // A browser that advertises JXL almost always ships WebP too; treating this as
             // "both" keeps the fallback chain jxl > webp > source meaningful even if a page's
             // source format is not JXL.
             "jxl" => Some(Self::jxl_and_webp()),
             "webp" => Some(Self::webp()),
             "source" | "original" | "none" => Some(Self::source()),
+            // The sequence-capable tokens may also arrive on their own; a sequence decoder decodes
+            // stills too, so each implies the still half plus WebP (every such client has it).
+            "avif-anim" => Some(Self {
+                avif: true,
+                avif_anim: true,
+                ..Self::webp()
+            }),
+            "jxl-anim" => Some(Self {
+                jxl: true,
+                jxl_anim: true,
+                ..Self::jxl_and_webp()
+            }),
             _ => None,
         }
+    }
+
+    /// Formats every mainstream browser decodes, so no capability signal is needed for them.
+    const UNIVERSAL: &'static [&'static str] = &[
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/svg+xml",
+        "image/bmp",
+    ];
+
+    /// Whether *this client* renders `content_type` natively. `animated` selects the vector for
+    /// the only format where the two differ (AVIF); callers know it per page from
+    /// `animation::is_animated`. Anything not listed (TIFF, unknown) is never renderable.
+    pub(crate) fn can_decode(&self, content_type: &str, animated: bool) -> bool {
+        if Self::UNIVERSAL.contains(&content_type) {
+            return true;
+        }
+        match content_type {
+            // WebP has no still/animated split in any shipping browser.
+            "image/webp" => self.webp,
+            "image/jxl" => {
+                if animated {
+                    self.jxl_anim
+                } else {
+                    self.jxl
+                }
+            }
+            "image/avif" => {
+                if animated {
+                    self.avif_anim
+                } else {
+                    self.avif
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether *this server* can decode the still format — the precondition for converting it on
+    /// behalf of a client that cannot render it. AVIF is deliberately absent: the workspace has no
+    /// AVIF decoder (only an encoder), so an AVIF page falls back to its original bytes.
+    pub(crate) fn server_can_decode_still(content_type: &str) -> bool {
+        Self::UNIVERSAL.contains(&content_type)
+            || matches!(
+                content_type,
+                "image/webp" | "image/jxl" | "image/tiff" | "image/jp2" | "image/avif"
+            )
     }
 
     pub(crate) fn from_request(headers: &HeaderMap, explicit: Option<&str>) -> Self {
@@ -2386,8 +2500,13 @@ impl ClientImageSupport {
             if accept.contains("image/jxl") {
                 return Self::jxl_and_webp();
             }
-            if accept.contains("image/webp") {
-                return Self::webp();
+            // No capability list, but the client still says what it takes: honour it rather than
+            // falling straight back to WebP. (Animated AVIF stays undetectable this way — its
+            // support is a separate, browser-version-dependent capability.)
+            let mut support = Self::webp();
+            support.avif = accept.contains("image/avif");
+            if accept.contains("image/webp") || support.avif {
+                return support;
             }
         }
         Self::webp()
@@ -2910,10 +3029,25 @@ async fn fetch_page(
     // only the first frame). Conversion is WebP-only for now; formats without a frame-safe decoder
     // return `None` and are served as original bytes.
     if lanrurugi_scanner::animation::is_animated(content_type, &raw) {
-        if !client_support.webp || (!enable_resize && !preview) {
+        // A client that cannot decode the source format at all must be converted, whatever the
+        // size threshold or the resize setting says: those are bandwidth heuristics, and serving
+        // the original here means serving something the client cannot render. Only formats this
+        // module can actually convert qualify — for the rest there is nothing better to serve.
+        let client_cannot_decode_source = !client_support.can_decode(content_type, true)
+            && lanrurugi_scanner::animation::is_convertible(content_type);
+        if !client_support.can_decode(content_type, true) && !client_cannot_decode_source {
+            tracing::warn!(
+                %id,
+                content_type,
+                "client cannot decode this animation and this server has no decoder for it; serving the original bytes"
+            );
+        }
+        if !client_support.webp || ((!enable_resize && !preview) && !client_cannot_decode_source) {
             return Ok(serve_original_page(archive_file, path, raw, content_type).await);
         }
-        let over_threshold = preview || (raw.len() / 1024) as i64 > effective_threshold;
+        let over_threshold = client_cannot_decode_source
+            || preview
+            || (raw.len() / 1024) as i64 > effective_threshold;
         if !over_threshold {
             return Ok(serve_original_page(archive_file, path, raw, content_type).await);
         }
@@ -2942,6 +3076,14 @@ async fn fetch_page(
                 etag,
             });
         }
+
+        // One conversion at a time per permit: even streamed, an animated conversion holds a whole
+        // frame's buffers plus libwebp's encoder state, and the reader fires the tiny placeholder,
+        // the full page and neighbour prefetches at the same page at once.
+        let _conversion_permit = match animated_conversion_semaphore().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return Err("animated conversion semaphore closed".to_string()),
+        };
 
         let converted = lanrurugi_scanner::animation::convert_to_animated_webp(
             raw.clone(),
@@ -3018,11 +3160,30 @@ async fn fetch_page(
             | "image/svg+xml"
             | "image/bmp"
     );
-    let force_convert = !renderable;
+    // A format the client cannot render must be converted — and only this server can say whether
+    // that is possible at all (`server_can_decode_still`): converting a page we cannot decode
+    // would turn a broken-looking image into a 500. The size threshold and the resize switch are
+    // bandwidth heuristics and must not apply to this case.
+    let client_cannot_decode = !client_support.can_decode(content_type, false);
+    if client_cannot_decode && !ClientImageSupport::server_can_decode_still(content_type) {
+        tracing::warn!(
+            %id,
+            content_type,
+            "client cannot decode this page's format and this server has no decoder for it; serving the original bytes"
+        );
+    }
+    // Never hand a format this server cannot decode to the conversion pipeline: AVIF is the case
+    // (there is an AVIF *encoder* in the workspace, but no decoder), and an unknown format is the
+    // other. Attempting it would turn a page the browser may well render into a 500.
+    if !ClientImageSupport::server_can_decode_still(content_type) {
+        return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+    }
+    let force_convert = !renderable
+        || (client_cannot_decode && ClientImageSupport::server_can_decode_still(content_type));
 
     // `optimize` is the per-request contract (set by `/files`'s own generated URLs); without it,
     // serve the original bytes. A renderable page with resize disabled also passes through.
-    if !optimize || (!enable_resize && renderable) {
+    if !optimize || (!enable_resize && renderable && !force_convert) {
         return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
@@ -3127,7 +3288,18 @@ async fn fetch_page(
             })
         }
         Ok(None) => Ok(serve_original_page(archive_file, path, raw, content_type).await),
-        Err(e) => Err(e.to_string()),
+        // A page that could not be converted is still a page: a decoder gap or a damaged file must
+        // not become an error response when the original bytes are right there (a JPEG 2000 page
+        // in the sYCC colour space did exactly that before the JP2 path handled it).
+        Err(error) => {
+            tracing::warn!(
+                %id,
+                path = %path,
+                error = %error,
+                "image conversion failed; serving the original bytes"
+            );
+            Ok(serve_original_page(archive_file, path, raw, content_type).await)
+        }
     }
 }
 
@@ -3197,8 +3369,20 @@ pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
         && (&raw[8..12] == b"avif" || &raw[8..12] == b"avis")
     {
         "image/avif"
+    } else if raw.len() >= 12
+        && &raw[4..8] == b"ftyp"
+        && matches!(&raw[8..12], b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1")
+    {
+        // HEIC/HEIF: only Safari 17+ renders it and this server cannot decode it, so the reader
+        // needs the format named to explain itself rather than serve an opaque blob.
+        "image/heic"
     } else if raw.len() >= 4 && ((&raw[..4] == b"II*\0") || (&raw[..4] == b"MM\0*")) {
         "image/tiff"
+    } else if (raw.len() >= 12 && &raw[..12] == b"\x00\x00\x00\x0CjP  \r\n\x87\n")
+        || (raw.len() >= 4 && &raw[..4] == b"\xFF\x4F\xFF\x51")
+    {
+        // JPEG 2000: the JP2 signature box, or a bare codestream's SOC/SIZ marker pair.
+        "image/jp2"
     } else if raw.starts_with(b"<svg") || raw.starts_with(b"<?xml") {
         "image/svg+xml"
     } else {
@@ -3703,6 +3887,19 @@ mod tests {
     }
 
     #[test]
+    fn image_content_type_detects_jpeg2000_and_heic() {
+        assert_eq!(
+            image_content_type(b"\x00\x00\x00\x0CjP  \r\n\x87\n\x00\x00\x00\x14ftypjp2 "),
+            "image/jp2"
+        );
+        assert_eq!(image_content_type(b"\xFF\x4F\xFF\x51\x00\x2F"), "image/jp2");
+        assert_eq!(
+            image_content_type(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00heicmif1"),
+            "image/heic"
+        );
+    }
+
+    #[test]
     fn image_content_type_detects_jpeg_from_magic_bytes() {
         assert_eq!(
             image_content_type(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"),
@@ -3799,10 +3996,108 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert_eq!(
-            ClientImageSupport::from_request(&accept_headers, None),
-            ClientImageSupport::webp()
+        let from_accept = ClientImageSupport::from_request(&accept_headers, None);
+        assert!(from_accept.webp, "Accept advertised WebP");
+        assert!(from_accept.avif, "Accept advertised AVIF");
+        assert!(!from_accept.jxl);
+
+        // Current frontend form: an explicit capability list, authoritative over the legacy
+        // "jxl implies webp" shorthand.
+        let modern = ClientImageSupport::from_request(
+            &HeaderMap::new(),
+            Some("jxl,jxl-anim,webp,avif,avif-anim"),
         );
+        assert!(modern.jxl && modern.webp && modern.avif && modern.avif_anim && modern.jxl_anim);
+        // `jxl-anim` implies still support too, whether it arrives in a list or on its own.
+        let jxl_sequences =
+            ClientImageSupport::from_request(&HeaderMap::new(), Some("webp,jxl-anim"));
+        assert!(jxl_sequences.jxl && jxl_sequences.jxl_anim);
+        let jxl_sequences_alone =
+            ClientImageSupport::from_request(&HeaderMap::new(), Some("jxl-anim"));
+        assert!(jxl_sequences_alone.jxl && jxl_sequences_alone.jxl_anim);
+        // `avif-anim` implies still support: a sequence decoder decodes stills too.
+        let sequences = ClientImageSupport::from_request(&HeaderMap::new(), Some("webp,avif-anim"));
+        assert!(sequences.avif && sequences.avif_anim);
+        let webp_only = ClientImageSupport::from_request(&HeaderMap::new(), Some("webp"));
+        assert!(!webp_only.jxl && !webp_only.avif && !webp_only.avif_anim);
+    }
+
+    #[test]
+    fn client_capabilities_decide_which_formats_need_converting() {
+        let modern = ClientImageSupport {
+            jxl: true,
+            webp: true,
+            avif: true,
+            avif_anim: true,
+            jxl_anim: true,
+        };
+        // Safari: still JXL yes, JXL sequences no.
+        let still_jxl_only = ClientImageSupport {
+            jxl: true,
+            webp: true,
+            avif: true,
+            avif_anim: true,
+            jxl_anim: false,
+        };
+        // Firefox 93-112 / Safari 16.0-16.3: still AVIF yes, sequences no.
+        let still_avif_only = ClientImageSupport {
+            jxl: false,
+            webp: true,
+            avif: true,
+            avif_anim: false,
+            jxl_anim: false,
+        };
+        let webp_only = ClientImageSupport::webp();
+        let bare = ClientImageSupport::source();
+
+        // Universal formats need no capability signal at all, animated or not.
+        for support in [modern, still_avif_only, still_jxl_only, webp_only, bare] {
+            for content_type in [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/svg+xml",
+                "image/bmp",
+            ] {
+                assert!(support.can_decode(content_type, false), "{content_type}");
+                assert!(
+                    support.can_decode(content_type, true),
+                    "{content_type} (animated)"
+                );
+            }
+        }
+        assert!(modern.can_decode("image/jxl", false) && modern.can_decode("image/avif", false));
+        assert!(
+            modern.can_decode("image/jxl", true),
+            "Chrome 155+/Firefox 158+ play JXL sequences"
+        );
+        assert!(!webp_only.can_decode("image/jxl", false));
+        assert!(!webp_only.can_decode("image/avif", false));
+        assert!(webp_only.can_decode("image/webp", false));
+        assert!(
+            webp_only.can_decode("image/webp", true),
+            "WebP has no still/animated split"
+        );
+        // The two per-mode splits, in opposite directions: AVIF (old Firefox/Safari) and JXL
+        // (Safari). Both are why `can_decode` takes `animated` at all.
+        assert!(still_avif_only.can_decode("image/avif", false));
+        assert!(!still_avif_only.can_decode("image/avif", true));
+        assert!(still_jxl_only.can_decode("image/jxl", false));
+        assert!(!still_jxl_only.can_decode("image/jxl", true));
+        // TIFF is never renderable in a browser, whatever the client claims.
+        assert!(!modern.can_decode("image/tiff", false));
+
+        // This server can decode everything except AVIF (and unknown formats) — that asymmetry is
+        // exactly why the forced conversion cannot be unconditional.
+        assert!(ClientImageSupport::server_can_decode_still("image/jxl"));
+        assert!(ClientImageSupport::server_can_decode_still("image/tiff"));
+        assert!(ClientImageSupport::server_can_decode_still("image/jp2"));
+        assert!(ClientImageSupport::server_can_decode_still("image/avif"));
+        // No decoder exists for these anywhere in the workspace.
+        assert!(!ClientImageSupport::server_can_decode_still("image/heic"));
+        assert!(!ClientImageSupport::server_can_decode_still(
+            "application/x-unknown"
+        ));
     }
 
     #[test]

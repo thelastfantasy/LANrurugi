@@ -84,7 +84,11 @@ const PAD_MODULO: u32 = 8;
 /// physical card running out). `1024` — the reference project's own value at its *own* smaller
 /// default, not a value invented here — cuts the input's pixel count roughly 2.4x, bringing peak
 /// activation memory back under what this project's own per-worker VRAM share can actually supply.
-const MAX_INPAINT_SIZE: u32 = 1024;
+///
+/// Public because the *client* side of the worker boundary reduces a page to this resolution before
+/// sending it, whenever sending it whole would exceed the boundary's message limit — see
+/// [`work_dims`], which both sides call so they cannot disagree.
+pub const MAX_INPAINT_SIZE: u32 = 1024;
 
 #[derive(Debug, Error)]
 pub enum InpaintError {
@@ -104,6 +108,65 @@ pub enum InpaintError {
     SessionPanic { path: String, message: String },
     #[error("unexpected model output shape: {0}")]
     BadOutput(String),
+}
+
+/// The dimensions [`Inpainter::erase_page`] reduces a `width` x `height` page to before inference:
+/// the page's own when its longest edge is already within [`MAX_INPAINT_SIZE`], otherwise both
+/// scaled by the same factor so the longest edge lands exactly on it.
+///
+/// Single implementation on purpose. The client reduces a page to this before it crosses the worker
+/// boundary; the worker reduces it again only if it arrives larger. Two independently derived copies
+/// of this rule would not error on divergence — they would hand the model a differently-shaped page
+/// and mask and produce a wrong result with nothing in the logs to show for it.
+pub fn work_dims(width: u32, height: u32) -> (u32, u32) {
+    let longest_edge = width.max(height);
+    if longest_edge > MAX_INPAINT_SIZE {
+        let scale = f64::from(MAX_INPAINT_SIZE) / f64::from(longest_edge);
+        (
+            ((width as f64) * scale).round().max(1.0) as u32,
+            ((height as f64) * scale).round().max(1.0) as u32,
+        )
+    } else {
+        (width, height)
+    }
+}
+
+/// The working-resolution page and model mask for `page`: the page resized with `CatmullRom` and the
+/// mask with `Nearest`, so a reduced mask can only select a location that was actually set rather
+/// than average a new one into existence — or unchanged copies when [`work_dims`] says no reduction
+/// is needed. Returns `InpaintError` when the mask's length does not match the page's pixel count.
+pub fn downscale_to_work(
+    page: &RgbImage,
+    model_mask: &[bool],
+) -> Result<(RgbImage, image::GrayImage), InpaintError> {
+    let (pw, ph) = page.dimensions();
+    let expected_len = (pw * ph) as usize;
+    if model_mask.len() != expected_len {
+        return Err(InpaintError::BadOutput(format!(
+            "model mask length {} does not match page dimensions {pw}x{ph}",
+            model_mask.len()
+        )));
+    }
+
+    let mut mask_img = image::GrayImage::new(pw, ph);
+    for (i, &m) in model_mask.iter().enumerate() {
+        mask_img.put_pixel(
+            (i as u32) % pw,
+            (i as u32) / pw,
+            image::Luma([if m { 255 } else { 0 }]),
+        );
+    }
+
+    // Downscale only if needed, aspect ratio preserved — never squeeze into a fixed shape.
+    let (work_w, work_h) = work_dims(pw, ph);
+    if (work_w, work_h) == (pw, ph) {
+        Ok((page.clone(), mask_img))
+    } else {
+        Ok((
+            image::imageops::resize(page, work_w, work_h, FilterType::CatmullRom),
+            image::imageops::resize(&mask_img, work_w, work_h, FilterType::Nearest),
+        ))
+    }
 }
 
 /// Abstracts over "how a page's original lettering actually gets erased" — same reasoning as
@@ -372,36 +435,8 @@ impl Inpainter {
             )));
         }
 
-        let mut mask_img = image::GrayImage::new(pw, ph);
-        for (i, &m) in model_mask.iter().enumerate() {
-            mask_img.put_pixel(
-                (i as u32) % pw,
-                (i as u32) / pw,
-                image::Luma([if m { 255 } else { 0 }]),
-            );
-        }
-
-        // Downscale only if needed, aspect ratio preserved — never squeeze into a fixed shape.
-        let longest_edge = pw.max(ph);
-        let (work_w, work_h) = if longest_edge > MAX_INPAINT_SIZE {
-            let scale = f64::from(MAX_INPAINT_SIZE) / f64::from(longest_edge);
-            (
-                ((pw as f64) * scale).round().max(1.0) as u32,
-                ((ph as f64) * scale).round().max(1.0) as u32,
-            )
-        } else {
-            (pw, ph)
-        };
-        let work_img = if (work_w, work_h) == (pw, ph) {
-            page.clone()
-        } else {
-            image::imageops::resize(page, work_w, work_h, FilterType::CatmullRom)
-        };
-        let work_mask = if (work_w, work_h) == (pw, ph) {
-            mask_img
-        } else {
-            image::imageops::resize(&mask_img, work_w, work_h, FilterType::Nearest)
-        };
+        let (work_img, work_mask) = downscale_to_work(page, model_mask)?;
+        let (work_w, work_h) = work_img.dimensions();
 
         // Pad up to a multiple of PAD_MODULO — edge-replicated (`imageops::overlay` onto a canvas
         // built by tiling the image's own last row/column would be more faithful, but a plain
@@ -717,15 +752,11 @@ mod tests {
     #[test]
     fn downscale_preserves_aspect_ratio_for_a_page_past_max_inpaint_size() {
         // A page taller than MAX_INPAINT_SIZE on its long edge must scale down, keeping
-        // aspect ratio, never squeezing into a fixed shape — this mirrors the scale computation
-        // inline in erase_page (kept here as a standalone check since that function itself needs
-        // a real ORT session to run end-to-end).
+        // aspect ratio, never squeezing into a fixed shape. Goes through `work_dims` rather than
+        // re-deriving the scale here, so this test cannot keep passing after the rule it is meant
+        // to mirror has changed — `erase_page` itself needs a real ORT session to run end-to-end.
         let (pw, ph) = (1500u32, 3000u32);
-        let longest_edge = pw.max(ph);
-        assert!(longest_edge > MAX_INPAINT_SIZE);
-        let scale = f64::from(MAX_INPAINT_SIZE) / f64::from(longest_edge);
-        let work_w = ((pw as f64) * scale).round().max(1.0) as u32;
-        let work_h = ((ph as f64) * scale).round().max(1.0) as u32;
+        let (work_w, work_h) = work_dims(pw, ph);
         assert_eq!(
             work_h, MAX_INPAINT_SIZE,
             "the longer dimension must hit the cap exactly"
@@ -733,5 +764,132 @@ mod tests {
         let orig_ratio = pw as f64 / ph as f64;
         let scaled_ratio = work_w as f64 / work_h as f64;
         assert!((orig_ratio - scaled_ratio).abs() < 0.001);
+    }
+
+    #[test]
+    fn work_dims_is_identity_at_or_below_the_working_resolution() {
+        // The `working resolution` boundary is exclusive: a page exactly on it must not be reduced,
+        // or the client would resample pages that today are handed to the model untouched.
+        // Careful with these cases: it is the *longest edge* that is compared, so 800x1200 is
+        // already over the cap and must be reduced — only pages whose longer side is at most
+        // MAX_INPAINT_SIZE belong here.
+        assert_eq!(work_dims(800, 1000), (800, 1000));
+        assert_eq!(work_dims(MAX_INPAINT_SIZE, MAX_INPAINT_SIZE), (1024, 1024));
+        assert_eq!(
+            work_dims(1, MAX_INPAINT_SIZE),
+            (1, MAX_INPAINT_SIZE),
+            "a page exactly at the cap is not reduced, whatever its other dimension is"
+        );
+        assert_eq!(
+            work_dims(MAX_INPAINT_SIZE, 1),
+            (MAX_INPAINT_SIZE, 1),
+            "the cap applies to whichever edge is longer"
+        );
+    }
+
+    #[test]
+    fn work_dims_longest_edge_lands_exactly_on_the_cap() {
+        // Load-bearing for the client-side reduction: the worker only reduces when its input's
+        // longest edge is *strictly* greater than the cap, so a reduced page whose longest edge
+        // came out at 1023 would be sent back through the worker's own reduction a second time.
+        for (w, h) in [
+            (1500u32, 3000u32),
+            (3000, 1500),
+            (6336, 9504),
+            (6084, 3943),
+            (4535, 6307),
+            (1025, 1025),
+            (100000, 100),
+        ] {
+            let (ww, wh) = work_dims(w, h);
+            assert_eq!(
+                ww.max(wh),
+                MAX_INPAINT_SIZE,
+                "work_dims({w}, {h}) = ({ww}, {wh}) must land exactly on the cap"
+            );
+            assert!(ww >= 1 && wh >= 1, "work_dims({w}, {h}) produced a zero");
+            assert!(
+                ww <= w && wh <= h,
+                "work_dims({w}, {h}) = ({ww}, {wh}) grew a dimension"
+            );
+        }
+    }
+
+    #[test]
+    fn work_dims_is_idempotent() {
+        // The reduced path feeds `work_dims`' own output back through the worker, which calls this
+        // same function. A second application must be a no-op.
+        for (w, h) in [(6336u32, 9504u32), (4535, 6307), (800, 1200), (100000, 100)] {
+            let once = work_dims(w, h);
+            assert_eq!(work_dims(once.0, once.1), once, "work_dims({w}, {h})");
+        }
+    }
+
+    #[test]
+    fn downscale_to_work_leaves_a_small_page_untouched() {
+        let mut page = RgbImage::new(64, 32);
+        for (x, y, px) in page.enumerate_pixels_mut() {
+            *px = Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8]);
+        }
+        let mask: Vec<bool> = (0..64 * 32).map(|i| i % 7 == 0).collect();
+
+        let (work_page, work_mask) = downscale_to_work(&page, &mask).unwrap();
+
+        assert_eq!(work_page.dimensions(), (64, 32));
+        assert_eq!(work_page.as_raw(), page.as_raw(), "page was resampled");
+        assert_eq!(work_mask.dimensions(), (64, 32));
+        let round_tripped: Vec<bool> = work_mask.pixels().map(|p| p.0[0] > 127).collect();
+        assert_eq!(round_tripped, mask, "mask changed despite no reduction");
+    }
+
+    #[test]
+    fn downscale_to_work_rejects_a_mismatched_mask() {
+        let page = RgbImage::new(16, 16);
+        let result = downscale_to_work(&page, &[true; 16]);
+        assert!(
+            result.is_err(),
+            "a short mask must be rejected, not resized"
+        );
+    }
+
+    #[test]
+    fn downscale_to_work_reduces_the_mask_without_inventing_set_bits() {
+        // Nearest-neighbour selection on the two-level mask can only ever *choose* a source
+        // location's value — it must never fabricate coverage where the source had none, and must
+        // never lose coverage where the source had it everywhere. Those two directions are what
+        // this asserts; a specific pixel-for-pixel expectation would be asserting the resampling
+        // library's own rounding convention rather than the property that matters here.
+        let (w, h) = (2048u32, 2048u32);
+        let (ww, wh) = work_dims(w, h);
+        let page = RgbImage::new(w, h);
+        let count_set = |mask: &image::GrayImage| mask.pixels().filter(|p| p.0[0] > 127).count();
+
+        // All-false in, all-false out.
+        let (_, none) = downscale_to_work(&page, &vec![false; (w * h) as usize]).unwrap();
+        assert_eq!(none.dimensions(), (ww, wh));
+        assert_eq!(
+            count_set(&none),
+            0,
+            "coverage appeared where there was none"
+        );
+
+        // All-true in, all-true out.
+        let (_, all) = downscale_to_work(&page, &vec![true; (w * h) as usize]).unwrap();
+        assert_eq!(all.dimensions(), (ww, wh));
+        assert_eq!(
+            count_set(&all),
+            (ww * wh) as usize,
+            "coverage was lost where the source had it everywhere"
+        );
+
+        // One set source pixel cannot become more than one set target pixel.
+        let mut sparse = vec![false; (w * h) as usize];
+        sparse[0] = true;
+        let (_, reduced) = downscale_to_work(&page, &sparse).unwrap();
+        assert!(
+            count_set(&reduced) <= 1,
+            "a single set source pixel became {} set target pixels",
+            count_set(&reduced)
+        );
     }
 }

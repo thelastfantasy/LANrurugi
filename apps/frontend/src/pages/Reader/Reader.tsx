@@ -48,7 +48,7 @@ import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
 import { fileInfoText } from "@/lib/utils/fileInfoText";
 import {
-  getImageFormatSupport,
+  getImageCapabilityHeader,
   IMAGE_FORMAT_SUPPORT_HEADER,
 } from "@/lib/utils/imageFormatSupport";
 import {
@@ -410,7 +410,7 @@ export function Reader() {
       fetch(fullUrl.toString(), {
         headers: {
           "X-LRR-Priority": priority,
-          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageFormatSupport(),
+          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageCapabilityHeader(),
         },
         signal: controller.signal,
       })
@@ -478,7 +478,7 @@ export function Reader() {
       fetch(tinyUrl.toString(), {
         headers: {
           "X-LRR-Priority": "preview",
-          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageFormatSupport(),
+          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageCapabilityHeader(),
         },
         signal: controller.signal,
       })

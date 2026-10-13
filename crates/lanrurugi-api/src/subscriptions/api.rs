@@ -132,6 +132,10 @@ async fn offers_discovery(state: &AppState, source: &str) -> bool {
 /// raised interval would leave the user believing checks happen more often than they do, and
 /// misreading every later result; a silently accepted source with no discovery would look fine until
 /// its first scheduled check failed, hours later and unattended.
+// The `Err` type is axum's `Response` — the shape this module's own error helper produces
+// and its callers return directly — so boxing it would ripple through every `?` here for
+// no gain on a path that has already failed.
+#[allow(clippy::result_large_err)]
 async fn validate(state: &AppState, body: &SubscriptionBody) -> Result<(), Response> {
     if !offers_discovery(state, &body.source).await {
         return Err(error(

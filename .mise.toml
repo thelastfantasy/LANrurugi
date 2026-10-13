@@ -153,6 +153,99 @@ run = "scripts/convert-plugins.sh \"$@\""
 description = "Quantified series-recognition accuracy of an embedding model against the 60-title fixture — usage: mise run eval-recommend-model -- <model.onnx> <tokenizer.json> [prefix]. Point at files under data/models/ to compare candidates before switching lanrurugi-recommend's production model (see crates/lanrurugi-recommend/examples/eval_fixture.rs's own docs)."
 run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release --example eval_fixture -- \"$@\""
 
+# ── 011-api-docs-site ────────────────────────────────────────────────────────
+[tasks.docs-api]
+description = "Generate the API reference document (docs/public/openapi.json) from the server's own route table. Extra args go to the generator: `mise run docs-api -- --check` runs the gates without writing."
+# Passes `$@` through so `--check`, `--quiet` and the path overrides in
+# specs/011-api-docs-site/contracts/docgen-cli.md are all reachable from here.
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-api-docgen -- \"$@\""
+
+[tasks.docs-vendor-legacy]
+description = "Refresh the vendored upstream LANraragi OpenAPI document (docs/api/legacy-openapi.yaml). Run this deliberately and review the diff — the generated reference's compatibility surface comes from that file."
+# Provenance header is regenerated with the body so the recorded fetch date cannot go stale
+# unnoticed; the body itself is kept byte-for-byte so a diff against upstream stays meaningful.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+url="https://raw.githubusercontent.com/Difegue/LANraragi/dev/tools/openapi.yaml"
+tmp="$(mktemp)"
+curl -fsSL --max-time 120 "$url" -o "$tmp"
+{
+  printf '# VENDORED — do not hand-edit.\\n'
+  printf '#\\n'
+  printf '# Upstream: https://github.com/Difegue/LANraragi/blob/dev/tools/openapi.yaml\\n'
+  printf '# Fetched:  %s (refresh with `mise run docs-vendor-legacy`)\\n' "$(date -u +%Y-%m-%d)"
+  printf '# Licence:  MIT (see the upstream repository'"'"'s LICENSE)\\n'
+  printf '#\\n'
+  printf '# This is LANraragi'"'"'s own description of its REST API, kept verbatim so the two can be\\n'
+  printf '# diffed. It is the base documentation layer for every endpoint the two projects share:\\n'
+  printf '# `lanrurugi-api-docgen` reads it, rewrites only the path prefix (from the `servers` entry\\n'
+  printf '# below) and drops the auth section, and uses the rest of each operation as-is rather than\\n'
+  printf '# re-writing a description that already exists and is already accurate.\\n'
+  printf '#\\n'
+  printf '# It is vendored rather than fetched at build time so that generation is offline and\\n'
+  printf '# reproducible: an upstream edit must never silently change what this project publishes.\\n'
+  printf '\\n'
+  cat "$tmp"
+} > docs/api/legacy-openapi.yaml
+rm -f "$tmp"
+echo "wrote docs/api/legacy-openapi.yaml — review the diff before committing."
+"""
+
+[tasks.docs-sdk]
+description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into docs/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
+# Same three sources as `plugin-sdk-docs`, and for the same reason: `plugins/legacy-globals.d.ts`
+# carries `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs`/
+# `PluginErrorException`, and a run without it silently drops every one of those symbols from the
+# output. Only the JSON goes through the normaliser — the HTML was checked and contains no absolute
+# paths, while the JSON keys its nodes on `file:///<absolute path>`.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+out=docs/dist-sdk
+rm -rf "$out"
+sources=(
+  crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts
+  crates/lanrurugi-plugin/dispatcher/dispatcher.ts
+  plugins/legacy-globals.d.ts
+)
+deno doc --html --name="LANrurugi Plugin SDK" --output="$out" "${sources[@]}"
+deno doc --json "${sources[@]}" | node scripts/normalize-sdk-doc-json.mjs . > "$out/plugin-sdk.json"
+# Cloudflare Pages treats a project with no root 404.html as a single-page app: an unmatched path
+# gets index.html with a 200, which hides a broken link instead of showing it.
+cat > "$out/404.html" <<'HTMLEOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>404 — LANrurugi Plugin SDK</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; padding: 4rem 2rem; text-align: center">
+    <h1>404</h1>
+    <p>没有这个页面。<a href="/">回到 SDK 参考</a>。</p>
+  </body>
+</html>
+HTMLEOF
+echo "wrote $out/index.html, $out/plugin-sdk.json and $out/404.html"
+"""
+
+[tasks.docs-swagger]
+description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into docs/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
+run = "pnpm --filter lanrurugi-docs run build:swagger"
+
+[tasks.docs-build]
+description = "Build deliverable 1 of 3: the documentation site into docs/dist/. DOCS_BASE picks the deployment shape: `/` (default) for the public site, `/docs/` for the copy inside the server image. DOCS_SDK_URL points the sidebar's SDK entry at the SDK deployment. Requires the generated docs/public/openapi.json (`mise run docs-api`)."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+export DOCS_BASE="${DOCS_BASE:-/}"
+pnpm --filter lanrurugi-docs run build
+"""
+
+[tasks.docs-dev]
+description = "Serve the documentation site locally with hot reload. Requires the generated docs/public/ artefacts (`mise run docs-api` and `mise run docs-sdk`), since the site renders them rather than producing them."
+run = "pnpm --filter lanrurugi-docs run dev"
+
 [tasks.plugin-sdk-docs]
 description = "Generate the plugin-authoring SDK reference (deno doc --html) into target/plugin-sdk-docs/"
 # `plugins/legacy-globals.d.ts` is included alongside the other two (issue #86's type-unification

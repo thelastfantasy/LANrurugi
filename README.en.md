@@ -396,6 +396,20 @@ that single run. See `specs/003-ui-test-automation/quickstart.md` for the full v
 
 ## Documentation
 
+**The HTTP API reference is not hand-written.** It is generated from the server's own route
+registrations by `crates/lanrurugi-api-docgen` (one OpenAPI 3.1 artefact) and rendered by the docs
+site under `docs/`: endpoints shared with LANraragi keep that project's own field-level
+documentation from its upstream `tools/openapi.yaml`, everything else is filled in by hand under
+`docs/api/sidecar/`, and an endpoint whose request/response shapes are not written down yet says so
+rather than being given an invented schema. A CI job (`docs-generate`) enforces "every route in the
+code must appear in the reference" on every run, so the reference cannot quietly fall behind the way
+a hand-maintained document does. The site is built inside this repository and shipped in the image
+at the instance's own `/docs` for offline reading (`mise run docs-api` / `docs-sdk` / `docs-build` /
+`docs-dev`).
+
+- [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) — Phase 1 addendum (additive,
+  implemented): the generator and docs site above, including testing the API against your own
+  instance from the browser and a `deno doc`-generated plugin SDK reference.
 - [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) — Phase 1 spec, plan,
   research decisions, data model, API contracts, and `quickstart.md` (end-to-end validation steps
   for all eight user stories).
