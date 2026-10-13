@@ -54,4 +54,10 @@ exceptions = [
     # accepted here rather than in the global `allow` list above (where it would silently green-light
     # MPL for every future crate). Re-check when bumping `casbin`/`rhai`.
     { allow = ["MPL-2.0"], crate = "smartstring" },
+    # `avif-parse` 2.1.0 declares plain `MPL-2.0` (weak, file-level copyleft) and is NOT replaceable:
+    # it is a hard transitive dependency of `avif-decode`, which is how this project decodes still
+    # AVIF images. Replacing it means dropping AVIF still support or swapping decoders. Accepted
+    # per-crate rather than globally, for the same reason as `smartstring` above. Re-check when
+    # bumping `avif-decode`.
+    { allow = ["MPL-2.0"], crate = "avif-parse" },
 ]
