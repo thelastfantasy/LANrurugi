@@ -70,13 +70,18 @@ updates:
         patterns:
           - "*"
 
-  # Docker base images and ARG-pinned tool versions (rust:${RUST_VERSION}-slim-bookworm,
-  # denoland/deno:bin-${DENO_VERSION}, redis:${REDIS_VERSION}-bookworm, node:${NODE_VERSION}-slim)
-  # across every Dockerfile in the repo (Dockerfile, Dockerfile.build, Dockerfile.dev,
-  # Dockerfile.test-e2e, Dockerfile.act-runner) — one `docker` entry scans every filename
-  # containing "dockerfile"/"containerfile" (case-insensitive) in `directory`, not just the
-  # literally-named `Dockerfile`, and resolves ARG-declared version pins used in a FROM line, not
-  # just literal tags.
+  # Docker base images — **literal tags only**. One `docker` entry scans every filename containing
+  # "dockerfile"/"containerfile" (case-insensitive) in `directory`, not just the literally-named
+  # `Dockerfile`.
+  #
+  # It CANNOT see a tag that comes from an ARG, and that is how this repository pins its toolchain:
+  # `FROM rust:${RUST_VERSION}-slim-bookworm`, same for node/deno/redis. That has been an open
+  # dependabot-core request since 2021 (dependabot/dependabot-core#2057; the implementation in #4598
+  # was merged and then reverted in #4759/#4837 because the file-updater half was never written), so
+  # 13 of this repository's 18 FROM lines are invisible here. Only the literal ones are ever
+  # proposed: the four `debian:bookworm-slim`, the act-runner image, and the dev image's NVIDIA CUDA
+  # tag. Bumping rust/node/deno/redis stays a manual edit of the ARG default — and of `.mise.toml`,
+  # which no Dependabot ecosystem reads either.
   - package-ecosystem: docker
     directory: /
     schedule:
