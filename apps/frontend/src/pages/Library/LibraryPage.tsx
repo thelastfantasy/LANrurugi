@@ -96,6 +96,7 @@ export function Library() {
             }}
             onSuggestionSelect={lib.applySuggestion}
             onInsertToken={lib.insertToken}
+            onToggleToken={lib.toggleToken}
             onPickRecent={lib.applyRecentFilter}
             onRemoveRecent={lib.removeRecentFilter}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}

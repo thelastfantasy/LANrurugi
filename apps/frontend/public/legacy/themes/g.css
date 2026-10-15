@@ -1148,3 +1148,14 @@ div.id4 {
   --stats-series-7: #7A3B6B;
   --stats-series-8: #8A5A44;
 }
+
+/* Solid "this quick filter is on" chip in the library search panel. Additive: legacy has no such
+   element, so there is nothing to stay diffable against, and every colour here is one this theme
+   already uses. The menu *hover* wash this replaced read as a ghost button rather than a pressed
+   one. Pairs are chosen by measurement, not by eye: minimum 9:1 chip-text contrast and 6:1 against
+   the theme's own page background, so a chip is both readable and unmistakably filled. */
+.search-chip-on {
+    background-color: #5C0D11;
+    border-color: #5C0D11;
+    color: #F2EFDF; /* this theme's own deep maroon, its `.msm-selected` accent */
+}

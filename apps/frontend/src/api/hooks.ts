@@ -321,6 +321,10 @@ export interface SearchSuggestResponse {
   recordsFiltered: number
 }
 
+export interface SearchHistoryResponse {
+  history: string[]
+}
+
 /** Shared by `useSearch` and the suggestion hooks below, so a suggestion is always scoped by
  *  exactly the filters the applied search would use — a candidate's own hit count has to mean "how
  *  many results would this give *here*", not a library-wide number that contradicts the page after
@@ -352,6 +356,43 @@ export function useSearchSuggest(options: SearchOptions, limit = 8) {
     queryKey: ["search-suggest", params.toString()],
     queryFn: () => fetchJson<SearchSuggestResponse>(`/search/suggest?${params.toString()}`),
     enabled: filter.trim().length > 0 && (options.enabled ?? true),
+  })
+}
+
+/** The account's recent searches, newest first. With `filter`, the server narrows it to the entries
+ *  related to it — using the engine's own equivalence, so `くろ` still offers a stored `クロガネ`,
+ *  which client-side string matching cannot see. Caller must debounce `filter`. */
+export function useSearchHistory(filter: string, options?: { enabled?: boolean }) {
+  const params = new URLSearchParams()
+  if (filter.trim() !== "") params.set("filter", filter)
+  const query = params.toString()
+  return useQuery({
+    queryKey: ["search-history", query],
+    queryFn: () => fetchJson<SearchHistoryResponse>(`/search/history${query ? `?${query}` : ""}`),
+    enabled: options?.enabled,
+    // Narrowing the list as the reader types must not blank it out for a round trip.
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useRememberSearch() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (filter: string) =>
+      sendJson<SearchHistoryResponse>("POST", "/search/history", { filter }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["search-history"] }),
+  })
+}
+
+export function useForgetSearch() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (filter: string) =>
+      sendJson<SearchHistoryResponse>(
+        "DELETE",
+        `/search/history?filter=${encodeURIComponent(filter)}`,
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["search-history"] }),
   })
 }
 

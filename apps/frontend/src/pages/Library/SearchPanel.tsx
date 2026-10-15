@@ -6,7 +6,9 @@ import { useTranslation } from "react-i18next"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import {
   buildDateRangeToken,
-  QUICK_FILTER_TOKENS,
+  QUICK_FILTERS,
+  type QuickFilter,
+  quickFilterActive,
   type SearchSuggestion,
   suggestionKey,
 } from "@/lib/searchSuggestions"
@@ -102,12 +104,18 @@ function SuggestionRow({
 export function SearchPanel({
   suggestions,
   recentSearches,
+  filter,
+  onToggleToken,
   onInsertToken,
 }: {
   suggestions: SearchSuggestion[]
   /** Previously applied filters, most recent first — the panel's own "history" rows, shown before
    *  you have typed anything (an address bar's equivalent of recent sites). */
   recentSearches: string[]
+  /** The query as it stands, so a quick-filter chip can show whether it is already on. */
+  filter: string
+  /** Turns one quick-filter chip on or off in the current query. */
+  onToggleToken: (chip: QuickFilter) => void
   /** Appends a token to the current filter — used by the date-range row, the only control here
    *  that isn't an `Autocomplete.Item` (rows dispatch through the input's `onValueChange`). */
   onInsertToken: (token: string) => void
@@ -116,6 +124,7 @@ export function SearchPanel({
   // Only for the sticky footer's own opaque background/border below — the fields themselves keep
   // the legacy `stdinput` look.
   const palette = useMenuPalette()
+
   const [from, setFrom] = useState("")
   const [to, setTo] = useState("")
 
@@ -218,25 +227,73 @@ export function SearchPanel({
           </Autocomplete.Group>
         )}
 
-        <Autocomplete.Group items={QUICK_FILTER_TOKENS}>
-          <Autocomplete.GroupLabel>
-            <SectionLabel>{t("library.searchPanelQuickFilters")}</SectionLabel>
-          </Autocomplete.GroupLabel>
-          {QUICK_FILTER_TOKENS.map((token) => (
-            <Autocomplete.Item
-              key={token}
-              value={token}
-              style={itemStyle}
-              className="search-panel-item-highlighted"
-            >
-              <span style={{ opacity: 0.55, fontSize: 11, flexShrink: 0, width: 14, textAlign: "center" }}>
-                <i className="fa fa-filter" aria-hidden="true"></i>
-              </span>
-              <span style={{ fontFamily: "monospace", flex: 1 }}>{token}</span>
-            </Autocomplete.Item>
-          ))}
-        </Autocomplete.Group>
       </Autocomplete.List>
+
+      {/*
+        Quick filters as toggleable chips rather than one row each. They are *outside* the list on
+        purpose: a button inside a `role="listbox"` is invalid aria, and these are toggles that keep
+        the panel open (stack several, then press Enter) rather than rows that complete a query — the
+        same reason the date range below lives outside it. Wrapping lets a dozen of them fit in two
+        or three lines instead of a dozen.
+      */}
+      <div style={{ borderTop: `1px solid ${palette.border}`, paddingTop: 2 }}>
+        <SectionLabel>{t("library.searchPanelQuickFilters")}</SectionLabel>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "2px 12px 6px" }}>
+          {QUICK_FILTERS.map((chip) => {
+            const on = quickFilterActive(filter, chip)
+            // A chip that inserts a placeholder says what to do next rather than just naming the
+            // token: "add bookmark:"" " is not advice anyone can act on.
+            const hint =
+              chip.caret !== undefined
+                ? t("library.searchPanelValueFilter", { token: chip.namespace ?? chip.token })
+                : t(on ? "library.searchPanelRemoveFilter" : "library.searchPanelAddFilter", {
+                    token: chip.token,
+                  })
+            return (
+              <button
+                key={chip.token}
+                type="button"
+                // The panel stays open on click, so the chip's own state (not a selection) is what
+                // `aria-pressed` describes.
+                aria-pressed={on}
+                title={hint}
+                onClick={() => onToggleToken(chip)}
+                // Layout only: the "on" fill/ink come from `.search-chip-on` (a real class per
+                // theme, so each one fills with its own accent — see those rules' own note), and
+                // the "off" look is the palette's plain outline. Emitting the border inline only
+                // when off keeps the class's `border-color` from being overridden by it.
+                className={on ? "search-chip-on" : undefined}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "1px 6px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  lineHeight: "16px",
+                  ...(on
+                    ? { opacity: 1 }
+                    : {
+                        background: "transparent",
+                        color: palette.text,
+                        border: `1px solid ${palette.border}`,
+                        opacity: 0.75,
+                      }),
+                }}
+              >
+                {chip.label ?? chip.token}
+                <i
+                  className={on ? "fa fa-minus" : "fa fa-plus"}
+                  aria-hidden="true"
+                  style={{ fontSize: 9, opacity: 0.85 }}
+                ></i>
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
       {/*
         Sticky footer: deliberately outside the list (it holds real inputs, so it takes Tab, not

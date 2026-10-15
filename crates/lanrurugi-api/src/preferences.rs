@@ -34,7 +34,8 @@ const DEFAULT_SORTBY: &str = "title";
 const DEFAULT_SORTDIR: &str = "asc";
 
 /// The only authenticated principals this app currently has share the single admin account.
-fn preference_owner(auth: Option<&AuthContext>) -> Option<&'static str> {
+/// Shared with `search_history`, which scopes its list the same way.
+pub(crate) fn account_owner(auth: Option<&AuthContext>) -> Option<&'static str> {
     match auth.map(|context| &context.method) {
         Some(AuthMethod::Session)
         | Some(AuthMethod::Token {
@@ -66,7 +67,7 @@ async fn get_preferences(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
 ) -> Response {
-    let Some(owner) = preference_owner(auth.as_deref()) else {
+    let Some(owner) = account_owner(auth.as_deref()) else {
         return axum::Json(json!({
             "library_sortby": DEFAULT_SORTBY,
             "library_sortdir": DEFAULT_SORTDIR,
@@ -108,7 +109,7 @@ async fn put_preferences(
     auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Json(body): axum::Json<UpdatePreferencesBody>,
 ) -> Response {
-    let Some(owner) = preference_owner(auth.as_deref()) else {
+    let Some(owner) = account_owner(auth.as_deref()) else {
         return error(
             StatusCode::FORBIDDEN,
             "put_preferences",
@@ -192,24 +193,24 @@ mod tests {
     #[test]
     fn maps_authenticated_admin_principals_to_the_admin_owner() {
         assert_eq!(
-            preference_owner(Some(&context(AuthMethod::Session))),
+            account_owner(Some(&context(AuthMethod::Session))),
             Some("admin")
         );
         assert_eq!(
-            preference_owner(Some(&context(AuthMethod::Token {
+            account_owner(Some(&context(AuthMethod::Token {
                 id: "token-1".to_string(),
                 role: TokenRole::Admin,
             }))),
             Some("admin")
         );
         assert_eq!(
-            preference_owner(Some(&context(AuthMethod::Token {
+            account_owner(Some(&context(AuthMethod::Token {
                 id: "token-2".to_string(),
                 role: TokenRole::Guest,
             }))),
             None
         );
-        assert_eq!(preference_owner(None), None);
+        assert_eq!(account_owner(None), None);
     }
 
     #[test]

@@ -9,8 +9,11 @@ import {
   useCategories,
   useCreateTankoubon,
   useFilterCounts,
+  useForgetSearch,
   usePreferences,
+  useRememberSearch,
   useSearch,
+  useSearchHistory,
   useSearchSuggest,
   useServerInfo,
   useSetArchiveProgress,
@@ -31,9 +34,10 @@ import { routes } from "@/lib/routes";
 import {
   appendToken,
   phraseSuggestions,
+  type QuickFilter,
   type SearchSuggestion,
   tagSuggestions,
-  titleFilterFragment,
+  toggleQuickFilter,
 } from "@/lib/searchSuggestions";
 import {
   COLUMN_COUNT_KEY,
@@ -112,6 +116,7 @@ export function useLibrary() {
 
   const selectedCategory = urlParams.get("c") ?? "";
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+
   const sortby =
     urlParams.get("sort") ??
     preferences.data?.library_sortby ??
@@ -130,40 +135,47 @@ export function useLibrary() {
   })();
   // Every field being changed must go through a single call, since `buildSearch()` reads
   // un-overridden fields from stale closure values — two separate calls would clobber each other.
-  /** Most-recent-first applied filters, persisted locally — the panel's "history" rows. No server
-   *  state: this is per-browser convenience, like an address bar's own history, not user data worth
-   *  syncing. */
-  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-    } catch {
-      return [];
-    }
-  });
+  /** The account's recent searches, from the server so one account has one history rather than one
+   *  per browser — and so the server can relate them to the current input with the engine's own
+   *  equivalence rules (`くろ` must still offer a stored `クロガネ`). */
+  const migratedHistory = useRef(false);
+  const rememberSearchMutation = useRememberSearch();
+  const forgetSearchMutation = useForgetSearch();
 
-  // Persisted from one effect rather than from inside each updater: a `setState` updater must stay
-  // pure (React invokes it twice under StrictMode), while this write is a side effect of the list
-  // *changing*. Keeping it here also means two edits in the same tick compose — each updater sees
-  // the previous one's result — instead of the second overwriting the first from stale render state.
+  // One-time lift of the history this browser accumulated while it lived in `localStorage`, oldest
+  // first so the newest ends up on top. The key is only cleared once every write succeeded, so a
+  // failure (or a re-run) cannot lose the entries.
   useEffect(() => {
-    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(recentSearches));
-  }, [recentSearches]);
+    if (!loggedIn || migratedHistory.current) return;
+    let stored: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) ?? "[]");
+      stored = Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      stored = [];
+    }
+    if (stored.length === 0) return;
+    migratedHistory.current = true;
+    void (async () => {
+      for (const entry of [...stored].reverse()) {
+        try {
+          await sendJson("POST", "/search/history", { filter: entry });
+        } catch {
+          migratedHistory.current = false;
+          return;
+        }
+      }
+      localStorage.removeItem(RECENT_SEARCHES_KEY);
+    })();
+  }, [loggedIn]);
 
   function rememberSearch(filter: string) {
-    const trimmed = filter.trim();
-    if (!trimmed) return;
-    setRecentSearches((previous) =>
-      [trimmed, ...previous.filter((entry) => entry !== trimmed)].slice(0, 8),
-    );
+    if (filter.trim()) rememberSearchMutation.mutate(filter.trim());
   }
 
-  /** Drops one entry from the recent-search list — what the panel's `Delete` key calls on the
-   *  highlighted history row. The cap in {@link rememberSearch} only ever *pushes* the oldest entry
-   *  out on its own, so without this a stale query stays until eight newer ones replace it. */
+  /** Drops one entry — what the panel's `Delete` key calls on the highlighted history row. */
   function removeRecentFilter(filter: string) {
-    setRecentSearches((previous) => previous.filter((entry) => entry !== filter));
+    forgetSearchMutation.mutate(filter);
   }
 
   function navigateSearch(overrides: {
@@ -342,11 +354,18 @@ export function useLibrary() {
     return () => clearTimeout(timeout);
   }, [filterInput]);
 
-  const titleFragment = titleFilterFragment(debouncedFilter);
-  const titleSuggest = useSearchSuggest(
-    { filter: titleFragment ?? "", ...searchContext },
-    6,
-  );
+  // The *whole* query goes to the title lookup, not just its last bare word run: `/search/suggest`
+  // answers with the top matches of whatever filter it is given, so narrowing it first turned these
+  // rows into "archives matching a fragment of what you typed" — they could list an archive the
+  // full query excludes (`bookmark:"书签" projec` showing an archive that has no such bookmark).
+  // Rows are now always genuine matches of the current query, offered as jump targets.
+  // Debounced like the title lookup: the server narrows the history to the current input, and a
+  // request per keystroke would be one per keystroke for a list that only changes as the reader
+  // pauses anyway.
+  const searchHistory = useSearchHistory(debouncedFilter, { enabled: loggedIn });
+  const recentSearches = searchHistory.data?.history ?? [];
+
+  const titleSuggest = useSearchSuggest({ filter: debouncedFilter, ...searchContext }, 6);
   const phraseRows = useMemo(
     () => phraseSuggestions(debouncedFilter),
     [debouncedFilter],
@@ -379,6 +398,27 @@ export function useLibrary() {
   function insertToken(token: string) {
     setFilterInputOverride(appendToken(filterInput, token));
     searchInputRef.current?.focus();
+  }
+
+  /** A quick-filter chip's own action: insert the token when it is absent, drop it when it is
+   *  already there. Same "stay open, keep composing" behaviour as {@link insertToken}, so several
+   *  chips can be turned on and off before the query is run.
+   *
+   *  A chip whose token is a placeholder (`bookmark:"…"`) also comes back with a caret offset; it is
+   *  applied on the next frame because the input's value is React state — the DOM still holds the
+   *  old text until this render commits, and a selection set against the old value would land in the
+   *  wrong place (or be reset to the end when the new value arrives). */
+  function toggleToken(chip: QuickFilter) {
+    const { filter, caret } = toggleQuickFilter(filterInput, chip);
+    setFilterInputOverride(filter);
+    const input = searchInputRef.current;
+    input?.focus();
+    if (caret !== undefined && input) {
+      requestAnimationFrame(() => {
+        // The element may have been replaced or the query re-edited in the meantime.
+        if (input.value.length >= caret) input.setSelectionRange(caret, caret);
+      });
+    }
   }
 
   /** Runs a history row outright. Unlike {@link insertToken} (a fragment the user is still
@@ -695,6 +735,7 @@ export function useLibrary() {
     recentSearches,
     applySuggestion,
     insertToken,
+    toggleToken,
     applyRecentFilter,
     removeRecentFilter,
     contextMenu,

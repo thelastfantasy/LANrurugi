@@ -867,7 +867,7 @@
   "library.suggestionKindTitle": "标题",
   "library.suggestionKindPhrase": "词组",
   "library.suggestionGroupPhrase": "词组",
-  "library.suggestionGroupTitle": "标题",
+  "library.suggestionGroupTitle": "匹配的档案",
   "library.suggestionGroupTag": "标签",
   "library.searchPanelRecent": "最近搜索",
   "library.searchPanelQuickFilters": "快捷条件",
@@ -2189,5 +2189,8 @@
   "stats.bucketRange": "{{from}} ～ {{to}}",
   "upload.uploadFailed": "上传失败",
   "upload.resumingFrom": "服务器已有 {{size}}，从该处续传",
-  "stats.bucketArchivesEmpty": "该区间内没有档案。"
+  "stats.bucketArchivesEmpty": "该区间内没有档案。",
+  "library.searchPanelAddFilter": "把 {{token}} 加入查询",
+  "library.searchPanelRemoveFilter": "把 {{token}} 从查询中移除",
+  "library.searchPanelValueFilter": "加入 {{token}} 过滤，然后在引号里输入取值"
 }

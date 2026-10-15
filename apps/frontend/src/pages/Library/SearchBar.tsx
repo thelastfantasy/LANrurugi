@@ -6,8 +6,8 @@ import { useTranslation } from "react-i18next";
 import { Button, IconButtonWithTooltip } from "@/components/common-ui/Form";
 import { ClickPopover, SearchSyntaxHelp } from "@/components/Display";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
+import { isRowPick, type QuickFilter } from "@/lib/searchSuggestions";
 import {
-  QUICK_FILTER_TOKENS,
   type SearchSuggestion,
   suggestionSelectionText,
 } from "@/lib/searchSuggestions";
@@ -31,6 +31,7 @@ export function SearchBar({
   onClearFilter,
   onSuggestionSelect,
   onInsertToken,
+  onToggleToken,
   onPickRecent,
   onRemoveRecent,
   onToggleMultiSelect,
@@ -49,6 +50,8 @@ export function SearchBar({
   onClearFilter: () => void;
   onSuggestionSelect: (suggestion: SearchSuggestion) => void;
   onInsertToken: (token: string) => void;
+  /** Turns one quick-filter chip on or off (see `SearchPanel`). */
+  onToggleToken: (chip: QuickFilter) => void;
   /** Runs a recent-search row as a complete query rather than filling the bar with it. */
   onPickRecent: (filter: string) => void;
   /** Forgets one recent-search row (the panel's `Delete` key on a highlighted history entry). */
@@ -82,35 +85,38 @@ export function SearchBar({
     for (const suggestion of suggestions) {
       actions.set(suggestionSelectionText(suggestion), () => onSuggestionSelect(suggestion))
     }
-    for (const token of QUICK_FILTER_TOKENS) {
-      actions.set(token, () => onInsertToken(token))
-    }
+    // Quick-filter chips are deliberately absent: they are buttons in the panel now, not rows, so
+    // no pick can ever write their text — and an entry here would mean that typing `is:new` by hand
+    // and pressing Enter *appends a second `is:new`* instead of running the search.
     // Registered so a pick *runs* the stored query; without an entry here it would fall through to
     // the plain text-edit path and only fill the bar.
     for (const filter of recentSearches) {
       actions.set(filter, () => onPickRecent(filter))
     }
     return actions
-  }, [suggestions, recentSearches, onSuggestionSelect, onInsertToken, onPickRecent])
+  }, [suggestions, recentSearches, onSuggestionSelect, onPickRecent])
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", justifyContent: "center" }}>
       <div style={{ position: "relative", flex: "1 1 300px", maxWidth: 450, boxSizing: "border-box" }}>
         <Autocomplete.Root
-          // Every selectable row, including the quick filters: Base UI needs the whole value space
-          // to keep keyboard highlighting and `itemToStringValue` consistent across both groups.
-          items={
-            [...suggestions, ...recentSearches, ...QUICK_FILTER_TOKENS] as (
-              | SearchSuggestion
-              | string
-            )[]
-          }
+          // Every *selectable row*: suggestions and history. The quick-filter chips are not rows
+          // (they are buttons in the panel, and they stay open on click), so they must not be in
+          // the value space either — Base UI treats a typed text that matches an item as "select
+          // this" and consumes Enter for it, which would leave a query equal to a chip token
+          // unsearchable by keyboard.
+          items={[...suggestions, ...recentSearches] as (SearchSuggestion | string)[]}
           itemToStringValue={(item: SearchSuggestion | string) =>
             typeof item === "string" ? item : suggestionSelectionText(item)
           }
           value={filterInput}
-          onValueChange={(next: string) => {
-            const action = selectionActions.get(next)
+          onValueChange={(next: string, details: { reason?: string }) => {
+            // Only a *picked* row runs that row's own action. Base UI also reports a value change
+            // when the typed text becomes equal to an item (its select heritage), so typing a query
+            // that happens to match one of your recent searches used to run that history row from
+            // under the cursor: the query was applied and the panel closed mid-word, which read as
+            // "Enter does nothing" and "it keeps closing on me".
+            const action = isRowPick(details?.reason) ? selectionActions.get(next) : undefined
             if (action) {
               action()
               return
@@ -123,10 +129,12 @@ export function SearchBar({
             setHighlighted(item ?? null)
           }
           onOpenChange={onAutocompleteOpenChange}
-          // Address-bar feel: the panel opens on click, and the first row is already highlighted so
-          // Enter alone takes the most likely suggestion.
+          // Address-bar feel: the panel opens on click. Deliberately *no* `autoHighlight`: it
+          // highlights the first row on every keystroke, so the highlight jumps to whatever the top
+          // match happens to be while the reader is still typing — and because a highlighted row
+          // takes Enter, "type and press Enter" silently opened an archive instead of searching.
+          // The reader moves into the rows with ↓ when they want one.
           openOnInputClick
-          autoHighlight
         >
           <Autocomplete.InputGroup
             style={{
@@ -298,6 +306,8 @@ export function SearchBar({
                 <SearchPanel
                   suggestions={suggestions}
                   recentSearches={recentSearches}
+                  filter={filterInput}
+                  onToggleToken={onToggleToken}
                   onInsertToken={onInsertToken}
                 />
               </Autocomplete.Popup>

@@ -467,7 +467,7 @@
   "library.suggestionKindTitle": "タイトル",
   "library.suggestionKindPhrase": "フレーズ",
   "library.suggestionGroupPhrase": "フレーズ",
-  "library.suggestionGroupTitle": "タイトル",
+  "library.suggestionGroupTitle": "一致する档案",
   "library.suggestionGroupTag": "タグ",
   "library.searchPanelRecent": "最近の検索",
   "library.searchPanelQuickFilters": "クイック条件",
@@ -2189,5 +2189,8 @@
   "stats.bucketRange": "{{from}} 〜 {{to}}",
   "upload.uploadFailed": "アップロードに失敗しました",
   "upload.resumingFrom": "サーバーには既に {{size}} あります — そこから再開します",
-  "stats.bucketArchivesEmpty": "この期間に該当する档案はありません。"
+  "stats.bucketArchivesEmpty": "この期間に該当する档案はありません。",
+  "library.searchPanelAddFilter": "クエリに {{token}} を追加",
+  "library.searchPanelRemoveFilter": "クエリから {{token}} を削除",
+  "library.searchPanelValueFilter": "{{token}} フィルタを追加し、引用符の中に値を入力"
 }

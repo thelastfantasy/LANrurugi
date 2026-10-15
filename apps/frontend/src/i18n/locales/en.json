@@ -821,7 +821,7 @@
   "library.suggestionKindTitle": "title",
   "library.suggestionKindPhrase": "phrase",
   "library.suggestionGroupPhrase": "Phrase",
-  "library.suggestionGroupTitle": "Title",
+  "library.suggestionGroupTitle": "Matching archives",
   "library.suggestionGroupTag": "Tag",
   "library.searchPanelRecent": "Recent searches",
   "library.searchPanelQuickFilters": "Quick filters",
@@ -2189,5 +2189,8 @@
   "stats.bucketRange": "{{from}} to {{to}}",
   "upload.uploadFailed": "Upload failed",
   "upload.resumingFrom": "The server already has {{size}} — resuming from there",
-  "stats.bucketArchivesEmpty": "No archives in this range."
+  "stats.bucketArchivesEmpty": "No archives in this range.",
+  "library.searchPanelAddFilter": "Add {{token}} to the query",
+  "library.searchPanelRemoveFilter": "Remove {{token}} from the query",
+  "library.searchPanelValueFilter": "Add a {{token}} filter, then type the value between the quotes"
 }

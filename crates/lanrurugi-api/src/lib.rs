@@ -39,6 +39,7 @@ pub mod recommend_llm;
 pub mod recommend_precompute;
 pub mod scripts;
 pub mod search;
+pub mod search_history;
 pub mod sessions;
 pub mod settings;
 pub mod shinobu;
@@ -88,6 +89,7 @@ pub fn router() -> Router<AppState> {
         .merge(plugins::router())
         .merge(plugin_wizard::router())
         .merge(preferences::router())
+        .merge(search_history::router())
         .merge(database::router())
         .merge(download_queue::router())
         .merge(subscriptions::api::router())
