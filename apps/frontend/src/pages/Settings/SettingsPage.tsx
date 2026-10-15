@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { ApiError } from "@/api/client"
-import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateSettings } from "@/api/hooks"
+import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateCheck, useUpdateSettings } from "@/api/hooks"
 import type { Settings as SettingsType } from "@/api/types"
 import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Button } from "@/components/common-ui/Form/Button"
@@ -25,6 +25,8 @@ import { SubscriptionsSection } from "./SubscriptionsSection"
 import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
 import { TranslationSection } from "./TranslationSection"
 import { useTranslationSectionState } from "./useTranslationSectionState"
+import { VersionDialog } from "./VersionDialog"
+import { WizardRerunButton } from "./WizardRerunButton"
 import { WorkersSection } from "./WorkersSection"
 
 export function Settings() {
@@ -61,6 +63,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   useSectionDeepLink()
   const logout = useLogout()
   const info = useServerInfo()
+  // Only to mark the version line when a newer release exists; the dialog itself reads the same
+  // query (shared cache, one request).
+  const updateCheck = useUpdateCheck()
+  const [versionDialogOpen, setVersionDialogOpen] = useState(false)
   const updateSettings = useUpdateSettings()
   const changePassword = useChangePassword()
 
@@ -296,7 +302,32 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <br />
         <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
         <span>
-          {t("settings.versionNumber", { version: info.data?.version ?? "" })}
+          <button
+            type="button"
+            onClick={() => setVersionDialogOpen(true)}
+            title={t("settings.versionDialog.open")}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              font: "inherit",
+              // `inherit` keeps the theme's own text colour: this must not become a hardcoded one.
+              color: "inherit",
+              cursor: "pointer",
+              textDecoration: "underline dotted",
+            }}
+          >
+            {t("settings.versionNumber", { version: info.data?.version ?? "" })}
+          </button>
+          {updateCheck.data ? (
+            <>
+              {" "}
+              <i className="fa fa-exclamation-triangle" aria-hidden="true" />{" "}
+              {t("settings.versionDialog.outdatedShort", {
+                version: updateCheck.data.latestVersion,
+              })}
+            </>
+          ) : null}
           {info.data?.version_name ? (
             // The concrete commit sits in parentheses, a step smaller and greyed out, so the
             // readable semver stays the primary line and the hash reads as build metadata rather
@@ -324,7 +355,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         </Button>{" "}
         <Button id="batch" onClick={() => navigate(routes.batch())}>
           {t("batch.batchOperations")}
-        </Button>
+        </Button>{" "}
+        {/* Renders nothing when the deployment switched the wizard off — see its own docs. */}
+        <WizardRerunButton />
         <br />
         <br />
         <Button id="return" onClick={() => navigate(routes.library())}>
@@ -528,6 +561,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         )}
         <input id="save" className="stdbtn" type="button" value={t("pluginOptions.saveSettings") ?? undefined} onClick={() => void handleSave()} />
       </div>
+
+      {versionDialogOpen ? <VersionDialog onClose={() => setVersionDialogOpen(false)} /> : null}
     </div>
   )
 }

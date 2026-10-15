@@ -1001,6 +1001,21 @@ mod tests {
         encoder.finish(200).unwrap()
     }
 
+    /// Six frames 10 ms apart: a 60 fps source, i.e. exactly the shape a phone cannot decode in
+    /// real time.
+    fn make_fast_animated_webp() -> Vec<u8> {
+        let mut encoder = AnimationEncoder::with_options(8, 8, false, 0).unwrap();
+        encoder.set_lossless(true);
+        for index in 0..6u8 {
+            let frame =
+                RgbaImage::from_pixel(8, 8, image::Rgba([index * 40, 0, 0, 255])).into_raw();
+            encoder
+                .add_frame_rgba(&frame, i32::from(index) * 10)
+                .unwrap();
+        }
+        encoder.finish(60).unwrap()
+    }
+
     fn frame_count(encoded: &[u8]) -> usize {
         AnimationDecoder::new(encoded).unwrap().info().frame_count as usize
     }
@@ -1037,6 +1052,53 @@ mod tests {
             "image/png",
             b"\x89PNG\r\n\x1A\n\x00\x00\x00\rIHDR"
         ));
+    }
+
+    /// A converted animation must keep the source's own frame timing: the converter is a
+    /// re-encoder, not a re-timer. (Frames and their delays are copied verbatim, so a device that
+    /// cannot decode fast enough will play late — but the file never lies about its speed.)
+    #[test]
+    fn preserves_the_source_frame_timing() {
+        let source = make_fast_animated_webp();
+        let decoded_source = AnimationDecoder::new(&source).unwrap();
+        let source_info = decoded_source.info().clone();
+        assert_eq!(source_info.frame_count, 6);
+
+        let converted = convert_sync(&source, "image/webp", 80, 4, None)
+            .unwrap()
+            .unwrap();
+        let decoded = AnimationDecoder::new(&converted.bytes).unwrap();
+        assert_eq!(
+            decoded.info().frame_count,
+            source_info.frame_count,
+            "every frame survives the conversion"
+        );
+
+        // Same frame count and the same per-frame spacing as the source: the *pace* is the
+        // intervals, and libwebp re-bases the timeline's origin by one interval when it muxes
+        // (source frames decode at 0..50 ms, the converted ones at 10..60 ms) — a constant offset
+        // that leaves the speed untouched. The end-to-end check on a real page compares the total
+        // duration against the source's own 5067 ms.
+        let timestamps = |bytes: &[u8]| {
+            let mut decoder = AnimationDecoder::new(bytes).unwrap();
+            let mut out = Vec::new();
+            while let Some(frame) = decoder.next_frame().unwrap() {
+                out.push(frame.timestamp_ms);
+            }
+            out
+        };
+        let deltas = |stamps: &[i32]| {
+            stamps
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .collect::<Vec<_>>()
+        };
+        let converted_timestamps = timestamps(&converted.bytes);
+        assert_eq!(
+            deltas(&converted_timestamps),
+            deltas(&timestamps(&source)),
+            "frame spacing (the animation's speed) is unchanged"
+        );
     }
 
     #[test]

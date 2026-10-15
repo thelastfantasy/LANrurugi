@@ -70,7 +70,7 @@ export function useLibrary() {
   const categories = useCategories();
   const tankoubons = useTankoubons();
   const createTankoubon = useCreateTankoubon();
-  const { isAuthenticated: loggedIn, usingDefaultPassword } = useSession();
+  const { isAuthenticated: loggedIn, usingDefaultPassword, firstRunWizardPending } = useSession();
   const preferences = usePreferences({ enabled: loggedIn });
   const updatePreferences = useUpdatePreferences();
   const settings = useSettings();
@@ -254,6 +254,10 @@ export function useLibrary() {
   useEffect(() => {
     if (
       usingDefaultPassword &&
+      // Suppressed while the first-run wizard is still pending: the wizard's password step says
+      // the same thing, at more length, and `FirstRunWizardGate` is about to navigate this page
+      // away — the toast would otherwise appear over (and outlive) that navigation.
+      !firstRunWizardPending &&
       !defaultPasswordToastShownThisPageLoad
     ) {
       defaultPasswordToastShownThisPageLoad = true;
@@ -266,7 +270,7 @@ export function useLibrary() {
         draggable: false,
       });
     }
-  }, [usingDefaultPassword, t]);
+  }, [usingDefaultPassword, firstRunWizardPending, t]);
 
   useEffect(() => {
     const seenKey = "seenContextMenuTutorial";

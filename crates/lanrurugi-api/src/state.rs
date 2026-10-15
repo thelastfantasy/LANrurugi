@@ -94,6 +94,13 @@ pub struct AppState {
     /// deployment-time operational concern, not a runtime-toggleable user setting. Read by
     /// `misc::server_info`'s `debug_mode` field.
     pub disable_update_check: bool,
+    /// Deploy-time kill switch for the first-run wizard, from `--disable-first-run-wizard` /
+    /// `LANRURUGI_DISABLE_FIRST_RUN_WIZARD` — same CLI-flag-not-Redis-setting reasoning as
+    /// [`AppState::disable_update_check`] above: whether an instance should nudge someone through
+    /// an onboarding flow is an operational decision, not something whoever reaches the Settings
+    /// page gets to flip. When set, `login::status` reports the wizard as neither available nor
+    /// pending, so the frontend neither auto-opens it nor offers a re-run button.
+    pub disable_first_run_wizard: bool,
     pub library: LibraryPaths,
     pub scanner: ScannerHandle,
     pub plugins: Arc<PluginPool>,

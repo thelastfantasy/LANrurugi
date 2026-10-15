@@ -282,6 +282,10 @@ ENV LANRURUGI_DOCS_DIR=/usr/local/share/lanrurugi/docs
 # for non-Docker/bare-metal use where no such convention applies.
 ENV LANRURUGI_LIBRARY_PATH=/home/koyomi/lanrurugi/content
 ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
+# The mounted `/temp` volume is otherwise dead weight: `--temp-dir` defaults to `./temp` under the
+# working directory, i.e. the container's own writable layer, which a container recreate discards —
+# taking the resize/animation conversion cache (and upload staging) with it.
+ENV LANRURUGI_TEMP_DIR=/temp
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 EXPOSE 3000
 ENTRYPOINT ["docker-entrypoint.sh"]

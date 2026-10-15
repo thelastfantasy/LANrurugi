@@ -92,6 +92,24 @@ struct ServeArgs {
     #[arg(long, env = "LANRURUGI_DISABLE_UPDATE_CHECK", default_value_t = false)]
     disable_update_check: bool,
 
+    /// Disables the first-run wizard entirely: it never auto-opens, and the Settings page stops
+    /// offering to run it. Same deploy-time-flag reasoning as `--disable-update-check` above.
+    ///
+    /// Deliberately uses [`clap::builder::BoolishValueParser`] rather than the plain `bool` parser
+    /// the neighbouring flags use: that one accepts *only* the literals `true`/`false`, so the
+    /// obvious `LANRURUGI_DISABLE_FIRST_RUN_WIZARD=1` — how most people write a Docker boolean —
+    /// would be a hard startup error rather than a disabled wizard. This accepts `1`/`0`,
+    /// `yes`/`no`, `on`/`off` and `true`/`false`, case-insensitively. An *empty* value is still an
+    /// error (clap reports "a value is required for '--disable-first-run-wizard'"), not "unset",
+    /// so a compose passthrough must default the value rather than to the empty string.
+    #[arg(
+        long,
+        env = "LANRURUGI_DISABLE_FIRST_RUN_WIZARD",
+        default_value_t = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    disable_first_run_wizard: bool,
+
     /// Appends `; Secure` to both auth cookies (JWT access token + refresh token) — only enable
     /// this once actually deployed behind HTTPS (a browser silently drops a `Secure` cookie over
     /// plain HTTP, breaking login entirely for local dev if left on by default). Not inferred
@@ -390,6 +408,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             force_secure_cookies: args.force_secure_cookies,
         },
         disable_update_check: args.disable_update_check,
+        disable_first_run_wizard: args.disable_first_run_wizard,
         library: LibraryPaths {
             archive_dir: args.library_path.clone(),
             thumb_dir: args.thumb_dir.clone(),

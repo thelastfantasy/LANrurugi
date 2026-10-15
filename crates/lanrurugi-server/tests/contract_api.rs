@@ -75,6 +75,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -1317,6 +1318,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -1494,6 +1496,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),
@@ -1778,6 +1781,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: library_dir.path().to_path_buf(),
             thumb_dir: PathBuf::from("/tmp"),
@@ -1991,6 +1995,7 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: library_dir.path().to_path_buf(),
             thumb_dir: PathBuf::from("/tmp"),

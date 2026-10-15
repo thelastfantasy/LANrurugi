@@ -151,8 +151,12 @@ function shouldInvalidateLoginStatus(outcome: RefreshOutcome): boolean {
 
 /** Shared tail of every request helper's `401`/`403` branch: one refresh attempt, then either a
  * retry (the caller re-issues its own request) or — when the refresh proved the session is really
- * gone — a login-status invalidation so `RequireAuth` can route the caller to `/login`. */
-async function recoverSession(): Promise<boolean> {
+ * gone — a login-status invalidation so `RequireAuth` can route the caller to `/login`.
+ *
+ * Exported for the resumable uploader (`api/uploadSession.ts`): its requests are hand-rolled
+ * (chunk-sized, and it needs `Upload-Offset` from the response headers), so they cannot go through
+ * the helpers here, but they must still recover a stale session exactly like every other call. */
+export async function recoverSession(): Promise<boolean> {
   const outcome = await tryRefreshWithRetry()
   if (outcome === "ok") {
     invalidateIdentityDependentQueries()

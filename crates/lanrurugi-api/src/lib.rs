@@ -44,6 +44,7 @@ pub mod settings;
 pub mod shinobu;
 pub mod stamps;
 pub mod state;
+pub mod stats;
 pub mod subscriptions;
 pub mod tag_rules;
 pub mod tankoubon_grouping;
@@ -82,6 +83,7 @@ pub fn router() -> Router<AppState> {
         .merge(shinobu::router())
         .merge(upload::router())
         .merge(search::router())
+        .merge(stats::router())
         .merge(opds::router())
         .merge(plugins::router())
         .merge(plugin_wizard::router())

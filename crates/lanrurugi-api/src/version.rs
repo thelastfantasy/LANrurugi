@@ -23,10 +23,11 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::AppState;
@@ -48,6 +49,26 @@ struct Cached {
 /// deployment needs this, move the cache into Redis (the `config` logical DB is already used for
 /// the app's other cross-process mutable state).
 static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+
+/// The changelog path's own slot, kept separate from [`CACHE`] because its key includes the
+/// caller's `since` — sharing one slot would let a `?since=` request evict the plain version
+/// check's cached answer and vice versa, on a route both `UpdateBanner` and the release-notes
+/// overlay hit on the same page load.
+static CHANGELOG_CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+
+/// Most releases one changelog response may carry. A user returning after a long absence would
+/// otherwise get every release ever published in a single payload; 30 is far more than any real
+/// gap between two upgrades of a self-hosted instance.
+const CHANGELOG_LIMIT: usize = 30;
+
+/// `GET /version`'s query string.
+#[derive(Deserialize)]
+struct VersionQuery {
+    /// The build the caller last saw, as a tag (`v0.2.0`) or a commit sha. Supplied only when a
+    /// browser notices its stored build differs from the running one; when present the response
+    /// additionally carries `changelog`, the releases published in between.
+    since: Option<String>,
+}
 
 pub fn public_router() -> Router<AppState> {
     Router::new().route("/version", get(get_version))
@@ -283,7 +304,159 @@ fn extracted_latest(latest: &Value) -> (String, String) {
     (tag, url)
 }
 
-async fn get_version(State(state): State<AppState>) -> Response {
+/// Epoch seconds of a GitHub `{"date": "..."}` object (commit author/committer, tag commit).
+fn date_secs(value: &Value) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value["date"].as_str()?)
+        .ok()
+        .map(|at| at.timestamp())
+}
+
+/// Epoch seconds a release was published at. `created_at` is the fallback because `published_at`
+/// is absent for a draft, and a draft slipping into the window is better than a section that
+/// silently has no date.
+fn release_secs(release: &Value) -> Option<i64> {
+    let raw = release["published_at"]
+        .as_str()
+        .or(release["created_at"].as_str())?;
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|at| at.timestamp())
+}
+
+/// One section of the changelog, as the overlay renders it. The tag's commit sha comes from the
+/// already-fetched tags list rather than a per-release `/commits/{tag}` call: the releases list
+/// itself never carries the commit a tag points at, and one call per section would spend GitHub's
+/// 60-requests-per-hour unauthenticated budget on a single modal.
+fn release_entry(release: &Value, tags: &[Value]) -> Value {
+    let tag = release["tag_name"].as_str().unwrap_or_default();
+    json!({
+        "tag": tag,
+        "sha": tags
+            .iter()
+            .find(|t| t["name"].as_str() == Some(tag))
+            .and_then(|t| t["commit"]["sha"].as_str()),
+        "published_at": release["published_at"].as_str().or(release["created_at"].as_str()),
+        "url": release["html_url"].as_str(),
+        "body": release["body"].as_str().unwrap_or_default(),
+    })
+}
+
+/// The instant a build identity belongs to, where the identity is a tag (`v0.2.0`), a bare version
+/// (`0.2.0`), or a commit sha: the release published for it, else the commit's own date. `None`
+/// when GitHub knows nothing about it.
+///
+/// Both sides of the upgrade window go through this, which is what makes a trunk build comparable
+/// to a released one — neither necessarily has a release row, but every build has a commit date.
+async fn identity_instant(identity: &str, releases: &[Value], tags: &[Value]) -> Option<i64> {
+    // `details.version` is `CARGO_PKG_VERSION` ("0.2.0") while the tag is "v0.2.0" — the same
+    // asymmetry `fetch_version_info`'s own `expected_tag` bridges.
+    let alternate = identity
+        .strip_prefix('v')
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("v{identity}"));
+    let tag = tags.iter().find_map(|t| {
+        let name = t["name"].as_str()?;
+        let sha = t["commit"]["sha"].as_str()?;
+        (name == identity || name == alternate || sha_match(sha, identity)).then_some(name)
+    });
+
+    if let Some(published) = tag
+        .and_then(|tag| {
+            releases
+                .iter()
+                .find(|r| r["tag_name"].as_str() == Some(tag))
+        })
+        .and_then(release_secs)
+    {
+        return Some(published);
+    }
+    // Either a tagged build whose release fell outside `CHANGELOG_LIMIT`, or a plain trunk commit.
+    github_get(&format!("/commits/{}", tag.unwrap_or(identity)))
+        .await
+        .ok()
+        .and_then(|commit| date_secs(&commit["commit"]["committer"]))
+}
+
+/// Releases published between the build the caller last saw (`since`) and the one it is running
+/// now, newest first — "everything that changed while I wasn't looking".
+///
+/// An unrecognized `since` (a hash GitHub has forgotten, a hand-edited `localStorage` value)
+/// degrades to legacy's own behaviour — the newest release alone — rather than to nothing at all.
+async fn changelog_since(
+    since: &str,
+    version: &str,
+    sha: Option<&str>,
+) -> Result<Vec<Value>, String> {
+    let releases = github_get(&format!("/releases?per_page={CHANGELOG_LIMIT}")).await?;
+    let releases = releases
+        .as_array()
+        .ok_or("GitHub releases response is not an array")?
+        .clone();
+    let tags = github_get("/tags?per_page=100")
+        .await?
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let Some(lower) = identity_instant(since, &releases, &tags).await else {
+        return Ok(releases
+            .iter()
+            .take(1)
+            .map(|release| release_entry(release, &tags))
+            .collect());
+    };
+    // Inclusive upper bound: the running build's own release belongs in its own upgrade window. A
+    // trunk build has no release row, so its commit date is the bound, and if even that is
+    // unreachable, "now".
+    let upper = match sha {
+        Some(sha) => identity_instant(sha, &releases, &tags).await,
+        None => None,
+    }
+    .or(identity_instant(version, &releases, &tags).await)
+    .unwrap_or_else(|| chrono::Utc::now().timestamp());
+
+    Ok(releases
+        .iter()
+        .filter(|release| release_secs(release).is_some_and(|at| at > lower && at <= upper))
+        .map(|release| release_entry(release, &tags))
+        .collect())
+}
+
+/// The `changelog` array for this request, or `None` to omit the key entirely — either because the
+/// caller supplied no `since`, or because GitHub could not be asked. Omitted rather than sent
+/// empty on purpose: "couldn't ask" and "nothing was published in between" are different answers,
+/// and only the second is worth telling the user.
+async fn changelog_for(since: Option<&str>, version: &str, sha: Option<&str>) -> Option<Value> {
+    let since = since?;
+    let key = format!("{version},{}|{since}", sha.unwrap_or("unknown"));
+    if let Some(cached) = CHANGELOG_CACHE.lock().unwrap().as_ref() {
+        if cached.key == key && cached.fetched_at.elapsed() < CACHE_TTL {
+            return Some(cached.data.clone());
+        }
+    }
+    match changelog_since(since, version, sha).await {
+        Ok(entries) => {
+            let value = Value::Array(entries);
+            *CHANGELOG_CACHE.lock().unwrap() = Some(Cached {
+                key,
+                fetched_at: Instant::now(),
+                data: value.clone(),
+            });
+            Some(value)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "changelog lookup failed");
+            None
+        }
+    }
+}
+
+async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQuery>) -> Response {
+    let since = query
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if state.disable_update_check {
         // No outbound request is made when the operator has explicitly suppressed update checks.
         // Returning a success shape with `enabled: false` keeps the frontend contract simple while
@@ -313,16 +486,29 @@ async fn get_version(State(state): State<AppState>) -> Response {
     let sha = current_sha();
     let cache_key = format!("{},{}", version, sha.as_deref().unwrap_or("unknown"));
 
-    if let Some(cached) = CACHE.lock().unwrap().as_ref() {
-        if cached.key == cache_key && cached.fetched_at.elapsed() < CACHE_TTL {
-            return axum::Json(json!({
-                "enabled": true,
-                "details": details_json(version, sha.as_deref()),
-                "data": cached.data.clone(),
-                "cached": true,
-            }))
-            .into_response();
+    // Cloned out of the guard rather than read inside the `if let`: a `std::sync::MutexGuard` held
+    // across the `changelog_for(..).await` below makes this handler's future `!Send`, which axum
+    // reports only as the far less obvious "`Handler` is not satisfied".
+    let cached_data = {
+        let guard = CACHE.lock().unwrap();
+        match guard.as_ref() {
+            Some(cached) if cached.key == cache_key && cached.fetched_at.elapsed() < CACHE_TTL => {
+                Some(cached.data.clone())
+            }
+            _ => None,
         }
+    };
+    if let Some(cached_data) = cached_data {
+        let mut body = json!({
+            "enabled": true,
+            "details": details_json(version, sha.as_deref()),
+            "data": cached_data,
+            "cached": true,
+        });
+        if let Some(changelog) = changelog_for(since, version, sha.as_deref()).await {
+            body["changelog"] = changelog;
+        }
+        return axum::Json(body).into_response();
     }
 
     match fetch_version_info(version, sha.as_deref()).await {
@@ -332,13 +518,16 @@ async fn get_version(State(state): State<AppState>) -> Response {
                 fetched_at: Instant::now(),
                 data: data.clone(),
             });
-            axum::Json(json!({
+            let mut body = json!({
                 "enabled": true,
                 "details": details_json(version, sha.as_deref()),
                 "data": data,
                 "cached": false,
-            }))
-            .into_response()
+            });
+            if let Some(changelog) = changelog_for(since, version, sha.as_deref()).await {
+                body["changelog"] = changelog;
+            }
+            axum::Json(body).into_response()
         }
         Err(e) => {
             tracing::warn!(error = %e, "version lookup failed");
@@ -385,5 +574,56 @@ mod tests {
         let sha = current_sha();
         let details = details_json(current_version(), sha.as_deref());
         assert_eq!(details["version"], current_version());
+    }
+
+    fn tags_fixture() -> Vec<Value> {
+        vec![
+            json!({"name": "v0.2.0", "commit": {"sha": "b0000000000000000000000000000000000000b"}}),
+            json!({"name": "v0.1.0", "commit": {"sha": "a0000000000000000000000000000000000000a"}}),
+        ]
+    }
+
+    #[test]
+    fn release_entry_takes_the_sha_from_the_tags_list() {
+        let release = json!({
+            "tag_name": "v0.2.0",
+            "published_at": "2026-10-14T00:00:00Z",
+            "html_url": "https://example.test/releases/v0.2.0",
+            "body": "notes",
+        });
+        let entry = release_entry(&release, &tags_fixture());
+        assert_eq!(entry["tag"], "v0.2.0");
+        assert_eq!(entry["sha"], "b0000000000000000000000000000000000000b");
+        assert_eq!(entry["published_at"], "2026-10-14T00:00:00Z");
+        assert_eq!(entry["body"], "notes");
+    }
+
+    #[test]
+    fn release_entry_survives_a_tag_the_tags_list_does_not_know() {
+        // A release row can outlive its tag (or arrive before `/tags` catches up). The section must
+        // still render, just without a hash rather than not at all.
+        let release = json!({"tag_name": "v9.9.9", "published_at": "2026-10-14T00:00:00Z"});
+        let entry = release_entry(&release, &tags_fixture());
+        assert_eq!(entry["sha"], Value::Null);
+        assert_eq!(entry["body"], "");
+    }
+
+    #[test]
+    fn release_secs_falls_back_to_created_at_for_a_draft() {
+        // `published_at` is null on a draft; the window filter must still be able to place it.
+        let draft = json!({"created_at": "2026-10-14T00:00:00Z", "published_at": Value::Null});
+        assert_eq!(
+            release_secs(&draft),
+            date_secs(&json!({"date": "2026-10-14T00:00:00Z"}))
+        );
+        assert_eq!(release_secs(&json!({"body": "no dates at all"})), None);
+    }
+
+    #[test]
+    fn date_secs_orders_two_releases() {
+        let older = date_secs(&json!({"date": "2026-07-03T00:15:53Z"})).unwrap();
+        let newer = date_secs(&json!({"date": "2026-07-06T22:08:30Z"})).unwrap();
+        assert!(newer > older);
+        assert_eq!(date_secs(&json!({"date": "not a date"})), None);
     }
 }

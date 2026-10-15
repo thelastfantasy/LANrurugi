@@ -44,6 +44,8 @@ describe("SessionProvider", () => {
       logged_in: false,
       guest_mode_enabled: true,
       using_default_password: true,
+      first_run_wizard_available: true,
+      first_run_wizard_pending: true,
     }
     fetchLoginStatusWithRefreshMock.mockResolvedValue(status)
 
@@ -54,7 +56,62 @@ describe("SessionProvider", () => {
     expect(result.current.isGuestModeEnabled).toBe(true)
     expect(result.current.isGuest).toBe(true)
     expect(result.current.usingDefaultPassword).toBe(true)
+    // The server already gates both wizard fields on `logged_in`, so a `true` here can only mean a
+    // stale or hand-crafted payload — the derived values must not trust them on their own.
+    expect(result.current.firstRunWizardAvailable).toBe(false)
+    expect(result.current.firstRunWizardPending).toBe(false)
     expect(result.current.status).toEqual(status)
+  })
+
+  it("exposes the pending first-run wizard only to an authenticated session", async () => {
+    fetchLoginStatusWithRefreshMock.mockResolvedValue({
+      logged_in: true,
+      guest_mode_enabled: false,
+      using_default_password: false,
+      first_run_wizard_available: true,
+      first_run_wizard_pending: true,
+    } satisfies LoginStatus)
+
+    const { result } = renderHook(() => useSession(), { wrapper: makeWrapper() })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.isAuthenticated).toBe(true)
+    expect(result.current.firstRunWizardAvailable).toBe(true)
+    expect(result.current.firstRunWizardPending).toBe(true)
+  })
+
+  it("keeps the wizard available but not pending once the instance has handled it", async () => {
+    fetchLoginStatusWithRefreshMock.mockResolvedValue({
+      logged_in: true,
+      guest_mode_enabled: false,
+      using_default_password: false,
+      first_run_wizard_available: true,
+      first_run_wizard_pending: false,
+    } satisfies LoginStatus)
+
+    const { result } = renderHook(() => useSession(), { wrapper: makeWrapper() })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    // Still runnable from the Settings page — only the automatic nudge is done with.
+    expect(result.current.firstRunWizardAvailable).toBe(true)
+    expect(result.current.firstRunWizardPending).toBe(false)
+  })
+
+  it("reports the wizard as unavailable on a deployment that switched it off", async () => {
+    fetchLoginStatusWithRefreshMock.mockResolvedValue({
+      logged_in: true,
+      guest_mode_enabled: false,
+      using_default_password: false,
+      first_run_wizard_available: false,
+      first_run_wizard_pending: false,
+    } satisfies LoginStatus)
+
+    const { result } = renderHook(() => useSession(), { wrapper: makeWrapper() })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.isAuthenticated).toBe(true)
+    expect(result.current.firstRunWizardAvailable).toBe(false)
+    expect(result.current.firstRunWizardPending).toBe(false)
   })
 
   it("does not classify an unauthenticated visitor as a guest when guest mode is off", async () => {
@@ -62,6 +119,8 @@ describe("SessionProvider", () => {
       logged_in: false,
       guest_mode_enabled: false,
       using_default_password: false,
+      first_run_wizard_available: false,
+      first_run_wizard_pending: false,
     } satisfies LoginStatus)
 
     const { result } = renderHook(() => useSession(), { wrapper: makeWrapper() })
@@ -76,6 +135,8 @@ describe("SessionProvider", () => {
       logged_in: true,
       guest_mode_enabled: true,
       using_default_password: false,
+      first_run_wizard_available: false,
+      first_run_wizard_pending: false,
     } satisfies LoginStatus)
 
     // Fake timers must be installed *before* the query mounts — React Query schedules the interval
@@ -97,6 +158,8 @@ describe("SessionProvider", () => {
       logged_in: false,
       guest_mode_enabled: true,
       using_default_password: false,
+      first_run_wizard_available: false,
+      first_run_wizard_pending: false,
     } satisfies LoginStatus)
 
     vi.useFakeTimers({ shouldAdvanceTime: true })

@@ -27,6 +27,13 @@ export interface SessionContextValue {
   isGuest: boolean
   /** Drives the default-password warning toast. */
   usingDefaultPassword: boolean
+  /** Whether this deployment still offers the first-run wizard at all (a deploy-time switch) —
+   *  gates the Settings page's re-run button. Always `false` unless a real admin session is
+   *  present. */
+  firstRunWizardAvailable: boolean
+  /** Drives `FirstRunWizardGate`'s one-time redirect into `/welcome`. Implies
+   *  `firstRunWizardAvailable`. */
+  firstRunWizardPending: boolean
   /** Force a fresh login-status check (and therefore a silent token refresh attempt). */
   refresh: () => Promise<unknown>
 }
@@ -65,6 +72,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       isGuestModeEnabled,
       isGuest: !isAuthenticated && isGuestModeEnabled,
       usingDefaultPassword: status?.using_default_password === true,
+      // Both ANDed with `isAuthenticated` rather than trusted as-is: the server already gates these
+      // fields on `logged_in`, but a stale cached payload must never be enough on its own to route
+      // a now-logged-out tab into the admin-only wizard.
+      firstRunWizardAvailable: isAuthenticated && status?.first_run_wizard_available === true,
+      firstRunWizardPending: isAuthenticated && status?.first_run_wizard_pending === true,
       refresh: query.refetch,
     }
   }, [query.data, query.isSuccess, query.isError, query.isPending, query.isFetching, query.refetch])

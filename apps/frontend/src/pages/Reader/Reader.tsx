@@ -51,8 +51,10 @@ import {
   getImageCapabilityHeader,
   IMAGE_FORMAT_SUPPORT_HEADER,
 } from "@/lib/utils/imageFormatSupport";
+import type { PageMeta } from "@/lib/utils/imageMeta";
 import {
   fetchContentLengthKb,
+  fetchPageMeta,
   fetchResizedPageInfo,
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
@@ -82,9 +84,6 @@ import { TankoubonSplitModal } from "./TankoubonSplitModal";
 
 /** Uniform icon size (rem, not em) for every paginator nav link. */
 const PAGINATOR_ICON_FONT_SIZE = "1.75rem";
-/** How many prefetched/current Blob URLs to keep in memory. Beyond this the oldest non-current
- * page blob is revoked, keeping repeated paging fast without holding an entire archive in RAM. */
-const MAX_PAGE_BLOB_CACHE = 8;
 
 /** Device-derived short-edge cap for the full WebP. Uses DPR and viewport width so a phone can ask
  * for a sharper full image now that tiny handles the first paint, while still bounding the server
@@ -308,6 +307,7 @@ export function Reader() {
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const leftImgRef = useRef<HTMLImageElement>(null);
+  const rightImgRef = useRef<HTMLImageElement>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const infiniteScrollRootRef = useRef<HTMLDivElement>(null);
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
@@ -336,18 +336,23 @@ export function Reader() {
   // `img.onload`, then issue a HEAD request on top of that — on mobile that made the text below a
   // page appear only after the whole large image had finished downloading).
   const prefetchedPageSizesRef = useRef<Set<number>>(new Set());
-  const [pageBlobUrls, setPageBlobUrls] = useState<Record<number, string>>({});
-  const [pageImageError, setPageImageError] = useState<Record<number, boolean>>({});
   const [pageTinyBlobs, setPageTinyBlobs] = useState<Record<number, string>>({});
+  // Per page: whether the visible `<img>` has decoded pixels yet. Until it has, the streaming
+  // element keeps showing the *previous* page (or nothing, if its box is still unknown) — which on
+  // a slow link looked like paging had stopped working. The tiny preview is stacked on top until
+  // this flips, so the reader always sees the right page, just at preview resolution first.
+  const [mainReady, setMainReady] = useState<Record<number, boolean>>({});
+  const lastDimsRef = useRef<{ width: number; height: number } | null>(null);
   const [pageTinyDims, setPageTinyDims] = useState<
     Record<number, { width: number; height: number }>
   >({});
-  const displayedLeftSrcRef = useRef<string | undefined>(undefined);
-  const displayedRightSrcRef = useRef<string | undefined>(undefined);
-  const pageBlobUrlsRef = useRef<Map<number, string>>(new Map());
-  const pageImageFetchesRef = useRef<
-    Map<number, { controller: AbortController; priority: "current" | "prefetch" }>
-  >(new Map());
+  /** False until the first page bitmap has painted: only then is there a previous bitmap the
+   *  reader should keep on screen while the next page loads. */
+  const displayedAnythingRef = useRef(false);
+  /** Detached `<img>` elements warming neighbouring pages in the browser's image/HTTP cache. */
+  const warmImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  /** Per page: the in-flight/resolved metadata HEAD (box + will-the-server-convert). */
+  const pageMetaRef = useRef<Map<number, Promise<PageMeta | null>>>(new Map());
   const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
   const pageTinyDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
   const pageTinyFetchesRef = useRef<Map<number, AbortController>>(new Map());
@@ -389,92 +394,98 @@ export function Reader() {
     infiniteScrollResumePageRef.current <= 1 ||
     infiniteScrollResumeDimensions.isSuccess;
 
-  // Fetch page images via `fetch()` with an explicit `X-LRR-Priority` header instead of relying on
-  // `<img src>` alone. This is what makes the Rust-side priority queue actually effective: the
-  // server can tell a current-page request (`current`) from a speculative preload (`prefetch`),
-  // which `<img>`/`<link rel=preload>` cannot express portably across browsers. Displaying the
-  // result as a Blob URL also lets Firefox/Android use the same source regardless of its weaker
-  // `fetchpriority` support.
-  const fetchPageImage = useCallback(
-    (page: number, priority: "current" | "prefetch") => {
+  /** The URL a plain `<img>` should request for a page: the address `/files` generated (it carries
+   * `optimize=1` and any patch marker) plus the variant the reader wants and the queue priority.
+   * A `<img>` cannot send `X-LRR-Priority`, but the backend reads the same hint from
+   * `?priority=` (`PageParams::priority`), and the codec capabilities already travel in the
+   * `lrr_img_support` cookie — which is what lets the visible page stream instead of waiting for a
+   * full Blob, i.e. paint its first frame before the whole file has arrived. */
+  const pageStreamUrl = useCallback(
+    (page: number) => {
       const url = pages.data?.pages[page - 1]?.url;
-      if (!url) return;
-      if (pageBlobUrlsRef.current.has(page)) return;
-      const existing = pageImageFetchesRef.current.get(page);
-      if (existing && existing.priority === priority) return;
-      existing?.controller.abort();
-      const controller = new AbortController();
-      pageImageFetchesRef.current.set(page, { controller, priority });
-      const fullUrl = new URL(url, window.location.origin);
-      fullUrl.searchParams.set("max_short_edge", String(readerFullShortEdge()));
-      fetch(fullUrl.toString(), {
-        headers: {
-          "X-LRR-Priority": priority,
-          [IMAGE_FORMAT_SUPPORT_HEADER]: getImageCapabilityHeader(),
-        },
-        signal: controller.signal,
-      })
-        .then(async (res) => {
-          if (!res.ok) throw new Error(`page fetch failed: ${res.status}`);
-          return res.blob();
-        })
-        .then((blob) => {
-          if (pageImageFetchesRef.current.get(page)?.controller !== controller) return;
-          const blobUrl = URL.createObjectURL(blob);
-          const map = pageBlobUrlsRef.current;
-          const old = map.get(page);
-          if (old) URL.revokeObjectURL(old);
-          map.delete(page);
-          map.set(page, blobUrl);
-          while (map.size > MAX_PAGE_BLOB_CACHE) {
-            const oldest = map.keys().next().value;
-            if (oldest === undefined || currentPageNumbersRef.current.includes(oldest)) break;
-            const victimUrl = map.get(oldest);
-            if (
-              victimUrl === displayedLeftSrcRef.current ||
-              victimUrl === displayedRightSrcRef.current
-            ) {
-              // This blob is the stale image still shown (and blurred) while the next page loads;
-              // revoking it now would make the reader flash blank instead of keeping the transition.
-              break;
-            }
-            map.delete(oldest);
-            if (victimUrl) URL.revokeObjectURL(victimUrl);
-          }
-          setPageBlobUrls(Object.fromEntries(map));
-          const tinyUrl = pageTinyBlobsRef.current.get(page);
-          if (tinyUrl) {
-            URL.revokeObjectURL(tinyUrl);
-            pageTinyBlobsRef.current.delete(page);
-            setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
-          }
-          setPageImageError((prev) => ({ ...prev, [page]: false }));
-          pageImageFetchesRef.current.delete(page);
-        })
-        .catch((err: unknown) => {
-          if (pageImageFetchesRef.current.get(page)?.controller !== controller) return;
-          pageImageFetchesRef.current.delete(page);
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          setPageImageError((prev) => ({ ...prev, [page]: true }));
-        });
+      if (!url) return undefined;
+      const parsed = new URL(url, window.location.origin);
+      parsed.searchParams.set("max_short_edge", String(readerFullShortEdge()));
+      // Deliberately no `priority` parameter: the prefetch and the visible `<img>` have to request
+      // the *same* URL or the browser cannot reuse the warmed cache entry. Speculative requests are
+      // marked with the `X-LRR-Priority` header instead, which the server reads too.
+      return parsed.toString();
     },
-    [pages.data, setPageBlobUrls, setPageImageError, setPageTinyBlobs],
+    [pages.data],
   );
 
-  // Fetches a much smaller WebP preview for the current page only. It is shown immediately so the
-  // reader never stares at a blank/old page even on slow connections; when the full-resolution blob
-  // arrives, the UI swaps it in. The preview is intentionally excluded from file-info metadata.
+  /**
+   * Warms a neighbouring page through a detached `new Image()`: the browser's own image loader and
+   * HTTP cache, requesting exactly the URL the visible `<img>` will use, so the bytes are reused
+   * rather than downloaded twice. Nothing is held in JS (no Blob, no fetched body), and
+   * `fetchPriority = "low"` tells the browser to keep speculative work behind the page the reader is
+   * actually looking at. Cancelling is `src = ""`.
+   */
+  const warmPage = useCallback(
+    (page: number) => {
+      const url = pageStreamUrl(page);
+      if (!url || warmImagesRef.current.has(url)) return;
+      const image = new Image();
+      image.fetchPriority = "low";
+      image.decoding = "async";
+      image.src = url;
+      warmImagesRef.current.set(url, image);
+    },
+    [pageStreamUrl],
+  );
+
+  /**
+   * Asks the server what a page will cost before deciding to fetch its preview placeholder: one
+   * metadata-only HEAD per page (deduplicated), which reports the page's box and whether the bytes
+   * will be the archive's own. A passthrough page renders from its own first frame in a fraction of
+   * the time a placeholder needs (measured: ~0.24s for a 20 MB animation on Fast 4G versus ~21s for
+   * a cold `variant=tiny` of the same page), so the placeholder is only requested for pages the
+   * server has to convert. The HEAD carries the same `max_short_edge` the visible `<img>` uses, so
+   * the answer describes the request the reader is actually making.
+   */
+  const ensurePageMeta = useCallback(
+    (page: number): Promise<PageMeta | null> => {
+      const existing = pageMetaRef.current.get(page);
+      if (existing) return existing;
+      const url = pageStreamUrl(page);
+      const promise = url
+        ? fetchPageMeta(url).then((meta) => {
+            if (meta && meta.width > 0 && meta.height > 0) {
+              // The same box the preview reports, but without decoding the page.
+              setPageTinyDims((prev) =>
+                prev[page] ? prev : { ...prev, [page]: { width: meta.width, height: meta.height } },
+              );
+            }
+            return meta;
+          })
+        : Promise.resolve(null);
+      pageMetaRef.current.set(page, promise);
+      return promise;
+    },
+    [pageStreamUrl, setPageTinyDims],
+  );
+
+  // Fetches a much smaller WebP preview for the current page only. It is what the reader sees until
+  // the streaming page has pixels to paint (and it reports that page's box), so it is intentionally
+  // excluded from file-info metadata.
   const fetchTinyPreview = useCallback(
     (page: number) => {
       const url = pages.data?.pages[page - 1]?.url;
       if (!url) return;
-      if (pageBlobUrlsRef.current.has(page) || pageTinyBlobsRef.current.has(page)) return;
+      if (pageTinyBlobsRef.current.has(page)) return;
       const existing = pageTinyFetchesRef.current.get(page);
       if (existing) return;
       const controller = new AbortController();
       pageTinyFetchesRef.current.set(page, controller);
       const tinyUrl = new URL(url, window.location.origin);
       tinyUrl.searchParams.set("variant", "tiny");
+      // The preview response reports the *full-size* page's dimensions (`x-lrr-preview-*`), which
+      // the reader turns into the `<img width height>` box. Without this the server has to guess
+      // that box from its own 1064/960 default while the full request asks for
+      // `readerFullShortEdge()` (up to 1440) — same box only while the source is narrower than
+      // both, then the image resizes under the reader when the full one lands. The preview image
+      // itself is unaffected: previews are always produced at `MAX_LONG_EDGE_PREVIEW`.
+      tinyUrl.searchParams.set("max_short_edge", String(readerFullShortEdge()));
       fetch(tinyUrl.toString(), {
         headers: {
           "X-LRR-Priority": "preview",
@@ -525,41 +536,95 @@ export function Reader() {
     currentPageNumbersRef.current = pageNumbers;
     // First page of a fresh archive: there is no previous bitmap to keep visible, so waiting for
     // the 300ms settle would leave a blank img. Start preview+full immediately for the initial page.
-    if (displayedLeftSrcRef.current === undefined && pageNumbers.length > 0) {
+    if (!displayedAnythingRef.current && pageNumbers.length > 0) {
       for (const page of pageNumbers) {
         if (page < 1) continue;
         fetchTinyPreview(page);
-        fetchPageImage(page, "current");
       }
     }
-    // Abort any still-in-flight request for a page that is no longer on screen. Under a slow/throttled
-    // network these stale downloads otherwise keep occupying browser connections and make the newest
-    // current page wait behind pages the user already flipped past.
-    for (const [page, fetch] of [...pageImageFetchesRef.current]) {
-      if (!pageNumbers.includes(page)) {
-        fetch.controller.abort();
-      }
-    }
-  }, [spread.left, spread.right, fetchPageImage, fetchTinyPreview, readerSettings.infiniteScroll]);
+  }, [spread.left, spread.right, fetchTinyPreview, readerSettings.infiniteScroll]);
 
   // Tiny previews are only for the page the user actually stops on. Starting one on every
   // intermediate page during a rapid flip would add extra small requests that are almost always
   // wasted. Wait for the current page to settle before creating it.
+  // Asks the browser when the visible pages' bitmaps are actually paintable. `decode()` resolves
+  // once the image can be drawn, which is the earliest signal a streaming (partially received)
+  // image offers — `onLoad` only fires when the whole file is in. Readiness is only ever flipped
+  // *to* true: a page whose dimensions are already known never shows the preview in the first
+  // place, so there is nothing to reset on a page turn.
   useEffect(() => {
     if (readerSettings.infiniteScroll) return;
-    const timer = window.setTimeout(() => {
-      const pageNumbers =
-        spread.right === null ? [spread.left] : [spread.left, spread.right];
-      for (const page of pageNumbers) {
-        if (page < 1) continue;
-        // Tiny first: the reader gets a small preview as soon as the user stops. Full starts right
-        // after so the seamless high-quality replacement follows in the background.
-        fetchTinyPreview(page);
-        fetchPageImage(page, "current");
+    const shown = spread.right === null ? [spread.left] : [spread.left, spread.right];
+    let cancelled = false;
+    const markReady = (page: number) =>
+      setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    const elements = [leftImgRef.current, rightImgRef.current].filter(
+      (el): el is HTMLImageElement => !!el,
+    );
+    const timers: number[] = [];
+    for (const el of elements) {
+      const page = Number(el.dataset.page ?? "0");
+      if (!shown.includes(page)) continue;
+      if (el.complete) {
+        markReady(page);
+        continue;
       }
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [spread.left, spread.right, readerSettings.infiniteScroll, fetchTinyPreview, fetchPageImage]);
+      // `decode()` only resolves once the *whole* file is in for a streaming image (≈40 s for a
+      // 20 MB page on Fast 4G), which would leave the preview covering it for that long.
+      // `naturalWidth > 0` instead flips as soon as the header arrives and the browser can start
+      // painting what it has, which is the moment the preview should get out of the way.
+      const timer = window.setInterval(() => {
+        if (cancelled || el.naturalWidth === 0) return;
+        window.clearInterval(timer);
+        // One frame later: give the element a chance to paint the bytes it already decoded.
+        window.requestAnimationFrame(() => {
+          if (!cancelled) markReady(page);
+        });
+      }, 120);
+      timers.push(timer);
+      if (typeof el.decode === "function") {
+        void el
+          .decode()
+          .then(() => {
+            if (!cancelled) markReady(page);
+          })
+          .catch(() => {
+            /* rejected for a broken/blocked image; `onError` marks it ready instead */
+          });
+      }
+    }
+    return () => {
+      cancelled = true;
+      for (const timer of timers) window.clearInterval(timer);
+    };
+  }, [spread.left, spread.right, readerSettings.infiniteScroll]);
+
+  // The preview is what the reader sees while the page itself has no pixels, so it is requested as
+  // soon as a page becomes visible — not after a settle delay, which on a throttled connection left
+  // a blank frame for as long as it took to notice the user had stopped. It doubles as the source of
+  // the page's box (`x-lrr-preview-*`). Requests for pages flipped past are aborted below.
+  useEffect(() => {
+    if (readerSettings.infiniteScroll) return;
+    const pageNumbers = spread.right === null ? [spread.left] : [spread.left, spread.right];
+    let cancelled = false;
+    for (const page of pageNumbers) {
+      if (page < 1) continue;
+      void ensurePageMeta(page).then((meta) => {
+        // `meta === null` (the HEAD failed) keeps the previous behaviour: a placeholder is cheap
+        // insurance when we cannot tell.
+        if (!cancelled && meta?.servedOriginal !== true) fetchTinyPreview(page);
+      });
+    }
+    for (const [page, controller] of [...pageTinyFetchesRef.current]) {
+      if (!pageNumbers.includes(page)) {
+        controller.abort();
+        pageTinyFetchesRef.current.delete(page);
+      }
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [spread.left, spread.right, readerSettings.infiniteScroll, fetchTinyPreview, ensurePageMeta]);
 
   // Start the file-size HEAD requests as soon as the page URLs are known, instead of only after
   // each `<img>` finishes loading. The file-info bar can then render `name :: size KB` while the
@@ -614,41 +679,31 @@ export function Reader() {
   useEffect(() => {
     if (readerSettings.infiniteScroll) return;
     if (!pages.data || readerSettings.preloadCount <= 0) return;
-    const pageList = pages.data;
-    // Debounce prefetching: while the user is rapidly clicking next/prev, speculative requests for
-    // every intermediate page (5, 6, 7, ...) only queue up behind the page the reader actually
-    // needs to show right now. Waiting until the current page settles means those low-priority
-    // prefetch images are only requested once the user has stopped flipping, so the final page gets
-    // the full queue of browser/network capacity in the meantime.
+    // Only once the reader has settled: while pages are being flipped through, warming every
+    // intermediate neighbour just competes with the page that is actually on screen.
     const timer = window.setTimeout(() => {
-      const prefetchPages: number[] = [];
+      const wanted = new Set<string>();
       for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
-        const nextPage = currentPage + offset;
-        if (nextPage <= totalPages) {
-          const url = pageList.pages[nextPage - 1]?.url;
-          if (url) prefetchPages.push(nextPage);
-        }
-        const prevPage = currentPage - offset;
-        if (prevPage >= 1) {
-          const url = pageList.pages[prevPage - 1]?.url;
-          if (url) prefetchPages.push(prevPage);
+        for (const page of [currentPage + offset, currentPage - offset]) {
+          if (page < 1 || page > totalPages) continue;
+          const url = pageStreamUrl(page);
+          if (!url) continue;
+          wanted.add(url);
+          warmPage(page);
         }
       }
-      for (const page of prefetchPages) {
-        fetchPageImage(page, "prefetch");
+      for (const [url, image] of [...warmImagesRef.current]) {
+        if (!wanted.has(url) && !image.complete) {
+          image.src = "";
+          warmImagesRef.current.delete(url);
+        }
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount, readerSettings.infiniteScroll, fetchPageImage]);
+  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount, readerSettings.infiniteScroll, pageStreamUrl, warmPage]);
 
-  // Revoke all Blob URLs and abort in-flight fetches when the reader unmounts.
+  // Revoke preview Blob URLs when the reader unmounts.
   useEffect(() => {
-    const fetches = [...pageImageFetchesRef.current.values()];
-    for (const fetch of fetches) fetch.controller.abort();
-    pageImageFetchesRef.current.clear();
-    const blobUrls = [...pageBlobUrlsRef.current.values()];
-    for (const url of blobUrls) URL.revokeObjectURL(url);
-    pageBlobUrlsRef.current.clear();
     const tinyUrls = [...pageTinyBlobsRef.current.values()];
     for (const url of tinyUrls) URL.revokeObjectURL(url);
     pageTinyBlobsRef.current.clear();
@@ -846,6 +901,10 @@ export function Reader() {
 
   function onImageError(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;
+    // Do not leave the preview covering an image that failed: show the (browser-default) broken
+    // state instead of pretending the page is still loading.
+    const page = Number(img.dataset.page ?? "0");
+    if (page > 0) setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
     if (img.src.includes("optimize=1")) return;
     const parsed = new URL(img.src);
     if (!parsed.searchParams.has("path")) return;
@@ -867,17 +926,28 @@ export function Reader() {
       prev[page] === isWide ? prev : { ...prev, [page]: isWide },
     );
     if (isPreview) return;
+    setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      lastDimsRef.current = { width: img.naturalWidth, height: img.naturalHeight };
+    }
+    // The tiny preview has done its job once the real page is painted. Its Blob used to be released
+    // when the full Blob arrived, but the visible page now streams instead of being fetched, so
+    // release it here.
+    const tinyUrl = pageTinyBlobsRef.current.get(page);
+    if (tinyUrl) {
+      URL.revokeObjectURL(tinyUrl);
+      pageTinyBlobsRef.current.delete(page);
+      setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+    }
     setPageDimensions((prev) => ({
       ...prev,
       [page]: { width: img.naturalWidth, height: img.naturalHeight },
     }));
-    // Remember what bitmap is currently on screen. When the reader flips to a new page before its
-    // Blob is ready, this keeps the old image visible (and blurred by `#i3.loading`) instead of
-    // clearing `src` and showing a blank flash.
-    if (page === spread.left) displayedLeftSrcRef.current = img.src;
-    if (page === spread.right) displayedRightSrcRef.current = img.src;
-    // `img.src` may be a Blob URL now (fetch-based reader images), so the file-info HEADs must
-    // always use the original server URL to keep Content-Length/resize metadata working.
+    // There is a bitmap on screen now, so a later page turn has something to keep visible while
+    // the next page streams.
+    displayedAnythingRef.current = true;
+    // The file-info HEADs always use the original server URL, so Content-Length/resize metadata
+    // keeps working regardless of the variant the reader is displaying.
     const originalUrl = pages.data?.pages[page - 1]?.url ?? img.src;
     if (pageSizesKb[page] === undefined) {
       void fetchContentLengthKb(originalUrl).then((kb) => {
@@ -1409,6 +1479,13 @@ export function Reader() {
   const isSpreadShowing = spread.right !== null;
   const imageStyle: React.CSSProperties = {};
   const outerStyle: React.CSSProperties = {};
+  // The tiny placeholder is an absolutely positioned sibling inside the same wrapper (see
+  // `tinyUnderlayStyle`). An absolutely positioned box paints *above* a static sibling regardless
+  // of DOM order, so without this the reader showed the low-res preview stretched over the
+  // full-resolution page. Making the real page a positioned element with a higher stack level puts
+  // it back on top; `placementImageStyle` may raise its own z-index further for marker placement.
+  imageStyle.position = "relative";
+  imageStyle.zIndex = 1;
   if (!isFullscreen) {
     if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       const heightVh =
@@ -1427,6 +1504,22 @@ export function Reader() {
       outerStyle.maxWidth = "1200px";
     }
   }
+
+  /** The tiny preview, pinned under the streaming page in the same box: it costs ~10 KB and paints
+   * long before a full page does (the first frame of a 20 MB animation needs ~76 KB, a static scan
+   * usually more), so it is what the reader sees while the real image streams in. Absolutely
+   * positioned, so it never contributes to layout — the box comes from the page's own
+   * `width`/`height` attributes above. */
+  const tinyUnderlayStyle: React.CSSProperties = {
+    position: "absolute",
+    zIndex: 0,
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",
+    pointerEvents: "none",
+  };
 
   const placementImageStyle: React.CSSProperties = markerPlacementMode
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
@@ -1998,13 +2091,52 @@ export function Reader() {
                 style={{ position: "relative", display: "inline-flex" }}
               >
                 <span style={{ position: "relative", display: "inline-flex" }}>
+                  {pageTinyBlobs[spread.left] &&
+                  pageDimensions[spread.left] === undefined ? (
+                    <img
+                      className="reader-image"
+                      key={`tiny-left-${spread.left}`}
+                      src={pageTinyBlobs[spread.left]}
+                      alt=""
+                      aria-hidden="true"
+                      draggable={false}
+                      style={{
+                        ...tinyUnderlayStyle,
+                        // Above the page while it has nothing to draw (so the preview is what you
+                        // see), below it once the real bitmap is paintable.
+                        zIndex: mainReady[spread.left] ? 0 : 2,
+                      }}
+                    />
+                  ) : null}
                   <img
                     id="img"
+                    // Remounting on a page turn is what makes the *old* page stop being displayed:
+                    // Chrome keeps painting the previous bitmap (and even reports its
+                    // `naturalWidth`) until a changed `src` finishes decoding, which on a 20 MB page
+                    // over a throttled connection looked exactly like "paging does nothing". A fresh
+                    // element has no bitmap and reports 0, so the preview below shows through and
+                    // the readiness poll below means what it says.
+                    key={`left-${spread.left}`}
                     ref={leftImgRef}
+                    data-page={spread.left}
                     className="reader-image"
-                    src={pageBlobUrls[spread.left] ?? (pageImageError[spread.left] ? leftUrl : (pageTinyBlobs[spread.left] ?? displayedLeftSrcRef.current))}
-                    width={pageTinyDims[spread.left]?.width}
-                    height={pageTinyDims[spread.left]?.height}
+                    src={
+                      pageStreamUrl(spread.left) ??
+                      leftUrl
+                    }
+                    // Fall back to the last box we saw: a page whose dimensions are not known yet
+                    // (and whose stream has not produced a header) would otherwise collapse to
+                    // zero size, which reads as "paging stopped working".
+                    width={
+                      pageTinyDims[spread.left]?.width ??
+                      pageDimensions[spread.left]?.width ??
+                      lastDimsRef.current?.width
+                    }
+                    height={
+                      pageTinyDims[spread.left]?.height ??
+                      pageDimensions[spread.left]?.height ??
+                      lastDimsRef.current?.height
+                    }
                     alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
                     onLoad={(e) => onImageLoad(spread.left, e)}
@@ -2029,12 +2161,43 @@ export function Reader() {
                 </span>
                 {rightUrl && (
                   <span style={{ position: "relative", display: "inline-flex" }}>
+                    {spread.right !== null &&
+                    pageTinyBlobs[spread.right] &&
+                    pageDimensions[spread.right] === undefined ? (
+                      <img
+                        className="reader-image"
+                        key={`tiny-right-${spread.right}`}
+                        src={pageTinyBlobs[spread.right]}
+                        alt=""
+                        aria-hidden="true"
+                        draggable={false}
+                        style={{
+                          ...tinyUnderlayStyle,
+                          zIndex: mainReady[spread.right] ? 0 : 2,
+                        }}
+                      />
+                    ) : null}
                     <img
                       id="img_doublepage"
+                      key={`right-${spread.right ?? "none"}`}
+                      ref={rightImgRef}
+                      data-page={spread.right ?? undefined}
                       className="reader-image"
-                      src={rightUrl ? (pageBlobUrls[spread.right ?? 0] ?? (pageImageError[spread.right ?? 0] ? rightUrl : (pageTinyBlobs[spread.right ?? 0] ?? displayedRightSrcRef.current))) : undefined}
-                      width={pageTinyDims[spread.right ?? 0]?.width}
-                      height={pageTinyDims[spread.right ?? 0]?.height}
+                      src={
+                        rightUrl
+                          ? (pageStreamUrl(spread.right ?? 0) ?? rightUrl)
+                          : undefined
+                      }
+                      width={
+                        pageTinyDims[spread.right ?? 0]?.width ??
+                        pageDimensions[spread.right ?? 0]?.width ??
+                        lastDimsRef.current?.width
+                      }
+                      height={
+                        pageTinyDims[spread.right ?? 0]?.height ??
+                        pageDimensions[spread.right ?? 0]?.height ??
+                        lastDimsRef.current?.height
+                      }
                       alt={`${t("reader.page")} ${spread.right}`}
                       fetchPriority="high"
                       onLoad={(e) => onImageLoad(spread.right ?? 0, e)}

@@ -18,9 +18,11 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_core::{password, session};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::device_info::ClientReportedInfo;
+use lanrurugi_storage::keys::CONFIG_KEY;
 use lanrurugi_storage::refresh_tokens::{RotateOutcome, SessionContext};
 use serde::Deserialize;
 
@@ -641,6 +643,17 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // guest session was shown the exact default-password toast an admin should see).
     let using_default_password =
         logged_in && auth.password_hash == crate::auth::DEFAULT_PASSWORD_HASH;
+    // Both first-run-wizard fields describe what applies to *this* caller, not the deploy alone —
+    // hence each is gated on `logged_in` like `using_default_password` above. `available` is the
+    // deploy-time switch (`--disable-first-run-wizard`); `pending` additionally requires that this
+    // instance has never handled the wizard. Reporting the deploy flag itself to an anonymous
+    // caller would be a pointless leak of an operational detail nobody unauthenticated can act on.
+    let wizard_available = logged_in && !state.disable_first_run_wizard;
+    // `pending` drives `FirstRunWizardGate`'s one-time redirect into `/welcome`. Instance-scoped,
+    // not session-scoped: the wizard is a "this deployment has never been set up" nudge, so it must
+    // open on whichever browser first loads the library and then never again anywhere — hence a
+    // `LRR_CONFIG` field the wizard itself writes (see `settings.rs::BOOL_FIELDS`).
+    let wizard_pending = wizard_available && first_run_wizard_handled(&state).await == Some(false);
     // `guest_mode_enabled` here reports the site-wide switch only, not "is a category actually
     // visible" (spec FR-003 keeps those two conditions distinct) — the frontend combines this with
     // its own knowledge of whether the request that landed on a page succeeded to infer the full
@@ -650,8 +663,27 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
         "logged_in": logged_in,
         "using_default_password": using_default_password,
         "guest_mode_enabled": auth.guest_mode_enabled,
+        "first_run_wizard_available": wizard_available,
+        "first_run_wizard_pending": wizard_pending,
     }))
     .into_response()
+}
+
+/// Whether this instance has already had the first-run wizard presented: `Some(true)` handled,
+/// `Some(false)` definitively not, `None` when Redis couldn't be reached to tell.
+///
+/// The three-way return exists so the caller can fail quiet in one direction only. A missing field
+/// reads as "never handled", so a fresh instance — and one that predates this feature — both get
+/// the wizard once. But a Redis failure must *not* also read as "never handled", or a flaky Redis
+/// would pop the wizard on every single page load; `status` therefore treats `None` the same as
+/// handled.
+async fn first_run_wizard_handled(state: &AppState) -> Option<bool> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    // `"0"`-means-false, matching `get_settings`'s own `BOOL_FIELDS` read convention rather than
+    // testing for an exact `"1"` — a value written by hand or by a future encoding still reads
+    // correctly.
+    let done: Option<String> = conn.hget(CONFIG_KEY, "first_run_wizard_done").await.ok()?;
+    Some(done.is_some_and(|value| value != "0"))
 }
 
 /// Now that refresh tokens are stateful (`lanrurugi_storage::refresh_tokens`), logout actually

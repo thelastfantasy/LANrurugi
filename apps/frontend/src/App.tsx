@@ -4,6 +4,7 @@ import { ToastContainer } from "react-toastify"
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
 import { DialogHost } from "./dialog"
+import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
 import { ActivityPage } from "./pages/Activity"
 import { Batch } from "./pages/Batch"
@@ -11,6 +12,7 @@ import { BookmarksPage } from "./pages/Bookmarks"
 import { Categories } from "./pages/Categories"
 import { Duplicates } from "./pages/Duplicates"
 import { Edit } from "./pages/Edit"
+import { FirstRunWizard } from "./pages/FirstRunWizard"
 import { Jobs } from "./pages/Jobs"
 import { Library } from "./pages/Library"
 import { Login } from "./pages/Login"
@@ -37,6 +39,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AuthBridgeGate />
+      <FirstRunWizardGate />
       <ToastContainer limit={7} theme="light" />
       <DialogHost />
       <Routes>
@@ -78,6 +81,12 @@ export function App() {
             <Route path="/backup" element={<Backup />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/jobs" element={<Jobs />} />
+            {/* Admin-only, like everything else in this block: it edits the admin password and the
+                instance's LLM key, so a guest must never reach it — not even on a guest-mode
+                deployment where `/` and the reader are open to anonymous visitors. `RequireAuth`
+                above is the first layer; `FirstRunWizard` additionally refuses to render for a
+                caller the server did not report the wizard as available to. */}
+            <Route path="/welcome" element={<FirstRunWizard />} />
             <Route path="/config" element={<Settings />} />
           </Route>
         </Route>

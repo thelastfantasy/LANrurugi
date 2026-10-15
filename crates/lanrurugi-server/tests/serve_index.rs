@@ -88,6 +88,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: PathBuf::from("/tmp"),
             thumb_dir: PathBuf::from("/tmp"),

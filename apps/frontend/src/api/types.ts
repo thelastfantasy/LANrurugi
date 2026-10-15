@@ -150,6 +150,20 @@ export interface Settings {
   usedateadded: boolean
   usedatemodified: boolean
   replacetitles: boolean
+  /** The first-run wizard has been finished or skipped on this instance; see
+   *  `LoginStatus.first_run_wizard_pending` for the inverse the auto-open gate reads. */
+  first_run_wizard_done: boolean
+}
+
+/** `PUT /settings`'s body — a partial update, so only the fields actually being changed need to
+ *  be present. Deliberately a separate type from `Settings` (the GET response) because of
+ *  `llm_api_key`: the real key is write-only, accepted here but never echoed back, so it has no
+ *  place on the read shape. Omitting it from *this* type instead would push every caller that
+ *  sets a key back onto the `...(value && { llm_api_key: value })` spread trick that only
+ *  typechecks by accident. */
+export type SettingsUpdate = Partial<Settings> & {
+  /** Omit the field entirely to leave the stored key alone; an empty string *clears* it. */
+  llm_api_key?: string
 }
 
 /** `GET /theme` — public, unauthenticated theme/language endpoint. `theme` is the effective
@@ -213,7 +227,23 @@ export interface VersionCheckResponse {
       }
     } | null
   }
+  /** Present only for a `?since=` request, and only when GitHub could be asked — absent means
+   *  "couldn't tell", which the release-notes overlay treats differently from an empty array. */
+  changelog?: ChangelogRelease[]
   cached: boolean
+}
+
+/** One release inside `VersionCheckResponse.changelog`, newest first. */
+export interface ChangelogRelease {
+  /** The release tag, e.g. `v0.2.0`. */
+  tag: string
+  /** The commit the tag points at, or `null` when the tags list doesn't know this release. */
+  sha: string | null
+  /** RFC3339 publish timestamp. */
+  published_at: string | null
+  url: string | null
+  /** The release body, as GitHub-flavored markdown. */
+  body: string
 }
 
 export interface ShinobuStatus {
@@ -630,6 +660,149 @@ export interface StatTag {
   weight: number
 }
 
+/** `GET /stats/overview` — one aggregated snapshot behind the `/stats` page's dashboard. Every
+ *  field is derived server-side from the archive records, the activity log, and two additive
+ *  reading counters; see `crates/lanrurugi-api/src/stats.rs` for how each is computed. */
+export interface StatsOverview {
+  generated_at: number
+  totals: StatsTotals
+  size_buckets: StatsSizeBucket[]
+  formats: StatsFormat[]
+  ingest: StatsIngest
+  reading: StatsReading
+  preferences: StatsPreferences
+  /** Machine-readable reason the reading sections are empty, when they are. */
+  note?: "no_server_side_reading"
+}
+
+export interface StatsTotals {
+  archives: number
+  tankoubons: number
+  categories: number
+  storage_bytes: number
+  average_bytes: number
+  largest_bytes: number
+  pages: number
+  average_pages: number
+  pages_read: number
+  unread: number
+  reading: number
+  finished: number
+  new: number
+  rated: number
+  bookmarks: number
+}
+
+/** `key` is the stable identifier the frontend localizes (`lt_1mb` … `gte_500mb`). */
+export interface StatsSizeBucket {
+  key: string
+  min_bytes: number
+  max_bytes?: number
+  archives: number
+  bytes: number
+}
+
+export interface StatsFormat {
+  extension: string
+  mime: string
+  archives: number
+  bytes: number
+  pages: number
+}
+
+export interface StatsIngest {
+  /** Closed taxonomy, zero-filled: `download`, `scanner`, `upload_browser`, `upload_token` always
+   *  appear in that order, plus any further key the server actually saw. */
+  sources: { source: string; archives: number }[]
+  sources_sampled: number
+  /** True when only the newest sample of the activity log was tallied. */
+  sources_sampled_only: boolean
+  recent: StatsArchiveCard[]
+}
+
+export interface StatsArchiveCard {
+  id: string
+  title: string
+  timestamp: number
+  bytes: number
+  pages: number
+  extension: string
+}
+
+export interface StatsReading {
+  progress: { key: string; archives: number }[]
+  ratings: { stars: number; archives: number }[]
+  recent: StatsRecentRead[]
+  most_reread: StatsRereadArchive[]
+}
+
+export type StatsTimelineMetric = "ingest" | "reading"
+
+/** Which chart a drill-down belongs to. `ingest`/`read` are time buckets (addressed by a day
+ *  range); `size`/`rating`/`progress` are addressed by the bucket's own key. */
+export type StatsBucketMetric = "ingest" | "read" | "size" | "rating" | "progress"
+
+/** `GET /stats/bucket` — the archives behind one bar of one chart. */
+export interface StatsBucketArchives {
+  metric: StatsBucketMetric
+  /** Every archive in the bucket, not just the returned page of them. */
+  total: number
+  truncated: boolean
+  archives: StatsArchiveCard[]
+}
+
+/** `GET /stats/timeline` — one metric's **daily** series over the whole available range. Daily
+ *  rather than pre-bucketed so the page can re-bucket (day/week/month) and zoom/pan entirely
+ *  locally: changing granularity or range costs no request. */
+export interface StatsTimelineResponse {
+  metric: "ingest" | "reading"
+  /** First and last day actually returned (`YYYY-MM-DD`). */
+  from: string
+  to: string
+  /** Where the data really starts — earlier than `from` when the server capped the span. */
+  available_from: string
+  available_to: string
+  /** Reading only: the day the per-day page counter started recording. */
+  pages_since?: string
+  points: { date: string; archives?: number; pages?: number; last_read?: number }[]
+}
+
+export interface StatsRecentRead {
+  id: string
+  title: string
+  last_read: number
+  page: number
+  pages: number
+}
+
+export interface StatsRereadArchive {
+  id: string
+  title: string
+  reads: number
+  page: number
+  pages: number
+}
+
+export interface StatsNamespaceTags {
+  namespace: string
+  weight: number
+  tags: { text: string; weight: number; archives: number }[]
+}
+
+export interface StatsPreferences {
+  read_archives: number
+  namespaces: { namespace: string; weight: number; archives: number }[]
+  /** The promoted axes (`language`, `artist`, `cosplayer`) — always shown, in that order, however
+   *  low they rank among all namespaces; excluded from `by_namespace`. */
+  highlights: StatsNamespaceTags[]
+  /** Top tags for the remaining namespaces. */
+  by_namespace: StatsNamespaceTags[]
+  /** Read archives per rating, `stars: 0` meaning unrated. */
+  ratings: { stars: number; archives: number }[]
+  categories: { id: string; name: string; total: number; read: number; weight: number }[]
+  categories_truncated: boolean
+}
+
 export interface JobStatus {
   task: string
   state: "inactive" | "active" | "finished" | "failed"
@@ -934,6 +1107,13 @@ export interface LoginStatus {
   /** Whether guest mode is on; doesn't alone guarantee a guest sees anything (needs a
    *  `visible_to_guest` category too). */
   guest_mode_enabled: boolean
+  /** The first-run wizard is not switched off for this deployment (`--disable-first-run-wizard` /
+   *  `LANRURUGI_DISABLE_FIRST_RUN_WIZARD`). Always `false` for a caller who isn't a logged-in
+   *  admin. */
+  first_run_wizard_available: boolean
+  /** The instance has never had its first-run wizard finished or skipped. Implies
+   *  `first_run_wizard_available`. */
+  first_run_wizard_pending: boolean
 }
 
 /** First-party API token management, replacing legacy's single fixed `apikey`. Never carries the

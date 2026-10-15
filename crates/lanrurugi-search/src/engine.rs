@@ -590,7 +590,8 @@ async fn attribute_filter(
     }
 }
 
-/// `is:` — reading/grouping state.
+/// `is:` — reading/grouping state. `new` / `untagged` / `tank` / `read` / `unread` / `reading` /
+/// `completed` / `incomplete`.
 async fn state_filter(
     archive_conn: &mut deadpool_redis::Connection,
     search_conn: &mut deadpool_redis::Connection,
@@ -623,6 +624,26 @@ async fn state_filter(
                 let completed = pagecount > 0
                     && (progress as f64 / pagecount as f64) > HIDE_COMPLETED_THRESHOLD;
                 if completed == want_completed {
+                    ids.insert(id.clone());
+                }
+            }
+            Ok(ids)
+        }
+        // Started, but not yet what this codebase already calls "completed" (>85% — the same
+        // `HIDE_COMPLETED_THRESHOLD` `is:completed` and the hide-completed toggle use). Defined
+        // that way so `is:unread` / `is:reading` / `is:completed` partition the library exactly:
+        // no archive falls into two of them or into none.
+        "reading" => {
+            let mut ids = HashSet::new();
+            for id in scope {
+                if id.starts_with("TANK") {
+                    continue;
+                }
+                let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
+                let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
+                let completed = pagecount > 0
+                    && (progress as f64 / pagecount as f64) > HIDE_COMPLETED_THRESHOLD;
+                if progress > 0 && !completed {
                     ids.insert(id.clone());
                 }
             }
@@ -973,11 +994,19 @@ fn parse_size_bytes(value: &str) -> Option<u64> {
     digits.trim().parse::<u64>().ok()?.checked_mul(multiplier)
 }
 
+/// The two spellings of "how far through this archive the reader is". `read:` is the one the
+/// search-syntax help documents (`read:>=80%`, `read:<5`), `progress:` is the same field under the
+/// name the archive hash actually uses — it was already accepted by the percentage form, and this
+/// makes the absolute/range forms agree with it instead of leaving one spelling half-supported.
+fn is_progress_namespace(namespace: &str) -> bool {
+    matches!(namespace.replace('?', "_").as_str(), "read" | "progress")
+}
+
 /// `read:>=80%` / `progress:<50%` — progress as a share of page count, for the one question the
 /// absolute `read:` form can't express ("mostly read, whatever its length").
 fn parse_percent_filter(tag: &str) -> Option<(&'static str, f64)> {
     let (namespace, rest) = tag.split_once(':')?;
-    if !matches!(namespace.replace('?', "_").as_str(), "read" | "progress") {
+    if !is_progress_namespace(namespace) {
         return None;
     }
     let (op, number) = parse_comparison::<f64>(rest, |v| {
@@ -988,6 +1017,29 @@ fn parse_percent_filter(tag: &str) -> Option<(&'static str, f64)> {
         digits.trim().parse::<f64>().ok()
     })?;
     Some((op, number))
+}
+
+/// `read:40-50` / `progress:40%-50%` — a whole progress band in one token, always a *percentage*
+/// (an absolute page range stays expressible as two tokens: `read:>=40 read:<=50`). The `-`
+/// separator has no other meaning in this syntax, so the form is unambiguous; either end may carry
+/// the optional `%`, which `grammar::normalize` has already rewritten to `*` (see
+/// [`parse_percent_filter`]'s own note). Inclusive at both ends, and tolerant of a reversed pair.
+fn parse_progress_range_filter(tag: &str) -> Option<(f64, f64)> {
+    let (namespace, rest) = tag.split_once(':')?;
+    if !is_progress_namespace(namespace) {
+        return None;
+    }
+    let (low, high) = rest.split_once('-')?;
+    let parse_end = |value: &str| {
+        let digits = value
+            .trim()
+            .strip_suffix('%')
+            .or_else(|| value.trim().strip_suffix('*'))
+            .unwrap_or(value.trim());
+        digits.trim().parse::<f64>().ok()
+    };
+    let (low, high) = (parse_end(low)?, parse_end(high)?);
+    Some((low.min(high), low.max(high)))
 }
 
 /// pages:/read: numeric filters, the additive `date_added:YYYY-MM-DD` date-range filter, and the
@@ -1024,6 +1076,24 @@ async fn token_matches(
             }
             let percent_read = 100.0 * f64::from(progress) / f64::from(pagecount);
             if compare_ord(op, percent_read, percent) {
+                ids.insert(id.clone());
+            }
+        }
+        return Ok(ids);
+    }
+    if let Some((low, high)) = parse_progress_range_filter(&token.tag) {
+        let mut ids = HashSet::new();
+        for id in scope {
+            if id.starts_with("TANK") {
+                continue;
+            }
+            let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
+            let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
+            if pagecount == 0 {
+                continue;
+            }
+            let percent_read = 100.0 * f64::from(progress) / f64::from(pagecount);
+            if percent_read >= low && percent_read <= high {
                 ids.insert(id.clone());
             }
         }
@@ -1330,7 +1400,8 @@ fn parse_numeric_filter(tag: &str) -> Option<(&'static str, &'static str, u32)> 
     let (col_str, rest) = tag.split_once(':')?;
     let col = match col_str {
         "pages" => "pagecount",
-        "read" => "progress",
+        // `read:`/`progress:` are one field under two spellings — see `is_progress_namespace`.
+        _ if is_progress_namespace(col_str) => "progress",
         _ => return None,
     };
     for (op_str, op) in [(">=", ">="), ("<=", "<="), (">", ">"), ("<", "<")] {
@@ -1898,6 +1969,168 @@ mod tests {
             .unwrap();
     }
 
+    /// The new progress filters end to end, through the real `search()` entry point: a whole band
+    /// in one token (`read:40-50`, both spellings), and `is:reading`'s own definition — started but
+    /// not yet "completed" (the same >85% threshold `is:completed` uses), so the three `is:` states
+    /// partition the library rather than overlapping.
+    #[tokio::test]
+    async fn progress_range_and_is_reading_filters_select_the_right_archives() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let eq = test_eq();
+        let mut aconn = archive_pool.get().await.unwrap();
+
+        // (id, progress, pagecount)
+        let cases: [(&str, u32, u32); 4] = [
+            ("1", 0, 100),   // unread
+            ("2", 10, 100),  // started
+            ("3", 45, 100),  // mid — inside the 40-50 band
+            ("4", 100, 100), // finished
+        ];
+        let mut ids = Vec::new();
+        for (suffix, progress, pagecount) in cases {
+            let id = format!("progress-filter-{suffix}").repeat(3)[..40].to_string();
+            let _: () = aconn
+                .hset_multiple(
+                    &id,
+                    &[
+                        ("tags", format!("artist:progresstest{suffix}")),
+                        ("pagecount", pagecount.to_string()),
+                        ("progress", progress.to_string()),
+                    ],
+                )
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(
+                &search_pool,
+                &eq,
+                &id,
+                &format!("progress {suffix}"),
+            )
+            .await
+            .unwrap();
+            crate::indexer::update_tag_indexes(
+                &search_pool,
+                &eq,
+                &id,
+                "",
+                &format!("artist:progresstest{suffix}"),
+            )
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        let (unread, started, mid, finished) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+        let scope: HashSet<lanrurugi_core::ids::ArchiveId> = ids
+            .iter()
+            .map(|id| lanrurugi_core::ids::ArchiveId(id.clone()))
+            .collect();
+
+        // A nested `async fn` rather than a closure: the future has to borrow the pools, which an
+        // `async move` closure would have to clone (`Equivalence` is deliberately not `Clone`).
+        // Scoped to this test's own four archives: the file's other tests write into the same
+        // Redis concurrently, and an unscoped `is:reading` legitimately also matches whatever
+        // halfway-read archive one of them just created.
+        async fn run(
+            archive_pool: &deadpool_redis::Pool,
+            search_pool: &deadpool_redis::Pool,
+            eq: &Equivalence,
+            bookmarks: &lanrurugi_storage::bookmarks::BookmarksRepository,
+            scope: &HashSet<lanrurugi_core::ids::ArchiveId>,
+            filter: &str,
+        ) -> Vec<String> {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                restrict_to_archive_ids: Some(scope.clone()),
+                ..Default::default()
+            };
+            let mut result = search(archive_pool, search_pool, eq, bookmarks, &params)
+                .await
+                .unwrap();
+            result.ids.sort();
+            result.ids
+        }
+        // Called directly at each site rather than through a closure: a closure returning the
+        // borrowed future trips a lifetime error, and spelling the arguments out is clearer anyway.
+
+        let band = run(
+            &archive_pool,
+            &search_pool,
+            &eq,
+            &bookmarks,
+            &scope,
+            "read:40-50",
+        )
+        .await;
+        assert_eq!(
+            band,
+            vec![mid.clone()],
+            "the 40-50% band holds exactly the 45% archive"
+        );
+        // Every spelling agrees.
+        for filter in [
+            "read:40-50",
+            "progress:40-50",
+            "progress:40%-50%",
+            "read:40*-50*",
+        ] {
+            assert_eq!(
+                run(&archive_pool, &search_pool, &eq, &bookmarks, &scope, filter).await,
+                band,
+                "{filter} should select the same archive"
+            );
+        }
+
+        let mut reading = run(
+            &archive_pool,
+            &search_pool,
+            &eq,
+            &bookmarks,
+            &scope,
+            "is:reading",
+        )
+        .await;
+        reading.sort();
+        let mut expected = vec![started.clone(), mid.clone()];
+        expected.sort();
+        assert_eq!(
+            reading, expected,
+            "is:reading is everything started but not completed"
+        );
+        assert_eq!(
+            run(
+                &archive_pool,
+                &search_pool,
+                &eq,
+                &bookmarks,
+                &scope,
+                "is:unread"
+            )
+            .await,
+            vec![unread.clone()]
+        );
+        assert_eq!(
+            run(
+                &archive_pool,
+                &search_pool,
+                &eq,
+                &bookmarks,
+                &scope,
+                "is:completed"
+            )
+            .await,
+            vec![finished.clone()]
+        );
+
+        // Cleanup, per-archive and targeted (the file's other tests share this Redis).
+        for id in &ids {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+    }
+
     /// 007-guest-restricted-access: `restrict_to_archive_ids` narrows the candidate set exactly
     /// like `category`/`untaggedonly`/`tankonly` already do — `None` is a no-op, an empty `Some`
     /// set excludes everything (never conflated with `None`, per the field's own doc comment), and
@@ -2276,6 +2509,60 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn parse_progress_range_filter_accepts_both_progress_spellings() {
+        assert_eq!(
+            parse_progress_range_filter("read:40-50"),
+            Some((40.0, 50.0))
+        );
+        assert_eq!(
+            parse_progress_range_filter("progress:40-50"),
+            Some((40.0, 50.0)),
+            "the same field under the name the archive hash uses"
+        );
+        // `grammar::normalize` rewrites `%` to `*` before the engine sees a token, so both
+        // spellings have to parse — and a reversed pair is tolerated rather than matching nothing.
+        assert_eq!(
+            parse_progress_range_filter("read:40%-50%"),
+            Some((40.0, 50.0))
+        );
+        assert_eq!(
+            parse_progress_range_filter("read:40*-50*"),
+            Some((40.0, 50.0))
+        );
+        assert_eq!(
+            parse_progress_range_filter("read:50-40"),
+            Some((40.0, 50.0))
+        );
+        // Not a range, not a progress namespace, or not numbers.
+        assert_eq!(parse_progress_range_filter("read:>=40"), None);
+        assert_eq!(parse_progress_range_filter("pages:1-2"), None);
+        assert_eq!(parse_progress_range_filter("artist:x-y"), None);
+        assert_eq!(parse_progress_range_filter("read:40-"), None);
+    }
+
+    #[test]
+    fn progress_namespaces_are_one_field_under_two_spellings() {
+        for spelling in ["read", "progress"] {
+            assert_eq!(
+                parse_numeric_filter(&format!("{spelling}:100")),
+                Some(("progress", "=", 100)),
+                "{spelling}:100 is an absolute page number"
+            );
+            assert_eq!(
+                parse_percent_filter(&format!("{spelling}:>=80%")),
+                Some((">=", 80.0)),
+                "{spelling}:>=80% is a share of the page count"
+            );
+        }
+        // `pages:` stays about the page count, and an unknown namespace is still left alone.
+        assert_eq!(
+            parse_numeric_filter("pages:100"),
+            Some(("pagecount", "=", 100))
+        );
+        assert_eq!(parse_numeric_filter("reader:100"), None);
     }
 
     #[test]

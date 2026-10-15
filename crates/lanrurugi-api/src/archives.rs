@@ -30,7 +30,9 @@ use crate::state::FetchedPage;
 use crate::AppState;
 use lanrurugi_scanner::resize::EncodeFormat;
 use lanrurugi_storage::id::ARCHIVE_ID_LEN;
-use lanrurugi_storage::keys::{CONFIG_KEY, TOTAL_PAGES_STAT_KEY};
+use lanrurugi_storage::keys::{
+    CONFIG_KEY, READ_DAILY_SINCE_KEY, READ_FREQ_STAT_KEY, TOTAL_PAGES_STAT_KEY,
+};
 
 const PLACEHOLDER_THUMBNAIL: &[u8] = include_bytes!("../assets/no_thumb.png");
 /// Served by `fetch_page` in place of a page entry name listed in `Archive::corrupted_pages` (see
@@ -1887,10 +1889,27 @@ async fn update_progress(
         Ok(()) => {
             // Matches legacy exactly (`Controller/Api/Archive.pm`: `$redis_cfg->incr("LRR_TOTALPAGESTAT")`)
             // — incremented unconditionally on every successful call, not just forward progress.
+            // The two additive keys alongside it (the stats page's own reading history) are
+            // written in the same round trip: legacy's counter is cumulative and timeless, so
+            // neither "pages per day" nor "which works get re-read" can be derived from it after
+            // the fact. Best-effort, like legacy's own increment — a stats write must never fail a
+            // progress save.
             if let Ok(mut conn) = state.redis.config.get().await {
-                let _: Result<i64, _> =
-                    deadpool_redis::redis::AsyncCommands::incr(&mut conn, TOTAL_PAGES_STAT_KEY, 1)
+                let _: Result<i64, _> = conn.incr(TOTAL_PAGES_STAT_KEY, 1).await;
+                let day = chrono::DateTime::from_timestamp(now as i64, 0)
+                    .map(|t| t.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                if !day.is_empty() {
+                    let key = lanrurugi_storage::keys::read_daily_key(&day);
+                    let _: Result<i64, _> = conn.incr(&key, 1).await;
+                    // Only the first write ever lands (`SETNX`), so this stays the counter's own
+                    // start date however long the library is read for.
+                    let _: Result<bool, _> = conn.set_nx(READ_DAILY_SINCE_KEY, day.as_str()).await;
+                    let _: Result<bool, _> = conn
+                        .expire(&key, lanrurugi_storage::keys::READ_DAILY_TTL_SECS)
                         .await;
+                }
+                let _: Result<i64, _> = conn.hincr(READ_FREQ_STAT_KEY, id.as_str(), 1).await;
             }
             axum::Json(json!({
                 "operation": "update_progress",
@@ -2598,12 +2617,24 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// *different* pages at once would launch unbounded concurrent rescans of the same archive file.
 async fn get_page(
     State(state): State<AppState>,
+    method: axum::http::Method,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageParams>,
     headers: HeaderMap,
 ) -> Response {
-    serve_page(&state, auth.as_deref(), &id, params, &headers).await
+    // A HEAD asks "what would this page cost me, and will it be converted?" — that must not run the
+    // conversion itself (`fetch_page` short-circuits before every encode when `head_only`), and its
+    // response must be headers only.
+    serve_page(
+        &state,
+        auth.as_deref(),
+        &id,
+        params,
+        &headers,
+        method == axum::http::Method::HEAD,
+    )
+    .await
 }
 
 /// The page pipeline itself, callable outside the `/archives/{id}/page` handler — the OPDS page
@@ -2616,6 +2647,7 @@ pub(crate) async fn serve_page(
     id: &lanrurugi_core::ids::ArchiveId,
     params: PageParams,
     headers: &HeaderMap,
+    head_only: bool,
 ) -> Response {
     if guest_scope_denies(state, auth, id).await {
         return not_found("serve_page", format!("{id} does not exist."));
@@ -2739,6 +2771,7 @@ pub(crate) async fn serve_page(
                     preview_variant,
                     requested_short_edge,
                     client_support,
+                    head_only,
                 )
                 .await
             }
@@ -2753,9 +2786,16 @@ pub(crate) async fn serve_page(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static(page.content_type),
             );
+            // `max-age` rather than plain `no-cache`: a phone browser that unloads the tab while
+            // the screen is locked loses the reader's blob URL and has to fetch the page again on
+            // resume. With `no-cache` that costs a revalidation round trip before anything can be
+            // drawn; with a short `max-age` the browser restores it straight from its own cache
+            // (even before the radio is back). Five minutes is safe because a page URL carries the
+            // content-derived archive id plus its variant parameters, so it is effectively
+            // immutable; the ETag still forces a revalidation once the window expires.
             header_map.insert(
                 header::CACHE_CONTROL,
-                header::HeaderValue::from_static("private, no-cache"),
+                header::HeaderValue::from_static("private, max-age=300"),
             );
             // `inline` (not `attachment`): a page opened in its own tab must still render, this
             // header only supplies the name a save-as would use — see `served_page_filename`.
@@ -2785,6 +2825,42 @@ pub(crate) async fn serve_page(
                 if if_none_match.is_some_and(|v| v.trim() == etag) {
                     return (header_map, StatusCode::NOT_MODIFIED).into_response();
                 }
+            }
+            // Whether these bytes are the archive's own entry, or a conversion this server had to
+            // make. The reader only needs its small preview placeholder in the latter case: a
+            // passthrough page paints from its own first frame, which arrives far sooner than a
+            // placeholder request could (measured: 76 KB of a 20 MB animation, ~0.24s on Fast 4G,
+            // versus ~21s for a cold `variant=tiny` of the same page).
+            header_map.insert(
+                header::HeaderName::from_static("x-lrr-served-original"),
+                header::HeaderValue::from_static(if page.resized { "0" } else { "1" }),
+            );
+            if page.orig_width > 0 && page.orig_height > 0 {
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-page-dimensions"),
+                    header::HeaderValue::from_str(&format!(
+                        "{}x{}",
+                        page.orig_width, page.orig_height
+                    ))
+                    .unwrap_or(header::HeaderValue::from_static("0x0")),
+                );
+            }
+            if head_only {
+                // No body, and a Content-Length describing the *entry* (what the file-info bar shows)
+                // rather than whatever the conversion would have produced.
+                header_map.insert(
+                    header::CONTENT_LENGTH,
+                    header::HeaderValue::from_str(&page.orig_size.to_string())
+                        .unwrap_or(header::HeaderValue::from_static("0")),
+                );
+                if page.resized {
+                    header_map.insert(
+                        header::HeaderName::from_static("x-lrr-original-size"),
+                        header::HeaderValue::from_str(&page.orig_size.to_string())
+                            .unwrap_or(header::HeaderValue::from_static("0")),
+                    );
+                }
+                return (header_map, StatusCode::OK).into_response();
             }
             if page.resized {
                 // Lets the reader's file-info bar show the actual converted format vs the original
@@ -2884,6 +2960,7 @@ async fn fetch_page(
     preview: bool,
     requested_short_edge: Option<u32>,
     client_support: ClientImageSupport,
+    head_only: bool,
 ) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
@@ -2987,6 +3064,12 @@ async fn fetch_page(
 
     let content_type = image_content_type(&raw);
     let source_is_jxl = content_type == "image/jxl";
+    // Header-only parse (no pixel decode): the reader needs each page's box, and a passthrough page
+    // never gets decoded here at all.
+    let source_dims = lanrurugi_scanner::image_decode::image_reader(std::io::Cursor::new(&raw))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
 
     // SVG is served as-is, always, before any threshold or codec decision: browsers render it
     // natively, and nothing in this pipeline can decode it (`resize_if_over_threshold` would fail
@@ -3026,9 +3109,14 @@ async fn fetch_page(
     };
 
     // Animated sources must never fall through to the still-image pipeline below (it would keep
-    // only the first frame). Conversion is WebP-only for now; formats without a frame-safe decoder
-    // return `None` and are served as original bytes.
-    if lanrurugi_scanner::animation::is_animated(content_type, &raw) {
+    // only the first frame) — except for the preview/tiny variant. That one exists purely as a
+    // first-paint placeholder, so converting all of its frames is the worst trade available: a
+    // 304-frame page costs ~10 s CPU (measured) to produce a 1-3 MB placeholder that the reader
+    // swaps out as soon as the full image arrives. A single frame at the same size is a few tens of
+    // KB and decodes in well under a second, so previews of animations fall through on purpose.
+    // Conversion is WebP-only for now; formats without a frame-safe decoder return `None` and are
+    // served as original bytes.
+    if lanrurugi_scanner::animation::is_animated(content_type, &raw) && !preview {
         // A client that cannot decode the source format at all must be converted, whatever the
         // size threshold or the resize setting says: those are bandwidth heuristics, and serving
         // the original here means serving something the client cannot render. Only formats this
@@ -3050,6 +3138,23 @@ async fn fetch_page(
             || (raw.len() / 1024) as i64 > effective_threshold;
         if !over_threshold {
             return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+        }
+        if head_only {
+            // Mirror the animation path's own value gate (`MIN_ANIMATION_DOWNSCALE_PERCENT`): a
+            // downscale under 20% is not worth a re-encode and comes back as the original bytes. A
+            // client that cannot decode the source has no such choice — it must be converted.
+            let source_short = source_dims.map(|(w, h)| w.min(h)).unwrap_or(0);
+            let worth_it = source_short == 0
+                || (effective_max_short_edge as u64) * 100 < (source_short as u64) * 80;
+            if !client_cannot_decode_source && !worth_it {
+                return Ok(serve_original_page(archive_file, path, raw, content_type).await);
+            }
+            return Ok(metadata_only(
+                EncodeFormat::Webp.content_type(),
+                raw.len() as u64,
+                source_dims,
+                true,
+            ));
         }
 
         let cache_path = resize_cache_path(
@@ -3164,6 +3269,9 @@ async fn fetch_page(
     // that is possible at all (`server_can_decode_still`): converting a page we cannot decode
     // would turn a broken-looking image into a 500. The size threshold and the resize switch are
     // bandwidth heuristics and must not apply to this case.
+    //
+    // A preview of an animated source arrives here too (see the animated branch above): the still
+    // pipeline decodes its first frame, which is exactly what a placeholder wants.
     let client_cannot_decode = !client_support.can_decode(content_type, false);
     if client_cannot_decode && !ClientImageSupport::server_can_decode_still(content_type) {
         tracing::warn!(
@@ -3241,6 +3349,14 @@ async fn fetch_page(
     } else {
         None
     };
+    if head_only {
+        return Ok(metadata_only(
+            output_format.content_type(),
+            orig_size,
+            source_dims,
+            true,
+        ));
+    }
     let converted = if force_convert {
         lanrurugi_scanner::resize::convert_to_format(
             raw.clone(),
@@ -3303,6 +3419,25 @@ async fn fetch_page(
     }
 }
 
+/// A page's metadata without its bytes: what a HEAD response needs, and what tells the reader
+/// whether this page is a passthrough or something only this server can turn into a viewable image.
+fn metadata_only(
+    content_type: &'static str,
+    orig_size: u64,
+    dims: Option<(u32, u32)>,
+    resized: bool,
+) -> FetchedPage {
+    FetchedPage {
+        content_type,
+        bytes: bytes::Bytes::new(),
+        resized,
+        orig_size,
+        orig_width: dims.map(|d| d.0).unwrap_or(0),
+        orig_height: dims.map(|d| d.1).unwrap_or(0),
+        etag: None,
+    }
+}
+
 async fn serve_original_page(
     archive_file: &str,
     path: &str,
@@ -3310,14 +3445,18 @@ async fn serve_original_page(
     content_type: &'static str,
 ) -> FetchedPage {
     let orig_size = raw.len() as u64;
+    let dims = lanrurugi_scanner::image_decode::image_reader(std::io::Cursor::new(&raw))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
     let etag = page_file_etag(archive_file, path).await;
     FetchedPage {
         content_type,
         bytes: bytes::Bytes::from(raw),
         resized: false,
         orig_size,
-        orig_width: 0,
-        orig_height: 0,
+        orig_width: dims.map(|d| d.0).unwrap_or(0),
+        orig_height: dims.map(|d| d.1).unwrap_or(0),
         etag,
     }
 }

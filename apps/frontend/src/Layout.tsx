@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next"
 import { NavLink, Outlet } from "react-router-dom"
 
 import { Footer } from "@/components/Layout"
+import { ReleaseNotesOverlay } from "@/components/Layout"
 import { UpdateBanner } from "@/components/Layout"
 import { useSession } from "@/session/SessionProvider"
 
@@ -46,6 +47,7 @@ export function Layout() {
         ))}
       </p>
       <UpdateBanner />
+      <ReleaseNotesOverlay />
       <Outlet />
       <Footer />
     </div>

@@ -1209,3 +1209,44 @@ div.id4 a:hover {
   outline: 2px solid #ED2553;
   outline-offset: 0;
 }
+
+/* First-run wizard (`/welcome`) step callouts: whether a setup item is already handled or still
+   wants the user's attention. Additive — legacy has no wizard, so nothing to stay diffable
+   against. Hues borrowed from this theme's own `.preview-row-match` / `.preview-row-excluded`,
+   each with a left border as well as a tint so the distinction does not rest on colour alone. */
+.wizard-callout-done {
+  background-color: rgba(70, 160, 100, 0.16);
+  border-left: 3px solid rgba(70, 160, 100, 0.7);
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+.wizard-callout-todo {
+  background-color: rgba(180, 70, 95, 0.12);
+  border-left: 3px solid rgba(200, 90, 115, 0.55);
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+
+/* Green tick on a first-run wizard step whose item is already handled. Additive — legacy has no
+   wizard, so nothing to stay diffable against. This theme's own `.history-state-done` green, per
+   this file's convention that a shared colour still gets one class name per component. */
+.wizard-step-done {
+  color: rgb(70, 160, 100);
+}
+
+/* Library-stats chart series palette (`/stats`'s dashboard sections). Additive — legacy has no
+   charts, so there is nothing to stay diffable against. Read at runtime by `useChartPalette()`
+   (apps/frontend/src/pages/Stats/chartPalette.ts), which resolves these custom properties off a
+   probe element rather than carrying any colour literal in TS, so every chart follows whichever
+   of the five themes is active. The ramp is this theme's own accent expanded into hues that stay
+   distinguishable from one another *and* readable on this theme's background. */
+.stats-chart-palette {
+  --stats-series-1: #ed2553;
+  --stats-series-2: #34495E;
+  --stats-series-3: #3b97ea;
+  --stats-series-4: #E9A53A;
+  --stats-series-5: #2E9E7B;
+  --stats-series-6: #9B59B6;
+  --stats-series-7: #E07A5F;
+  --stats-series-8: #7F8C9A;
+}

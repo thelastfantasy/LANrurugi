@@ -65,6 +65,11 @@ services:
       # points `lanrurugi-ocr`'s model-discovery at the same place rather than one of its
       # production-image search paths (`/usr/local/bin/models`, `/var/lib/lanrurugi/models`,
       # `/app/models`), none of which exist in this dev container.
+      # `lrr-dev-temp:/temp` above is only useful if the server actually writes there:
+      # `--temp-dir` defaults to `./temp` (the container's writable layer), which is discarded on
+      # every container recreate — so resize/animation conversions were re-run from scratch after
+      # each rebuild, at ~10 s CPU per animated page.
+      - LANRURUGI_TEMP_DIR=/temp
       - LANRURUGI_MANGA_OCR_MODEL_DIR=/home/koyomi/lanrurugi/models/manga-ocr
       # Same reasoning as LANRURUGI_MANGA_OCR_MODEL_DIR above, for `scripts/fetch-inpaint-model.sh`'s
       # LaMa model (`lanrurugi-inpaint`) — optional (missing = compositing falls back to flat-fill/

@@ -29,6 +29,8 @@ function mockSession(
     isGuestModeEnabled,
     isGuest: !isAuthenticated && isGuestModeEnabled,
     usingDefaultPassword: normalized?.using_default_password === true,
+    firstRunWizardAvailable: isAuthenticated && normalized?.first_run_wizard_available === true,
+    firstRunWizardPending: isAuthenticated && normalized?.first_run_wizard_pending === true,
     refresh: vi.fn(),
   })
 }

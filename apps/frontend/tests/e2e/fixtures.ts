@@ -220,6 +220,14 @@ export const test = base.extend<object, { workerBaseURL: string }>({
       // genuinely up and logging `lanrurugi serve listening` but every request 500ing — this
       // fixture's own `FLUSHALL` above wiped a field the backend now assumes is always present.
       execSync(`redis-cli -p ${redisPort} -n 2 HSET LRR_CONFIG guestmode 0`, { stdio: "ignore" })
+      // Mark the first-run wizard as already handled. Without this every spec that signs in and
+      // asserts it landed on the library would instead be redirected to `/welcome` by
+      // `FirstRunWizardGate` — every login in this suite uses the default password, which is
+      // exactly the state the wizard exists to nag about. `firstRunWizard.spec.ts` re-arms this
+      // field itself to cover the auto-open path, and restores it afterward.
+      execSync(`redis-cli -p ${redisPort} -n 2 HSET LRR_CONFIG first_run_wizard_done 1`, {
+        stdio: "ignore",
+      })
 
       fs.mkdirSync(libraryDir, { recursive: true })
       const backendLogPath = path.join(libraryDir, "backend.log")

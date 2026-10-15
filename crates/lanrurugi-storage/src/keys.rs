@@ -47,6 +47,40 @@ pub fn archive_tankoubons_key(archive_id: &str) -> String {
     format!("LANRURUGI_ARCHIVE_TANKOUBONS_{archive_id}")
 }
 
+/// Additive, LANrurugi-only. Per-day page-read counter, one key per UTC calendar day
+/// (`LANRURUGI_READ_DAILY:2026-10-14` → pages read that day), written alongside legacy's
+/// cumulative [`TOTAL_PAGES_STAT_KEY`] in `archives.rs::update_progress`.
+///
+/// Legacy has no time dimension on reading at all — the only per-archive timestamp is
+/// `lastreadtime`, which retains just the *most recent* read, so a day-by-day history cannot be
+/// reconstructed from it. Dated keys (rather than one hash) keep retention trivial: each key
+/// expires on its own, with no sweep code to run and no unbounded hash to prune.
+pub fn read_daily_key(date: &str) -> String {
+    format!("LANRURUGI_READ_DAILY:{date}")
+}
+
+/// Additive, LANrurugi-only. The first `YYYY-MM-DD` the per-day counter was ever written for —
+/// `SETNX`-ed once by `archives.rs::update_progress`, with no TTL of its own so it outlives the
+/// per-day keys it describes. Without it the stats page can only say "the counter has data as far
+/// back as the window I happened to read", which is exactly the wrong answer once the page lets a
+/// reader pick that window themselves.
+pub const READ_DAILY_SINCE_KEY: &str = "LANRURUGI_READ_DAILY_SINCE";
+
+/// How long one [`read_daily_key`] survives — long enough for a "past year" reading-history chart,
+/// short enough that the key family never grows without bound.
+pub const READ_DAILY_TTL_SECS: i64 = 400 * 24 * 60 * 60;
+
+/// Additive, LANrurugi-only. How many progress updates each archive has ever received — i.e. how
+/// many page turns that archive has been part of while it was the archive being read. Legacy's
+/// `progress` field only ever holds the *current* page, so "which works do I come back to?" (a
+/// real preference signal, distinct from progress percentage and from recency) has no other
+/// source.
+///
+/// A hash rather than one key per archive: it is only ever read as a whole for the stats page, and
+/// a single `HGETALL` is one round trip regardless of library size. Bounded by archive count, so
+/// nothing needs to prune it.
+pub const READ_FREQ_STAT_KEY: &str = "LANRURUGI_READ_FREQ";
+
 /// Additive, LANrurugi-only. One archive's own copy of its gallery's revision chain
 /// (`specs/007`-era issue #107's `version_history`), as JSON `[{source, posted_at}]`.
 ///

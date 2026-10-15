@@ -284,6 +284,8 @@ async fn opds_page(
         &id,
         PageParams::optimized(entry.clone()),
         &headers,
+        // OPDS readers are ordinary GET clients; nothing there issues a metadata-only request.
+        false,
     )
     .await
 }

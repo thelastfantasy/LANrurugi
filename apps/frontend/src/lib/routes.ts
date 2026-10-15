@@ -26,4 +26,7 @@ export const routes = {
     focus ? `/config/plugins?focus=${encodeURIComponent(focus)}` : "/config/plugins",
   pluginSection: (section: string) => `/config/plugins?section=${encodeURIComponent(section)}`,
   pluginWizard: () => "/config/plugins/wizard",
+  // First-run wizard. Auto-opened once by `FirstRunWizardGate`; `?from=settings` is the explicit
+  // re-run from the Settings page, which changes only where the wizard returns to when it ends.
+  welcome: (from?: "settings") => (from ? `/welcome?from=${from}` : "/welcome"),
 } as const

@@ -1881,3 +1881,14 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   font-size: 0.85em;
   padding: 2px 8px;
 }
+
+/* Recharts draws its hover ("active") dot in a higher z-index layer than the line's own dots, so it
+   sits on top of exactly the pixel a reader aims at — and it carries no click handler, which made
+   clicking a data point work only when the cursor landed outside the active dot's 4px radius (the
+   stats page's line dots carry the drill-down handler; see `ReadingHistory.tsx`'s `renderLineDot`).
+   Letting pointer events through to the dot underneath keeps the hover affordance while making the
+   whole point clickable. */
+.recharts-active-dot circle,
+.recharts-active-dot path {
+  pointer-events: none;
+}

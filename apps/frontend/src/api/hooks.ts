@@ -6,8 +6,9 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useEffect, useSyncExternalStore } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 
+import { buildChanged, type BuildIdentity,readSeenBuild, sinceIdentity, writeSeenBuild } from "@/lib/seenBuild"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { clearSearchNavigationState } from "@/pages/Reader/crossArchiveNav"
@@ -41,6 +42,7 @@ import type {
   BookmarkSort,
   BookmarksPageResponse,
   CategoryMetadata,
+  ChangelogRelease,
   CheckCycle,
   ComparisonResult,
   Condition,
@@ -68,9 +70,15 @@ import type {
   SearchResponse,
   ServerInfo,
   Settings,
+  SettingsUpdate,
   ShinobuStatus,
   StampedPagesResponse,
   StampsByPageResponse,
+  StatsBucketArchives,
+  StatsBucketMetric,
+  StatsOverview,
+  StatsTimelineMetric,
+  StatsTimelineResponse,
   StatTag,
   Subscription,
   SubscriptionBody,
@@ -151,7 +159,7 @@ export function usePublicSettings(options?: { enabled?: boolean }) {
 export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (partial: Partial<Settings>) => sendJson("PUT", "/settings", partial),
+    mutationFn: (partial: SettingsUpdate) => sendJson("PUT", "/settings", partial),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   })
 }
@@ -251,6 +259,55 @@ export function useStats(minWeight = 1) {
       fetchJson<StatTag[]>(
         `/database/stats?minweight=${minWeight}&hide_excluded_namespaces=true`,
       ),
+  })
+}
+
+/** `GET /stats/timeline` — one metric's daily series for the whole available range. The page
+ *  buckets and zooms it locally, so this is fetched once per metric rather than per interaction. */
+export function useStatsTimeline(metric: StatsTimelineMetric) {
+  return useQuery({
+    queryKey: ["stats-timeline", metric],
+    queryFn: () => fetchJson<StatsTimelineResponse>(`/stats/timeline?metric=${metric}`),
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+/** One drill-down selection: a bucket of a chart, or `null` when nothing is selected. */
+export interface StatsBucketSelection {
+  metric: StatsBucketMetric
+  /** Time buckets (`ingest`/`read`) carry the day range the chart actually drew. */
+  from?: string
+  to?: string
+  /** Keyed buckets carry their own key. */
+  key?: string
+}
+
+/** `GET /stats/bucket` — the archives behind one clicked bar. Only fetched once something is
+ *  selected. Deliberately *not* `keepPreviousData`: the panel labels its list from the current
+ *  selection, so holding the previous bucket's archives through the next fetch would caption one
+ *  bucket's archives with another bucket's name. These queries are one library scan (~15 ms), which
+ *  is cheaper than that being wrong for a frame. */
+export function useStatsBucket(selection: StatsBucketSelection | null) {
+  const params = new URLSearchParams({ metric: selection?.metric ?? "" })
+  if (selection?.from) params.set("from", selection.from)
+  if (selection?.to) params.set("to", selection.to)
+  if (selection?.key) params.set("key", selection.key)
+  return useQuery({
+    queryKey: ["stats-bucket", selection?.metric, selection?.from, selection?.to, selection?.key],
+    queryFn: () => fetchJson<StatsBucketArchives>(`/stats/bucket?${params.toString()}`),
+    enabled: selection !== null,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+/** `GET /stats/overview` — the `/stats` page's dashboard aggregates. Computed server-side over
+ *  the whole library on every request (no caching layer of its own), so it is fetched with a
+ *  generous stale time rather than polled. */
+export function useStatsOverview() {
+  return useQuery({
+    queryKey: ["stats-overview"],
+    queryFn: () => fetchJson<StatsOverview>("/stats/overview"),
+    staleTime: 5 * 60 * 1000,
   })
 }
 
@@ -759,27 +816,104 @@ export interface UpdateCheckResult {
   upstreamPull: boolean
 }
 
-/** Server-side version/update check (Zipline-style `/api/version`); resolves `null` on any
- * failure instead of throwing, mirroring the old client-side GitHub fetch behavior. */
+/** The raw `/api/version` payload, for the version dialog. `useUpdateCheck` below derives its
+ * narrower view from this same query (same key *and* same `queryFn`, so the two share one request
+ * and one cache entry): the dialog needs exactly the cases that hook collapses into `null` — up to
+ * date, check disabled, GitHub unreachable — to be told apart. */
+export function useVersionDetails() {
+  return useQuery({
+    queryKey: ["update-check"],
+    queryFn: () => fetchJson<VersionCheckResponse>("/version"),
+    staleTime: UPDATE_CHECK_STALE_TIME_MS,
+    retry: false,
+  })
+}
+
+/** Server-side version/update check (Zipline-style `/api/version`); resolves `null` when there is
+ * nothing to advertise, mirroring the old client-side GitHub fetch behavior. */
 export function useUpdateCheck() {
   return useQuery({
     queryKey: ["update-check"],
-    queryFn: async (): Promise<UpdateCheckResult | null> => {
-      try {
-        const result = await fetchJson<VersionCheckResponse>("/version")
-        if (!result.enabled || !result.data.latest || result.data.isLatest) return null
-        return {
-          latestVersion: result.data.latest.tag,
-          releaseUrl: result.data.latest.url,
-          isUpstream: result.data.isUpstream,
-          upstreamPull: result.data.latest.commit?.pull ?? false,
-        }
-      } catch {
-        return null
-      }
-    },
+    queryFn: () => fetchJson<VersionCheckResponse>("/version"),
     staleTime: UPDATE_CHECK_STALE_TIME_MS,
     retry: false,
+    select: (result): UpdateCheckResult | null => {
+      if (!result.enabled || !result.data.latest || result.data.isLatest) return null
+      return {
+        latestVersion: result.data.latest.tag,
+        releaseUrl: result.data.latest.url,
+        isUpstream: result.data.isUpstream,
+        upstreamPull: result.data.latest.commit?.pull ?? false,
+      }
+    },
+  })
+}
+
+/**
+ * Release notes for this browser's own upgrade, newest first, or `null` when there is nothing to
+ * say.
+ *
+ * Costs nothing in the steady state: the running build is read off the already-fetched public
+ * `useServerInfo`, and a request only goes out when the build this browser last saw differs from
+ * it. That request is the whole of what this feature adds, and it happens once per upgrade per
+ * browser.
+ *
+ * `null` covers every "nothing to show" case alike — a first visit, an unchanged build, a
+ * deployment with `--disable-update-check` (the backend answers `enabled: false` and never calls
+ * GitHub), GitHub unreachable, or genuinely no releases published in between.
+ */
+export function useReleaseNotes(enabled: boolean) {
+  const info = useServerInfo()
+  const running: BuildIdentity | null = info.data
+    ? { version: info.data.version, sha: info.data.version_name ?? "" }
+    : null
+
+  /**
+   * The upgrade window, resolved **once** as soon as the running build is known — not re-derived
+   * on every query run.
+   *
+   * This is load-bearing rather than tidiness. Showing the notes moves the seen-build marker
+   * forward, and the marker is what the window is derived from: re-deriving it on a routine
+   * refetch (React Query does one on window focus) would answer "nothing to show" and the modal
+   * would vanish under whoever was still reading it. Freezing the window here makes `queryFn`
+   * idempotent, so a refetch reproduces exactly the same sections.
+   *
+   * Resolved during render, guarded on `undefined`, rather than from an effect — the same "adjust
+   * state during render" pattern `SettingsPage`'s language sync already uses, which avoids both the
+   * extra render pass an effect costs and the `set-state-in-effect` lint rule.
+   */
+  const [since, setSince] = useState<string | null | undefined>(undefined)
+  if (since === undefined && running) {
+    const seen = readSeenBuild()
+    setSince(seen !== null && buildChanged(seen, running) ? sinceIdentity(seen) : null)
+  }
+
+  return useQuery({
+    // Keyed by the frozen window, so a remount of the overlay that re-resolves to `null` (the
+    // upgrade already acknowledged) gets its own cache entry rather than the previous sections.
+    queryKey: ["release-notes", since ?? "none"],
+    enabled: enabled && since !== undefined,
+    retry: false,
+    // A notice about an upgrade that already happened, not a live signal.
+    staleTime: Infinity,
+    queryFn: async (): Promise<ChangelogRelease[] | null> => {
+      if (!running) return null
+      if (!since) {
+        // First visit, an unchanged build, or a build that cannot identify itself: remember where
+        // we are so the *next* change has a "before" to compare against.
+        writeSeenBuild(running)
+        return null
+      }
+      const response = await fetchJson<VersionCheckResponse>(
+        `/version?since=${encodeURIComponent(since)}`,
+      )
+      // An absent `changelog` means the backend could not reach GitHub, which is not the same as
+      // "nothing was published in between": leave the marker alone so the next load asks again,
+      // instead of silently spending this upgrade's one notice on a rate-limit error.
+      if (!response.changelog) return null
+      writeSeenBuild(running)
+      return response.changelog.length > 0 ? response.changelog : null
+    },
   })
 }
 
@@ -819,6 +953,8 @@ export function useLogout() {
         logged_in: false,
         using_default_password: false,
         guest_mode_enabled: false,
+        first_run_wizard_available: false,
+        first_run_wizard_pending: false,
       })
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       clearSearchNavigationState()

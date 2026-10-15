@@ -40,12 +40,23 @@ services:
       # a redundant re-download of the same day's database.
       - lrr-try-geoip:/var/lib/GeoIP
     environment:
+      # `lrr-try-temp:/temp` above is only useful if the server actually writes there: `--temp-dir`
+      # defaults to `./temp` in the image's working directory, i.e. the container's writable layer,
+      # which a container recreate discards — taking the resize/animation conversion cache with it.
+      - LANRURUGI_TEMP_DIR=/temp
       # Optional — a free MaxMind account's own credentials
       # (https://www.maxmind.com/en/geolite2/signup), used only by `docker-entrypoint.sh`'s
       # `geoipupdate` call to fetch/refresh the GeoLite2-City database `lanrurugi_api::geoip` reads
       # for activity-log geo data. Unset = no geo data recorded, everything else works unaffected.
       - LANRURUGI_GEOIP_ACCOUNT_ID=${LANRURUGI_GEOIP_ACCOUNT_ID:-}
       - LANRURUGI_GEOIP_LICENSE_KEY=${LANRURUGI_GEOIP_LICENSE_KEY:-}
+      # Optional — suppresses the first-run setup wizard entirely (it neither auto-opens nor
+      # appears on the Settings page). Set to a truthy value (`1`, `true`, `yes`, `on`) to disable
+      # it; anything else is a hard startup error, so this must default to a real value rather than
+      # to the empty string the two lines above use (`LANRURUGI_DISABLE_FIRST_RUN_WIZARD=` makes the
+      # server refuse to boot with "a value is required for '--disable-first-run-wizard'", not
+      # "unset").
+      - LANRURUGI_DISABLE_FIRST_RUN_WIZARD=${LANRURUGI_DISABLE_FIRST_RUN_WIZARD:-false}
     restart: unless-stopped
 
 volumes:

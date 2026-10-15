@@ -4332,6 +4332,7 @@ pub(crate) mod tests {
                 force_secure_cookies: false,
             },
             disable_update_check: true,
+            disable_first_run_wizard: false,
             library: crate::LibraryPaths {
                 archive_dir: std::env::temp_dir(),
                 thumb_dir: std::env::temp_dir(),

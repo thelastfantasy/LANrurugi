@@ -134,6 +134,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
             force_secure_cookies: false,
         },
         disable_update_check: true,
+        disable_first_run_wizard: false,
         library: LibraryPaths {
             archive_dir: args.library_dir.clone(),
             thumb_dir,

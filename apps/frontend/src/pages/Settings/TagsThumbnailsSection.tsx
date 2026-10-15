@@ -3,37 +3,11 @@ import { useTranslation } from "react-i18next"
 import { useRegenThumbnails } from "@/api/hooks"
 import { NumberInput, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
+import { TimezoneSelect } from "@/components/Form"
 import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 import { FONT_SIZE_SM } from "@/theme"
 
 import { ActionRow, CheckboxRow, ImageSupportBadge, Row } from "./shared"
-
-// Full IANA timezone list, grouped by continent (phpBB-style), built from
-// `Intl.supportedValuesOf('timeZone')` so it stays in sync with the backend's `chrono-tz`.
-const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = (() => {
-  const supported: string[] = (Intl.supportedValuesOf?.("timeZone") as string[] | undefined) ?? []
-  const groups = new Map<string, string[]>()
-  for (const tz of supported) {
-    const area = tz.includes("/") ? tz.slice(0, tz.indexOf("/")) : "Other"
-    const bucket = groups.get(area)
-    if (bucket) {
-      bucket.push(tz)
-    } else {
-      groups.set(area, [tz])
-    }
-  }
-  const order = ["Africa", "America", "Antarctica", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific"]
-  const sortedAreas = [...groups.keys()].sort((a, b) => {
-    const ai = order.indexOf(a)
-    const bi = order.indexOf(b)
-    return (ai === -1 ? order.length : ai) - (bi === -1 ? order.length : bi) || a.localeCompare(b)
-  })
-  return sortedAreas.map((area) => ({ label: area, zones: (groups.get(area) ?? []).sort() }))
-})()
-
-function isKnownTimezone(tz: string): boolean {
-  return tz === "UTC" || TIMEZONE_GROUPS.some((g) => g.zones.includes(tz))
-}
 
 export function TagsThumbnailsSection({
   thumbnailFormat,
@@ -181,36 +155,7 @@ export function TagsThumbnailsSection({
           <Row label={t("settings.timezone")}>
             {/* `date_added` display + day-range search resolve in this IANA timezone so every
                 viewer agrees on which day an archive belongs to, regardless of browser timezone. */}
-            <select
-              className="stdbtn"
-              value={isKnownTimezone(timezone) ? timezone : "__custom__"}
-              onChange={(e) => {
-                if (e.target.value === "__custom__") return
-                setTimezone(e.target.value)
-              }}
-            >
-              <option value="UTC">UTC</option>
-              {TIMEZONE_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.zones.map((tz) => (
-                    <option key={tz} value={tz}>{tz}</option>
-                  ))}
-                </optgroup>
-              ))}
-              {!isKnownTimezone(timezone) && (
-                <option value="__custom__">{t("settings.custom")} ({timezone})</option>
-              )}
-            </select>
-            {!isKnownTimezone(timezone) && (
-              <input
-                className="stdinput"
-                style={{ width: "100%", marginTop: 4 }}
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                type="text"
-                placeholder="e.g. Asia/Tokyo"
-              />
-            )}
+            <TimezoneSelect value={timezone} onChange={setTimezone} ariaLabel={t("settings.timezone")} />
             <br />
             {t("settings.ianaTimezoneIdentifierEG")}
           </Row>

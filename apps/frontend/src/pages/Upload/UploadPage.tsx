@@ -3,9 +3,10 @@ import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { fetchJson, sendFormDataWithProgress } from "@/api/client"
+import { fetchJson } from "@/api/client"
 import { useAddToQueue, useCategories, useCreateCategory, useDownloadQueue, usePlugins } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
+import { uploadResumable } from "@/api/uploadSession"
 import { Tooltip } from "@/components/common-ui/Display"
 import { formatBytes, STATE_COLOR } from "@/components/Display"
 import { newCategoryDialog } from "@/dialog"
@@ -37,21 +38,40 @@ export function Upload() {
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
   const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null)
+  // Bytes the server already held when this upload started, when it was a resume of an
+  // interrupted one — surfaced so the transfer does not look stuck at 60% for no reason.
+  const [resumedFrom, setResumedFrom] = useState<number | null>(null)
   useApplyTheme()
   useDocumentTitle(t("upload.uploadCenter") ?? undefined)
 
   async function handleUpload(toUpload: File) {
     setUploadingCount((n) => n + 1)
     setUploadProgress({ loaded: 0, total: toUpload.size })
+    setResumedFrom(null)
     try {
-      const formData = new FormData()
-      formData.append("file", toUpload)
-      if (category) formData.append("catid", category)
-
-      // The queue item's own outcome is the source of truth, not this response; refetch surfaces it.
-      await sendFormDataWithProgress("PUT", "/archives/upload", formData, (loaded, total) =>
-        setUploadProgress({ loaded, total }),
-      ).catch(() => null)
+      // Chunked and resumable: a dropped connection costs one chunk, and re-picking the same file
+      // continues where the server left off rather than starting over. The ingest that runs at
+      // `complete` is the same one the old one-shot multipart call ran, so the queue item, its
+      // overwrite/rename prompts, and the activity records are all unchanged.
+      await uploadResumable(
+        toUpload,
+        {
+          catid: category || undefined,
+          onResume: (offset) => setResumedFrom(offset > 0 ? offset : null),
+          onProgress: (loaded, total) => setUploadProgress({ loaded, total }),
+        },
+      ).catch((err: unknown) => {
+        // The queue item's own outcome is the source of truth when the transfer worked; a failure
+        // *before* that (network, expired session, ingest refusal) has no queue row to show, so it
+        // is reported here instead of vanishing. The session's staged bytes stay on the server, so
+        // picking the same file again resumes it.
+        toast({
+          heading: t("upload.uploadFailed"),
+          text: err instanceof Error ? err.message : String(err),
+          icon: "error",
+        })
+        return null
+      })
       await Promise.all([
         downloadQueue.refetch(),
         queryClient.invalidateQueries({ queryKey: ["archives"] }),
@@ -60,6 +80,7 @@ export function Upload() {
     } finally {
       setUploadingCount((n) => n - 1)
       setUploadProgress(null)
+      setResumedFrom(null)
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }
@@ -216,6 +237,12 @@ export function Upload() {
                 {Math.round((uploadProgress.loaded / uploadProgress.total) * 100)}%)
               </span>
             </div>
+          )}
+
+          {resumedFrom !== null && (
+            <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.72, marginTop: 4, textAlign: "center" }}>
+              {t("upload.resumingFrom", { size: formatBytes(resumedFrom) })}
+            </p>
           )}
 
           <br />

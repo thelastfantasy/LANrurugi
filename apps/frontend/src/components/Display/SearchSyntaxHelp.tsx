@@ -62,8 +62,8 @@ export function SearchSyntaxHelp() {
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxAttributes")} <SyntaxExample>is:new</SyntaxExample>,{" "}
-          <SyntaxExample>is:completed</SyntaxExample>, <SyntaxExample>has:patch</SyntaxExample>,{" "}
-          <SyntaxExample>in:tank</SyntaxExample>
+          <SyntaxExample>is:reading</SyntaxExample>, <SyntaxExample>is:completed</SyntaxExample>,{" "}
+          <SyntaxExample>has:patch</SyntaxExample>, <SyntaxExample>in:tank</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxBookmarkName")}{" "}
@@ -80,6 +80,10 @@ export function SearchSyntaxHelp() {
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxSizeRead")} <SyntaxExample>size:&gt;=100M</SyntaxExample>,{" "}
           <SyntaxExample>read:&gt;=80%</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxProgressBand")} <SyntaxExample>read:40-50</SyntaxExample>,{" "}
+          <SyntaxExample>progress:0-25</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxWildcard")}</li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>

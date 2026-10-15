@@ -6,13 +6,20 @@ import { fixturePath } from "./fixturePath"
 import { expect, test } from "./fixtures"
 
 // Covers the large-archive upload regression (data-model.md Regression Fixture #2): axum's
-// `Multipart` extractor enforces a 2 MB `DefaultBodyLimit` by default; without the explicit
-// `DefaultBodyLimit::max(...)` layer (crates/lanrurugi-api/src/upload.rs), an upload past 2 MB
-// fails with "Error parsing `multipart/form-data` request" instead of succeeding.
+// `Multipart` extractor enforces a 2 MB `DefaultBodyLimit` by default, and the one-shot
+// `PUT /archives/upload` route therefore disables the body limit explicitly
+// (`DefaultBodyLimit::disable()` in crates/lanrurugi-api/src/upload.rs) — without that, an upload
+// past 2 MB fails with "Error parsing `multipart/form-data` request" instead of succeeding.
 //
-// To verify this test actually catches the regression: temporarily remove the
-// `.layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))` call in upload.rs's route registration,
-// confirm this test fails, then restore it.
+// The UI no longer takes that route (it uploads in chunks through
+// `/archives/upload/session/{id}`, whose body limit is a deliberate 64 MiB per chunk), so this test
+// now exercises the resumable path end to end with a file several chunks' worth of "large" for a
+// browser. The one-shot route is still served for API clients and still covered by
+// `crates/lanrurugi-server/tests/`-level contract tests.
+//
+// To verify this test still catches the original regression: temporarily remove the
+// `DefaultBodyLimit::disable()` layer in upload.rs's one-shot route registration and confirm the
+// API-level tests fail (the browser test no longer routes through it); then restore it.
 test.describe("upload", { tag: "@upload" }, () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post("/api/login", { form: { password: "kamimamita" } })

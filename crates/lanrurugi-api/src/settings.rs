@@ -467,6 +467,11 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // Whether a successful manual split deletes the original archive/record. Defaults to false:
     // by default keep the original and also create the split ZIPs.
     ("archive_split_delete_original_enabled", false),
+    // First-run wizard's own "handled, don't auto-open again" marker. Written by the wizard page
+    // (`/welcome`) when the user finishes or skips it, never by the Settings page — the same
+    // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as
+    // `replacetitles` above. Read by `login::status` to compute `first_run_wizard_pending`.
+    ("first_run_wizard_done", false),
 ];
 
 /// Normalizes a configured/request origin to a `scheme://host:port` string with a known default
@@ -1149,6 +1154,19 @@ mod validate_setting_field_tests {
         assert_eq!(
             validate_setting_field("subfolders_to_tankoubons", &json!(false)).unwrap(),
             "0"
+        );
+    }
+
+    /// The first-run wizard writes this field directly (it has no Settings-page control), so the
+    /// write-side allowlist must accept it or the wizard could never stop auto-opening.
+    #[test]
+    fn accepts_the_first_run_wizard_done_marker() {
+        assert!(BOOL_FIELDS
+            .iter()
+            .any(|(k, default)| *k == "first_run_wizard_done" && !*default));
+        assert_eq!(
+            validate_setting_field("first_run_wizard_done", &json!(true)).unwrap(),
+            "1"
         );
     }
 
