@@ -2154,6 +2154,7 @@
   "stats.highlightedAxes": "主要偏好维度",
   "stats.prefNamespace.language": "语言",
   "stats.prefNamespace.artist": "作者",
+  "stats.prefNamespace.circle": "社团",
   "stats.prefNamespace.cosplayer": "Coser",
   "stats.noSuchTags": "该命名空间暂无标签。",
   "stats.ratingAmongRead": "已读档案的评分分布",

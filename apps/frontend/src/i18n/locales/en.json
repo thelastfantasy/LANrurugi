@@ -2154,6 +2154,7 @@
   "stats.highlightedAxes": "Preferred axes",
   "stats.prefNamespace.language": "Language",
   "stats.prefNamespace.artist": "Author",
+  "stats.prefNamespace.circle": "Circle",
   "stats.prefNamespace.cosplayer": "Cosplayer",
   "stats.noSuchTags": "No tags in this namespace yet.",
   "stats.ratingAmongRead": "Ratings among read archives",

@@ -792,7 +792,7 @@ export interface StatsNamespaceTags {
 export interface StatsPreferences {
   read_archives: number
   namespaces: { namespace: string; weight: number; archives: number }[]
-  /** The promoted axes (`language`, `artist`, `cosplayer`) — always shown, in that order, however
+  /** The promoted axes (`language`, `artist`, `circle`, `cosplayer`) — always shown, in that order, however
    *  low they rank among all namespaces; excluded from `by_namespace`. */
   highlights: StatsNamespaceTags[]
   /** Top tags for the remaining namespaces. */

@@ -2154,6 +2154,7 @@
   "stats.highlightedAxes": "主な傾向",
   "stats.prefNamespace.language": "言語",
   "stats.prefNamespace.artist": "作者",
+  "stats.prefNamespace.circle": "サークル",
   "stats.prefNamespace.cosplayer": "コスプレイヤー",
   "stats.noSuchTags": "この名前空間のタグはまだありません。",
   "stats.ratingAmongRead": "閲覧済みアーカイブの評価分布",

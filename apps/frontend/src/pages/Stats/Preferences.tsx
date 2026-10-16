@@ -13,7 +13,7 @@ function namespaceLabelKey(namespace: string): string {
   return `stats.prefNamespace.${namespace}`
 }
 
-/** One promoted axis (`language` / `artist` / `cosplayer`) as its own block: its tags, each with
+/** One promoted axis (`language` / `artist` / `circle` / `cosplayer`) as its own block: its tags, each with
  *  the bar length of its preference weight and the number of read archives behind it. */
 function HighlightBlock({
   namespace,

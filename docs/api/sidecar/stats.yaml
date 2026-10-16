@@ -415,7 +415,7 @@ components:
         highlights:
           type: array
           description: >-
-            The promoted axes — `language`, `artist` and `cosplayer`, in that order, whichever of
+            The promoted axes — `language`, `artist`, `circle` and `cosplayer`, in that order, whichever of
             them the library actually has. Always present, however low they rank among all
             namespaces, and deliberately excluded from `by_namespace` so nothing is listed twice.
           items: { $ref: "#/components/schemas/StatsNamespaceTags" }

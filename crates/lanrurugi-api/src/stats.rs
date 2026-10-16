@@ -90,12 +90,15 @@ const NON_CONTENT_NAMESPACES: &[&str] = &["date_added", "timestamp", "source", "
 const NON_AXIS_TAG_VALUES: &[(&str, &str)] = &[("language", "translated")];
 
 /// Namespaces the preferences section promotes into their own list, in display order: the axes a
-/// reader actually picks works by (interface language, author, cosplayer), which otherwise share a
-/// single "top tags per namespace" list with the long tail of content tags — where a small library
-/// can leave them out of the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the
-/// per-namespace cap. Whatever appears here is excluded from [`Preferences::by_namespace`], so
-/// nothing is listed twice. Adding another axis is a one-line change to this roster.
-const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "cosplayer"];
+/// reader actually picks works by (interface language, author, circle, cosplayer), which otherwise
+/// share a single "top tags per namespace" list with the long tail of content tags — where a small
+/// library can leave them out of the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the
+/// per-namespace cap. `circle` is here for the same reason `artist` is: a doujin circle is a much
+/// better predictor of what a reader wants next than the content tags it competes with, and on this
+/// library its weight is far below the cap that would otherwise hide it. Whatever appears here is
+/// excluded from [`Preferences::by_namespace`], so nothing is listed twice. Adding another axis is a
+/// one-line change to this roster.
+const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "circle", "cosplayer"];
 
 /// Half-life of the recency term in [`preference_weights`], in days: a read half as recent as
 /// another counts half as much.
@@ -398,7 +401,10 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
         },
         preferences: Preferences {
             read_archives,
-            namespaces: namespace_weights(&archives, &weights, &excluded),
+            namespaces: namespace_weights(&archives, &weights, &excluded)
+                .into_iter()
+                .take(MAX_NAMESPACES)
+                .collect(),
             highlights: tags_for_namespaces(
                 &archives,
                 &weights,
@@ -412,6 +418,7 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
                 // The promoted axes are already listed on their own above.
                 let rest: Vec<String> = namespace_weights(&archives, &weights, &excluded)
                     .into_iter()
+                    .take(MAX_NAMESPACES)
                     .map(|ns| ns.namespace)
                     .filter(|ns| !HIGHLIGHTED_NAMESPACES.contains(&ns.as_str()))
                     .collect();
@@ -1220,6 +1227,10 @@ fn preference_weights(
 /// namespace contributes its archive's weight **once per archive**, however many of its tags that
 /// archive carries — otherwise a work with three `female:` tags would read as three times the
 /// preference for that namespace as one with a single tag.
+/// Every namespace present among the weighted archives, heaviest first — deliberately *not* capped
+/// here, because the promoted roster below must be able to find an axis however low it ranks. The
+/// chart's own top-[`MAX_NAMESPACES`] cut is applied by that caller; capping inside this function
+/// made the roster's "always shown" promise false for any axis outside the top twelve.
 fn namespace_weights(
     archives: &[Archive],
     weights: &HashMap<String, f64>,
@@ -1255,7 +1266,6 @@ fn namespace_weights(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.namespace.cmp(&b.namespace))
     });
-    out.truncate(MAX_NAMESPACES);
     out
 }
 
@@ -1795,7 +1805,7 @@ mod tests {
         let now = 1_800_000_000;
         let archives = vec![read_archive(
             "a",
-            "language:chinese,artist:alpha,cosplayer:somebody,tag:school",
+            "language:chinese,artist:alpha,circle:beta,cosplayer:somebody,tag:school",
             10,
             10,
             now,
@@ -1809,7 +1819,7 @@ mod tests {
         let order: Vec<&str> = highlights.iter().map(|n| n.namespace.as_str()).collect();
         assert_eq!(
             order,
-            vec!["language", "artist", "cosplayer"],
+            vec!["language", "artist", "circle", "cosplayer"],
             "roster order, not weight order"
         );
 
@@ -1824,6 +1834,57 @@ mod tests {
             .find(|n| n.namespace == "language")
             .unwrap();
         assert_eq!(language.tags[0].text, "chinese");
+    }
+
+    #[test]
+    fn a_promoted_axis_below_the_namespace_cap_still_gets_its_own_list() {
+        // Regression: `namespace_weights` used to truncate to `MAX_NAMESPACES` itself, so the roster
+        // could only find an axis that also made the chart's top twelve — a `circle` tag on one read
+        // archive (the real shape of this library) was silently dropped despite being promoted.
+        let now = 1_800_000_000;
+        // The circle-tagged archive is old (so its preference weight is small) while the filler
+        // namespaces are freshly read, which is what puts circle *below* the chart's cap: with equal
+        // weights the alphabetical tie-break would let it in and the test would prove nothing.
+        let mut archives = vec![read_archive(
+            "old",
+            "language:chinese,artist:alpha,circle:beta",
+            10,
+            10,
+            now - 400 * 86_400,
+        )];
+        for i in 0..(MAX_NAMESPACES + 4) {
+            archives.push(read_archive(
+                &format!("heavy{i}"),
+                &format!("heavy{i}:tag{i}"),
+                10,
+                10,
+                now,
+            ));
+        }
+        let weights = preference_weights(&archives, now, &HashMap::new(), &HashMap::new());
+        let excluded = excluded();
+
+        let chart: Vec<String> = namespace_weights(&archives, &weights, &excluded)
+            .into_iter()
+            .take(MAX_NAMESPACES)
+            .map(|n| n.namespace)
+            .collect();
+        assert!(
+            !chart.contains(&"circle".to_string()),
+            "the fixture must keep circle outside the chart's cap for this to test anything"
+        );
+
+        let roster: Vec<String> = HIGHLIGHTED_NAMESPACES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let highlights = tags_for_namespaces(&archives, &weights, &excluded, &roster);
+        assert!(
+            highlights.iter().any(|n| n.namespace == "circle"),
+            "a promoted axis is listed however far below the cap it ranks"
+        );
+        let circle = highlights.iter().find(|n| n.namespace == "circle").unwrap();
+        assert_eq!(circle.tags[0].text, "beta");
     }
 
     #[test]
