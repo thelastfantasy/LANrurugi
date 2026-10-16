@@ -1,3 +1,4 @@
+import { lazy,Suspense } from "react"
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
@@ -6,26 +7,43 @@ import { NotFoundPage } from "./components/Display/NotFoundPage"
 import { DialogHost } from "./dialog"
 import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
-import { ActivityPage } from "./pages/Activity"
-import { Batch } from "./pages/Batch"
-import { BookmarksPage } from "./pages/Bookmarks"
-import { Categories } from "./pages/Categories"
-import { Duplicates } from "./pages/Duplicates"
-import { Edit } from "./pages/Edit"
-import { FirstRunWizard } from "./pages/FirstRunWizard"
-import { Jobs } from "./pages/Jobs"
 import { Library } from "./pages/Library"
 import { Login } from "./pages/Login"
-import { Logs } from "./pages/Logs"
-import { Plugins } from "./pages/Plugins"
-import { PluginWizard } from "./pages/PluginWizard"
-import { Reader } from "./pages/Reader/Reader"
-import { Settings } from "./pages/Settings"
-import { Backup } from "./pages/Settings/Backup"
-import { Stats } from "./pages/Stats"
-import { TankoubonEdit } from "./pages/TankoubonEdit"
-import { Upload } from "./pages/Upload"
+import { RouteFallback } from "./RouteFallback"
 import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
+
+/**
+ * Route-level code splitting. Only the Library (the landing route) and the shell stay in the entry
+ * chunk; everything else arrives as its own chunk when its route is opened, which is also what keeps
+ * the heavy libraries out of the entry chunk — `recharts` is only reachable from Stats, `codemirror`
+ * only from the plugin wizard, and both used to be bundled into the initial 3.6 MB script every page
+ * had to download and parse.
+ */
+const ActivityPage = lazy(() => import("./pages/Activity").then((m) => ({ default: m.ActivityPage })))
+const Batch = lazy(() => import("./pages/Batch").then((m) => ({ default: m.Batch })))
+const BookmarksPage = lazy(() =>
+  import("./pages/Bookmarks").then((m) => ({ default: m.BookmarksPage })),
+)
+const Categories = lazy(() => import("./pages/Categories").then((m) => ({ default: m.Categories })))
+const Duplicates = lazy(() => import("./pages/Duplicates").then((m) => ({ default: m.Duplicates })))
+const Edit = lazy(() => import("./pages/Edit").then((m) => ({ default: m.Edit })))
+const FirstRunWizard = lazy(() =>
+  import("./pages/FirstRunWizard").then((m) => ({ default: m.FirstRunWizard })),
+)
+const Jobs = lazy(() => import("./pages/Jobs").then((m) => ({ default: m.Jobs })))
+const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })))
+const Plugins = lazy(() => import("./pages/Plugins").then((m) => ({ default: m.Plugins })))
+const PluginWizard = lazy(() =>
+  import("./pages/PluginWizard").then((m) => ({ default: m.PluginWizard })),
+)
+const Reader = lazy(() => import("./pages/Reader/Reader").then((m) => ({ default: m.Reader })))
+const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })))
+const Backup = lazy(() => import("./pages/Settings/Backup").then((m) => ({ default: m.Backup })))
+const Stats = lazy(() => import("./pages/Stats").then((m) => ({ default: m.Stats })))
+const TankoubonEdit = lazy(() =>
+  import("./pages/TankoubonEdit").then((m) => ({ default: m.TankoubonEdit })),
+)
+const Upload = lazy(() => import("./pages/Upload").then((m) => ({ default: m.Upload })))
 
 /** Forces Reader to remount when the archive id changes, so per-archive in-memory image/blob
  * state (including the displayed fallback bitmap and progress-derived current page) never leaks
@@ -42,6 +60,7 @@ export function App() {
       <FirstRunWizardGate />
       <ToastContainer limit={7} theme="light" />
       <DialogHost />
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route
           path="/login"
@@ -91,6 +110,7 @@ export function App() {
           </Route>
         </Route>
       </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

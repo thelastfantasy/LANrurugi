@@ -56,6 +56,75 @@ static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 /// overlay hit on the same page load.
 static CHANGELOG_CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
+/// How long a *failed* lookup is remembered.
+///
+/// Without this, a deployment where GitHub is unreachable — no egress at all, or simply a repository
+/// with no releases, which 404s `/releases/latest` — pays two live round trips and two warnings on
+/// *every page load*, since only successful answers ever populate the caches above. Short enough
+/// that a transient failure is retried by the next visitor, long enough to take the check off the
+/// page-load path.
+const FAILURE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// The key whose lookup failed, and when. Separate slots for the two paths because their cache keys
+/// differ; a failure of one says nothing about the other.
+static FAILED: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+static CHANGELOG_FAILED: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+/// Built once so the TLS connection to GitHub is reused across requests: `Client::new()` per call
+/// made even a *failed* lookup pay a fresh handshake (measured at ~380 ms cold vs ~57 ms warm).
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            // `reqwest`'s default is no timeout at all, which would let an unresponsive GitHub hold
+            // a page load open indefinitely.
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(8))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// Whether a remembered failure still covers `key` at `now`. Pure so the policy is testable without
+/// waiting five minutes or reaching the network.
+fn failure_covers(entry: Option<&(String, Instant)>, key: &str, now: Instant) -> bool {
+    match entry {
+        Some((failed_key, at)) => failed_key == key && now.duration_since(*at) < FAILURE_TTL,
+        None => false,
+    }
+}
+
+fn recently_failed(slot: &Mutex<Option<(String, Instant)>>, key: &str) -> bool {
+    failure_covers(slot.lock().unwrap().as_ref(), key, Instant::now())
+}
+
+fn remember_failure(slot: &Mutex<Option<(String, Instant)>>, key: &str) {
+    *slot.lock().unwrap() = Some((key.to_string(), Instant::now()));
+}
+
+/// The body returned when GitHub cannot be consulted — also used while a remembered failure is
+/// still fresh, so a failing deployment answers page loads without leaving the process.
+fn fail_open_body(version: &str, sha: Option<&str>) -> Response {
+    axum::Json(json!({
+        "enabled": true,
+        "details": details_json(version, sha),
+        "data": {
+            "isUpstream": false,
+            "isRelease": false,
+            "isLatest": true,
+            "version": {
+                "tag": version,
+                "sha": sha,
+                "url": Value::Null,
+            },
+            "latest": Value::Null,
+        },
+        "cached": false,
+    }))
+    .into_response()
+}
+
 /// Most releases one changelog response may carry. A user returning after a long absence would
 /// otherwise get every release ever published in a single payload; 30 is far more than any real
 /// gap between two upgrades of a self-hosted instance.
@@ -150,7 +219,7 @@ fn sha_match(first: &str, second: &str) -> bool {
 }
 
 async fn github_get(path: &str) -> Result<Value, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let url = format!("{}{}", github_api(), path);
     let mut request = client
         .get(&url)
@@ -434,6 +503,9 @@ async fn changelog_for(since: Option<&str>, version: &str, sha: Option<&str>) ->
             return Some(cached.data.clone());
         }
     }
+    if recently_failed(&CHANGELOG_FAILED, &key) {
+        return None;
+    }
     match changelog_since(since, version, sha).await {
         Ok(entries) => {
             let value = Value::Array(entries);
@@ -446,6 +518,7 @@ async fn changelog_for(since: Option<&str>, version: &str, sha: Option<&str>) ->
         }
         Err(e) => {
             tracing::warn!(error = %e, "changelog lookup failed");
+            remember_failure(&CHANGELOG_FAILED, &key);
             None
         }
     }
@@ -511,6 +584,11 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
         return axum::Json(body).into_response();
     }
 
+    if recently_failed(&FAILED, &cache_key) {
+        // A recent failure is still fresh: answer from it instead of paying the round trips again.
+        return fail_open_body(version, sha.as_deref());
+    }
+
     match fetch_version_info(version, sha.as_deref()).await {
         Ok(data) => {
             *CACHE.lock().unwrap() = Some(Cached {
@@ -531,25 +609,10 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
         }
         Err(e) => {
             tracing::warn!(error = %e, "version lookup failed");
+            remember_failure(&FAILED, &cache_key);
             // Fail open with current-only data: the UI may show the version badge but must not
             // claim a nonexistent update is available just because GitHub was unreachable.
-            axum::Json(json!({
-                "enabled": true,
-                "details": details_json(version, sha.as_deref()),
-                "data": {
-                    "isUpstream": false,
-                    "isRelease": false,
-                    "isLatest": true,
-                    "version": {
-                        "tag": version,
-                        "sha": sha,
-                        "url": Value::Null,
-                    },
-                    "latest": Value::Null,
-                },
-                "cached": false,
-            }))
-            .into_response()
+            fail_open_body(version, sha.as_deref())
         }
     }
 }
@@ -557,6 +620,43 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remembered_failure_covers_only_its_own_key_and_only_while_fresh() {
+        let now = Instant::now();
+        let fresh = ("v1,abc".to_string(), now - Duration::from_secs(30));
+        assert!(failure_covers(Some(&fresh), "v1,abc", now));
+        assert!(
+            !failure_covers(Some(&fresh), "v2,def", now),
+            "a failure of one lookup must not suppress another version's check"
+        );
+        let stale = (
+            "v1,abc".to_string(),
+            now - FAILURE_TTL - Duration::from_secs(1),
+        );
+        assert!(
+            !failure_covers(Some(&stale), "v1,abc", now),
+            "past the TTL the next request retries instead of staying failed-open forever"
+        );
+        assert!(!failure_covers(None, "v1,abc", now));
+    }
+
+    #[tokio::test]
+    async fn fail_open_body_claims_no_update_and_needs_no_github() {
+        // What a failing deployment serves on every page load: the version badge may render, but it
+        // must never advertise a release that was not actually observed.
+        let response = fail_open_body("1.2.3", Some("abcdef1234567890"));
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["data"]["isLatest"], serde_json::json!(true));
+        assert_eq!(body["data"]["isRelease"], serde_json::json!(false));
+        assert_eq!(body["data"]["latest"], serde_json::Value::Null);
+        assert_eq!(body["data"]["version"]["tag"], serde_json::json!("1.2.3"));
+        assert_eq!(body["cached"], serde_json::json!(false));
+    }
 
     #[test]
     fn sha_match_accepts_either_prefix() {

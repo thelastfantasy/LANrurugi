@@ -1,3 +1,4 @@
+import { Suspense } from "react"
 import { useTranslation } from "react-i18next"
 import { NavLink, Outlet } from "react-router-dom"
 
@@ -7,6 +8,7 @@ import { UpdateBanner } from "@/components/Layout"
 import { useSession } from "@/session/SessionProvider"
 
 import { useApplySettingsLanguage } from "./i18n"
+import { RouteFallback } from "./RouteFallback"
 import { useApplyTheme } from "./theme"
 
 // Legacy's top nav (`<p id="nb">`) is a single centered link line; anonymous nav deliberately
@@ -48,7 +50,10 @@ export function Layout() {
       </p>
       <UpdateBanner />
       <ReleaseNotesOverlay />
-      <Outlet />
+      {/* Its own boundary: a page chunk arriving must not blank the navigation bar above it. */}
+      <Suspense fallback={<RouteFallback />}>
+        <Outlet />
+      </Suspense>
       <Footer />
     </div>
   )
