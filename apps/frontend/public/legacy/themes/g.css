@@ -1313,3 +1313,14 @@ textarea {
         "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei",
         sans-serif;
 }
+
+/* Reader toolbar's split fullscreen/fit control (`pages/Reader/FitMenuButton.tsx`). One border
+   around both halves, drawn in this theme's own `.ghost-btn` hover accent so the control reads as
+   part of the toolbar rather than as a legacy button. Deliberately no `overflow: hidden`: the two
+   halves carry their own half-pill radii, and clipping here would swallow a half's focus ring. */
+.reader-split-control {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #5f0d1f;
+    border-radius: 50px;
+}

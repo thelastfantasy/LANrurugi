@@ -1892,3 +1892,90 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .recharts-active-dot path {
   pointer-events: none;
 }
+
+/*
+ * Legacy's `div.ido` is `width: 99%` plus 5px padding and a 1px border under the default
+ * `content-box`, so it is always ~12px wider than its parent — on a phone that is a horizontal
+ * scrollbar on every page that uses it (settings, upload, jobs, logs, duplicates, plugins,
+ * categories). The higher-specificity selector fixes it without editing the theme files, which
+ * mirror legacy verbatim.
+ */
+body div.ido {
+  box-sizing: border-box;
+}
+
+/*
+ * Legacy-era admin pages size things with inline pixel widths — 400px textareas and columns on
+ * Upload/Batch/Categories, `.stdbtn`'s 150px minimum, the categories panel — which overflow a phone
+ * viewport and give the whole page a horizontal scrollbar. Inline styles can only be beaten with
+ * `!important`, so that is what this uses; the breakpoint keeps every desktop layout exactly as it
+ * was, and `max-width` (rather than `width`) leaves narrow content untouched.
+ */
+@media (max-width: 768px) {
+  body div.id1,
+  body .left-column,
+  body .right-column,
+  body .category-panel,
+  body textarea,
+  body input.stdbtn,
+  body h1 {
+    max-width: 100% !important;
+    /* These panels also set an inline `min-width` (400px on Batch/Categories) and `min-width`
+       outranks `max-width` in CSS, so the clamp is inert without this. */
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  body .left-column,
+  body .right-column,
+  body .category-panel {
+    display: block;
+  }
+
+  /* A page header that lays its title and a `.stdbtn` out in a flex row (`display: flex` on the
+     `h1`, no class to target) cannot shrink a 150px button, so the row overflows instead: let it
+     wrap. `flex-wrap` is inert on the block-level `h1`s everywhere else. */
+  body h1 {
+    flex-wrap: wrap;
+  }
+}
+
+/*
+ * A page shorter than the viewport — any wide/landscape page, which is most of the time on a phone
+ * — used to sit at the very top of the reader with dead space beneath it, because `#i3` is a plain
+ * flow block and `.reader-image`'s `align-self: center` (legacy's own rule) needs a flex parent to
+ * do anything. On phones only (the desktop reader fills its area, so centring is invisible there),
+ * make the image area a centring box with a viewport-relative height; the infinite-scroll column
+ * keeps its own top-aligned flow via `align-self`.
+ */
+@media (max-width: 768px) {
+  body #i3 {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 70dvh;
+  }
+
+  /* Only the infinite-scroll column keeps a top-aligned flow: it is always taller than the
+     viewport, and centring it would cut off its top. The single-spread wrapper (also `#display`)
+     is centred like everything else. */
+  body #i3 > #display.infinite-scroll {
+    align-self: flex-start;
+    width: 100%;
+  }
+}
+
+/*
+ * The page image is an inline-level element, so centring it inside the image area is a matter of
+ * `text-align` — and doing it *here* rather than by shrinking the whole reader container is what
+ * keeps the toolbar (a sibling of the image area) at full width, so its buttons cannot overlap when
+ * the current page is a narrow portrait scan. Harmless in the other fit modes, where the image fills
+ * the width anyway.
+ */
+#i3 {
+  text-align: center;
+  /* The page image is inline-level, so its line box adds leading/descender space below it — which
+     the fit-height measurement (based on the image's own height) cannot account for, leaving the
+     page a few pixels taller than the viewport. Zeroing the line height removes exactly that. */
+  line-height: 0;
+}

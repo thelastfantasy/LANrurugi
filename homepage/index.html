@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LANrurugi</title>
+    <meta
+      name="description"
+      content="LANrurugi — 用 Rust 与 React 重写的 LANraragi，自托管漫画/同人志库管理器，与现有 LANraragi 部署保持数据与 API 兼容。"
+    />
+    <meta property="og:title" content="LANrurugi" />
+    <meta
+      property="og:description"
+      content="自托管的漫画/同人志库管理器：Rust 后端、React 前端，沿用 LANraragi 的 Redis 数据与 HTTP API。"
+    />
+    <meta property="og:type" content="website" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="card">
+        <!-- Decorative only: an abstract "library shelf" of covers drawn with gradients, halftone
+             and text bars. No artwork is bundled — the page ships as plain HTML/CSS/JS. -->
+        <div class="shelf" aria-hidden="true">
+          <div class="cover c1"><span class="cover-title"></span><span class="cover-sub"></span></div>
+          <div class="cover c2"><span class="cover-title"></span><span class="cover-sub"></span></div>
+          <div class="cover c3">
+            <span class="cover-title"></span><span class="cover-sub"></span>
+            <span class="cover-badge">★</span>
+          </div>
+          <div class="cover c4"><span class="cover-title"></span><span class="cover-sub"></span></div>
+          <div class="cover c5"><span class="cover-title"></span><span class="cover-sub"></span></div>
+        </div>
+
+        <p class="eyebrow" data-i18n="eyebrow">自托管漫画 / 同人志库管理器</p>
+        <h1 class="title">LANrurugi</h1>
+        <p class="tagline" data-i18n="tagline">
+          LANraragi 的 Rust + React 重写版。继续使用你现有的 Redis 数据、档案目录和第三方客户端，界面与性能换成一套新的。
+        </p>
+
+        <ul class="features">
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2.5 2.5 0 0 0-2.5-2.5H4zM20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a2.5 2.5 0 0 1 2.5-2.5H20z"
+              />
+            </svg>
+            <span data-i18n="feature.compat">沿用 LANraragi 的 Redis 键、目录结构与 HTTP API，可直接替换现有部署</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M4 7h16M4 12h16M4 17h10" />
+            </svg>
+            <span data-i18n="feature.ingest">不合并、不改名的入库流程，保留原始压缩包与文件名</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="M15.5 15.5 21 21" />
+            </svg>
+            <span data-i18n="feature.search"
+              >命名空间检索（artist / circle / cosplayer / language……）与服务端搜索历史</span
+            >
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 3l7 3v5c0 4.2-2.9 7.9-7 9-4.1-1.1-7-4.8-7-9V6z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <span data-i18n="feature.api">Casbin 逐路由授权，242 个接口全部纳入管理，文档由源码生成</span>
+          </li>
+        </ul>
+
+        <section class="ai" aria-labelledby="ai-title">
+          <h2 id="ai-title" class="ai-title">
+            <span class="ai-badge" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
+                <path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />
+              </svg>
+            </span>
+            <span data-i18n="ai.title">AI 功能</span>
+          </h2>
+          <p class="ai-lead" data-i18n="ai.lead">
+            不是零散的玩具功能：几个过去只能手工完成的场景被做成了完整闭环，而且全部可选 —— 不配 LLM Key 也能优雅降级。
+          </p>
+          <ul class="ai-grid">
+            <li>
+              <h3 data-i18n="ai.wizard">AI 插件创建向导</h3>
+              <p data-i18n="ai.wizardBody">
+                用自然语言描述目标站点 → 自动生成 .ts 插件 → Deno 沙箱真实试运行 → 按报错自动修复 → 确认安装。页面抓取由系统执行，测试凭据永远不会发给 AI。
+              </p>
+            </li>
+            <li>
+              <h3 data-i18n="ai.recommend">智能推荐</h3>
+              <p data-i18n="ai.recommendBody">
+                阅读到卷尾时给出推荐卡片：本地 ONNX 嵌入模型粗筛，再由 LLM 精排；单行本以其最后一卷为锚点计算。
+              </p>
+            </li>
+            <li>
+              <h3 data-i18n="ai.translate">漫画翻译 / OCR</h3>
+              <p data-i18n="ai.translateBody">
+                逐页 OCR、字形掩膜擦除与译文排版，支持本地后端与云端后端；阅读页可随时开关。
+              </p>
+            </li>
+            <li>
+              <h3 data-i18n="ai.tankoubon">AI 单行本整理</h3>
+              <p data-i18n="ai.tankoubonBody">
+                从标题识别卷号与话数，建议单行本名称、章节标题和阅读顺序；也能把散档案自动归并成系列。
+              </p>
+            </li>
+          </ul>
+        </section>
+
+        <nav class="links" aria-label="LANrurugi">
+          <a class="btn primary" href="https://github.com/thelastfantasy/LANrurugi">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path
+                fill="currentColor"
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+              />
+            </svg>
+            <span data-i18n="link.github">GitHub 仓库</span>
+          </a>
+          <a class="btn" href="https://lanrurugi-docs.pages.dev/">
+            <span data-i18n="link.docs">文档</span>
+          </a>
+          <a class="btn" href="https://lanrurugi-api-swagger.pages.dev/">
+            <span data-i18n="link.api">API 参考</span>
+          </a>
+          <a class="btn" href="https://lanrurugi-sdk.pages.dev/">
+            <span data-i18n="link.sdk">插件 SDK</span>
+          </a>
+        </nav>
+
+        <div class="meta">
+          <p class="note" data-i18n="note">
+            需要自托管：一台能跑 Docker 的机器，加上你现有的 LANraragi 数据即可开始。
+          </p>
+          <div class="langs" role="group" aria-label="Language">
+            <button type="button" data-lang="zh" lang="zh-CN">中文</button>
+            <button type="button" data-lang="en" lang="en">English</button>
+            <button type="button" data-lang="ja" lang="ja">日本語</button>
+          </div>
+        </div>
+
+        <p class="footer">
+          Powered by
+          <a href="https://github.com/thelastfantasy/LANrurugi">LANrurugi</a>.
+        </p>
+      </section>
+    </main>
+    <script src="./script.js"></script>
+  </body>
+</html>

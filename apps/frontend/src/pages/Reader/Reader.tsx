@@ -75,6 +75,12 @@ import {
   resolveAdjacentArchive,
   setupArchiveNavigation,
 } from "./crossArchiveNav";
+import {
+  type FitAction,
+  FitMenuButton,
+  readStoredFitAction,
+  storeFitAction,
+} from "./FitMenuButton";
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
@@ -294,6 +300,17 @@ export function Reader() {
   >({});
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
   const supportsHover = useSupportsHover();
+  // Shared by both toolbars, so changing the primary action in one updates the other too.
+  const [fitAction, setFitAction] = useState<FitAction>(readStoredFitAction);
+  /**
+   * Fit-height used to be a flat `90vh` (98vh with the header hidden), which ignores the reader's
+   * own chrome — title, toolbar, the page-info line, the footer — so the page still ended up taller
+   * than the viewport and kept the scrollbar that this mode exists to remove. Measure the space that
+   * is actually free instead: everything above the image area plus everything below it, subtracted
+   * from the viewport. Both of those are independent of the image's own height, so the measurement
+   * cannot chase itself.
+   */
+  const [fitHeightPx, setFitHeightPx] = useState<number | null>(null);
   const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
   const [navState, setNavState] = useState<ArchiveNavState>({
     ids: [],
@@ -329,6 +346,81 @@ export function Reader() {
       | null;
   } | null>(null);
   const imageAreaRef = useRef<HTMLDivElement>(null);
+  /**
+   * Fit-height used to be a flat `90vh` (98vh with the header hidden), which ignores the reader's own
+   * chrome — title, toolbar, the page-info line, the footer — so the page still ended up taller than
+   * the viewport and kept the scrollbar this mode exists to remove. Measure the space that is
+   * actually free instead: everything above the image area plus everything below it, subtracted from
+   * the viewport. Neither depends on the image's own height, so the measurement cannot chase itself.
+   */
+  useEffect(() => {
+    if (readerSettings.fitMode !== FIT_MODE.FIT_HEIGHT || isFullscreen) {
+      return;
+    }
+    let frame = 0;
+    /** Height of everything painted below the image area — the page info line, the bottom toolbar,
+     *  the footer — measured element by element.
+     *
+     *  `document.documentElement.scrollHeight - areaBottom` is the obvious formula and it is wrong:
+     *  once the content fits, `scrollHeight` is clamped up to the viewport, so the "space below"
+     *  degenerates into the image's own height and every re-measure (the ResizeObserver fires on
+     *  each size change) shrinks the page by another few pixels — the endless shrink loop readers
+     *  saw in fit-height. Summing the siblings that actually sit below the area has no such
+     *  feedback: it does not depend on the image's height at all.
+     */
+    const bottomChrome = (area: HTMLElement): number => {
+      let total = 0;
+      let node: HTMLElement | null = area;
+      while (node && node !== document.body) {
+        const parent: HTMLElement | null = node.parentElement;
+        if (!parent) break;
+        const nodeBottom = node.getBoundingClientRect().bottom;
+        for (const sibling of Array.from(parent.children)) {
+          if (sibling === node) continue;
+          const box = sibling.getBoundingClientRect();
+          if (box.height > 0 && box.top >= nodeBottom - 1) {
+            // `getBoundingClientRect` excludes margins, and the toolbar/footer margins are exactly
+            // what made the sum a few pixels short (page still scrollable by ~7px).
+            const style = getComputedStyle(sibling);
+            total +=
+              box.height +
+              parseFloat(style.marginTop || "0") +
+              parseFloat(style.marginBottom || "0");
+          }
+        }
+        node = parent;
+      }
+      return total;
+    };
+    const measure = () => {
+      const area = imageAreaRef.current;
+      if (!area) return;
+      const box = area.getBoundingClientRect();
+      // The slack covers what a siblings-only walk cannot see: the ancestors' bottom padding and
+      // the footer's own margins (~15px measured, 20 leaves a few pixels of headroom so rounding
+      // never reintroduces a scrollbar).
+      const available = Math.round(
+        window.innerHeight - box.top - bottomChrome(area) - 20,
+      );
+      setFitHeightPx(available > 160 ? available : null);
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    schedule();
+    const settled = window.setTimeout(schedule, 250);
+    window.addEventListener("resize", schedule);
+    const observer = new ResizeObserver(schedule);
+    if (imageAreaRef.current) observer.observe(imageAreaRef.current);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settled);
+      window.removeEventListener("resize", schedule);
+      observer.disconnect();
+    };
+  }, [readerSettings.fitMode, readerSettings.hideHeader, readerSettings.infiniteScroll, isFullscreen]);
+
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
@@ -1490,8 +1582,18 @@ export function Reader() {
     if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       const heightVh =
         readerSettings.hideHeader || readerSettings.infiniteScroll ? 98 : 90;
-      imageStyle.maxHeight = `${heightVh}vh`;
-      outerStyle.width = "fit-content";
+      imageStyle.maxHeight =
+        fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
+      // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
+      // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
+      // between them is ~224px, so ~676px is where they stop overlapping. Measuring that instead
+      // feeds back into itself (the side groups widen with the container), hence a constant. Phones
+      // keep the plain full-width container — their toolbar is a separate floating bar, and
+      // `fit-content` there overflowed by a few pixels.
+      if (!isMobileToolbarViewport) {
+        outerStyle.width = "fit-content";
+        outerStyle.minWidth = "min(680px, 100%)";
+      }
     } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
       imageStyle.width = "100%";
       outerStyle.maxWidth = "98%";
@@ -1719,15 +1821,16 @@ export function Reader() {
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
-        <IconButton
-          variant="ghost-btn"
-          icon={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
-          title={t("reader.fullscreen") ?? undefined}
-          size={32}
-          style={{ marginRight: 13, borderRadius: "50%" }}
-          onClick={() => {
-            toggleFullScreen();
+        <FitMenuButton
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullScreen}
+          onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
+          primary={fitAction}
+          onPrimaryChange={(action) => {
+            setFitAction(action);
+            storeFitAction(action);
           }}
+          compact={isMobileToolbarViewport}
         />
       </div>
     </>
@@ -1917,15 +2020,16 @@ export function Reader() {
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
-        <IconButton
-          variant="ghost-btn"
-          icon={`fas ${isFullscreen ? "fa-compress" : "fa-expand"} fa-2x`}
-          title={t("reader.fullscreen") ?? undefined}
-          size={32}
-          style={{ borderRadius: "50%" }}
-          onClick={() => {
-            toggleFullScreen();
+        <FitMenuButton
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullScreen}
+          onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
+          primary={fitAction}
+          onPrimaryChange={(action) => {
+            setFitAction(action);
+            storeFitAction(action);
           }}
+          compact={isMobileToolbarViewport}
         />
         {moreMenu}
       </div>
@@ -2037,7 +2141,7 @@ export function Reader() {
           }
         >
           {readerSettings.infiniteScroll ? (
-            <div id="display" ref={infiniteScrollRootRef}>
+            <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
               {pages.data.pages.map((url, i) => {
                 const hasRealHeight = pageDimensions[i + 1] !== undefined;
                 const resumeDim =

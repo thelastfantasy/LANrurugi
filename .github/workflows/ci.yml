@@ -256,7 +256,7 @@ jobs:
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
-      # The three deliverables are built and published independently, each to its own Cloudflare
+      # The deliverables are built and published independently, each to its own Cloudflare
       # Pages project. They are separate because they answer separate questions for separate
       # audiences: the guides and per-group prose reference; a Swagger UI over the same document,
       # which can show schemas and send requests where a prose reference cannot; and the plugin SDK's
@@ -312,3 +312,16 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy docs/dist-sdk --project-name=lanrurugi-sdk
+
+      # The project homepage. No build step: it is hand-written HTML/CSS/JS with no dependencies, so
+      # this deploys the directory exactly as committed (and a broken edit cannot hide behind a build).
+      - name: Publish homepage
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy homepage --project-name=lanrurugi-home

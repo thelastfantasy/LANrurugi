@@ -1,0 +1,480 @@
+/*
+ * Mirrors the app's own login card (apps/frontend .../themes/g.css `.login-*`): same paper tones,
+ * same accent, same card geometry, same CJK-first font stack. Everything visual here is CSS — the
+ * cover wall, the halftone and the panel frames are gradients and dots, so the page ships as three
+ * plain files with no image, font or script dependency.
+ */
+
+:root {
+  --paper: #e3e0d1;
+  --card: #edebdf;
+  --ink: #5c0d11;
+  --ink-strong: #5c0d12;
+  --accent: #5f0d1f;
+  --accent-ink: #f2efdf;
+  --warm: 240, 165, 0;
+  --rule: rgba(92, 13, 18, 0.16);
+  --shadow: 0 10px 30px rgba(92, 13, 17, 0.18);
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family:
+    Arial, Helvetica,
+    "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans SC", "Noto Sans JP",
+    "Source Han Sans SC", "Source Han Sans JP", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The app's own background: one narrow diagonal band plus two warm glows, kept away from the card. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(rgba(92, 13, 18, 0.055) 1px, transparent 1.2px),
+    linear-gradient(
+      115deg,
+      transparent 47%,
+      rgba(var(--warm), 0.16) 47%,
+      rgba(var(--warm), 0.16) 55%,
+      transparent 55%
+    ),
+    radial-gradient(620px 620px at 4% -12%, rgba(var(--warm), 0.28) 0%, transparent 62%),
+    radial-gradient(700px 700px at 106% 112%, rgba(var(--warm), 0.28) 0%, transparent 64%);
+  background-size: 5px 5px, auto, auto, auto;
+}
+
+.shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 760px;
+  margin: 0;
+  padding: 0 38px 26px;
+  background: var(--card);
+  border: 1px solid var(--ink-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: center;
+  overflow: hidden;
+}
+
+/* ---- decorative cover wall ---------------------------------------------------------------- */
+
+/* Five abstract covers: gradients, a spine strip and a dot screen. Deliberately tiny and tilted,
+   the way a shelf of tankoubon reads at a glance, without shipping any artwork. */
+.shelf {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 0 -38px 22px;
+  padding: 26px 0 22px;
+  border-bottom: 1px solid var(--rule);
+  background-image: radial-gradient(rgba(92, 13, 18, 0.09) 1px, transparent 1.2px);
+  background-size: 6px 6px;
+}
+
+.cover {
+  position: relative;
+  width: 56px;
+  height: 74px;
+  border-radius: 3px;
+  box-shadow: 0 5px 12px rgba(92, 13, 17, 0.22);
+  transition: transform 160ms ease;
+}
+
+.cover::before {
+  /* spine */
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 6px;
+  border-radius: 3px 0 0 3px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.cover::after {
+  /* halftone */
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1.2px);
+  background-size: 5px 5px;
+  opacity: 0.55;
+}
+
+.cover-title,
+.cover-sub {
+  position: absolute;
+  left: 13px;
+  right: 9px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.cover-title {
+  top: 12px;
+  height: 7px;
+}
+
+.cover-sub {
+  top: 24px;
+  height: 4px;
+  right: 22px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.cover-badge {
+  position: absolute;
+  right: -5px;
+  top: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 9px;
+  line-height: 16px;
+  z-index: 1;
+}
+
+.c1 {
+  background: linear-gradient(160deg, #8d2233, #4a0f18);
+  transform: rotate(-5deg) translateY(4px);
+}
+.c2 {
+  background: linear-gradient(160deg, #c98a2e, #7a4a12);
+  transform: rotate(2deg) translateY(-2px);
+}
+.c3 {
+  background: linear-gradient(160deg, #5a6b8c, #2a3550);
+  transform: rotate(-2deg) translateY(2px);
+}
+.c4 {
+  background: linear-gradient(160deg, #2f6f6a, #143f3c);
+  transform: rotate(4deg) translateY(-3px);
+}
+.c5 {
+  background: linear-gradient(160deg, #9c4a6e, #55233c);
+  transform: rotate(-1deg) translateY(3px);
+}
+
+.shelf:hover .cover {
+  transform: rotate(0deg) translateY(0);
+}
+
+/* ---- copy --------------------------------------------------------------------------------- */
+
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.title {
+  margin: 0 0 12px;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.tagline {
+  margin: 0 auto 26px;
+  max-width: 36em;
+  font-size: 0.98rem;
+}
+
+/* ---- feature list ------------------------------------------------------------------------- */
+
+.features {
+  display: grid;
+  gap: 0;
+  margin: 0 0 26px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.features li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 2px;
+  font-size: 0.93rem;
+  border-top: 1px solid var(--rule);
+}
+
+.features li:first-child {
+  border-top: 0;
+}
+
+.features svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- AI panel ----------------------------------------------------------------------------- */
+
+.ai {
+  margin: 0 0 26px;
+  padding: 18px 18px 14px;
+  text-align: left;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background-image:
+    radial-gradient(rgba(95, 13, 31, 0.06) 1px, transparent 1.2px),
+    linear-gradient(180deg, rgba(var(--warm), 0.1), transparent 60%);
+  background-size: 6px 6px, auto;
+}
+
+.ai-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.ai-badge svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.ai-lead {
+  margin: 0 0 12px;
+  font-size: 0.88rem;
+  opacity: 0.86;
+}
+
+.ai-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-grid li {
+  padding: 10px 12px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid var(--rule);
+}
+
+.ai-grid h3 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.ai-grid p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  opacity: 0.88;
+}
+
+/* ---- links -------------------------------------------------------------------------------- */
+
+.links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 22px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.97rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.btn:hover,
+.btn:focus-visible {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.primary {
+  grid-column: 1 / -1;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.primary:hover,
+.btn.primary:focus-visible {
+  background: #7a1125;
+}
+
+/* ---- meta / footer ------------------------------------------------------------------------ */
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+
+.note {
+  margin: 0;
+  font-size: 0.82rem;
+  text-align: left;
+  opacity: 0.8;
+}
+
+.langs {
+  display: inline-flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.langs button {
+  min-width: 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(92, 13, 18, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.langs button:hover,
+.langs button:focus-visible {
+  opacity: 1;
+}
+
+.langs button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  opacity: 1;
+}
+
+.footer {
+  margin: 18px 0 0;
+  font-size: 0.78rem;
+  opacity: 0.72;
+}
+
+.footer a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 620px) {
+  .shell {
+    padding: 20px 12px;
+  }
+
+  .card {
+    padding: 0 20px 22px;
+  }
+
+  .shelf {
+    margin: 0 -20px 20px;
+    gap: 7px;
+    padding: 20px 0 18px;
+  }
+
+  .cover {
+    width: 44px;
+    height: 58px;
+  }
+
+  .title {
+    font-size: 1.6rem;
+  }
+
+  .ai-grid,
+  .links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .cover {
+    transition: none;
+  }
+}
