@@ -64,7 +64,7 @@ export function Library() {
 
   return (
     <div className="ido">
-      <h1 className="ih">{lib.info.data?.motd}</h1>
+      <h1 className="ih">{lib.info.data?.name}</h1>
 
       <div id="toppane">
         <div className="idi">

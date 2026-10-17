@@ -99,7 +99,6 @@
   "logs.lines": "Linee: ",
   "Link copied successfully.": "Collegamento copiato con successo.",
   "common.loading": "Loading…",
-  "settings.motd": "Messaggio del giorno",
   "plugins.maintenanceScripts": "Maintenance Scripts",
   "pluginOptions.maxKbS": "Max KB/s",
   "pluginOptions.maxConcurrent": "Max Concurrent",

@@ -74,7 +74,10 @@ async fn server_info(State(state): State<AppState>) -> Response {
 
     axum::Json(json!({
         "name": field("htmltitle", "LANrurugi"),
-        "motd": field("motd", "Welcome to this Library running LANrurugi!"),
+        // Legacy's `motd` slot. Its setting was removed as meaningless, so this is now always
+        // empty — the field itself stays because the recorded legacy ServerInfo example documents
+        // it and `contract_api.rs` holds `/api/info` to that shape.
+        "motd": "",
         "version": env!("CARGO_PKG_VERSION"),
         // Legacy's own `version_name` slot — the Settings header renders it as
         // "版本 {{version}} {{vername}}". Holds the concrete commit this binary was built

@@ -74,7 +74,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const currentGuestTheme = settings.guest_theme ?? "ex.css"
 
   const [htmltitle, setHtmltitle] = useState(settings.htmltitle)
-  const [motd, setMotd] = useState(settings.motd)
   const [language, setLanguage] = useState(settings.language)
   // Synced via "adjust state during render" (not an effect) since the sidebar's LanguageSelector
   // writes settings.language directly and this dropdown must reflect it immediately.
@@ -164,7 +163,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const isDirty = useMemo(
     () =>
       htmltitle !== settings.htmltitle ||
-      motd !== settings.motd ||
       language !== settings.language ||
       pagesize !== settings.pagesize ||
       enableresize !== settings.enableresize ||
@@ -200,7 +198,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recommendprecision !== settings.recommendprecision ||
       translationIsDirty,
     [
-      htmltitle, motd, language, pagesize, enableresize, sizethreshold, readerquality,
+      htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
       archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
       guestmode, accessTokenLifetimeSecs,
@@ -225,7 +223,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
     }
     await updateSettings.mutateAsync({
       htmltitle,
-      motd,
       language,
       pagesize,
       enableresize,
@@ -382,8 +379,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           <GlobalSection
             htmltitle={htmltitle}
             setHtmltitle={setHtmltitle}
-            motd={motd}
-            setMotd={setMotd}
             language={language}
             setLanguage={setLanguage}
             pagesize={pagesize}

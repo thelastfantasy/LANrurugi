@@ -126,6 +126,21 @@ pub fn run(merged: &Merged, policy: &Policy) -> Result<()> {
         }
     }
 
+    // The reverse direction of the reachability gate above: a rule that matches no served route
+    // governs nothing, which is what a rename or a removal leaves behind. Silent on the server, so
+    // this is the only place it can surface.
+    let served: Vec<(String, String)> = merged
+        .operations
+        .keys()
+        .map(|(path, method)| (method.as_str().to_string(), path.to_string()))
+        .collect();
+    for (line, rule) in policy.unused_rules(&served) {
+        failures.push(format!(
+            "policy: line {line} of `route_policy.csv` (`{rule}`) matches no served route. A route \
+             renamed or removed in the source must take its rules with it."
+        ));
+    }
+
     if !failures.is_empty() {
         failures.sort();
         bail!(

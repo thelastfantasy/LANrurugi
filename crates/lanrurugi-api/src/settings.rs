@@ -343,7 +343,6 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // a list of length one.
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
-    ("motd", "Welcome to this Library running LANrurugi!"),
     ("excludednamespaces", "source, date_added"),
     // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
     // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
@@ -739,7 +738,7 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
 /// access or expose content to unauthenticated visitors — exactly what a stolen-but-scoped token
 /// must not be able to do. A narrower, per-field check rather than a whole-route `require_session`
 /// (unlike `/settings/password` or `/database/drop`) because this one endpoint also carries many
-/// harmless fields (`theme`/`motd`/`pagesize`/...) an otherwise-trusted admin-role token should
+/// harmless fields (`theme`/`htmltitle`/`pagesize`/...) an otherwise-trusted admin-role token should
 /// still be able to update. `enablepass`/`nofunmode` are gone from this list along with the
 /// settings themselves — password login can no longer be disabled by anyone, token or not.
 const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
@@ -859,7 +858,7 @@ async fn put_settings(
         .is_some_and(|s| !s.trim().is_empty());
 
     // Only the *names* of changed fields are recorded, not their values — settings cover
-    // everything from a `motd` string to API token lifetimes, and logging arbitrary field values
+    // everything from a site-title string to API token lifetimes, and logging arbitrary field values
     // here would risk incidentally recording something sensitive a future field addition didn't
     // anticipate. Populated inside the write loop below (not snapshotted from `fields` up front)
     // now that unknown/invalid keys are rejected before ever reaching Redis — see the allowlist
@@ -1106,7 +1105,7 @@ mod validate_setting_field_tests {
 
     #[test]
     fn accepts_a_known_string_field() {
-        let stored = validate_setting_field("motd", &json!("Hello")).unwrap();
+        let stored = validate_setting_field("htmltitle", &json!("Hello")).unwrap();
         assert_eq!(stored, "Hello");
     }
 

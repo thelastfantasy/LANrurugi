@@ -170,7 +170,6 @@ export function targetLink(
  * `after.changed_fields`. `theme` saves via a separate path, so is never actually looked up here. */
 const SETTINGS_FIELD_SECTIONS: Record<string, string> = {
   htmltitle: "global",
-  motd: "global",
   language: "global",
   pagesize: "global",
   enableresize: "global",

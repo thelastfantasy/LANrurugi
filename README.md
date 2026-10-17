@@ -161,6 +161,9 @@ OCR 模型文件后逐一复核。本轮多条工作线（OCR/擦除/嵌入模�
   失败也会记 5 分钟（负缓存），HTTP 客户端复用连接并带 4s/8s 显式超时（此前 reqwest 默认**无超时**，
   GitHub 不响应时页面加载会被一直挂着）。实测 `/api/version` 与 `?since=` 均降至 0.8–1.3ms、零告警，
   失败时仍返回"不声称有更新"的安全结构。
+- **登录页重做。** 原先逐字照搬 legacy 的 `login.html.tt2`（表格式布局：标签与输入框各占一个 `<td>`，永远对不齐，两个按钮被拉成横杠；且 `.stdbtn` 固定 `height: 21px`，一旦加内边距文字就被裁掉）。现在是一个居中的卡片：标题/说明/标签/输入框/主按钮/文字链"返回库"竖排，输入框 44px、按钮 46px、按钮用真实 Bold 字面；背景是三层纯 CSS 渐变（斜向色带 + 两团柔光，颜色取自各主题自己的 `.msm-selected` 强调色），**固定覆盖整个视口**，因此不会在页脚上方留下硬边。5 个主题各一套（+157 行、纯追加）。
+- **CJK 字体补全。** 5 套主题的 `body` 字体栈原本只有拉丁字族（Arial / Geist / Inter UI），汉字全靠浏览器逐字回退，且表单控件默认不继承 `font-family`。现在每个主题都追加了显式 CJK 栈（`Noto Sans CJK SC → JP → Source Han Sans → PingFang SC → Hiragino Sans GB → Microsoft YaHei → WenQuanYi`），并让 `input/button/select/textarea` 继承它；拉丁观感不变。**不自托管字体**：Windows/macOS 客户端用各自原生 CJK 字体更自然，也避免为几 MB 字体引入构建期依赖。
+- **移除无意义的固定文案。** 页脚不再显示 legacy 的 `version_desc` 标语（`/api/info` 字段为兼容保留）；`motd`（"欢迎语"）的设置、库页标题与 `/api/settings` 字段全部移除，`/api/info` 的 `motd` 字段保留但恒为空（legacy ServerInfo 形状与契约测试不变）。
 - **"最近搜索"改为账号级、服务端存储。** 新增 `/api/search/history`（GET/POST/DELETE，键
   `LANRURUGI_SEARCH_HISTORY_{owner}`，上限 8 条与原先一致），同一账号在任何浏览器/设备上看到同一份
   历史；搜索框非空时，只列出与该输入**相关**的条目，这个判断同样在服务端。之所以必须在服务端：它用引擎自己的

@@ -85,7 +85,6 @@ export interface Settings {
   guest_theme: string
   language: string
   htmltitle: string
-  motd: string
   excludednamespaces: string
   tagrules: string
   /** IANA timezone id (e.g. `"Asia/Tokyo"`) used to render date-tag values and build
@@ -184,9 +183,10 @@ export interface PublicThemeSettings {
 
 export interface ServerInfo {
   name: string
-  motd: string
   version: string
   version_name: string
+  /** Kept because `/api/info` still returns it for legacy parity (it is the project's own
+   *  `package.json` description) — nothing in this app displays it any more. */
   version_desc: string
   /** Always `true` — password protection can no longer be disabled; kept for third-party clients. */
   has_password: boolean

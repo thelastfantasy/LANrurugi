@@ -42,6 +42,17 @@ pub enum Role {
 }
 
 impl Role {
+    /// The spelling `route_policy.csv` uses, so a gate's message can quote the file back.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Anonymous => "anonymous",
+            Role::GuestVisitor => "guest_visitor",
+            Role::Session => "session",
+            Role::TokenAdmin => "token_admin",
+            Role::TokenGuest => "token_guest",
+        }
+    }
+
     fn parse(name: &str) -> Option<Self> {
         match name {
             "anonymous" => Some(Role::Anonymous),
@@ -258,6 +269,33 @@ impl Policy {
         })
     }
 
+    /// Rules that match no served route, as `(line, "sub obj act")`.
+    ///
+    /// The opposite direction of the reachability gate: that one catches a route nobody can call,
+    /// this one catches a rule that governs nothing — a route renamed or removed without its rule
+    /// following it. Harmless to the server (nothing matches, so it grants nothing) and therefore
+    /// silent forever without this, while the file slowly stops describing the routes it is cited
+    /// for. Wide rules are exempt: `/api/*` is deliberately broad, not stale.
+    pub fn unused_rules(&self, served: &[(String, String)]) -> Vec<(usize, String)> {
+        let mut unused = Vec::new();
+        for rule in &self.rules {
+            if rule.object == "*" || rule.object.ends_with("/*") {
+                continue;
+            }
+            let matched = served.iter().any(|(method, path)| {
+                (rule.action == "*" || rule.action == method.to_ascii_uppercase())
+                    && key_match2(&rule.object, &normalise(path))
+            });
+            if !matched {
+                unused.push((
+                    rule.line,
+                    format!("{} {} {}", rule.role.as_str(), rule.object, rule.action),
+                ));
+            }
+        }
+        unused
+    }
+
     /// The line numbers of every rule that matches, for diagnostics.
     pub fn matching_lines(&self, method: &str, path: &str) -> Vec<usize> {
         let object = normalise(path);
@@ -401,5 +439,37 @@ p, token_guest, /api/archives, DELETE, deny
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown subject"), "{error}");
+    }
+
+    #[test]
+    fn unused_rules_reports_only_rules_no_served_route_can_match() {
+        // One wildcard (never stale by definition), one rule for a route that is still served,
+        // one for a route that is not, and one whose *method* is no longer served.
+        let policy = Policy::parse(
+            "p, session, /api/*, *, allow
+p, anonymous, /api/login, POST, allow
+p, session, /api/old-thing, GET, allow
+p, session, /api/login, DELETE, allow
+",
+        )
+        .unwrap();
+        let served = [
+            ("POST".to_string(), "/api/login".to_string()),
+            ("GET".to_string(), "/api/archives/{id}".to_string()),
+        ];
+        let unused: Vec<String> = policy
+            .unused_rules(&served)
+            .into_iter()
+            .map(|(line, rule)| format!("{line}: {rule}"))
+            .collect();
+        assert_eq!(
+            unused,
+            vec![
+                "3: session /api/old-thing GET".to_string(),
+                "4: session /api/login DELETE".to_string()
+            ],
+            "the wildcard is exempt, the served rule is kept, and both the removed route and the \
+             removed method are reported with their file line"
+        );
     }
 }

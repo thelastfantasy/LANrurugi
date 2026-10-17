@@ -6,10 +6,19 @@ import { useLogin } from "@/api/hooks"
 import { Footer } from "@/components/Layout"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
+import { useApplyTheme } from "@/theme"
 
-/** Mirrors legacy's `login.html.tt2` plus the same return-to-library affordance used by other
- * admin pages. Route protection lives in `RequireGuest` (`App.tsx`), not here. */
+/**
+ * The admin login form.
+ *
+ * Deliberately *not* legacy's `login.html.tt2` markup any more: that page put the label and the
+ * field in adjacent `<td>`s of a centered table, which lines nothing up (the label is unbounded
+ * while the field is a fixed 90% of its cell) and made both buttons look like full-width bars.
+ *
+ * Everything visual — the soft accent shapes behind the card, the card surface, control heights —
+ * lives in each theme's own theme file (`.login-*`), so this stays inside the app's existing look
+ * and follows all five themes. Route protection lives in `RequireGuest` (`App.tsx`), not here.
+ */
 export function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -35,64 +44,47 @@ export function Login() {
     }
   }
 
+  const ssoError = searchParams.get("sso_error")
+
   return (
     <>
-      <div className="ido" style={{ textAlign: "center" }}>
-        <p>{t("login.thisPageRequiresYouTo")}</p>
-        {searchParams.get("sso_error") && (
-          <p style={{ color: "#c0392b" }}>{t("login.ssoError")}</p>
-        )}
+      <div className="login-shell">
+        <form onSubmit={handleSubmit} name="loginForm" method="post" className="login-card">
+          <h1 className="login-title">{t("app.adminLogin")}</h1>
+          <p className="login-hint">{t("login.thisPageRequiresYouTo")}</p>
 
-        <form onSubmit={handleSubmit} name="loginForm" method="post">
-          <table style={{ margin: "auto", textAlign: "left", fontSize: FONT_SIZE_XS }}>
-            <tbody>
-              <tr>
-                <td>{t("login.adminPassword")}</td>
-                <td>
-                  <input
-                    id="pw_field"
-                    type="password"
-                    autoFocus
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="stdinput"
-                    style={{ width: "90%" }}
-                    maxLength={255}
-                    size={20}
-                    name="password"
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td colSpan={2} style={{ paddingTop: 5, textAlign: "center", verticalAlign: "middle" }}>
-                  <input
-                    type="submit"
-                    className="stdbtn"
-                    disabled={login.isPending}
-                    value={t("library.login") ?? undefined}
-                    style={{ width: 60 }}
-                  />
-                </td>
-              </tr>
-              {login.isError && (
-                <tr style={{ fontSize: 23 }}>
-                  <td colSpan={2} style={{ paddingTop: 5, textAlign: "center", verticalAlign: "middle" }}>
-                    {t("login.wrongPassword")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <label className="login-label" htmlFor="pw_field">
+            {t("login.adminPassword")}
+          </label>
+          <input
+            id="pw_field"
+            type="password"
+            autoFocus
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="stdinput login-input"
+            maxLength={255}
+            size={20}
+            name="password"
+          />
+
+          {(login.isError || ssoError) && (
+            <p className="login-error">
+              {login.isError ? t("login.wrongPassword") : t("login.ssoError")}
+            </p>
+          )}
+
+          <input
+            type="submit"
+            className="stdbtn login-submit"
+            disabled={login.isPending}
+            value={t("library.login") ?? undefined}
+          />
+
+          <button type="button" className="login-back" onClick={() => navigate(routes.library())}>
+            {t("common.returnToLibrary")}
+          </button>
         </form>
-
-        <br />
-        <input
-          type="button"
-          id="return"
-          className="stdbtn"
-          value={t("common.returnToLibrary") ?? undefined}
-          onClick={() => navigate(routes.library())}
-        />
       </div>
 
       <Footer />

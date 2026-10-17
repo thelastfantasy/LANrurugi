@@ -16,8 +16,6 @@ import { ActionRow, CheckboxRow, ImageSupportBadge, Row } from "./shared"
 export function GlobalSection({
   htmltitle,
   setHtmltitle,
-  motd,
-  setMotd,
   language,
   setLanguage,
   pagesize,
@@ -55,8 +53,6 @@ export function GlobalSection({
 }: {
   htmltitle: string
   setHtmltitle: (v: string) => void
-  motd: string
-  setMotd: (v: string) => void
   language: string
   setLanguage: (v: string) => void
   pagesize: number
@@ -106,11 +102,6 @@ export function GlobalSection({
             <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={htmltitle} onChange={(e) => setHtmltitle(e.target.value)} type="text" />
             <br />
             {t("settings.theSiteTitleAppearsOn")}
-          </Row>
-          <Row label={t("settings.motd")}>
-            <input className="stdinput" style={{ width: "100%" }} maxLength={255} value={motd} onChange={(e) => setMotd(e.target.value)} type="text" />
-            <br />
-            {t("settings.slangForMessageOfThe")}
           </Row>
           <Row label={t("settings.language")}>
             <LanguageOrderEditor value={language} onChange={setLanguage} />

@@ -275,7 +275,6 @@
   "Login Plugins": "Plugins de connexion",
   "app.logs": "Logs",
   "reader.mToggleMangaModeRighttoleft": "activer le mode manga (lecture de droite à gauche)",
-  "settings.motd": "MOTD",
   "plugins.maintenanceScripts": "Maintenance Scripts",
   "pluginOptions.maxKbS": "Max KB/s",
   "pluginOptions.maxConcurrent": "Max Concurrent",

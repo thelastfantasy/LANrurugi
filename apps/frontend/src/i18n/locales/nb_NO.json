@@ -239,7 +239,6 @@
   "Login Plugins": "Programvaretillegg for Pålogging",
   "app.logs": "Logger",
   "reader.mToggleMangaModeRighttoleft": "Aktiver manga modus (høyre til venstre leserettning)",
-  "settings.motd": "MOTD",
   "plugins.maintenanceScripts": "Maintenance Scripts",
   "pluginOptions.maxKbS": "Max KB/s",
   "pluginOptions.maxConcurrent": "Max Concurrent",
