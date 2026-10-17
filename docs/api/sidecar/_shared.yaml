@@ -1,0 +1,117 @@
+# Schemas shared by the hand-written fragments. Every other file in this directory may reference
+# these with `$ref: "#/components/schemas/<name>"`.
+#
+# `OperationResponse` is deliberately NOT defined here even though almost every LANrurugi mutation
+# returns it: the vendored upstream document already defines it, and this server kept that envelope
+# (`{operation, success, error}` — `lanrurugi-api::common::ok`/`error`) verbatim, so fragments
+# reference the upstream definition rather than maintaining a second copy that could drift from it.
+components:
+  schemas:
+    JobStatus:
+      type: object
+      description: One tracked background job.
+      required: [id, name, state, progress, result_truncated]
+      properties:
+        id:
+          type: string
+          description: Stable identifier for this job, used to look it up or clear it.
+        name:
+          type: string
+          description: >-
+            Job type — a maintenance job name (`regen_thumbs`, a rescan, a duplicate scan, an index
+            rebuild) or a download plugin's namespace for a download job.
+        state:
+          type: string
+          enum: [queued, active, finished, failed]
+        progress:
+          type: number
+          description: >-
+            Best-effort 0.0–1.0. Jobs that cannot report granular progress jump straight from 0 to 1
+            rather than reporting a fake intermediate value.
+        downloaded_bytes:
+          type: integer
+          format: int64
+          description: >-
+            Bytes transferred so far, for a real download job. Absent — not `0` — until transfer has
+            actually started, and for every non-download job.
+        total_bytes:
+          type: integer
+          format: int64
+          description: >-
+            Expected total size, from the response's `Content-Length`. Absent when the server does
+            not report one: render an indeterminate indicator rather than treating absence as zero.
+            For a multi-resource download this is the sum across all resources.
+        rate_limit_bytes_per_sec:
+          type: integer
+          format: int64
+          description: >-
+            The rate limit actually in effect for this download, in bytes/second. Absent means
+            unlimited — either no rule matched or the download has not started. There is no
+            `0`/`null` sentinel, precisely because that would be ambiguous with "unlimited".
+        rate_limit_matched_pattern:
+          type: string
+          description: >-
+            Which rule produced `rate_limit_bytes_per_sec`: an exact hostname, a wildcard such as
+            `*.example.com`, or `*` for the general fallback.
+        started_at:
+          type: integer
+          format: int64
+          description: Epoch milliseconds. Absent until the job leaves `queued`.
+        finished_at:
+          type: integer
+          format: int64
+          description: Epoch milliseconds. Absent while the job is still in flight.
+        result:
+          description: Job-specific result payload; its shape depends on `name`.
+        result_truncated:
+          type: boolean
+          description: True when `result` was too large to keep in full.
+        error:
+          type: string
+          description: Failure message. Present only for a `failed` job.
+
+    Session:
+      type: object
+      description: One signed-in device, identified by its refresh-token family.
+      required: [family_id, name, current]
+      properties:
+        family_id:
+          type: string
+          description: Identifier used to rename or revoke this session.
+        name:
+          type: string
+          description: The session's display name — `custom_name` if one was set, otherwise a name derived from the device.
+        auto_name:
+          type: string
+          description: The device-derived name, always present, regardless of whether a custom name overrides it.
+        custom_name:
+          type: string
+          description: The user-assigned name, when one has been set.
+        ip:
+          type: string
+          description: The address this session was last seen from.
+        created_at: { type: integer, format: int64, description: Epoch seconds. }
+        last_seen_at: { type: integer, format: int64, description: Epoch seconds. }
+        idle_expires_at: { type: integer, format: int64, description: Epoch seconds; when an idle session stops being usable. }
+        expires_at: { type: integer, format: int64, description: Epoch seconds; the session's absolute expiry. }
+        current:
+          type: boolean
+          description: True for the session making this request. Useful for not offering to revoke yourself by accident.
+
+    ApiToken:
+      type: object
+      description: One API token. The token's own secret is never included — it is shown once, at creation.
+      required: [id, name, role]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role:
+          type: string
+          enum: [admin, guest]
+          description: >-
+            `admin` can do anything a session can except manage tokens or sessions; `guest` is
+            read-only.
+        created_at: { type: integer, format: int64, description: Epoch seconds. }
+        expires_at: { type: integer, format: int64, description: Epoch seconds; absent for a token that does not expire. }
+        last_used_at: { type: integer, format: int64, description: Epoch seconds; absent until the token has been used. }
+        last_used_ip: { type: string, description: Absent until the token has been used. }

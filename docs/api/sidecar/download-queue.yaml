@@ -1,0 +1,270 @@
+# The download queue (`specs/005-download-plugin-progress/`).
+#
+# This file covers the queue's own lifecycle: listing, adding, editing, deleting, and starting
+# items — individually and in bulk. The **archive-comparison sub-group** under
+# `/download_queue/{id}/compare*` and the per-item `/overwrite`, `/rename`, `/stop`,
+# `/confirm-older` and `/fetch-metadata` operations are not written up yet; they are listed in the
+# reference with their own handler notes and are counted as the remaining backlog there.
+"/api/download_queue":
+  get:
+    summary: List queue items
+    description: |
+      Every item in the download queue, in whatever state it currently holds.
+
+      For live updates prefer `/download_queue/stream`, which pushes state changes as they happen
+      rather than requiring a poll.
+    tags: [download_queue]
+    responses:
+      "200":
+        description: The queue.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items: { type: object, description: "One queue item. See the item schema on `/download_queue/{id}`." }
+  post:
+    summary: Add items to the queue
+    description: |
+      Bulk add. The caller has already decided which download plugin's `url_pattern` matched each
+      URL; this endpoint's only validation is that `plugin_namespace` resolves to an installed
+      plugin.
+
+      Invalid entries are **rejected individually** rather than failing the whole batch, so one bad
+      URL in a pasted list does not block the rest. Check `rejected` in the response.
+    tags: [download_queue]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [url, plugin_namespace]
+                  properties:
+                    url: { type: string }
+                    plugin_namespace: { type: string, description: "`<category>/<name>`, as shown in the plugin list." }
+                    category: { type: string, description: "Category to file the downloaded archive under." }
+                    metadata_tags: { type: array, items: { type: string } }
+                    auto_fetch_metadata: { type: boolean, description: "Fetch metadata with the plugin once the download completes." }
+                    overwrite_on_duplicate: { type: boolean, description: "Replace an existing archive with the same identity instead of keeping both." }
+    responses:
+      "200":
+        description: The items that were added, and the ones that were not.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                added:
+                  type: array
+                  items: { type: object }
+                rejected:
+                  type: array
+                  description: Entries that were refused, each with the reason.
+                  items:
+                    type: object
+                    properties:
+                      url: { type: string }
+                      reason: { type: string }
+
+"/api/download_queue/{id}":
+  patch:
+    summary: Update a queue item
+    description: |
+      Partial update: a field omitted from the request body keeps its stored value rather than being
+      cleared. Same convention as `PUT /plugins/options`.
+    tags: [download_queue]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            description: Any subset of the item's editable fields.
+            properties:
+              category: { type: string }
+              metadata_tags: { type: array, items: { type: string } }
+    responses:
+      "200":
+        description: Updated.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No such queue item.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  delete:
+    summary: Delete a queue item
+    description: |
+      Removes one item from the queue.
+
+      An item that is currently downloading is refused with a 409 — deleting its record out from
+      under the running background task would leave that task updating nothing, with no queue row
+      left to show progress and no way to stop the transfer. Stop it first.
+
+      A queue item that has already been ingested into the library is also refused; remove the
+      resulting archive instead.
+    tags: [download_queue]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Deleted.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "409":
+        description: The item is currently downloading; stop it before deleting.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/download_queue/{id}/start":
+  post:
+    summary: Start one queue item
+    description: |
+      Resolves the item's own download plugin (chosen when it was added, not now), marks it as
+      starting, and launches the real download in the background. The item's `state`, `job_id` and
+      `error` stay current as the transfer proceeds.
+    tags: [download_queue]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Started; the body carries the job id.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "409":
+        description: The item is not in a startable state.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/download_queue/start_all":
+  post:
+    summary: Start every queued item
+    description: |
+      Starts every item in the `queued` state, concurrently. Each spawns its own background task;
+      per-domain concurrency and rate limiting are enforced downstream by the download manager, so
+      no extra throttling happens here.
+
+      Deliberately narrower than the single-item start: items in `error` or `cancelled` are retried
+      one at a time on purpose, and an item parked awaiting a version-conflict answer is **never**
+      swept up — bulk-starting it would answer, by omission, the very question it is parked on.
+    tags: [download_queue]
+    responses:
+      "200":
+        description: Which items started, and which were skipped and why.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                started:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      job: { type: string }
+                skipped:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      reason: { type: string }
+
+"/api/download_queue/start_selected":
+  post:
+    summary: Start selected queue items
+    description: |
+      Like `start_all`, filtered to the IDs given.
+
+      An ID that is already in flight, already finished, or otherwise not startable is a **silent
+      no-op**, not an error — so a client can pass a selection without re-checking each item's
+      current state first.
+    tags: [download_queue]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids: { type: array, items: { type: string } }
+    responses:
+      "200":
+        description: Which items started, and which were skipped and why.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                started:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      job: { type: string }
+                skipped:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      reason: { type: string }
+
+"/api/download_queue/delete_selected":
+  post:
+    summary: Delete selected queue items
+    description: |
+      Bulk delete by ID, mirroring `start_selected`'s semantics: an ID that is missing or already
+      deleted is a **silent no-op**, not an error, so a stale selection can be passed safely.
+
+      An ID that is currently downloading is likewise a silent no-op — the same safety rule the
+      single-item delete enforces with a 409.
+    tags: [download_queue]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids: { type: array, items: { type: string } }
+    responses:
+      "200":
+        description: The IDs that were actually removed.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deleted: { type: array, items: { type: string } }

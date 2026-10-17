@@ -1,0 +1,23 @@
+name: Delete branch on merge to dev
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  delete-branch:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete head branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through an environment variable, never interpolated into the script below. A branch name
+          # is attacker-controlled on a fork PR, and git's own ref rules do not forbid `"` or `;` —
+          # so `${{ ... }}` inside the quoted command would be a real shell-injection path into a job
+          # holding `contents: write` and GH_TOKEN. As a variable it is data. (Found by actionlint.)
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF"

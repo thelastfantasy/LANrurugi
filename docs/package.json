@@ -1,0 +1,23 @@
+{
+  "name": "lanrurugi-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "prepare-static-assets": "node scripts/prepare-static-assets.mjs",
+    "generate-api-pages": "node scripts/generate-api-pages.mjs",
+    "build": "pnpm run prepare-static-assets && pnpm run generate-api-pages && astro build",
+    "build:swagger": "node scripts/build-swagger.mjs",
+    "dev": "pnpm run prepare-static-assets && pnpm run generate-api-pages && astro dev",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.6",
+    "@scalar/api-reference": "^1.73.1",
+    "@scalar/starlight": "^0.2.13",
+    "astro": "^7.3.8"
+  },
+  "devDependencies": {
+    "swagger-ui-dist": "^5.33.1"
+  }
+}

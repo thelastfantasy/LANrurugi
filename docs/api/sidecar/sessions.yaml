@@ -1,0 +1,76 @@
+# Signed-in device management. Session-only: `route_policy.csv` denies both roles of API token,
+# since a token must not be able to enumerate or revoke the devices a human is signed in on.
+"/api/sessions":
+  get:
+    summary: List signed-in devices
+    description: |
+      Every active refresh-token family — that is, every device currently signed in — including the
+      one making this request, which is marked so a client does not offer to revoke itself by
+      accident.
+
+      Requires a session-cookie login. An API token of either role is rejected.
+    tags: [sessions]
+    responses:
+      "200":
+        description: The active sessions.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/Session" }
+
+"/api/sessions/{family_id}":
+  patch:
+    summary: Rename a signed-in device
+    description: |
+      Sets a custom display name for one session, so a device list reads as "living room tablet"
+      rather than as a user-agent string. Requires a session-cookie login.
+    tags: [sessions]
+    parameters:
+      - name: family_id
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+                description: The new display name.
+    responses:
+      "200":
+        description: Renamed.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No such session.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  delete:
+    summary: Revoke a signed-in device
+    description: |
+      Ends one session by revoking its whole refresh-token family, so the device must sign in again.
+      Requires a session-cookie login.
+    tags: [sessions]
+    parameters:
+      - name: family_id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Revoked.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No such session.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }

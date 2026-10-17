@@ -1,0 +1,16 @@
+[package]
+name = "lanrurugi-inpaint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+image.workspace = true
+imageproc.workspace = true
+kmeans_colors = { workspace = true, features = ["palette_color"] }
+ort.workspace = true
+palette.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
