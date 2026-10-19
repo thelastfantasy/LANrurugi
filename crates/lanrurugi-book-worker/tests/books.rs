@@ -377,11 +377,13 @@ fn djvu_pages_render_and_bookmarks_import() {
     let pages: Vec<_> = (0..2)
         .map(|i| {
             let ppm = dir.join(format!("p{i}.ppm"));
-            image::RgbImage::from_fn(200, 300, |x, y| {
+            let page = image::RgbImage::from_fn(200, 300, |x, y| {
                 image::Rgb([(x + i * 60) as u8, y as u8, 90])
-            })
-            .save_with_format(&ppm, image::ImageFormat::Pnm)
-            .unwrap();
+            });
+            // Binary PPM (P6) by hand: `image` writes PAM (P7) for RGB, which c44 cannot read.
+            let mut bytes = format!("P6\n{} {}\n255\n", page.width(), page.height()).into_bytes();
+            bytes.extend_from_slice(page.as_raw());
+            std::fs::write(&ppm, bytes).unwrap();
             let djvu = dir.join(format!("p{i}.djvu"));
             assert!(std::process::Command::new("c44")
                 .arg(&ppm)
