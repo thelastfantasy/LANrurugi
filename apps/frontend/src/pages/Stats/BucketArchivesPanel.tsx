@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { type StatsBucketSelection,useStatsBucket } from "@/api/hooks"
+import { FormatBadge } from "@/components/Display"
 import { routes } from "@/lib/routes"
 
 import { useChartPalette } from "./chartPalette"
@@ -138,7 +139,7 @@ export function BucketArchivesPanel({
               }}
             >
               <i className="fa fa-book" style={{ marginRight: 6, opacity: 0.6 }} />
-              {archive.title}
+              {archive.title} <FormatBadge extension={archive.extension} />
             </a>
             <span style={{ ...muted, whiteSpace: "nowrap" }}>
               {formatBytes(archive.bytes)} · {t("stats.pages")} {archive.pages} ·{" "}

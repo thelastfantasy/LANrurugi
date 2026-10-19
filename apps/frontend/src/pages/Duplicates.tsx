@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { waitForJob } from "@/api/client"
 import { useClearDuplicates, useDeleteArchive, useDuplicates, useScanDuplicates } from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
+import { FormatBadge } from "@/components/Display"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { useApplyTheme } from "@/theme"
@@ -101,7 +102,7 @@ export function Duplicates() {
                       </a>
                     </div>
                     <a href={routes.edit(archive.arcid)} onClick={(e) => { e.preventDefault(); navigate(routes.edit(archive.arcid)) }}>
-                      {archive.title}
+                      {archive.title} <FormatBadge extension={archive.extension} />
                     </a>
                   </td>
                   <td>{(archive.size / 1e6).toFixed(1)} MB</td>

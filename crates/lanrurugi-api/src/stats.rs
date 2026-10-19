@@ -228,6 +228,7 @@ pub struct RecentRead {
     pub last_read: u64,
     pub page: u32,
     pub pages: u32,
+    pub extension: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -237,6 +238,7 @@ pub struct RereadArchive {
     pub reads: u64,
     pub page: u32,
     pub pages: u32,
+    pub extension: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1088,6 +1090,11 @@ fn mime_for_extension(extension: &str) -> &'static str {
         "zst" => "application/zstd",
         "epub" => "application/epub+zip",
         "pdf" => "application/pdf",
+        "mobi" | "azw" | "prc" => "application/x-mobipocket-ebook",
+        "azw3" => "application/vnd.amazon.ebook",
+        "djvu" | "djv" => "image/vnd.djvu",
+        "fb2" => "application/x-fictionbook+xml",
+        "txt" => "text/plain",
         _ => "application/octet-stream",
     }
 }
@@ -1430,6 +1437,7 @@ fn recent_reads(archives: &[Archive]) -> Vec<RecentRead> {
             last_read: a.lastreadtime,
             page: a.lastreadpage,
             pages: a.pagecount,
+            extension: container_extension(a),
         })
         .collect()
 }
@@ -1451,6 +1459,7 @@ fn most_reread(archives: &[Archive], read_freq: &HashMap<String, u64>) -> Vec<Re
             reads,
             page: a.lastreadpage,
             pages: a.pagecount,
+            extension: container_extension(a),
         })
         .collect()
 }

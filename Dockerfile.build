@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nasm \
         libacl1-dev \
         fonts-noto-cjk \
+        djvulibre-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Same rootless-tar ownership workaround as the module install itself needs when run inside a

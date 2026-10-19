@@ -256,6 +256,7 @@ export interface DuplicateArchive {
   title: string
   tags: string
   size: number
+  extension: string
   group_key: string
 }
 
@@ -773,6 +774,7 @@ export interface StatsRecentRead {
   last_read: number
   page: number
   pages: number
+  extension: string
 }
 
 export interface StatsRereadArchive {
@@ -781,6 +783,7 @@ export interface StatsRereadArchive {
   reads: number
   page: number
   pages: number
+  extension: string
 }
 
 export interface StatsNamespaceTags {

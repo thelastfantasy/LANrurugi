@@ -90,3 +90,9 @@ docs/src/content/docs/en/api/
 # Scalar's API-reference runtime (so the API page never loads it from a CDN) and the favicon
 # (so it cannot drift from the product frontend's own icon).
 docs/public/favicon.svg
+homepage/dist/
+
+# PDFium shared library for local tests (fetched from bblanchon/pdfium-binaries, used by crates/lanrurugi-book-worker tests)
+/.pdfium/
+/dist/native/
+/.native-assets/

@@ -3,36 +3,85 @@ title: Install (Docker / NAS)
 description: Deploy LANrurugi on a server or NAS with Docker or Compose.
 ---
 
-LANrurugi is a single binary: the static frontend, the HTTP API, the file watcher and the plugin pool
-all live in one process. It reuses the Redis you already have and does **not** destructively migrate
-existing data — the `data/database` directory mounted by `compose.yaml` is the same Redis data
-directory the old LANraragi used.
+The LANrurugi server is one resident process holding the static frontend, the HTTP API, the file
+watcher and background jobs; plugins, e-book parsing and AI inference run in subprocesses started on
+demand. It reuses the Redis you already have and does **not** destructively migrate existing data —
+the `data/database` directory mounted by `compose.yaml` is the same Redis data directory the old
+LANraragi used.
 
-## Start it with Compose
+Prefer not to use containers? There are [native packages](../install-native/) for Linux, macOS (Apple
+Silicon) and FreeBSD.
 
-```sh
-podman compose up -d      # or: docker compose up -d
+## Deploy with Compose (recommended)
+
+Save the following as `compose.yaml`, change the host directories on the left as the comments
+describe, then start it:
+
+```yaml
+services:
+  lanrurugi:
+    image: ghcr.io/thelastfantasy/lanrurugi:latest
+    container_name: lanrurugi
+    ports:
+      - "3000:3000"
+    volumes:
+      # Library — can point straight at LANraragi's content directory
+      - ./data/manga:/home/koyomi/lanrurugi/content
+      # Thumbnail cache
+      - ./data/thumb:/home/koyomi/lanrurugi/thumb
+      # Redis data — can point straight at LANraragi's database directory
+      - ./data/database:/home/koyomi/lanrurugi/database
+      # Embedding model for recommendations, downloaded on first use
+      - ./data/models:/home/koyomi/lanrurugi/models
+    environment:
+      # Set to true when served over HTTPS through a reverse proxy
+      - LANRURUGI_FORCE_SECURE_COOKIES=false
+    restart: unless-stopped
 ```
 
-The three host directories `compose.yaml` uses match the old LANraragi `data/` layout:
+```sh
+docker compose up -d      # or: podman compose up -d
+```
+
+On a NAS (Synology Container Manager, Portainer and the like), create a compose project and paste
+the same text.
+
+Then open `http://<server>:3000` in a browser. Redis is bundled in the image; no separate database
+container is needed. The four mounted directories:
 
 | Host path | Path in the container | Purpose |
 |---|---|---|
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | Your library |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | Thumbnail cache |
 | `./data/database` | `/home/koyomi/lanrurugi/database` | Redis data (shared with the old instance) |
+| `./data/models` | `/home/koyomi/lanrurugi/models` | Embedding model cache for recommendations |
 
-The container uses `network_mode: host`, and the server listens on port **3000** (`LANRURUGI_BIND`
-defaults to `0.0.0.0:3000`).
+To serve it on a domain over HTTPS, see [Reverse proxy](../reverse-proxy/).
 
 ## Run it with plain Docker
 
 ```sh
-docker build -t lanrurugi .
-docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
+docker run -d --name lanrurugi -p 3000:3000 \
+  -v /path/to/library:/home/koyomi/lanrurugi/content \
+  -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
+  -v /path/to/database:/home/koyomi/lanrurugi/database \
+  ghcr.io/thelastfantasy/lanrurugi:latest
+```
+
+## Build the image from source
+
+The repository's own `compose.yaml` builds from source for a trial run (`network_mode: host`,
+listening on port 3000):
+
+```sh
+podman compose up -d --build      # or: docker compose up -d --build
 ```
 
 ## First login
+
+The first visit opens the first-run wizard: change the admin password, add a DeepSeek API key for
+the AI features, and import a LANraragi backup. Every step can be skipped, and the wizard can be
+rerun from Settings later.
 
 A brand-new instance — or one migrated from an old installation whose password was never changed —
 uses LANraragi's own default administrator password, **`kamimamita`**.

@@ -54,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
-RUN cargo build --release -p lanrurugi-server
+RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker
 # The API reference document, generated from the crate source already copied above. Built here
 # rather than in the docs stage because the generator is Rust: it parses the API crate's route
 # registrations, which is exactly the source this stage has. `docs/api/` (the vendored upstream
@@ -99,6 +99,15 @@ FROM docker.io/library/redis:${REDIS_VERSION}-bookworm AS redis-bin
 # Apache-2.0 `manga-ocr` recognition model in its own stage so the ~460MB download is cached
 # independently of the Rust/frontend builds and never re-runs when only code changes. Detection
 # models are not fetched here — `oar-ocr` manages those itself (research.md §1).
+# PDFium (Chromium's PDF engine) for `lanrurugi-book-worker`, which loads it at runtime from
+# `LANRURUGI_PDFIUM_LIB`. Version and checksums are pinned in scripts/fetch-pdfium.sh.
+FROM debian:bookworm-slim AS pdfium
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/fetch-pdfium.sh /tmp/fetch-pdfium.sh
+RUN sh /tmp/fetch-pdfium.sh "${TARGETARCH:-amd64}" /opt/pdfium
+
 FROM debian:bookworm-slim AS ocr-model
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
@@ -171,6 +180,7 @@ RUN deno doc --html --name="LANrurugi Plugin SDK" --output=./docs/dist-sdk \
         sdk-src/plugin-sdk.ts sdk-src/dispatcher.ts sdk-src/legacy-globals.d.ts \
  && deno doc --json sdk-src/plugin-sdk.ts sdk-src/dispatcher.ts sdk-src/legacy-globals.d.ts \
       | node scripts/normalize-sdk-doc-json.mjs . > ./docs/dist-sdk/plugin-sdk.json \
+ && node docs/scripts/theme-sdk.mjs ./docs/dist-sdk \
  && pnpm --filter lanrurugi-docs run build:swagger \
  && DOCS_BASE=/docs/ DOCS_SDK_URL=/docs/sdk/ pnpm --filter lanrurugi-docs run build \
  && mkdir -p /build/docs \
@@ -179,6 +189,8 @@ RUN deno doc --html --name="LANrurugi Plugin SDK" --output=./docs/dist-sdk \
  && cp -a ./docs/dist-swagger /build/docs/swagger
 
 FROM debian:bookworm-slim AS runtime
+# Set by BuildKit per target platform; picks the matching prebuilt ONNX Runtime and geoipupdate.
+ARG TARGETARCH
 # No external `unrar`/`7z` needed: archive extraction (incl. RAR5/7z/LZH) is linked in statically
 # via libarchive (see `crates/lanrurugi-scanner/src/archive_format.rs` + `Dockerfile.build`). This
 # also drops the old `unrar-free`, whose getopt CLI never accepted the RARLAB `lb`/`p -inul` flags
@@ -195,6 +207,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         fonts-noto-cjk \
+        djvulibre-bin \
         libstdc++6 \
         zlib1g \
         libbz2-1.0 \
@@ -210,6 +223,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
+COPY --from=rust-builder /build/target/release/lanrurugi-book-worker /usr/local/bin/lanrurugi-book-worker
+# E-book support: the worker subprocess sits next to `lanrurugi-server` (the client looks for it
+# there), PDFium beside it with its BSD license and third-party notices; DjVuLibre's tools come from
+# apt (`djvulibre-bin`) and are run as separate programs (GPL, not linked).
+COPY --from=pdfium /opt/pdfium/lib/libpdfium.so /usr/local/lib/libpdfium.so
+COPY --from=pdfium /opt/pdfium/LICENSE /usr/local/share/doc/pdfium/LICENSE
+COPY --from=pdfium /opt/pdfium/licenses /usr/local/share/doc/pdfium/licenses
+ENV LANRURUGI_PDFIUM_LIB=/usr/local/lib/libpdfium.so
 
 # MaxMind's own `geoipupdate` CLI — not in Debian bookworm's apt repos at all (confirmed: neither
 # the base repo nor `bookworm-backports` carries it), so this installs the official `.deb` release
@@ -223,7 +244,7 @@ COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/l
 # it needs a free MaxMind account's own credentials to fetch at all).
 ARG GEOIPUPDATE_VERSION=8.0.0
 RUN curl -fsSL -o /tmp/geoipupdate.deb \
-        https://github.com/maxmind/geoipupdate/releases/download/v${GEOIPUPDATE_VERSION}/geoipupdate_${GEOIPUPDATE_VERSION}_linux_amd64.deb \
+        https://github.com/maxmind/geoipupdate/releases/download/v${GEOIPUPDATE_VERSION}/geoipupdate_${GEOIPUPDATE_VERSION}_linux_${TARGETARCH:-amd64}.deb \
     && dpkg -i /tmp/geoipupdate.deb \
     && rm -f /tmp/geoipupdate.deb
 
@@ -233,13 +254,18 @@ RUN curl -fsSL -o /tmp/geoipupdate.deb \
 # tarball. Extracted as the real `.so.1.26.0` file (the tarball's `libonnxruntime.so` is a
 # symlink) with the two symlinks recreated, then `ldconfig` for the soname.
 ARG ORT_VERSION=1.27.0
-RUN curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
-    && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
-    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) ort_arch=x64 ;; \
+        arm64) ort_arch=aarch64 ;; \
+        *) echo "no ONNX Runtime build for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz \
+    && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+    && cp /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
     && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/libonnxruntime.so.1 \
     && ln -sf libonnxruntime.so.1 /usr/local/lib/libonnxruntime.so \
     && ldconfig \
-    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-x64-${ORT_VERSION}
+    && rm -rf /tmp/ort.tgz /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}
 # `manga-ocr` recognition model — matches `lanrurugi-ocr::model_discovery`'s container candidate
 # path, so no env var is needed in the default image.
 COPY --from=ocr-model /models/manga-ocr /app/models/manga-ocr

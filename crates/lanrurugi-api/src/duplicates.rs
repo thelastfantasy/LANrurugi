@@ -201,6 +201,7 @@ async fn get_duplicates(State(state): State<AppState>) -> Response {
                         "title": archive.title,
                         "tags": archive.tags,
                         "size": archive.arcsize,
+                        "extension": archive.extension(),
                         "group_key": key,
                     }));
                 }

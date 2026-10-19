@@ -8,6 +8,7 @@ license.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
 lanrurugi-search.workspace = true
+lanrurugi-book.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 crc32fast.workspace = true

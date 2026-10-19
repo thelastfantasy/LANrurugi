@@ -26,3 +26,8 @@ specs/
 # under here (data/database/appendonlydir, owned by Redis's in-container uid) isn't even readable
 # by the host user building the image, which fails the build outright without this exclusion.
 data/
+
+# Locally fetched PDFium (mise run fetch-pdfium); images fetch their own in the `pdfium` stage.
+.pdfium/
+dist/native
+.native-assets

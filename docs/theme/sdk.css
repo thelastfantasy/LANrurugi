@@ -1,0 +1,144 @@
+/*
+ * `deno doc --html` output on the shared LANrurugi palette (tokens.css). deno doc has no theming
+ * hook and its CSS is compiled Tailwind with literal colours, so these rules override the handful of
+ * surfaces that carry the look; symbol-kind colours (Function, Interface…) and syntax colours stay.
+ * Each rule is doubled under `html.dark` to match the specificity of deno doc's `:is(.dark *)` rules.
+ * Injected into every page by scripts/theme-sdk.mjs.
+ */
+
+html body,
+html.dark body {
+  background: var(--lr-paper);
+  color: var(--lr-text);
+}
+
+html .ddoc .text-black,
+html.dark .ddoc .text-black {
+  color: var(--lr-text-strong);
+}
+
+/* Top bar: the homepage's ink band. */
+#topnav,
+html.dark #topnav {
+  background: var(--lr-bar);
+  color: var(--lr-bar-text);
+  border-bottom: var(--lr-border);
+  backdrop-filter: none;
+}
+
+#topnav a,
+#topnav .breadcrumbs li,
+html.dark #topnav a {
+  color: var(--lr-bar-text);
+}
+
+#topnav #searchbar,
+html.dark #topnav #searchbar {
+  border: 2px solid var(--lr-bar-text);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lr-bar-text);
+}
+
+#theme-toggle,
+html.dark #theme-toggle {
+  color: var(--lr-bar-text);
+}
+
+/* Hover fill sweeps in from the left, as on the homepage. */
+#theme-toggle,
+html.dark #theme-toggle {
+  background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition:
+    background-size 300ms ease,
+    color 200ms ease;
+}
+
+#theme-toggle:hover,
+html.dark #theme-toggle:hover {
+  background-color: transparent;
+  background-size: 100% 100%;
+  color: var(--lr-hi-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #theme-toggle {
+    transition: none;
+  }
+}
+
+/* Headings, links and secondary text. */
+html .ddoc h1,
+html .ddoc h2,
+html .ddoc h3,
+html.dark .ddoc h1,
+html.dark .ddoc h2,
+html.dark .ddoc h3 {
+  color: var(--lr-text-strong);
+}
+
+html .ddoc .markdown a,
+html .ddoc .link,
+html .ddoc .contextLink,
+html.dark .ddoc .markdown a,
+html.dark .ddoc .link,
+html.dark .ddoc .contextLink {
+  color: var(--lr-link);
+}
+
+html .ddoc [class*='text-stone-'],
+html .ddoc [class*='text-gray-'],
+html .ddoc .anchor,
+html.dark .ddoc [class*='text-stone-'],
+html.dark .ddoc [class*='text-gray-'],
+html.dark .ddoc .anchor {
+  color: var(--lr-text-muted);
+}
+
+html .ddoc [class*='border-gray-'],
+html .ddoc [class*='border-stone-'],
+html.dark .ddoc [class*='border-gray-'],
+html.dark .ddoc [class*='border-stone-'] {
+  border-color: var(--lr-rule);
+}
+
+/* Code: ink-framed cards with a hard shadow. */
+html .ddoc pre,
+html.dark .ddoc pre {
+  background: var(--lr-code-bg);
+  border: var(--lr-border-thin);
+  border-radius: 12px;
+  box-shadow: var(--lr-shadow-sm);
+}
+
+html .ddoc :not(pre) > code,
+html.dark .ddoc :not(pre) > code {
+  background: var(--lr-sand);
+  border-radius: 5px;
+}
+
+html .ddoc,
+html.dark .ddoc {
+  --ddoc-usage-active-bg: var(--lr-sand);
+  --ddoc-selection-selected-bg: var(--lr-hi);
+  --ddoc-selection-selected-border-color: var(--lr-ink);
+}
+
+/* Namespace and symbol sections: card frames. */
+html .ddoc .namespaceSection,
+html.dark .ddoc .namespaceSection {
+  padding: 4px 8px;
+}
+
+html .ddoc .namespaceItem,
+html.dark .ddoc .namespaceItem {
+  border-radius: 10px;
+}
+
+html .ddoc .toc,
+html.dark .ddoc .toc {
+  border-color: var(--lr-rule);
+}

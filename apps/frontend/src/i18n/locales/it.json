@@ -259,6 +259,7 @@
   "reader.archiveSplit": "Split Suggestion",
   "reader.archiveSplitSuggestionFound": "Split suggestion found:",
   "reader.noArchiveSplitSuggestion": "No split suggestion yet. You can analyze this archive.",
+  "reader.archiveSplitNotNeeded": "Analisi completata: questo archivio sembra un'unica opera, non c'è nulla da dividere.",
   "reader.analyzeArchiveSplit": "Generate Split Suggestion",
   "reader.analyzing": "Analyzing...",
   "reader.executeSplit": "Execute Split",

@@ -15,6 +15,11 @@
 # way as the recognition model.
 set -euo pipefail
 
+# Verifies `<sha256>  <file>` lines on stdin (`shasum` on macOS, which has no `sha256sum`).
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum --check --status; else shasum -a 256 --check --status; fi
+}
+
 ONNX_REPO="onnx-community/manga-ocr-base-ONNX"
 ONNX_REV="f9023406bb2f6b17df67bc4a327c56ecd20611f0"
 VOCAB_REPO="kha-white/manga-ocr-base"
@@ -37,7 +42,7 @@ mkdir -p "$DEST"
 fetch() {
   local url="$1" out="$2" want="$3"
 
-  if [ -f "$out" ] && echo "${want}  ${out}" | sha256sum --check --status 2>/dev/null; then
+  if [ -f "$out" ] && echo "${want}  ${out}" | sha256_check 2>/dev/null; then
     echo "  already present and verified: $(basename "$out")"
     return 0
   fi
@@ -45,7 +50,7 @@ fetch() {
   echo "  downloading $(basename "$out") ..."
   curl -fL --retry 3 --progress-bar "$url" -o "${out}.part"
 
-  if ! echo "${want}  ${out}.part" | sha256sum --check --status; then
+  if ! echo "${want}  ${out}.part" | sha256_check; then
     rm -f "${out}.part"
     echo "ERROR: checksum mismatch for $(basename "$out") — refusing to install." >&2
     exit 1

@@ -3,35 +3,77 @@ title: 安装（Docker / NAS）
 description: 用 Docker 或 Compose 在服务器/NAS 上部署 LANrurugi。
 ---
 
-LANrurugi 是单个二进制，前端静态资源、HTTP API、文件监视器与插件池都在同一个进程里。它复用你已有的
-Redis，并且**不会**破坏性地迁移已有数据——`compose.yaml` 里挂载的 `data/database` 就是旧版 LANraragi
-用的那份 Redis 数据目录。
+LANrurugi 的服务端是一个常驻进程，前端静态资源、HTTP API、文件监视器和后台任务都在里面；插件、电子书解析和
+AI 推理在按需启动的子进程里运行。它复用你已有的 Redis，并且**不会**破坏性地迁移已有数据——`compose.yaml`
+里挂载的 `data/database` 就是旧版 LANraragi 用的那份 Redis 数据目录。
 
-## 用 Compose 启动
+不想用容器的话，也可以用 Linux、macOS（Apple Silicon）和 FreeBSD 的[原生安装包](../install-native/)。
 
-```sh
-podman compose up -d      # 或 docker compose up -d
+## 用 Compose 部署（推荐）
+
+把下面这段保存为 `compose.yaml`，按注释把左侧的宿主机目录改成你自己的，然后启动：
+
+```yaml
+services:
+  lanrurugi:
+    image: ghcr.io/thelastfantasy/lanrurugi:latest
+    container_name: lanrurugi
+    ports:
+      - "3000:3000"
+    volumes:
+      # 书库，可以直接指向旧版 LANraragi 的 content 目录
+      - ./data/manga:/home/koyomi/lanrurugi/content
+      # 缩略图缓存
+      - ./data/thumb:/home/koyomi/lanrurugi/thumb
+      # Redis 数据，可以直接指向旧版 LANraragi 的 database 目录
+      - ./data/database:/home/koyomi/lanrurugi/database
+      # 推荐功能的嵌入模型，首次用到时自动下载
+      - ./data/models:/home/koyomi/lanrurugi/models
+    environment:
+      # 经 HTTPS 反向代理访问时改为 true
+      - LANRURUGI_FORCE_SECURE_COOKIES=false
+    restart: unless-stopped
 ```
 
-`compose.yaml` 使用的三个宿主机目录，与旧版 LANraragi 的 `data/` 布局一致：
+```sh
+docker compose up -d      # 或 podman compose up -d
+```
+
+NAS 上（群晖 Container Manager、Portainer 等）新建一个 compose 项目，粘贴同一段文本即可。
+
+启动后在浏览器打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器。四个挂载目录：
 
 | 宿主机路径 | 容器内路径 | 用途 |
 |---|---|---|
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | 你的档案库 |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | 缩略图缓存 |
 | `./data/database` | `/home/koyomi/lanrurugi/database` | Redis 数据（与旧版共用） |
+| `./data/models` | `/home/koyomi/lanrurugi/models` | 推荐功能的嵌入模型缓存 |
 
-容器使用 `network_mode: host`，服务监听 **3000** 端口（`LANRURUGI_BIND` 的默认值
-`0.0.0.0:3000`）。
+要通过域名和 HTTPS 访问，见[反向代理](../reverse-proxy/)。
 
 ## 直接用 Docker 运行
 
 ```sh
-docker build -t lanrurugi .
-docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
+docker run -d --name lanrurugi -p 3000:3000 \
+  -v /path/to/library:/home/koyomi/lanrurugi/content \
+  -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
+  -v /path/to/database:/home/koyomi/lanrurugi/database \
+  ghcr.io/thelastfantasy/lanrurugi:latest
+```
+
+## 从源码构建镜像
+
+仓库根目录的 `compose.yaml` 用于从源码构建并试运行（`network_mode: host`，监听 3000 端口）：
+
+```sh
+podman compose up -d --build      # 或 docker compose up -d --build
 ```
 
 ## 首次登录
+
+首次打开时会出现首次运行向导：修改管理员密码、填写 AI 功能用的 DeepSeek API 密钥、从 LANraragi 备份导入
+数据，每一步都可以跳过，之后也能在设置页面重新运行。
 
 一个全新实例——或者从一个从未修改过密码的旧版安装迁移过来的实例——使用的是旧版 LANraragi 自身的默认
 管理员密码 **`kamimamita`**。

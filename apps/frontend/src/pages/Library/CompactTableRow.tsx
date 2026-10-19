@@ -1,8 +1,11 @@
 import type { MouseEvent } from "react"
+import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { FormatBadge, StatusIcon } from "@/components/Display"
 import { routes } from "@/lib/routes"
+import { isBookExtension } from "@/lib/utils/bookFormats"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { CustomColumnCell } from "./CustomColumnCell"
@@ -27,6 +30,7 @@ export function CompactTableRow({
   onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
   onSearchTag: (namespacedTag: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <tr
       key={archive.arcid}
@@ -65,8 +69,18 @@ export function CompactTableRow({
               else onOpen(archive.arcid)
             }}
           >
-            {archive.isnew && "🆕 "}
+            {archive.isnew && (
+              <>
+                <StatusIcon kind="new" title={t("library.new") ?? undefined} />{" "}
+              </>
+            )}
             {archive.title}
+            {isBookExtension(archive.extension) && (
+              <>
+                {" "}
+                <FormatBadge extension={archive.extension} />
+              </>
+            )}
           </a>
         </Tooltip>
       </td>

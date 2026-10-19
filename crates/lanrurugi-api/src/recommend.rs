@@ -513,6 +513,7 @@ async fn get_recommendations(
                         .map(|a| a.lastreadpage > 0 && a.lastreadpage >= a.pagecount)
                         .unwrap_or(false),
                     "is_tank": r.id.starts_with("TANK_"),
+                    "extension": meta.as_ref().map(|a| a.extension()).unwrap_or_default(),
                 }));
             }
             axum::Json(json!({ "archive_id": id, "recommendations": enriched })).into_response()

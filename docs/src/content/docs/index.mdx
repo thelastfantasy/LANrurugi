@@ -3,7 +3,7 @@ title: LANrurugi 文档
 description: 安装、使用、插件开发与 HTTP API 参考。
 template: splash
 hero:
-  tagline: LANraragi 的 Rust + React 重写版——自托管漫画/同人志库管理器，与现有 LANraragi 部署保持数据与 API 兼容。
+  tagline: 以漫画为主、也能读 PDF / EPUB 等电子书的自托管书库，以 LANraragi 为起点、用 Rust + React 大幅改造与强化——现有 LANraragi 部署的数据与 API 直接可用。
   actions:
     - text: 安装
       link: guide/install/
@@ -15,7 +15,9 @@ hero:
 ## 这个站点里有什么
 
 - **[安装（Docker / NAS）](guide/install/)**——把 LANrurugi 跑起来，并让它读到你已有的库。
+- **[原生安装](guide/install-native/)**——不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上运行。
 - **[快速开始](guide/quickstart/)**——首次登录、扫描库、导入旧数据。
+- **[支持的格式](guide/formats/)**——能放进书库的压缩包和电子书（PDF、EPUB、MOBI/AZW3、DjVu、FB2、TXT），以及各自怎么显示。
 - **[用文档站测试 API](guide/api-testing/)**——在浏览器里直接对**你自己的实例**发请求，以及它不生效时的处理方式。
 - **[插件开发入门](plugin/getting-started/)**——写一个元数据/登录/下载插件。
 - **[API 参考](api/)**——完整的 HTTP API：每个端点、参数、响应，以及可直接复制的命令行。

@@ -9,6 +9,7 @@ name = "lanrurugi-server"
 path = "src/main.rs"
 
 [dependencies]
+lanrurugi-book.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
 lanrurugi-api.workspace = true
@@ -17,6 +18,8 @@ lanrurugi-search.workspace = true
 lanrurugi-backup.workspace = true
 lanrurugi-scanner.workspace = true
 lanrurugi-plugin.workspace = true
+lanrurugi-ocr.workspace = true
+lanrurugi-inpaint.workspace = true
 lanrurugi-bench.workspace = true
 tokio.workspace = true
 axum.workspace = true

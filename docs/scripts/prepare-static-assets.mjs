@@ -53,6 +53,12 @@ if (!existsSync(faviconSource)) {
   mkdirSync(dirname(faviconTarget), { recursive: true })
   copyFileSync(faviconSource, faviconTarget)
   report('favicon', faviconTarget)
+  // The same icon as the header logo: Starlight's `logo.src` must be an importable file under the
+  // project, which `public/` is not.
+  const logoTarget = join(docsRoot, 'src', 'generated', 'logo.svg')
+  mkdirSync(dirname(logoTarget), { recursive: true })
+  copyFileSync(faviconSource, logoTarget)
+  report('header logo', logoTarget)
 }
 
 process.exit(failed ? 2 : 0)

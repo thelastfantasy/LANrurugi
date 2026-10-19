@@ -304,7 +304,10 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| archive.file.clone());
 
-        if archive.heal_failed_at.is_some() {
+        // E-books are exempt from "never retry": before e-book support every one failed here and
+        // was marked, and a book that still cannot be opened fails fast and cheaply.
+        let is_book = crate::archive_format::is_book(Path::new(&archive.file));
+        if archive.heal_failed_at.is_some() && !is_book {
             summary.skipped_known_failed += 1;
             summary.details.push(HealDetail {
                 archive_id: archive.id.to_string(),
@@ -323,6 +326,10 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                 let new_pagecount = pages.len() as u32;
                 archive.pagecount = new_pagecount;
                 archive.arcsize = new_arcsize;
+                archive.heal_failed_at = None;
+                if is_book && archive.toc.is_empty() {
+                    archive.toc = crate::pipeline::book_outline_toc(Path::new(&archive.file));
+                }
                 if let Err(e) = archives.save(&archive).await {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to save healed archive");
                     summary.failed += 1;

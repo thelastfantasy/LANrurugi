@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import type { CategoryMetadata } from "@/api/types"
+import { StatusIcon } from "@/components/Display"
 import { CATEGORY_BUTTON_CAP, NEW_ONLY, TANKOUBON_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
 
 export function CategoryBar({
@@ -26,7 +27,7 @@ export function CategoryBar({
         title={t("library.archivesAddedWithinTheLast") ?? undefined}
         onClick={() => onToggleCategory(NEW_ONLY)}
       >
-        🆕 {t("library.newArchives")}
+        <StatusIcon kind="new" /> {t("library.newArchives")}
       </button>
       <button
         type="button"
@@ -34,7 +35,7 @@ export function CategoryBar({
         title={t("library.archivesWithNoTagsAt") ?? undefined}
         onClick={() => onToggleCategory(UNTAGGED_ONLY)}
       >
-        🏷️ {t("library.untaggedArchives")}
+        <StatusIcon kind="untagged" /> {t("library.untaggedArchives")}
       </button>
       {hasTankoubons && (
         <button
@@ -43,7 +44,7 @@ export function CategoryBar({
           title={t("library.tankoubonVolumes") ?? undefined}
           onClick={() => onToggleCategory(TANKOUBON_ONLY)}
         >
-          📚 {t("categories.tankoubons")}
+          <StatusIcon kind="tankoubon" /> {t("categories.tankoubons")}
         </button>
       )}
       {visible.map((c) => (

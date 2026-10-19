@@ -36,7 +36,7 @@ export default defineConfig({
     starlight({
       title: 'LANrurugi',
       description:
-        'LANraragi 的 Rust + React 重写版：自托管漫画/同人志库管理器。这里放安装、使用、插件开发与 HTTP API 参考。',
+        '以漫画为主、也能读 PDF / EPUB 等电子书的自托管书库，以 LANraragi 为起点、用 Rust + React 大幅改造与强化。这里放安装、使用、插件开发与 HTTP API 参考。',
       // Two locales, each with its own content directory: `src/content/docs/` is the default
       // (Simplified Chinese, served without a path prefix) and `src/content/docs/en/` is English.
       // Declaring both is what puts the language switcher in the header.
@@ -47,6 +47,8 @@ export default defineConfig({
       // Rendered by the `SocialIcons` override below as text links. Kept in the config because it is
       // the framework's declared place for these, and the override asserts every entry here is
       // actually rendered — a configured link that silently never appears is its own bug.
+      // The product's own icon, copied from the frontend by `prepare-static-assets.mjs`.
+      logo: { src: './src/generated/logo.svg' },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi' },
       ],
@@ -60,7 +62,10 @@ export default defineConfig({
           translations: { en: 'User Guide' },
           items: [
             { label: '安装（Docker / NAS）', translations: { en: 'Install (Docker / NAS)' }, slug: 'guide/install' },
+            { label: '原生安装（Linux / macOS / FreeBSD）', translations: { en: 'Native install (Linux / macOS / FreeBSD)' }, slug: 'guide/install-native' },
+            { label: '反向代理', translations: { en: 'Reverse proxy' }, slug: 'guide/reverse-proxy' },
             { label: '快速开始', translations: { en: 'Quickstart' }, slug: 'guide/quickstart' },
+            { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
             { label: '用文档站测试 API', translations: { en: 'Testing the API from these docs' }, slug: 'guide/api-testing' },
           ],
         },
@@ -90,11 +95,16 @@ export default defineConfig({
           })),
         },
       ],
-      customCss: ['./src/styles/custom.css'],
+      // Palette shared with the homepage, Swagger UI and SDK pages, then Starlight's mapping onto it.
+      customCss: ['./theme/tokens.css', './src/styles/custom.css', './src/styles/theme.css'],
       components: {
         // Text links instead of icon-only ones; see the component's own docs for which of the
         // reference site's four top-bar links this project can honestly offer.
         SocialIcons: './src/components/SocialIcons.astro',
+        // The homepage's E-H / EX palette switch instead of the dark/light/auto dropdown.
+        ThemeSelect: './src/components/ThemeSelect.astro',
+        // Starlight's search plus an empty state (example queries, popular pages).
+        Search: './src/components/Search.astro',
       },
     }),
   ],

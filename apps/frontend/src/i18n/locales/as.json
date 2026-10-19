@@ -86,6 +86,7 @@
   "reader.archiveSplit": "Split Suggestion",
   "reader.archiveSplitSuggestionFound": "Split suggestion found:",
   "reader.noArchiveSplitSuggestion": "No split suggestion yet. You can analyze this archive.",
+  "reader.archiveSplitNotNeeded": "Analysis finished: this archive looks like a single work, so there is nothing to split.",
   "reader.analyzeArchiveSplit": "Generate Split Suggestion",
   "reader.analyzing": "Analyzing...",
   "reader.executeSplit": "Execute Split",

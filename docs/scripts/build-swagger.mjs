@@ -63,8 +63,6 @@ const ASSETS = [
   'swagger-ui.css',
   'swagger-ui-bundle.js',
   'swagger-ui-standalone-preset.js',
-  'favicon-16x16.png',
-  'favicon-32x32.png',
   'oauth2-redirect.html',
 ]
 
@@ -88,6 +86,11 @@ for (const asset of ASSETS) {
 copyFileSync(specPath, join(outDir, 'openapi.json'))
 copyFileSync(join(SWAGGER_DIR, 'swagger-init.js'), join(outDir, 'swagger-init.js'))
 copyFileSync(join(SWAGGER_DIR, 'swagger-custom.css'), join(outDir, 'swagger-custom.css'))
+// Shared LANrurugi palette plus Swagger UI's mapping onto it (see swagger/swagger-theme.css).
+copyFileSync(join(docsRoot, 'theme', 'tokens.css'), join(outDir, 'lanrurugi-tokens.css'))
+copyFileSync(join(SWAGGER_DIR, 'swagger-theme.css'), join(outDir, 'swagger-theme.css'))
+// The project icon, for the tab and for the top-bar logo swagger-init.js puts in Swagger's place.
+copyFileSync(join(repoRoot, 'apps', 'frontend', 'public', 'favicon.svg'), join(outDir, 'lanrurugi.svg'))
 
 // ── The Chinese copy of the document ────────────────────────────────────────────────────────────
 //
@@ -172,6 +175,7 @@ const LOCALES = [
     dir: '',
     lang: 'zh-CN',
     title: 'LANrurugi API — Swagger UI',
+    themeLabel: '配色',
     // Asset prefix: the root page sits next to the assets, the English page one level down.
     prefix: './',
     spec: 'openapi.zh.json',
@@ -181,6 +185,7 @@ const LOCALES = [
     dir: 'en',
     lang: 'en',
     title: 'LANrurugi API — Swagger UI',
+    themeLabel: 'Color theme',
     prefix: '../',
     // Relative to the *page*, not the site root: this page lives at `/en/`, so a bare
     // `openapi.json` would resolve to `/en/openapi.json`, which does not exist.
@@ -196,10 +201,19 @@ function page(locale) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${locale.title}</title>
-    <link rel="icon" type="image/png" sizes="32x32" href="${locale.prefix}favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="${locale.prefix}favicon-16x16.png" />
+    <link rel="icon" type="image/svg+xml" href="${locale.prefix}lanrurugi.svg" />
     <link rel="stylesheet" href="${locale.prefix}swagger-ui.css" />
     <link rel="stylesheet" href="${locale.prefix}swagger-custom.css" />
+    <link rel="stylesheet" href="${locale.prefix}lanrurugi-tokens.css" />
+    <link rel="stylesheet" href="${locale.prefix}swagger-theme.css" />
+    <script>
+      // E-H / EX palette before first paint: the stored choice, else the OS preference.
+      try {
+        const t = localStorage.getItem('lanrurugi-swagger:theme')
+        const dark = t ? t === 'ex' : matchMedia('(prefers-color-scheme: dark)').matches
+        if (dark) document.documentElement.classList.add('dark-mode')
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="swagger-ui"></div>
@@ -210,6 +224,8 @@ function page(locale) {
       window.__LRR_SWAGGER__ = ${JSON.stringify({
         spec: locale.spec,
         switcher: locale.switcher,
+        logo: `${locale.prefix}lanrurugi.svg`,
+        themeLabel: locale.themeLabel,
       })}
     </script>
     <script src="${locale.prefix}swagger-ui-bundle.js" crossorigin></script>
@@ -237,6 +253,8 @@ writeFileSync(
     <meta charset="utf-8" />
     <title>404 — LANrurugi API</title>
     <link rel="stylesheet" href="/swagger-custom.css" />
+    <link rel="stylesheet" href="/lanrurugi-tokens.css" />
+    <link rel="stylesheet" href="/swagger-theme.css" />
   </head>
   <body style="font-family: system-ui, sans-serif; padding: 4rem 2rem; text-align: center">
     <h1>404</h1>

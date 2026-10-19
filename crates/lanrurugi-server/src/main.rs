@@ -197,8 +197,17 @@ struct BenchArgs {
     interactive_load_iterations: usize,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Before any thread exists (it sets environment variables): a native package finds its own
+    // frontend, plugins, libraries and models next to the executable.
+    let from_install_prefix = lanrurugi_server::install_layout::apply();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(from_install_prefix))
+}
+
+async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Result<()> {
     // Register the JPEG XL decoder with `image` once at process start. Every production decode
     // path already goes through `lanrurugi_scanner::image_decode`, but this keeps any future direct
     // `image::open`/`ImageReader` use (or a dependency's own call) JXL-aware too.
@@ -208,9 +217,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve(args) => telemetry::init(Some(&args.log_dir)),
         _ => telemetry::init(None),
     }
+    for (variable, path) in &from_install_prefix {
+        tracing::info!(variable, path = %path.display(), "location resolved from the install prefix");
+    }
 
     match cli.command {
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => {
+            lanrurugi_server::capabilities::log_summary(&args.deno_bin);
+            serve(args).await
+        }
         Command::RebuildIndex(args) => rebuild_index(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
@@ -236,6 +251,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&args.library_path)?;
     std::fs::create_dir_all(&args.thumb_dir)?;
     std::fs::create_dir_all(&args.temp_dir)?;
+    // Rendered e-book pages and inspection results live with the other conversion caches.
+    lanrurugi_book::configure(lanrurugi_book::BookConfig {
+        cache_dir: args.temp_dir.join("book"),
+        ..Default::default()
+    });
     std::fs::create_dir_all(&args.plugins_dir)?;
 
     // `dispatcher.ts` (`crates/lanrurugi-plugin/dispatcher/dispatcher.ts`) builds a `file://` URL
@@ -761,7 +781,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     // Every 15 minutes — enforce the `tempmaxsize` setting against the reader's WebP resize cache
-    // (`temp_dir/resize_page/`), the only unbounded self-regenerating content under `temp_dir`. A
+    // (`temp_dir/resize_page/`) and rendered e-book pages (`temp_dir/book/`), the unbounded
+    // self-regenerating content under `temp_dir`. A
     // finer interval than the pending-rename sweep since this cache can grow continuously under
     // heavy reading traffic, not just accumulate from occasional abandoned conflicts.
     {

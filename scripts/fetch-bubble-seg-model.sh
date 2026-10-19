@@ -23,6 +23,11 @@
 # the closest meaningful notion of reproducibility this ecosystem's own export tooling supports.
 set -euo pipefail
 
+# Verifies `<sha256>  <file>` lines on stdin (`shasum` on macOS, which has no `sha256sum`).
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum --check --status; else shasum -a 256 --check --status; fi
+}
+
 REPO="huyvux3005/manga109-segmentation-bubble"
 REV="f9a4108c4955136a810e5e92207972f3fb3a65fd"
 PT_SHA256="4028152940f7c910f40192f46ede3b3f6c7129e5c76849c324d3564f8ac50198"
@@ -60,7 +65,7 @@ fi
 echo "Downloading best.pt into ${WORKDIR}/"
 curl -fL --retry 3 --progress-bar \
   "${HF_ENDPOINT}/${REPO}/resolve/${REV}/best.pt" -o "${WORKDIR}/best.pt"
-if ! echo "${PT_SHA256}  ${WORKDIR}/best.pt" | sha256sum --check --status; then
+if ! echo "${PT_SHA256}  ${WORKDIR}/best.pt" | sha256_check; then
   echo "ERROR: checksum mismatch for best.pt — refusing to convert." >&2
   exit 1
 fi

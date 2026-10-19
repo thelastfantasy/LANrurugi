@@ -140,7 +140,23 @@ pub async fn run(
     new_archive_tx: Option<mpsc::UnboundedSender<IngestEvent>>,
     locks: FilenameLocks,
 ) {
-    while let Some(path) = rx.recv().await {
+    let mut pending: std::collections::VecDeque<PathBuf> = std::collections::VecDeque::new();
+    loop {
+        let path = match pending.pop_front() {
+            Some(path) => path,
+            None => match rx.recv().await {
+                Some(path) => path,
+                None => break,
+            },
+        };
+        // A file being copied in emits one Modify event per write — dozens for a large file, each
+        // of which used to be a full ingest. Everything already queued is folded into a
+        // de-duplicated backlog; this ingest covers every queued duplicate of `path`.
+        while let Ok(next) = rx.try_recv() {
+            if next != path && !pending.contains(&next) {
+                pending.push_back(next);
+            }
+        }
         let filename = path
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
@@ -495,9 +511,18 @@ async fn catalogue_new_archive(
                 .to_string()
         });
     let arcsize = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let pagecount = archive_format::list_pages(path)
-        .map(|p| p.len() as u32)
-        .unwrap_or(0);
+    let pagecount = match archive_format::list_pages(path) {
+        Ok(pages) => pages.len() as u32,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "cannot list pages; cataloguing with 0 pages");
+            0
+        }
+    };
+    let toc = if archive_format::is_book(path) {
+        book_outline_toc(path)
+    } else {
+        Vec::new()
+    };
 
     // `Utils/Database.pm::add_timestamp_tag`, called by both legacy's watcher (`Shinobu.pm:386`)
     // and its upload handler (`Model/Upload.pm:169`) right after a new archive is first
@@ -548,7 +573,7 @@ async fn catalogue_new_archive(
         lastreadpage: 0,
         lastreadtime: 0,
         thumbhash: None,
-        toc: Vec::new(),
+        toc,
         stamp_ids: Vec::new(),
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
@@ -591,6 +616,29 @@ async fn catalogue_new_archive(
     }
 
     Ok(())
+}
+
+/// A book's own table of contents (PDF/DjVu bookmarks, EPUB nav/NCX, FB2 sections, TXT chapters,
+/// MOBI headings) as the archive's initial ToC. The ToC holds one entry per page and no hierarchy,
+/// so nested entries are flattened in document order and, where several land on the same page,
+/// the first one wins.
+pub(crate) fn book_outline_toc(path: &Path) -> Vec<lanrurugi_core::entities::TocEntry> {
+    let Ok(info) = lanrurugi_book::inspect(path) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut toc: Vec<_> = info
+        .outline
+        .iter()
+        .filter(|item| (item.page as usize) < info.pages.len() && seen.insert(item.page))
+        // The ToC numbers pages from 1 (the reader's own page numbers); the outline from 0.
+        .map(|item| lanrurugi_core::entities::TocEntry {
+            page: item.page + 1,
+            name: item.title.clone(),
+        })
+        .collect();
+    toc.sort_by_key(|t| t.page);
+    toc
 }
 
 #[cfg(test)]

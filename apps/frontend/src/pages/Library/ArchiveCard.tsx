@@ -3,14 +3,18 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
+import { FormatBadge, StatusIcon } from "@/components/Display"
 import { routes } from "@/lib/routes"
+import { isBookExtension } from "@/lib/utils/bookFormats"
 import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { TagLine } from "./TagLine"
 
-/** Status badges — 🆕 and 👑 are mutually exclusive (a Tankoubon can show both plus 📚); read
- * threshold is >85%. */
+const gap = { marginLeft: 2 }
+
+/** File format (e-books only) and status badges — new and read are mutually exclusive (a
+ * Tankoubon can show both plus its own mark); read threshold is >85%. */
 function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   const { t } = useTranslation()
   const isTank = isTankoubonId(archive.arcid)
@@ -20,13 +24,17 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   // No legacy equivalent, so no mutual-exclusion with the other badges.
   const showPatch = archive.has_patch === true
 
-  if (!showNew && !showCrown && !isTank && !showPatch) return null
+  const isBook = isBookExtension(archive.extension)
+  if (!showNew && !showCrown && !isTank && !showPatch && !isBook) return null
   return (
-    <div className="status-icons" style={{ display: "flex", gap: 1, flexShrink: 0, paddingTop: 2 }}>
-      {showNew && <span title={t("library.new") ?? undefined} style={{ fontSize: "0.8em" }}>🆕</span>}
-      {showCrown && <span title={t("common.read") ?? undefined} style={{ fontSize: "0.8em" }}>👑</span>}
-      {isTank && <span title={t("library.tankoubon") ?? undefined} style={{ fontSize: "0.8em" }}>📚</span>}
-      {showPatch && <span title={t("library.hasAPagePatch") ?? undefined} style={{ fontSize: "0.8em" }}>🩹</span>}
+    // Inline flow rather than flex: the row aligns this box by its first baseline, and the marks
+    // centre on the text's middle like any inline icon.
+    <div className="status-icons" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+      {isBook && <FormatBadge extension={archive.extension} style={gap} />}
+      {showNew && <StatusIcon kind="new" title={t("library.new") ?? undefined} style={gap} />}
+      {showCrown && <StatusIcon kind="read" title={t("common.read") ?? undefined} style={gap} />}
+      {isTank && <StatusIcon kind="tankoubon" title={t("library.tankoubon") ?? undefined} style={gap} />}
+      {showPatch && <StatusIcon kind="patch" title={t("library.hasAPagePatch") ?? undefined} style={gap} />}
     </div>
   )
 }
@@ -96,7 +104,7 @@ export function ArchiveCard({
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
     >
-      <div className="id2" style={{ display: "flex", alignItems: "flex-start", justifyContent: "center", gap: 2 }}>
+      <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
         <a
           href={routes.reader(id)}
           title={archive.title}

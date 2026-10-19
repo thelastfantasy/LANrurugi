@@ -63,6 +63,8 @@ pub enum ArchiveFormatError {
     UnsupportedExtension(String),
     #[error("entry {0:?} not found in archive")]
     EntryNotFound(String),
+    #[error(transparent)]
+    Book(#[from] lanrurugi_book::BookError),
 }
 
 type Result<T> = std::result::Result<T, ArchiveFormatError>;
@@ -73,9 +75,10 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 
 /// Extensions libarchive is asked to open. Kept as an allowlist (rather than handing libarchive
 /// every file) so a non-archive upload comes back as a clean `UnsupportedExtension` instead of a
-/// opaque libarchive parse error.
+/// opaque libarchive parse error. Only codecs the bundled libarchive is built with (zlib, bzip2,
+/// xz/lzma, lz4 — not zstd).
 const ARCHIVE_EXTENSIONS: &[&str] = &[
-    "zip", "cbz", "epub", "rar", "cbr", "7z", "cb7", "lzh", "lha", "tar", "gz", "bz2", "xz",
+    "zip", "cbz", "rar", "cbr", "7z", "cb7", "lzh", "lha", "tar", "cbt", "gz", "bz2", "xz", "lzma",
 ];
 
 fn is_image_name(name: &str) -> bool {
@@ -94,6 +97,45 @@ fn extension_of(path: &Path) -> String {
 
 fn is_supported_archive(path: &Path) -> bool {
     ARCHIVE_EXTENSIONS.contains(&extension_of(path).as_str())
+}
+
+/// Whether files with this (lowercase) extension can be catalogued at all: an archive libarchive
+/// reads, or an e-book.
+pub fn is_supported_extension(ext: &str) -> bool {
+    ARCHIVE_EXTENSIONS.contains(&ext) || lanrurugi_book::BookFormat::from_extension(ext).is_some()
+}
+
+/// E-books (PDF, EPUB, MOBI/AZW3, DjVu, FB2, TXT) are not libarchive containers: each function
+/// below hands them to `lanrurugi_book`, which lists one synthetic entry per page (`0001.jpg`,
+/// `0002.webp`, …) and produces that page's image.
+pub fn is_book(path: &Path) -> bool {
+    lanrurugi_book::BookFormat::from_path_extension(path).is_some()
+}
+
+pub fn is_pdf(path: &Path) -> bool {
+    extension_of(path) == "pdf"
+}
+
+fn book_page_names(path: &Path) -> Result<Vec<String>> {
+    let info = lanrurugi_book::inspect(path)?;
+    let count = info.pages.len();
+    Ok(info
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, source)| lanrurugi_book::page_entry_name(i, count, *source))
+        .collect())
+}
+
+fn book_read_page(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
+    let index = lanrurugi_book::parse_page_entry_name(entry_name)
+        .ok_or_else(|| ArchiveFormatError::EntryNotFound(entry_name.to_string()))?;
+    match lanrurugi_book::read_page(path, index) {
+        Err(lanrurugi_book::BookError::PageOutOfRange(_)) => {
+            Err(ArchiveFormatError::EntryNotFound(entry_name.to_string()))
+        }
+        other => Ok(other?),
+    }
 }
 
 /// Decodes a raw archive-entry filename byte string, trying UTF-8 first (the overwhelming common
@@ -328,6 +370,9 @@ fn natural_key(s: &str) -> Vec<(String, u64)> {
 /// Lists image entry names inside the archive, in natural-sorted (page) order. Works for every
 /// format libarchive understands (zip/cbz/epub, rar/cbr incl. RAR5, 7z/cb7, lzh/lha, tar…).
 pub fn list_pages(path: &Path) -> Result<Vec<String>> {
+    if is_book(path) {
+        return book_page_names(path);
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -375,6 +420,16 @@ pub struct ArchiveEntryInfo {
 /// imposes its own path-based ordering when rendering). A cheap header-only walk (`skip_data` on
 /// every entry) — no file bytes are ever read into memory.
 pub fn list_all_entries(path: &Path) -> Result<Vec<ArchiveEntryInfo>> {
+    if is_book(path) {
+        return Ok(book_page_names(path)?
+            .into_iter()
+            .map(|name| ArchiveEntryInfo {
+                name,
+                is_regular_file: true,
+                is_page: true,
+            })
+            .collect());
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -396,6 +451,9 @@ pub fn list_all_entries(path: &Path) -> Result<Vec<ArchiveEntryInfo>> {
 /// Reads the raw bytes of a single named entry (used for thumbnail extraction). Iterates the
 /// archive until the entry is found, then reads its data into memory.
 pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
+    if is_book(path) {
+        return book_read_page(path, entry_name);
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -421,6 +479,16 @@ pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
 /// `read_page_dimensions`'s own per-entry tolerance rather than failing the whole batch over one
 /// missing/renamed page).
 pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Vec<u8>>>> {
+    if is_book(path) {
+        return entry_names
+            .iter()
+            .map(|name| match book_read_page(path, name) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(ArchiveFormatError::EntryNotFound(_)) => Ok(None),
+                Err(e) => Err(e),
+            })
+            .collect();
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -500,6 +568,16 @@ pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Ve
 /// whole batch, matching `fetch_page`'s own per-page tolerance for corrupted pages elsewhere in
 /// this codebase.
 pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32, u32)>>> {
+    if is_book(path) {
+        // Known from inspection, without producing a single page.
+        let info = lanrurugi_book::inspect(path)?;
+        return Ok(info
+            .sizes
+            .iter()
+            .take(count)
+            .map(|&size| Some(size))
+            .collect());
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -548,6 +626,10 @@ pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32
 /// — sidecar metadata files (`api.json`, `ComicInfo.xml`, ...) live alongside the pages, not
 /// among them.
 pub fn find_entry_by_suffix(path: &Path, wanted_suffix: &str) -> Result<Option<String>> {
+    if is_book(path) {
+        // A book carries no sidecar files (`info.json`, `ComicInfo.xml`, …).
+        return Ok(None);
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -785,7 +867,7 @@ mod tests {
 
     #[test]
     fn list_pages_works_across_zip_family_extensions() {
-        for ext in ["zip", "cbz", "epub"] {
+        for ext in ["zip", "cbz"] {
             let f = make_test_zip_with_ext(ext, &["page1.jpg", "page2.jpg"]);
             assert_eq!(
                 list_pages(f.path()).unwrap(),
@@ -793,6 +875,16 @@ mod tests {
                 "extension .{ext} should be readable via libarchive"
             );
         }
+    }
+
+    #[test]
+    fn epub_is_read_as_a_book_not_as_a_zip_of_images() {
+        // A zip renamed to .epub has no package document: an unreadable book, not a 2-page archive.
+        let f = make_test_zip_with_ext("epub", &["page1.jpg", "page2.jpg"]);
+        assert!(matches!(
+            list_pages(f.path()),
+            Err(ArchiveFormatError::Book(_))
+        ));
     }
 
     #[test]

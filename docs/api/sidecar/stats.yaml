@@ -381,23 +381,25 @@ components:
 
     StatsRecentRead:
       type: object
-      required: [id, title, last_read, page, pages]
+      required: [id, title, last_read, page, pages, extension]
       properties:
         id: { type: string }
         title: { type: string }
         last_read: { type: integer, format: int64, description: Unix seconds. }
         page: { type: integer, description: Last-read page. }
         pages: { type: integer, description: "`0` when the page count is unknown." }
+        extension: { type: string, description: Lowercase file extension of the archive. }
 
     StatsRereadArchive:
       type: object
-      required: [id, title, reads, page, pages]
+      required: [id, title, reads, page, pages, extension]
       properties:
         id: { type: string }
         title: { type: string }
         reads: { type: integer, format: int64, description: Recorded page turns for this archive. }
         page: { type: integer }
         pages: { type: integer }
+        extension: { type: string, description: Lowercase file extension of the archive. }
 
     StatsPreferences:
       type: object

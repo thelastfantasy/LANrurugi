@@ -60,8 +60,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
             nasm libopenjp2-7-dev \
-            redis-server perl cpanminus
+            redis-server perl cpanminus \
+            djvulibre-bin fonts-noto-cjk
           sudo cpanm --notest PPI JSON::PP
+
+      # The e-book worker's end-to-end tests load PDFium (pinned in scripts/fetch-pdfium.sh) and run
+      # DjVuLibre's tools; the text typesetter needs CJK fonts. Without these the tests skip.
+      - name: Fetch PDFium
+        run: scripts/fetch-pdfium.sh amd64 .pdfium/linux-x64
 
       # A `services.redis` Docker container can't be started with a custom `--databases` count
       # (the `services:` schema only allows docker-run flags via `options`, not overriding the
@@ -313,8 +319,11 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy docs/dist-sdk --project-name=lanrurugi-sdk
 
-      # The project homepage. No build step: it is hand-written HTML/CSS/JS with no dependencies, so
-      # this deploys the directory exactly as committed (and a broken edit cannot hide behind a build).
+      # The project homepage: plain HTML/CSS/JS pre-rendered per language by a dependency-free
+      # Node script (so crawlers get real text and hreflang alternates without running JS).
+      - name: Build homepage
+        run: node homepage/build.mjs
+
       - name: Publish homepage
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
@@ -324,4 +333,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy homepage --project-name=lanrurugi-home
+          command: pages deploy homepage/dist --project-name=lanrurugi-home

@@ -26,7 +26,12 @@ import {
 } from "@/api/hooks";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
-import { ForbiddenPage, NotFoundPage } from "@/components/Display";
+import {
+  ForbiddenPage,
+  FormatBadge,
+  NotFoundPage,
+  StatusIcon,
+} from "@/components/Display";
 import { Footer } from "@/components/Layout";
 import { confirmDialog, promptDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -46,6 +51,7 @@ import { useSupportsHover } from "@/hooks/useSupportsHover";
 import { useTankoubonReading } from "@/hooks/useTankoubonReading";
 import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
+import { isBookExtension } from "@/lib/utils/bookFormats";
 import { fileInfoText } from "@/lib/utils/fileInfoText";
 import {
   getImageCapabilityHeader,
@@ -132,6 +138,7 @@ const badgeChipStyle: React.CSSProperties = {
   fontSize: 11,
   lineHeight: 1,
   background: "rgba(0,0,0,0.55)",
+  color: "#fff",
   borderRadius: 4,
 };
 
@@ -295,6 +302,16 @@ export function Reader() {
     Record<number, { width: number; height: number }>
   >({});
   const [pageSizesKb, setPageSizesKb] = useState<Record<number, number>>({});
+  // Bytes actually delivered for the displayed (converted) page, from the browser's own resource
+  // timing — the file-info HEAD deliberately reports the original entry's size instead.
+  const [servedSizesKb, setServedSizesKb] = useState<Record<number, number>>({});
+  useEffect(() => {
+    // Resource timing keeps 250 entries by default; a long reading session would fill it and
+    // leave later pages without a served size.
+    const clear = () => performance.clearResourceTimings();
+    performance.addEventListener("resourcetimingbufferfull", clear);
+    return () => performance.removeEventListener("resourcetimingbufferfull", clear);
+  }, []);
   const [resizedPageInfo, setResizedPageInfo] = useState<
     Record<number, ResizedPageInfo | null>
   >({});
@@ -342,6 +359,7 @@ export function Reader() {
           isnew: boolean;
           is_read: boolean;
           is_tank: boolean;
+          extension?: string;
         }[]
       | null;
   } | null>(null);
@@ -926,6 +944,7 @@ export function Reader() {
             isnew: boolean;
             is_read: boolean;
             is_tank: boolean;
+            extension?: string;
           }[];
         }>(RECS_QUERY_KEY(archiveId))
       : undefined;
@@ -1038,6 +1057,13 @@ export function Reader() {
     // There is a bitmap on screen now, so a later page turn has something to keep visible while
     // the next page streams.
     displayedAnythingRef.current = true;
+    const timing = performance
+      .getEntriesByName(img.currentSrc || img.src)
+      .at(-1) as PerformanceResourceTiming | undefined;
+    if (timing && timing.encodedBodySize > 0) {
+      const kb = Math.floor(timing.encodedBodySize / 1024);
+      setServedSizesKb((prev) => (prev[page] === kb ? prev : { ...prev, [page]: kb }));
+    }
     // The file-info HEADs always use the original server URL, so Content-Length/resize metadata
     // keeps working regardless of the variant the reader is displaying.
     const originalUrl = pages.data?.pages[page - 1]?.url ?? img.src;
@@ -1540,6 +1566,22 @@ export function Reader() {
       })()
     : null;
 
+  // Pages of a PDF are served as images; its original opens in the browser's own PDF viewer, for
+  // selectable, searchable text. Raw files are not available to guests.
+  const renderOpenPdfButton = (style: React.CSSProperties) =>
+    !isTank && loggedIn && metadata.data?.extension === "pdf" ? (
+      <IconButton
+        variant="ghost-btn"
+        icon="fas fa-file-pdf fa-2x"
+        title={t("reader.openOriginalPdf") ?? undefined}
+        size={32}
+        style={style}
+        onClick={() => {
+          window.open(`/api/archives/${archiveId}/download?inline=true`, "_blank", "noopener");
+        }}
+      />
+    ) : null;
+
   // In Tankoubon reading, `archiveId` from the route is the tank id (`TANK_xxx`), not a real
   // archive — every displayed page actually belongs to one of the tank's member archives, so
   // marker/translation targets must resolve through `getArchiveForPage` (global page → real
@@ -1810,6 +1852,7 @@ export function Reader() {
             toggleAutoNextPage();
           }}
         />
+        {renderOpenPdfButton({ marginRight: 13, borderRadius: "50%" })}
         <IconButton
           variant="ghost-btn"
           icon="fas fa-th fa-2x"
@@ -2009,6 +2052,7 @@ export function Reader() {
             style={{ borderRadius: "50%" }}
           />
         </Tooltip>
+        {renderOpenPdfButton({ borderRadius: "50%" })}
         <IconButton
           variant="ghost-btn"
           icon="fas fa-th fa-2x"
@@ -2062,7 +2106,7 @@ export function Reader() {
         window.location.origin,
       ).searchParams.get("path") ?? "")
     : "";
-  const servedKb = spread.right === null ? pageSizesKb[spread.left] : undefined;
+  const servedKb = spread.right === null ? servedSizesKb[spread.left] : undefined;
   const leftDims =
     spread.right === null ? pageDimensions[spread.left] : undefined;
   let resizedFileInfo: React.ReactNode | null = null;
@@ -2105,13 +2149,23 @@ export function Reader() {
   );
 
   const artistMatch = metadata.data.tags.match(/artist:([^,]+)(?:,|$)/i);
+  const formatBadge = isBookExtension(metadata.data.extension) && (
+    <>
+      {" "}
+      <FormatBadge extension={metadata.data.extension} />
+    </>
+  );
   const archiveHeading = artistMatch ? (
     <>
       {metadata.data.title} by{" "}
       <a href={getTagSearchURL("artist", artistMatch[1])}>{artistMatch[1]}</a>
+      {formatBadge}
     </>
   ) : (
-    metadata.data.title
+    <>
+      {metadata.data.title}
+      {formatBadge}
+    </>
   );
 
   return (
@@ -2475,7 +2529,8 @@ export function Reader() {
                     marginBottom: 4,
                   }}
                 >
-                  {t("reader.currentlyReading")}: {metadata.data.title}
+                  {t("reader.currentlyReading")}: {metadata.data.title}{" "}
+                  <FormatBadge extension={metadata.data.extension} />
                 </p>
               )}
               <p style={{ fontSize: 16, fontWeight: "bold", color: "#fff" }}>
@@ -2554,29 +2609,29 @@ export function Reader() {
                                   }}
                                 >
                                   {rec.is_tank && (
-                                    <span
-                                      title={
-                                        t("library.tankoubon") ?? undefined
-                                      }
-                                      style={badgeChipStyle}
-                                    >
-                                      📚
+                                    <span style={badgeChipStyle}>
+                                      <StatusIcon
+                                        kind="tankoubon"
+                                        title={
+                                          t("library.tankoubon") ?? undefined
+                                        }
+                                      />
                                     </span>
                                   )}
                                   {rec.isnew && (
-                                    <span
-                                      title={t("library.new") ?? undefined}
-                                      style={badgeChipStyle}
-                                    >
-                                      🆕
+                                    <span style={badgeChipStyle}>
+                                      <StatusIcon
+                                        kind="new"
+                                        title={t("library.new") ?? undefined}
+                                      />
                                     </span>
                                   )}
                                   {rec.is_read && (
-                                    <span
-                                      title={t("common.read") ?? undefined}
-                                      style={badgeChipStyle}
-                                    >
-                                      👑
+                                    <span style={badgeChipStyle}>
+                                      <StatusIcon
+                                        kind="read"
+                                        title={t("common.read") ?? undefined}
+                                      />
                                     </span>
                                   )}
                                 </span>
@@ -2584,6 +2639,12 @@ export function Reader() {
                             </div>
                             <div className="rec-title">
                               <span>{rec.title}</span>
+                              {rec.extension && (
+                                <>
+                                  {" "}
+                                  <FormatBadge extension={rec.extension} />
+                                </>
+                              )}
                             </div>
                           </a>
                         </div>

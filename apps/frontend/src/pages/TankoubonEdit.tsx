@@ -20,7 +20,7 @@ import { Modal, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { SortableList } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Button, IconButton, IconButtonWithTooltip } from "@/components/common-ui/Form"
-import { AiSkeleton } from "@/components/Display"
+import { AiSkeleton, FormatBadge } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -646,7 +646,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                             void addArchiveId(a.arcid, a.title)
                           }}
                         >
-                          <span>{a.title}</span>{" "}
+                          <span>{a.title}</span> <FormatBadge extension={a.extension} />{" "}
                           <span style={{ opacity: 0.45, fontSize: "0.9em" }}>({a.pagecount}p)</span>
                         </PopupMenuItem>
                       </Tooltip>

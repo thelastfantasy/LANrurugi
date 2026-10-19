@@ -1,0 +1,253 @@
+/*
+ * Swagger UI on the shared LANrurugi palette (tokens.css, copied next to this file). Every rule is
+ * listed twice — plain and under `html.dark-mode` — because Swagger UI's own dark rules carry that
+ * extra class; matching their specificity and loading later is what lets one rule cover both modes.
+ * Method colours (GET green, POST blue…) are left alone: they carry meaning.
+ */
+
+body,
+.swagger-ui,
+html.dark-mode .swagger-ui {
+  background: var(--lr-paper);
+  color: var(--lr-text);
+}
+
+/* swagger-ui-dist resets this in its demo page's index.css, which this page doesn't load; without
+   it the browser's 8px body margin frames the top bar. */
+body {
+  margin: 0;
+}
+
+/* Top bar: the homepage's ink band. */
+.swagger-ui .topbar,
+html.dark-mode .swagger-ui .topbar {
+  background: var(--lr-bar);
+  border-bottom: var(--lr-border);
+}
+
+.swagger-ui .topbar .locale-switcher {
+  border: 2px solid var(--lr-bar-text);
+  border-radius: 999px;
+  color: var(--lr-bar-text);
+  font-weight: 700;
+}
+
+/* Hover fill sweeps in from the left, as on the homepage. */
+.swagger-ui .topbar .locale-switcher {
+  background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition:
+    background-size 300ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+}
+
+.swagger-ui .topbar .locale-switcher:hover {
+  background-size: 100% 100%;
+  border-color: var(--lr-hi);
+  color: var(--lr-hi-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swagger-ui .topbar .locale-switcher {
+    transition: none;
+  }
+}
+
+/* Headings and tag rows. */
+.swagger-ui .info .title,
+.swagger-ui .info h1,
+.swagger-ui .info h2,
+.swagger-ui .info h3,
+.swagger-ui .opblock-tag,
+.swagger-ui section.models h4,
+.swagger-ui .opblock-tag small,
+html.dark-mode .swagger-ui .info .title,
+html.dark-mode .swagger-ui .info h1,
+html.dark-mode .swagger-ui .info h2,
+html.dark-mode .swagger-ui .info h3,
+html.dark-mode .swagger-ui .opblock-tag,
+html.dark-mode .swagger-ui section.models h4,
+html.dark-mode .swagger-ui .opblock-tag small {
+  color: var(--lr-text-strong);
+}
+
+.swagger-ui .info p,
+.swagger-ui .info li,
+.swagger-ui .markdown p,
+.swagger-ui .renderedMarkdown p,
+html.dark-mode .swagger-ui .info p,
+html.dark-mode .swagger-ui .info li,
+html.dark-mode .swagger-ui .markdown p,
+html.dark-mode .swagger-ui .renderedMarkdown p {
+  color: var(--lr-text);
+}
+
+.swagger-ui .info a,
+html.dark-mode .swagger-ui .info a {
+  color: var(--lr-link);
+}
+
+.swagger-ui .opblock-tag,
+html.dark-mode .swagger-ui .opblock-tag {
+  border-bottom: 2px solid var(--lr-rule);
+}
+
+/* Version stamps: amber pills. */
+.swagger-ui .info .title small,
+html.dark-mode .swagger-ui .info .title small,
+.swagger-ui .info .title small.version-stamp,
+html.dark-mode .swagger-ui .info .title small.version-stamp {
+  background: var(--lr-hi);
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+}
+
+.swagger-ui .info .title small pre,
+html.dark-mode .swagger-ui .info .title small pre {
+  color: var(--lr-hi-text);
+}
+
+/* Servers / authorize strip: a card with an ink frame. */
+.swagger-ui .scheme-container,
+html.dark-mode .swagger-ui .scheme-container {
+  background: var(--lr-card);
+  border-top: var(--lr-border);
+  border-bottom: var(--lr-border);
+  box-shadow: none;
+}
+
+.swagger-ui .scheme-container .schemes > .schemes-server-container > label,
+html.dark-mode .swagger-ui .scheme-container .schemes > .schemes-server-container > label,
+.server-override__title {
+  color: var(--lr-text-strong);
+}
+
+/* Operation blocks: keep the method tint, give them ink frames and a hard shadow. */
+.swagger-ui .opblock,
+html.dark-mode .swagger-ui .opblock {
+  border-width: 2px;
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 var(--lr-ink);
+  overflow: hidden;
+}
+
+.swagger-ui .opblock .opblock-summary-method {
+  border-radius: 999px;
+}
+
+/* Buttons. */
+.swagger-ui .btn,
+html.dark-mode .swagger-ui .btn {
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  box-shadow: 2px 2px 0 var(--lr-ink);
+  color: var(--lr-text-strong);
+  background: var(--lr-card);
+}
+
+.swagger-ui .btn.execute,
+html.dark-mode .swagger-ui .btn.execute,
+.swagger-ui .scheme-container .btn.authorize,
+html.dark-mode .swagger-ui .scheme-container .btn.authorize {
+  background: var(--lr-btn-bg);
+  border-color: var(--lr-ink);
+  color: var(--lr-btn-text);
+  box-shadow: 3px 3px 0 var(--lr-hi);
+}
+
+.swagger-ui .scheme-container .btn.authorize svg,
+html.dark-mode .swagger-ui .scheme-container .btn.authorize svg {
+  fill: var(--lr-btn-text);
+  color: var(--lr-btn-text);
+}
+
+/* Schemas panel. */
+.swagger-ui section.models,
+html.dark-mode .swagger-ui section.models {
+  border: var(--lr-border);
+  border-radius: 14px;
+  background: var(--lr-card);
+  box-shadow: 4px 4px 0 var(--lr-ink);
+}
+
+/* Inputs, including this page's own base-URL override. */
+.swagger-ui input[type='text'],
+.swagger-ui select,
+.swagger-ui textarea,
+.server-override input {
+  border: var(--lr-border-thin);
+  border-radius: 8px;
+}
+
+.server-override input:focus {
+  border-color: var(--lr-hi);
+  box-shadow: 0 0 0 2px var(--lr-hi);
+}
+
+.server-override__hint {
+  color: var(--lr-text-muted);
+}
+
+/* The project's logo, which swagger-init.js renders in place of Swagger's own. */
+.swagger-ui .topbar .lr-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--lr-bar-text);
+}
+
+.swagger-ui .topbar .lr-logo img {
+  display: block;
+  border: 2px solid var(--lr-bar-text);
+  border-radius: 9px;
+}
+
+.swagger-ui .topbar .lr-logo__name {
+  font-family: sans-serif;
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.swagger-ui .topbar .lr-logo__tag {
+  padding: 0 10px;
+  border: 2px solid var(--lr-ink);
+  border-radius: 999px;
+  background: var(--lr-hi);
+  color: var(--lr-hi-text);
+  font-family: sans-serif;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+/* E-H / EX palette switch (replaces Swagger UI's light-bulb toggle; see swagger-init.js). */
+.swagger-ui .topbar .lr-theme-switch {
+  display: inline-flex;
+  align-self: center;
+  gap: 2px;
+  padding: 3px;
+  border: 2px solid var(--lr-bar-text);
+  border-radius: 999px;
+}
+
+.swagger-ui .topbar .lr-theme-switch button {
+  padding: 2px 10px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lr-bar-text);
+  font-family: sans-serif;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.swagger-ui .topbar .lr-theme-switch button[aria-pressed='true'] {
+  background: var(--lr-hi);
+  border-color: var(--lr-ink);
+  color: var(--lr-hi-text);
+}

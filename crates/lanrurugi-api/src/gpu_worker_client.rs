@@ -315,6 +315,20 @@ struct Session {
 /// AMD is deliberately not included — see this crate's own module doc on why: no ONNX Runtime
 /// execution provider for AMD has a verified-safe Linux integration path in this project the way
 /// CUDA and OpenVINO do (MIGraphX exists upstream but hasn't been evaluated here).
+/// The CPU runtime for a worker with no usable GPU build: the dev image's dedicated CPU build,
+/// else this process's own runtime — a native package's bundled library (`ORT_DYLIB_PATH`, set
+/// from the install prefix) or the system's, found by the loader.
+fn cpu_ort_dylib_path() -> std::ffi::OsString {
+    const DEV_IMAGE_CPU: &str = "/usr/local/lib/ort-cpu/libonnxruntime.so";
+    if std::path::Path::new(DEV_IMAGE_CPU).exists() {
+        return DEV_IMAGE_CPU.into();
+    }
+    std::env::var_os("ORT_DYLIB_PATH").unwrap_or_else(|| {
+        let (prefix, suffix) = (std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+        format!("{prefix}onnxruntime{suffix}").into()
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GpuVendor {
     Nvidia,
@@ -534,8 +548,9 @@ impl GpuWorkerClient {
                 std::env::var_os("LANRURUGI_GPU_WORKER_ORT_DYLIB_PATH").unwrap_or_else(|| {
                     detect_gpu_vendor()
                         .map(GpuVendor::ort_dylib_path)
-                        .unwrap_or("/usr/local/lib/ort-cpu/libonnxruntime.so")
-                        .into()
+                        .filter(|path| std::path::Path::new(path).exists())
+                        .map(Into::into)
+                        .unwrap_or_else(cpu_ort_dylib_path)
                 }),
             )
             .stdin(Stdio::null())

@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="{{htmlLang}}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{t:doc.title}}</title>
+    <meta name="description" content="{{t:doc.description}}" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="{{url}}" />
+{{hreflang}}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="LANrurugi" />
+    <meta property="og:title" content="{{t:doc.title}}" />
+    <meta property="og:description" content="{{t:doc.description}}" />
+    <meta property="og:url" content="{{url}}" />
+    <meta property="og:image" content="{{ogImage}}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="{{t:og.alt}}" />
+    <meta property="og:locale" content="{{ogLocale}}" />
+{{ogLocaleAlternates}}
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{t:doc.title}}" />
+    <meta name="twitter:description" content="{{t:doc.description}}" />
+    <meta name="twitter:image" content="{{ogImage}}" />
+    <meta name="theme-color" content="#e3e0d1" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#34353b" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="{{base}}favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="{{base}}apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Display face for chapter labels and numerals only, subset to those glyphs and loaded
+         without blocking render. -->
+    <link rel="stylesheet" href="{{displayFont}}" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="{{displayFont}}" /></noscript>
+    <link rel="stylesheet" href="{{base}}style.css" />
+    <script>
+      // Applied before first paint so an explicit E-H / EX choice never flashes the other palette.
+      try {
+        const t = localStorage.getItem("lanrurugi-home-theme");
+        if (t === "eh" || t === "ex") document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
+    <script type="application/ld+json">
+{{jsonLd}}
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top">
+        <img src="{{base}}favicon.svg" alt="" width="30" height="30" />
+        <span>LANrurugi</span>
+      </a>
+      <nav class="topnav" aria-label="{{t:a11y.sections}}">
+        <a href="#ai" data-i18n="nav.ai">AI 功能</a>
+        <a href="#reader" data-i18n="nav.reader">阅读体验</a>
+        <a href="#download" data-i18n="nav.download">下载与整理</a>
+        <a href="#library" data-i18n="nav.library">书库</a>
+        <a href="#start" data-i18n="nav.start">开始使用</a>
+      </nav>
+      <div class="theme-switch" role="group" aria-label="{{t:a11y.theme}}">
+        <button type="button" data-theme-choice="eh" title="E-Hentai">E-H</button>
+        <button type="button" data-theme-choice="ex" title="ExHentai">EX</button>
+      </div>
+      <nav class="langs" aria-label="{{t:a11y.language}}">
+        <a href="{{href:zh}}" hreflang="zh-CN" lang="zh-CN" title="简体中文"{{current:zh}}>中</a>
+        <a href="{{href:en}}" hreflang="en" lang="en" title="English"{{current:en}}>EN</a>
+        <a href="{{href:ja}}" hreflang="ja" lang="ja" title="日本語"{{current:ja}}>日</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <!-- ============================== HERO ============================== -->
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="kicker">
+            <span class="kicker-dot" aria-hidden="true"></span>
+            <span data-i18n="hero.kicker">自托管漫画 / 电子书阅读器</span>
+          </p>
+          <h1 class="hero-title">
+            <span data-i18n="hero.title1">支持 AI 翻译的</span>
+            <em data-i18n="hero.title2">漫画书库</em>
+          </h1>
+          <p class="hero-lead" data-i18n="hero.lead">
+            以漫画为主、同时支持 PDF、EPUB 等电子书的自托管书库。以 LANraragi 为起点，用 Rust + React 大幅改造与强化，现有的 LANraragi 书库可以直接使用。内置漫画页面翻译、相似作品推荐和 AI 插件生成。
+          </p>
+          <div class="hero-cta">
+            <a class="btn primary" href="#start" data-i18n="cta.start">部署到自己的机器</a>
+            <a class="btn ghost" href="https://github.com/thelastfantasy/LANrurugi">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  fill="currentColor"
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+                />
+              </svg>
+              <span>GitHub</span>
+            </a>
+          </div>
+          <ul class="hero-tags">
+            <li data-i18n="hero.tag1">开源 · 自托管</li>
+            <li data-i18n="hero.tag2">兼容 LANraragi 数据</li>
+            <li data-i18n="hero.tag3">AI 全部可选</li>
+          </ul>
+        </div>
+
+        <!-- The reader demo: a two-page spread whose speech bubbles cycle original → OCR boxes →
+             translated, driven by script.js. Everything is drawn in CSS; no artwork is shipped. -->
+        <figure class="device" aria-label="{{t:demo.label}}">
+          <div
+            class="reader{{readerClass}}"
+            data-state="original"
+            data-status-original="{{t:demo.status.original}}"
+            data-status-detect="{{t:demo.status.detect}}"
+            data-status-erase="{{t:demo.status.erase}}"
+            data-status-translated="{{t:demo.status.translated}}"
+          >
+            <div class="reader-bar">
+              <span class="rb-back" aria-hidden="true">‹</span>
+              <span class="rb-title" data-i18n="demo.title">示例作品 · 第 3 卷</span>
+              <button type="button" class="rb-translate" aria-pressed="false">
+                <span class="rb-tr-icon" aria-hidden="true">訳</span>
+                <span class="rb-tr-label" data-i18n="demo.translate">翻译</span>
+              </button>
+            </div>
+
+            <div class="spread">
+              <!-- right-hand page comes first: manga reads right to left -->
+              <div class="page page-r">
+                <div class="koma k-wide tone-dots"></div>
+                <div class="koma k-a speed"></div>
+                <div class="koma k-b tone-sky"></div>
+                <div class="bubble b1">
+                  <span class="jp">この本、どこまで読んだっけ？</span>
+                  <span class="tr" data-i18n="demo.b1">这本我读到哪儿了？</span>
+                </div>
+                <div class="bubble b2 shout">
+                  <span class="jp">続きは次の巻だ！</span>
+                  <span class="tr" data-i18n="demo.b2">后续在下一卷！</span>
+                </div>
+              </div>
+              <div class="page page-l">
+                <div class="koma k-c tone-night"></div>
+                <div class="koma k-d tone-grad"></div>
+                <div class="koma k-e speed-soft"></div>
+                <div class="bubble b3">
+                  <span class="jp">似た作品、ほかにある？</span>
+                  <span class="tr" data-i18n="demo.b3">还有类似的作品吗？</span>
+                </div>
+              </div>
+              <div class="scanline" aria-hidden="true"></div>
+            </div>
+
+            <div class="reader-foot">
+              <span class="rf-page">14–15 / 186</span>
+              <span class="rf-track"><span class="rf-fill"></span></span>
+              <span class="rf-status" data-i18n="demo.status.original">原文</span>
+            </div>
+          </div>
+          <figcaption class="steps" aria-hidden="true">
+            <span class="step s-detect" data-i18n="demo.step1">检测</span>
+            <span class="step s-ocr" data-i18n="demo.step2">识别</span>
+            <span class="step s-erase" data-i18n="demo.step3">擦除</span>
+            <span class="step s-typeset" data-i18n="demo.step4">译文排版</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- ============================== AI ============================== -->
+      <section id="ai" class="chapter">
+        <header class="chapter-head">
+          <p class="chapter-no">第1話</p>
+          <h2 data-i18n="ai.title">AI 功能</h2>
+          <p class="chapter-lead" data-i18n="ai.lead">
+            翻译、编写插件、整理单行本等原本需要手动完成的工作，可以交给 AI 处理。所有 AI 功能都是可选的，不配置 API 密钥也不影响其它功能。
+          </p>
+        </header>
+
+        <div class="koma-grid">
+          <!-- Translation: the big panel -->
+          <article class="panel p-translate">
+            <span class="panel-badge" data-i18n="ai.badge.translate">页面内翻译</span>
+            <h3 data-i18n="ai.translate.title">漫画页面翻译</h3>
+            <p data-i18n="ai.translate.body">
+              用针对漫画的 OCR 识别竖排和横排文字，按字形擦除原文、保留画面，再把译文按原文方向排回对话框。术语表让人名、招式名在整卷中保持一致，字体缓存让同一卷的译文字体统一。
+            </p>
+            <ol class="pipeline">
+              <li data-i18n="ai.translate.p1">文字检测</li>
+              <li data-i18n="ai.translate.p2">漫画 OCR</li>
+              <li data-i18n="ai.translate.p3">字形擦除</li>
+              <li data-i18n="ai.translate.p4">LLM 翻译</li>
+              <li data-i18n="ai.translate.p5">回填排版</li>
+            </ol>
+            <ul class="facts">
+              <li data-i18n="ai.translate.f1">支持云端或本地翻译后端</li>
+              <li data-i18n="ai.translate.f2">显示翻译费用，可设置上限</li>
+              <li data-i18n="ai.translate.f3">翻译结果会保存，再次打开无需重新翻译</li>
+            </ul>
+          </article>
+
+          <!-- Plugin wizard -->
+          <article class="panel p-wizard">
+            <span class="panel-badge" data-i18n="ai.badge.wizard">插件向导</span>
+            <h3 data-i18n="ai.wizard.title">用一句话生成插件</h3>
+            <p data-i18n="ai.wizard.body">
+              描述目标站点，AI 会生成登录、元数据或下载插件，并在 Deno 沙箱中实际试运行；运行失败时根据报错自动修正。页面由 LANrurugi 自己抓取，测试用的账号密码不会发送给 AI。
+            </p>
+            <div class="term" aria-hidden="true">
+              <p class="t-in" data-i18n="ai.wizard.l1">“给 example.org 的画廊抓标签和作者”</p>
+              <p class="t-ok" data-i18n="ai.wizard.l2">抓取页面样本 · example.org/g/1024</p>
+              <p class="t-ok" data-i18n="ai.wizard.l3">生成 metadata/example.ts</p>
+              <p class="t-err" data-i18n="ai.wizard.l4">试运行：选择器未命中标签列表</p>
+              <p class="t-ok" data-i18n="ai.wizard.l5">依据报错修复 → 重新试运行通过</p>
+              <p class="t-ask" data-i18n="ai.wizard.l6">确认安装？</p>
+            </div>
+          </article>
+
+          <!-- Recommendations -->
+          <article class="panel p-recommend">
+            <span class="panel-badge" data-i18n="ai.badge.recommend">推荐</span>
+            <h3 data-i18n="ai.recommend.title">读完一本，推荐下一本</h3>
+            <p data-i18n="ai.recommend.body">
+              先用本地 ONNX 嵌入模型从整个书库中筛选候选，再由 LLM 排序。单行本以最后一卷为准，不会把第 1 卷推荐回来。
+            </p>
+            <div class="recs" aria-hidden="true">
+              <span class="rec r1"></span>
+              <span class="rec r2"></span>
+              <span class="rec r3"></span>
+              <span class="rec r4"></span>
+            </div>
+          </article>
+
+          <!-- Tankoubon curation -->
+          <article class="panel p-tank">
+            <span class="panel-badge" data-i18n="ai.badge.tank">整理</span>
+            <h3 data-i18n="ai.tank.title">把零散文件整理成单行本</h3>
+            <p data-i18n="ai.tank.body">
+              用本地模型找出属于同一系列的散档案，建议建成单行本（这一步不需要 API 密钥）；再根据文件名里的卷号和话数，由 AI 建议系列名、章节标题与阅读顺序。整个子目录也能直接建成单行本。
+            </p>
+            <div class="sort" aria-hidden="true">
+              <ul class="sort-in">
+                <li>Sample Story vol2 (raw).zip</li>
+                <li>[circle] サンプル物語 01.cbz</li>
+                <li>sample_story_03_final.rar</li>
+              </ul>
+              <span class="sort-arrow">→</span>
+              <ol class="sort-out">
+                <li><b>1</b><span data-i18n="ai.tank.v">卷</span></li>
+                <li><b>2</b><span data-i18n="ai.tank.v">卷</span></li>
+                <li><b>3</b><span data-i18n="ai.tank.v">卷</span></li>
+              </ol>
+            </div>
+          </article>
+
+          <!-- small extras -->
+          <article class="panel p-mini">
+            <h3 data-i18n="ai.tags.title">标签自动补全</h3>
+            <p data-i18n="ai.tags.body">元数据插件找不到标签时，由 LLM 根据标题和已有信息补全。</p>
+          </article>
+          <article class="panel p-mini">
+            <h3 data-i18n="ai.cond.title">用自然语言写订阅条件</h3>
+            <p data-i18n="ai.cond.body">描述想追什么样的作品，AI 会把它转换成订阅的筛选规则；规则保存前会先经过校验。</p>
+          </article>
+        </div>
+
+        <aside class="ds-note">
+          <span class="ds-mascot">
+            <img
+              src="{{base}}dafeiyu.webp"
+              alt=""
+              title="上善无形 · 梗鲸 #367"
+              width="96"
+              height="131"
+              loading="lazy"
+              decoding="async"
+            />
+          </span>
+          <div class="ds-text">
+            <h3 data-i18n="ai.ds.title">AI 功能由 DeepSeek 驱动</h3>
+            <p data-i18n="ai.ds.body">
+              插件生成、推荐精排、标签补全、单行本命名与排序、拆包方案和订阅条件生成都调用 DeepSeek，需要一个 DeepSeek 官方 API 密钥，在首次运行向导或设置页填写即可。页面内翻译可以另选 OpenAI 兼容接口、Anthropic 或本地模型。不填密钥，书库和阅读器照常使用。
+            </p>
+            <a class="ds-link" href="https://platform.deepseek.com/api_keys" data-i18n="ai.ds.link">在 DeepSeek 开放平台获取密钥 →</a>
+          </div>
+        </aside>
+      </section>
+
+      <!-- ============================== READER ============================== -->
+      <section id="reader" class="chapter">
+        <header class="chapter-head">
+          <p class="chapter-no">第2話</p>
+          <h2 data-i18n="reader.title">阅读与管理</h2>
+        </header>
+        <ul class="feature-grid">
+          <li>
+            <span class="fi" aria-hidden="true">⇄</span>
+            <h3 data-i18n="reader.f1.title">单行本连续阅读</h3>
+            <p data-i18n="reader.f1.body">同一套单行本的各卷连成连续的页面，翻页可直接跨卷，阅读进度与书签按卷分别记录。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">≡</span>
+            <h3 data-i18n="reader.f2.title">章节目录</h3>
+            <p data-i18n="reader.f2.body">封面、彩页、后记一键设置，数字键快速标记章节；优先显示 AI 生成的章节名。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">✦</span>
+            <h3 data-i18n="reader.f3.title">页码级书签与图章</h3>
+            <p data-i18n="reader.f3.body">书签精确到页；图章可以框选标注画面的一部分，放置图章时自动添加书签。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">▦</span>
+            <h3 data-i18n="reader.f4.title">概览无限滚动</h3>
+            <p data-i18n="reader.f4.body">缩略图按需加载，几百页的合集也能快速打开，滚动条不会跳动。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">◫</span>
+            <h3 data-i18n="reader.f5.title">图片自动转换</h3>
+            <p data-i18n="reader.f5.body">浏览器显示不了的格式（例如部分浏览器上的 AVIF、JPEG XL 和动画图）会先转换再显示；也可以把大图缩小并转成 WebP 或 JPEG XL 后再发送，节省流量。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">◐</span>
+            <h3 data-i18n="reader.f6.title">访客模式</h3>
+            <p data-i18n="reader.f6.body">访客只能浏览你指定的分类，看不到其它内容。</p>
+          </li>
+        </ul>
+      </section>
+
+      <!-- ============================== DOWNLOAD ============================== -->
+      <section id="download" class="chapter">
+        <header class="chapter-head">
+          <p class="chapter-no">第3話</p>
+          <h2 data-i18n="dl.title">下载与整理</h2>
+        </header>
+        <ul class="feature-grid">
+          <li>
+            <span class="fi" aria-hidden="true">↓</span>
+            <h3 data-i18n="dl.f1.title">服务端下载器</h3>
+            <p data-i18n="dl.f1.body">下载由服务端完成，显示实际字节进度和剩余时间；可按域名设置并发上限和限速，同一地址不会重复下载。Pixiv 这类按页下载的作品会打包成一个档案。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">↻</span>
+            <h3 data-i18n="dl.f2.title">订阅追更</h3>
+            <p data-i18n="dl.f2.body">按来源站点加作者、标签、评分下限、发布时间等条件建立订阅，定时检查新作并自动下载。预览会列出每个候选的处理结果，可以一键拉黑或撤销；之后评分或标签有变化，会重新判断。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">⇅</span>
+            <h3 data-i18n="dl.f3.title">新旧版本识别</h3>
+            <p data-i18n="dl.f3.body">根据站点提供的版本链判断新下载比库里的更新还是更旧：更新的可按设置替换旧档案，新档案入库后才删除旧的；更旧的可以拒绝，或在下载前先询问。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">✂</span>
+            <h3 data-i18n="dl.f4.title">拆包</h3>
+            <p data-i18n="dl.f4.body">自动找出多卷合集、多层目录和压缩包里套压缩包的档案，给出拆分方案，确认后在后台执行。拆出的文件由 AI 命名，可同时迁移单行本成员、删除原文件。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">⧉</span>
+            <h3 data-i18n="dl.f5.title">可视化补页</h3>
+            <p data-i18n="dl.f5.body">上传的档案和库里已有档案内容高度重合时，会逐页比对并并排显示差异；把多出的页面拖到对应位置，就会生成页面补丁，不必替换整个档案。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">文</span>
+            <h3 data-i18n="dl.f6.title">乱码名称修复</h3>
+            <p data-i18n="dl.f6.body">找出档案、分类、单行本和标签名称里的乱码，先列出修复结果供确认，确认后再应用，并同步更新搜索索引。</p>
+          </li>
+        </ul>
+      </section>
+
+      <!-- ============================== LIBRARY ============================== -->
+      <section id="library" class="chapter">
+        <header class="chapter-head">
+          <p class="chapter-no">第4話</p>
+          <h2 data-i18n="lib.title">兼容 LANraragi 书库</h2>
+          <p class="chapter-lead" data-i18n="lib.lead">
+            沿用 LANraragi 的 Redis 数据、目录结构与 HTTP API。停用 LANraragi、启动 LANrurugi 后，书库、标签和阅读进度都会保留，第三方阅读器也能照常连接。
+          </p>
+        </header>
+
+        <dl class="stats">
+          <div>
+            <dt data-i18n="lib.s1">个 API 接口，按路由授权</dt>
+            <dd>242</dd>
+          </div>
+          <div>
+            <dt data-i18n="lib.s2">个常驻主进程（LANraragi 为 3 个）</dt>
+            <dd>1</dd>
+          </div>
+          <div>
+            <dt data-i18n="lib.s3">种完整翻译的界面语言</dt>
+            <dd>3</dd>
+          </div>
+          <div>
+            <dt data-i18n="lib.s4">套主题，含 E-Hentai 经典配色</dt>
+            <dd>5</dd>
+          </div>
+        </dl>
+
+        <div class="search-demo">
+          <p class="sd-label" data-i18n="lib.search">搜索语法</p>
+          <p class="sd-box">
+            <span class="sd-icon" aria-hidden="true">⌕</span>
+            <code
+              ><span class="q-ns">artist:</span>"some artist" <span class="q-op">|</span>
+              <span class="q-ns">circle:</span>example <span class="q-ns">is:</span>unread
+              <span class="q-ns">size:</span>&gt;=100M <span class="q-op">-</span
+              ><span class="q-ns">tag:</span>sample</code
+            >
+          </p>
+          <p class="sd-hint" data-i18n="lib.searchHint">
+            或 / 分组 / 取反 · 阅读状态 · 文件大小 · 阅读进度区间 · 加入日期 · 账号级搜索历史
+          </p>
+        </div>
+
+        <div class="search-demo formats">
+          <p class="sd-label" data-i18n="lib.formats">支持的格式</p>
+          <div class="fmt-rows">
+            <p class="fmt-row">
+              <span class="fmt-kind" data-i18n="lib.fmtArchives">压缩包</span>
+              <span class="fmt">ZIP / CBZ</span>
+              <span class="fmt">RAR / CBR</span>
+              <span class="fmt">7Z / CB7</span>
+              <span class="fmt">TAR / CBT</span>
+              <span class="fmt">LZH</span>
+            </p>
+            <p class="fmt-row">
+              <span class="fmt-kind" data-i18n="lib.fmtBooks">电子书</span>
+              <span class="fmt">PDF</span>
+              <span class="fmt">EPUB</span>
+              <span class="fmt">MOBI / AZW3</span>
+              <span class="fmt">DjVu</span>
+              <span class="fmt">FB2</span>
+              <span class="fmt">TXT</span>
+            </p>
+          </div>
+          <p class="sd-hint" data-i18n="lib.formatsHint">
+            扫描页直接输出原图，不重新压缩；文字书在服务端排版成页，按书的语言选用中日韩字体；书自带的目录会导入为章节。
+          </p>
+        </div>
+
+        <ul class="mini-list">
+          <li data-i18n="lib.m1">修复了 LANraragi 把不同文件误判为重复并合并的问题，并提供一次性修复工具</li>
+          <li data-i18n="lib.m2">插件在最小权限的 Deno 沙箱中运行，网络请求由服务端执行并检查</li>
+          <li data-i18n="lib.m3">短期访问令牌 + 可轮换的刷新令牌；可以查看、重命名和撤销已登录的设备</li>
+          <li data-i18n="lib.m4">后台任务控制台、操作审计日志和书库统计页</li>
+        </ul>
+      </section>
+
+      <!-- ============================== START ============================== -->
+      <section id="start" class="chapter start">
+        <header class="chapter-head">
+          <p class="chapter-no">最終話</p>
+          <h2 data-i18n="start.title">用 Docker Compose 部署</h2>
+        </header>
+        <div class="start-grid">
+          <ol class="howto">
+            <li>
+              <h3 data-i18n="start.s1.title">复制 compose 文本</h3>
+              <p data-i18n="start.s1.body">点右边的「复制」，保存为 compose.yaml，再按注释把目录改成你自己的。</p>
+            </li>
+            <li>
+              <h3 data-i18n="start.s2.title">启动</h3>
+              <p class="howto-cmd"><code>docker compose up -d</code></p>
+              <p data-i18n="start.s2.body">NAS 用户：在群晖 Container Manager、Portainer 等面板里新建 compose 项目，粘贴同一段文本即可。</p>
+            </li>
+            <li>
+              <h3 data-i18n="start.s3.title">打开浏览器</h3>
+              <p class="howto-cmd"><code>http://&lt;server&gt;:3000</code></p>
+              <p data-i18n="start.s3.body">首次打开时，设置向导会引导你修改默认密码、填写 AI 功能所需的 API 密钥，并导入 LANraragi 备份。</p>
+            </li>
+          </ol>
+          <div class="code-wrap">
+            <button type="button" class="copy-btn" data-copied="{{t:start.copied}}">
+              <span data-i18n="start.copy">复制</span>
+            </button>
+            <pre class="code" tabindex="0"><code id="compose-yaml" data-i18n="start.compose"></code></pre>
+            <p class="code-note">
+              <span data-i18n="start.proxyNote">要放在 Nginx、Caddy、Traefik 等反向代理之后？</span>
+              <a href="{{t:link.proxyHref}}" data-i18n="start.proxyLink">查看反向代理配置示例</a>
+            </p>
+          </div>
+        </div>
+        <div class="native-note">
+          <h3 data-i18n="start.native.title">不用 Docker</h3>
+          <p data-i18n="start.native.body">Linux（x86_64 / ARM64）、Apple Silicon Mac 和 FreeBSD 有原生安装包：用系统的包管理器装好 Redis、Deno 等依赖，解压后直接运行，也可以注册为系统服务。Windows 请使用 Docker Desktop。</p>
+          <a href="{{t:link.nativeHref}}" data-i18n="start.native.link">原生安装指南 →</a>
+        </div>
+        <nav class="doc-links" aria-label="{{t:a11y.docs}}">
+          <a href="{{t:link.docsHref}}">
+            <strong data-i18n="link.docs">文档</strong>
+            <span data-i18n="link.docsSub">部署、迁移与使用指南</span>
+          </a>
+          <a href="https://lanrurugi-api-swagger.pages.dev/">
+            <strong data-i18n="link.api">API 参考</strong>
+            <span data-i18n="link.apiSub">可直接发请求的 Swagger UI</span>
+          </a>
+          <a href="https://lanrurugi-sdk.pages.dev/">
+            <strong data-i18n="link.sdk">插件 SDK</strong>
+            <span data-i18n="link.sdkSub">手写插件也有完整类型</span>
+          </a>
+        </nav>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p class="tsuzuku" aria-hidden="true">つづく</p>
+      <p>
+        <a href="https://github.com/thelastfantasy/LANrurugi">LANrurugi</a>
+        <span data-i18n="footer">· 以 LANraragi 为起点，大幅改造与强化</span>
+      </p>
+      <div class="footer-meta">
+        <p class="footer-credit">
+          <span data-i18n="footer.credit1">插图：</span><a href="https://www.bilibili.com/opus/1231977657712771073"
+            >上善无形</a
+          ><span data-i18n="footer.credit2">的鲸鱼娘形象，</span><a
+            href="https://creativecommons.org/licenses/by-nc-sa/4.0/"
+            >CC BY-NC-SA 4.0</a
+          ><span data-i18n="footer.credit3">；图片取自 </span><a href="https://aigengtu.com/meme/367"
+            >梗鲸 #367</a
+          ><span data-i18n="footer.credit4">（作者未注明），有修改</span>
+        </p>
+        <p class="footer-license">
+          © 2026 thelastfantasy ·
+          <a href="https://github.com/thelastfantasy/LANrurugi/blob/main/LICENSE" data-i18n="footer.license">MIT 许可</a>
+        </p>
+      </div>
+    </footer>
+
+    <script src="{{base}}script.js" defer></script>
+  </body>
+</html>

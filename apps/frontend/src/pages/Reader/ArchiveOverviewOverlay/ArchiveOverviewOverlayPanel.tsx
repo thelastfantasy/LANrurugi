@@ -38,6 +38,7 @@ import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
 import { useSupportsHover } from "@/hooks/useSupportsHover"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
 import { routes } from "@/lib/routes"
+import { isBookExtension } from "@/lib/utils/bookFormats"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { displayTocName, isReservedTocIdentifier } from "@/lib/utils/tocValidation"
@@ -539,7 +540,8 @@ export function ArchiveOverviewOverlay({
                       </Button>
                     )
                   )}
-                  {!isTank && !archive.has_split_suggestion && (
+                  {/* An e-book has no inner files to regroup into separate zips. */}
+                  {!isTank && !archive.has_split_suggestion && !isBookExtension(archive.extension) && (
                     supportsHover ? (
                       <Tooltip
                         label={
@@ -569,7 +571,13 @@ export function ArchiveOverviewOverlay({
                                   queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion", archive.arcid] })
                                   setShowSplitPanel(true)
                                 } else {
-                                  setSplitStatus(t("reader.noArchiveSplitSuggestion") ?? "")
+                                  // The split panel (and its status line) only exists once there is a suggestion, so
+                                  // the "nothing to split" outcome has to be a toast or the click looks like it did nothing.
+                                  toast({
+                                    heading: t("reader.analyzeArchiveSplit") ?? undefined,
+                                    text: t("reader.archiveSplitNotNeeded") ?? "",
+                                    icon: "info",
+                                  })
                                 }
                               },
                               onError: (e) => {
@@ -599,7 +607,13 @@ export function ArchiveOverviewOverlay({
                                 queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion", archive.arcid] })
                                 setShowSplitPanel(true)
                               } else {
-                                setSplitStatus(t("reader.noArchiveSplitSuggestion") ?? "")
+                                // The split panel (and its status line) only exists once there is a suggestion, so
+                                // the "nothing to split" outcome has to be a toast or the click looks like it did nothing.
+                                toast({
+                                  heading: t("reader.analyzeArchiveSplit") ?? undefined,
+                                  text: t("reader.archiveSplitNotNeeded") ?? "",
+                                  icon: "info",
+                                })
                               }
                             },
                             onError: (e) => {

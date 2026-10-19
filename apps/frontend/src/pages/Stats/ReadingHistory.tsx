@@ -4,6 +4,7 @@ import { Bar, CartesianGrid, Cell, ComposedChart, Line, Tooltip, XAxis, YAxis } 
 
 import type { StatsBucketSelection } from "@/api/hooks"
 import type { StatsOverview } from "@/api/types"
+import { FormatBadge } from "@/components/Display"
 import { routes } from "@/lib/routes"
 
 import { BucketArchivesPanel } from "./BucketArchivesPanel"
@@ -211,7 +212,7 @@ export function ReadingHistory({ reading }: { reading: StatsOverview["reading"] 
               head={[t("stats.title"), t("stats.lastRead"), t("stats.progress")]}
               rows={reading.recent.map((archive) => [
                 <a key={archive.id} href={routes.reader(archive.id)} title={archive.title}>
-                  {archive.title}
+                  {archive.title} <FormatBadge extension={archive.extension} />
                 </a>,
                 formatTimestamp(archive.last_read),
                 formatProgress(archive.page, archive.pages),
@@ -229,7 +230,7 @@ export function ReadingHistory({ reading }: { reading: StatsOverview["reading"] 
               head={[t("stats.title"), t("stats.readEvents"), t("stats.progress")]}
               rows={reading.most_reread.map((archive) => [
                 <a key={archive.id} href={routes.reader(archive.id)} title={archive.title}>
-                  {archive.title}
+                  {archive.title} <FormatBadge extension={archive.extension} />
                 </a>,
                 archive.reads.toLocaleString(),
                 formatProgress(archive.page, archive.pages),

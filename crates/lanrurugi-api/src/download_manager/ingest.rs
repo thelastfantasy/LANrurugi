@@ -594,10 +594,11 @@ async fn find_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> Vec<
 /// field is missing from Redis entirely.
 const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
 
-/// Enforces the `tempmaxsize` setting (MB, Redis `LRR_CONFIG` hash field) against
-/// `temp_dir/resize_page/` — the reader's WebP/JXL resize cache (`archives.rs::resize_cache_path`),
-/// the only unbounded, self-regenerating content under `temp_dir` (a cache miss just re-resizes
-/// from the archive; nothing is lost). Deliberately does not touch anything else in `temp_dir`:
+/// Enforces the `tempmaxsize` setting (MB, Redis `LRR_CONFIG` hash field) against the unbounded,
+/// self-regenerating content under `temp_dir` (a cache miss just regenerates it; nothing is lost):
+/// `resize_page/`, the reader's WebP/JXL resize cache (`archives.rs::resize_cache_path`), and the
+/// rendered e-book pages under `book/` (`lanrurugi_book`'s page cache; its small `info.json` files
+/// are left alone). Deliberately does not touch anything else in `temp_dir`:
 /// `temp_*`-prefixed pending-rename staging files are unresolved user decisions, not a cache, and
 /// already have their own age-based sweep (`sweep_stale_pending_renames`) with different
 /// eligibility rules. Called on a periodic timer (see `main.rs`), not in response to any request.
@@ -620,11 +621,12 @@ pub async fn sweep_resize_cache_size(state: &AppState) {
         * 1024
         * 1024;
 
-    let resize_cache_dir = state.library.temp_dir.join("resize_page");
-    let mut entries = match list_resize_cache_entries(&resize_cache_dir).await {
-        Some(entries) => entries,
-        None => return,
-    };
+    let mut entries = Vec::new();
+    for dir in ["resize_page", "book"] {
+        if let Some(found) = list_resize_cache_entries(&state.library.temp_dir.join(dir)).await {
+            entries.extend(found);
+        }
+    }
 
     let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
     if total_bytes <= max_bytes {
@@ -674,11 +676,11 @@ struct ResizeCacheEntry {
     modified: std::time::SystemTime,
 }
 
-/// Recursively lists every `.webp` / `.jxl` file under `resize_page/<id>/…` with its size and
-/// mtime. Returns `None` (rather than an empty vec) when the directory doesn't exist yet — a
+/// Lists every `.webp` / `.jxl` file one directory level below `cache_dir` (`resize_page/<id>/…`,
+/// `book/<fingerprint>/…`) with its size and mtime. Returns `None` (rather than an empty vec) when the directory doesn't exist yet — a
 /// fresh install with no resize activity yet, not a cache to trim.
-async fn list_resize_cache_entries(resize_cache_dir: &Path) -> Option<Vec<ResizeCacheEntry>> {
-    let mut per_archive_dirs = match tokio::fs::read_dir(resize_cache_dir).await {
+async fn list_resize_cache_entries(cache_dir: &Path) -> Option<Vec<ResizeCacheEntry>> {
+    let mut per_archive_dirs = match tokio::fs::read_dir(cache_dir).await {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {

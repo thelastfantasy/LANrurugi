@@ -569,6 +569,10 @@ async fn generate_suggestion(
         .flatten()
         .ok_or_else(|| "Archive not found.".to_string())?;
     let original_path = PathBuf::from(&archive.file);
+    // An e-book has no inner files to regroup — its "entries" are one generated name per page.
+    if lanrurugi_scanner::archive_format::is_book(&original_path) {
+        return Ok(None);
+    }
     let path = resolve_multivolume_path(&original_path, &state.library.temp_dir)
         .unwrap_or_else(|| original_path.clone());
     let entries = list_all_entries(&path).map_err(|e| e.to_string())?;
@@ -793,6 +797,24 @@ async fn split_progress_stream(
         .into_response()
 }
 
+/// Resident memory of this process, in KiB.
+fn current_memory_kb() -> Option<u64> {
+    if cfg!(target_os = "linux") {
+        read_proc_status_kb("VmRSS:")
+    } else {
+        sysinfo_rss_kb()
+    }
+}
+
+/// Highest resident memory this process has reached, in KiB.
+fn peak_memory_kb() -> Option<u64> {
+    if cfg!(target_os = "linux") {
+        read_proc_status_kb("VmHWM:")
+    } else {
+        rusage_peak_kb()
+    }
+}
+
 fn read_proc_status_kb(key: &str) -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
@@ -805,12 +827,31 @@ fn read_proc_status_kb(key: &str) -> Option<u64> {
     None
 }
 
-fn current_memory_kb() -> Option<u64> {
-    read_proc_status_kb("VmRSS:")
+fn sysinfo_rss_kb() -> Option<u64> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let pid = Pid::from_u32(std::process::id());
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    sys.process(pid).map(|p| p.memory() / 1024)
 }
 
-fn peak_memory_kb() -> Option<u64> {
-    read_proc_status_kb("VmHWM:")
+fn rusage_peak_kb() -> Option<u64> {
+    // SAFETY: getrusage only writes into the zeroed struct it is given.
+    let usage = unsafe {
+        let mut usage: libc::rusage = std::mem::zeroed();
+        (libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0).then_some(usage)?
+    };
+    let max_rss = u64::try_from(usage.ru_maxrss).ok()?;
+    // macOS reports bytes; Linux and the BSDs report KiB.
+    Some(if cfg!(target_os = "macos") {
+        max_rss / 1024
+    } else {
+        max_rss
+    })
 }
 
 async fn emit_progress(
@@ -1403,6 +1444,9 @@ pub async fn maybe_auto_analyze(state: AppState, archive_id: String) {
         _ => return,
     };
     let path = Path::new(&archive.file);
+    if lanrurugi_scanner::archive_format::is_book(path) {
+        return;
+    }
     let Ok(entries) = list_all_entries(path) else {
         return;
     };
@@ -1421,6 +1465,20 @@ pub async fn maybe_auto_analyze(state: AppState, archive_id: String) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn portable_memory_readings_agree_with_proc() {
+        let rss = super::sysinfo_rss_kb().expect("rss via sysinfo");
+        let peak = super::rusage_peak_kb().expect("peak via getrusage");
+        assert!(rss > 0 && peak >= rss / 2, "rss {rss} KiB, peak {peak} KiB");
+        if let Some(proc_rss) = super::read_proc_status_kb("VmRSS:") {
+            // Same process, read moments apart: within a factor of two.
+            assert!(
+                rss <= proc_rss * 2 && proc_rss <= rss * 2,
+                "{rss} vs {proc_rss}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

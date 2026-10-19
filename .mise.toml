@@ -114,6 +114,20 @@ run = "scripts/cargo-container-run.sh cargo fmt --all --check"
 description = "cargo fmt --all inside the dev container — auto-fixes what fmt-check flags (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo fmt --all"
 
+[tasks.fetch-pdfium]
+description = "Download the pinned PDFium library into .pdfium/<os>-<arch>/ (gitignored) — what lanrurugi-book-worker's end-to-end tests and a locally run worker load. Version and checksums live in scripts/fetch-pdfium.sh."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) platform=amd64 dir=linux-x64 ;;
+  Linux-aarch64) platform=arm64 dir=linux-arm64 ;;
+  Darwin-arm64) platform=mac-arm64 dir=mac-arm64 ;;
+  *) echo "no prebuilt PDFium for $(uname -s) $(uname -m)" >&2; exit 1 ;;
+esac
+scripts/fetch-pdfium.sh "$platform" ".pdfium/$dir"
+"""
+
 [tasks.check-crate]
 description = "cargo check -p <crate> inside the dev container — fast single-crate iteration check, not the full-workspace pre-push gate. Usage: mise run check-crate -- <crate-name> [<crate-name> ...]"
 # `run`'s multi-line form executes under `sh`, not bash — no arrays (`args=(...)`) available, so
@@ -133,6 +147,27 @@ run = "npx lefthook run pre-push"
 [tasks.build]
 description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo build --workspace"
+
+[tasks.package-native]
+description = "Build the native release package for this Linux machine's architecture into dist/native/ (specs/015-native-platforms): release binaries in the build container, then frontend/docs/plugins, PDFium and ONNX Runtime. Smoke-test the result with scripts/smoke-native.sh."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) platform=linux-x86_64 ;;
+  Linux-aarch64) platform=linux-aarch64 ;;
+  *) echo "package-native builds Linux packages; other platforms are built by .github/workflows/native-release.yml" >&2; exit 1 ;;
+esac
+version="$(git describe --tags --always 2>/dev/null || echo dev)"
+# libarchive2-sys only reruns its build script when its own sources change, so the toolchain file
+# below takes effect only on a fresh build of it.
+scripts/cargo-container-run.sh cargo clean --release -p libarchive2-sys
+scripts/cargo-container-run.sh env CMAKE_TOOLCHAIN_FILE=/workspace/packaging/libarchive-portable.cmake \
+  cargo build --release -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
+[ -f docs/public/openapi.json ] || mise run docs-api
+scripts/build-native-assets.sh .native-assets
+scripts/package-native.sh "$platform" "$version" .cargo-target/release .native-assets dist/native
+"""
 
 [tasks.debug-erase-page]
 description = "Run erase_page against a real full page image with lanrurugi-ocr's own detected regions, for manual before/after inspection — usage: mise run debug-erase-page -- <page.jpg> <out.png> (LANRURUGI_INPAINT_MODEL_DIR must be set; PAGE_102_REGIONS in the example itself is currently hardcoded to one real captured page's regions, see that file's own doc comment)"
@@ -231,6 +266,8 @@ cat > "$out/404.html" <<'HTMLEOF'
   </body>
 </html>
 HTMLEOF
+# deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every page.
+node docs/scripts/theme-sdk.mjs "$out"
 echo "wrote $out/index.html, $out/plugin-sdk.json and $out/404.html"
 """
 

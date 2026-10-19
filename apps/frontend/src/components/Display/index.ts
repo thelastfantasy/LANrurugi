@@ -12,11 +12,15 @@ export * from "./Confirm"
 
 export * from "./DateTimeStack"
 
+export * from "./FormatBadge"
+
 export * from "./ForbiddenPage"
 
 export * from "./IpGeoLink"
 
 export * from "./JobProgress"
+
+export * from "./StatusIcon"
 
 export * from "./NotFoundPage"
 

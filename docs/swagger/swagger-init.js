@@ -171,12 +171,62 @@ function installLocaleSwitcher() {
   return true
 }
 
+const THEME_KEY = 'lanrurugi-swagger:theme'
+
+/**
+ * Replaces two pieces of Swagger UI's top bar: its logo (the Swagger/SmartBear wordmark) with the
+ * project's, and its light-bulb dark-mode button with the homepage's E-H / EX switch. The stock
+ * toggle keeps all of its logic inside the component and persists nothing, so swapping the
+ * component out leaves nothing behind to fight with; the initial palette is applied by an inline
+ * script in the page head (see build-swagger.mjs) so a reload never flashes the other one.
+ */
+const LanrurugiTopbar = (system) => ({
+  components: {
+    Logo: () => {
+      const h = system.React.createElement
+      return h(
+        'span',
+        { className: 'lr-logo' },
+        h('img', { src: LOCALE.logo ?? './lanrurugi.svg', alt: '', width: 30, height: 30 }),
+        h('span', { className: 'lr-logo__name' }, 'LANrurugi'),
+        h('span', { className: 'lr-logo__tag' }, 'API'),
+      )
+    },
+    DarkModeToggle: () => {
+      const h = system.React.createElement
+      const root = document.documentElement
+      const [dark, setDark] = system.React.useState(root.classList.contains('dark-mode'))
+      const choose = (nextDark) => {
+        root.classList.toggle('dark-mode', nextDark)
+        try {
+          localStorage.setItem(THEME_KEY, nextDark ? 'ex' : 'eh')
+        } catch {
+          // Storage can be unavailable (private mode); the choice then lasts for this page only.
+        }
+        setDark(nextDark)
+      }
+      const button = (label, title, isDark) =>
+        h(
+          'button',
+          { type: 'button', title, 'aria-pressed': dark === isDark, onClick: () => choose(isDark) },
+          label,
+        )
+      return h(
+        'div',
+        { className: 'dark-mode-toggle lr-theme-switch', role: 'group', 'aria-label': LOCALE.themeLabel ?? 'Theme' },
+        button('E-H', 'E-Hentai', false),
+        button('EX', 'ExHentai', true),
+      )
+    },
+  },
+})
+
 window.addEventListener('load', () => {
   window.ui = SwaggerUIBundle({
     url: SPEC_URL,
     dom_id: '#swagger-ui',
     presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
-    plugins: [SwaggerUIBundle.plugins.DownloadUrl, PathAwareFilter],
+    plugins: [SwaggerUIBundle.plugins.DownloadUrl, PathAwareFilter, LanrurugiTopbar],
     layout: 'StandaloneLayout',
     deepLinking: true,
     // Without this there is no filter box, and this document has 231 operations across 37 tags —

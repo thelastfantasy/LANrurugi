@@ -4,6 +4,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recha
 
 import type { StatsBucketSelection } from "@/api/hooks"
 import type { StatsOverview } from "@/api/types"
+import { FormatBadge } from "@/components/Display"
 import { routes } from "@/lib/routes"
 
 import { BucketArchivesPanel } from "./BucketArchivesPanel"
@@ -152,7 +153,7 @@ export function IngestHistory({ ingest }: { ingest: StatsOverview["ingest"] }) {
               head={[t("stats.title"), t("stats.added"), t("stats.size"), t("stats.pages")]}
               rows={ingest.recent.map((archive) => [
                 <a key={archive.id} href={routes.reader(archive.id)} title={archive.title}>
-                  {archive.title}
+                  {archive.title} <FormatBadge extension={archive.extension} />
                 </a>,
                 formatTimestamp(archive.timestamp),
                 formatBytes(archive.bytes),

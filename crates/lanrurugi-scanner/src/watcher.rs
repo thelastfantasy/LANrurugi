@@ -18,10 +18,6 @@ use tokio::sync::mpsc;
 
 use crate::patch;
 
-const WATCHED_EXTENSIONS: &[&str] = &[
-    "zip", "rar", "7z", "tar", "gz", "lzma", "xz", "cbz", "cbr", "cb7", "cbt", "pdf", "epub", "zst",
-];
-
 pub fn is_watched_archive_path(path: &Path) -> bool {
     if path.components().any(|c| c.as_os_str() == "thumb") {
         return false;
@@ -35,10 +31,18 @@ pub fn is_watched_archive_path(path: &Path) -> bool {
     if patch::is_patch_path(path) {
         return false;
     }
-    path.extension()
+    let Some(ext) = path
+        .extension()
         .and_then(|e| e.to_str())
-        .map(|ext| WATCHED_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
+        .map(str::to_ascii_lowercase)
+    else {
+        return false;
+    };
+    if !crate::archive_format::is_supported_extension(&ext) {
+        return false;
+    }
+    // A short `.txt` next to the archives is a readme or a note, not a book.
+    ext != "txt" || std::fs::metadata(path).is_ok_and(|m| m.len() >= lanrurugi_book::TXT_MIN_BYTES)
 }
 
 #[derive(Debug, Error)]
@@ -116,6 +120,8 @@ mod tests {
         assert!(is_watched_archive_path(Path::new("/library/foo.zip")));
         assert!(is_watched_archive_path(Path::new("/library/foo.CBZ")));
         assert!(!is_watched_archive_path(Path::new("/library/foo.txt")));
+        assert!(is_watched_archive_path(Path::new("/library/foo.azw3")));
+        assert!(is_watched_archive_path(Path::new("/library/foo.DJVU")));
         assert!(!is_watched_archive_path(Path::new(
             "/library/thumb/foo.zip"
         )));
@@ -140,5 +146,36 @@ mod tests {
         let path = dir.path().join("gone.zip");
         let err = wait_until_stable(&path).await.unwrap_err();
         assert!(matches!(err, StabilityError::Disappeared));
+    }
+
+    #[test]
+    fn watches_exactly_what_can_be_read() {
+        for name in [
+            "a.cbz",
+            "a.CBR",
+            "a.cbt",
+            "a.lzh",
+            "a.tar.bz2",
+            "a.lzma",
+            "a.pdf",
+            "a.azw3",
+        ] {
+            assert!(is_watched_archive_path(Path::new(name)), "{name}");
+        }
+        // zstd is not compiled into the bundled libarchive; images are pages, not archives.
+        for name in ["a.tar.zst", "a.jpg", "a.json", "noext"] {
+            assert!(!is_watched_archive_path(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn short_text_files_are_not_books() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("readme.txt");
+        std::fs::write(&note, "see the archives").unwrap();
+        assert!(!is_watched_archive_path(&note));
+        let novel = dir.path().join("novel.txt");
+        std::fs::write(&novel, "第一章 春天\n".repeat(1000)).unwrap();
+        assert!(is_watched_archive_path(&novel));
     }
 }

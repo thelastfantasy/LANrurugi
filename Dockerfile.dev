@@ -63,10 +63,11 @@ COPY crates ./crates
 ARG CARGO_BUILD_JOBS=2
 RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lrr-cargo-target,target=/build/target \
-    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker && \
+    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" cargo build --release -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker -p lanrurugi-book-worker && \
     cp /build/target/release/lanrurugi-server /build/lanrurugi-server && \
     cp /build/target/release/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker && \
-    cp /build/target/release/lanrurugi-embed-worker /build/lanrurugi-embed-worker
+    cp /build/target/release/lanrurugi-embed-worker /build/lanrurugi-embed-worker && \
+    cp /build/target/release/lanrurugi-book-worker /build/lanrurugi-book-worker
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
@@ -83,6 +84,15 @@ RUN pnpm install --frozen-lockfile --filter lanrurugi-frontend
 # Same rationale as the production `Dockerfile`'s own `redis-bin` stage: the official image's
 # `-bookworm` (glibc) variant, pinned to the exact version this project's Redis data is already
 # written with.
+# PDFium (Chromium's PDF engine) for `lanrurugi-book-worker`, which loads it at runtime from
+# `LANRURUGI_PDFIUM_LIB`. Version and checksums are pinned in scripts/fetch-pdfium.sh.
+FROM debian:bookworm-slim AS pdfium
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/fetch-pdfium.sh /tmp/fetch-pdfium.sh
+RUN sh /tmp/fetch-pdfium.sh "${TARGETARCH:-amd64}" /opt/pdfium
+
 FROM docker.io/library/redis:${REDIS_VERSION}-bookworm AS redis-bin
 
 # Same rationale as the production `Dockerfile`'s own `deno-bin` stage — plugins (Deno-executed
@@ -106,6 +116,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         fonts-noto-cjk \
+        djvulibre-bin \
         libstdc++6 \
         zlib1g \
         libbz2-1.0 \
@@ -133,6 +144,14 @@ COPY --from=rust-builder /build/lanrurugi-gpu-worker /usr/local/bin/lanrurugi-gp
 # subprocess, `embed_worker_client::EmbedWorkerClient::worker_binary_path` — kept out of
 # `lanrurugi-server`'s own process so its RSS baseline isn't inflated by a loaded ONNX session).
 COPY --from=rust-builder /build/lanrurugi-embed-worker /usr/local/bin/lanrurugi-embed-worker
+COPY --from=rust-builder /build/lanrurugi-book-worker /usr/local/bin/lanrurugi-book-worker
+# E-book support: the worker subprocess sits next to `lanrurugi-server` (the client looks for it
+# there), PDFium beside it with its BSD license and third-party notices; DjVuLibre's tools come from
+# apt (`djvulibre-bin`) and are run as separate programs (GPL, not linked).
+COPY --from=pdfium /opt/pdfium/lib/libpdfium.so /usr/local/lib/libpdfium.so
+COPY --from=pdfium /opt/pdfium/LICENSE /usr/local/share/doc/pdfium/LICENSE
+COPY --from=pdfium /opt/pdfium/licenses /usr/local/share/doc/pdfium/licenses
+ENV LANRURUGI_PDFIUM_LIB=/usr/local/lib/libpdfium.so
 
 # GPU EP integration plan v9 (issue #103): TWO separate ONNX Runtime builds are needed now, not
 # one — `lanrurugi-server` itself no longer touches CUDA, or any ONNX Runtime session, at all

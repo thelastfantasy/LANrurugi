@@ -83,7 +83,10 @@ marked **parity** are deliberate compatibility decisions, called out so this lis
   as a separate file-watcher process, and Minion as a separate job-queue worker — three
   independent OS processes. LANrurugi is one `clap`-based binary (`lanrurugi-server`) with
   `serve`/`rebuild-index`/`bench` subcommands; `serve` runs the HTTP API, the `notify`-based file
-  watcher, and the Deno plugin pool all as tasks inside one Tokio runtime, not separate processes.
+  watcher and background jobs as tasks inside one Tokio runtime, not separate processes. Work that
+  can crash or use a lot of memory — plugins (Deno), the embedding model, GPU inference and e-book
+  parsing — runs in isolated helper subprocesses started on demand, so a failure there never takes
+  the main process down.
 - **A real fix for a concurrent-download race that could silently corrupt files.** Filename-
   conflict detection used to be a one-time directory scan with no lock between "checked, no
   conflict" and "wrote the file" — two downloads racing to the same resolved filename could both
@@ -308,6 +311,32 @@ Everything below is optional and degrades gracefully without a configured DeepSe
   endpoint that no longer exists (the underlying feature had migrated to a different mechanism),
   which was then replaced with a real equivalent test.
 
+### E-book formats
+
+- **PDF, EPUB (fixed-layout and reflowable), MOBI/AZW/AZW3 (comic and text), DjVu, FB2 and TXT are
+  catalogued like archives and read page by page in the same reader** (`specs/013-ebook-formats/`).
+  Pictures stored in a book (scanned PDF pages, fixed-layout EPUB pages, comic MOBI pages, FB2
+  illustrations) are served as their stored bytes, never re-encoded; text PDF pages and DjVu pages
+  are rendered to WebP; text books are typeset and paginated server-side with a Simplified
+  Chinese/Japanese/Korean CJK font chosen by the book's language. The book's own table of contents
+  (PDF bookmarks, EPUB nav/NCX resolved to the linked anchor, the MOBI guide ToC, DjVu bookmarks,
+  FB2 sections, detected TXT chapters) becomes the archive's chapter list on first import without
+  overwriting user edits, and a missing or token one is completed from the text's headings and
+  chapter lines. DRM-protected or encrypted files report why instead of becoming empty 0-page
+  archives. All parsing and rendering runs in a pool of `lanrurugi-book-worker` subprocesses (a
+  crash or hang never takes the server down; idle workers exit), rendered pages count against
+  `tempmaxsize`, and a PDF can still be opened as-is in the browser.
+
+### Native packages
+
+- **Native packages, no container needed** (`specs/015-native-platforms/`). Besides the Docker image,
+  every release ships packages for Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD. The
+  program finds its frontend, plugins, docs, bundled PDFium/ONNX Runtime and models relative to its
+  own location, so nothing needs configuring beyond the library; a model download script and
+  systemd / launchd / rc.d service definitions are included. Redis, Deno and the other prerequisites
+  come from the system package manager; when an optional component is missing the server still
+  starts and its start-up log lists the unavailable features.
+
 ### Job console
 
 - Surfaces the job registry already used internally for backup/restore, thumbnail regeneration,
@@ -335,6 +364,13 @@ Everything below is optional and degrades gracefully without a configured DeepSe
 
 ## Building and running
 
+**To run it**: the Docker image is recommended (docs site, "Install"); without containers, every
+release also ships native packages for Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD
+that run straight after unpacking (docs site, "Native install"). Build a Linux package locally with
+`mise run package-native` and check it with `scripts/smoke-native.sh`; the release packages for every
+platform are built by `.github/workflows/native-release.yml` on each tag (`specs/015-native-platforms/`).
+
+**From source**:
 Toolchain versions are pinned in `.mise.toml` (`mise install` reproduces them exactly: Rust,
 Node, Deno, pnpm, plus `sccache`/`mold` for build acceleration).
 
@@ -352,7 +388,11 @@ Or via Docker (bundles the built frontend into the same image):
 
 ```sh
 docker build -t lanrurugi .
-docker run -p 3000:3000 -v /path/to/library:/library lanrurugi
+docker run -d --name lanrurugi -p 3000:3000 \
+  -v /path/to/library:/home/koyomi/lanrurugi/content \
+  -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
+  -v /path/to/database:/home/koyomi/lanrurugi/database \
+  lanrurugi
 ```
 
 A fresh instance (or one migrated from a legacy install that never changed its password) starts

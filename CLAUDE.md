@@ -1,11 +1,12 @@
 <!-- SPECKIT START -->
-Twelve feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+Fifteen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
 block is regenerated, because it has gone stale before.
 
 - **Implemented (all tasks complete)**: `001-lanrurugi-full-rewrite` (96/96), `002-job-console`
   (23/23), `003-ui-test-automation` (52/52), `005-download-plugin-progress` (41/41),
-  `006-ai-plugin-wizard` (53/53), `011-api-docs-site` (this feature's own list).
+  `006-ai-plugin-wizard` (53/53), `011-api-docs-site` (this feature's own list),
+  `013-ebook-formats` (31/31).
 - **Code implemented, some tasks outstanding** — in every case the remainder is real-deployment
   or real-asset verification rather than unbuilt code: `004-ocr-manga-translation` (70/76,
   awaiting the `quickstart.md` scenarios that need real OCR model files),
@@ -17,6 +18,11 @@ block is regenerated, because it has gone stale before.
   pre-existing `result_large_err` warnings in crates this feature never touched. Its `tasks.md`
   Implementation Record states exactly what was and was not verified — notably that the
   reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised).
+- **Code implemented, release verification outstanding**: `015-native-platforms` — native packages for
+  Linux x86_64/aarch64, macOS arm64 and FreeBSD x86_64; the Linux package is verified locally in a clean
+  Debian container, while macOS, FreeBSD and Linux aarch64 are only verified by
+  `.github/workflows/native-release.yml`, which has not run yet (see its `tasks.md`).
+- **Planned, not started**: `014-ai-harness-hardening` (tasks.md 0/46).
 - **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
@@ -41,6 +47,29 @@ unknown mount prefix, a sidecar entry for a route that does not exist). `cors.rs
 is not a CORS-safelisted value, so every JSON-bodied cross-origin request was preflighted and
 refused. Design artifacts:
 `specs/011-api-docs-site/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
+
+**Phase 1 addendum — `015-native-platforms`**: plan at `specs/015-native-platforms/plan.md`. Native
+release packages next to the Docker image. `lanrurugi-server::install_layout` runs first in `main`
+(before the Tokio runtime exists — it calls `set_var`) and fills every **unset** location variable
+(`LANRURUGI_STATIC_DIR`/`PLUGINS_DIR`/`DOCS_DIR`/`PDFIUM_LIB`, `ORT_DYLIB_PATH`, model dirs) from the
+install prefix when that path exists, so explicit settings and the container image are never
+overridden; `capabilities::log_summary` logs once which optional components were found. Packages are
+assembled by `scripts/package-native.sh` from `scripts/build-native-assets.sh` output and checked by
+`scripts/smoke-native.sh`; locally `mise run package-native` builds the Linux one. Keep new
+Linux-only code behind `cfg(target_os = "linux")` with a portable fallback, and keep any such
+fallback compiled and unit-tested on Linux too (macOS/BSD are only built in CI).
+
+**Phase 1 addendum — `013-ebook-formats`** (implemented): plan at `specs/013-ebook-formats/plan.md`.
+PDF, EPUB (fixed-layout/reflowable), MOBI/AZW/AZW3, DjVu, FB2 and TXT are catalogued as archives
+whose pages are synthetic entries (`0001.jpg`, `0002.webp`) — `lanrurugi-scanner::archive_format`
+dispatches every book to `crates/lanrurugi-book` (client: worker pool, info/render caches keyed by
+file identity plus `CACHE_VERSION` — **bump it whenever the worker would answer differently for the
+same file**, or stale page lists/outlines are served), which talks to `crates/lanrurugi-book-worker`
+subprocesses (PDFium, DjVuLibre CLI, own EPUB/MOBI/FB2/TXT parsers, cosmic-text typesetting).
+Stored pictures are served as their stored bytes; text books are typeset server-side. Outlines are
+imported into an empty ToC only. Rendered pages live under `<temp>/book/` and count against
+`tempmaxsize`. Design artifacts:
+`specs/013-ebook-formats/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
 
 **Phase 1 addendum — `002-job-console`** (additive to Phase 1, implemented): plan at
 `specs/002-job-console/plan.md`. Background job management console (a

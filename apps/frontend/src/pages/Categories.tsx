@@ -9,7 +9,7 @@ import { useArchives, useCategories, useCreateCategory, useTankoubons } from "@/
 import type { TankoubonMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Button, Checkbox, Select } from "@/components/common-ui/Form"
-import { ArchiveChecklistItem, SearchSyntaxHelp } from "@/components/Display"
+import { ArchiveChecklistItem, FormatBadge, SearchSyntaxHelp } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -346,7 +346,11 @@ export function Categories() {
                       return (
                         <ArchiveChecklistItem
                           key={a.arcid}
-                          title={title}
+                          title={
+                            <>
+                              {title} <FormatBadge extension={a.extension} />
+                            </>
+                          }
                           checked={selected.archives.includes(a.arcid)}
                           onChange={(checked) => void handleArchiveToggle(a.arcid, checked)}
                           className={memberTanks?.length ? "tankoubon-member-row" : undefined}

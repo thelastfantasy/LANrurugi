@@ -24,6 +24,8 @@ members = [
     "crates/lanrurugi-gpu-worker",
     "crates/lanrurugi-embed-ipc",
     "crates/lanrurugi-embed-worker",
+    "crates/lanrurugi-book",
+    "crates/lanrurugi-book-worker",
 ]
 
 [workspace.package]
@@ -51,6 +53,7 @@ lanrurugi-translate = { path = "crates/lanrurugi-translate" }
 lanrurugi-inpaint = { path = "crates/lanrurugi-inpaint" }
 lanrurugi-gpu-ipc = { path = "crates/lanrurugi-gpu-ipc" }
 lanrurugi-embed-ipc = { path = "crates/lanrurugi-embed-ipc" }
+lanrurugi-book = { path = "crates/lanrurugi-book" }
 
 tarpc = { version = "0.38.0", features = ["serde-transport", "serde-transport-bincode", "unix", "tokio1"] }
 futures = "0.3.34"
@@ -144,6 +147,10 @@ maxminddb = "0.32"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"
+quick-xml = "0.38"
+base64 = "0.22"
+memmap2 = "0.9"
+cosmic-text = "0.14"
 # Already in the dependency tree transitively (a `criterion`/`clap` dependency of a dependency) —
 # promoted to a direct workspace dependency for `bookmarks.rs`'s own grapheme-cluster-accurate
 # name-length check (`MAX_BOOKMARK_NAME_LEN`), which `str::chars().count()` alone gets wrong for a

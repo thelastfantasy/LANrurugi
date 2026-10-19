@@ -12,6 +12,7 @@ import { formatBytes, STATE_COLOR } from "@/components/Display"
 import { newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import { UPLOAD_ACCEPT } from "@/lib/utils/bookFormats"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
@@ -212,7 +213,7 @@ export function Upload() {
               ref={fileInputRef}
               type="file"
               name="file"
-              accept=".zip,.cbz,.rar,.cbr,.7z,.cb7,.pdf,.epub"
+              accept={UPLOAD_ACCEPT}
               disabled={uploadingCount > 0}
               onChange={(e) => {
                 const chosen = e.target.files?.[0] ?? null

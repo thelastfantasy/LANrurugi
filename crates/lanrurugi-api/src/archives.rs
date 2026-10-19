@@ -859,9 +859,18 @@ async fn remove_toc_entry(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DownloadParams {
+    /// For a PDF: serve it as `application/pdf`, `inline`, so the browser opens it in its own
+    /// viewer (selectable, searchable text) instead of saving it.
+    #[serde(default)]
+    inline: bool,
+}
+
 async fn download_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+    Query(params): Query<DownloadParams>,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -874,6 +883,11 @@ async fn download_archive(
             )
         }
     };
+    if params.inline
+        && lanrurugi_scanner::archive_format::is_pdf(std::path::Path::new(&archive.file))
+    {
+        return inline_pdf(&archive).await;
+    }
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
     // drop them. `build_merged_zip` returns `None` (repackage cost skipped entirely) whenever
@@ -910,6 +924,39 @@ async fn download_archive(
             e.to_string(),
         ),
     }
+}
+
+/// Streams the PDF rather than reading it into memory: a PDF can be hundreds of megabytes.
+async fn inline_pdf(archive: &Archive) -> Response {
+    let file = match tokio::fs::File::open(&archive.file).await {
+        Ok(f) => f,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "download_archive",
+                e.to_string(),
+            )
+        }
+    };
+    let length = file.metadata().await.map(|m| m.len()).ok();
+    let disposition = format!(
+        "inline; {}",
+        disposition_filename(&format!("{}.pdf", archive.name))
+    );
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "application/pdf".to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response();
+    if let Some(length) = length {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, length.into());
+    }
+    response
 }
 
 /// Builds a real `Content-Disposition: attachment` header from the archive's own `name` — without
@@ -2741,7 +2788,7 @@ pub(crate) async fn serve_page(
         .map(|n| format!(":short{n}"))
         .unwrap_or_default();
     let cache_key_path = format!(
-        "{}:{}{}{}{}{}:{}",
+        "{}:{}{}{}{}{}:{}{}",
         if is_patch { "patch" } else { "orig" },
         params.path,
         if optimize { ":opt" } else { "" },
@@ -2749,6 +2796,9 @@ pub(crate) async fn serve_page(
         if preview_variant { ":preview" } else { "" },
         short_edge_key,
         client_support.key(),
+        // A HEAD's flight returns metadata only (empty body). Sharing it with a concurrent GET for
+        // the same page handed that GET zero bytes — a broken image in the reader.
+        if head_only { ":head" } else { "" },
     );
     let result = state
         .page_singleflight
@@ -2796,6 +2846,14 @@ pub(crate) async fn serve_page(
             header_map.insert(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("private, max-age=300"),
+            );
+            // The same URL is served as JXL, WebP or the original depending on what the client
+            // says it decodes (`ClientImageSupport::from_request`: header, cookie, then Accept), so
+            // a cached copy is only valid for the same signals — without this a browser could
+            // reuse, say, a WebP response for five minutes after switching to JXL.
+            header_map.insert(
+                header::VARY,
+                header::HeaderValue::from_static("Accept, Cookie, X-LRR-Image-Support"),
             );
             // `inline` (not `attachment`): a page opened in its own tab must still render, this
             // header only supplies the name a save-as would use — see `served_page_filename`.
@@ -2859,6 +2917,26 @@ pub(crate) async fn serve_page(
                         header::HeaderValue::from_str(&page.orig_size.to_string())
                             .unwrap_or(header::HeaderValue::from_static("0")),
                     );
+                    // The format the GET will convert to — known without encoding — so the
+                    // file-info bar can say "→ JXL" instead of looking unconverted.
+                    header_map.insert(
+                        header::HeaderName::from_static("x-lrr-resized"),
+                        header::HeaderValue::from_static(if page.content_type == "image/jxl" {
+                            "jxl"
+                        } else {
+                            "webp"
+                        }),
+                    );
+                    if page.orig_width > 0 && page.orig_height > 0 {
+                        header_map.insert(
+                            header::HeaderName::from_static("x-lrr-original-dimensions"),
+                            header::HeaderValue::from_str(&format!(
+                                "{}x{}",
+                                page.orig_width, page.orig_height
+                            ))
+                            .unwrap_or(header::HeaderValue::from_static("0x0")),
+                        );
+                    }
                 }
                 return (header_map, StatusCode::OK).into_response();
             }

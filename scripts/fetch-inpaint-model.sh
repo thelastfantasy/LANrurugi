@@ -10,6 +10,11 @@
 # `cardData.license` field, not inferred from a repo badge.
 set -euo pipefail
 
+# Verifies `<sha256>  <file>` lines on stdin (`shasum` on macOS, which has no `sha256sum`).
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum --check --status; else shasum -a 256 --check --status; fi
+}
+
 REPO="Carve/LaMa-ONNX"
 REV="c3c0c9e468934d62e79c329e35d82dd09ff8c444"
 SHA256="1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
@@ -24,7 +29,7 @@ mkdir -p "$DEST"
 fetch() {
   local url="$1" out="$2" want="$3"
 
-  if [ -f "$out" ] && echo "${want}  ${out}" | sha256sum --check --status 2>/dev/null; then
+  if [ -f "$out" ] && echo "${want}  ${out}" | sha256_check 2>/dev/null; then
     echo "  already present and verified: $(basename "$out")"
     return 0
   fi
@@ -32,7 +37,7 @@ fetch() {
   echo "  downloading $(basename "$out") ..."
   curl -fL --retry 3 --progress-bar "$url" -o "${out}.part"
 
-  if ! echo "${want}  ${out}.part" | sha256sum --check --status; then
+  if ! echo "${want}  ${out}.part" | sha256_check; then
     rm -f "${out}.part"
     echo "ERROR: checksum mismatch for $(basename "$out") — refusing to install." >&2
     exit 1
