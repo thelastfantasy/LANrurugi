@@ -4,10 +4,11 @@ import en from "@/i18n/locales/en.json"
 import ja from "@/i18n/locales/ja.json"
 import zh from "@/i18n/locales/zh.json"
 import {
-  FIRST_RUN_LEGACY_IMPORT_URL,
+  FIRST_RUN_IMPORT_CONFLICT_MODE,
   FIRST_RUN_WIZARD_STEPS,
   passwordStepProblem,
 } from "@/pages/FirstRunWizard/logic"
+import { runningLibraryScan } from "@/pages/Settings/LegacyImportPanel"
 
 describe("passwordStepProblem", () => {
   it("treats an untouched pair as a no-op rather than an error", () => {
@@ -30,13 +31,20 @@ describe("passwordStepProblem", () => {
   })
 })
 
-describe("FIRST_RUN_LEGACY_IMPORT_URL", () => {
-  it("imports with the wizard's own fixed safe defaults", () => {
-    // Pinned as a contract: the wizard's step deliberately offers no conflict-mode or
-    // tag-minimization UI, so these two values are the whole of what the step can send.
-    expect(FIRST_RUN_LEGACY_IMPORT_URL).toBe(
-      "/api/database/import-legacy?on_existing=merge&minimize_tags=false",
-    )
+describe("FIRST_RUN_IMPORT_CONFLICT_MODE", () => {
+  it("starts on overwrite, so titles edited in LANraragi replace the file-name ones", () => {
+    expect(FIRST_RUN_IMPORT_CONFLICT_MODE).toBe("overwrite")
+  })
+})
+
+describe("runningLibraryScan", () => {
+  it("finds a queued or active library scan and ignores everything else", () => {
+    const scan = { name: "startup_scan", state: "active" }
+    expect(runningLibraryScan([{ name: "backup", state: "active" }, scan])).toBe(scan)
+    expect(runningLibraryScan([{ name: "rebuild_index", state: "queued" }])).toBeDefined()
+    expect(runningLibraryScan([{ name: "startup_scan", state: "finished" }])).toBeUndefined()
+    expect(runningLibraryScan([{ name: "startup_scan", state: "failed" }])).toBeUndefined()
+    expect(runningLibraryScan(undefined)).toBeUndefined()
   })
 })
 

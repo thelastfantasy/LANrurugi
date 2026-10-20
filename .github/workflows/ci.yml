@@ -286,6 +286,28 @@ jobs:
       # pull request, or anyone else's clone must still get a green pipeline from the build alone.
       # Cloudflare Pages receives prebuilt directories: it is not asked to build anything, because it
       # cannot see this job's generated artefacts or this repository's pinned toolchain.
+      # `pages deploy` cannot create a missing project non-interactively, so a project added later
+      # (such as the homepage) would fail its first deploy. Same Pages-only token.
+      - name: Create missing Pages projects
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects"
+          for project in lanrurugi-docs lanrurugi-api-swagger lanrurugi-sdk lanrurugi-home; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api/$project")
+            case "$status" in
+              200) ;;
+              404)
+                echo "creating Pages project $project"
+                curl -sf -X POST "$api" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"name\":\"$project\",\"production_branch\":\"main\"}" >/dev/null ;;
+              *) echo "::error::looking up Pages project $project returned HTTP $status"; exit 1 ;;
+            esac
+          done
+
       - name: Publish docs site
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&

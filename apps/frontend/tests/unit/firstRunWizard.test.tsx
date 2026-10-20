@@ -13,7 +13,11 @@ const { changePasswordMock, markDoneMock, useSessionMock, wizardState } = vi.hoi
   markDoneMock: vi.fn(async () => ({})),
   useSessionMock: vi.fn(),
   /** What the instance already has handled, which is what decides the ticks on the step tabs. */
-  wizardState: { llmKeySet: false, importCount: 0 },
+  wizardState: {
+    llmKeySet: false,
+    importCount: 0,
+    jobs: [] as { id: string; name: string; state: string; progress: number }[],
+  },
 }))
 
 vi.mock("@/session/SessionProvider", () => ({ useSession: useSessionMock }))
@@ -25,6 +29,7 @@ vi.mock("@/api/hooks", async (importOriginal) => ({
     data: { llm_api_key_set: wizardState.llmKeySet, language: "auto", timezone: "UTC" },
   }),
   useImportLegacyCount: () => ({ data: { import_count: wizardState.importCount } }),
+  useJobs: () => ({ data: wizardState.jobs, isPending: false }),
   useUpdateSettings: () => ({ mutateAsync: markDoneMock }),
   useChangePassword: () => ({ mutateAsync: changePasswordMock }),
 }))
@@ -51,15 +56,18 @@ function renderWizard({
   guest = false,
   llmKeySet = false,
   importCount = 0,
+  jobs = [],
 }: {
   /** What the *server* reports for `first_run_wizard_available` (the deploy-time switch). */
   available?: boolean
   guest?: boolean
   llmKeySet?: boolean
   importCount?: number
+  jobs?: (typeof wizardState)["jobs"]
 } = {}) {
   wizardState.llmKeySet = llmKeySet
   wizardState.importCount = importCount
+  wizardState.jobs = jobs
   const isAuthenticated = !guest
   useSessionMock.mockReturnValue({
     status: undefined,
@@ -123,6 +131,40 @@ describe("FirstRunWizard", () => {
     expect(
       screen.queryByRole("button", { name: "Skip setup and start using LANrurugi" }),
     ).toBeNull()
+  })
+
+  it("holds the import back while the library scan is running", () => {
+    // jsdom has no `matchMedia`; the scan's progress bar reads it for its narrow layout.
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    const { container } = renderWizard({
+      jobs: [{ id: "1", name: "startup_scan", state: "active", progress: 0.4 }],
+    })
+    click("Next")
+    click("Skip this step")
+    click("Skip this step")
+
+    expect(
+      screen.getByText(/The library is still being scanned/),
+    ).toBeInTheDocument()
+    // The step tab is also named "Import", so the file picker itself is what is checked.
+    expect(container.querySelector('input[type="file"]')).toBeDisabled()
+  })
+
+  it("allows the import once no library scan is running", () => {
+    const { container } = renderWizard({
+      jobs: [{ id: "1", name: "startup_scan", state: "finished", progress: 1 }],
+    })
+    click("Next")
+    click("Skip this step")
+    click("Skip this step")
+
+    expect(screen.queryByText(/The library is still being scanned/)).toBeNull()
+    expect(container.querySelector('input[type="file"]')).toBeEnabled()
   })
 
   it("marks the instance handled when the wizard is finished, then leaves", async () => {

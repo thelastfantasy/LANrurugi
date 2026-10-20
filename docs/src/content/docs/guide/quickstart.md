@@ -29,16 +29,14 @@ curl -H "Authorization: Bearer <你的令牌>" http://localhost:3000/api/archive
 
 ## 5. 从旧版 LANraragi 迁移
 
-不需要迁移步骤。LANrurugi 直接读旧版写入 Redis 的数据：档案记录、标签、分类、阅读进度、缩略图、
-Tankoubon 分组、配置。把你的 `data/database` 目录指过来即可。
+LANrurugi 用自己的数据库，不读取也不改动 LANraragi 的数据，两边可以同时运行。步骤见[安装](../install/)页的
+「从 LANraragi 迁移」：书库挂载同一个漫画目录，缩略图和数据库用新的目录，再在首次运行向导里导入 LANraragi 的
+备份 JSON。
 
-需要注意的两点：
-
-- **档案 ID 算法**。新扫描使用大小感知指纹（`hash(前 512KB ++ 大端 u64 文件大小)`），旧版的
-  `SHA-1(前 512KB)` 仍然可读。旧算法会把开头字节相同的不同档案误判为重复并合并——这是本项目修掉的
-  已知缺陷。修复只对新内容生效，已有 ID 不会被静默改写。
-- **找回被误合并隐藏的文件**。跑一次 `lanrurugi rebuild-index`：它会用新算法重算 ID，并把历史上被
-  误判合并隐藏的文件重新暴露出来。
+导入按文件名把备份里的档案对应到 LANrurugi 扫描到的档案，不比较档案 ID：LANrurugi 用大小感知指纹
+（`hash(前 512KB ++ 大端 u64 文件大小)`）作为 ID，和 LANraragi 的 `SHA-1(前 512KB)` 不同。同名文件有多个时
+不会猜测，计入「匹配不唯一」。导入前请等书库扫描完成，还没扫描到的档案会被算作「无匹配而跳过」。
+LANraragi 曾把开头字节相同的不同文件误判为重复并合并，这些文件在 LANrurugi 里会各自出现。
 
 ## 6. 试试 API
 

@@ -370,9 +370,33 @@
           <p class="chapter-no">第4話</p>
           <h2 data-i18n="lib.title">兼容 LANraragi 书库</h2>
           <p class="chapter-lead" data-i18n="lib.lead">
-            沿用 LANraragi 的 Redis 数据、目录结构与 HTTP API。停用 LANraragi、启动 LANrurugi 后，书库、标签和阅读进度都会保留，第三方阅读器也能照常连接。
+            沿用 LANraragi 的书库目录结构与 HTTP API，第三方阅读器照常连接。标签、分类等元数据从 LANraragi 的备份导入，两边的数据库互不影响。
           </p>
         </header>
+
+        <div class="migrate">
+          <h3 class="migrate-title" data-i18n="mig.title">从 LANraragi 迁移</h3>
+          <ol class="howto migrate-steps">
+            <li>
+              <h4 data-i18n="mig.s1.title">在 LANraragi 导出备份</h4>
+              <p data-i18n="mig.s1.body">设置 →「Database Backup/Restore」→「Backup Database」，下载 JSON 文件。LANraragi 可以继续运行。</p>
+            </li>
+            <li>
+              <h4 data-i18n="mig.s2.title">启动 LANrurugi</h4>
+              <p data-i18n="mig.s2.body">书库挂载和 LANraragi 相同的漫画目录；缩略图和数据库也要挂载，但必须用新的目录，不要和 LANraragi 的相同。</p>
+              <p><a href="#start" data-i18n="mig.s2.link">用转换器从 LANraragi 的部署生成 compose →</a></p>
+            </li>
+            <li>
+              <h4 data-i18n="mig.s3.title">登录</h4>
+              <p class="howto-cmd"><code>kamimamita</code></p>
+              <p data-i18n="mig.s3.body">打开 http://&lt;server&gt;:3000，用默认密码 kamimamita（与 LANraragi 相同）登录。首次运行向导会提示你改成自己的密码。</p>
+            </li>
+            <li>
+              <h4 data-i18n="mig.s4.title">导入备份</h4>
+              <p data-i18n="mig.s4.body">在向导的「从 LANraragi 备份导入」一步上传 JSON；之后也能在 设置 →「数据库备份/恢复」里导入。标签、分类、合集和 stamps 会恢复，阅读进度不在备份里。档案按文件名对应，请等书库扫描完成再导入。</p>
+            </li>
+          </ol>
+        </div>
 
         <dl class="stats">
           <div>
@@ -467,7 +491,7 @@
             </li>
           </ol>
           <div class="code-wrap">
-            <button type="button" class="copy-btn" data-copied="{{t:start.copied}}">
+            <button type="button" class="copy-btn" data-target="compose-yaml" data-copied="{{t:start.copied}}">
               <span data-i18n="start.copy">复制</span>
             </button>
             <pre class="code" tabindex="0"><code id="compose-yaml" data-i18n="start.compose"></code></pre>
@@ -475,8 +499,39 @@
               <span data-i18n="start.proxyNote">要放在 Nginx、Caddy、Traefik 等反向代理之后？</span>
               <a href="{{t:link.proxyHref}}" data-i18n="start.proxyLink">查看反向代理配置示例</a>
             </p>
+            <p class="code-note db-note" data-i18n="start.dbNote">LANrurugi 的缩略图和数据库目录必须和 LANraragi 的分开，不要指向同一个路径；两边可以同时运行。标签、分类等元数据通过 LANraragi 的备份 JSON 导入，首次运行向导里就有这一步。</p>
+            <p class="code-note">
+              <span data-i18n="start.hubNote">同一个镜像也发布在 Docker Hub：</span>
+              <code>jade913/lanrurugi</code>
+            </p>
           </div>
         </div>
+        <details
+          class="converter"
+          data-content="{{t:conv.l.content}}"
+          data-port="{{t:conv.l.port}}"
+          data-read="{{t:conv.read}}"
+          data-relative="{{t:conv.relative}}"
+          data-named="{{t:conv.named}}"
+          data-not-found="{{t:conv.notFound}}"
+          data-port-moved="{{t:conv.portMoved}}"
+          data-import-note="{{t:conv.importNote}}"
+        >
+          <summary data-i18n="conv.title">已经在用 LANraragi？把部署命令或 compose 转换成 LANrurugi 的</summary>
+          <div class="conv-body">
+            <p class="conv-lead" data-i18n="conv.lead">粘贴 LANraragi 的 docker run 命令或 compose.yaml，书库目录会填进上面的 compose 文本，缩略图和数据库用 LANrurugi 自己的目录，端口换成原端口的下一个。转换只在你的浏览器里进行，不会上传任何内容。</p>
+            <textarea rows="7" spellcheck="false" aria-label="{{t:conv.title}}" placeholder="{{t:conv.placeholder}}"></textarea>
+            <button type="button" class="btn primary conv-run" data-i18n="conv.run">转换</button>
+            <ul class="conv-notes" aria-live="polite"></ul>
+            <div class="code-wrap conv-out" hidden>
+              <button type="button" class="copy-btn" data-target="conv-yaml" data-copied="{{t:start.copied}}">
+                <span data-i18n="start.copy">复制</span>
+              </button>
+              <pre class="code" tabindex="0"><code id="conv-yaml"></code></pre>
+            </div>
+          </div>
+        </details>
+
         <div class="native-note">
           <h3 data-i18n="start.native.title">不用 Docker</h3>
           <p data-i18n="start.native.body">Linux（x86_64 / ARM64）、Apple Silicon Mac 和 FreeBSD 有原生安装包：用系统的包管理器装好 Redis、Deno 等依赖，解压后直接运行，也可以注册为系统服务。Windows 请使用 Docker Desktop。</p>

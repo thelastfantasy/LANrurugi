@@ -33,19 +33,18 @@ Tokens come in two roles, administrator and guest; a guest token can only read.
 
 ## 5. Migrating from LANraragi
 
-There is no migration step. LANrurugi reads the data the old version wrote into Redis directly:
-archive records, tags, categories, reading progress, thumbnails, Tankoubon groupings, settings. Point
-it at your `data/database` directory and you are done.
+LANrurugi has its own database and neither reads nor changes LANraragi's, so the two can run side
+by side. The steps are under "Moving from LANraragi" on the [install](../install/) page: mount the same
+manga directory as the library, give thumbnails and the database new directories, then import
+LANraragi's backup JSON in the first-run wizard.
 
-Two things worth knowing:
-
-- **The archive ID algorithm.** New scans use a size-aware fingerprint
-  (`hash(first 512KB ++ big-endian u64 file size)`), while the old `SHA-1(first 512KB)` remains
-  readable. The old algorithm treated different archives that happened to share their leading bytes as
-  duplicates and merged them — a known defect this project fixes. The fix only applies to new
-  content; existing IDs are never silently rewritten.
-- **Recovering files hidden by a mistaken merge.** Run `lanrurugi rebuild-index`: it recomputes IDs
-  with the new algorithm and re-exposes files that were historically hidden by a bad merge.
+The import pairs archives in the backup with the ones LANrurugi scanned by file name, never by ID:
+LANrurugi's IDs are a size-aware fingerprint (`hash(first 512KB ++ big-endian u64 file size)`), unlike
+LANraragi's `SHA-1(first 512KB)`. When several files share a name nothing is guessed; they count as
+ambiguous. Let the library scan finish before importing — archives not scanned yet count as skipped
+with no match.
+Different files that LANraragi wrongly merged as duplicates because their leading bytes matched show up
+separately in LANrurugi.
 
 ## 6. Try the API
 

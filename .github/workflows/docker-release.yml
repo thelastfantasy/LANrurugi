@@ -56,6 +56,9 @@ jobs:
   amend-builds:
     runs-on: ubuntu-24.04
     needs: push
+    env:
+      DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+      HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     permissions:
       contents: read
       packages: write
@@ -80,21 +83,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: pull images
-        run: |
-          docker pull --platform=linux/amd64 ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-amd64
-          docker pull --platform=linux/arm64 ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-arm64
+      # Docker Hub is optional: set the repository variable DOCKERHUB_IMAGE (e.g. user/lanrurugi)
+      # and the secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN to publish there as well.
+      - uses: docker/login-action@v3
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: create manifests
+      # One multi-arch manifest per tag, copied to every configured registry.
+      - name: publish multi-arch manifests
         run: |
-          docker manifest create ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }} \
-            --amend ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-amd64 \
-            --amend ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-arm64
-          docker manifest create ghcr.io/thelastfantasy/lanrurugi:latest \
-            --amend ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-amd64 \
-            --amend ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-arm64
-
-      - name: push manifests
-        run: |
-          docker manifest push ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}
-          docker manifest push ghcr.io/thelastfantasy/lanrurugi:latest
+          tags=""
+          for tag in "${{ steps.version.outputs.lanrurugi_version }}" latest; do
+            tags="$tags -t ghcr.io/thelastfantasy/lanrurugi:$tag"
+            if [ -n "$DOCKERHUB_IMAGE" ] && [ "$HAS_DOCKERHUB_TOKEN" = true ]; then
+              tags="$tags -t docker.io/$DOCKERHUB_IMAGE:$tag"
+            fi
+          done
+          docker buildx imagetools create $tags \
+            ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-amd64 \
+            ghcr.io/thelastfantasy/lanrurugi:${{ steps.version.outputs.lanrurugi_version }}-arm64

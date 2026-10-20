@@ -250,8 +250,9 @@ OCR 模型文件后逐一复核。本轮多条工作线（OCR/擦除/嵌入模�
 - **后端**：Rust（Tokio 异步运行时、Axum Web 框架、Rayon 用于 CPU 密集型并行计算），一个位于
   `crates/` 下的 Cargo workspace，产出单一二进制文件 `lanrurugi-server`，带有
   `serve` / `rebuild-index` / `bench` / `formats` 四个子命令。
-- **数据存储**：Redis，原样复用自旧版部署（五个逻辑数据库——见
-  `crates/lanrurugi-storage/src/redis.rs`）。
+- **数据存储**：Redis，键结构沿用旧版（五个逻辑数据库——见
+  `crates/lanrurugi-storage/src/redis.rs`）。LANrurugi 用自己的数据库目录，LANraragi 的元数据通过其备份 JSON
+  导入。
 - **前端**：React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query，位于
   `apps/frontend/` 下。
 - **插件**：沙箱化的 Deno 子进程，每个插件命名空间一个（`crates/lanrurugi-plugin/`）。
@@ -461,6 +462,9 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
   lanrurugi
 ```
+
+预构建镜像发布在 `ghcr.io/thelastfantasy/lanrurugi` 和 Docker Hub 的 `jade913/lanrurugi`。从 LANraragi 迁移：书库挂载
+同一个漫画目录，缩略图和数据库用新的目录，再在首次运行向导里导入 LANraragi 的备份 JSON（见文档的安装页）。
 
 一个全新的实例（或者一个从从未修改过密码的旧版安装迁移过来的实例）启动时，仍然使用的是旧版 LANraragi
 自身的默认管理员密码 `kamimamita`（`crates/lanrurugi-api/src/auth.rs::DEFAULT_PASSWORD_HASH` 的

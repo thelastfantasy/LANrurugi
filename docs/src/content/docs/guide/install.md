@@ -4,8 +4,17 @@ description: 用 Docker 或 Compose 在服务器/NAS 上部署 LANrurugi。
 ---
 
 LANrurugi 的服务端是一个常驻进程，前端静态资源、HTTP API、文件监视器和后台任务都在里面；插件、电子书解析和
-AI 推理在按需启动的子进程里运行。它复用你已有的 Redis，并且**不会**破坏性地迁移已有数据——`compose.yaml`
-里挂载的 `data/database` 就是旧版 LANraragi 用的那份 Redis 数据目录。
+AI 推理在按需启动的子进程里运行。它有自己的数据库，不读取也不改动 LANraragi 的数据库，两者可以同时运行。
+
+:::tip[从 LANraragi 迁移]
+1. 在 LANraragi 的设置 →「Database Backup/Restore」→「Backup Database」下载备份 JSON，LANraragi 可以继续运行。
+2. 启动 LANrurugi：书库挂载和 LANraragi 相同的漫画目录；缩略图和数据库也要挂载，但必须用新的目录，不要和
+   LANraragi 的相同。[主页](https://lanrurugi-home.pages.dev/#start)上的转换器能根据 LANraragi 的部署命令或
+   compose 文件生成。
+3. 用默认密码 `kamimamita` 登录，首次运行向导会提示你修改。
+4. 在向导的「从 LANraragi 备份导入」一步上传 JSON（之后也能在设置 →「数据库备份/恢复」里导入）。标签、分类、
+   合集和 stamps 会恢复，阅读进度不在备份里。
+:::
 
 不想用容器的话，也可以用 Linux、macOS（Apple Silicon）和 FreeBSD 的[原生安装包](../install-native/)。
 
@@ -25,7 +34,7 @@ services:
       - ./data/manga:/home/koyomi/lanrurugi/content
       # 缩略图缓存
       - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      # Redis 数据，可以直接指向旧版 LANraragi 的 database 目录
+      # Redis 数据，LANrurugi 专用；LANraragi 的元数据通过备份 JSON 导入
       - ./data/database:/home/koyomi/lanrurugi/database
       # 推荐功能的嵌入模型，首次用到时自动下载
       - ./data/models:/home/koyomi/lanrurugi/models
@@ -47,7 +56,7 @@ NAS 上（群晖 Container Manager、Portainer 等）新建一个 compose 项目
 |---|---|---|
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | 你的档案库 |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | 缩略图缓存 |
-| `./data/database` | `/home/koyomi/lanrurugi/database` | Redis 数据（与旧版共用） |
+| `./data/database` | `/home/koyomi/lanrurugi/database` | Redis 数据（LANrurugi 专用） |
 | `./data/models` | `/home/koyomi/lanrurugi/models` | 推荐功能的嵌入模型缓存 |
 
 要通过域名和 HTTPS 访问，见[反向代理](../reverse-proxy/)。
@@ -61,6 +70,19 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
   ghcr.io/thelastfantasy/lanrurugi:latest
 ```
+
+## 镜像来源
+
+同一个镜像同时发布在两个仓库，内容完全相同，都包含 amd64 和 arm64 两种架构：
+
+| 仓库 | 镜像名 |
+| --- | --- |
+| GitHub Container Registry（推荐） | `ghcr.io/thelastfantasy/lanrurugi` |
+| Docker Hub | `jade913/lanrurugi` |
+
+上面的示例用的是 GitHub 的仓库。Docker Hub 对未登录用户有拉取次数限制；如果你的 NAS 面板只能从 Docker Hub
+搜索镜像，或者你更习惯用它，把镜像名换成 `jade913/lanrurugi` 即可。`latest` 指向最新的正式版本，
+也可以写具体的版本号。
 
 ## 从源码构建镜像
 

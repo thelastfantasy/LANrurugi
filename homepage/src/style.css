@@ -1393,7 +1393,8 @@ main {
   font-size: 1.1rem;
 }
 
-.howto h3 {
+.howto h3,
+.howto h4 {
   margin: 0 0 4px;
   font-size: 1.25rem;
   font-weight: 800;
@@ -1403,6 +1404,25 @@ main {
   margin: 0;
   font-size: 0.92rem;
   font-weight: 600;
+}
+
+.migrate {
+  margin: 0 0 40px;
+}
+
+.migrate-title {
+  margin: 0 0 16px;
+  font-size: 1.6rem;
+  font-weight: 800;
+}
+
+.migrate-steps {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+
+.migrate-steps a {
+  color: var(--accent-text);
+  font-weight: 900;
 }
 
 .howto .howto-cmd {
@@ -1752,6 +1772,69 @@ main {
   color: #1d1e22;
 }
 
+.converter {
+  margin-top: 30px;
+  background: var(--sand);
+  border: var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.converter summary {
+  padding: 18px 30px;
+  font-size: 1.1rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.conv-body {
+  display: grid;
+  gap: 14px;
+  padding: 0 30px 26px;
+}
+
+.conv-lead {
+  margin: 0;
+  font-weight: 650;
+}
+
+.converter textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  color: var(--text);
+  background: var(--card);
+  border: var(--line-thin);
+  border-radius: 14px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+  resize: vertical;
+}
+
+.conv-run {
+  justify-self: start;
+}
+
+.conv-notes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.2em;
+  font-weight: 650;
+}
+
+.conv-notes:empty {
+  display: none;
+}
+
+.conv-notes .warn {
+  color: var(--accent-text);
+}
+
+.conv-out[hidden] {
+  display: none;
+}
+
 .native-note {
   margin-top: 30px;
   padding: 22px 30px;
@@ -1782,6 +1865,10 @@ main {
 .code-note {
   margin: 18px 0 0;
   font-weight: 700;
+}
+
+.db-note {
+  color: var(--accent-text);
 }
 
 .code-note a {

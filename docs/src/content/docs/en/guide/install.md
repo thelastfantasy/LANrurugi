@@ -5,9 +5,20 @@ description: Deploy LANrurugi on a server or NAS with Docker or Compose.
 
 The LANrurugi server is one resident process holding the static frontend, the HTTP API, the file
 watcher and background jobs; plugins, e-book parsing and AI inference run in subprocesses started on
-demand. It reuses the Redis you already have and does **not** destructively migrate existing data —
-the `data/database` directory mounted by `compose.yaml` is the same Redis data directory the old
-LANraragi used.
+demand. It has its own database and neither reads nor changes LANraragi's, so the two can run side by side.
+
+:::tip[Moving from LANraragi]
+1. In LANraragi, go to Settings → Database Backup/Restore → Backup Database and save the JSON. LANraragi
+   can keep running.
+2. Start LANrurugi with the same manga directory as its library. Thumbnails and the database need mounts
+   too, but in new directories, not LANraragi's. The converter on the
+   [homepage](https://lanrurugi-home.pages.dev/en/#start) generates this from LANraragi's deployment
+   command or compose file.
+3. Sign in with the default password `kamimamita`; the first-run wizard asks you to change it.
+4. Upload the JSON in the wizard's "Import from a LANraragi backup" step (or later under Settings →
+   Database Backup/Restore). Tags, categories, tankoubons and stamps come back; reading progress is not
+   part of the backup.
+:::
 
 Prefer not to use containers? There are [native packages](../install-native/) for Linux, macOS (Apple
 Silicon) and FreeBSD.
@@ -29,7 +40,7 @@ services:
       - ./data/manga:/home/koyomi/lanrurugi/content
       # Thumbnail cache
       - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      # Redis data — can point straight at LANraragi's database directory
+      # Redis data, LANrurugi only; LANraragi's metadata is imported from its backup JSON
       - ./data/database:/home/koyomi/lanrurugi/database
       # Embedding model for recommendations, downloaded on first use
       - ./data/models:/home/koyomi/lanrurugi/models
@@ -53,7 +64,7 @@ container is needed. The four mounted directories:
 |---|---|---|
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | Your library |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | Thumbnail cache |
-| `./data/database` | `/home/koyomi/lanrurugi/database` | Redis data (shared with the old instance) |
+| `./data/database` | `/home/koyomi/lanrurugi/database` | Redis data (LANrurugi only) |
 | `./data/models` | `/home/koyomi/lanrurugi/models` | Embedding model cache for recommendations |
 
 To serve it on a domain over HTTPS, see [Reverse proxy](../reverse-proxy/).
@@ -67,6 +78,19 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
   ghcr.io/thelastfantasy/lanrurugi:latest
 ```
+
+## Where the image is published
+
+The same image, for amd64 and arm64, is published to two registries:
+
+| Registry | Image |
+| --- | --- |
+| GitHub Container Registry (recommended) | `ghcr.io/thelastfantasy/lanrurugi` |
+| Docker Hub | `jade913/lanrurugi` |
+
+The examples above use GitHub's registry. Docker Hub limits how often anonymous users can pull; if
+your NAS panel only searches Docker Hub, or you simply prefer it, use `jade913/lanrurugi` instead.
+`latest` points at the newest release; a specific version number works too.
 
 ## Build the image from source
 

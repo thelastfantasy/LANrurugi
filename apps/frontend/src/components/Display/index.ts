@@ -18,6 +18,8 @@ export * from "./ForbiddenPage"
 
 export * from "./IpGeoLink"
 
+export * from "./ImportLegacySummary"
+
 export * from "./JobProgress"
 
 export * from "./StatusIcon"

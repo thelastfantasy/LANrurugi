@@ -54,10 +54,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      # .mise.toml sets RUSTC_WRAPPER=sccache and .cargo/config.toml links with mold on Linux, so
+      # both must be installed alongside the toolchain.
       - uses: jdx/mise-action@v2
         with:
           install: true
-          install_args: rust deno
+          install_args: rust deno sccache mold
           cache: true
       - uses: Swatinem/rust-cache@v2
         with:
@@ -109,10 +111,11 @@ jobs:
       RUSTFLAGS: -C link-arg=-Wl,-dead_strip_dylibs
     steps:
       - uses: actions/checkout@v4
+      # sccache because .mise.toml sets RUSTC_WRAPPER=sccache (mold is Linux-only).
       - uses: jdx/mise-action@v2
         with:
           install: true
-          install_args: rust deno
+          install_args: rust deno sccache
           cache: true
       - uses: Swatinem/rust-cache@v2
         with:

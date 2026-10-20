@@ -26,8 +26,9 @@ Phase 1 にブロックされることもないよう意図的に独立させて
 - **バックエンド**: Rust（Tokio 非同期ランタイム、Axum Web フレームワーク、CPU バウンドな並列処理には
   Rayon）。`crates/` 配下の単一の Cargo ワークスペースが、`serve` / `rebuild-index` / `bench`
   サブコマンドを持つ単一バイナリ `lanrurugi-server` を生成する。
-- **データストア**: Redis。レガシーのデプロイ環境からそのまま流用（論理 DB 5 個 — 詳細は
-  `crates/lanrurugi-storage/src/redis.rs` を参照）。
+- **データストア**: Redis。キー構成はレガシーを踏襲（論理 DB 5 個 — 詳細は
+  `crates/lanrurugi-storage/src/redis.rs` を参照）。LANrurugi は専用のデータベースディレクトリを使い、
+  LANraragi のメタデータはそのバックアップ JSON から取り込む。
 - **フロントエンド**: React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query。
   `apps/frontend/` 配下。
 - **プラグイン**: サンドボックス化された Deno サブプロセス。プラグインの名前空間ごとに 1 プロセス
@@ -395,6 +396,11 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
   lanrurugi
 ```
+
+ビルド済みイメージは `ghcr.io/thelastfantasy/lanrurugi` と Docker Hub の `jade913/lanrurugi` で公開している。
+LANraragi から移行する場合は、ライブラリに同じ漫画ディレクトリをマウントし、サムネイルとデータベースには
+新しいディレクトリを使い、初回セットアップウィザードで LANraragi のバックアップ JSON を取り込む（ドキュメントの
+インストールページを参照）。
 
 新規インスタンス（またはパスワードを一度も変更していないレガシーインストールから移行した
 インスタンス）は、レガシー LANraragi 自身のデフォルト管理者パスワードがそのまま有効な状態で

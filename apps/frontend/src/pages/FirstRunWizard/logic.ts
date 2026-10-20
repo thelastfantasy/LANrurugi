@@ -1,3 +1,5 @@
+import type { ImportConflictMode } from "@/api/types"
+
 /** The wizard's step order — the step indicator, the clickable-back rule, and which step counts
  *  as "last" all read this one list.
  *
@@ -25,13 +27,9 @@ export function passwordStepProblem(
   return null
 }
 
-/** Where the wizard's legacy-import step sends its upload.
+/** The conflict mode the wizard's import step starts on.
  *
- *  Deliberately hardcoded to `merge` + no tag minimization rather than exposing the choices the
- *  Backup page offers: on the fresh instance this wizard is written for there is nothing to
- *  conflict with yet, so the advanced modes would be a decision with no observable consequence.
- *  The `/backup` link next to the file picker is the escape hatch for a library that is *not*
- *  fresh. Exported so a test can pin the contract rather than leaving it as a string literal
- *  buried in a component. */
-export const FIRST_RUN_LEGACY_IMPORT_URL =
-  "/api/database/import-legacy?on_existing=merge&minimize_tags=false"
+ *  `overwrite`, not the Backup page's `merge`: by the time the wizard runs every archive already
+ *  has a title and summary derived from its file name, and `merge` keeps those, silently discarding
+ *  the ones edited in LANraragi. Every import saves a rollback snapshot. */
+export const FIRST_RUN_IMPORT_CONFLICT_MODE = "overwrite" satisfies ImportConflictMode

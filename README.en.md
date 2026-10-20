@@ -27,8 +27,9 @@ or is blocked by Phase 1.
 - **Backend**: Rust (Tokio async runtime, Axum web framework, Rayon for CPU-bound parallelism),
   one Cargo workspace under `crates/` producing a single binary, `lanrurugi-server`, with
   `serve` / `rebuild-index` / `bench` subcommands.
-- **Datastore**: Redis, reused as-is from the legacy deployment (five logical DBs — see
-  `crates/lanrurugi-storage/src/redis.rs`).
+- **Datastore**: Redis with the legacy key layout (five logical DBs — see
+  `crates/lanrurugi-storage/src/redis.rs`). LANrurugi keeps its own database directory; LANraragi's
+  metadata is imported from its backup JSON.
 - **Frontend**: React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query, under
   `apps/frontend/`.
 - **Plugins**: sandboxed Deno subprocesses, one per plugin namespace (`crates/lanrurugi-plugin/`).
@@ -394,6 +395,11 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
   lanrurugi
 ```
+
+Prebuilt images are published as `ghcr.io/thelastfantasy/lanrurugi` and, on Docker Hub,
+`jade913/lanrurugi`. To move from LANraragi, mount the same manga directory as the library, give
+thumbnails and the database new directories, and import LANraragi's backup JSON in the first-run
+wizard (see the install guide in the docs).
 
 A fresh instance (or one migrated from a legacy install that never changed its password) starts
 with legacy LANraragi's own default admin password still in place. **Change it immediately after

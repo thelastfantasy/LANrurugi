@@ -83,23 +83,164 @@ if (reader && auto) {
   }).observe(reader);
 }
 
-/* ---- copy the compose text ---------------------------------------------------------------- */
+/* ---- copy buttons (each names the code block it copies in data-target) -------------------- */
 
-const copyButton = document.querySelector(".copy-btn");
-copyButton?.addEventListener("click", async () => {
-  const label = copyButton.querySelector("span");
-  const original = label.textContent;
-  try {
-    await navigator.clipboard.writeText(document.getElementById("compose-yaml").textContent);
-  } catch {
-    // Clipboard API needs a secure context; fall back to selecting the text for a manual copy.
-    getSelection().selectAllChildren(document.getElementById("compose-yaml"));
+for (const button of document.querySelectorAll(".copy-btn")) {
+  button.addEventListener("click", async () => {
+    const label = button.querySelector("span");
+    const original = label.textContent;
+    const source = document.getElementById(button.dataset.target);
+    try {
+      await navigator.clipboard.writeText(source.textContent);
+    } catch {
+      // Clipboard API needs a secure context; fall back to selecting the text for a manual copy.
+      getSelection().selectAllChildren(source);
+      return;
+    }
+    button.classList.add("done");
+    label.textContent = button.dataset.copied;
+    setTimeout(() => {
+      button.classList.remove("done");
+      label.textContent = original;
+    }, 1800);
+  });
+}
+
+/* ---- LANraragi deployment → LANrurugi compose (runs in the browser only) ------------------- */
+
+// Only the library is carried over: thumbnails and the database stay LANrurugi's own.
+const LEGACY_DIRS = ["content"];
+
+const LEGACY_HOME = "/home/koyomi/lanraragi";
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+
+/** LANraragi's container path for its library: the default, or its `LRR_DATA_DIRECTORY` override. */
+function legacyTargets(text) {
+  const targets = { content: `${LEGACY_HOME}/content` };
+  for (const m of text.matchAll(/LRR_DATA_DIRECTORY["']?[ \t]*[=:][ \t]*["']?([^\s"',]+)/g)) {
+    const path = m[1].startsWith("/") ? m[1] : `${LEGACY_HOME}/${m[1].replace(/^\.\//, "")}`;
+    targets.content = path.replace(/\/+$/, "");
+  }
+  return targets;
+}
+
+/**
+ * Host side of the bind mount onto LANraragi's library directory (recognised by the container path
+ * it is mounted on), and the host port for 3000.
+ */
+function parseLanraragi(text) {
+  const joined = text.replace(/\\\r?\n/g, " ");
+  const targets = legacyTargets(joined);
+  const dirOf = (target) => LEGACY_DIRS.find((dir) => targets[dir] === target.replace(/\/+$/, ""));
+  // Longest first, so an override such as /data/manga is not read as /data.
+  const paths = Object.values(targets).sort((a, b) => b.length - a.length).map(escapeRegExp).join("|");
+  const tgt = `(${paths})\\/?(?=[:"'\\s,]|$)`;
+  const mounts = {};
+  const take = (host, target) => {
+    host = host.trim();
+    const dir = dirOf(target);
+    if (host && dir && !(dir in mounts)) mounts[dir] = host;
+  };
+  // Quoted "host:target[:opts]" — paths with spaces or drive letters.
+  const rest = joined.replace(new RegExp(`(["'])([^"'\\n]*?):${tgt}[^"'\\n]*\\1`, "g"), (_, _quote, host, target) => {
+    take(host, target);
+    return " ";
+  });
+  // Unquoted short syntax. `-v` and compose's "- " entries run up to the container path, so a
+  // path with spaces copied from a guide still comes through; anything else stops at whitespace.
+  const unquoted = [
+    `(?:-v|--volume)[=\\s]+(?!-)((?:(?![ \\t]-)[^"'\\n])+?):${tgt}`,
+    `^[ \\t]*-[ \\t]+([^"'\\n]+?):${tgt}`,
+    `(?:^|[\\s=])([^\\s"'=]+):${tgt}`,
+  ];
+  for (const pattern of unquoted) {
+    for (const m of rest.matchAll(new RegExp(pattern, "gm"))) take(m[1], m[2]);
+  }
+  // --mount type=bind,source=…,target=…
+  for (const m of rest.matchAll(/--mount[=\s]+["']?([^\s"']+)/g)) {
+    const fields = {};
+    for (const part of m[1].split(",")) {
+      const at = part.indexOf("=");
+      if (at > 0) fields[part.slice(0, at)] = part.slice(at + 1);
+    }
+    const host = fields.source ?? fields.src;
+    const target = fields.target ?? fields.dst ?? fields.destination;
+    if (host && target) take(host, target);
+  }
+  // Compose long syntax, source and target in either order within one volume entry: the lines
+  // between them may not start another entry or name another source/target.
+  const value = `["']?([^"'\\n]+?)["']?`;
+  const legacy = `["']?${tgt}["']?`;
+  const between = `[ \\t]*\\n(?:(?![ \\t]*-[ \\t]|[ \\t]*(?:source|target):)[^\\n]*\\n){0,3}?[ \\t]*`;
+  for (const m of rest.matchAll(new RegExp(`source:[ \\t]*${value}${between}target:[ \\t]*${legacy}`, "g"))) {
+    take(m[1], m[2]);
+  }
+  for (const m of rest.matchAll(new RegExp(`target:[ \\t]*${legacy}${between}source:[ \\t]*${value}[ \\t]*$`, "gm"))) {
+    take(m[2], m[1]);
+  }
+  const port =
+    joined.match(/(?:-p|--publish)[=\s]+["']?((?:[\d.]+:)?\d+):3000\b/)?.[1] ??
+    joined.match(/^\s*-\s*["']?((?:[\d.]+:)?\d+):3000\b/m)?.[1];
+  return { mounts, port };
+}
+
+const isNamedVolume = (host) => !/^([/.~$]|[A-Za-z]:[\\/])/.test(host);
+
+/** The page's own compose text with the old deployment's directories and port put in. */
+function convertDeployment(text, template) {
+  const { mounts, port } = parseLanraragi(text);
+  if (!mounts.content) return null;
+  let out = template;
+  for (const dir of LEGACY_DIRS) {
+    const host = mounts[dir];
+    if (!host) continue;
+    const line = new RegExp(`^(\\s*- )[^\\n]*?(:\\/home\\/koyomi\\/lanrurugi\\/${dir})$`, "m");
+    const quote = /[\s#"]|^[^\w./~$]/.test(host) || /^[A-Za-z]:/.test(host);
+    out = out.replace(line, (_, lead, tail) =>
+      quote ? `${lead}"${host.replace(/"/g, '\\"')}${tail}"` : `${lead}${host}${tail}`,
+    );
+  }
+  // The next port up, so LANrurugi can run next to LANraragi while the move is checked.
+  const newPort = port?.replace(/\d+$/, (n) => String(Number(n) < 65535 ? Number(n) + 1 : Number(n) - 1));
+  if (newPort) out = out.replace(/^(\s*- )"3000:3000"$/m, `$1"${newPort}:3000"`);
+  const named = LEGACY_DIRS.map((dir) => mounts[dir]).filter((host) => host && isNamedVolume(host));
+  if (named.length) {
+    out += `\nvolumes:\n${named.map((name) => `  ${name}:\n    external: true`).join("\n")}\n`;
+  }
+  return { out, mounts, port, newPort, named };
+}
+
+
+const converter = document.querySelector(".converter");
+converter?.querySelector(".conv-run").addEventListener("click", () => {
+  const text = converter.querySelector("textarea").value;
+  const notes = converter.querySelector(".conv-notes");
+  const output = converter.querySelector(".conv-out");
+  const msg = converter.dataset;
+  const result = convertDeployment(text, document.getElementById("compose-yaml").textContent);
+  notes.replaceChildren();
+  const note = (message, warn) => {
+    const item = document.createElement("li");
+    item.textContent = message;
+    if (warn) item.className = "warn";
+    notes.append(item);
+  };
+  if (!result) {
+    output.hidden = true;
+    note(msg.notFound, true);
     return;
   }
-  copyButton.classList.add("done");
-  label.textContent = copyButton.dataset.copied;
-  setTimeout(() => {
-    copyButton.classList.remove("done");
-    label.textContent = original;
-  }, 1800);
+  document.getElementById("conv-yaml").textContent = result.out;
+  output.hidden = false;
+  const found = LEGACY_DIRS.filter((dir) => result.mounts[dir]).map((dir) => `${msg[dir]} ${result.mounts[dir]}`);
+  if (result.port) found.push(`${msg.port} ${result.port}`);
+  note(`${msg.read}${found.join(" · ")}`);
+  if (LEGACY_DIRS.some((dir) => /^\.\.?[/\\]/.test(result.mounts[dir] ?? ""))) note(msg.relative);
+  if (result.named.length) note(msg.named.replace("{names}", result.named.join(", ")));
+  if (result.newPort) {
+    const hostPort = (p) => p.replace(/^.*:/, "");
+    note(msg.portMoved.replaceAll("{new}", hostPort(result.newPort)).replaceAll("{old}", hostPort(result.port)));
+  }
+  note(msg.importNote, true);
 });
+
