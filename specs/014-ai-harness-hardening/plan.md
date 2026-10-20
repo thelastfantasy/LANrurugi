@@ -6,7 +6,7 @@
 
 ## Summary
 
-LANrurugi's AI surface is 14 server-side model calls across 9 features, one 3-provider
+LANrurugi's AI surface is 14 server-side model calls across 10 features, one 3-provider
 translation pipeline, four local model classes, and one browser-direct path. Measured against the
 agent-harness construct list, exactly four constructs are both applicable and missing, one is
 partially present, and six are structurally inapplicable and stay out of scope.
@@ -15,11 +15,13 @@ This plan delivers the four missing constructs and completes the partial one, **
 
 1. **A tool gate** for the one place where the model chooses a network destination and the server
    attaches the user's real credential to it (currently unconstrained — a
-   prompt-injection-to-exfiltration path).
+   prompt-injection-to-exfiltration path), extended to the trial run that executes model-written
+   code with the user's credentials, and backed by framing fetched content as untrusted data.
 2. **A real model-call seam**: one failure vocabulary, a deadline that covers retries, retry-once
-   for transient classes only, and per-call token/elapsed measurement — replacing fourteen
+   for transient classes only, a cancellation signal that reaches in-flight work, and per-call
+   token/elapsed measurement including cache and reasoning tokens — replacing fourteen
    independently-written error maps and the absence of any bound at twelve of them.
-3. **Per-feature usage attribution** readable from the product surface (today: 1 of 9 features).
+3. **Per-feature usage attribution** readable from the product surface (today: 1 of 11 features).
 4. **Bounded tool results** (prune + continuation), the construct that decides whether a
    multi-round generation completes at a usable cost.
 5. **Bounded repair**: one attempt, driven only by a deterministic validator's verdict — the two
@@ -41,7 +43,9 @@ resolver path already reachable through `reqwest`/`tokio`.
 **Storage**: Redis, reused as-is (constitution: a second store would require an amendment). New key
 namespaces only; no existing key's shape changes.
 
-**Testing**: `cargo test` through `mise run test-crate` / `mise run test`; real network round-trips
+**Testing**: `cargo test` through `mise run test-crate` for the crate a task touches. The full
+`mise run test` is run by the user (host memory pressure; see the repository's own rules) and its log
+read afterwards — tasks never launch it themselves. Real network round-trips
 against `127.0.0.1` fixtures for fetch-path tests (the existing pattern in
 `crates/lanrurugi-api/src/plugin_wizard/fetch.rs`); Redis-gated integration tests that skip when
 `LANRURUGI_TEST_REDIS_URL` is unset (existing convention).
@@ -58,8 +62,8 @@ generation has been observed taking 80+ seconds for its final round, and the wiz
 bound is 300s, so the per-call ceiling is set above the longest legitimate single round and is never
 used as a shorter overall deadline. Tool-result bounding must not degrade a page that already fits.
 
-**Scale/Scope**: 14 call sites to register in one seam; 9 feature ids in the usage ledger; 1
-persisted record type with a bounded retention window.
+**Scale/Scope**: 14 call sites to register in one seam; 11 feature ids in the usage ledger
+(data-model.md §0); 1 persisted record type with a bounded retention window.
 
 ## Constitution Check
 
@@ -73,7 +77,7 @@ persisted record type with a bounded retention window.
 | IV. Sandboxed plugin extensibility | Plugin execution stays inside the Deno permission model | **Pass, strengthened** — the wizard's page fetch is today the one network capability that bypasses the plugin permission model. FR-001…FR-006 bring it under an explicit policy for the first time |
 | V. Secrets & network trust boundaries | Provider keys server-side only; secrets never browser-readable | **Pass, strengthened** — FR-002/FR-006 confine a substituted credential to its own site; FR-026 keeps it out of the persisted record. No credential becomes browser-readable, and the record is session-scoped exactly like the wizard itself |
 | VI. Phased scope discipline | Phase 2 concerns must not be smuggled into Phase 1 work nor gate it | **Pass** — cross-phase infrastructure. The only Phase 2 surface touched is `lanrurugi-translate`, additively (failure-vocabulary boundary + attribution). Every story is independently deliverable |
-| VII. Frontend discipline & legacy UI fidelity | New UI verified against real computed style, not eyeballed | **Pass with obligation** — the only new UI is the usage panel; its task carries the mandatory computed-style comparison against the settings surface it sits in |
+| VII. Frontend discipline & legacy UI fidelity | New UI verified against rendered output, not assumed | **Pass with obligation** — the new UI is the usage panel and the trial-run host approval; neither ports legacy UI, and the user confirms the rendered result before it is committed (repository rule) |
 
 **Gate result: pass, no violations, no complexity-tracking entries required.**
 
@@ -81,7 +85,9 @@ persisted record type with a bounded retention window.
 point made explicit rather than assumed. The design stores two new Redis namespaces; Principle I
 forbids touching legacy data, and the chosen names (`LANRURUGI_LLM_USAGE:*`,
 `LANRURUGI_GENERATION_RECORD:*`) are `LANRURUGI_`-prefixed per the existing convention for keys with
-no legacy counterpart, so no upstream key can ever collide with them. Principle V also gains a
+no legacy counterpart, so no upstream key can ever collide with them. The record's identifier is a
+`GenerationId` newtype from first implementation, as the Technology Stack Constraints require of
+domain identifiers. Principle V also gains a
 concrete guarantee it did not have before this feature: the outbound-fetch contract now makes
 "a substituted credential is never sent off-site" a testable invariant rather than a property of the
 code's good intentions.
@@ -117,10 +123,11 @@ crates/
 │   ├── policy/route_policy.csv          # + /api/llm/usage guest deny
 │   └── src/
 │       ├── plugin_wizard/fetch.rs       # + policy evaluation (3 points), byte-capped body read
-│       ├── plugin_wizard/tool_loop.rs   # + denial surfacing, result bounding, continuation
-│       ├── plugin_wizard/generate.rs    # + target_domain, accumulated budget, record writes
+│       ├── plugin_wizard/tool_loop.rs   # + denial surfacing, result bounding, continuation, untrusted frame
+│       ├── plugin_wizard/generate.rs    # + target_domain, accumulated budget, record writes, cancellation
+│       ├── plugin_wizard/trial_run.rs   # + declared-host check before running a draft, record append
 │       ├── plugin_wizard/record.rs      # NEW — generation record persistence + retention
-│       ├── llm_call.rs                  # NEW — the 9 features' single entry point to the seam
+│       ├── llm_call.rs                  # NEW — the 10 server-side features' single entry point to the seam
 │       ├── llm_usage.rs                 # NEW — ledger + GET /api/llm/usage
 │       ├── repair.rs                    # NEW — validate, then at most one informed repair
 │       ├── archive_split.rs             # + one bounded repair on coverage failure
@@ -134,7 +141,8 @@ crates/
 
 apps/frontend/src/
 ├── api/hooks.ts            # + useLlmUsage
-└── pages/Settings/         # + usage panel (computed-style verified)
+├── pages/PluginWizard/     # + target_domain, trial-run host approval, cancel
+└── pages/Settings/         # + usage panel (verified by the user)
 ```
 
 **Structure Decision**: existing Cargo workspace and the single frontend app, per the
@@ -143,8 +151,8 @@ belongs where all fourteen callers already depend. The api crate grows four beca
 the ledger endpoint, the repair helper and the record are API-layer concerns that `lanrurugi-llm`
 must not learn about — it deliberately knows nothing about features or HTTP.
 
-**Deliberate non-structure**: no `crates/lanrurugi-harness` abstraction over the nine AI features.
-Two of the nine have a loop; the rest are single calls. A second framework for two users is exactly
+**Deliberate non-structure**: no `crates/lanrurugi-harness` abstraction over the ten server-side AI
+features. Two of the ten have a loop; the rest are single calls. A second framework for two users is exactly
 the over-engineering this spec's Assumptions section rejects.
 
 ## Phased delivery
@@ -159,13 +167,10 @@ Ordering below is by risk, so that the security slice can land and be verified a
 - **Phase D (US4, US5, US6)** — result bounding, bounded repair, generation record. Mutually
   independent; result bounding is a prerequisite for the record's usefulness, not for its storage.
 
-## Parallel-work sequencing note
+## Sequencing note
 
-A separate body of work is in flight on this branch and shares the working tree. Implementation
-order therefore also minimises file overlap: Phase A and Phase B touch files no other feature owns
-(`plugin_wizard/fetch.rs`, `plugin_wizard/tool_loop.rs`, `lanrurugi-llm/*`), while Phase C's frontend
-panel and Phase D's `plugin_wizard/generate.rs` edits are the highest-overlap items and land last.
-This is a scheduling fact, not a design constraint — no story is blocked on the other body of work.
+The other work that shared this branch when the plan was written (013, 015) has landed, so ordering
+is by risk alone (Phased delivery above).
 
 ## Complexity Tracking
 

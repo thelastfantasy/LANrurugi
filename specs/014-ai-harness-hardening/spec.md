@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-16
 
-**Status**: Draft
+**Status**: Ready (revised 2026-10-20 after `/speckit-analyze`; see the revision note at the end)
 
 **Input**: User description: "归纳一下 lanrurugi 中的各处 ai 调用，并汇总出来，然后分析哪些地方有必要用 harness 的概念进行工程强化（暂时不用改代码进行实装）。" Follow-up: "就是智能体harness的定义" — i.e. the reference is the *agent harness* (the non-model scaffolding that turns a one-shot completion into a bounded, observable, steerable, reproducible autonomous process), not generic service engineering. Then: "你可以用 speckit 先做，然后在 implement 前面停下来就行了".
 
@@ -16,7 +16,7 @@ LANrurugi has six distinct families of AI call, not one:
 
 | Family | Count | Notes |
 | --- | --- | --- |
-| Server-side LLM calls | **14 call sites / 9 features** | All through one client abstraction; single provider |
+| Server-side LLM calls | **14 call sites / 10 features** | All through one client abstraction; single provider |
 | Cloud translation | **1 pipeline × 3 provider adapters** | The only high-volume path; already heavily engineered |
 | Local model inference | **4 classes** | OCR detection, OCR recognition, lettering erase, title embedding |
 | Browser-direct local model | **1 path** | User's own loopback endpoint, deliberately never proxied |
@@ -42,8 +42,11 @@ Measured against the agent-harness construct list, four constructs genuinely app
 one applies partially, and six are structurally inapplicable:
 
 **Missing and applicable:** the tool gating pipeline (pre-execute policy + deny-when-undecidable
-approval), the tool-result pruning/spill step, the "model-visible is recorded" session invariant,
-and the provider-neutral model-call seam (request retry, failure normalization, token metering).
+approval), applied both to the model's own tool calls *and* to the code the model writes when that
+code is executed; the tool-result pruning/spill step, with fetched content framed as untrusted data;
+the "model-visible is recorded" session invariant; cancellation that reaches in-flight work; and the
+provider-neutral model-call seam (request retry, failure normalization, token metering including
+cache and reasoning tokens).
 
 **Partially present:** bounded repair. One call site has a hand-written JSON reformat round, one has
 a deterministic validator that never feeds back, and the wizard's real verify→repair loop lives in
@@ -101,6 +104,15 @@ without touching any other story.
    outcome is the same legible refusal as scenario 2.
 5. **Given** the model requests a destination on the server's own host or a link-local/private
    address, **When** the request is evaluated, **Then** it is refused without being attempted.
+6. **Given** credentials entered for site A and a test link the user supplied on site C, **When** the
+   model requests a fetch of site C with a credential placeholder, **Then** the fetch is refused: site
+   C may be fetched, but only without credentials.
+7. **Given** a fetch of site A that redirects to a host outside every user-supplied site, **When** the
+   redirect is evaluated, **Then** the chain stops there and nothing is sent to that host, with or
+   without credentials.
+8. **Given** a generated plugin whose declared network hosts include a host outside the user-supplied
+   sites, **When** a trial run is requested, **Then** the trial run does not execute until the user
+   has explicitly approved that host, and without approval it is refused with the hosts listed.
 
 ---
 
@@ -112,7 +124,8 @@ outcome — success, or a specific, explainable failure — within a documented 
 indefinitely, and it never reports a generic failure where the real cause is knowable.
 
 **Why this priority**: today only the two wizard actions have a bound at all; the other twelve call
-sites can wait forever on a stalled connection. A hung action is indistinguishable from a slow one,
+sites can wait forever on a stalled connection, and even the bounded generation keeps running and
+billing for up to five minutes after the user has closed the wizard. A hung action is indistinguishable from a slow one,
 which makes the whole AI surface feel unreliable and leaves the administrator unable to tell whether
 the work was billed.
 
@@ -134,6 +147,9 @@ message. Delivered value: no AI action can hang, and the reason is always one of
    is not retried.
 4. **Given** a long-running multi-round action, **When** an individual round is retried,
    **Then** the action's overall bound still applies and is not silently extended.
+5. **Given** a running plugin generation, **When** the user cancels it or the browser disconnects,
+   **Then** the in-flight model call and tool call stop, no further provider request is issued, and
+   the action is recorded as cancelled rather than failed.
 
 ---
 
@@ -257,21 +273,24 @@ reviewable record.
 ### Edge Cases
 
 - A credential is entered for a site, and the model requests a fetch of a **subdomain** or a
-  **different port** on that site. The boundary must be stated as a definite rule, not left to
-  judgment.
+  **different port** on that site. Rule: a proper subdomain at a DNS-label boundary is the same site;
+  the port is not part of the rule.
 - A fetch of an allowed host redirects to a second allowed host, then to a disallowed one. Every hop
-  is evaluated, not just the first.
-- Credentials exist for two sites in the same session and the model composes one request that
-  references placeholders belonging to both.
+  is evaluated; the chain stops at the first disallowed hop.
+- The user supplies links on more than one site. Every supplied site may be fetched, but credentials
+  only ever go to the wizard's target site (FR-002), so a request referencing a credential on any
+  other supplied site is refused.
 - The provider reports a rate limit together with a retry-after hint that exceeds the action's own
   bound.
-- A retry happens after a partial stream has already been delivered to the user; what the user saw
-  must not contradict what is recorded.
+- A retry happens after a partial stream has already been delivered to the user. The retry is
+  announced in the same stream before any of its output, and the abandoned round is recorded as a
+  failed attempt, so what the user saw and what is recorded agree (FR-031).
 - Token usage is reported on some rounds of a multi-round action and not others.
 - A tool result is within the per-page budget but the accumulated rounds are not.
 - A deterministic validator rejects an output for a reason the model cannot act on (for example, the
   assignment it must produce may be genuinely impossible for the given input).
-- The same generation is resumed after a restart that happened between rounds.
+- The server restarts between two rounds of a generation. The generation ends; resuming it is out of
+  scope (see Assumptions). Its record keeps every round written before the restart.
 
 ## Requirements *(mandatory)*
 
@@ -282,9 +301,12 @@ reviewable record.
 - **FR-001**: The system MUST evaluate every model-requested fetch against an allow rule before any
   network traffic is issued, and MUST deny by default when the rule cannot be evaluated.
 - **FR-002**: A request MUST NOT carry a substituted credential value unless its destination is the
-  site the credential was entered for.
+  site the credential was entered for — the wizard's target site and its subdomains. Other sites the
+  user supplied links for may be fetched, but never with a credential.
 - **FR-003**: The allow rule MUST be re-evaluated on every redirect hop, not only on the initial
-  destination.
+  destination. A hop that leaves every user-supplied site MUST end the chain without sending anything
+  to that hop's destination; a hop that stays on a supplied site but leaves the target site continues
+  without credentials.
 - **FR-004**: The system MUST refuse destinations resolving to the server's own host, loopback,
   link-local, or private address space.
 - **FR-005**: A denied request MUST produce an outcome the model can read and reason about; it MUST
@@ -310,7 +332,8 @@ reviewable record.
 
 - **FR-012**: The system MUST attribute every model call to the feature that issued it.
 - **FR-013**: The system MUST record, per attributed call, request count, elapsed time, and token
-  usage when the provider reports it, and MUST distinguish "not reported" from zero.
+  usage when the provider reports it — including cache-hit and cache-miss input tokens and reasoning
+  tokens, which the provider prices differently — and MUST distinguish "not reported" from zero.
 - **FR-014**: Attributed usage MUST remain queryable across a server restart over the retention
   window.
 - **FR-015**: The administrator MUST be able to read attributed usage per feature from the product
@@ -341,14 +364,32 @@ reviewable record.
 
 **Reconstructibility (US6)**
 
-- **FR-024**: For every action that issued at least one model call, the system MUST persist the
-  sequence of model-visible inputs — prompts, tool calls, tool results — such that it can be
-  recovered after a restart.
+- **FR-024**: For every plugin-wizard generation — the only AI action with rounds and tool calls —
+  the system MUST persist the sequence of model-visible inputs as actually sent: the full messages
+  including the system prompt, the model and request parameters, every tool call and every tool
+  result, such that the generation can be reconstructed after a restart. Single-call features are
+  covered by the usage ledger and their own stored outputs, not by this record.
 - **FR-025**: A failed or retried attempt MUST be recorded as a distinct attempt and MUST NOT be
   represented as content the model was shown.
 - **FR-026**: Persisted records MUST NOT contain cleartext credential values.
 - **FR-027**: Persisted records MUST expire on a retention window and their expiry MUST NOT affect
   any other feature's data or any user-visible behavior.
+
+**Added after analysis (2026-10-20)**
+
+- **FR-028** (US1): Before a trial run executes model-written plugin code, the network hosts that
+  code declares MUST be checked against the user-supplied sites. A declared host outside them MUST
+  cause the trial run to be refused, listing the hosts, unless the user has explicitly approved those
+  hosts for that trial run. Approval MUST come from the user, never from the model or the draft.
+- **FR-029** (US2): Cancelling a plugin generation — explicitly, or by the client disconnecting —
+  MUST stop the in-flight model call and tool call promptly, MUST NOT issue any further provider
+  request, and MUST be recorded and counted as `cancelled`, distinct from every failure class.
+- **FR-030** (US1, US4): Fetched page content MUST reach the model framed as untrusted data, and the
+  generation's instructions MUST tell the model that instructions inside fetched content are not to
+  be followed. This is defense in depth; FR-001…FR-006 and FR-028 MUST hold without relying on it.
+- **FR-031** (US2, US6): When a round is retried after part of its stream has already reached the
+  user, the stream MUST announce the retry before any of the retried round's output, and the
+  abandoned round MUST be recorded as a failed attempt.
 
 ### Key Entities
 
@@ -364,21 +405,24 @@ reviewable record.
   retried, recorded as distinct from content the model was shown.
 - **Generation Record**: the ordered set of Attempts for one generation action, retention-bounded,
   secret-free.
+- **Trial-Run Host Approval**: the user's per-run confirmation of a draft's declared network hosts
+  that lie outside the user-supplied sites; never stored, never supplied by the model.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: In a scripted suite covering every credentialed outbound path, 100% of requests whose
-  destination differs from the credential's own site are refused before any traffic leaves the
-  server, and 0% of same-site requests change behavior.
+- **SC-001**: In a scripted suite covering every credentialed outbound path — the fetch tool and the
+  trial run of model-written code — 100% of requests whose destination differs from the credential's
+  own site are refused before any traffic leaves the server, and 0% of same-site requests change
+  behavior.
 - **SC-002**: 0 AI actions can exceed their documented bound under a forced-stall scenario, across
-  all 9 AI features (today: 2 of 9 are bounded).
+  all 10 server-side AI features (today: 2 of 10 are bounded).
 - **SC-003**: 100% of provider failure outcomes map to one of the listed classes; a scripted suite
   asserts that no failure path produces a generic message where a class is knowable.
 - **SC-004**: An administrator can answer "requests, tokens and elapsed time for feature X over the
-  last 7 days" from the product surface alone, in under 30 seconds, for 100% of the 9 features
-  (today: 1 of 9).
+  last 7 days" from the product surface alone, in under 30 seconds, for 100% of the 11 features —
+  the 10 server-side features plus translation (today: 1 of 11).
 - **SC-005**: For a generation whose pages are an order of magnitude larger than typical, per-round
   model-visible context stays within budget and the generation completes; measured request size does
   not grow proportionally to page size.
@@ -390,6 +434,8 @@ reviewable record.
 - **SC-008**: No shipped AI feature's ordinary-path behavior, output, or cost changes except where a
   story above explicitly requires it — a regression suite over the 14 call sites passes unchanged
   for the success paths.
+- **SC-009**: After a generation is cancelled or its client disconnects, 0 further provider requests
+  are issued and the generation ends within 5 seconds, in a scripted suite.
 
 ## Assumptions
 
@@ -417,3 +463,20 @@ reviewable record.
   quotas, no cross-user isolation work is implied by "usage attribution".
 - **Local model inference and the browser-direct path are out of scope**: they already have per-call
   bounds, error classification, and lifecycle management.
+- **Resuming a generation after a restart is out of scope.** The record makes an interrupted run
+  inspectable, not continuable.
+- **A provider-wide concurrency or rate limiter is out of scope.** Interactive and background features
+  share one key, and a shared limiter would decide which of them waits — a product decision this
+  feature does not make. Rate-limit responses are classified and retried per FR-008/FR-009 instead.
+- **Approving extra hosts for a trial run (FR-028) is a per-run confirmation, not configuration.** It
+  adds no setting and is never remembered across runs.
+
+## Revision note (2026-10-20)
+
+Revised after `/speckit-analyze` and a comparison against current agent-harness practice. Changes:
+credentials are confined to the target site rather than to every user-supplied site (FR-002); a
+redirect leaving every supplied site ends the chain (FR-003); the record holds the messages actually
+sent plus model and parameters, and is scoped to wizard generations (FR-024); token metering covers
+cache and reasoning tokens (FR-013); new FR-028 (trial-run egress), FR-029 (cancellation), FR-030
+(untrusted-content framing), FR-031 (retry after partial stream), SC-009; the feature count is
+corrected from 9 to 10 server-side features plus translation.

@@ -21,7 +21,7 @@ least one feature in this codebase actually has the shape the construct exists t
 | --- | --- | --- |
 | Tool gate | a model that chooses side-effecting actions | **Yes** — the plugin wizard's page fetch, and it is the only such place |
 | Model-call seam | many call sites needing one consistent failure/retry/measurement contract | **Yes** — 14 call sites, 14 independently written error maps |
-| Usage measurement | spend and latency that must be attributable | **Yes** — 9 features, 1 measured |
+| Usage measurement | spend and latency that must be attributable | **Yes** — 10 server-side features plus translation, 1 measured |
 | Tool-result bounding | a loop that accumulates model-visible observations | **Yes** — one loop, with a fetcher that has no size limit |
 | Bounded repair | deterministic validators that can inform a retry | **Yes** — two validators exist, one rename path has none |
 | Goals / plans / todos | an objective pursued across turns, held by the system | **No** — the objective is held by the human in a wizard UI; the server is a callee |
@@ -75,32 +75,35 @@ matching later. This is what makes a 14-site refactor land as a 14-line change.
 
 ## 3. What "the credential's own site" means, precisely
 
-**Decision**: The permitted destination set for a generation is computed once, from user input only:
-the domain the user entered for this wizard session, plus the hosts of the test links and auxiliary
-reference URLs the user supplied in the same request. Matching is by host, at DNS-label boundaries,
-and also matches a subdomain of a permitted host (`img.example.com` is permitted when
+**Decision** (revised 2026-10-20): two host sets, both computed once per generation from user input
+only. `fetch_hosts` is the domain the user entered for this wizard session plus the hosts of the
+test links and auxiliary reference URLs in the same request; a request to any other host is refused.
+`credential_hosts` is that domain alone; a request carrying a substituted credential must stay inside
+it. Matching is by host at DNS-label boundaries, subdomains included (`img.example.com` is in when
 `example.com` is). Scheme must be `http` or `https`. Port is not constrained. Nothing derived from
-model output ever enters this set.
+model output enters either set.
 
 **Rationale**: three properties are load-bearing. (1) *Derived only from user input* — if the model
-could widen its own permitted set, the gate would be theater. (2) *Label-boundary matching* — naive
-suffix matching would accept `evil-example.com` for `example.com`, which is the single most likely
-mistake in any hand-rolled host rule. (3) *Subdomains in* — real sites routinely redirect to and load
-from subdomains, and a rule that fails them produces a gate administrators turn off.
+could widen its own sets, the gate would be theater. (2) *Label-boundary matching* — naive suffix
+matching would accept `evil-example.com` for `example.com`, the single most likely mistake in any
+hand-rolled host rule. (3) *Subdomains in* — real sites routinely redirect to and load from
+subdomains, and a rule that fails them produces a gate administrators turn off.
+
+The split is what FR-002 actually says: a credential belongs to the site it was entered for. A user
+who adds a test link on a mirror or a CDN wants that page fetched, not their login sent to it.
 
 Port is deliberately unconstrained: leaking a credential requires the attacker to control a port on
 the user's own host, which is not this feature's threat model, and constraining it would break sites
 served from non-default ports for no security gain.
 
 **Alternatives considered**:
+- *One set for both purposes (the original decision).* Rejected on analysis: it sends the target
+  site's credential to every site the user supplied a link for, which contradicts FR-002.
 - *Permit only the exact host the user typed.* Rejected: breaks the common `www.` ↔ apex and
   `m.`/`api.` subdomain patterns, producing a gate that fails on legitimate use.
 - *Use the associated login plugin's declared URL pattern as the anchor.* Rejected as the primary
   source: a URL pattern is a path-level regex in this codebase (`nhentai\.net/g/`), not a host
-  declaration, and it is intentionally sometimes narrower than the domain. It would be used only as
-  a fallback, and only if a host can be extracted unambiguously.
-- *Use the first test link's host as the only anchor.* Rejected: a session may legitimately involve
-  more than one of the user's links.
+  declaration, and it is intentionally sometimes narrower than the domain.
 
 ---
 
@@ -130,23 +133,25 @@ the policy lives at the one function every fetch goes through rather than at eac
 
 ## 5. What happens to a redirect that leaves the permitted set
 
-**Decision**: Follow the redirect, but drop every substituted credential header at that hop and
-disclose in the tool result that credentials were withheld from hop N onward.
+**Decision** (revised 2026-10-20): a hop that leaves `credential_hosts` but stays in `fetch_hosts`
+continues without credential headers, and the result discloses that credentials were withheld from
+hop N onward. A hop that leaves `fetch_hosts` ends the chain with `redirect_left_permitted_set`, and
+the refusal names that hop's host.
 
-**Rationale**: cross-host redirects are ordinary on the real web (apex↔`www`, http→https, CDN and
-login-flow redirects), so refusing the whole chain would break a large share of legitimate pages and
-push administrators toward disabling the gate. Dropping credentials closes the leak exactly. The
-disclosure is what makes the model able to reason correctly instead of concluding the site requires
-authentication when the real cause was this gate.
-
-The disclosure is also a testable contract: it turns a silent security decision into an observable
-one, which is what lets SC-001 be asserted rather than assumed.
+**Rationale**: the hosts the model may reach were never only about credentials. A URL is itself a
+channel: anything the model has read — including authenticated page content — can be encoded into a
+path or query, and an open redirect on the user's own site would carry it to any host if the chain
+simply continued without credentials. Ending the chain closes that. Ordinary redirect shapes still
+work: apex↔`www` and http→https stay inside the same site, and a legitimate cross-site hop (a CDN, a
+mirror) is unblocked the same way a direct fetch of it is — by the user supplying a link on it. The
+refusal names the host so the model can say so instead of concluding the site is broken.
 
 **Alternatives considered**:
-- *Stop the chain at the first hop leaving the set.* Rejected: breaks ordinary redirect shapes and
-  yields a worse diagnostic (the model cannot tell "site is broken" from "gate intervened").
-- *Allow the credential across the redirect when the destination is also permitted.* That is the
-  decided behaviour (both hosts in the set → credential retained). Only leaving the set strips it.
+- *Follow every redirect, dropping credentials when it leaves the set (the original decision).*
+  Rejected on analysis: closes the credential leak but leaves the open-redirect channel above, and is
+  inconsistent with refusing a direct fetch of the same host.
+- *Stop at any hop leaving `credential_hosts`.* Rejected: a user-supplied CDN or mirror hop is
+  legitimate and carries no credential under the decision above.
 
 ---
 
@@ -234,7 +239,7 @@ Storing the *bounded* tool result rather than the raw page is deliberate: it is 
 saw, which is what reproducibility needs, and it inherits the context bound rather than duplicating it.
 
 **Alternatives considered**:
-- *A general append-only session log for all AI features.* Rejected: nine features, one of which has
+- *A general append-only session log for all AI features.* Rejected: eleven features, one of which has
   rounds. That is the excluded construct arriving through the side door.
 - *Keep it in memory with a larger cap.* Rejected: does not survive the restart that is the whole
   reason the record exists.
@@ -274,15 +279,42 @@ the security slice is not waiting behind a merge.
 - *Implement strictly in priority order including frontend.* Rejected: puts the highest-conflict file
   (`generate.rs` + settings UI) in the critical path for no delivery benefit.
 
+
+*Update 2026-10-20*: that work (013, 015) has landed; this section no longer constrains ordering.
+
 ---
 
 ## 12. Resolved unknowns
 
 | Unknown from Technical Context | Resolution |
 | --- | --- |
-| Where the credential's permitted host set comes from | Decision 3 — user-supplied domain and link hosts, computed server-side |
+| Where the credential's permitted host set comes from | Decision 3 — `fetch_hosts` from user-supplied domain and link hosts; `credential_hosts` from the domain alone |
 | Whether a per-call bound can truncate a legitimate long generation | Resolved: the per-call ceiling sits above the longest observed single round; the wizard's existing overall bound stays as the outer limit |
 | Where usage attribution is stored | Decision 8 — new Redis namespace, day-bucketed counters |
 | Whether tool results should be summarized or pruned | Decision 6 — model-free prune plus continuation |
 | Whether the wizard's browser-driven repair should move server-side | Resolved in part: the *record* moves server-side (Decision 9); the trigger stays where the user's confirm click is, so no autonomous repair loop is introduced |
 | Whether any touched endpoint is legacy-shaped | Resolved: none — verified against the route policy file; all are LANrurugi-only additions |
+
+---
+
+## 13. Constructs added after analysis (2026-10-20)
+
+A comparison against current agent-harness practice found five concerns the construct list in §1 had
+not covered. Each is adopted because a feature here has its shape, the same test §1 applies.
+
+| Concern | Shape here | Decision |
+| --- | --- | --- |
+| Gating the execution of model-written code | the wizard's trial run executes the draft with the user's credentials, and the draft's network permissions are written by the model | Before a trial run, declared hosts outside `fetch_hosts` need the user's explicit, per-run approval (FR-028). The host HTTP client's existing per-hop enforcement stays as is |
+| Cancellation reaching in-flight work | the generation is a detached task that keeps calling the provider after the browser is gone | One cancellation signal per call, fired by the user or by the event receiver closing; checked between rounds and in tool calls (FR-029) |
+| Untrusted tool output | fetched pages are attacker-controllable text placed in the model's context | A fixed untrusted-data frame plus a system-prompt rule (FR-030) — defense in depth, never the control the gate relies on |
+| Cache- and reasoning-aware metering | DeepSeek reports cache-hit/miss input tokens (priced about 10× apart) and reasoning tokens | Recorded as separate optional figures (FR-013) so cost is derivable |
+| Replayable records | "what was the model shown" needs the messages as sent and the model parameters, not the user's request | The record stores both (FR-024) |
+
+**Alternatives considered**:
+- *Prompt framing as the primary injection defense.* Rejected: models do not reliably obey it; the
+  gates are what hold.
+- *Automatic approval of a draft's declared hosts when they look related to the target.* Rejected:
+  the draft and its permissions are model output, so any automatic rule is the model approving
+  itself.
+- *A provider-wide concurrency limiter.* Not adopted (spec Assumptions): it decides which features
+  wait, a product decision outside this feature.

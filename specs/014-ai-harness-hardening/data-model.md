@@ -9,17 +9,42 @@ TTL rather than a sweep. No existing key is read differently or rewritten.
 
 ---
 
+## 0. Feature ids (closed set)
+
+`FeatureId` is a newtype over a `&'static str`, supplied by each call site; the seam never infers it.
+The set is closed and returned by the usage endpoint in this order:
+
+| Id | Call sites |
+| --- | --- |
+| `plugin_generation` | `plugin_wizard/generate.rs` (1) |
+| `plugin_login_analysis` | `plugin_wizard/analyze_login.rs` (2, including the JSON-reformat round) |
+| `plugin_trial_attribution` | `plugin_wizard/trial_run.rs` (1) |
+| `archive_split` | `archive_split.rs` (1) |
+| `subfolder_tankoubon_naming` | `scripts.rs` (1) |
+| `artist_backfill` | `artist_backfill.rs` (3) |
+| `tankoubon_rename` | `tankoubons.rs` (2) |
+| `recommend_rerank` | `recommend_llm.rs` (1) |
+| `subscription_condition` | `subscriptions/ai_condition.rs` (1) |
+| `provider_pricing` | `lanrurugi-translate/src/pricing.rs` (1) |
+| `translation` | the translation pipeline, attributed at its own seam boundary (T043) |
+
+The first ten are the 14 server-side calls; `translation` is the eleventh feature in the ledger.
+
+---
+
 ## 1. Model Call (ephemeral)
 
 One request to a model provider. Produced by the call seam, consumed by the caller and by the ledger.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `feature` | feature id (closed set of 9) | Attributed by the caller; the seam never guesses |
-| `outcome` | one of `ok`, `not_configured`, `auth`, `balance`, `rate_limited`, `transient`, `timeout`, `malformed`, `rejected` | The single failure vocabulary |
+| `feature` | `FeatureId` (§0) | Attributed by the caller; the seam never guesses |
+| `outcome` | one of `ok`, `not_configured`, `auth`, `balance`, `rate_limited`, `transient`, `timeout`, `malformed`, `rejected`, `cancelled` | The single failure vocabulary; `cancelled` is not a failure and is never retried |
 | `attempts` | integer, 1 or 2 | 2 only when a transient class was retried once |
 | `elapsed_ms` | integer | Wall clock for the whole call including its retry |
 | `prompt_tokens` / `completion_tokens` / `total_tokens` | optional integers | `None` means *the provider did not report* — never zero |
+| `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` | optional integers | DeepSeek's split of `prompt_tokens`; priced differently, so cost cannot be derived from `prompt_tokens` alone |
+| `reasoning_tokens` | optional integer | From `completion_tokens_details`, when reported |
 | `retry_after` | optional duration | Carried through from a rate-limit response; clamped to the remaining deadline |
 
 **Validation rules**
@@ -42,7 +67,7 @@ over window W".
 
 | Key | Type | TTL | Contents |
 | --- | --- | --- | --- |
-| `LANRURUGI_LLM_USAGE:<feature>:<YYYY-MM-DD>` | hash | 40 days | `requests`, `elapsed_ms`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `unreported_token_calls`, and one counter per failure class (`fail_auth`, `fail_balance`, `fail_rate_limited`, `fail_transient`, `fail_timeout`, `fail_malformed`, `fail_rejected`) |
+| `LANRURUGI_LLM_USAGE:<feature>:<YYYY-MM-DD>` | hash | 40 days | `requests`, `elapsed_ms`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, `reasoning_tokens`, `unreported_token_calls`, `cancelled`, and one counter per failure class (`fail_auth`, `fail_balance`, `fail_rate_limited`, `fail_transient`, `fail_timeout`, `fail_malformed`, `fail_rejected`) |
 
 Dated keys rather than one hash, for the same reason the existing read-daily counter uses dated
 keys: retention becomes each key's own TTL, so there is no pruning code and no unbounded hash.
@@ -71,15 +96,19 @@ Computed once per generation, evaluated on every outbound request.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `permitted_hosts` | set of hosts | From the user's wizard domain plus the hosts of user-supplied links. Label-boundary matching; subdomains of a permitted host are permitted |
+| `fetch_hosts` | set of hosts | The wizard's target domain plus the hosts of user-supplied test links and reference URLs. A request to any other host is denied |
+| `credential_hosts` | set of hosts | The target domain only. A credentialed request, or a hop that keeps credentials, must stay inside it (FR-002) |
 | `credential_fields` | set of field names | The names that may appear as a placeholder; used to decide whether a request is *credentialed* |
+
+Both host sets use label-boundary matching: a proper subdomain of a member is a member; ports are
+ignored.
 
 **Tool-Request Decision** — the outcome of evaluating one request.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `verdict` | `allow` \| `deny` \| `allow_without_credentials` | `allow_without_credentials` is the redirect-leaves-the-set case |
-| `reason` | one of `scheme_not_allowed`, `host_not_permitted`, `private_address`, `unresolvable_host`, `unknown_credential_reference`, `redirect_left_permitted_set` | Machine-readable; each maps to a model-legible explanation |
+| `verdict` | `allow` \| `deny` \| `allow_without_credentials` | `allow_without_credentials` is a redirect hop that leaves `credential_hosts` but stays inside `fetch_hosts` |
+| `reason` | one of `scheme_not_allowed`, `host_not_permitted`, `credential_host_not_permitted`, `private_address`, `unresolvable_host`, `unknown_credential_reference`, `redirect_left_permitted_set` | Machine-readable; each maps to a model-legible explanation. `redirect_left_permitted_set` ends the chain at a hop outside `fetch_hosts` |
 | `withheld_at_hop` | optional integer | Set only for `allow_without_credentials` |
 | `resolved_addresses` | optional list | Retained for diagnostics; never exposed to the model |
 
@@ -95,8 +124,24 @@ Computed once per generation, evaluated on every outbound request.
   forces `deny` regardless of host permission (FR-004).
 - A credential placeholder with no corresponding field in `credential_fields` is `deny`, never an
   empty substitution and never a literal pass-through (FR-006).
-- The permitted set is derived exclusively from values the user typed in the request; no model
-  output can widen it.
+- A credentialed request whose host is outside `credential_hosts` is `deny /
+  credential_host_not_permitted`, even when the host is in `fetch_hosts` (FR-002).
+- A redirect hop outside `fetch_hosts` ends the chain with `deny / redirect_left_permitted_set`;
+  nothing is sent to that hop's destination (FR-003).
+- Both host sets are derived exclusively from values the user typed in the request; no model output
+  can widen them.
+
+**Trial-Run Host Check** (ephemeral, FR-028) — evaluated before a trial run executes a draft.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `declared_hosts` | set of hosts | From the draft's own `pluginInfo()` network permissions |
+| `outside_hosts` | set of hosts | `declared_hosts` not inside `fetch_hosts` |
+| `approved_hosts` | set of hosts | Sent by the frontend from an explicit user confirmation for this one run; never remembered |
+| `verdict` | `run` \| `needs_approval` | `run` iff `outside_hosts ⊆ approved_hosts` |
+
+The draft runs with exactly its declared hosts; this check only decides whether it may run at all.
+The host-side plugin HTTP client's existing per-hop enforcement of declared hosts is unchanged.
 
 **State transitions** — a request moves `proposed → evaluated → (executed | refused)` exactly once.
 An evaluated request is never re-evaluated with a widened policy within the same generation.
@@ -120,6 +165,8 @@ An evaluated request is never re-evaluated with a widened policy within the same
 - `returned_bytes <= total_bytes` always; `status == truncated` iff `returned_bytes < total_bytes`.
 - A `refused` result never carries `content` — a refusal must not leak the response of a request that
   was denied.
+- `content` reaches the model inside an untrusted-data frame (FR-030); a result under the cap is
+  otherwise byte-identical to today's (FR-019).
 - A continuation handle addresses a specific source and byte range; it must not be usable to reach a
   different host than the one it was issued for (it is re-evaluated like any other request).
 - The read itself is capped, so `total_bytes` for an enormous response is an upper bound rather than
@@ -130,17 +177,25 @@ An evaluated request is never re-evaluated with a widened policy within the same
 ## 5. Attempt and Generation Record (persisted)
 
 An **Attempt** is one model-visible round. A **Generation Record** is the ordered set of Attempts for
-one generation action.
+one generation action, identified by a `GenerationId` — a `#[serde(transparent)]` newtype over the
+existing generation id string (constitution: domain identifiers are newtypes from first
+implementation). The pending-request map and the record key builder both take `GenerationId`.
+
+**Header** (index 0, kind `request`): the generation request with credential fields reduced to
+placeholder form, plus the `model`, the request parameters actually sent (reasoning effort,
+temperature, max tokens) and the system prompt.
 
 **Attempt**
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `index` | integer | Order within the generation |
-| `kind` | `request` \| `tool_round` \| `failed_attempt` | A failed or retried round is its own kind, never mistaken for content the model was shown (FR-025) |
+| `kind` | `request` \| `tool_round` \| `failed_attempt` \| `trial_run` | A failed or retried round is its own kind, never mistaken for content the model was shown (FR-025); `trial_run` holds a trial-run result and its attribution (FR-022) |
+| `messages` | list | The messages actually sent for this round, credential values in placeholder form; omitted for `trial_run` |
 | `tool_calls` | list of `{name, arguments}` | Arguments are stored in placeholder form for credentialed headers |
 | `tool_result` | optional bounded tool result | Exactly what the model saw, hence already bounded |
-| `outcome` | one of the model-call outcomes | Failure classes recorded, not elided |
+| `outcome` | one of the model-call outcomes | Failure classes recorded, not elided; `cancelled` when FR-029 stopped the round |
+| `trial` | optional `{plugin_type, ok, error, attribution}` | Only for `trial_run`; `attribution` is the trial-attribution call's verdict |
 
 **Record key**: `LANRURUGI_GENERATION_RECORD:<generation_id>` — a list, TTL 30 days.
 

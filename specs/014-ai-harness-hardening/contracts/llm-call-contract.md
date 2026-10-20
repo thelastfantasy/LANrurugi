@@ -1,6 +1,6 @@
 # Contract: Model Call
 
-**Feature**: `014-ai-harness-hardening` | **Story**: US2 (with US3's measurement hook) | **Requirements**: FR-007…FR-013
+**Feature**: `014-ai-harness-hardening` | **Story**: US2 (with US3's measurement hook) | **Requirements**: FR-007…FR-013, FR-029, FR-031
 
 ## Purpose
 
@@ -25,6 +25,7 @@ replaces that with:
 | `Timeout` | the call's own deadline elapsed | no | timed out |
 | `Malformed` | unparseable body, missing content, truncated stream | once (truncation only) | response incomplete or unparseable |
 | `Rejected { reason }` | a deterministic validator refused the output | **no** (see repair contract) | validator message |
+| `Cancelled` | the caller's cancellation signal fired (FR-029) | **no** | cancelled — not a failure; counted separately |
 
 The rendered message for every variant MUST be byte-identical to what that call site produces today,
 so adopting the vocabulary changes no user-visible text. The type also converts losslessly into the
@@ -54,6 +55,18 @@ A failure whose class is unknown is a seam bug, not a call-site decision.
   it is expressed as this rule's `Malformed`-by-truncation case rather than as a separate special
   path.
 - A retry never extends the action's overall bound.
+- A streamed round retried after part of its output reached the user is announced first: the seam
+  emits a `retrying` event before any of the retry's output, and the abandoned round is reported to
+  the caller as a failed attempt so the generation record keeps it (FR-031).
+
+## Cancellation
+
+- Every call accepts a cancellation signal alongside its deadline. When it fires, the in-flight
+  request is dropped, no retry is attempted, and the call returns `Cancelled`.
+- The plugin generation fires it when the user cancels or the event stream's receiver is gone (the
+  browser disconnected). Its tool calls observe the same signal, so a fetch in flight is abandoned
+  too.
+- Cancellation is checked between rounds as well, so a loop never starts a new round after it.
 
 ## Measurement
 
@@ -66,8 +79,10 @@ Every call yields a report even when it fails:
 | `attempts` | 1 or 2 |
 | `elapsed_ms` | across all attempts |
 | `prompt_tokens`, `completion_tokens`, `total_tokens` | `None` when the provider did not report usage; never `0` as a stand-in |
+| `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens` | DeepSeek's cache split of the prompt, priced differently; `None` when absent |
+| `reasoning_tokens` | from `completion_tokens_details` when present; `None` otherwise |
 
-The caller MUST pass its feature id. The seam does not infer it — inference would silently misattribute
+The caller MUST pass its feature id (data-model.md §0). The seam does not infer it — inference would silently misattribute
 once a caller is refactored.
 
 ## Relationship to the repair contract

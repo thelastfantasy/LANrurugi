@@ -14,36 +14,43 @@ by story; none depends on another, and each states what it proves in one line.
 | A provider that can be made to misbehave | a local stub endpoint reached by `LANRURUGI_DEEPSEEK_BASE_URL`; already supported and used today, so no new test seam is needed |
 | A real provider key | only for the optional end-to-end pass; the scripted scenarios do not need one |
 
-> Long test runs must be launched detached from the agent/editor process tree, per this repository's
-> own rule: `setsid nohup mise run test > /tmp/test-output.log 2>&1 < /dev/null &`. Do not use the
-> harness's own background mechanism for `mise run test`.
+> Scenario tests run per crate (`mise run test-crate -- <crate>`). The full `mise run test` is run by
+> the user, not by the implementing agent, because of host memory pressure; the agent reads its log.
 
 ## S1 — A credential never leaves its own site
 
-**Proves**: US1 / FR-001…FR-006 / SC-001. This is the security scenario; run it first.
+**Proves**: US1 / FR-001…FR-006, FR-028, FR-030 / SC-001. This is the security scenario; run it first.
 
 Setup: a Redis-backed test state with a login plugin whose declared field is `token`, a wizard
-generation request carrying `target_domain = "site-a.example"`, a test link on `site-a.example`, and
-`credential_values = { "token": "SECRET-<random>" }`. A local stub server stands in for each host.
+generation request carrying `target_domain = "site-a.example"`, test links on `site-a.example` and
+on `site-c.example` (a user-supplied second site), and `credential_values = { "token":
+"SECRET-<random>" }`. A local stub server stands in for each host; `site-b.example` is never
+supplied by the user.
 
 | Step | Action | Expected |
 | --- | --- | --- |
 | 1 | Model requests `https://site-a.example/docs` with `Authorization: Key {{token}}` | request reaches the stub with the real value substituted; result `status: "ok"` |
 | 2 | Model requests `https://site-b.example/` with the same header | **no request reaches site B's stub at all**; result `status: "refused"`, `refusal_reason: "host_not_permitted"` |
-| 3 | Model requests `https://site-a.example/start` which 302s to `https://site-b.example/x` | the redirect is followed **without** the credential header; result carries `withheld_credentials_from_hop: 1`; site B's stub records no `Authorization` header |
+| 3 | Model requests `https://site-a.example/start` which 302s to `https://site-b.example/x` | the chain ends at that hop: result `status: "refused"`, `refusal_reason: "redirect_left_permitted_set"`, naming `site-b.example`; **site B's stub receives no request at all** |
+| 3b | Model requests `https://site-a.example/cdn` which 302s to `https://site-c.example/img` | followed **without** the credential header; result carries `withheld_credentials_from_hop: 1`; site C's stub records no `Authorization` header |
 | 4 | Model requests `https://img.site-a.example/p.png` (subdomain) | allowed — label-boundary subdomain rule |
 | 5 | Model requests `https://not-site-a.example/` | refused (`evil-` style suffix is not a subdomain) |
 | 6 | Model requests `http://127.0.0.1:8500/`, `http://169.254.169.254/`, `file:///etc/passwd` | each refused: `private_address`, `private_address`, `scheme_not_allowed`; nothing is dialled |
 | 7 | Model sends `Authorization: Key {{nonexistent}}` | refused `unknown_credential_reference` — the header is **not** sent with `{{nonexistent}}` literal, and **not** emptied |
 | 8 | Model requests `https://site-a.example/` with no credential reference | allowed, and the request is byte-identical to today's behaviour |
+| 9 | Model requests `https://site-c.example/` with `Authorization: Key {{token}}` | refused `credential_host_not_permitted`; site C's stub receives nothing |
+| 10 | Model requests `https://site-c.example/` with no credential reference | allowed |
+| 11 | Trial run of a draft declaring network hosts `site-a.example`, `evil.example` | refused `409 trial_hosts_need_approval` listing `evil.example`; **nothing executes** (no Deno process, no request at any stub) |
+| 12 | Same trial run with `approved_hosts: ["evil.example"]` | runs as today |
+| 13 | Inspect the model input after any successful fetch | the page content sits inside the untrusted-data frame, and the system prompt carries the rule about instructions inside it |
 
-Assertion that must be mechanical, not visual: the stub servers record every inbound request; step 2
-and step 6 assert **zero** inbound requests, and step 3 asserts headers present on hop 1 absent on
-hop 3.
+Assertion that must be mechanical, not visual: the stub servers record every inbound request; steps
+2, 3, 6, 9 and 11 assert **zero** inbound requests at the foreign stub, and step 3b asserts the
+header present on hop 1 and absent at site C.
 
 ## S2 — No AI action can hang, and every failure has a name
 
-**Proves**: US2 / FR-007…FR-011 / SC-002, SC-003.
+**Proves**: US2 / FR-007…FR-011, FR-029, FR-031 / SC-002, SC-003, SC-009.
 
 | Step | Action | Expected |
 | --- | --- | --- |
@@ -54,9 +61,11 @@ hop 3.
 | 5 | Stub returns `429` with `Retry-After: 1` | retried once after the hint; if the hint exceeds the remaining deadline, fails immediately as `RateLimited` |
 | 6 | Stub returns a truncated stream (no `finish_reason`) | retried once with reduced reasoning effort, exactly as today, expressed as the `Malformed`-by-truncation case |
 | 7 | Enumerate all failure paths in the suite | every one maps to a named class; no path yields a generic message |
+| 8 | Start a generation against a slow stub, then drop the event-stream receiver mid-round | the in-flight provider request is dropped, no further request reaches the stub, the generation ends within 5 s, outcome `cancelled` |
+| 9 | Truncated stream after progress events were already emitted (step 6's case mid-stream) | a `retrying` event precedes the retried round's output; the record holds the abandoned round as `failed_attempt` |
 
-Run across all 9 features, not just the wizard — the point of the story is that the 12 previously
-unbounded call sites are now bounded.
+Run across all 10 server-side features, not just the wizard — the point of the story is that the 12
+previously unbounded call sites are now bounded.
 
 ## S3 — Usage is attributable per feature
 
@@ -64,7 +73,9 @@ unbounded call sites are now bounded.
 
 | Step | Action | Expected |
 | --- | --- | --- |
-| 1 | Exercise three different AI features (any outcome) | `GET /api/llm/usage?window=day` reports `reported` for exactly those three, `no_data` for the other six |
+| 1 | Exercise three different AI features (any outcome) | `GET /api/llm/usage?window=day` reports `reported` for exactly those three, `no_data` for the other eight |
+| 1b | Stub reports `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens` and reasoning tokens | the three figures appear separately; a feature whose stub omitted them shows them absent, not `0` |
+| 1c | A cancelled generation | counted under `cancelled`, not under any failure class |
 | 2 | Inspect a feature whose stub returned no usage block | its token figures are **absent**, `unreported_calls > 0`; the panel renders "not reported", not `0` |
 | 3 | Restart the server, re-query the week window | the same figures are still reported (persisted, not in-process) |
 | 4 | Query as a guest | denied by the route policy before the handler |
@@ -105,6 +116,8 @@ Setup: a stub serving a page an order of magnitude larger than a typical plugin-
 | 2 | Restart the server, re-query | identical record |
 | 3 | Grep the record for the known credential value | **zero occurrences**; only placeholder forms appear |
 | 4 | Inspect a round that failed and was retried | it appears with `kind: "failed_attempt"`, distinguishable from rounds the model was shown |
+| 4b | Inspect the header and any round | the header carries the model, request parameters and system prompt; each round carries the messages as sent, credentials in placeholder form |
+| 4c | Run a trial run for the generated draft, then re-read the record | a `trial_run` attempt with the result and its attribution |
 | 5 | Query a random id | `404` |
 | 6 | Query as a guest | denied by route policy |
 
@@ -115,14 +128,13 @@ produced from a real generation, not as a manual read.
 
 **Proves**: SC-008.
 
-- `mise run test` passes unchanged for every existing AI feature's success-path tests.
+- `mise run test` (run by the user) passes unchanged for every existing AI feature's success-path
+  tests.
 - The same generation inputs produce byte-identical output for the same stub responses (recording the
   request bodies the stub receives before and after, and diffing them) — the only permitted difference
   being an added bounded-result field on truncated/refused results.
-- The new settings panel's computed style matches the settings surface it sits in across all 5 themes
-  — the repository's mandatory UI verification rule: `font-size`, `font-weight`, `line-height`,
-  rendered width/height, `border-radius`, `padding`, `margin`, pulled from `getComputedStyle` on both
-  sides rather than compared by screenshot.
+- The usage panel and the trial-run host approval are handed to the user to confirm in the running
+  app; neither ports legacy UI, and the repository's rule is that visual sign-off is the user's.
 
 ## Gates before handing off
 
@@ -132,4 +144,4 @@ mise run fmt-check
 mise run check        # rust-check + frontend-lint, per the pre-push rule
 ```
 
-`mise run test` is the full gate and must be launched detached (see Prerequisites).
+`mise run test` is the full gate; the user runs it (see Prerequisites).

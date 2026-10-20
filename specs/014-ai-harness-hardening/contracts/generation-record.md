@@ -1,6 +1,6 @@
 # Contract: Generation Record
 
-**Feature**: `014-ai-harness-hardening` | **Story**: US6 | **Requirements**: FR-024…FR-027
+**Feature**: `014-ai-harness-hardening` | **Story**: US6 | **Requirements**: FR-022, FR-024…FR-027, FR-031
 
 ## Purpose
 
@@ -15,22 +15,30 @@ because that is the only feature in this codebase with rounds.
 
 ## Stored shape
 
-Key `LANRURUGI_GENERATION_RECORD:<generation_id>`, a list, appended in round order, TTL 30 days.
+Key `LANRURUGI_GENERATION_RECORD:<generation_id>` (built from a `GenerationId` newtype), a list, appended in round order, TTL 30 days.
 
 Each element is one **attempt**:
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `index` | integer | 0-based, append order |
-| `kind` | `request` \| `tool_round` \| `failed_attempt` | A failed/retried round is its own kind, never presented as content the model was shown |
+| `kind` | `request` \| `tool_round` \| `failed_attempt` \| `trial_run` | A failed/retried round is its own kind, never presented as content the model was shown; `trial_run` holds a trial-run result with its attribution (FR-022) |
+| `messages` | list | The messages actually sent this round, credential values in placeholder form (absent for `trial_run`) |
 | `tool_calls` | list of `{name, arguments}` | Credentialed header arguments stored in **placeholder form** (`{{field}}`), never substituted |
 | `tool_result` | optional object | The bounded result exactly as the model saw it, including `truncated`/`refused` status and any `withheld_credentials_from_hop` |
-| `outcome` | model-call outcome | Failure classes recorded, not elided |
+| `outcome` | model-call outcome | Failure classes recorded, not elided; `cancelled` included |
+| `trial` | optional object | `trial_run` only: plugin type, success, error, and the attribution verdict |
 | `at` | timestamp | Ordering safeguard for concurrent writers |
 
 Plus a header element (index 0, kind `request`) holding the generation request body with
 `credential_values` / `login_credentials` / `plugin_parameter_values` reduced to their placeholder
-forms and a boolean per field indicating "was supplied".
+forms and a boolean per field indicating "was supplied", together with the `model`, the request
+parameters actually sent, and the system prompt — what is needed to replay the generation, not just
+to read the user's request.
+
+A trial run carries the `generation_id` of the generation that produced its draft; its result and
+attribution are appended to that record as a `trial_run` attempt. A trial run without a known id
+appends nothing.
 
 ## Invariants
 
@@ -47,6 +55,9 @@ forms and a boolean per field indicating "was supplied".
    (FR-027).
 6. **Same authority as the wizard.** Readable only by whatever the wizard routes themselves require;
    no new permission surface.
+7. **May hold logged-in page content.** "Exactly what the model saw" includes bounded pages fetched
+   with the user's credential, so the record can contain content from behind the user's login for its
+   30-day retention. That is why invariant 6 matters and why the record has no UI or export.
 
 ## Read surface
 
