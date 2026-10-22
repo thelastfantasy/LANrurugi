@@ -11,7 +11,7 @@
 //! This module also hosts the new native **Subfolders to Tankoubons** maintenance endpoint, the
 //! direct “make a single-volume/Tankoubon from each directory” counterpart to FolderToCat.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -309,6 +309,34 @@ struct LlmTankBatch {
     suggestions: Vec<LlmTankSuggestion>,
 }
 
+/// Output filter before anything becomes a tankoubon name or tag: suggestions only for folders
+/// that were sent, and names that are one bounded value each (a comma would split into extra tags).
+fn check_tank_batch(batch: &LlmTankBatch, folders: &HashSet<&str>) -> Result<(), String> {
+    for s in &batch.suggestions {
+        if !folders.contains(s.folder.as_str()) {
+            return Err(format!(
+                "folder「{}」不在输入的目录里，folder 必须原样取自输入",
+                s.folder
+            ));
+        }
+        if s.tank_name
+            .as_deref()
+            .is_some_and(|n| n.chars().count() > 200)
+        {
+            return Err(format!("「{}」的 tank_name 太长", s.folder));
+        }
+        for name in s.artists.iter().chain(&s.circles) {
+            if name.contains([',', '，', '\n', '\r']) || name.chars().count() > 64 {
+                return Err(format!(
+                    "「{}」的作者/社团名「{name}」不合规：每项只能是一个名字，不含逗号或换行，不超过 64 个字符",
+                    s.folder
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Best-effort LLM enrichment: batch-names every discovered folder group and, where the model is
 /// confident, returns an `artist:`/`circle:` author tag. Never fatal — `Ok(None)` is used for
 /// “no key / call failed / unparseable”, and the caller falls back to folder names.
@@ -335,13 +363,20 @@ async fn infer_tank_suggestions(
     let system = crate::llm_prompts::subfolders_to_tankoubons_system();
 
     let user = serde_json::to_string(&json!({ "groups": inputs })).unwrap_or_default();
-    match state
-        .redis
-        .config
-        .json_chat::<LlmTankBatch>(&system, &user, 0.3, 2000)
-        .await
+    let folders: HashSet<&str> = groups.iter().map(|g| g.folder.as_str()).collect();
+    match crate::repair::json_chat_checked(
+        &state.redis.config,
+        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::SUBFOLDER_TANKOUBON_NAMING),
+        &system,
+        &user,
+        0.3,
+        2000,
+        |b: &LlmTankBatch| check_tank_batch(b, &folders),
+    )
+    .await
     {
         Ok(batch) => {
+            let batch = batch.value;
             let mut map = HashMap::new();
             for suggestion in batch.suggestions {
                 map.entry(suggestion.folder.clone()).or_insert(suggestion);

@@ -259,7 +259,8 @@ pub struct AppState {
     /// after that always 404s rather than silently re-running an old request. Stored as a raw
     /// `serde_json::Value` (not `plugin_wizard::generate::GenerateRequest` directly) so this field
     /// doesn't need that submodule-private type to become crate-visible just for this.
-    pub pending_generate_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pub pending_generate_requests:
+        Arc<Mutex<HashMap<lanrurugi_core::ids::GenerationId, serde_json::Value>>>,
     /// Per-job SSE broadcast for archive split progress. A job sends every progress update here;
     /// `GET /archives/{id}/split/stream` subscribes while the reader page is open. Job results are
     /// also persisted in the normal `JobRegistry`, so a user who leaves the page can still retrieve

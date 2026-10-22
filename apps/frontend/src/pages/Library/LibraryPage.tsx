@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { useLibrary } from "@/hooks/useLibrary";
 import { routes } from "@/lib/routes";
 
-import { AiSmartTankoubonModal } from "./AiSmartTankoubonModal";
+import { AiSmartTankoubonDrawer } from "./AiSmartTankoubonDrawer";
 import { ArchiveCard } from "./ArchiveCard";
 import { ArchiveContextMenu } from "./ArchiveContextMenu";
 import { CategoryBar } from "./CategoryBar";
@@ -35,7 +35,9 @@ function sourceOf(
 export function Library() {
   const lib = useLibrary();
   const deleteTarget = lib.deleteTarget;
-  const [aiTankoubonModalOpen, setAiTankoubonModalOpen] = useState(false);
+  const [aiTankoubonDrawerOpen, setAiTankoubonDrawerOpen] = useState(false);
+  // The bottom pager scrolls back up to this bar, so a new page is read from its top.
+  const optionsRef = useRef<HTMLDivElement>(null);
 
   if (lib.search.isError) {
     // 401 means the session just expired mid-view; RequireAuth is already navigating to /login.
@@ -100,7 +102,7 @@ export function Library() {
             onPickRecent={lib.applyRecentFilter}
             onRemoveRecent={lib.removeRecentFilter}
             onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
-            onAiSmartTankoubon={() => setAiTankoubonModalOpen(true)}
+            onAiSmartTankoubon={() => setAiTankoubonDrawerOpen(true)}
             loggedIn={lib.loggedIn}
           />
         </div>
@@ -161,7 +163,7 @@ export function Library() {
         </div>
       )}
 
-      <div className="table-options table-options-row">
+      <div ref={optionsRef} className="table-options table-options-row">
         {lib.viewMode === "thumbnail" && (
           <SortBySelector
             sortby={lib.sortby}
@@ -272,7 +274,7 @@ export function Library() {
           onContextMenu={lib.handleContextMenu}
         />
       ) : (
-        <div id="thumbs_container" style={{ textAlign: "center" }}>
+        <div id="thumbs_container" className="library-thumb-grid" style={{ textAlign: "center" }}>
           {lib.shown.map((a) => (
             <ArchiveCard
               key={a.arcid}
@@ -286,6 +288,24 @@ export function Library() {
               onSearchTag={lib.applyTagSearch}
             />
           ))}
+        </div>
+      )}
+
+      {lib.shown.length > 0 && lib.pageCount > 1 && (
+        <div className="library-bottom-pager">
+          <ResultInfoAndPager
+            rangeStart={lib.rangeStart}
+            rangeEnd={lib.rangeEnd}
+            totalFiltered={lib.totalFiltered}
+            totalRecords={lib.totalRecords}
+            page={lib.page}
+            pageCount={lib.pageCount}
+            onPage={(p) => {
+              lib.navigateSearch({ page: p });
+              optionsRef.current?.scrollIntoView({ block: "start" });
+            }}
+            buildHref={(p) => `/?${lib.buildSearch({ page: p })}`}
+          />
         </div>
       )}
 
@@ -331,9 +351,7 @@ export function Library() {
         />
       )}
 
-      {aiTankoubonModalOpen && (
-        <AiSmartTankoubonModal onClose={() => setAiTankoubonModalOpen(false)} />
-      )}
+      <AiSmartTankoubonDrawer open={aiTankoubonDrawerOpen} onClose={() => setAiTankoubonDrawerOpen(false)} />
     </div>
   );
 }

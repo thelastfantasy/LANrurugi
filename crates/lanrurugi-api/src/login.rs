@@ -109,49 +109,74 @@ pub(crate) fn auth_cookies(
     access_token: &str,
     refresh_cookie_value: &str,
     refresh_max_age_secs: u64,
-) -> [String; 2] {
+) -> Vec<String> {
     let secure = if cfg.force_secure_cookies {
         "; Secure"
     } else {
         ""
     };
-    let domain = cfg
-        .cookie_domain
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("; Domain={value}"))
-        .unwrap_or_default();
-    [
+    let domain = domain_attr(cfg.cookie_domain.as_deref());
+    let mut cookies = vec![
         format!(
             "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
-            session::COOKIE_NAME,
-            access_token,
-            cfg.access_token_lifetime_secs,
-            secure,
-            domain,
+            cfg.cookie_names.session, access_token, cfg.access_token_lifetime_secs, secure, domain,
         ),
         format!(
             "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
-            session::REFRESH_COOKIE_NAME,
+            cfg.cookie_names.refresh,
             refresh_cookie_value,
             REFRESH_COOKIE_PATH,
             refresh_max_age_secs,
             secure,
             domain,
         ),
+    ];
+    // The pre-tag cookies are replaced by the ones above; drop them so they stop being sent.
+    cookies.extend(legacy_cleared_cookies(secure, &domain));
+    cookies
+}
+
+fn domain_attr(cookie_domain: Option<&str>) -> String {
+    cookie_domain
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("; Domain={value}"))
+        .unwrap_or_default()
+}
+
+/// Expires the bare pre-tag auth cookies (`session::COOKIE_NAME` / `REFRESH_COOKIE_NAME`).
+fn legacy_cleared_cookies(secure: &str, domain: &str) -> [String; 2] {
+    [
+        format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            session::COOKIE_NAME,
+        ),
+        format!(
+            "{}=; Path={REFRESH_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            session::REFRESH_COOKIE_NAME,
+        ),
     ]
 }
 
 /// Long-lived device identity cookie. Not an auth credential; `HttpOnly` keeps it out of JS reach,
 /// and it only carries an opaque per-browser UUID used for device-name inheritance.
-pub(crate) fn device_id_cookie(device_id: &str, secure: bool) -> String {
-    format!(
-        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
-        session::DEVICE_ID_COOKIE_NAME,
-        device_id,
-        365 * 24 * 60 * 60,
-        if secure { "; Secure" } else { "" },
-    )
+pub(crate) fn device_id_cookie(
+    names: &session::CookieNames,
+    device_id: &str,
+    secure: bool,
+) -> Vec<String> {
+    let secure = if secure { "; Secure" } else { "" };
+    vec![
+        format!(
+            "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{secure}",
+            names.device_id,
+            device_id,
+            365 * 24 * 60 * 60,
+        ),
+        format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}",
+            session::DEVICE_ID_COOKIE_NAME,
+        ),
+    ]
 }
 
 /// Whether the browser-facing request used HTTPS, honouring a trusted reverse proxy's
@@ -169,27 +194,27 @@ pub(crate) fn request_is_https(headers: &HeaderMap) -> bool {
 /// a clearing `Set-Cookie` with mismatched attributes isn't guaranteed to be treated as the same
 /// cookie by every client (RFC 6265's identity is `(name, domain, path)`, but real browsers have
 /// historically been inconsistent about `Secure`-attribute mismatches on deletion).
-pub(crate) fn cleared_auth_cookies(force_secure: bool, cookie_domain: Option<&str>) -> [String; 2] {
+/// `names` is `None` when the config could not be loaded: only the pre-tag names can be cleared then.
+pub(crate) fn cleared_auth_cookies(
+    names: Option<&session::CookieNames>,
+    force_secure: bool,
+    cookie_domain: Option<&str>,
+) -> Vec<String> {
     let secure = if force_secure { "; Secure" } else { "" };
-    let domain = cookie_domain
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("; Domain={value}"))
-        .unwrap_or_default();
-    [
-        format!(
-            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
-            session::COOKIE_NAME,
-            secure,
-            domain,
-        ),
-        format!(
-            "{}=; Path={}; Max-Age=0; HttpOnly; SameSite=Lax{}{}",
-            session::REFRESH_COOKIE_NAME,
-            REFRESH_COOKIE_PATH,
-            secure,
-            domain,
-        ),
-    ]
+    let domain = domain_attr(cookie_domain);
+    let mut cookies = Vec::new();
+    if let Some(names) = names {
+        cookies.push(format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            names.session,
+        ));
+        cookies.push(format!(
+            "{}=; Path={REFRESH_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            names.refresh,
+        ));
+    }
+    cookies.extend(legacy_cleared_cookies(secure, &domain));
+    cookies
 }
 
 /// `[(SET_COOKIE, ..); 2]`'s own `IntoResponseParts` impl (`axum-core`) builds the header map via
@@ -197,7 +222,7 @@ pub(crate) fn cleared_auth_cookies(force_secure: bool, cookie_domain: Option<&st
 /// array elements sharing the `Set-Cookie` key silently collapse to just the last one, so the
 /// browser never actually receives both cookies (caught live by `tests/auth_flow.rs`: `login`
 /// only ever set the refresh cookie). `HeaderMap::append` is the one that keeps both.
-pub(crate) fn cookie_headers(cookies: [String; 2]) -> axum::http::HeaderMap {
+pub(crate) fn cookie_headers(cookies: impl IntoIterator<Item = String>) -> axum::http::HeaderMap {
     let mut headers = axum::http::HeaderMap::new();
     for cookie in cookies {
         headers.append(
@@ -255,7 +280,13 @@ async fn login(
     let device_id = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .and_then(|raw| {
+            crate::auth::find_auth_cookie(
+                raw,
+                &auth.cookie_names.device_id,
+                session::DEVICE_ID_COOKIE_NAME,
+            )
+        })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let device_info =
@@ -346,16 +377,18 @@ async fn login(
     .await;
 
     let mut response_headers = cookie_headers(cookies);
-    let device_cookie = device_id_cookie(
+    for cookie in device_id_cookie(
+        &auth.cookie_names,
         &device_id,
         auth.force_secure_cookies || request_is_https(&headers),
-    );
-    response_headers.append(
-        header::SET_COOKIE,
-        device_cookie
-            .parse()
-            .expect("device id cookie header value is valid"),
-    );
+    ) {
+        response_headers.append(
+            header::SET_COOKIE,
+            cookie
+                .parse()
+                .expect("device id cookie header value is valid"),
+        );
+    }
     (
         StatusCode::OK,
         response_headers,
@@ -400,8 +433,11 @@ async fn refresh(
             "No refresh cookie.",
         );
     };
-    let Some(cookie_value) = crate::auth::find_cookie(cookie_header, session::REFRESH_COOKIE_NAME)
-    else {
+    let Some(cookie_value) = crate::auth::find_auth_cookie(
+        cookie_header,
+        &auth.cookie_names.refresh,
+        session::REFRESH_COOKIE_NAME,
+    ) else {
         return error(
             StatusCode::UNAUTHORIZED,
             "token_refresh",
@@ -420,7 +456,13 @@ async fn refresh(
     let device_id = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|raw| crate::auth::find_cookie(raw, session::DEVICE_ID_COOKIE_NAME))
+        .and_then(|raw| {
+            crate::auth::find_auth_cookie(
+                raw,
+                &auth.cookie_names.device_id,
+                session::DEVICE_ID_COOKIE_NAME,
+            )
+        })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let rotate_device_info =
@@ -485,8 +527,11 @@ async fn refresh(
             .await;
             // The whole family was just burned by `rotate` itself — clear both cookies so the
             // browser doesn't keep presenting now-dead credentials on its next request.
-            let cookies =
-                cleared_auth_cookies(auth.force_secure_cookies, auth.cookie_domain.as_deref());
+            let cookies = cleared_auth_cookies(
+                Some(&auth.cookie_names),
+                auth.force_secure_cookies,
+                auth.cookie_domain.as_deref(),
+            );
             (
                 StatusCode::UNAUTHORIZED,
                 cookie_headers(cookies),
@@ -593,15 +638,18 @@ async fn refresh(
             }
 
             let mut response_headers = cookie_headers(cookies);
-            response_headers.append(
-                header::SET_COOKIE,
-                device_id_cookie(
-                    &device_id,
-                    auth.force_secure_cookies || request_is_https(&headers),
-                )
-                .parse()
-                .expect("device id cookie header value is valid"),
-            );
+            for cookie in device_id_cookie(
+                &auth.cookie_names,
+                &device_id,
+                auth.force_secure_cookies || request_is_https(&headers),
+            ) {
+                response_headers.append(
+                    header::SET_COOKIE,
+                    cookie
+                        .parse()
+                        .expect("device id cookie header value is valid"),
+                );
+            }
             (
                 StatusCode::OK,
                 response_headers,
@@ -717,11 +765,16 @@ async fn logout(
     // out at all) would be worse than a `Secure`-attribute mismatch.
     let force_secure_cookies = auth.as_ref().is_some_and(|a| a.force_secure_cookies);
     let cookie_domain = auth.as_ref().and_then(|a| a.cookie_domain.clone());
+    let cookie_names = auth.as_ref().map(|a| a.cookie_names.clone());
     if let (Some(auth), Some(cookie_header)) = (
         auth,
         headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
     ) {
-        if let Some(access_token) = crate::auth::find_cookie(cookie_header, session::COOKIE_NAME) {
+        if let Some(access_token) = crate::auth::find_auth_cookie(
+            cookie_header,
+            &auth.cookie_names.session,
+            session::COOKIE_NAME,
+        ) {
             if let Some(family_id) =
                 session::family_id_ignoring_expiry(&auth.session_secret, &access_token)
             {
@@ -759,7 +812,11 @@ async fn logout(
         }
     }
 
-    let cookies = cleared_auth_cookies(force_secure_cookies, cookie_domain.as_deref());
+    let cookies = cleared_auth_cookies(
+        cookie_names.as_ref(),
+        force_secure_cookies,
+        cookie_domain.as_deref(),
+    );
     (
         StatusCode::OK,
         cookie_headers(cookies),
@@ -777,6 +834,7 @@ mod tests {
             guest_mode_enabled: false,
             password_hash: String::new(),
             session_secret: b"test-secret".to_vec(),
+            cookie_names: lanrurugi_core::session::CookieNames::for_secret(b"test"),
             access_token_lifetime_secs: 3_600,
             refresh_token_lifetime_secs: 604_800,
             refresh_token_idle_lifetime_secs: 1_209_600,
@@ -808,6 +866,44 @@ mod tests {
             cookies[1].contains("Path=/api/token/refresh"),
             "refresh cookie path must stay scoped: {}",
             cookies[1]
+        );
+    }
+
+    /// Two instances on one host name (different ports) must not overwrite each other's login:
+    /// cookies carry this instance's own names, and the bare pre-tag ones are expired.
+    #[test]
+    fn auth_cookies_use_this_instances_names_and_retire_the_bare_ones() {
+        let cfg = test_cfg();
+        let cookies = auth_cookies(&cfg, "access-token", "refresh-token", 123);
+        assert!(cookies[0].starts_with(&format!("{}=access-token", cfg.cookie_names.session)));
+        assert!(cookies[1].starts_with(&format!("{}=refresh-token", cfg.cookie_names.refresh)));
+        assert!(cookies[2].starts_with("lanrurugi_session=; ") && cookies[2].contains("Max-Age=0"));
+        assert!(cookies[3].starts_with("lanrurugi_refresh=; ") && cookies[3].contains("Max-Age=0"));
+
+        let cleared = cleared_auth_cookies(Some(&cfg.cookie_names), false, None);
+        assert_eq!(
+            cleared.len(),
+            4,
+            "this instance's and the bare cookies are both cleared"
+        );
+        assert_eq!(cleared_auth_cookies(None, false, None).len(), 2);
+    }
+
+    #[test]
+    fn a_bare_cookie_from_before_the_tag_is_still_read() {
+        let names = lanrurugi_core::session::CookieNames::for_secret(b"test");
+        let header = "lanrurugi_refresh=old.value; other=x";
+        assert_eq!(
+            crate::auth::find_auth_cookie(header, &names.refresh, session::REFRESH_COOKIE_NAME)
+                .as_deref(),
+            Some("old.value")
+        );
+        let both = format!("lanrurugi_refresh=old; {}=new", names.refresh);
+        assert_eq!(
+            crate::auth::find_auth_cookie(&both, &names.refresh, session::REFRESH_COOKIE_NAME)
+                .as_deref(),
+            Some("new"),
+            "this instance's own cookie wins"
         );
     }
 }

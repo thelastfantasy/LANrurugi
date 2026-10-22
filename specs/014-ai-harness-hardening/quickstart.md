@@ -40,7 +40,7 @@ supplied by the user.
 | 8 | Model requests `https://site-a.example/` with no credential reference | allowed, and the request is byte-identical to today's behaviour |
 | 9 | Model requests `https://site-c.example/` with `Authorization: Key {{token}}` | refused `credential_host_not_permitted`; site C's stub receives nothing |
 | 10 | Model requests `https://site-c.example/` with no credential reference | allowed |
-| 11 | Trial run of a draft declaring network hosts `site-a.example`, `evil.example` | refused `409 trial_hosts_need_approval` listing `evil.example`; **nothing executes** (no Deno process, no request at any stub) |
+| 11 | Trial run of a draft declaring network hosts `site-a.example`, `evil.example` | refused `409 trial_hosts_need_approval` listing `evil.example`; nothing executes beyond the existing zero-permission `pluginInfo()` probe (no network), and no request reaches any stub |
 | 12 | Same trial run with `approved_hosts: ["evil.example"]` | runs as today |
 | 13 | Inspect the model input after any successful fetch | the page content sits inside the untrusted-data frame, and the system prompt carries the rule about instructions inside it |
 

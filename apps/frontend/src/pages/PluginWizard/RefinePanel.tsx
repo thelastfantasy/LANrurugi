@@ -47,7 +47,7 @@ export function RefinePanel({
     if (!activeRevision || !instruction.trim()) return
     onBeginOperation()
     setRefining(true)
-    startProgress()
+    const signal = startProgress()
     try {
       const loginAssociation = typeSession.loginAssociation
         ? { namespace: typeSession.loginAssociation.namespace }
@@ -61,6 +61,7 @@ export function RefinePanel({
       const response = await streamGenerate(
         {
           plugin_type: type,
+          target_domain: session.domain,
           test_links: links,
           auxiliary_reference_urls: links,
           login_association: loginAssociation,
@@ -74,6 +75,7 @@ export function RefinePanel({
           })),
         },
         onProgress,
+        signal,
       )
       if (loginAssociation) onCredentialValuesResolved(response.resolvedCredentialValues)
       onRevisionAppended({
@@ -83,10 +85,13 @@ export function RefinePanel({
         createdAt: Date.now(),
         trialRuns: [],
         explanation: response.explanation,
+        generationId: response.generationId,
       })
       onConversationTurnAppended({ userMessage: instruction.trim(), assistantCode: response.code })
       setInstruction("")
     } catch (err) {
+      // Cancelled because the component went away mid-generation; nothing to report.
+      if (err instanceof GenerateStreamError && err.code === "cancelled") return
       const heading =
         err instanceof GenerateStreamError && err.code === "ai_output_not_code"
           ? t("pluginWizard.aiOutputNotCode")

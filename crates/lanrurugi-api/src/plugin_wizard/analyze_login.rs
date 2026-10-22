@@ -13,11 +13,12 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use lanrurugi_llm::{LlmClient, Message, ToolChatResponse};
+use lanrurugi_llm::{CallSpec, FeatureId, LlmClient, LlmError, Message, ToolChatResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::tool_loop::{execute_fetch_tool, extract_url_arg, fetch_page_tool};
+use super::fetch::FetchPolicy;
+use super::tool_loop::{fetch_page_tool, FetchSession};
 use crate::AppState;
 
 const MAX_LOOP_ROUNDS: usize = 6;
@@ -47,7 +48,8 @@ struct AnalyzeLoginResponse {
 
 enum AnalyzeError {
     AiOutputNotParameters(String),
-    LlmUnavailable(String),
+    Llm(LlmError),
+    Unconverged,
 }
 
 pub(super) async fn analyze_login(
@@ -63,14 +65,23 @@ pub(super) async fn analyze_login(
             Json(json!({ "error": "ai_output_not_parameters", "raw_output": raw })),
         )
             .into_response(),
-        Ok(Err(AnalyzeError::LlmUnavailable(detail))) => (
+        Ok(Err(AnalyzeError::Llm(err))) => (
+            crate::common::llm_error_status(err.class()),
+            Json(json!({
+                "error": "llm_unavailable",
+                "detail": err.message(),
+                "class": err.class().as_str(),
+            })),
+        )
+            .into_response(),
+        Ok(Err(AnalyzeError::Unconverged)) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "llm_unavailable", "detail": detail })),
+            Json(json!({ "error": "llm_unavailable", "detail": "分析未能在合理轮数内收敛，请重试" })),
         )
             .into_response(),
         Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "llm_unavailable", "detail": "分析超时，请重试" })),
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({ "error": "llm_unavailable", "detail": "分析超时，请重试", "class": "timeout" })),
         )
             .into_response(),
     }
@@ -96,10 +107,27 @@ async fn run_analysis(
     req: &AnalyzeLoginRequest,
 ) -> Result<Vec<LoginParameter>, AnalyzeError> {
     let mut messages = vec![
-        Message::system(crate::llm_prompts::plugin_wizard_analyze_login_system()),
+        Message::system(format!(
+            "{}\n\n{}",
+            crate::llm_prompts::plugin_wizard_analyze_login_system(),
+            crate::llm_prompts::untrusted_content_rule()
+        )),
         Message::user(user_prompt(req)),
     ];
     let tools = vec![fetch_page_tool()];
+    // The page the user named is the only site this analysis may read, and no credential exists
+    // yet — this call's whole job is determining which credential fields the site needs.
+    let mut session = FetchSession::new(
+        FetchPolicy::new(Some(&req.reference_url), [], Vec::<String>::new()),
+        std::collections::HashMap::new(),
+    );
+    let spec = CallSpec::new(FeatureId::PLUGIN_LOGIN_ANALYSIS).with_deadline(ANALYZE_TIMEOUT);
+    // The tool rounds are one conversation, each extending the last. The JSON-only reformat
+    // below drops the tools (json_object mode forbids them), so it is a deliberate one-off and
+    // goes out under the plain spec.
+    let round_spec = spec
+        .clone()
+        .in_conversation(lanrurugi_llm::Conversation::new());
 
     for _ in 0..MAX_LOOP_ROUNDS {
         // `false`: this round still carries `tools` (non-empty), and DeepSeek documents
@@ -109,9 +137,9 @@ async fn run_analysis(
         let response = state
             .redis
             .config
-            .tool_chat(&messages, &tools, 0.2, 1000, false)
+            .tool_chat(&round_spec, &messages, &tools, 0.2, 1000, false)
             .await
-            .map_err(AnalyzeError::LlmUnavailable)?;
+            .map_err(AnalyzeError::Llm)?;
 
         match response {
             ToolChatResponse::Content(content) => {
@@ -127,13 +155,15 @@ async fn run_analysis(
                 // to restate its own prior judgment in the required shape, not to re-derive it —
                 // low risk of semantic drift since no new information enters the conversation.
                 messages.push(Message::assistant(content));
-                messages.push(Message::user(REFORMAT_AS_JSON_PROMPT.to_string()));
+                messages.push(Message::user(
+                    crate::llm_prompts::plugin_wizard_reformat_as_json(),
+                ));
                 let reformatted = state
                     .redis
                     .config
-                    .tool_chat(&messages, &[], 0.0, 1000, true)
+                    .tool_chat(&spec, &messages, &[], 0.0, 1000, true)
                     .await
-                    .map_err(AnalyzeError::LlmUnavailable)?;
+                    .map_err(AnalyzeError::Llm)?;
                 return match reformatted {
                     ToolChatResponse::Content(json_content) => parse_parameters(&json_content)
                         .ok_or(AnalyzeError::AiOutputNotParameters(json_content)),
@@ -149,24 +179,17 @@ async fn run_analysis(
             ToolChatResponse::ToolCalls(calls) => {
                 messages.push(Message::assistant_tool_calls(calls.clone()));
                 for call in calls {
-                    let url = extract_url_arg(&call).unwrap_or_else(|| req.reference_url.clone());
-                    // No credential exists yet at this stage — this call's whole job is
-                    // *determining* what credential fields the site needs, so there's nothing to
-                    // substitute into an AI-composed `headers` placeholder even if it asked for
-                    // one.
-                    let tool_result =
-                        execute_fetch_tool(&url, &std::collections::HashMap::new()).await;
-                    messages.push(Message::tool_result(call.id.clone(), tool_result));
+                    let outcome = session
+                        .execute(&call, Some(req.reference_url.clone()))
+                        .await;
+                    messages.push(Message::tool_result(call.id.clone(), outcome.result));
+                }
+                if session.budget_exhausted() {
+                    return Err(AnalyzeError::Unconverged);
                 }
             }
         }
     }
 
-    Err(AnalyzeError::LlmUnavailable(
-        "分析未能在合理轮数内收敛，请重试".to_string(),
-    ))
+    Err(AnalyzeError::Unconverged)
 }
-
-const REFORMAT_AS_JSON_PROMPT: &str =
-    "请把你刚才的判断结果重新整理成严格的 JSON 数组格式本身，不要\
-    markdown 代码块包裹，不要任何解释性文字，只输出这一个 JSON 数组，格式与之前的要求完全一致。";

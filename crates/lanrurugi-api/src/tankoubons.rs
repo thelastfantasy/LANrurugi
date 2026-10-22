@@ -22,7 +22,6 @@ use crate::archives::ArchiveMetadataJson;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found, ok};
 use crate::AppState;
-use lanrurugi_llm::LlmClient;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 
 /// Matches legacy's default `archives_per_page` (verified: `ServerInfo` example in
@@ -1643,7 +1642,7 @@ async fn ai_rename_suggestions(
         ),
     );
 
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, serde::Serialize)]
     struct AiResponse {
         suggestions: Vec<RenameSuggestion>,
     }
@@ -1661,14 +1660,36 @@ async fn ai_rename_suggestions(
         name: String,
     }
 
-    match state.redis.config.json_chat::<AiResponse>(
+    // The index mapping is deterministic, so a mismatch gets one repair naming it (FR-020).
+    let validate = |r: &AiResponse| {
+        let shaped: Vec<ShapedSuggestion> = r
+            .suggestions
+            .iter()
+            .map(|s| {
+                (
+                    s.tank_name.clone(),
+                    s.chapters
+                        .iter()
+                        .map(|c| (c.original_index, c.sorted_index, c.name.clone()))
+                        .collect(),
+                )
+            })
+            .collect();
+        check_rename_suggestions(members.len(), &shaped)
+    };
+    let outcome = crate::repair::json_chat_checked::<AiResponse>(
+        &state.redis.config,
+        &rename_spec(),
         &system,
         &user,
         0.7,
         2000,
+        validate,
     )
     .await
-    {
+    .map(|c| c.value);
+
+    match outcome {
         Ok(response) => axum::Json(serde_json::json!({
             "suggestions": response.suggestions,
             "original_member_names": members.iter().map(|(id, title)|
@@ -1676,11 +1697,7 @@ async fn ai_rename_suggestions(
             ).collect::<Vec<_>>(),
         }))
         .into_response(),
-        Err(msg) => error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ai_rename",
-            msg,
-        ),
+        Err(err) => crate::common::llm_error("ai_rename", &err),
     }
 }
 
@@ -1777,22 +1794,116 @@ async fn ai_rename_chapter(
         name: String,
     }
 
-    match state
-        .redis
-        .config
-        .json_chat::<ChapterSuggestion>(&system, &user, 0.5, 200)
-        .await
+    let check = |s: &ChapterSuggestion| match s.name.trim().chars().count() {
+        0 => Err("name 为空".to_string()),
+        n if n > 120 => Err(format!("name 太长（{n} 个字符），章节标题应简短")),
+        _ => Ok(()),
+    };
+    match crate::repair::json_chat_checked::<ChapterSuggestion>(
+        &state.redis.config,
+        &rename_spec(),
+        &system,
+        &user,
+        0.5,
+        200,
+        check,
+    )
+    .await
     {
         Ok(suggestion) => {
-            axum::Json(serde_json::json!({ "name": suggestion.name })).into_response()
+            axum::Json(serde_json::json!({ "name": suggestion.value.name.trim() })).into_response()
         }
-        Err(msg) => error(StatusCode::SERVICE_UNAVAILABLE, "ai_rename_chapter", msg),
+        Err(err) => crate::common::llm_error("ai_rename_chapter", &err),
     }
+}
+
+/// One rename suggestion as the validator sees it: the tankoubon name and each chapter's
+/// `(original_index, sorted_index, name)`.
+type ShapedSuggestion = (String, Vec<(u32, u32, String)>);
+
+/// Every suggestion must name the tankoubon, assign each of the `member_count` members exactly
+/// once (`original_index` 1..=n) and use each position exactly once (`sorted_index` 1..=n).
+fn check_rename_suggestions(
+    member_count: usize,
+    suggestions: &[ShapedSuggestion],
+) -> Result<(), String> {
+    if suggestions.is_empty() {
+        return Err("没有返回任何建议".to_string());
+    }
+    let expected: std::collections::BTreeSet<u32> = (1..=member_count as u32).collect();
+    for (i, (tank_name, chapters)) in suggestions.iter().enumerate() {
+        let n = i + 1;
+        if tank_name.trim().is_empty() {
+            return Err(format!("第 {n} 条建议的 tank_name 为空"));
+        }
+        if chapters.len() != member_count {
+            return Err(format!(
+                "第 {n} 条建议有 {} 个章节，但成员有 {member_count} 个",
+                chapters.len()
+            ));
+        }
+        let originals: std::collections::BTreeSet<u32> = chapters.iter().map(|c| c.0).collect();
+        if originals != expected {
+            let missing: Vec<u32> = expected.difference(&originals).copied().collect();
+            return Err(format!(
+                "第 {n} 条建议的 original_index 必须恰好是 1 到 {member_count} 各一次，缺少 {missing:?}"
+            ));
+        }
+        let sorted: std::collections::BTreeSet<u32> = chapters.iter().map(|c| c.1).collect();
+        if sorted != expected {
+            return Err(format!(
+                "第 {n} 条建议的 sorted_index 必须是 1 到 {member_count} 的一个排列"
+            ));
+        }
+        if let Some((o, _, _)) = chapters.iter().find(|c| c.2.trim().is_empty()) {
+            return Err(format!("第 {n} 条建议中编号 {o} 的章节名为空"));
+        }
+    }
+    Ok(())
+}
+
+/// Both rename suggestions are attributed to the same feature.
+fn rename_spec() -> lanrurugi_llm::CallSpec {
+    lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::TANKOUBON_RENAME)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chapter(o: u32, s: u32, name: &str) -> (u32, u32, String) {
+        (o, s, name.to_string())
+    }
+
+    #[test]
+    fn rename_suggestions_must_map_every_member_once() {
+        let good = vec![(
+            "Series".to_string(),
+            vec![chapter(1, 2, "B"), chapter(2, 1, "A")],
+        )];
+        assert!(check_rename_suggestions(2, &good).is_ok());
+
+        let duplicate = vec![(
+            "Series".to_string(),
+            vec![chapter(1, 1, "A"), chapter(1, 2, "B")],
+        )];
+        assert!(check_rename_suggestions(2, &duplicate)
+            .unwrap_err()
+            .contains("缺少 [2]"));
+
+        let short = vec![("Series".to_string(), vec![chapter(1, 1, "A")])];
+        assert!(check_rename_suggestions(2, &short).is_err());
+
+        let bad_order = vec![(
+            "Series".to_string(),
+            vec![chapter(1, 1, "A"), chapter(2, 1, "B")],
+        )];
+        assert!(check_rename_suggestions(2, &bad_order)
+            .unwrap_err()
+            .contains("sorted_index"));
+
+        assert!(check_rename_suggestions(2, &[]).is_err());
+    }
 
     #[test]
     fn strip_rating_tag_removes_rating_regardless_of_position() {

@@ -10,8 +10,6 @@
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use lanrurugi_llm::LlmClient;
-
 use crate::AppState;
 use lanrurugi_recommend::recommend::{ArchiveMeta, Recommendation};
 
@@ -59,21 +57,29 @@ pub async fn llm_rerank(
         limit
     );
 
-    let picks: Vec<LlmPick> = state
-        .redis
-        .config
-        .json_chat(&system, &user, 0.2, 2000)
-        .await
-        .ok()?;
-    if picks.is_empty() {
-        warn!("LLM rerank returned no picks — falling back to embedding order");
-        return None;
-    }
+    let known: std::collections::HashSet<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
+    let picks: Vec<LlmPick> = crate::repair::json_chat_checked(
+        &state.redis.config,
+        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::RECOMMEND_RERANK),
+        &system,
+        &user,
+        0.2,
+        2000,
+        |picks: &Vec<LlmPick>| check_picks(picks, &known),
+    )
+    .await
+    .map_err(|e| warn!(error = %e, "LLM rerank failed — falling back to embedding order"))
+    .ok()?
+    .value;
 
     let by_id: std::collections::HashMap<&str, &ArchiveMeta> =
         candidates.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut ranked: Vec<Recommendation> = Vec::with_capacity(picks.len());
+    let mut seen = std::collections::HashSet::new();
     for pick in picks {
+        if !seen.insert(pick.id.clone()) {
+            continue;
+        }
         if let Some(meta) = by_id.get(pick.id.as_str()) {
             ranked.push(Recommendation {
                 id: meta.id.clone(),
@@ -105,4 +111,51 @@ pub async fn llm_rerank(
         }
     }
     Some(ranked)
+}
+
+/// The picks must be non-empty, name only shortlisted candidates, and name each at most once.
+fn check_picks(picks: &[LlmPick], known: &std::collections::HashSet<&str>) -> Result<(), String> {
+    if picks.is_empty() {
+        return Err("没有返回任何推荐".to_string());
+    }
+    let unknown: Vec<&str> = picks
+        .iter()
+        .map(|p| p.id.as_str())
+        .filter(|id| !known.contains(id))
+        .take(5)
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "这些 id 不在候选清单里：{}；id 必须原样取自候选清单",
+            unknown.join("、")
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = picks.iter().find(|p| !seen.insert(p.id.as_str())) {
+        return Err(format!("{} 出现了不止一次", dup.id));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pick(id: &str) -> LlmPick {
+        LlmPick {
+            id: id.into(),
+            title: String::new(),
+        }
+    }
+
+    #[test]
+    fn picks_must_be_known_unique_and_non_empty() {
+        let known: std::collections::HashSet<&str> = ["a", "b"].into_iter().collect();
+        assert!(check_picks(&[pick("a"), pick("b")], &known).is_ok());
+        assert!(check_picks(&[], &known).is_err());
+        assert!(check_picks(&[pick("a"), pick("zzz")], &known)
+            .unwrap_err()
+            .contains("zzz"));
+        assert!(check_picks(&[pick("a"), pick("a")], &known).is_err());
+    }
 }

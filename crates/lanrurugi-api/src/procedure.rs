@@ -46,10 +46,15 @@ use crate::AppState;
 pub async fn require_api_key(
     State(state): State<AppState>,
     ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
-    matched_path: MatchedPath,
+    matched_path: Option<MatchedPath>,
     mut request: Request,
     next: Next,
 ) -> Response {
+    // No route matched: the `/api` fallback answers with a JSON 404. There is nothing to
+    // authorize, and the route table is public (the API docs) anyway.
+    let Some(matched_path) = matched_path else {
+        return next.run(request).await;
+    };
     let cfg = match crate::auth::load(&state).await {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -364,6 +369,7 @@ mod tests {
             guest_mode_enabled: false,
             password_hash: String::new(),
             session_secret: Vec::new(),
+            cookie_names: lanrurugi_core::session::CookieNames::for_secret(b"test"),
             access_token_lifetime_secs: 3_600,
             refresh_token_lifetime_secs: 604_800,
             refresh_token_idle_lifetime_secs: 1_209_600,

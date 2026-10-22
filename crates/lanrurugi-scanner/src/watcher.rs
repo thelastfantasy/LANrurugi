@@ -51,17 +51,53 @@ pub enum WatcherError {
     Notify(#[from] notify::Error),
 }
 
+/// Something the watcher itself reports, beyond archive paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatcherSignal {
+    /// The watch is no longer reliable (a backend error, or the watched root itself was removed or
+    /// unmounted) and must be recreated.
+    Failed(String),
+    /// Events were dropped (e.g. the kernel queue overflowed); the watch still works, but files
+    /// that arrived meanwhile need a catch-up scan.
+    Rescan,
+}
+
 /// Starts watching `library_path` for archive create/modify events, forwarding matching paths on
-/// the returned channel. The `RecommendedWatcher` must be kept alive for as long as watching
-/// should continue (dropping it stops the watch) — callers hold onto it in their app state.
+/// the returned channel, and anything that makes the watch unreliable on the second one. The
+/// `RecommendedWatcher` must be kept alive for as long as watching should continue (dropping it
+/// stops the watch).
 pub fn watch(
     library_path: &Path,
-) -> Result<(RecommendedWatcher, mpsc::UnboundedReceiver<PathBuf>), WatcherError> {
+) -> Result<
+    (
+        RecommendedWatcher,
+        mpsc::UnboundedReceiver<PathBuf>,
+        mpsc::UnboundedReceiver<WatcherSignal>,
+    ),
+    WatcherError,
+> {
     let (tx, rx) = mpsc::unbounded_channel();
+    let (signal_tx, signal_rx) = mpsc::unbounded_channel();
+    let root = library_path.to_path_buf();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
         use notify::EventKind;
+        let event = match res {
+            Ok(event) => event,
+            Err(e) => {
+                let _ = signal_tx.send(WatcherSignal::Failed(e.to_string()));
+                return;
+            }
+        };
+        if event.need_rescan() {
+            let _ = signal_tx.send(WatcherSignal::Rescan);
+        }
+        if matches!(event.kind, EventKind::Remove(_)) && event.paths.iter().any(|p| p == &root) {
+            let _ = signal_tx.send(WatcherSignal::Failed(
+                "the content directory was removed or unmounted".to_string(),
+            ));
+            return;
+        }
         if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
             return;
         }
@@ -73,7 +109,7 @@ pub fn watch(
     })?;
 
     watcher.watch(library_path, RecursiveMode::Recursive)?;
-    Ok((watcher, rx))
+    Ok((watcher, rx, signal_rx))
 }
 
 /// Legacy's sample size — a file must reach this many bytes before it's considered stable enough

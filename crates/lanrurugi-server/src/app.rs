@@ -60,6 +60,12 @@ pub fn build_app(
         .merge(lanrurugi_api::misc::public_router())
         .merge(lanrurugi_api::version::public_router())
         .merge(lanrurugi_api::router())
+        // An unknown `/api/*` path is a JSON 404, not the SPA's `index.html` with a 200 — a client
+        // parsing that HTML as JSON reports "data unavailable" for what is really a missing route.
+        // Inside the auth layer, so an anonymous caller is refused before it can probe for routes.
+        .fallback(|| async {
+            lanrurugi_api::common::not_found("api_not_found", "No such API endpoint.")
+        })
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_api_key,

@@ -82,7 +82,9 @@ pub fn assemble(merged: &Merged, policy: &Policy, notes: &AccessNotes, version: 
                 "name": "lanrurugi_session",
                 "description": "The session cookie set by `POST /api/login`. Only this site's own \
                                 frontend uses it; there is no way to obtain one from an API token, \
-                                which is why the endpoints below accept nothing else."
+                                which is why the endpoints below accept nothing else. The actual \
+                                name carries a per-instance tag (`lanrurugi_session_<tag>`), so \
+                                two instances on one host name keep separate logins."
             }
         }),
     );

@@ -33,6 +33,7 @@ policy file. No token-scoped admin/guest grant.
       "feature": "plugin_generation",
       "status": "reported",
       "requests": 12,
+      "local_cache_hits": 0,
       "elapsed_ms": 184300,
       "tokens": {
         "prompt": 41200,
@@ -44,6 +45,7 @@ policy file. No token-scoped admin/guest grant.
         "unreported_calls": 0
       },
       "cancelled": 2,
+      "prefix_breaks": 0,
       "failures": {
         "auth": 0,
         "balance": 0,
@@ -66,8 +68,10 @@ policy file. No token-scoped admin/guest grant.
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `reported` when any call landed in the window; `no_data` when none did. A `no_data` row carries no figures — deliberately, so an unused feature is not displayed as costing nothing |
-| `requests` | total calls, including failed ones |
+| `status` | `reported` when any call landed in the window or a local cache answered; `no_data` when neither did. A `no_data` row carries no figures — deliberately, so an unused feature is not displayed as costing nothing |
+| `requests` | total calls that reached the provider, including failed ones (may be `0` when every answer came from a local cache) |
+| `local_cache_hits` | answers the feature served from its own result cache instead of calling the provider — today the grouping-review cache (counted when a card asks for its review) and the provider price table |
+| `prefix_breaks` | conversation rounds that did not extend the previous round's request (`lanrurugi_llm::prefix`), so the provider's prompt cache missed from the changed message on; expected `0` |
 | `elapsed_ms` | sum of per-call wall clock across all attempts |
 | `tokens.cache_hit` / `cache_miss` / `reasoning` | Present only when at least one call reported them; omitted rather than `0` otherwise |
 | `cancelled` | calls stopped by cancellation (FR-029); not a failure, not in `failures` |

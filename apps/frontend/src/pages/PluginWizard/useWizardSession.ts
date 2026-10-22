@@ -126,6 +126,9 @@ export interface DraftRevision {
   trialRuns: TrialRunResult[]
   /** AI explanation; absent (not empty) for non-`ai-*` origins. */
   explanation?: string
+  /** The generation that produced this revision, so its trial runs land in that generation's
+   * server-side record; absent for non-`ai-*` origins. */
+  generationId?: string
 }
 
 /** One past round of this type's generation conversation. */

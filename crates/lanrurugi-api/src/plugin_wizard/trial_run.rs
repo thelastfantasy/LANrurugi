@@ -32,7 +32,6 @@ use serde_json::json;
 use crate::download_manager::settings::{merge, EffectivePluginOptions};
 use crate::plugins::{with_login_cookies, CUSTOM_PLUGIN_DIR};
 use crate::AppState;
-use lanrurugi_llm::LlmClient;
 
 /// Subdirectory of `custom/` reserved for trial-run staging — distinct from `upload_plugin`'s own
 /// direct use of `custom/` so a crashed/killed request's leftover file (if T025's cleanup somehow
@@ -64,6 +63,41 @@ pub(super) struct TrialRunRequest {
     /// `Credentials.fields`/`customargs_for` already use.
     #[serde(default)]
     plugin_parameter_values: std::collections::HashMap<String, String>,
+    /// The wizard session's target domain; with `test_links` it bounds which hosts the draft may
+    /// declare without the user's approval (FR-028).
+    #[serde(default)]
+    target_domain: Option<String>,
+    /// Declared hosts outside the user's sites that the user explicitly confirmed for this one
+    /// run. Never stored, never taken from the draft.
+    #[serde(default)]
+    approved_hosts: Vec<String>,
+    /// The generation that produced this draft; its record gets this run appended (FR-022).
+    #[serde(default)]
+    generation_id: Option<lanrurugi_core::ids::GenerationId>,
+}
+
+/// The draft's declared network hosts that lie outside the user-supplied sites and were not
+/// approved for this run. A wildcard entry (`*.cdn.example`) is judged by its base host; anything
+/// unparseable (`*`) is always outside.
+fn unapproved_hosts(declared: &[String], req: &TrialRunRequest) -> Vec<String> {
+    let policy = super::fetch::FetchPolicy::new(
+        req.target_domain.as_deref(),
+        req.test_links.iter().map(String::as_str),
+        Vec::<String>::new(),
+    );
+    declared
+        .iter()
+        .filter(|entry| {
+            let base = entry.trim().trim_start_matches("*.");
+            let inside = super::fetch::host_of(base).is_some_and(|h| policy.allows_fetch(&h));
+            !inside
+                && !req
+                    .approved_hosts
+                    .iter()
+                    .any(|a| a.trim().eq_ignore_ascii_case(entry.trim()))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The wizard no longer assumes every login is an account+secret pair (`/plugin-wizard/
@@ -139,7 +173,51 @@ pub(super) async fn trial_run(
     // T025: unconditional cleanup — runs regardless of which branch `run_trial` returned from.
     let _ = tokio::fs::remove_file(&staged_path).await;
 
-    result
+    match &req.generation_id {
+        Some(id) => record_trial(&state, id, &req, result).await,
+        None => result,
+    }
+}
+
+/// Appends this run's outcome to the generation's record and returns the response unchanged.
+async fn record_trial(
+    state: &AppState,
+    id: &lanrurugi_core::ids::GenerationId,
+    req: &TrialRunRequest,
+    response: Response,
+) -> Response {
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 8 * 1024 * 1024).await else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "trial run response too large",
+        )
+            .into_response();
+    };
+    let result: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    let mut secrets = req.plugin_parameter_values.clone();
+    for creds in [&req.credentials, &req.login_credentials]
+        .into_iter()
+        .flatten()
+    {
+        secrets.extend(creds.fields.clone());
+    }
+    super::record::append(
+        state,
+        id,
+        json!({
+            "kind": "trial_run",
+            "trial": {
+                "plugin_type": req.plugin_type,
+                "http_status": parts.status.as_u16(),
+                "result": result,
+            },
+        }),
+        &secrets,
+    )
+    .await;
+    Response::from_parts(parts, axum::body::Body::from(bytes))
 }
 
 async fn run_trial(state: &AppState, namespace: &str, req: &TrialRunRequest) -> Response {
@@ -156,6 +234,21 @@ async fn run_trial(state: &AppState, namespace: &str, req: &TrialRunRequest) -> 
             )
         }
     };
+
+    // FR-028: model-written code runs with the user's credentials, so hosts it declares outside
+    // the user's own sites need the user's approval before anything executes.
+    let unapproved = unapproved_hosts(&info.declared_permissions.net, req);
+    if !unapproved.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "trial_hosts_need_approval",
+                "hosts": unapproved,
+                "detail": "这个草稿声明要访问你没有提供过的站点。确认这些站点可信后才能试运行。",
+            })),
+        )
+            .into_response();
+    }
 
     match req.plugin_type.as_str() {
         "login" => run_login_trial(state, namespace, &info, req).await,
@@ -554,13 +647,18 @@ async fn classify_login_relevance(
         reasoning: String,
     }
 
-    match state
-        .redis
-        .config
-        .json_chat::<Classification>(&system, &user, 0.3, 500)
-        .await
+    match crate::repair::json_chat_checked(
+        &state.redis.config,
+        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::PLUGIN_TRIAL_ATTRIBUTION),
+        &system,
+        &user,
+        0.3,
+        500,
+        crate::repair::shape_only::<Classification>,
+    )
+    .await
     {
-        Ok(c) => json!({ "relevant": c.relevant, "reasoning": c.reasoning }),
+        Ok(c) => json!({ "relevant": c.value.relevant, "reasoning": c.value.reasoning }),
         Err(e) => json!({
             "relevant": false,
             "reasoning": format!("Could not classify (LLM unavailable): {e}"),
@@ -583,6 +681,47 @@ fn error_typed(status: StatusCode, kind: &str, detail: impl Into<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trial_request(approved: &[&str]) -> TrialRunRequest {
+        serde_json::from_value(json!({
+            "plugin_type": "metadata",
+            "code": "",
+            "target_domain": "site-a.example",
+            "test_links": ["https://site-a.example/g/1", "https://site-c.example/m/1"],
+            "approved_hosts": approved,
+        }))
+        .unwrap()
+    }
+
+    fn declared(hosts: &[&str]) -> Vec<String> {
+        hosts.iter().map(|h| h.to_string()).collect()
+    }
+
+    /// Quickstart S1 steps 11–12: a draft declaring an off-site host needs approval, and runs
+    /// once that exact host is approved.
+    #[test]
+    fn off_site_declared_hosts_need_the_users_approval() {
+        let hosts = declared(&["api.site-a.example", "*.site-c.example", "evil.example"]);
+        assert_eq!(
+            unapproved_hosts(&hosts, &trial_request(&[])),
+            ["evil.example"]
+        );
+        assert!(unapproved_hosts(&hosts, &trial_request(&["evil.example"])).is_empty());
+    }
+
+    #[test]
+    fn a_bare_wildcard_is_always_outside() {
+        assert_eq!(
+            unapproved_hosts(&declared(&["*"]), &trial_request(&[])),
+            ["*"]
+        );
+    }
+
+    #[test]
+    fn a_draft_declaring_only_the_users_sites_runs_without_approval() {
+        let hosts = declared(&["site-a.example", "img.site-a.example:443", "site-c.example"]);
+        assert!(unapproved_hosts(&hosts, &trial_request(&[])).is_empty());
+    }
 
     /// Regression test for the exact bug reported live (2026-08-25): a wizard trial run for a
     /// download/metadata draft with `login_from` pointing at a header-authenticated login plugin

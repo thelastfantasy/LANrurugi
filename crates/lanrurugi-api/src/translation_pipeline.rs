@@ -146,6 +146,59 @@ async fn translate_with_configured_provider(
     glossary: &mut lanrurugi_translate::TerminologyGlossary,
     pages: Vec<PageWork>,
 ) -> Result<lanrurugi_translate::pipeline::BatchOutcome, TranslationError> {
+    let started = std::time::Instant::now();
+    let result = translate_via_provider(state, ctx, glossary, pages).await;
+    // A batch whose blocks were all cached made no provider call and carries no usage.
+    let report = match &result {
+        Ok(outcome) => outcome
+            .usage
+            .as_ref()
+            .map(|u| translation_report(None, started.elapsed(), u)),
+        Err(e) => Some(lanrurugi_llm::usage::ModelCallReport {
+            feature: lanrurugi_llm::FeatureId::TRANSLATION,
+            outcome: Some(e.llm_class()),
+            attempts: 1,
+            elapsed: started.elapsed(),
+            usage: lanrurugi_llm::TokenUsage::default(),
+        }),
+    };
+    if let Some(report) = report {
+        lanrurugi_llm::usage::record(&state.redis.config, &report).await;
+    }
+    result
+}
+
+/// One provider call's usage, as the shared ledger records it.
+fn translation_report(
+    outcome: Option<lanrurugi_llm::LlmErrorClass>,
+    elapsed: std::time::Duration,
+    u: &lanrurugi_translate::pipeline::UsageInfo,
+) -> lanrurugi_llm::usage::ModelCallReport {
+    lanrurugi_llm::usage::ModelCallReport {
+        feature: lanrurugi_llm::FeatureId::TRANSLATION,
+        outcome,
+        attempts: 1,
+        elapsed,
+        usage: lanrurugi_llm::TokenUsage {
+            prompt: u.prompt_tokens,
+            completion: u.completion_tokens,
+            total: u.total_tokens,
+            cache_hit: u.cached_prompt_tokens,
+            cache_miss: u
+                .prompt_tokens
+                .zip(u.cached_prompt_tokens)
+                .map(|(p, c)| p.saturating_sub(c)),
+            reasoning: None,
+        },
+    }
+}
+
+async fn translate_via_provider(
+    state: &AppState,
+    ctx: &TranslationContextHandles,
+    glossary: &mut lanrurugi_translate::TerminologyGlossary,
+    pages: Vec<PageWork>,
+) -> Result<lanrurugi_translate::pipeline::BatchOutcome, TranslationError> {
     let credentials = CredentialStore::new(state.redis.config.clone());
     // `reqwest::Client::new()` has no request timeout at all by default — a real incident (2026-09-
     // 14) found a translation batch silently hang forever with no log output anywhere (not even the

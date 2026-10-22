@@ -1,5 +1,7 @@
 export * from "./BubbleActionMenu"
 
+export * from "./Drawer"
+
 export * from "./ErrorBoundary"
 
 export * from "./Menu"

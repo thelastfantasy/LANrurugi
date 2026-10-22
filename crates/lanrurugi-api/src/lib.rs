@@ -24,6 +24,7 @@ pub mod gpu_worker_client;
 pub mod health;
 pub mod jobs;
 pub mod llm_prompts;
+pub mod llm_usage;
 pub mod login;
 pub mod logs;
 pub mod misc;
@@ -37,6 +38,7 @@ pub mod procedure;
 pub mod recommend;
 pub mod recommend_llm;
 pub mod recommend_precompute;
+pub mod repair;
 pub mod scripts;
 pub mod search;
 pub mod search_history;
@@ -88,6 +90,7 @@ pub fn router() -> Router<AppState> {
         .merge(opds::router())
         .merge(plugins::router())
         .merge(plugin_wizard::router())
+        .merge(llm_usage::router())
         .merge(preferences::router())
         .merge(search_history::router())
         .merge(database::router())

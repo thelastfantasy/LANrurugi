@@ -122,6 +122,7 @@ p, token_admin, /api/plugin-wizard/lookup, POST, deny
 p, token_admin, /api/plugin-wizard/analyze-login, POST, deny
 p, token_admin, /api/plugin-wizard/generate/start, POST, deny
 p, token_admin, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_admin, /api/plugin-wizard/generate/:id/record, GET, deny
 p, token_admin, /api/plugin-wizard/trial-run, POST, deny
 p, token_admin, /api/plugin-wizard/save, POST, deny
 
@@ -147,6 +148,9 @@ p, token_guest, /api/plugin-wizard/lookup, POST, deny
 p, token_guest, /api/plugin-wizard/analyze-login, POST, deny
 p, token_guest, /api/plugin-wizard/generate/start, POST, deny
 p, token_guest, /api/plugin-wizard/generate/stream/:id, GET, deny
+p, token_guest, /api/plugin-wizard/generate/:id/record, GET, deny
+p, token_guest, /api/llm/usage, GET, deny
+p, token_guest, /api/tankoubons/ai-group-suggestions/labels, GET, deny
 p, token_guest, /api/plugin-wizard/trial-run, POST, deny
 p, token_guest, /api/plugin-wizard/save, POST, deny
 

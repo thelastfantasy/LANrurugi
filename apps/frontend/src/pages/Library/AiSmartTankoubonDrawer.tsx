@@ -1,29 +1,190 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
+import { type CSSProperties, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { sendJson } from "@/api/client"
 import {
   type AiGroupSuggestion,
+  type GroupReview,
+  type PairEvidence,
   useAiGroupSuggestions,
   useAiRenameTankoubon,
   useArchives,
   useCreateTankoubon,
+  useGroupSuggestionReview,
   useIgnoredGroupSuggestions,
   useIgnoreGroupSuggestion,
   useLlmKeyStatus,
+  useRecordGroupLabels,
   useTankoubons,
   useUnignoreGroupSuggestion,
 } from "@/api/hooks"
-import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { Drawer, DrawerFooter, Tooltip } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
+import { useHorizontalSwipe } from "@/hooks"
 import { routes } from "@/lib/routes"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
 
-/** One AI-suggested group's card — members start all checked; "Create Tankoubon" is disabled
- * below 2 checked (nothing to group). */
+/** Members the reviewer rejected, with its reason. */
+function rejectedReasons(review: GroupReview | undefined): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const v of review?.verdicts ?? []) {
+    if (!v.keep) out.set(v.archive_id, v.reason)
+  }
+  return out
+}
+
+/** One line saying what the AI review did with this card. */
+function ReviewStatusLine({
+  review,
+  pending,
+  total,
+  rejected,
+  minimum,
+}: {
+  review: GroupReview | undefined
+  pending: boolean
+  total: number
+  rejected: number
+  minimum: number
+}) {
+  const { t } = useTranslation()
+  let icon = "fa-robot"
+  let text: string
+  if (pending) {
+    icon = "fa-spinner fa-spin"
+    text = t("library.groupReviewPending")
+  } else if (!review) {
+    return null
+  } else if (review.status === "settled") {
+    text = t("library.groupReviewSettled")
+  } else if (review.status === "not_configured") {
+    text = t("library.groupReviewNotConfigured")
+  } else if (review.status === "fell_back") {
+    text = t("library.groupReviewFellBack", { reason: review.reason ?? "" })
+  } else if (total - rejected < minimum) {
+    text = t("library.groupReviewNoSeries")
+  } else if (rejected === 0) {
+    text = t("library.groupReviewAllKept")
+  } else {
+    text = t("library.groupReviewKept", { kept: total - rejected, total })
+  }
+  return (
+    <div style={{ padding: "6px 16px", fontSize: 12, opacity: 0.75, display: "flex", gap: 6, alignItems: "baseline" }}>
+      <i className={`fa ${icon}`} aria-hidden="true" />
+      <span>{text}</span>
+    </div>
+  )
+}
+
+const MAX_EVIDENCE_ROWS = 30
+
+function pct(v: number) {
+  return `${Math.round(v * 100)}%`
+}
+
+/** "Why are these grouped": per-pair scores and creator match, strongest pairs first. */
+function EvidencePanel({ evidence, titleById }: { evidence: PairEvidence[]; titleById: Map<string, string> }) {
+  const { t } = useTranslation()
+  const rows = [...evidence].sort((x, y) => y.score - x.score)
+  const shown = rows.slice(0, MAX_EVIDENCE_ROWS)
+  const creatorLabel = (e: PairEvidence) =>
+    e.shared_cosplayer
+      ? t("library.groupEvidenceCosplayer")
+      : e.creator_match === "same"
+        ? t("library.groupEvidenceCreatorSame")
+        : e.creator_match === "different"
+          ? t("library.groupEvidenceCreatorDifferent")
+          : t("library.groupEvidenceCreatorUnknown")
+  const cell: CSSProperties = { padding: "3px 6px", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }
+  return (
+    <div style={{ padding: "4px 16px 8px", maxHeight: 220, overflowY: "auto" }}>
+      <table className="itg" style={{ width: "100%", tableLayout: "fixed", fontSize: 11 }}>
+        <colgroup>
+          <col style={{ width: "40%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "20%" }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th style={{ ...cell, textAlign: "left" }}>{t("library.groupEvidencePair")}</th>
+            <th style={{ ...cell, textAlign: "right" }}>{t("library.groupEvidenceScore")}</th>
+            <th style={{ ...cell, textAlign: "right" }}>{t("library.groupEvidenceTitle")}</th>
+            <th style={{ ...cell, textAlign: "right" }}>{t("library.groupEvidenceTag")}</th>
+            <th style={{ ...cell, textAlign: "right" }}>{t("library.groupEvidenceTokens")}</th>
+            <th style={{ ...cell, textAlign: "left" }}>{t("library.groupEvidenceCreator")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((e, i) => (
+            <tr key={`${e.a}:${e.b}`} className={i % 2 ? "gtr1" : "gtr0"}>
+              <td style={{ ...cell, overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{titleById.get(e.a) ?? e.a}</div>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{titleById.get(e.b) ?? e.b}</div>
+                {e.shared_top_tags.length > 0 && (
+                  <div style={{ opacity: 0.6, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {t("library.groupEvidenceSharedTags")}: {e.shared_top_tags.join(", ")}
+                  </div>
+                )}
+              </td>
+              <td style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{pct(e.score)}</td>
+              <td style={{ ...cell, textAlign: "right" }}>{pct(e.title)}</td>
+              <td style={{ ...cell, textAlign: "right" }}>{pct(e.tag)}</td>
+              <td style={{ ...cell, textAlign: "right" }}>{pct(e.tokens)}</td>
+              <td style={{ ...cell, opacity: e.creator_match === "unknown" ? 0.55 : undefined }}>{creatorLabel(e)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > shown.length && (
+        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+          {t("library.groupEvidenceMore", { count: rows.length - shown.length })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A member's title. Hover shows its thumbnail, plus the full title when the row cut it off. */
+function MemberTitle({ id, title, muted }: { id: string; title: string; muted: boolean }) {
+  const [truncated, setTruncated] = useState(false)
+  return (
+    <Tooltip
+      anchor="cursor"
+      wrapperStyle={{ display: "inline" }}
+      maxWidth={480}
+      zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+      label={
+        <div>
+          {truncated && <div style={{ marginBottom: 6, wordBreak: "break-word" }}>{title}</div>}
+          <img
+            src={`/api/archives/${id}/thumbnail?no_fallback=true`}
+            alt=""
+            style={{ maxHeight: 420, maxWidth: "100%", display: "block" }}
+          />
+        </div>
+      }
+    >
+      <span
+        style={muted ? { opacity: 0.6 } : undefined}
+        onPointerEnter={(e) => {
+          const box = e.currentTarget.closest("[data-truncate-box]")
+          setTruncated(!!box && box.scrollWidth > box.clientWidth)
+        }}
+      >
+        {title}
+      </span>
+    </Tooltip>
+  )
+}
+
+/** One AI-suggested group's card — members start checked, except those the AI review rejected
+ * (unless the user already toggled them); "Create Tankoubon" is disabled below 2 checked. */
 function SuggestionCard({
   suggestion,
   page,
@@ -51,13 +212,32 @@ function SuggestionCard({
   const aiRenameTankoubon = useAiRenameTankoubon()
   const llmKeyStatus = useLlmKeyStatus()
   const queryClient = useQueryClient()
-  const [checked, setChecked] = useState<Set<string>>(() => new Set(suggestion.archive_ids))
+  const recordGroupLabels = useRecordGroupLabels()
+  const review = useGroupSuggestionReview(suggestion, true)
+  const rejected = rejectedReasons(review.data)
+  // The user's own toggles; every other member follows the review (rejected → unticked), so a
+  // review arriving after the user acted never overrides them.
+  const [overrides, setOverrides] = useState<Map<string, boolean>>(() => new Map())
+  const checked = new Set(suggestion.archive_ids.filter((id) => overrides.get(id) ?? !rejected.has(id)))
   const [creating, setCreating] = useState(false)
   const [autoRename, setAutoRename] = useState(true)
+  const [showEvidence, setShowEvidence] = useState(false)
 
   const selectedIds = suggestion.archive_ids.filter((id) => checked.has(id))
   const isAddToExisting = !!suggestion.existing_tankoubon_id
-  const canConfirm = selectedIds.length >= (isAddToExisting ? 1 : 2) && !creating
+  const minimum = isAddToExisting ? 1 : 2
+  const canConfirm = selectedIds.length >= minimum && !creating
+
+  /** Best effort: labels never block or fail the create. */
+  function recordLabels() {
+    recordGroupLabels.mutate({
+      archive_ids: suggestion.archive_ids,
+      existing_tankoubon_id: suggestion.existing_tankoubon_id,
+      kept: selectedIds,
+      unticked: suggestion.archive_ids.filter((id) => !checked.has(id)),
+      reviewer_rejected_kept: selectedIds.filter((id) => rejected.has(id)),
+    })
+  }
 
   async function handleConfirm() {
     setCreating(true)
@@ -72,12 +252,14 @@ function SuggestionCard({
         void queryClient.invalidateQueries({ queryKey: ["archives"] })
         void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "search" })
         toast({ heading: t("library.addedToTankoubon") ?? undefined, icon: "success" })
+        recordLabels()
       } else {
         const name = selectedIds
           .map((id) => titleById.get(id))
           .find((title) => !!title) ?? t("library.newTankoubon") ?? "New Tankoubon"
         const { tankoubon_id } = await createTankoubon.mutateAsync(name)
         await sendJson("PUT", `/tankoubons/${tankoubon_id}`, { archives: selectedIds })
+        recordLabels()
 
         let finalName = name
         if (autoRename && llmKeyStatus.data?.configured) {
@@ -183,65 +365,67 @@ function SuggestionCard({
               : t("library.suggestedGroup")}{" "}
             {page + 1} · {suggestion.archive_ids.length} {t("library.archives")}
           </span>
-          <span style={{ fontSize: 10, opacity: 0.4 }}>
-            <i className="fa fa-robot" aria-hidden="true" />
-          </span>
+          <button
+            type="button"
+            className="stdbtn ai-pill-btn"
+            style={{ fontSize: 11 }}
+            aria-expanded={showEvidence}
+            onClick={() => setShowEvidence((v) => !v)}
+          >
+            <i className={`fa ${showEvidence ? "fa-chevron-up" : "fa-question-circle"}`} aria-hidden="true" />{" "}
+            {t("library.groupEvidenceToggle")}
+          </button>
         </div>
 
-        <ul style={{ listStyle: "none", padding: "4px 16px", margin: 0, maxHeight: 260, overflowY: "auto" }}>
+        <ReviewStatusLine
+          review={review.data}
+          pending={review.isFetching}
+          total={suggestion.archive_ids.length}
+          rejected={rejected.size}
+          minimum={minimum}
+        />
+
+        {showEvidence && <EvidencePanel evidence={suggestion.evidence} titleById={titleById} />}
+
+        <ul style={{ listStyle: "none", padding: "4px 16px", margin: 0 }}>
           {suggestion.archive_ids.map((id) => (
             <ArchiveChecklistItem
               key={id}
               className="ai-group-checklist-item"
-              title={
-                <Tooltip
-                  anchor="cursor"
-                  wrapperStyle={{ display: "inline" }}
-                  maxWidth={480}
-                  zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
-                  label={
-                    <img
-                      src={`/api/archives/${id}/thumbnail?no_fallback=true`}
-                      alt=""
-                      style={{ maxHeight: 420, maxWidth: "100%", display: "block" }}
-                    />
-                  }
-                >
-                  <span>{titleById.get(id) ?? id}</span>
-                </Tooltip>
-              }
+              title={<MemberTitle id={id} title={titleById.get(id) ?? id} muted={rejected.has(id)} />}
               checked={checked.has(id)}
               onChange={(isChecked) => {
-                setChecked((prev) => {
-                  const next = new Set(prev)
-                  if (isChecked) next.add(id)
-                  else next.delete(id)
-                  return next
-                })
+                setOverrides((prev) => new Map(prev).set(id, isChecked))
               }}
               trailing={
-                <IconButton
-                  variant="ghost-btn"
-                  icon={<i className="fa fa-book-open" />}
-                  size={22}
-                  title={t("common.read") ?? undefined}
-                  onClick={() => window.open(routes.reader(id), "_blank", "noreferrer")}
-                />
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  {rejected.has(id) && (
+                    <Tooltip
+                      label={`${t("library.groupReviewRejected")}: ${rejected.get(id) ?? ""}`}
+                      maxWidth={360}
+                      zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+                    >
+                      <span style={{ fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" }}>
+                        <i className="fa fa-robot" aria-hidden="true" /> {t("library.groupReviewRejectedShort")}
+                      </span>
+                    </Tooltip>
+                  )}
+                  <IconButton
+                    variant="ghost-btn"
+                    icon={<i className="fa fa-book-open" />}
+                    size={22}
+                    title={t("common.read") ?? undefined}
+                    onClick={() => window.open(routes.reader(id), "_blank", "noreferrer")}
+                  />
+                </span>
               }
             />
           ))}
         </ul>
+      </div>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 16px",
-            borderTop: "1px solid rgba(128,128,128,0.15)",
-            background: "rgba(128,128,128,0.05)",
-          }}
-        >
+      <DrawerFooter>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
             {Array.from({ length: total }, (_, i) => (
               <span
@@ -305,14 +489,25 @@ function SuggestionCard({
             )}
           </div>
         </div>
-      </div>
+      </DrawerFooter>
     </div>
   )
 }
 
-/** AI-smart-create-Tankoubon modal — skeleton while the request runs, then one suggested group
- * at a time in a paginated card. Creating a group removes it and clamps the page index. */
-export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
+/** AI-smart-create-Tankoubon, as a right-side drawer: top-aligned, so the pager stays put however
+ * tall the current card is. Its body mounts on each open, which is what requests fresh suggestions. */
+export function AiSmartTankoubonDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <Drawer open={open} onClose={onClose} title={t("library.aiSmartCreateTankoubon")} width={600} swipeToClose={false}>
+      <SuggestionsBody onClose={onClose} />
+    </Drawer>
+  )
+}
+
+/** Skeleton while the request runs, then one suggested group at a time in a paginated card.
+ * Creating a group removes it and clamps the page index. */
+function SuggestionsBody({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const archives = useArchives()
   const aiGroupSuggestions = useAiGroupSuggestions()
@@ -368,10 +563,19 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
   }, [suggestions, showIgnored])
 
   const current = suggestions?.[page]
+  // On touch, a sideways swipe anywhere in the body pages through suggestions (the drawer's own
+  // swipe-to-close is off); the body fills the drawer so short cards leave no dead area.
+  const count = suggestions?.length ?? 0
+  const swipe = useHorizontalSwipe({
+    onSwipeLeft: () => !showIgnored && setPage((p) => Math.min(count - 1, p + 1)),
+    onSwipeRight: () => !showIgnored && setPage((p) => Math.max(0, p - 1)),
+  })
+  // Prefetch the next two reviews so paging forward rarely waits; the card reviews itself.
+  useGroupSuggestionReview(suggestions?.[page + 1], !showIgnored)
+  useGroupSuggestionReview(suggestions?.[page + 2], !showIgnored)
 
   return (
-    <Modal onClose={onClose}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div {...swipe} style={{ ...swipe.style, display: "flex", flexDirection: "column", gap: 12, minHeight: "100%" }}>
         {aiGroupSuggestions.isPending || !suggestions ? (
           <AiSkeleton />
         ) : showIgnored ? (
@@ -387,7 +591,7 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
           </div>
         ) : current ? (
           <SuggestionCard
-            key={current.archive_ids.join(",")}
+            key={current.suggestion_id}
             suggestion={current}
             page={page}
             total={suggestions.length}
@@ -414,8 +618,7 @@ export function AiSmartTankoubonModal({ onClose }: { onClose: () => void }) {
             {t("library.showIgnoredCombinations")} ({ignoredSuggestions.data.ignored.length})
           </label>
         )}
-      </div>
-    </Modal>
+    </div>
   )
 }
 

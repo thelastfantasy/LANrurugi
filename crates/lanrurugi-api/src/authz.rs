@@ -432,6 +432,53 @@ mod tests {
         assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
     }
 
+    /// 014: the generation record is session-only like its sibling wizard routes, and AI usage is
+    /// hidden from read-only tokens and guest visitors.
+    #[tokio::test]
+    async fn generation_record_and_llm_usage_routes_are_gated() {
+        let e = route_enforcer().await;
+        let record = "/api/plugin-wizard/generate/abc/record";
+        assert!(check_route(&e, Some(&session_auth()), record, "GET"));
+        assert!(!check_route(
+            &e,
+            Some(&token_auth(TokenRole::Admin)),
+            record,
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&token_auth(TokenRole::Guest)),
+            record,
+            "GET"
+        ));
+        assert!(!check_route(&e, Some(&guest_visitor_auth()), record, "GET"));
+
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/llm/usage",
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&token_auth(TokenRole::Guest)),
+            "/api/llm/usage",
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&guest_visitor_auth()),
+            "/api/llm/usage",
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&anonymous_auth()),
+            "/api/llm/usage",
+            "GET"
+        ));
+    }
+
     /// 007-guest-restricted-access: `guest_visitor` gets an explicit whitelist (route_policy.csv's
     /// own docs on why this replaced the earlier `token_guest`-copied blanket-GET-allow shape),
     /// not a denylist — this test exercises both directions: routes actually on the whitelist

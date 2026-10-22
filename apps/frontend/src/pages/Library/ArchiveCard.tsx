@@ -56,6 +56,11 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   )
 }
 
+/** Thumbnail URLs that have loaded at least once this session. A remounted card (the carousel
+ * collapsed and reopened, a page revisited) starts from these instead of flashing the "wait warmly"
+ * placeholder over an image the browser already has. */
+const loadedThumbs = new Set<string>()
+
 /** Mirrors legacy's thumbnail card markup so the copied theme CSS styles it identically.
  * Right-click opens `ArchiveContextMenu`; multi-select mode overlays a checkbox instead. */
 export function ArchiveCard({
@@ -82,7 +87,10 @@ export function ArchiveCard({
 }) {
   const id = archive.arcid
   const isTank = isTankoubonId(id)
-  const [thumbLoaded, setThumbLoaded] = useState(false)
+  const thumbSrc = isTank
+    ? `/api/tankoubons/${id}/thumbnail?no_fallback=true`
+    : `/api/archives/${id}/thumbnail?no_fallback=true`
+  const [thumbLoaded, setThumbLoaded] = useState(() => loadedThumbs.has(thumbSrc))
   const [thumbFailed, setThumbFailed] = useState(false)
 
   function handleOpen(e: MouseEvent) {
@@ -94,9 +102,6 @@ export function ArchiveCard({
     }
   }
 
-  const thumbSrc = isTank
-    ? `/api/tankoubons/${id}/thumbnail?no_fallback=true`
-    : `/api/archives/${id}/thumbnail?no_fallback=true`
 
   return (
     <div
@@ -135,7 +140,10 @@ export function ArchiveCard({
             src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
             style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
-            onLoad={() => setThumbLoaded(true)}
+            onLoad={() => {
+              loadedThumbs.add(thumbSrc)
+              setThumbLoaded(true)
+            }}
             onError={() => setThumbFailed(true)}
           />
         </a>

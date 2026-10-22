@@ -1426,3 +1426,16 @@ textarea {
     border: 1px solid #34495E;
     border-radius: 50px;
 }
+
+/* Phone nav drawer (`components/Layout/MobileNav.tsx`): the current page's row. Additive — legacy
+   has no collapsed nav. Same accent as .tankoubon-member-row, per the project's custom-color rule. */
+.nav-drawer-link.active {
+    background-color: rgba(237, 37, 83, 0.15);
+}
+
+/* Settings → background workers: the file watcher's "recovering" status, between legacy's green
+   OK and red Kaput (`pages/Settings/WorkersSection.tsx`). Additive — legacy's watcher had no such
+   state. An amber readable on this theme's background, per the project's custom-color rule. */
+.watcher-recovering {
+    color: #B97300;
+}

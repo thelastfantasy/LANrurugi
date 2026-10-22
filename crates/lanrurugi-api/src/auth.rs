@@ -57,6 +57,8 @@ pub struct LiveAuthConfig {
     pub guest_mode_enabled: bool,
     pub password_hash: String,
     pub session_secret: Vec<u8>,
+    /// This instance's auth cookie names, derived from `session_secret`.
+    pub cookie_names: lanrurugi_core::session::CookieNames,
     /// Overridable via the `access_token_lifetime_secs` setting (`settings.rs::NUMBER_FIELDS`) —
     /// falls back to `lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS` when unset.
     pub access_token_lifetime_secs: u64,
@@ -129,6 +131,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
     Ok(LiveAuthConfig {
         guest_mode_enabled,
         password_hash,
+        cookie_names: lanrurugi_core::session::CookieNames::for_secret(&session_secret),
         session_secret,
         access_token_lifetime_secs,
         refresh_token_lifetime_secs,
@@ -147,7 +150,11 @@ pub fn session_family_id(cfg: &LiveAuthConfig, headers: &axum::http::HeaderMap) 
     let cookie_header = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())?;
-    let token = find_cookie(cookie_header, lanrurugi_core::session::COOKIE_NAME)?;
+    let token = find_auth_cookie(
+        cookie_header,
+        &cfg.cookie_names.session,
+        lanrurugi_core::session::COOKIE_NAME,
+    )?;
     lanrurugi_core::session::family_id_ignoring_expiry(&cfg.session_secret, &token)
 }
 
@@ -161,7 +168,11 @@ pub fn session_is_valid(cfg: &LiveAuthConfig, headers: &axum::http::HeaderMap) -
     else {
         return false;
     };
-    let Some(token) = find_cookie(cookie_header, lanrurugi_core::session::COOKIE_NAME) else {
+    let Some(token) = find_auth_cookie(
+        cookie_header,
+        &cfg.cookie_names.session,
+        lanrurugi_core::session::COOKIE_NAME,
+    ) else {
         return false;
     };
     let now = std::time::SystemTime::now()
@@ -208,6 +219,12 @@ pub async fn session_is_live(
             true
         }
     }
+}
+
+/// An auth cookie under this instance's name, or under its bare pre-tag name as a fallback
+/// (`lanrurugi_core::session::CookieNames`).
+pub(crate) fn find_auth_cookie(cookie_header: &str, current: &str, legacy: &str) -> Option<String> {
+    find_cookie(cookie_header, current).or_else(|| find_cookie(cookie_header, legacy))
 }
 
 /// Minimal `Cookie` header lookup — avoids pulling in a full cookie-jar crate for a single-name

@@ -26,11 +26,13 @@ export function ArchiveChecklistItem({
       style={trailing ? { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } : undefined}
     >
       <span style={trailing ? { minWidth: 0, flex: 1 } : undefined}>
-        <CheckboxField checked={checked} onCheckedChange={onChange}>
-          {/* `CheckboxField`'s own label wrapper is `inline-flex`, which doesn't truncate text on
-              its own — this span carries `.checklist li`'s truncation behavior itself when
-              `trailing` makes the `<li>` a flex row (see the `<li>`'s own comment above). */}
-          <span style={trailing ? { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
+        <CheckboxField checked={checked} onCheckedChange={onChange} fill={!!trailing}>
+          {/* With `trailing`, `fill` lets the label shrink and this span carries `.checklist li`'s
+              truncation itself. `data-truncate-box` lets a title measure whether it was cut off. */}
+          <span
+            data-truncate-box=""
+            style={trailing ? { display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}
+          >
             {title}
           </span>
         </CheckboxField>

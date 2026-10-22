@@ -7,6 +7,7 @@ mod analyze_login;
 mod fetch;
 mod generate;
 mod lookup;
+mod record;
 mod save;
 mod tool_loop;
 mod trial_run;
@@ -30,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/plugin-wizard/generate/stream/{id}",
             get(generate::generate_stream),
+        )
+        .route(
+            "/plugin-wizard/generate/{id}/record",
+            get(record::get_record),
         )
         .route("/plugin-wizard/trial-run", post(trial_run::trial_run))
         .route("/plugin-wizard/save", post(save::save))

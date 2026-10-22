@@ -16,7 +16,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -39,7 +39,7 @@ const ARCHIVE_EXTENSIONS: &[&str] = &[
     "zip", "cbz", "epub", "rar", "cbr", "7z", "cb7", "lzh", "lha", "tar", "gz", "bz2", "xz",
 ];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct LlmSplitGroup {
     zip_name: String,
     #[serde(default)]
@@ -56,7 +56,7 @@ struct ExecuteSplitParams {
     delete_original: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct LlmSplitResponse {
     #[serde(default)]
     split_groups: Vec<LlmSplitGroup>,
@@ -584,31 +584,27 @@ async fn generate_suggestion(
     let system = crate::llm_prompts::archive_split_suggestion_system();
     let user = serde_json::to_string_pretty(&tree).unwrap_or_default();
     tracing::info!(id = %archive_id, "archive_split: LLM request user payload:\n{user}");
-    let response: LlmSplitResponse = state
-        .redis
-        .config
-        .json_chat(&system, &user, 0.2, 3000)
-        .await
-        .map_err(|e| e.to_string())?;
-    tracing::info!(id = %archive_id, response = ?response, "archive_split: LLM response");
-
-    let split_groups: Vec<SplitGroupSuggestion> = response
-        .split_groups
-        .into_iter()
-        .map(|g| SplitGroupSuggestion {
-            zip_name: g.zip_name,
-            description: g.description,
-            source_dirs: g.source_dirs,
-            source_files: g.source_files,
-        })
-        .collect();
-
+    let spec = lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::ARCHIVE_SPLIT);
     let all_files: HashSet<&str> = entries
         .iter()
         .filter(|e| e.is_regular_file)
         .map(|e| e.name.as_str())
         .collect();
-    validate_coverage(&all_files, &split_groups)?;
+    // The coverage check is deterministic, so a gap gets one repair naming the unassigned files.
+    let response = crate::repair::json_chat_checked::<LlmSplitResponse>(
+        &state.redis.config,
+        &spec,
+        &system,
+        &user,
+        0.2,
+        3000,
+        |r| validate_coverage(&all_files, &to_suggestions(&r.split_groups)),
+    )
+    .await?
+    .value;
+    tracing::info!(id = %archive_id, response = ?response, "archive_split: LLM response");
+
+    let split_groups = to_suggestions(&response.split_groups);
 
     let suggestion = ArchiveSplitSuggestion {
         archive_id: archive_id.0.clone(),
@@ -625,6 +621,18 @@ async fn generate_suggestion(
         .await
         .map_err(|e| e.to_string())?;
     Ok(Some(suggestion))
+}
+
+fn to_suggestions(groups: &[LlmSplitGroup]) -> Vec<SplitGroupSuggestion> {
+    groups
+        .iter()
+        .map(|g| SplitGroupSuggestion {
+            zip_name: g.zip_name.clone(),
+            description: g.description.clone(),
+            source_dirs: g.source_dirs.clone(),
+            source_files: g.source_files.clone(),
+        })
+        .collect()
 }
 
 fn validate_coverage(
@@ -652,10 +660,18 @@ fn validate_coverage(
         .copied()
         .collect();
     if !missing.is_empty() {
+        let mut missing = missing;
+        missing.sort_unstable();
+        let shown: Vec<&str> = missing.iter().take(20).copied().collect();
         return Err(format!(
-            "LLM split suggestion is incomplete, {} file(s) unassigned: first missing = {:?}",
+            "LLM split suggestion is incomplete, {} file(s) unassigned: {:?}{}",
             missing.len(),
-            missing.first().copied().unwrap_or("")
+            shown,
+            if missing.len() > shown.len() {
+                " …"
+            } else {
+                ""
+            }
         ));
     }
     Ok(())

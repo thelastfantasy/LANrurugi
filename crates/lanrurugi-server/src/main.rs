@@ -45,6 +45,9 @@ enum Command {
     /// Census the library's page formats and report the ones nothing can display (a format no
     /// mainstream browser renders *and* this server cannot decode).
     Formats(lanrurugi_server::cli::formats::FormatsArgs),
+    /// Measure the tankoubon-grouping pipeline against the recorded grouping labels (precision
+    /// and recall), optionally comparing a candidate settings file.
+    EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
 }
 
 #[derive(clap::Args)]
@@ -227,6 +230,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
             serve(args).await
         }
         Command::RebuildIndex(args) => rebuild_index(args).await,
+        Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
         }
@@ -817,19 +821,19 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     if !args.no_watch {
-        if let Err(e) = scanner
-            .start(
-                args.library_path.clone(),
-                args.thumb_dir.clone(),
-                redis.config.clone(),
-                redis.search.clone(),
-                state.equivalence.clone(),
-                (*repos.archives).clone(),
-                Some(new_archive_tx.clone()),
-                filename_locks.clone(),
-            )
-            .await
-        {
+        let config = lanrurugi_scanner::handle::ScannerConfig {
+            archive_dir: args.library_path.clone(),
+            thumb_dir: args.thumb_dir.clone(),
+            config_pool: redis.config.clone(),
+            search_pool: redis.search.clone(),
+            equivalence: state.equivalence.clone(),
+            archives: (*repos.archives).clone(),
+            new_archive_tx: Some(new_archive_tx.clone()),
+            locks: filename_locks.clone(),
+            jobs: jobs.clone(),
+        };
+        // No catch-up here: the startup scan below covers what is already on disk.
+        if let Err(e) = scanner.start(config, false).await {
             tracing::warn!(error = %e, "failed to start file watcher");
         }
     }

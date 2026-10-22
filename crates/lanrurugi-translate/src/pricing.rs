@@ -294,18 +294,49 @@ async fn fetch_and_derive(pool: &Pool, provider_id: &str) -> Result<ProviderPric
     // The raw page HTML is large and mostly irrelevant markup — capped rather than sent whole, a
     // pricing table itself is always well within the first ~40K characters of a docs page.
     let truncated: String = html.chars().take(40_000).collect();
-    let extracted: ExtractedModels =
-        lanrurugi_llm::json_chat(pool, prompt, &truncated, 0.0, 2048).await?;
+    let extracted: ExtractedModels = lanrurugi_llm::json_chat(
+        pool,
+        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::PROVIDER_PRICING),
+        prompt,
+        &truncated,
+        0.0,
+        2048,
+    )
+    .await?;
 
     if extracted.models.is_empty() {
         return Err("LLM extracted zero pricing entries from the page".to_string());
     }
+    check_prices(&extracted.models)?;
 
     Ok(ProviderPricing {
         provider_id: provider_id.to_string(),
         models: extracted.models,
         fetched_at: chrono::Utc::now().timestamp(),
     })
+}
+
+/// Output filter for prices read off an untrusted page: a negative, non-finite or absurd number
+/// (a misread, or text on the page steering the model) is refused, so [`get`] keeps the last good
+/// table instead of caching it.
+fn check_prices(models: &[ModelPricing]) -> Result<(), String> {
+    const CEILING_USD_PER_MILLION: f64 = 1_000.0;
+    for m in models {
+        let prices = [
+            Some(m.input_per_million_usd),
+            m.cached_input_per_million_usd,
+            m.cache_write_per_million_usd,
+            Some(m.output_per_million_usd),
+        ];
+        let sane = |p: f64| p.is_finite() && (0.0..=CEILING_USD_PER_MILLION).contains(&p);
+        if m.model.trim().is_empty() || !prices.into_iter().flatten().all(sane) {
+            return Err(format!(
+                "implausible extracted price for model {:?}",
+                m.model
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Returns `provider_id`'s current price table — from Redis if a fresh one is cached, otherwise by
@@ -320,6 +351,11 @@ pub async fn get(pool: &Pool, provider_id: &str) -> Result<ProviderPricing, Stri
     if let Ok(mut conn) = pool.get().await {
         if let Ok(Some(raw)) = conn.get::<_, Option<String>>(&key).await {
             if let Ok(cached) = serde_json::from_str::<ProviderPricing>(&raw) {
+                lanrurugi_llm::usage::record_local_cache_hit(
+                    pool,
+                    lanrurugi_llm::FeatureId::PROVIDER_PRICING,
+                )
+                .await;
                 return Ok(cached);
             }
         }
@@ -410,6 +446,19 @@ mod tests {
             peak: None,
             peak_schedule: None,
         }
+    }
+
+    #[test]
+    fn implausible_extracted_prices_are_refused() {
+        assert!(check_prices(&[sample_pricing()]).is_ok());
+        for bad in [-1.0, f64::NAN, 50_000.0] {
+            let mut p = sample_pricing();
+            p.output_per_million_usd = bad;
+            assert!(check_prices(&[p]).is_err(), "{bad}");
+        }
+        let mut unnamed = sample_pricing();
+        unnamed.model = " ".into();
+        assert!(check_prices(&[unnamed]).is_err());
     }
 
     fn off_peak_instant() -> chrono::DateTime<chrono::Utc> {

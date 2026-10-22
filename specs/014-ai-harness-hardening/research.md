@@ -293,7 +293,7 @@ the security slice is not waiting behind a merge.
 | Where usage attribution is stored | Decision 8 — new Redis namespace, day-bucketed counters |
 | Whether tool results should be summarized or pruned | Decision 6 — model-free prune plus continuation |
 | Whether the wizard's browser-driven repair should move server-side | Resolved in part: the *record* moves server-side (Decision 9); the trigger stays where the user's confirm click is, so no autonomous repair loop is introduced |
-| Whether any touched endpoint is legacy-shaped | Resolved: none — verified against the route policy file; all are LANrurugi-only additions |
+| Whether any touched endpoint is legacy-shaped | Resolved: none. T002 audit (2026-10-20): `plugin-wizard`, `rename-suggestions`, `rename-chapter`, `condition/ai`, `/split` and `llm/usage` each occur 0 times in `docs/api/legacy-openapi.yaml`; only `plugin-wizard` has explicit `route_policy.csv` rows (12), the rest fall under the default rows. All are LANrurugi-only additions |
 
 ---
 

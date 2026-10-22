@@ -6,6 +6,10 @@ export type GenerateProgressEvent =
   | { kind: "fetch_page"; url: string }
   | { kind: "fetch_result"; url: string; status: string }
   | { kind: "content_delta"; text: string }
+  /** The round is being retried; text streamed so far belongs to the abandoned attempt. */
+  | { kind: "retrying" }
+  /** The answer failed its structure check; the model is asked once to resend the whole file. */
+  | { kind: "repairing" }
 
 /** Mirrors `readErrorBody`'s `{error, detail, raw_output}` shape (`api/client.ts`). */
 export class GenerateStreamError extends Error {
@@ -25,11 +29,18 @@ export class GenerateStreamError extends Error {
 }
 
 /** Drives `POST /plugin-wizard/generate/start` + `GET /plugin-wizard/generate/stream/{id}` via a
- * plain `EventSource` — shared by generate, auto-fix, and refine calls. */
+ * plain `EventSource` — shared by generate, auto-fix, and refine calls. Aborting `signal` closes
+ * the stream, which the server takes as cancellation (no further provider requests). */
 export function streamGenerate(
   body: Record<string, unknown>,
   onProgress: (event: GenerateProgressEvent) => void,
-): Promise<{ code: string; explanation: string; resolvedCredentialValues: Record<string, string> }> {
+  signal?: AbortSignal,
+): Promise<{
+  code: string
+  explanation: string
+  resolvedCredentialValues: Record<string, string>
+  generationId: string
+}> {
   return sendJson<{ generation_id: string }>("POST", "/plugin-wizard/generate/start", body).then(
     ({ generation_id }) =>
       new Promise((resolve, reject) => {
@@ -46,6 +57,14 @@ export function streamGenerate(
           action()
         }
 
+        if (signal?.aborted) {
+          finish(() => reject(new GenerateStreamError("cancelled")))
+          return
+        }
+        signal?.addEventListener("abort", () => {
+          if (!finished) finish(() => reject(new GenerateStreamError("cancelled")))
+        })
+
         source.addEventListener("fetch_page", (ev) => {
           const data = JSON.parse((ev as MessageEvent<string>).data) as { url: string }
           onProgress({ kind: "fetch_page", url: data.url })
@@ -58,6 +77,12 @@ export function streamGenerate(
           const data = JSON.parse((ev as MessageEvent<string>).data) as { text: string }
           onProgress({ kind: "content_delta", text: data.text })
         })
+        source.addEventListener("retrying", () => {
+          onProgress({ kind: "retrying" })
+        })
+        source.addEventListener("repairing", () => {
+          onProgress({ kind: "repairing" })
+        })
         source.addEventListener("done", (ev) => {
           const data = JSON.parse((ev as MessageEvent<string>).data) as {
             code: string
@@ -69,6 +94,7 @@ export function streamGenerate(
               code: data.code,
               explanation: data.explanation,
               resolvedCredentialValues: data.resolved_credential_values ?? {},
+              generationId: generation_id,
             }),
           )
         })

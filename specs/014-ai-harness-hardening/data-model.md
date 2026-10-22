@@ -27,8 +27,10 @@ The set is closed and returned by the usage endpoint in this order:
 | `subscription_condition` | `subscriptions/ai_condition.rs` (1) |
 | `provider_pricing` | `lanrurugi-translate/src/pricing.rs` (1) |
 | `translation` | the translation pipeline, attributed at its own seam boundary (T043) |
+| `tankoubon_grouping_review` | `tankoubon_grouping/review.rs` (1, plus at most one repair) — added by `016-tankoubon-grouping-harness` |
 
 The first ten are the 14 server-side calls; `translation` is the eleventh feature in the ledger.
+`tankoubon_grouping_review` was added afterwards by spec 016, making twelve.
 
 ---
 
@@ -181,21 +183,11 @@ one generation action, identified by a `GenerationId` — a `#[serde(transparent
 existing generation id string (constitution: domain identifiers are newtypes from first
 implementation). The pending-request map and the record key builder both take `GenerationId`.
 
-**Header** (index 0, kind `request`): the generation request with credential fields reduced to
-placeholder form, plus the `model`, the request parameters actually sent (reasoning effort,
-temperature, max tokens) and the system prompt.
-
-**Attempt**
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `index` | integer | Order within the generation |
-| `kind` | `request` \| `tool_round` \| `failed_attempt` \| `trial_run` | A failed or retried round is its own kind, never mistaken for content the model was shown (FR-025); `trial_run` holds a trial-run result and its attribution (FR-022) |
-| `messages` | list | The messages actually sent for this round, credential values in placeholder form; omitted for `trial_run` |
-| `tool_calls` | list of `{name, arguments}` | Arguments are stored in placeholder form for credentialed headers |
-| `tool_result` | optional bounded tool result | Exactly what the model saw, hence already bounded |
-| `outcome` | one of the model-call outcomes | Failure classes recorded, not elided; `cancelled` when FR-029 stopped the round |
-| `trial` | optional `{plugin_type, ok, error, attribution}` | Only for `trial_run`; `attribution` is the trial-attribution call's verdict |
+Element kinds and their fields are listed in contracts/generation-record.md §Stored shape:
+`header` (request in placeholder form, model, params, system prompt), `request` (messages added
+since the previous element, written before the round is sent), `tool_round` (tool calls and the
+results the model was shown), `final`, `failed_attempt` (retried / failed / cancelled /
+budget-stopped rounds) and `trial_run` (FR-022).
 
 **Record key**: `LANRURUGI_GENERATION_RECORD:<generation_id>` — a list, TTL 30 days.
 

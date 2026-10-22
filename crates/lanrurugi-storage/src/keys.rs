@@ -66,6 +66,56 @@ pub fn read_daily_key(date: &str) -> String {
 /// reader pick that window themselves.
 pub const READ_DAILY_SINCE_KEY: &str = "LANRURUGI_READ_DAILY_SINCE";
 
+/// Additive, LANrurugi-only. Per-feature, per-UTC-day model usage counters (a hash of request,
+/// elapsed, token and failure-class counts), written by `lanrurugi_llm::usage::record` for every
+/// model call. Dated keys for the same reason as [`read_daily_key`]: retention is each key's TTL.
+pub fn llm_usage_daily_key(feature: &str, date: &str) -> String {
+    format!("LANRURUGI_LLM_USAGE:{feature}:{date}")
+}
+
+/// 40 days: a week window stays fully answerable with margin, and the family never grows unbounded.
+pub const LLM_USAGE_DAILY_TTL_SECS: i64 = 40 * 24 * 60 * 60;
+
+/// Additive, LANrurugi-only. One plugin-wizard generation's record of what the model was shown
+/// (a list of attempts, `specs/014-ai-harness-hardening/contracts/generation-record.md`).
+pub fn generation_record_key(id: &lanrurugi_core::ids::GenerationId) -> String {
+    format!("LANRURUGI_GENERATION_RECORD:{id}")
+}
+
+/// 30 days: long enough to answer a real bug report, short enough not to become an audit log.
+pub const GENERATION_RECORD_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// Additive, LANrurugi-only. A cached grouping review (`specs/016-tankoubon-grouping-harness`),
+/// keyed by suggestion, reviewer-prompt version and a hash of the members' titles and tags, so an
+/// edit or a prompt change simply misses the cache.
+pub fn grouping_review_key(
+    id: &lanrurugi_core::ids::GroupSuggestionId,
+    prompt_version: &str,
+    content_hash: &str,
+) -> String {
+    format!("LANRURUGI_GROUPING_REVIEW:{id}:{prompt_version}:{content_hash}")
+}
+
+/// 30 days: re-opening the modal reuses reviews, and a stale review ages out on its own.
+pub const GROUPING_REVIEW_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// Additive, LANrurugi-only. The last time a suggestion was shown: members, pair evidence, the
+/// settings that produced it and its review.
+pub fn grouping_suggestion_key(id: &lanrurugi_core::ids::GroupSuggestionId) -> String {
+    format!("LANRURUGI_GROUPING_SUGGESTION:{id}")
+}
+
+/// 90 days: long enough to explain a label recorded against it.
+pub const GROUPING_SUGGESTION_TTL_SECS: i64 = 90 * 24 * 60 * 60;
+
+/// Additive, LANrurugi-only. Pair labels from the user's grouping decisions (a hash, field
+/// `<id_a>|<id_b>` sorted). No TTL: they are the evaluation's ground truth; the user deletes them.
+pub const GROUPING_LABELS_KEY: &str = "LANRURUGI_GROUPING_LABELS";
+
+/// Additive, LANrurugi-only. Members the reviewer rejected that the user kept (a hash, field
+/// `<suggestion_id>|<archive_id>`). No TTL, like the labels.
+pub const GROUPING_DISAGREEMENTS_KEY: &str = "LANRURUGI_GROUPING_REVIEWER_DISAGREEMENTS";
+
 /// How long one [`read_daily_key`] survives — long enough for a "past year" reading-history chart,
 /// short enough that the key family never grows without bound.
 pub const READ_DAILY_TTL_SECS: i64 = 400 * 24 * 60 * 60;

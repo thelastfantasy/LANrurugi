@@ -219,6 +219,7 @@ async fn revoke_session(
                 // Current device: clear both cookies so the browser immediately falls back to
                 // guest/login, same effect as `POST /logout` but for the "revoke this row" path.
                 let cookies = crate::login::cleared_auth_cookies(
+                    Some(&cfg.cookie_names),
                     cfg.force_secure_cookies,
                     cfg.cookie_domain.as_deref(),
                 );

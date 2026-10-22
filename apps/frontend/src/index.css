@@ -553,7 +553,7 @@ input[type="checkbox"]:disabled {
   }
 }
 
-/* AiSmartTankoubonModal.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
+/* AiSmartTankoubonDrawer.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
  * component itself carries no row spacing (Categories.tsx/Batch.tsx both rely on plain browser
  * default <li> layout, which is correct for their own denser lists), but this modal's own rows
  * routinely show long, near-identical titles (same-series archives differing only in a volume
@@ -570,7 +570,7 @@ input[type="checkbox"]:disabled {
   border-top: 1px solid rgba(128, 128, 128, 0.12);
 }
 
-/* AiSmartTankoubonModal.tsx's "Create Tankoubon" checkable button — a pill button with the label
+/* AiSmartTankoubonDrawer.tsx's "Create Tankoubon" checkable button — a pill button with the label
  * on the left and a small checkbox toggle on the right, separated by a `currentColor` divider,
  * same left-label/right-action shape as ArchiveOverviewOverlayPanel's own real category chip
  * (`.gt.category-chip`'s label span + `borderLeft: "1px solid currentColor"` + right-side action
@@ -661,7 +661,7 @@ input[type="checkbox"]:disabled {
   transform: scale(1);
 }
 
-/* AiSmartTankoubonModal.tsx's suggestion cards — border + header background color varies by
+/* AiSmartTankoubonDrawer.tsx's suggestion cards — border + header background color varies by
  * suggestion kind (see each theme file's own `.ai-suggestion-card-add`/`-new` rule pair for the
  * actual blue/green values); this shared rule only carries the border WIDTH itself, since that's
  * identical either way and shouldn't need repeating per-theme. */
@@ -769,6 +769,51 @@ input[type="checkbox"]:disabled {
   max-height: none;
 }
 
+/* Library thumbnail grid: legacy gives `div.id1` a fixed width (228px, 164px below 560px), which
+ * leaves side gutters whenever the row isn't an exact multiple of it. Here the cards fill the row
+ * instead — as many columns of at least legacy's width as fit, sharing the leftover — and the cover
+ * keeps legacy's own proportions (228:280 desktop, 164:196 phone) as it widens. On a phone the
+ * column minimum drops to 150px so a typical screen still gets two. */
+#thumbs_container.library-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 5px;
+}
+.library-thumb-grid div.id1 {
+  width: auto;
+  margin: 0;
+}
+.library-thumb-grid div.id1 div.id3 {
+  height: auto !important;
+  aspect-ratio: 228 / 280;
+}
+.library-thumb-grid div.id1 div.id3 img {
+  max-height: 100%;
+}
+@media (max-width: 560px) {
+  #thumbs_container.library-thumb-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+  .library-thumb-grid div.id1 div.id3 {
+    aspect-ratio: 164 / 196;
+  }
+}
+
+/* Library title on a phone: legacy's 10pt reads too small beside the floating menu button
+ * (`MobileNav.tsx`), and the side padding keeps a long name from running under that button. */
+@media (max-width: 560px) {
+  .ido > h1.ih {
+    font-size: 18px;
+    padding: 4px 40px 8px;
+  }
+}
+
+/* Library page's second pager, under the results — the same `ResultInfoAndPager` as the toolbar's,
+ * so reaching the bottom of a page doesn't mean scrolling back up to turn it. */
+.library-bottom-pager {
+  margin: 12px auto 8px;
+}
+
 /* Library page's `SearchBar.tsx` — the search box and the four-button row below it each get their
  * own `div` inside a `flexWrap: "wrap"` parent, so a narrow viewport wraps them onto two separate
  * lines instead of squeezing everything onto one cramped row. On a wide viewport (still one row)
@@ -780,9 +825,30 @@ input[type="checkbox"]:disabled {
  * with an inline style alone (no container query bound to *this row's own* wrap state, just the
  * viewport), hence a real class + `@media` rule instead. */
 @media (max-width: 560px) {
+  /* Same outer edges as the search input above: both lose the theme's 1px side margins (the
+     robot icon button has none), and the row shares the input group's 450px cap. */
   .searchbar-button-row {
     width: 100%;
+    max-width: 450px;
     justify-content: center;
+    flex-wrap: nowrap !important;
+    gap: 4px;
+  }
+  #search-input.stdinput {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  /* Every theme gives `.searchbtn` `min-width: 100px !important`; three of those plus the robot
+     icon button overflow a ~335px phone row, pushing the icon onto a line of its own. Here the
+     three share whatever the icon leaves. */
+  .searchbar-button-row .searchbtn {
+    margin-left: 0;
+    margin-right: 0;
+    min-width: 0 !important;
+    flex: 1 1 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -1567,7 +1633,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 }
 
 .preview-skeleton-row:nth-child(even) .preview-skeleton-bar,
-.subscriptions-skeleton-row:nth-child(even) .skeleton-bar {
+.subscriptions-skeleton-row:nth-child(even) .skeleton-bar,
+.usage-skeleton-row:nth-child(even) .skeleton-bar {
   /* Offset so the rows do not pulse in lockstep, which reads as one flashing block. */
   animation-delay: 0.2s;
 }

@@ -253,12 +253,15 @@ async fn age_out_used_refresh_token(redis: &RedisDbs, refresh_cookie: &str) {
         .expect("failed to age out rotated refresh token");
 }
 
+/// The cookies a browser would keep, as `name=value`: an expiring `Max-Age=0` one (e.g. the
+/// bare pre-tag auth cookies a login retires) deletes rather than stores.
 fn set_cookie_values(response: &axum::http::Response<axum::body::Body>) -> Vec<String> {
     response
         .headers()
         .get_all(axum::http::header::SET_COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
+        .filter(|v| !v.contains("Max-Age=0"))
         .map(|v| v.split(';').next().unwrap_or(v).to_string())
         .collect()
 }

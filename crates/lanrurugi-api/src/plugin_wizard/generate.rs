@@ -21,22 +21,27 @@
 //! rather than assembled into one final response, an eventual `GENERATE_TIMEOUT` expiry no longer
 //! erases everything that already streamed — the frontend has already seen it.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use lanrurugi_llm::{LlmClient, Message, ToolChatResponse};
+use lanrurugi_core::ids::GenerationId;
+use lanrurugi_llm::{
+    CallSpec, FeatureId, LlmClient, LlmError, LlmErrorClass, Message, StreamEvent, ToolChatResponse,
+};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 
-use super::tool_loop::{
-    execute_fetch_tool, extract_headers_arg, extract_url_arg, fetch_page_tool,
-    substitute_credential_placeholders,
-};
+use super::fetch::FetchPolicy;
+use super::record;
+use super::tool_loop::{fetch_page_tool, FetchSession};
 use crate::AppState;
 
 const PLUGIN_SDK: &str = include_str!("../../../lanrurugi-plugin/dispatcher/plugin-sdk.ts");
@@ -64,6 +69,14 @@ const MAX_LOOP_ROUNDS: usize = 5;
 /// than 120s without actually being stuck.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// How long a cancelled generation may take to wind down so its in-flight model call records
+/// itself as cancelled (FR-029, SC-009).
+const CANCEL_GRACE: Duration = Duration::from_secs(5);
+
+/// The generation call's sampling parameters, also written to the record's header.
+const GENERATE_TEMPERATURE: f32 = 0.3;
+const GENERATE_MAX_TOKENS: u32 = 16000;
+
 /// Splits the model's final answer into its code half and its user-facing explanation half (see
 /// `GenerateResponse::explanation`'s own docs). An unlikely-to-collide literal line rather than
 /// e.g. a JSON envelope — the code half must stay exactly the raw .ts source `looks_like_plugin_
@@ -75,6 +88,10 @@ const EXPLANATION_MARKER: &str = "///===PLUGIN_WIZARD_EXPLANATION===///";
 #[derive(Deserialize)]
 pub(super) struct GenerateRequest {
     plugin_type: String,
+    /// The wizard session's target domain — the only site a credential may be sent to (FR-002).
+    /// Defaulted so an older client cannot 400; without it no fetch may carry a credential.
+    #[serde(default)]
+    target_domain: Option<String>,
     #[serde(default)]
     test_links: Vec<String>,
     #[serde(default)]
@@ -157,7 +174,14 @@ enum GenerateError {
     /// The final response wasn't parseable as plugin code (spec Edge Cases: AI returned prose
     /// instead of code, or malformed code) — carries the raw output for the user to see.
     AiOutputNotCode(String),
-    LlmUnavailable(String),
+    /// The model call failed; carries its class.
+    Llm(LlmError),
+    /// The loop ran out of rounds without converging.
+    Unconverged,
+    /// The accumulated tool-result budget was spent (FR-018).
+    ContextBudgetExceeded,
+    /// The user cancelled or the client disconnected (FR-029).
+    Cancelled,
 }
 
 /// `POST /plugin-wizard/generate/start` — see this module's own top-level docs for why generation
@@ -170,7 +194,7 @@ pub(super) async fn generate_start(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = GenerationId(uuid::Uuid::new_v4().to_string());
     state
         .pending_generate_requests
         .lock()
@@ -188,9 +212,11 @@ pub(super) async fn generate_stream(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
+    let id = GenerationId(id);
     let Some(body) = state.pending_generate_requests.lock().await.remove(&id) else {
         return sse_single_error_response("generation_not_found", "该次生成请求不存在或已被使用。");
     };
+    let request_record = record::request_placeholder_form(&body);
     let mut req: GenerateRequest = match serde_json::from_value(body) {
         Ok(req) => req,
         Err(e) => return sse_single_error_response("invalid_request", &e.to_string()),
@@ -212,19 +238,34 @@ pub(super) async fn generate_stream(
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(async move {
-        let outcome = tokio::time::timeout(
-            GENERATE_TIMEOUT,
-            run_generation(&state, &req, &credential_values, &tx),
-        )
-        .await;
+        let cancel = CancellationToken::new();
+        let generation = Generation {
+            state: &state,
+            req: &req,
+            id: &id,
+            credential_values: &credential_values,
+            event_tx: &tx,
+            cancel: &cancel,
+            started: Instant::now(),
+            conversation: lanrurugi_llm::Conversation::new(),
+        };
+        let run = tokio::time::timeout(GENERATE_TIMEOUT, generation.run(request_record));
+        tokio::pin!(run);
+        // The receiver goes away when the browser disconnects: fire cancellation and give the
+        // in-flight call a moment to record itself as cancelled.
+        let outcome = tokio::select! {
+            outcome = &mut run => outcome,
+            () = tx.closed() => {
+                cancel.cancel();
+                tokio::time::timeout(CANCEL_GRACE, &mut run)
+                    .await
+                    .unwrap_or(Ok(Err(GenerateError::Cancelled)))
+            }
+        };
         let final_event = match outcome {
             // `resolved_credential_values` (real Redis-persisted values for the associated login
             // plugin, if any) rides along on `done` so the frontend can auto-prefill the trial-run
-            // parameter panel by field-name match — previously computed here purely for the AI's
-            // own `fetch_page` substitution and then discarded, leaving the trial-run UI's separate
-            // `pluginParameterValues` state permanently blank even when Redis already had the exact
-            // value the user was trying to test with (real report, 2026-08-25: "这里还是没读取到
-            // 已经设置的key").
+            // parameter panel by field-name match.
             Ok(Ok((code, explanation))) => Event::default().event("done").data(
                 json!({
                     "code": code,
@@ -236,11 +277,31 @@ pub(super) async fn generate_stream(
             Ok(Err(GenerateError::AiOutputNotCode(raw))) => Event::default()
                 .event("error")
                 .data(json!({ "error": "ai_output_not_code", "raw_output": raw }).to_string()),
-            Ok(Err(GenerateError::LlmUnavailable(detail))) => Event::default()
+            Ok(Err(GenerateError::Llm(err))) => Event::default().event("error").data(
+                json!({
+                    "error": "llm_unavailable",
+                    "detail": err.message(),
+                    "class": err.class().as_str(),
+                })
+                .to_string(),
+            ),
+            Ok(Err(GenerateError::Unconverged)) => Event::default().event("error").data(
+                json!({ "error": "llm_unavailable", "detail": "生成未能在合理轮数内收敛，请重试" })
+                    .to_string(),
+            ),
+            Ok(Err(GenerateError::ContextBudgetExceeded)) => Event::default().event("error").data(
+                json!({
+                    "error": "context_budget_exceeded",
+                    "detail": "抓取的网页内容超出了本次生成的总预算，已停止。请减少需要分析的页面后重试。",
+                })
+                .to_string(),
+            ),
+            Ok(Err(GenerateError::Cancelled)) => Event::default()
                 .event("error")
-                .data(json!({ "error": "llm_unavailable", "detail": detail }).to_string()),
+                .data(json!({ "error": "cancelled", "class": "cancelled" }).to_string()),
             Err(_) => Event::default().event("error").data(
-                json!({ "error": "llm_unavailable", "detail": "生成超时，请重试" }).to_string(),
+                json!({ "error": "llm_unavailable", "detail": "生成超时，请重试", "class": "timeout" })
+                    .to_string(),
             ),
         };
         let _ = tx.send(final_event);
@@ -326,7 +387,7 @@ async fn resolve_credentials(
 }
 
 fn system_prompt(req: &GenerateRequest, deno_version: Option<&str>) -> String {
-    crate::llm_prompts::plugin_generation_system_prompt(
+    let base = crate::llm_prompts::plugin_generation_system_prompt(
         &req.plugin_type,
         req.reference_sample_code.as_deref(),
         req.login_association.is_some(),
@@ -335,7 +396,8 @@ fn system_prompt(req: &GenerateRequest, deno_version: Option<&str>) -> String {
         SAMPLE_DOWNLOAD,
         PLUGIN_SDK,
         EXPLANATION_MARKER,
-    )
+    );
+    format!("{base}\n\n{}", crate::llm_prompts::untrusted_content_rule())
 }
 
 fn user_prompt(req: &GenerateRequest) -> String {
@@ -412,7 +474,7 @@ fn user_prompt(req: &GenerateRequest) -> String {
 /// Splits the model's final answer on [`EXPLANATION_MARKER`] into `(code, explanation)`. Falls
 /// back to treating the whole response as code with a generic placeholder explanation if the
 /// model forgot the marker entirely — the code half is the essential deliverable and
-/// `looks_like_plugin_code` already independently guards its validity, so a missing explanation
+/// `plugin_code_defect` already independently guards its validity, so a missing explanation
 /// alone must never fail the whole generation.
 fn split_code_and_explanation(content: &str) -> (String, String) {
     match content.split_once(EXPLANATION_MARKER) {
@@ -424,21 +486,10 @@ fn split_code_and_explanation(content: &str) -> (String, String) {
     }
 }
 
-/// A lightweight structural check, not a full TS typecheck (T018's own scope) — just enough to
-/// reject an obviously-non-code response (prose, an apology, an empty string) before handing it
-/// back to the user as a usable draft.
-/// A lightweight structural check, not a full TS typecheck — just enough to reject an obviously
-/// non-code or *incomplete* response before handing it back to the user as a usable draft. Beyond
-/// the original "does it mention pluginInfo at all" check, also requires the type-appropriate
-/// entry function to actually appear and requires balanced braces/parens — a real, observed
-/// failure mode is the model's response getting cut off mid-file by the `max_tokens` limit, which
-/// still trivially contains the substring "pluginInfo" (it's declared near the top of every
-/// plugin) despite the rest of the file — including the entry function's own closing brace —
-/// never having been generated.
-fn looks_like_plugin_code(content: &str, plugin_type: &str) -> bool {
-    if !content.contains("pluginInfo") {
-        return false;
-    }
+/// A lightweight structural check, not a full TS typecheck: rejects prose, and a file cut off
+/// mid-way by `max_tokens` (which still contains `pluginInfo` near its top) by also requiring the
+/// type's entry function and balanced braces/parens. Returns the defect for the one repair round.
+fn plugin_code_defect(content: &str, plugin_type: &str) -> Option<String> {
     let entry_fn = match plugin_type {
         "metadata" => "execMetadata",
         "download" => "execDownload",
@@ -448,10 +499,15 @@ fn looks_like_plugin_code(content: &str, plugin_type: &str) -> bool {
         // plugin was rejected as malformed (issue #55).
         _ => "execLogin",
     };
-    if !content.contains(entry_fn) {
-        return false;
+    for symbol in ["pluginInfo", entry_fn] {
+        if !content.contains(symbol) {
+            return Some(crate::llm_prompts::plugin_code_missing(symbol));
+        }
     }
-    balanced(content, '{', '}') && balanced(content, '(', ')')
+    if !(balanced(content, '{', '}') && balanced(content, '(', ')')) {
+        return Some(crate::llm_prompts::plugin_code_unbalanced().to_string());
+    }
+    None
 }
 
 /// Counts `open`/`close` occurrences outside of string/template literals, comments, and regex
@@ -620,146 +676,271 @@ fn default_fetch_url(req: &GenerateRequest) -> Option<String> {
         .cloned()
 }
 
-async fn run_generation(
-    state: &AppState,
-    req: &GenerateRequest,
-    credential_values: &std::collections::HashMap<String, String>,
-    event_tx: &UnboundedSender<Event>,
-) -> Result<(String, String), GenerateError> {
-    let deno_version = deno_version(state.plugins.deno_binary()).await;
-    let mut messages = vec![Message::system(system_prompt(req, deno_version.as_deref()))];
-    // Replay every prior round's own (ask, code) pair first, oldest first, so the model has full
-    // multi-round context — not just this round's own new request layered on the latest code
-    // snapshot. Only the code half of each prior round is replayed (not its explanation): a later
-    // round only ever needs to know "what code did you write", not the user-facing summary of it.
-    for turn in &req.conversation_history {
-        messages.push(Message::user(turn.user_message.clone()));
-        messages.push(Message::assistant(turn.assistant_code.clone()));
+/// One running generation and everything its rounds share.
+struct Generation<'a> {
+    state: &'a AppState,
+    req: &'a GenerateRequest,
+    id: &'a GenerationId,
+    credential_values: &'a HashMap<String, String>,
+    event_tx: &'a UnboundedSender<Event>,
+    cancel: &'a CancellationToken,
+    started: Instant,
+    /// Every round of this generation is one conversation: each must extend the last.
+    conversation: lanrurugi_llm::Conversation,
+}
+
+impl Generation<'_> {
+    async fn record(&self, element: serde_json::Value) {
+        record::append(self.state, self.id, element, self.credential_values).await;
     }
-    messages.push(Message::user(user_prompt(req)));
-    let tools = vec![fetch_page_tool()];
 
-    for _ in 0..MAX_LOOP_ROUNDS {
-        // `false`: this loop's final answer is a raw .ts source file, not JSON — `force_json_
-        // content` is for analyze_login.rs's structured-array case, not this one.
-        // 16000 (raised from 8000, itself raised from 4000): `max_tokens` bounds `reasoning_
-        // content` *and* `content` combined for this reasoning model, not `content` alone — a
-        // real generation was observed spending its entire 8000-token budget on reasoning and
-        // emitting zero bytes of actual code (`finish_reason: "length"`, `reasoning_tokens: 8000`,
-        // 2026-08-25; see `lanrurugi-llm`'s own `thinking_low_effort` docs for the primary fix,
-        // steering the model toward less of that in the first place — this larger ceiling is the
-        // second line of defense, not a replacement for it).
-        //
-        // Streaming (not plain `tool_chat`): a tool-calling *decision* round is typically fast
-        // (observed live: 0.3-4s), but the FINAL content-only round — the one that actually writes
-        // the code+explanation — was observed taking 80+ seconds by itself, with zero visibility
-        // into whether anything was happening. `on_content_delta` forwards every chunk of that
-        // final round live as a `content_delta` SSE event the instant it arrives; a tool-calling
-        // round never invokes this closure at all (the model emits `tool_calls`, not `content`, in
-        // that case), so this one call site correctly covers both round shapes without needing to
-        // know in advance which one a given round will turn out to be.
-        let event_tx_for_delta = event_tx.clone();
-        let response = state
-            .redis
-            .config
-            .tool_chat_streaming(&messages, &tools, 0.3, 16000, false, move |delta| {
-                let _ = event_tx_for_delta.send(
-                    Event::default()
-                        .event("content_delta")
-                        .data(json!({ "text": delta }).to_string()),
-                );
-            })
-            .await
-            .map_err(GenerateError::LlmUnavailable)?;
+    fn send(&self, event: &str, data: serde_json::Value) {
+        let _ = self
+            .event_tx
+            .send(Event::default().event(event).data(data.to_string()));
+    }
 
-        match response {
-            ToolChatResponse::Content(content) => {
-                let (code, explanation) = split_code_and_explanation(&content);
-                if !looks_like_plugin_code(&code, &req.plugin_type) {
-                    // Logged, not silent — this failure previously left no trace at all (the
-                    // frontend's own `err.message` for this case was, until a companion fix,
-                    // *also* just the bare "ai_output_not_code" code string with no diagnostic
-                    // content), making a real "AI 未能生成有效代码" report undiagnosable from
-                    // either side (observed live 2026-08-24). Logs a structural breakdown (which
-                    // specific check failed) plus the full raw content, not just a length/preview
-                    // — this is a rare failure path, not a hot loop, so the extra log volume is
-                    // worth having the complete picture on the very first occurrence.
-                    tracing::warn!(
-                        plugin_type = %req.plugin_type,
-                        content_len = content.len(),
-                        marker_found = content.contains(EXPLANATION_MARKER),
-                        has_plugin_info = code.contains("pluginInfo"),
-                        braces_balanced = balanced(&code, '{', '}'),
-                        parens_balanced = balanced(&code, '(', ')'),
-                        content = %content,
-                        "plugin wizard: AI's final answer failed looks_like_plugin_code",
-                    );
-                    // The raw, unsplit response is what's most useful to show the user here (the
-                    // split code half alone could itself be misleadingly truncated at whatever
-                    // text happened to look like the marker) — matches the pre-existing contract
-                    // of `AiOutputNotCode` carrying the model's literal output.
-                    return Err(GenerateError::AiOutputNotCode(content));
-                }
-                // Prompt instructions alone (standard 2-space indent, etc.) are a real but soft
-                // constraint — a live-observed generation still came back with runaway indentation
-                // despite them. Run the AI's own output through a real formatter (the same `deno`
-                // binary the plugin sandbox itself uses, via `PluginPool::deno_binary`) rather than
-                // trusting prompt compliance alone; if formatting fails for any reason (deno not on
-                // PATH in some deployment, a genuine syntax error `looks_like_plugin_code`'s
-                // lightweight brace-balance check didn't catch), fall back to the AI's raw output
-                // rather than failing the whole generation over a cosmetic step.
-                let formatted = match format_with_deno(state.plugins.deno_binary(), &code).await {
-                    Ok(formatted) => formatted,
-                    Err(err) => {
-                        // Logged, not silent — a `deno fmt` failure here previously left no trace
-                        // at all (the raw-output fallback swallowed the `Err` unconditionally),
-                        // making a real "code came back unformatted" report undiagnosable after
-                        // the fact (observed live 2026-08-24).
-                        tracing::warn!(error = %err, "plugin wizard: deno fmt failed, returning unformatted code");
-                        code
-                    }
-                };
-                return Ok((formatted, explanation));
+    /// Each round's call gets what is left of the overall bound, never more than the default.
+    fn round_spec(&self) -> CallSpec {
+        let remaining = GENERATE_TIMEOUT.saturating_sub(self.started.elapsed());
+        CallSpec::new(FeatureId::PLUGIN_GENERATION)
+            .with_deadline(remaining.min(lanrurugi_llm::DEFAULT_DEADLINE))
+            .with_cancel(self.cancel.clone())
+            .in_conversation(self.conversation.clone())
+    }
+
+    async fn run(
+        &self,
+        request_record: serde_json::Value,
+    ) -> Result<(String, String), GenerateError> {
+        let req = self.req;
+        let deno_version = deno_version(self.state.plugins.deno_binary()).await;
+        let system = system_prompt(req, deno_version.as_deref());
+        let mut messages = vec![Message::system(system.clone())];
+        // Replay every prior round's own (ask, code) pair first, oldest first, so the model has
+        // full multi-round context. Only the code half of each prior round is replayed.
+        for turn in &req.conversation_history {
+            messages.push(Message::user(turn.user_message.clone()));
+            messages.push(Message::assistant(turn.assistant_code.clone()));
+        }
+        messages.push(Message::user(user_prompt(req)));
+        let tools = vec![fetch_page_tool()];
+
+        self.record(json!({
+            "kind": "header",
+            "generation_request": request_record,
+            "model": lanrurugi_llm::DEEPSEEK_MODEL,
+            "params": {
+                "temperature": GENERATE_TEMPERATURE,
+                "max_tokens": GENERATE_MAX_TOKENS,
+                "thinking": "enabled, reasoning_effort low (disabled on a truncation retry)",
+            },
+            "system_prompt": system,
+        }))
+        .await;
+
+        let links = req
+            .test_links
+            .iter()
+            .chain(&req.auxiliary_reference_urls)
+            .map(String::as_str);
+        let policy = FetchPolicy::new(
+            req.target_domain.as_deref(),
+            links,
+            self.credential_values.keys().cloned(),
+        );
+        let mut session = FetchSession::new(policy, self.credential_values.clone());
+        // Messages before this index are already in the record.
+        let mut recorded = 1;
+
+        let mut repaired = false;
+        for round in 0..MAX_LOOP_ROUNDS {
+            if self.cancel.is_cancelled() {
+                return self.cancelled(round).await;
             }
-            ToolChatResponse::ToolCalls(calls) => {
-                messages.push(Message::assistant_tool_calls(calls.clone()));
-                for call in calls {
-                    let url = extract_url_arg(&call).or_else(|| default_fetch_url(req));
-                    let Some(url) = url else {
-                        messages.push(Message::tool_result(
-                            call.id.clone(),
-                            json!({ "status": "error", "error": "没有可供访问的 URL" }).to_string(),
-                        ));
-                        continue;
+            self.record(json!({
+                "kind": "request",
+                "round": round,
+                "messages": &messages[recorded..],
+            }))
+            .await;
+
+            // `false`: this loop's final answer is a raw .ts source file, not JSON. 16000 tokens:
+            // `max_tokens` bounds reasoning *and* content combined for this reasoning model.
+            //
+            // Streaming: a tool-calling round is fast, but the final round that writes the code was
+            // observed taking 80+ seconds — every content chunk is forwarded live as a
+            // `content_delta` event. A retried round is announced with `retrying` first (FR-031).
+            let retries = AtomicUsize::new(0);
+            let event_tx = self.event_tx.clone();
+            let response = self
+                .state
+                .redis
+                .config
+                .tool_chat_streaming(
+                    &self.round_spec(),
+                    &messages,
+                    &tools,
+                    GENERATE_TEMPERATURE,
+                    GENERATE_MAX_TOKENS,
+                    false,
+                    |event| match event {
+                        StreamEvent::ContentDelta(delta) => {
+                            let _ = event_tx.send(
+                                Event::default()
+                                    .event("content_delta")
+                                    .data(json!({ "text": delta }).to_string()),
+                            );
+                        }
+                        StreamEvent::Retrying => {
+                            retries.fetch_add(1, Ordering::Relaxed);
+                            let _ = event_tx.send(
+                                Event::default()
+                                    .event("retrying")
+                                    .data(json!({ "round": round }).to_string()),
+                            );
+                        }
+                    },
+                )
+                .await;
+            for _ in 0..retries.load(Ordering::Relaxed) {
+                self.record(json!({
+                    "kind": "failed_attempt",
+                    "round": round,
+                    "outcome": "retried",
+                }))
+                .await;
+            }
+
+            let response = match response {
+                Ok(response) => response,
+                Err(err) if err.class() == LlmErrorClass::Cancelled => {
+                    return self.cancelled(round).await
+                }
+                Err(err) => {
+                    self.record(json!({
+                        "kind": "failed_attempt",
+                        "round": round,
+                        "outcome": err.class().as_str(),
+                    }))
+                    .await;
+                    return Err(GenerateError::Llm(err));
+                }
+            };
+
+            match response {
+                ToolChatResponse::Content(content) => {
+                    let (code, explanation) = split_code_and_explanation(&content);
+                    let defect = plugin_code_defect(&code, &req.plugin_type);
+                    let valid = defect.is_none();
+                    self.record(json!({
+                        "kind": "final",
+                        "round": round,
+                        "outcome": if valid { "ok" } else { "ai_output_not_code" },
+                        "content": content,
+                    }))
+                    .await;
+                    if !valid {
+                        // Logged with a structural breakdown plus the full raw content — a rare
+                        // failure path, worth the complete picture on its first occurrence.
+                        tracing::warn!(
+                            plugin_type = %req.plugin_type,
+                            content_len = content.len(),
+                            marker_found = content.contains(EXPLANATION_MARKER),
+                            has_plugin_info = code.contains("pluginInfo"),
+                            braces_balanced = balanced(&code, '{', '}'),
+                            parens_balanced = balanced(&code, '(', ')'),
+                            content = %content,
+                            "plugin wizard: AI's final answer failed plugin_code_defect",
+                        );
+                        // One repair round naming the defect (usually a file cut off mid-way);
+                        // a second structural failure ends the generation.
+                        if !repaired {
+                            repaired = true;
+                            self.send("repairing", json!({}));
+                            messages.push(Message::assistant(content));
+                            messages.push(Message::user(crate::llm_prompts::plugin_code_repair(
+                                defect.as_deref().unwrap_or_default(),
+                            )));
+                            continue;
+                        }
+                        return Err(GenerateError::AiOutputNotCode(content));
+                    }
+                    // Run the output through the same `deno` the sandbox uses; a formatter failure
+                    // falls back to the raw output rather than failing over a cosmetic step.
+                    let formatted = match format_with_deno(self.state.plugins.deno_binary(), &code)
+                        .await
+                    {
+                        Ok(formatted) => formatted,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "plugin wizard: deno fmt failed, returning unformatted code");
+                            code
+                        }
                     };
-                    let _ = event_tx.send(
-                        Event::default()
-                            .event("fetch_page")
-                            .data(json!({ "url": url }).to_string()),
-                    );
-                    let headers = substitute_credential_placeholders(
-                        extract_headers_arg(&call),
-                        credential_values,
-                    );
-                    let tool_result = execute_fetch_tool(&url, &headers).await;
-                    let status = serde_json::from_str::<serde_json::Value>(&tool_result)
-                        .ok()
-                        .and_then(|v| v["status"].as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let _ = event_tx.send(
-                        Event::default()
-                            .event("fetch_result")
-                            .data(json!({ "url": url, "status": status }).to_string()),
-                    );
-                    messages.push(Message::tool_result(call.id.clone(), tool_result));
+                    return Ok((formatted, explanation));
+                }
+                ToolChatResponse::ToolCalls(calls) => {
+                    messages.push(Message::assistant_tool_calls(calls.clone()));
+                    let mut results = Vec::new();
+                    for call in &calls {
+                        let url = super::tool_loop::extract_url_arg(call)
+                            .or_else(|| default_fetch_url(req));
+                        if let Some(url) = &url {
+                            self.send("fetch_page", json!({ "url": url }));
+                        }
+                        let outcome = tokio::select! {
+                            outcome = session.execute(call, default_fetch_url(req)) => outcome,
+                            () = self.cancel.cancelled() => return self.cancelled(round).await,
+                        };
+                        if let Some(url) = &url {
+                            self.send(
+                                "fetch_result",
+                                json!({ "url": url, "status": outcome.status }),
+                            );
+                        }
+                        results.push(json!({
+                            "tool_call_id": call.id,
+                            "status": outcome.status,
+                            "result": outcome.result,
+                        }));
+                        messages.push(Message::tool_result(call.id.clone(), outcome.result));
+                    }
+                    self.record(json!({
+                        "kind": "tool_round",
+                        "round": round,
+                        "tool_calls": calls
+                            .iter()
+                            .map(|c| json!({ "id": c.id, "name": c.function.name, "arguments": c.function.arguments }))
+                            .collect::<Vec<_>>(),
+                        "tool_results": results,
+                    }))
+                    .await;
+                    recorded = messages.len();
+                    if session.budget_exhausted() {
+                        self.record(json!({
+                            "kind": "failed_attempt",
+                            "round": round,
+                            "outcome": "context_budget_exceeded",
+                        }))
+                        .await;
+                        return Err(GenerateError::ContextBudgetExceeded);
+                    }
                 }
             }
         }
+
+        Err(GenerateError::Unconverged)
     }
 
-    Err(GenerateError::LlmUnavailable(
-        "生成未能在合理轮数内收敛，请重试".to_string(),
-    ))
+    async fn cancelled(&self, round: usize) -> Result<(String, String), GenerateError> {
+        self.record(json!({
+            "kind": "failed_attempt",
+            "round": round,
+            "outcome": "cancelled",
+        }))
+        .await;
+        Err(GenerateError::Cancelled)
+    }
 }
 
 #[cfg(test)]

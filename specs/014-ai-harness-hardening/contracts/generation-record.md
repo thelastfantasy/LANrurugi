@@ -17,27 +17,21 @@ because that is the only feature in this codebase with rounds.
 
 Key `LANRURUGI_GENERATION_RECORD:<generation_id>` (built from a `GenerationId` newtype), a list, appended in round order, TTL 30 days.
 
-Each element is one **attempt**:
+Elements, in append order (as implemented in `crates/lanrurugi-api/src/plugin_wizard/record.rs`):
 
-| Field | Type | Notes |
+| `kind` | Written | Holds |
 | --- | --- | --- |
-| `index` | integer | 0-based, append order |
-| `kind` | `request` \| `tool_round` \| `failed_attempt` \| `trial_run` | A failed/retried round is its own kind, never presented as content the model was shown; `trial_run` holds a trial-run result with its attribution (FR-022) |
-| `messages` | list | The messages actually sent this round, credential values in placeholder form (absent for `trial_run`) |
-| `tool_calls` | list of `{name, arguments}` | Credentialed header arguments stored in **placeholder form** (`{{field}}`), never substituted |
-| `tool_result` | optional object | The bounded result exactly as the model saw it, including `truncated`/`refused` status and any `withheld_credentials_from_hop` |
-| `outcome` | model-call outcome | Failure classes recorded, not elided; `cancelled` included |
-| `trial` | optional object | `trial_run` only: plugin type, success, error, and the attribution verdict |
-| `at` | timestamp | Ordering safeguard for concurrent writers |
+| `header` | once, first | the generation request with `credential_values` / `login_credentials` / `plugin_parameter_values` reduced to `{value: "{{name}}", supplied}` placeholders, the `model`, the request `params`, and the full `system_prompt` |
+| `request` | before each round is sent | `round` and the `messages` added since the previous element — the header's prompt plus every `request`'s and `tool_round`'s messages, in order, is the full conversation as sent |
+| `tool_round` | after a round that requested tools | the `tool_calls` (`{id, name, arguments}`, arguments as the model wrote them — placeholders only) and `tool_results` exactly as the model was shown them, bounded and framed |
+| `final` | after the round that answered | `outcome` (`ok` / `ai_output_not_code`) and the model's `content` |
+| `failed_attempt` | for a retried, failed, cancelled or budget-stopped round | `round` and `outcome` (`retried`, a model-call class, `cancelled`, `context_budget_exceeded`) — never content the model was shown |
+| `trial_run` | when a trial run names this generation | `trial: {plugin_type, http_status, result}`, the result including its attribution |
 
-Plus a header element (index 0, kind `request`) holding the generation request body with
-`credential_values` / `login_credentials` / `plugin_parameter_values` reduced to their placeholder
-forms and a boolean per field indicating "was supplied", together with the `model`, the request
-parameters actually sent, and the system prompt — what is needed to replay the generation, not just
-to read the user's request.
+Every element carries `at` (epoch ms); the read surface adds `index`. Every element passes a final
+redaction that replaces any known credential value with its placeholder before it is stored.
 
-A trial run carries the `generation_id` of the generation that produced its draft; its result and
-attribution are appended to that record as a `trial_run` attempt. A trial run without a known id
+A trial run carries the `generation_id` of the generation that produced its draft; without one it
 appends nothing.
 
 ## Invariants

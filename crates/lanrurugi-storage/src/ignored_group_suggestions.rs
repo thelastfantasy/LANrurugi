@@ -50,6 +50,14 @@ pub fn fingerprint(archive_ids: &[String], existing_tankoubon_id: Option<&str>) 
     format!("{:016x}", hasher.finish())
 }
 
+/// [`fingerprint`] as the suggestion's typed identity — what records, reviews and labels key on.
+pub fn suggestion_id(
+    archive_ids: &[String],
+    existing_tankoubon_id: Option<&str>,
+) -> lanrurugi_core::ids::GroupSuggestionId {
+    lanrurugi_core::ids::GroupSuggestionId(fingerprint(archive_ids, existing_tankoubon_id))
+}
+
 /// One ignored suggestion, as stored/returned — kept as the original (unsorted, human-readable)
 /// `archive_ids` rather than re-deriving them from the fingerprint (a hash isn't reversible), so
 /// the frontend's "Show ignored combinations" list can render real titles without a second lookup

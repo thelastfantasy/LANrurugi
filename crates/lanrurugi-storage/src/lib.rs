@@ -7,6 +7,7 @@ pub mod bootstrap;
 pub mod compare_cache;
 pub mod device_info;
 pub mod download_queue;
+pub mod grouping_labels;
 pub mod id;
 pub mod ignored_group_suggestions;
 pub mod keys;

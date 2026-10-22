@@ -15,6 +15,7 @@ export function useGenerationProgress() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const startedAtRef = useRef<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const stop = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -23,8 +24,12 @@ export function useGenerationProgress() {
     }
   }, [])
 
-  const start = useCallback(() => {
+  /** Begins a new call; the returned signal aborts if the component unmounts mid-generation. */
+  const start = useCallback((): AbortSignal => {
     stop()
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setItems([])
     setElapsedSeconds(0)
     startedAtRef.current = Date.now()
@@ -33,10 +38,17 @@ export function useGenerationProgress() {
         setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000))
       }
     }, 1000)
+    return controller.signal
   }, [stop])
 
-  // Unmount safety net in case the component unmounts mid-generation.
-  useEffect(() => stop, [stop])
+  // Unmounting mid-generation stops the timer and cancels the generation server-side.
+  useEffect(
+    () => () => {
+      stop()
+      abortRef.current?.abort()
+    },
+    [stop],
+  )
 
   const onProgress = useCallback(
     (event: GenerateProgressEvent) => {
@@ -47,8 +59,19 @@ export function useGenerationProgress() {
         ])
       } else if (event.kind === "fetch_result") {
         const key =
-          event.status === "ok" ? "pluginWizard.streamFetchResultOk" : "pluginWizard.streamFetchResultFailed"
+          event.status === "ok"
+            ? "pluginWizard.streamFetchResultOk"
+            : event.status === "truncated"
+              ? "pluginWizard.streamFetchResultTruncated"
+              : event.status === "refused"
+                ? "pluginWizard.streamFetchResultRefused"
+                : "pluginWizard.streamFetchResultFailed"
         setItems((prev) => [...prev, { kind: "log", text: t(key, { url: event.url }) ?? event.url }])
+      } else if (event.kind === "retrying") {
+        // A log line also makes the retried round's text start a fresh run.
+        setItems((prev) => [...prev, { kind: "log", text: t("pluginWizard.streamRetrying") }])
+      } else if (event.kind === "repairing") {
+        setItems((prev) => [...prev, { kind: "log", text: t("pluginWizard.streamRepairing") }])
       } else if (event.kind === "content_delta") {
         // Only appends onto the last item if it's already a text run, so a delta after a log
         // line (new round) starts a fresh text run instead of concatenating onto stale text.

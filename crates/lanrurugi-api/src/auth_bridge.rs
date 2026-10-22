@@ -693,9 +693,10 @@ async fn bridge_callback(
         refresh_max_age,
     );
     let clear_state = set_cookie(SSO_STATE_COOKIE, "", SSO_STATE_PATH, 0, false);
-    let mut all_cookies = cookies.to_vec();
+    let mut all_cookies = cookies;
     all_cookies.push(clear_state);
-    all_cookies.push(crate::login::device_id_cookie(
+    all_cookies.extend(crate::login::device_id_cookie(
+        &cfg.live.cookie_names,
         &device_id,
         is_https_origin(&current_origin) || cfg.live.force_secure_cookies,
     ));
@@ -717,6 +718,7 @@ mod tests {
                 guest_mode_enabled: false,
                 password_hash: String::new(),
                 session_secret: Vec::new(),
+                cookie_names: lanrurugi_core::session::CookieNames::for_secret(b"test"),
                 access_token_lifetime_secs: 0,
                 refresh_token_lifetime_secs: 0,
                 refresh_token_idle_lifetime_secs: 0,

@@ -51,7 +51,7 @@ export function GenerationStep({
   async function trigger() {
     onBeginOperation()
     setGenerating(true)
-    start()
+    const signal = start()
     try {
       const loginAssociation = typeSession.loginAssociation
         ? { namespace: typeSession.loginAssociation.namespace }
@@ -66,6 +66,7 @@ export function GenerationStep({
       const response = await streamGenerate(
         {
           plugin_type: type,
+          target_domain: session.domain,
           test_links: links,
           auxiliary_reference_urls: links,
           reference_sample_code: session.lookupResult[type].covered
@@ -83,6 +84,7 @@ export function GenerationStep({
           })),
         },
         onProgress,
+        signal,
       )
       if (loginAssociation) onCredentialValuesResolved(response.resolvedCredentialValues)
       onRevisionAppended({
@@ -92,12 +94,15 @@ export function GenerationStep({
         createdAt: Date.now(),
         trialRuns: [],
         explanation: response.explanation,
+        generationId: response.generationId,
       })
       onConversationTurnAppended({
         userMessage: previousError ? `上一版代码试运行失败，请修复：${previousError}` : "请生成插件代码。",
         assistantCode: response.code,
       })
     } catch (err) {
+      // Cancelled because the component went away mid-generation; nothing to report.
+      if (err instanceof GenerateStreamError && err.code === "cancelled") return
       const heading =
         err instanceof GenerateStreamError && err.code === "ai_output_not_code"
           ? t("pluginWizard.aiOutputNotCode")

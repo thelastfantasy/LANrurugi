@@ -168,10 +168,14 @@ export async function recoverSession(): Promise<boolean> {
 
 /** Reads `{error, detail?, raw_output?}`, appending detail/raw_output when present. */
 async function readErrorBody(response: Response, path: string): Promise<string> {
-  const body = (await response.json().catch(() => null)) as
-    | { error?: string; detail?: string; raw_output?: string }
-    | null
-  if (!body?.error) return `Request to ${path} failed with ${response.status}`
+  const body = (await response.json().catch(() => null)) as ErrorBody | null
+  return errorMessage(body, response.status, path)
+}
+
+type ErrorBody = { error?: string; detail?: string; raw_output?: string; field?: string }
+
+function errorMessage(body: ErrorBody | null, status: number, path: string): string {
+  if (!body?.error) return `Request to ${path} failed with ${status}`
   const extra = body.detail ?? body.raw_output
   return extra ? `${body.error}: ${extra}` : body.error
 }
@@ -278,11 +282,12 @@ export async function sendJson<T>(
         invalidateLoginStatus()
       }
     }
-    if (response.status === 422) {
-      const errorBody = (await response.json().catch(() => null)) as { error?: string; field?: string } | null
-      if (errorBody?.error && errorBody.field) throw new ValidationError(errorBody.error, errorBody.field)
+    // Read once: a second `response.json()` on a consumed body always fails.
+    const errorBody = (await response.json().catch(() => null)) as ErrorBody | null
+    if (response.status === 422 && errorBody?.error && errorBody.field) {
+      throw new ValidationError(errorBody.error, errorBody.field)
     }
-    throw new ApiError(response.status, await readErrorBody(response, path))
+    throw new ApiError(response.status, errorMessage(errorBody, response.status, path), errorBody ?? undefined)
   }
 
   const text = await response.text()

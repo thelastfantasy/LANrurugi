@@ -249,6 +249,12 @@ export interface ChangelogRelease {
 export interface ShinobuStatus {
   is_alive: 0 | 1
   pid: number
+  /** Additive: the self-recovering watcher's state; `is_alive` is `state === "running"`. */
+  state?: "running" | "recovering" | "stopped"
+  /** Why it last failed (kept after a recovery, for the record). */
+  last_error?: string | null
+  /** Automatic recoveries since it was last started. */
+  recoveries?: number
 }
 
 export interface DuplicateArchive {
@@ -1458,4 +1464,41 @@ export interface AuthBridgeConfig {
   current_origin: string | null
   current_origin_trusted: boolean
   current_origin_is_auth_origin: boolean
+}
+
+/** `GET /api/llm/usage` — per-feature model usage over a window. */
+export type LlmUsageWindow = "day" | "week"
+
+/** Token figures are absent (never `0`) when no call in the window reported them. */
+export interface LlmUsageTokens {
+  prompt?: number
+  completion?: number
+  total?: number
+  cache_hit?: number
+  cache_miss?: number
+  reasoning?: number
+  /** Calls whose provider response carried no usage block; non-zero means the figures undercount. */
+  unreported_calls: number
+}
+
+export type LlmUsageFeatureRow =
+  | { feature: string; status: "no_data" }
+  | {
+      feature: string
+      status: "reported"
+      /** Calls that reached the provider; may be 0 when every answer came from a local cache. */
+      requests: number
+      /** Answers the feature served from its own result cache instead of calling the provider. */
+      local_cache_hits: number
+      elapsed_ms: number
+      tokens: LlmUsageTokens
+      cancelled: number
+      /** Conversation rounds that did not extend the previous request (prompt cache missed). */
+      prefix_breaks: number
+      failures: Record<string, number>
+    }
+
+export interface LlmUsageResponse {
+  window: LlmUsageWindow
+  features: LlmUsageFeatureRow[]
 }

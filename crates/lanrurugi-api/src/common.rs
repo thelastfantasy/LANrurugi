@@ -30,6 +30,33 @@ pub fn not_found(operation: &str, message: impl Into<String>) -> Response {
     error(StatusCode::NOT_FOUND, operation, message)
 }
 
+/// HTTP status for a failed model call, decided by its class rather than by each endpoint.
+pub fn llm_error_status(class: lanrurugi_llm::LlmErrorClass) -> StatusCode {
+    use lanrurugi_llm::LlmErrorClass as C;
+    match class {
+        C::NotConfigured | C::Transient | C::Cancelled => StatusCode::SERVICE_UNAVAILABLE,
+        C::Auth | C::Balance | C::Malformed => StatusCode::BAD_GATEWAY,
+        C::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        C::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        C::Rejected => StatusCode::UNPROCESSABLE_ENTITY,
+    }
+}
+
+/// The `OperationResponse` error shape for a failed model call, plus its machine-readable
+/// `class` so a client can tell a timeout from a provider error from a validator rejection.
+pub fn llm_error(operation: &str, err: &lanrurugi_llm::LlmError) -> Response {
+    (
+        llm_error_status(err.class()),
+        Json(json!({
+            "operation": operation,
+            "error": err.message(),
+            "class": err.class().as_str(),
+            "success": 0,
+        })),
+    )
+        .into_response()
+}
+
 fn merge_extra(body: &mut Value, extra: impl IntoIterator<Item = (&'static str, Value)>) {
     let Value::Object(map) = body else {
         unreachable!("ok() always builds an object")

@@ -261,3 +261,27 @@ async fn serve_index_ignores_a_theme_value_outside_the_known_whitelist() {
         "an unrecognized theme value must leave the attribute empty for the client script's own fallback chain to handle, got: {body}"
     );
 }
+
+/// An unknown `/api/*` path must never fall through to the SPA's `index.html`: that 200 HTML
+/// response is what made a missing route look like "data unavailable" to a JSON client.
+#[tokio::test]
+async fn an_unknown_api_path_is_json_not_the_spa_index() {
+    let Some((app, _redis, _dir)) = test_app_with_static_dir().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    // `require_api_key` reads the peer address, which a real server supplies per connection.
+    let app = app.layer(axum::extract::connect_info::MockConnectInfo(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+    ));
+    let (status, body) = get_body(&app, "/api/definitely-not-a-route").await;
+    assert_ne!(
+        status,
+        axum::http::StatusCode::OK,
+        "got the SPA index: {body}"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&body).is_ok(),
+        "expected a JSON error body, got: {body}"
+    );
+}

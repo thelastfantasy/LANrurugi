@@ -63,6 +63,7 @@ export function CheckboxField({
   onCheckedChange,
   disabled,
   size = "inherit",
+  fill = false,
   children,
   ...rootProps
 }: {
@@ -70,11 +71,14 @@ export function CheckboxField({
   onCheckedChange: (checked: boolean) => void
   disabled?: boolean
   size?: FieldSize
+  /** Take the parent's full width and let the label shrink, so a long label can truncate instead
+   * of overflowing whatever sits beside the field. */
+  fill?: boolean
   children: ReactNode
 } & Omit<ComponentProps<typeof BaseCheckbox.Root>, "checked" | "onCheckedChange" | "className" | "children" | "disabled">) {
   return (
     <label
-      className={`inline-flex items-start gap-[6px] align-middle ${
+      className={`${fill ? "flex w-full min-w-0" : "inline-flex"} items-start gap-[6px] align-middle ${
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
       }`}
     >
@@ -94,7 +98,7 @@ export function CheckboxField({
           real box to align by (no line-height/geometry of its own to match against the checkbox's
           `size-[13px]` box) — wrapping it here is what actually makes `items-start` (or any
           `align-items`) apply consistently, not the `marginTop` nudge alone. */}
-      <span>{children}</span>
+      <span className={fill ? "min-w-0 flex-1" : undefined}>{children}</span>
     </label>
   );
 }

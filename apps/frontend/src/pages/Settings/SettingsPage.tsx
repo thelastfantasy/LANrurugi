@@ -20,6 +20,7 @@ import { setLocalBackend } from "@/translation/settings"
 import { ApiTokensSection } from "./ApiTokensSection"
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
+import { LlmUsageSection } from "./LlmUsageSection"
 import { SecuritySection } from "./SecuritySection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
 import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
@@ -546,7 +547,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <TranslationSection state={translation} dispatch={dispatchTranslation} />
 
-          <WorkersSection onStatus={setStatus} />
+          <LlmUsageSection />
+
+          <WorkersSection />
         </ul>
       </form>
 

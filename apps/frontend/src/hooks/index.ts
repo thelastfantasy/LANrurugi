@@ -4,6 +4,8 @@ export * from "./useCustomColumnNamespace"
 
 export * from "./useDocumentTitle"
 
+export * from "./useHorizontalSwipe"
+
 export * from "./useIsNarrowViewport"
 
 export * from "./useLibrary"

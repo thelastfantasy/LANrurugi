@@ -1,7 +1,8 @@
 //! `shinobu` endpoint group. Shapes verified against `~/LANraragi/tools/openapi.yaml`. There is
 //! no separate Shinobu process in LANrurugi (constitution Principle III) — `pid` reports the
 //! current (single) process PID rather than a distinct watcher-process PID, and `is_alive`
-//! reflects whether the in-process watcher task is running.
+//! reflects whether the in-process watcher is currently watching (not merely started). Restart
+//! and rescan also run a catch-up scan for files that arrived while it was not.
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
@@ -19,13 +20,34 @@ pub fn router() -> Router<AppState> {
         .route("/shinobu/rescan", post(shinobu_rescan))
 }
 
+/// What the watcher's supervisor needs to restart and catch up on its own.
+fn scanner_config(state: &AppState) -> lanrurugi_scanner::handle::ScannerConfig {
+    lanrurugi_scanner::handle::ScannerConfig {
+        archive_dir: state.library.archive_dir.clone(),
+        thumb_dir: state.library.thumb_dir.clone(),
+        config_pool: state.redis.config.clone(),
+        search_pool: state.redis.search.clone(),
+        equivalence: state.equivalence.clone(),
+        archives: (*state.repos.archives).clone(),
+        new_archive_tx: Some(state.new_archive_tx.clone()),
+        locks: state.filename_locks.clone(),
+        jobs: state.jobs.clone(),
+    }
+}
+
+/// Legacy's fields unchanged (`pid` is this process's own); `state`, `last_error` and
+/// `recoveries` are additive and describe the self-recovering watcher.
 async fn shinobu_status(State(state): State<AppState>) -> Response {
-    let is_alive = state.scanner.is_alive().await;
+    let status = state.scanner.status();
+    let is_alive = status.state == lanrurugi_scanner::handle::WatcherState::Running;
     axum::Json(json!({
         "operation": "shinobu_status",
         "success": 1,
         "is_alive": if is_alive { 1 } else { 0 },
         "pid": std::process::id(),
+        "state": status.state,
+        "last_error": status.last_error,
+        "recoveries": status.recoveries,
     }))
     .into_response()
 }
@@ -36,19 +58,7 @@ async fn shinobu_stop(State(state): State<AppState>) -> Response {
 }
 
 async fn shinobu_restart(State(state): State<AppState>) -> Response {
-    let result = state
-        .scanner
-        .restart(
-            state.library.archive_dir.clone(),
-            state.library.thumb_dir.clone(),
-            state.redis.config.clone(),
-            state.redis.search.clone(),
-            state.equivalence.clone(),
-            (*state.repos.archives).clone(),
-            Some(state.new_archive_tx.clone()),
-            state.filename_locks.clone(),
-        )
-        .await;
+    let result = state.scanner.restart(scanner_config(&state)).await;
     match result {
         Ok(()) => axum::Json(json!({
             "operation": "shinobu_restart",
@@ -84,19 +94,7 @@ async fn shinobu_rescan(State(state): State<AppState>) -> Response {
     use lanrurugi_storage::keys::FILEMAP_KEY;
     let _: Result<(), _> = conn.del(FILEMAP_KEY).await;
 
-    let result = state
-        .scanner
-        .restart(
-            state.library.archive_dir.clone(),
-            state.library.thumb_dir.clone(),
-            state.redis.config.clone(),
-            state.redis.search.clone(),
-            state.equivalence.clone(),
-            (*state.repos.archives).clone(),
-            Some(state.new_archive_tx.clone()),
-            state.filename_locks.clone(),
-        )
-        .await;
+    let result = state.scanner.restart(scanner_config(&state)).await;
     match result {
         Ok(()) => axum::Json(json!({
             "operation": "shinobu_rescan",

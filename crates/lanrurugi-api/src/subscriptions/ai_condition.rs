@@ -11,7 +11,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use lanrurugi_llm::LlmClient;
 use lanrurugi_storage::subscriptions::{Condition, FieldOperator, FieldRule, RuleValue};
 
 use crate::common::error;
@@ -38,7 +37,7 @@ pub(crate) struct ParseConditionRequest {
 /// The model-facing DSL. Deliberately JSON rather than free-form text: the same shape can be
 /// validated by serde before the semantic parser sees it, and the model does not have to remember
 /// exact `kind`/`child`/`children` spellings.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum Dsl {
     All {
@@ -320,16 +319,27 @@ pub(crate) async fn generate(
     }
 
     let system = crate::llm_prompts::subscription_condition_system(&body.fields);
-    let dsl = match state
-        .redis
-        .config
-        .json_chat::<Dsl>(&system, &prompt, 0.1, 2000)
-        .await
+    // The semantic parser is the validator: an unknown field or operator gets one repair naming it.
+    let dsl = match crate::repair::json_chat_checked(
+        &state.redis.config,
+        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::SUBSCRIPTION_CONDITION),
+        &system,
+        &prompt,
+        0.1,
+        2000,
+        |dsl: &Dsl| condition_from_dsl(dsl.clone(), &body.fields).map(|_| ()),
+    )
+    .await
     {
-        Ok(dsl) => dsl,
-        Err(message) => {
-            return error(StatusCode::BAD_GATEWAY, "ai_condition", message);
+        Ok(dsl) => dsl.value,
+        Err(err) if err.class() == lanrurugi_llm::LlmErrorClass::Rejected => {
+            return error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "ai_condition",
+                err.message(),
+            )
         }
+        Err(err) => return crate::common::llm_error("ai_condition", &err),
     };
 
     match condition_from_dsl(dsl, &body.fields) {

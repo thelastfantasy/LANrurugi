@@ -55,6 +55,8 @@ import type {
   ImportSnapshotMetadata,
   JobRecord,
   JobsResponse,
+  LlmUsageResponse,
+  LlmUsageWindow,
   LoginSession,
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
@@ -769,11 +771,47 @@ export function useAiRenameChapter() {
   })
 }
 
+/** Why two members were scored together (one pair of a suggestion). */
+export interface PairEvidence {
+  a: string
+  b: string
+  title: number
+  tag: number
+  tokens: number
+  score: number
+  creator_match: "same" | "different" | "unknown"
+  shared_cosplayer: boolean
+  shared_top_tags: string[]
+  blocked_by?: "category" | "creator"
+  similar: boolean
+}
+
+export type GroupReviewStatus = "reviewed" | "repaired" | "settled" | "fell_back" | "not_configured"
+
+export interface GroupReviewVerdict {
+  archive_id: string
+  keep: boolean
+  reason: string
+}
+
+/** The AI reviewer's judgment of one suggestion; it can only reject members, never add. */
+export interface GroupReview {
+  status: GroupReviewStatus
+  verdicts?: GroupReviewVerdict[]
+  reason?: string
+  judged?: string[]
+  prompt_version: string
+}
+
 export interface AiGroupSuggestion {
   /** Additional archives only — existing members are never repeated. */
   archive_ids: string[]
   /** Present when adding to an existing Tankoubon instead of creating a new one. */
   existing_tankoubon_id?: string
+  suggestion_id: string
+  evidence: PairEvidence[]
+  /** Present only when known without a provider call (settled or cached). */
+  review?: GroupReview
 }
 
 /** Whole-library grouping suggestions; local-model-only (503 `model_not_ready` if not ready). */
@@ -791,6 +829,68 @@ export interface IgnoredGroupSuggestion {
   archive_ids: string[]
   existing_tankoubon_id?: string
   ignored_at: number
+}
+
+/** Reviews one suggestion on demand. Cached forever per suggestion id: the server caches by
+ * content too, so a re-ask only costs a round trip. A suggestion that already carries a review
+ * skips the request. */
+export function useGroupSuggestionReview(suggestion: AiGroupSuggestion | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["tankoubons", "ai-group-suggestions", "review", suggestion?.suggestion_id],
+    queryFn: async () =>
+      (
+        await sendJson<{ suggestion_id: string; review: GroupReview }>(
+          "POST",
+          "/tankoubons/ai-group-suggestions/review",
+          {
+            archive_ids: suggestion?.archive_ids ?? [],
+            existing_tankoubon_id: suggestion?.existing_tankoubon_id,
+          },
+        )
+      ).review,
+    enabled: enabled && !!suggestion && !suggestion.review,
+    initialData: suggestion?.review,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  })
+}
+
+/** Records the user's choices on a created suggestion as grouping labels. */
+export function useRecordGroupLabels() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: {
+      archive_ids: string[]
+      existing_tankoubon_id?: string
+      kept: string[]
+      unticked: string[]
+      reviewer_rejected_kept: string[]
+    }) => sendJson("POST", "/tankoubons/ai-group-suggestions/labels", body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons", "ai-group-suggestions", "labels"] }),
+  })
+}
+
+export interface GroupLabelCounts {
+  positive: number
+  negative: number
+  disagreements: number
+}
+
+export function useGroupLabelCounts(enabled = true) {
+  return useQuery({
+    queryKey: ["tankoubons", "ai-group-suggestions", "labels"],
+    queryFn: () => fetchJson<GroupLabelCounts>("/tankoubons/ai-group-suggestions/labels"),
+    enabled,
+  })
+}
+
+export function useDeleteGroupLabels() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson("DELETE", "/tankoubons/ai-group-suggestions/labels"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons", "ai-group-suggestions", "labels"] }),
+  })
 }
 
 /** Raw dismissed-suggestion entries; titles resolved client-side. */
@@ -1280,6 +1380,14 @@ export function useDiscardReservation() {
     mutationFn: (id: string) =>
       sendJson<void>("POST", `/reservations/${encodeURIComponent(id)}/discard`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reservations"] }),
+  })
+}
+
+/** Per-feature model usage for the settings panel (`specs/014-ai-harness-hardening` US3). */
+export function useLlmUsage(window: LlmUsageWindow) {
+  return useQuery({
+    queryKey: ["llm-usage", window],
+    queryFn: () => fetchJson<LlmUsageResponse>(`/llm/usage?window=${window}`),
   })
 }
 

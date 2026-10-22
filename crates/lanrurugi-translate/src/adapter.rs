@@ -368,6 +368,19 @@ impl TranslationError {
             Self::MalformedResponse(_) => "malformed_response",
         }
     }
+
+    /// The shared model-call vocabulary's class for this failure (`specs/014-ai-harness-hardening`
+    /// T043), used for usage attribution at the seam boundary. Additive: nothing in this crate
+    /// branches on it.
+    pub fn llm_class(&self) -> lanrurugi_llm::LlmErrorClass {
+        use lanrurugi_llm::LlmErrorClass as C;
+        match self {
+            Self::Unreachable(_) => C::Transient,
+            Self::AuthFailed => C::Auth,
+            Self::RateLimited => C::RateLimited,
+            Self::MalformedResponse(_) => C::Malformed,
+        }
+    }
 }
 
 /// Maps an HTTP status from any provider onto a normalized error.

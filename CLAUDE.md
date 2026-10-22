@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Fifteen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+Sixteen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
 block is regenerated, because it has gone stale before.
 
@@ -22,7 +22,16 @@ block is regenerated, because it has gone stale before.
   Linux x86_64/aarch64, macOS arm64 and FreeBSD x86_64; the Linux package is verified locally in a clean
   Debian container, while macOS, FreeBSD and Linux aarch64 are only verified by
   `.github/workflows/native-release.yml`, which has not run yet (see its `tasks.md`).
-- **Planned, not started**: `014-ai-harness-hardening` (tasks.md 0/46).
+- **Code implemented, full-suite run outstanding**: `014-ai-harness-hardening` (52/53 — the open task is
+  the user-run `mise run test`). Every model call goes through `lanrurugi_llm`'s `CallSpec` seam
+  (deadline, retry-once, cancellation, usage ledger `LANRURUGI_LLM_USAGE:*` read by `GET /api/llm/usage`);
+  the plugin wizard's fetches pass `plugin_wizard/fetch.rs`'s outbound policy (credentials only to the
+  target site, hops off the user's sites end the chain), trial runs need user approval for off-site
+  declared hosts, and each generation is recorded at `LANRURUGI_GENERATION_RECORD:*`. Its `tasks.md`
+  Implementation Record lists what was and was not verified, and where the code departs from plan.md.
+- **Code implemented, user verification outstanding**: `016-tankoubon-grouping-harness` (30/30 —
+  single-crate gates run; the full `mise run test` and the modal's visual sign-off are the user's).
+  See its addendum below.
 - **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
@@ -47,6 +56,21 @@ unknown mount prefix, a sidecar entry for a route that does not exist). `cors.rs
 is not a CORS-safelisted value, so every JSON-bodied cross-origin request was preflighted and
 refused. Design artifacts:
 `specs/011-api-docs-site/{research.md,data-model.md,contracts/,quickstart.md,tasks.md}`.
+
+**Phase 1 addendum — `016-tankoubon-grouping-harness`**: plan at
+`specs/016-tankoubon-grouping-harness/plan.md`. "AI smart tankoubon" grouping is local recall plus an
+LLM review. `tankoubon_grouping.rs` scores every pair once into a `PairEvidence` (the grouping
+decision, the "why" panel and the evaluation all read it) behind `GroupingSettings`. Deterministic
+gates: a creator conflict (artist + circle as one set) blocks a pair unless either side is an
+anthology or they share a cosplayer; `release_markers.rs` strips 中国翻訳/DL版-style tokens; tag
+overlap is IDF-weighted over the candidate pool. `tankoubon_grouping/review.rs` reviews only the card
+in view plus the next two, through `FeatureId::TANKOUBON_GROUPING_REVIEW`. It may only *remove*
+members (validated, one repair, else `fell_back`), skips groups that already share a creator or
+cosplayer (`settled`), and sends a compact payload (≤ 12 members, cleaned titles, ≤ 6 rare tags).
+Reviews are cached by suggestion id + prompt version + content hash. Creating or dismissing a
+suggestion writes pair labels (`LANRURUGI_GROUPING_LABELS`). `lanrurugi-server eval-grouping` replays
+those labels to report precision and recall before any weight, gate or prompt change. Its prompt
+lives in `llm_prompts.rs`, like every model-facing string.
 
 **Phase 1 addendum — `015-native-platforms`**: plan at `specs/015-native-platforms/plan.md`. Native
 release packages next to the Docker image. `lanrurugi-server::install_layout` runs first in `main`

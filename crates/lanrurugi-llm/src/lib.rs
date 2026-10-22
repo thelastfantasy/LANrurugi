@@ -1,26 +1,38 @@
 //! Generic LLM chat client — currently DeepSeek only, designed for easy addition of
-//! other providers (Qwen, OpenAI, etc.) through the [`ChatBackend`] trait.
+//! other providers (Qwen, OpenAI, etc.).
 //!
-//! Callers get an API key via [`resolve_api_key`] and call [`chat`] / [`json_chat`] for a plain
-//! single-turn system+user exchange, or [`tool_chat`] for a multi-turn, tool-calling-capable
-//! conversation (`specs/006-ai-plugin-wizard`'s own agentic generation loop). Failures return
-//! `Err` with a human-readable message suitable for surfacing to the frontend as a toast.
+//! Every call takes a [`CallSpec`] (which feature is calling, its deadline, an optional
+//! cancellation token) and runs under one policy (`retry`): a single deadline covering all
+//! attempts, at most one retry for a retryable class, and a usage report folded into the ledger
+//! (`usage`). Failures are an [`LlmError`], whose message is the human-readable text callers have
+//! always shown and which converts losslessly into `String`.
+
+pub mod error;
+pub mod prefix;
+pub mod retry;
+pub mod usage;
+
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use tracing::warn;
+
+pub use error::{LlmError, LlmErrorClass};
+pub use prefix::{Conversation, PrefixBreak};
+pub use retry::{CallSpec, DEFAULT_DEADLINE};
+pub use usage::{FeatureId, TokenUsage};
 
 /// The one model name every `lanrurugi-llm` call site uses. `-pro`'s reasoning could exhaust the
 /// whole `max_tokens` budget on `reasoning_content` and never emit `content` — switched to
 /// `-flash` for all callers 2026-08-25 per explicit user direction.
-const DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
+pub const DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
 
 /// Steers `reasoning_effort` down without disabling it — a soft mitigation for the truncation
-/// issue above; `tool_chat_streaming`'s own retry-with-thinking-disabled is the real fallback.
+/// issue above; a truncated stream's retry runs with thinking disabled as the real fallback.
 fn thinking_low_effort() -> serde_json::Value {
     json!({ "type": "enabled", "reasoning_effort": "low" })
 }
@@ -28,13 +40,16 @@ fn thinking_low_effort() -> serde_json::Value {
 /// Resolves the LLM API key: Redis `LRR_CONFIG.llm_api_key` first, env var
 /// `DEEPSEEK_API_KEY` fallback (e.g. pre-injected via compose).
 pub async fn resolve_api_key(redis_config: &Pool) -> Option<String> {
-    let mut conn = redis_config.get().await.ok()?;
-    let from_config = conn
-        .hget::<_, _, Option<String>>(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key")
-        .await
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty());
+    // An unreachable Redis still falls back to the env var rather than reading as "no key".
+    let from_config = match redis_config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key")
+            .await
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty()),
+        Err(_) => None,
+    };
     from_config.or_else(|| {
         std::env::var("DEEPSEEK_API_KEY")
             .ok()
@@ -56,11 +71,19 @@ fn deepseek_base_url() -> String {
         .unwrap_or_else(|_| "https://api.deepseek.com".to_string())
 }
 
+/// The provider's own error message from a non-2xx body, or the raw body.
+fn provider_message(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| text.to_string())
+}
+
 /// Checks the DeepSeek account's own `/user/balance` endpoint before an LLM call. For the
 /// official DeepSeek API this is the authoritative "is the key both valid and funded" signal;
 /// custom/mock base URLs that do not implement the endpoint are allowed to fall through (404 is
 /// treated as "balance checking not supported", not as a hard failure).
-async fn check_balance(key: &str) -> Result<(), String> {
+async fn check_balance(key: &str) -> Result<(), LlmError> {
     let base_url = deepseek_base_url();
     let client = reqwest::Client::new();
     let resp = client
@@ -68,7 +91,7 @@ async fn check_balance(key: &str) -> Result<(), String> {
         .header("Authorization", format!("Bearer {key}"))
         .send()
         .await
-        .map_err(|e| format!("LLM: 余额检查请求失败: {e}"))?;
+        .map_err(LlmError::balance_request_failed)?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -77,35 +100,29 @@ async fn check_balance(key: &str) -> Result<(), String> {
         if status.as_u16() == 404 {
             return Ok(());
         }
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| text.clone());
-        let detail = match status.as_u16() {
-            401 => format!("LLM: API Key 无效 (401) — {msg}"),
-            402 => format!("LLM: 账户余额不足 (402) — {msg}"),
-            _ => format!("LLM: 余额检查失败 ({}) — {msg}", status.as_u16()),
-        };
-        return Err(detail);
+        return Err(LlmError::from_balance_status(
+            status.as_u16(),
+            &provider_message(&text),
+        ));
     }
 
     let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
     if let Some(available) = body["is_available"].as_bool() {
         if !available {
-            return Err("LLM: DeepSeek 账户余额不足或账户不可用".to_string());
+            return Err(LlmError::balance_unavailable());
         }
     }
     Ok(())
 }
 
-/// Single availability gate used by every LLM call site: verifies that a key is configured and,
-/// for the official DeepSeek API, that the account currently has enough balance to make requests.
+/// Single availability gate used by every LLM call: verifies that a key is configured and, for
+/// the official DeepSeek API, that the account currently has enough balance to make requests.
 /// Success is cached briefly for the same key to avoid a `/user/balance` round-trip on every
 /// model call.
-pub async fn ensure_available(redis_config: &Pool) -> Result<(), String> {
+pub async fn ensure_available(redis_config: &Pool) -> Result<(), LlmError> {
     let key = resolve_api_key(redis_config)
         .await
-        .ok_or_else(|| "DeepSeek API key not configured".to_string())?;
+        .ok_or_else(LlmError::not_configured)?;
 
     {
         let cache = BALANCE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -123,89 +140,102 @@ pub async fn ensure_available(redis_config: &Pool) -> Result<(), String> {
     Ok(())
 }
 
-/// `LlmClient` is the single trait through which every LANrurugi feature should talk to the
-/// LLM. It deliberately bundles availability pre-flight (key + balance) with the actual call
-/// methods, so call sites do not have to remember whether this particular feature checks
-/// `resolve_api_key()` itself or relies on the underlying HTTP helper.
+/// What a streaming call reports while it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEvent<'a> {
+    /// A chunk of the final answer's content.
+    ContentDelta(&'a str),
+    /// The round is being retried; anything streamed so far belongs to an abandoned attempt.
+    /// Sent before any of the retry's output (FR-031).
+    Retrying,
+}
+
+/// `LlmClient` is the single trait through which every LANrurugi feature talks to the LLM. Each
+/// method verifies key/balance, then makes the call under the spec's deadline/retry/cancel policy.
 #[allow(async_fn_in_trait)]
 pub trait LlmClient: Send + Sync {
-    /// Verifies key/balance before any model call. All trait methods call this internally.
-    async fn ensure_available(&self) -> Result<(), String>;
+    async fn ensure_available(&self) -> Result<(), LlmError>;
     async fn chat(
         &self,
+        spec: &CallSpec,
         system: &str,
         user: &str,
         temperature: f32,
         max_tokens: u32,
-    ) -> Result<String, String>;
+    ) -> Result<String, LlmError>;
     async fn json_chat<T: serde::de::DeserializeOwned>(
         &self,
+        spec: &CallSpec,
         system: &str,
         user: &str,
         temperature: f32,
         max_tokens: u32,
-    ) -> Result<T, String>;
+    ) -> Result<T, LlmError>;
     async fn tool_chat(
         &self,
+        spec: &CallSpec,
         messages: &[Message],
         tools: &[Tool],
         temperature: f32,
         max_tokens: u32,
         force_json_content: bool,
-    ) -> Result<ToolChatResponse, String>;
+    ) -> Result<ToolChatResponse, LlmError>;
+    #[allow(clippy::too_many_arguments)]
     async fn tool_chat_streaming<F>(
         &self,
+        spec: &CallSpec,
         messages: &[Message],
         tools: &[Tool],
         temperature: f32,
         max_tokens: u32,
         force_json_content: bool,
-        on_content_delta: F,
-    ) -> Result<ToolChatResponse, String>
+        on_event: F,
+    ) -> Result<ToolChatResponse, LlmError>
     where
-        F: FnMut(&str) + Send;
+        F: FnMut(StreamEvent<'_>) + Send;
 }
 
 /// The canonical backend is the Redis config pool itself; every `AppState.redis.config` Pool can
 /// therefore be used directly as an `LlmClient`.
 impl LlmClient for Pool {
-    async fn ensure_available(&self) -> Result<(), String> {
+    async fn ensure_available(&self) -> Result<(), LlmError> {
         ensure_available(self).await
     }
 
     async fn chat(
         &self,
+        spec: &CallSpec,
         system: &str,
         user: &str,
         temperature: f32,
         max_tokens: u32,
-    ) -> Result<String, String> {
-        self.ensure_available().await?;
-        chat(self, system, user, temperature, max_tokens).await
+    ) -> Result<String, LlmError> {
+        chat(self, spec, system, user, temperature, max_tokens).await
     }
 
     async fn json_chat<T: serde::de::DeserializeOwned>(
         &self,
+        spec: &CallSpec,
         system: &str,
         user: &str,
         temperature: f32,
         max_tokens: u32,
-    ) -> Result<T, String> {
-        self.ensure_available().await?;
-        json_chat(self, system, user, temperature, max_tokens).await
+    ) -> Result<T, LlmError> {
+        json_chat(self, spec, system, user, temperature, max_tokens).await
     }
 
     async fn tool_chat(
         &self,
+        spec: &CallSpec,
         messages: &[Message],
         tools: &[Tool],
         temperature: f32,
         max_tokens: u32,
         force_json_content: bool,
-    ) -> Result<ToolChatResponse, String> {
-        self.ensure_available().await?;
+    ) -> Result<ToolChatResponse, LlmError> {
         tool_chat(
             self,
+            spec,
             messages,
             tools,
             temperature,
@@ -217,85 +247,183 @@ impl LlmClient for Pool {
 
     async fn tool_chat_streaming<F>(
         &self,
+        spec: &CallSpec,
         messages: &[Message],
         tools: &[Tool],
         temperature: f32,
         max_tokens: u32,
         force_json_content: bool,
-        mut on_content_delta: F,
-    ) -> Result<ToolChatResponse, String>
+        on_event: F,
+    ) -> Result<ToolChatResponse, LlmError>
     where
-        F: FnMut(&str) + Send,
+        F: FnMut(StreamEvent<'_>) + Send,
     {
-        self.ensure_available().await?;
         tool_chat_streaming(
             self,
-            messages,
-            tools,
-            temperature,
-            max_tokens,
-            force_json_content,
-            &mut on_content_delta,
+            spec,
+            &StreamingRequest {
+                messages,
+                tools,
+                temperature,
+                max_tokens,
+                force_json_content,
+            },
+            on_event,
         )
         .await
     }
 }
 
-/// Posts a chat-completions request body to DeepSeek and returns the parsed JSON response, or a
-/// human-readable error — the HTTP call/status-code-error-translation logic shared by [`chat`]
-/// and [`tool_chat`], factored out per constitution's "near-identical logic... factored into a
-/// shared helper" rule rather than duplicated between them.
-async fn post_chat_completion(
-    redis_config: &Pool,
-    body: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let key = resolve_api_key(redis_config)
-        .await
-        .ok_or_else(|| "DeepSeek API key not configured".to_string())?;
-
-    // Overridable to point at a local mock responder instead of the real DeepSeek API (e.g. for
-    // manual testing without a live LLM key); unset in every real deployment, where it's always
-    // the real endpoint.
-    let base_url = deepseek_base_url();
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base_url}/chat/completions"))
+/// Sends a chat-completions request and returns the response, or the class-bearing error for a
+/// failed request or non-2xx status. Shared by every non-streaming call.
+async fn send_chat_completion(
+    key: &str,
+    body: &serde_json::Value,
+    stream: bool,
+) -> Result<reqwest::Response, LlmError> {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/chat/completions", deepseek_base_url()))
         .header("Authorization", format!("Bearer {key}"))
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| {
-            warn!(error = %e, "LLM API request failed");
-            format!("AI API 请求失败: {e}")
+            warn!(error = %e, stream, "LLM API request failed");
+            LlmError::request_failed(e)
         })?;
 
     let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let retry_after = error::parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    );
+    let text = resp.text().await.unwrap_or_default();
+    warn!(status = %status, body = %text, stream, "LLM API returned error");
+    Err(LlmError::from_status(
+        status.as_u16(),
+        &provider_message(&text),
+        retry_after,
+    ))
+}
+
+/// One non-streaming attempt: availability gate, request, parsed JSON body.
+async fn post_chat_completion(
+    redis_config: &Pool,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, LlmError> {
+    ensure_available(redis_config).await?;
+    let key = resolve_api_key(redis_config)
+        .await
+        .ok_or_else(LlmError::not_configured)?;
+    let resp = send_chat_completion(&key, body, false).await?;
     let text = resp.text().await.map_err(|e| {
         warn!(error = %e, "LLM API response body read failed");
-        format!("AI API 响应读取失败: {e}")
+        LlmError::body_read_failed(e)
     })?;
-
-    // Non-2xx: parse the error body from DeepSeek if possible
-    if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| text.clone());
-        warn!(status = %status, body = %text, "LLM API returned error");
-        let detail = match status.as_u16() {
-            401 => format!("LLM: API Key 无效 (401) — {msg}"),
-            402 => format!("LLM: 账户余额不足 (402) — {msg}"),
-            429 => format!("LLM: 请求频率超限 (429) — {msg}"),
-            500 | 503 => format!("LLM: 服务暂时不可用 ({}) — {msg}", status.as_u16()),
-            _ => format!("LLM: API 错误 ({}) — {msg}", status.as_u16()),
-        };
-        return Err(detail);
-    }
-
     serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
         warn!(error = %e, body = %text, "LLM API response not valid JSON");
-        format!("AI 返回了非 JSON 数据: {e}")
+        LlmError::not_json(e)
     })
+}
+
+/// Runs a non-streaming request under the spec, turning each parsed body into `T` via `parse`.
+async fn run_parsed<T>(
+    redis_config: &Pool,
+    spec: &CallSpec,
+    body: serde_json::Value,
+    parse: impl Fn(&serde_json::Value) -> Result<T, LlmError>,
+) -> Result<T, LlmError> {
+    let parse = &parse;
+    retry::execute(redis_config, spec, |previous| {
+        // A reply whose reasoning used the whole budget is retried once with thinking off, as the
+        // streaming path does; the first attempt's body is untouched.
+        let mut body = body.clone();
+        if previous.as_ref().is_some_and(LlmError::is_truncation) {
+            body["thinking"] = json!({ "type": "disabled" });
+        }
+        async move {
+            match post_chat_completion(redis_config, &body).await {
+                Ok(parsed) => (
+                    parse(&parsed),
+                    TokenUsage::from_usage_block(&parsed["usage"]),
+                ),
+                Err(e) => (Err(e), TokenUsage::default()),
+            }
+        }
+    })
+    .await
+}
+
+/// An empty answer cut off at the token limit: reasoning spent the whole `max_tokens` budget.
+/// Small-budget JSON calls hit this, so it is a retryable truncation rather than bad output.
+fn reasoning_exhausted(parsed: &serde_json::Value) -> bool {
+    let choice = &parsed["choices"][0];
+    choice["finish_reason"] == "length"
+        && choice["message"]["content"]
+            .as_str()
+            .is_none_or(|c| c.trim().is_empty())
+}
+
+fn first_choice_content(parsed: &serde_json::Value) -> Result<String, LlmError> {
+    if reasoning_exhausted(parsed) {
+        warn!("LLM reply truncated with empty content (reasoning used the budget); retrying with thinking off");
+        return Err(LlmError::truncated());
+    }
+    parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .map(strip_markdown_fence)
+        .ok_or_else(|| {
+            warn!(body = %parsed, "LLM API response missing choices[0].message.content");
+            LlmError::missing_content()
+        })
+}
+
+fn chat_body(system: &str, user: &str, temperature: f32, max_tokens: u32) -> serde_json::Value {
+    json!({
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": { "type": "json_object" },
+    })
+}
+
+/// Calls the DeepSeek chat API and returns the raw text content of the first choice.
+pub async fn chat(
+    redis_config: &Pool,
+    spec: &CallSpec,
+    system: &str,
+    user: &str,
+    temperature: f32,
+    max_tokens: u32,
+) -> Result<String, LlmError> {
+    let body = chat_body(system, user, temperature, max_tokens);
+    run_parsed(redis_config, spec, body, first_choice_content).await
+}
+
+/// Calls DeepSeek chat API and deserialises the response as JSON.
+/// The system prompt should instruct the model to output valid JSON matching `T`.
+pub async fn json_chat<T: serde::de::DeserializeOwned>(
+    redis_config: &Pool,
+    spec: &CallSpec,
+    system: &str,
+    user: &str,
+    temperature: f32,
+    max_tokens: u32,
+) -> Result<T, LlmError> {
+    let body = chat_body(system, user, temperature, max_tokens);
+    run_parsed(redis_config, spec, body, |parsed| {
+        let text = first_choice_content(parsed)?;
+        serde_json::from_str::<T>(&text).map_err(|_| LlmError::unparseable(&text))
+    })
+    .await
 }
 
 /// Strips a markdown code fence wrapping the given text, if present, and trims the result —
@@ -321,37 +449,6 @@ fn strip_markdown_fence(text: &str) -> String {
         None => without_fence,
     };
     body.trim().to_string()
-}
-
-/// Calls the DeepSeek chat API and returns the raw text content of the first choice.
-pub async fn chat(
-    redis_config: &Pool,
-    system: &str,
-    user: &str,
-    temperature: f32,
-    max_tokens: u32,
-) -> Result<String, String> {
-    let body = json!({
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "response_format": { "type": "json_object" },
-    });
-
-    let parsed = post_chat_completion(redis_config, body).await?;
-
-    let content = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or_else(|| {
-            warn!(body = %parsed, "LLM API response missing choices[0].message.content");
-            "AI 返回格式异常，缺少 content 字段".to_string()
-        })?;
-
-    Ok(strip_markdown_fence(content))
 }
 
 /// A single message in a [`tool_chat`] conversation — mirrors the OpenAI/DeepSeek wire shape
@@ -494,18 +591,17 @@ pub enum ToolChatResponse {
 /// MUST only ever be `true` on a call passing an empty `tools` slice (a round the caller already
 /// knows won't request further tool use, typically a loop's final "give me your structured answer
 /// now" turn) — never on a round where the model might still legitimately want to call a tool
-/// instead of answering. Most callers (e.g. `generate.rs`'s plugin-code loop, whose final answer is
-/// a raw `.ts` file, not JSON) pass `false` throughout and rely on prompt wording alone, same as
-/// before this parameter existed; `analyze_login.rs`'s loop is the first caller that actually wants
-/// the hard guarantee, since its final answer must be a real parseable JSON array.
+/// instead of answering.
 pub async fn tool_chat(
     redis_config: &Pool,
+    spec: &CallSpec,
     messages: &[Message],
     tools: &[Tool],
     temperature: f32,
     max_tokens: u32,
     force_json_content: bool,
-) -> Result<ToolChatResponse, String> {
+) -> Result<ToolChatResponse, LlmError> {
+    check_conversation(redis_config, spec, messages, tools).await;
     let mut body = json!({
         "model": DEEPSEEK_MODEL,
         "messages": messages,
@@ -518,123 +614,125 @@ pub async fn tool_chat(
     } else if force_json_content {
         body["response_format"] = json!({ "type": "json_object" });
     }
+    run_parsed(redis_config, spec, body, parse_tool_chat_response).await
+}
 
-    let parsed = post_chat_completion(redis_config, body).await?;
-    parse_tool_chat_response(&parsed)
+/// Checks a conversation round extends the previous one (`prefix`), once per logical call — a
+/// retry resends the same request and is not a new round. A break is logged and counted, never
+/// refused: the round is still correct, only more expensive.
+async fn check_conversation(
+    redis_config: &Pool,
+    spec: &CallSpec,
+    messages: &[Message],
+    tools: &[Tool],
+) {
+    let Some(conversation) = &spec.conversation else {
+        return;
+    };
+    let messages: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| serde_json::to_value(m).unwrap_or_default())
+        .collect();
+    if let Some(found) = conversation.advance(&json!(tools), &messages) {
+        warn!(
+            feature = spec.feature.as_str(),
+            reason = found.as_str(),
+            "conversation round does not extend the previous request; the prompt cache misses from here"
+        );
+        usage::record_prefix_break(redis_config, spec.feature).await;
+    }
 }
 
 /// The actual message-loop decision logic `tool_chat` runs against a parsed API response body —
 /// pulled out as its own pure function so it's unit-testable against a hand-built
 /// `serde_json::Value` without needing a real (or mocked-transport) HTTP round-trip.
-fn parse_tool_chat_response(parsed: &serde_json::Value) -> Result<ToolChatResponse, String> {
+fn parse_tool_chat_response(parsed: &serde_json::Value) -> Result<ToolChatResponse, LlmError> {
     let message = &parsed["choices"][0]["message"];
     if let Some(tool_calls) = message["tool_calls"].as_array() {
         if !tool_calls.is_empty() {
             let calls: Vec<ToolCall> = serde_json::from_value(message["tool_calls"].clone())
                 .map_err(|e| {
                     warn!(error = %e, body = %parsed, "LLM API tool_calls not in expected shape");
-                    format!("AI 返回的 tool_calls 格式异常: {e}")
+                    LlmError::bad_tool_calls(e)
                 })?;
             return Ok(ToolChatResponse::ToolCalls(calls));
         }
     }
 
+    if reasoning_exhausted(parsed) {
+        warn!("LLM tool reply truncated with empty content (reasoning used the budget); retrying with thinking off");
+        return Err(LlmError::truncated());
+    }
     let content = message["content"].as_str().ok_or_else(|| {
         warn!(body = %parsed, "LLM API response missing both tool_calls and content");
-        "AI 返回格式异常，既无 tool_calls 也无 content 字段".to_string()
+        LlmError::neither_tool_calls_nor_content()
     })?;
 
     Ok(ToolChatResponse::Content(strip_markdown_fence(content)))
 }
 
-/// Streaming twin of [`tool_chat`] — same request shape (`messages`/`tools`/`force_json_content`
-/// carry the identical meaning and constraints), but sets `"stream": true` and reports every
-/// content delta to `on_content_delta` as it arrives over DeepSeek's own SSE response, rather than
-/// waiting for the full response body. Added specifically because a real final-answer generation
-/// (code + explanation, `generate.rs`) was observed taking 80+ seconds with zero visibility into
-/// whether anything was actually happening — streaming the same call turns that dead time into a
-/// live, incrementally-growing answer instead.
-///
-/// Tool-call deltas (the model requesting `fetch_page`) are accumulated internally and only
-/// surfaced once complete, as the returned `ToolChatResponse::ToolCalls` — `on_content_delta` is
-/// never called for a round that turns out to be a tool call, since a partial, not-yet-complete
-/// `arguments` JSON string isn't meaningful to show incrementally. Which shape a given round will
-/// take isn't known until the stream starts arriving, so this same function handles both regardless
-/// of a caller's actual intent for that round — it does not need calling differently in the tool
-/// call loop vs. the final answer.
-/// Bundles [`tool_chat_streaming`]'s request-shaping parameters so the retry call site can pass
-/// the same request twice without an 8-argument function.
-struct StreamingRequest<'a> {
-    messages: &'a [Message],
-    tools: &'a [Tool],
-    temperature: f32,
-    max_tokens: u32,
-    force_json_content: bool,
+/// A streaming request's shape — the same meaning and constraints as [`tool_chat`]'s parameters.
+pub struct StreamingRequest<'a> {
+    pub messages: &'a [Message],
+    pub tools: &'a [Tool],
+    pub temperature: f32,
+    pub max_tokens: u32,
+    pub force_json_content: bool,
 }
 
+/// Streaming twin of [`tool_chat`]: sets `"stream": true` and reports every content delta as it
+/// arrives over DeepSeek's SSE response, rather than waiting for the full body. Added because a
+/// real final-answer generation was observed taking 80+ seconds with zero visibility.
+///
+/// Tool-call deltas are accumulated internally and only surfaced once complete, as
+/// `ToolChatResponse::ToolCalls` — a partial `arguments` string isn't meaningful to show. A
+/// truncated stream (reasoning exhausted the budget, or no `finish_reason` ever arrived) is
+/// retried once with thinking disabled; any retry is announced with [`StreamEvent::Retrying`]
+/// before its output.
 pub async fn tool_chat_streaming(
     redis_config: &Pool,
-    messages: &[Message],
-    tools: &[Tool],
-    temperature: f32,
-    max_tokens: u32,
-    force_json_content: bool,
-    mut on_content_delta: impl FnMut(&str),
-) -> Result<ToolChatResponse, String> {
-    let req = StreamingRequest {
-        messages,
-        tools,
-        temperature,
-        max_tokens,
-        force_json_content,
-    };
-    // Retry once with thinking disabled on either: reasoning consuming the whole token budget
-    // (never emits `content`), or the connection dropping mid-stream with no `finish_reason` ever
-    // observed (indistinguishable from a clean finish otherwise).
-    match tool_chat_streaming_once(redis_config, &req, &mut on_content_delta, true).await {
-        Err(StreamingFailure::RetryableTruncation) => {
-            warn!("retrying tool_chat_streaming with thinking disabled after a truncated/incomplete response");
-            tool_chat_streaming_once(redis_config, &req, &mut on_content_delta, false)
-                .await
-                .map_err(|e| e.into_message())
-        }
-        Err(e) => Err(e.into_message()),
-        Ok(r) => Ok(r),
-    }
-}
-
-enum StreamingFailure {
-    /// Reasoning exhausted the token budget, or the stream ended with no `finish_reason` seen —
-    /// see `tool_chat_streaming`'s own docs.
-    RetryableTruncation,
-    Other(String),
-}
-
-impl StreamingFailure {
-    fn into_message(self) -> String {
-        match self {
-            StreamingFailure::RetryableTruncation => {
-                "AI 返回的内容不完整（连接中断或响应被截断），已重试仍未成功，请再次尝试"
-                    .to_string()
+    spec: &CallSpec,
+    req: &StreamingRequest<'_>,
+    on_event: impl FnMut(StreamEvent<'_>) + Send,
+) -> Result<ToolChatResponse, LlmError> {
+    // Shared by reference into each attempt's future (an `FnMut` closure cannot lend its own
+    // captured `&mut` to the future it returns).
+    check_conversation(redis_config, spec, req.messages, req.tools).await;
+    let on_event = Mutex::new(on_event);
+    let on_event = &on_event;
+    retry::execute(redis_config, spec, |previous| async move {
+        let thinking_enabled = match &previous {
+            Some(err) => {
+                (on_event.lock().unwrap_or_else(|e| e.into_inner()))(StreamEvent::Retrying);
+                if err.is_truncation() {
+                    warn!("retrying tool_chat_streaming with thinking disabled after a truncated/incomplete response");
+                }
+                !err.is_truncation()
             }
-            StreamingFailure::Other(msg) => msg,
-        }
-    }
+            None => true,
+        };
+        tool_chat_streaming_once(redis_config, req, thinking_enabled, |text| {
+            (on_event.lock().unwrap_or_else(|e| e.into_inner()))(StreamEvent::ContentDelta(text))
+        })
+        .await
+    })
+    .await
 }
 
 async fn tool_chat_streaming_once(
     redis_config: &Pool,
     req: &StreamingRequest<'_>,
-    on_content_delta: &mut impl FnMut(&str),
     thinking_enabled: bool,
-) -> Result<ToolChatResponse, StreamingFailure> {
+    mut on_content_delta: impl FnMut(&str),
+) -> (Result<ToolChatResponse, LlmError>, TokenUsage) {
     use futures_util::StreamExt;
 
-    let key = resolve_api_key(redis_config)
-        .await
-        .ok_or_else(|| StreamingFailure::Other("DeepSeek API key not configured".to_string()))?;
-    let base_url = std::env::var("LANRURUGI_DEEPSEEK_BASE_URL")
-        .unwrap_or_else(|_| "https://api.deepseek.com".to_string());
+    if let Err(e) = ensure_available(redis_config).await {
+        return (Err(e), TokenUsage::default());
+    }
+    let Some(key) = resolve_api_key(redis_config).await else {
+        return (Err(LlmError::not_configured()), TokenUsage::default());
+    };
 
     let thinking = if thinking_enabled {
         thinking_low_effort()
@@ -655,46 +753,18 @@ async fn tool_chat_streaming_once(
         body["response_format"] = json!({ "type": "json_object" });
     }
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base_url}/chat/completions"))
-        .header("Authorization", format!("Bearer {key}"))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            warn!(error = %e, "LLM streaming API request failed");
-            StreamingFailure::Other(format!("AI API 请求失败: {e}"))
-        })?;
+    let resp = match send_chat_completion(&key, &body, true).await {
+        Ok(resp) => resp,
+        Err(e) => return (Err(e), TokenUsage::default()),
+    };
 
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| text.clone());
-        warn!(status = %status, body = %text, "LLM streaming API returned error");
-        let detail = match status.as_u16() {
-            401 => format!("LLM: API Key 无效 (401) — {msg}"),
-            402 => format!("LLM: 账户余额不足 (402) — {msg}"),
-            429 => format!("LLM: 请求频率超限 (429) — {msg}"),
-            500 | 503 => format!("LLM: 服务暂时不可用 ({}) — {msg}", status.as_u16()),
-            _ => format!("LLM: API 错误 ({}) — {msg}", status.as_u16()),
-        };
-        return Err(StreamingFailure::Other(detail));
-    }
-
+    let mut usage = TokenUsage::default();
     let mut content = String::new();
     let mut tool_calls: Vec<StreamingToolCall> = Vec::new();
     let mut byte_stream = resp.bytes_stream();
     let mut line_buf = String::new();
-    // Diagnostics only, not used for anything functional — a real, previously-unanswerable report
-    // ("流式的话...你能正确获取吗？" followed shortly by an actual empty-response failure with zero
-    // way to tell whether DeepSeek genuinely sent nothing or this parser silently dropped
-    // something, 2026-08-25) needs *some* trace of what the raw SSE stream actually contained on
-    // failure, without keeping the entire (potentially large) stream in memory for the success
-    // path, which never needs it.
+    // Diagnostics only: some trace of what the raw SSE stream contained on failure, without
+    // keeping the whole stream in memory for the success path.
     let mut raw_line_count: usize = 0;
     let mut json_parse_failures: usize = 0;
     let mut last_raw_lines: std::collections::VecDeque<String> =
@@ -703,10 +773,13 @@ async fn tool_chat_streaming_once(
     let mut last_finish_reason: Option<String> = None;
 
     while let Some(chunk) = byte_stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            warn!(error = %e, "LLM streaming API body read failed");
-            StreamingFailure::Other(format!("AI API 流式响应读取失败: {e}"))
-        })?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                warn!(error = %e, "LLM streaming API body read failed");
+                return (Err(LlmError::stream_read_failed(e)), usage);
+            }
+        };
         line_buf.push_str(&String::from_utf8_lossy(&chunk));
 
         // SSE frames are newline-delimited; a chunk boundary can split one mid-line, so only
@@ -734,6 +807,9 @@ async fn tool_chat_streaming_once(
                 json_parse_failures += 1;
                 continue;
             };
+            if event["usage"].is_object() {
+                usage = TokenUsage::from_usage_block(&event["usage"]);
+            }
             let delta = &event["choices"][0]["delta"];
             if let Some(reason) = event["choices"][0]["finish_reason"].as_str() {
                 last_finish_reason = Some(reason.to_string());
@@ -793,7 +869,7 @@ async fn tool_chat_streaming_once(
                 },
             })
             .collect();
-        return Ok(ToolChatResponse::ToolCalls(calls));
+        return (Ok(ToolChatResponse::ToolCalls(calls)), usage);
     }
 
     if content.is_empty() {
@@ -806,11 +882,9 @@ async fn tool_chat_streaming_once(
             "LLM streaming API produced neither content nor tool_calls",
         );
         if saw_reasoning_content && last_finish_reason.as_deref() == Some("length") {
-            return Err(StreamingFailure::RetryableTruncation);
+            return (Err(LlmError::truncated()), usage);
         }
-        return Err(StreamingFailure::Other(
-            "AI 返回格式异常，既无 tool_calls 也无 content 字段".to_string(),
-        ));
+        return (Err(LlmError::neither_tool_calls_nor_content()), usage);
     }
 
     // Stream ended with no `finish_reason` ever seen — the connection was likely cut mid-response
@@ -823,10 +897,13 @@ async fn tool_chat_streaming_once(
             "LLM streaming API's connection ended before any finish_reason was ever observed \
              (likely a dropped connection mid-response, not a normal completion)",
         );
-        return Err(StreamingFailure::RetryableTruncation);
+        return (Err(LlmError::truncated()), usage);
     }
 
-    Ok(ToolChatResponse::Content(strip_markdown_fence(&content)))
+    (
+        Ok(ToolChatResponse::Content(strip_markdown_fence(&content))),
+        usage,
+    )
 }
 
 #[derive(Default, Clone)]
@@ -835,19 +912,6 @@ struct StreamingToolCall {
     kind: String,
     name: String,
     arguments: String,
-}
-
-/// Calls DeepSeek chat API and deserialises the response as JSON.
-/// The system prompt should instruct the model to output valid JSON matching `T`.
-pub async fn json_chat<T: serde::de::DeserializeOwned>(
-    redis_config: &Pool,
-    system: &str,
-    user: &str,
-    temperature: f32,
-    max_tokens: u32,
-) -> Result<T, String> {
-    let text = chat(redis_config, system, user, temperature, max_tokens).await?;
-    serde_json::from_str::<T>(&text).map_err(|_| format!("AI 返回了无法解析的格式: {text}"))
 }
 
 #[cfg(test)]

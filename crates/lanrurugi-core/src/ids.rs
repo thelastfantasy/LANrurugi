@@ -100,3 +100,13 @@ define_id!(
     StampId,
     "A `Stamp`'s primary key (`STAMPS_<page>_<millisecond-timestamp>`)."
 );
+define_id!(
+    GroupSuggestionId,
+    "One tankoubon-grouping suggestion's identity: the fingerprint of its sorted member ids plus \
+     the existing tankoubon it would extend (`ignored_group_suggestions::suggestion_id`)."
+);
+define_id!(
+    GenerationId,
+    "One AI plugin-wizard generation's id, issued by `POST /plugin-wizard/generate/start`; keys \
+     both the pending request and the generation record."
+);

@@ -5,6 +5,7 @@ import { ApiError } from "@/api/apiError"
 import { sendJson } from "@/api/client"
 import type { PluginOptions } from "@/api/types"
 import { AiSkeleton } from "@/components/Display/AiSkeleton"
+import { confirmDialog } from "@/dialog"
 import { toast } from "@/toast"
 
 import { AssociatedLoginPluginSettings } from "./AssociatedLoginPluginSettings"
@@ -42,6 +43,15 @@ function sampleLabel(entry: unknown): string {
   }
   if (typeof e.title === "string" && e.title) return e.title
   return typeof e.source === "string" ? e.source : JSON.stringify(entry)
+}
+
+/** The hosts a `409 trial_hosts_need_approval` asks the user to confirm, or `undefined` for any
+ * other error. */
+function trialHostsNeedingApproval(err: unknown): string[] | undefined {
+  if (!(err instanceof ApiError) || err.status !== 409) return undefined
+  const body = err.body as { error?: string; hosts?: unknown } | undefined
+  if (body?.error !== "trial_hosts_need_approval" || !Array.isArray(body.hosts)) return undefined
+  return body.hosts.filter((h): h is string => typeof h === "string")
 }
 
 /** Default save filename: domain's alphanumeric characters only, matching
@@ -155,27 +165,45 @@ export function TrialRunResult({
     setDeclaredOptions(undefined)
   }
 
+  /** Posts a trial run. A draft declaring hosts outside the user's own sites is refused until the
+   * user approves exactly those hosts; on approval the same run is resent once (FR-028). Returns
+   * `null` when the user declines. */
+  async function postTrialRun<T>(body: Record<string, unknown>): Promise<T | null> {
+    const full = { ...body, target_domain: domain, generation_id: activeRevision?.generationId }
+    try {
+      return await sendJson<T>("POST", "/plugin-wizard/trial-run", full)
+    } catch (err) {
+      const hosts = trialHostsNeedingApproval(err)
+      if (!hosts) throw err
+      const approved = await confirmDialog(t("pluginWizard.trialHostsApproval", { hosts: hosts.join("、") }), true)
+      if (!approved) return null
+      return sendJson<T>("POST", "/plugin-wizard/trial-run", { ...full, approved_hosts: hosts })
+    }
+  }
+
   async function trigger() {
     if (!activeRevision) return
     onBeginOperation()
     try {
       if (type === "login") {
-        const response = await sendJson<LoginTrialRunResponse>("POST", "/plugin-wizard/trial-run", {
+        const response = await postTrialRun<LoginTrialRunResponse>({
           plugin_type: type,
           code: activeRevision.code,
           credentials: { fields: typeSession.loginFieldValues },
         })
+        if (!response) return
         onTrialRunAppended({ type: "login", outcome: response.outcome, detail: response.detail })
       } else if (type === "discovery") {
         // The server interprets each hint itself: a URL becomes a `listing_url` probe, anything
         // else a `creator` probe, and an empty list one unfiltered probe. Sending them as-is is
         // what keeps this branch from having to know which is which.
-        const response = await sendJson<DiscoveryTrialRunResponse>("POST", "/plugin-wizard/trial-run", {
+        const response = await postTrialRun<DiscoveryTrialRunResponse>({
           plugin_type: type,
           code: activeRevision.code,
           test_links: cleanLinks(session.sharedLinks),
           plugin_parameter_values: pluginParameterValues,
         })
+        if (!response) return
         setDeclaredOptions(response.declared_options)
         onTrialRunAppended({
           type: "discovery",
@@ -189,13 +217,14 @@ export function TrialRunResult({
             ? session.typeSessions.login?.loginFieldValues
             : undefined
         const loginCredentials = loginFieldValues ? { fields: loginFieldValues } : undefined
-        const response = await sendJson<LinkTrialRunResponse>("POST", "/plugin-wizard/trial-run", {
+        const response = await postTrialRun<LinkTrialRunResponse>({
           plugin_type: type,
           code: activeRevision.code,
           test_links: cleanLinks(session.sharedLinks),
           login_credentials: loginCredentials ?? undefined,
           plugin_parameter_values: pluginParameterValues,
         })
+        if (!response) return
         setDeclaredParameters(response.declared_parameters)
         setDeclaredOptions(response.declared_options)
         if (Object.keys(typeSession.resolvedCredentialValues).length > 0) {
@@ -268,7 +297,7 @@ export function TrialRunResult({
     if (!previousError) return
     onBeginOperation()
     setAutoFixing(true)
-    startProgress()
+    const signal = startProgress()
     try {
       const loginAssociation = typeSession.loginAssociation
         ? { namespace: typeSession.loginAssociation.namespace }
@@ -281,6 +310,7 @@ export function TrialRunResult({
       const response = await streamGenerate(
         {
           plugin_type: type,
+          target_domain: session.domain,
           test_links: links,
           auxiliary_reference_urls: links,
           login_association: loginAssociation,
@@ -295,6 +325,7 @@ export function TrialRunResult({
           })),
         },
         onProgress,
+        signal,
       )
       if (loginAssociation) onCredentialValuesResolved(response.resolvedCredentialValues)
       onRevisionAppended({
@@ -304,12 +335,15 @@ export function TrialRunResult({
         createdAt: Date.now(),
         trialRuns: [],
         explanation: response.explanation,
+        generationId: response.generationId,
       })
       onConversationTurnAppended({
         userMessage: `上一版代码试运行失败，请修复：${previousError}`,
         assistantCode: response.code,
       })
     } catch (err) {
+      // Cancelled because the component went away mid-generation; nothing to report.
+      if (err instanceof GenerateStreamError && err.code === "cancelled") return
       const heading =
         err instanceof GenerateStreamError && err.code === "ai_output_not_code"
           ? t("pluginWizard.aiOutputNotCode")

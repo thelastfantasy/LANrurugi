@@ -80,6 +80,27 @@ fn clean_llm_name(name: &str) -> String {
     .to_string()
 }
 
+/// Output filter for a name about to become a permanent tag: the prompts ask for the name exactly
+/// as written in the title, so a name the title does not contain is invented, and a comma would
+/// split into extra tags. `None` (no name) always passes.
+fn check_name(title: &str, field: &str, name: Option<&String>) -> Result<(), String> {
+    let Some(name) = name.map(|n| clean_llm_name(n)).filter(|n| !n.is_empty()) else {
+        return Ok(());
+    };
+    if name.chars().count() > 64 {
+        return Err(format!("{field} 太长，应只包含名字本身"));
+    }
+    if name.contains([',', '，', '\n', '\r']) {
+        return Err(format!("{field} 含有逗号或换行，只能是一个名字"));
+    }
+    if !title.to_lowercase().contains(&name.to_lowercase()) {
+        return Err(format!(
+            "{field}「{name}」没有出现在标题里；只能原样摘取标题中的文字，无法确定时输出 null"
+        ));
+    }
+    Ok(())
+}
+
 /// Every `category:`-namespaced value on an archive, lowercased for matching (tag values in this
 /// codebase are otherwise treated case-sensitively elsewhere, but `category:Cosplay` vs
 /// `category:cosplay` typos are exactly the kind of thing worth tolerating here rather than
@@ -175,11 +196,19 @@ async fn resolve_tags_for_known_kind(
         BackfillTarget::Cosplayer => {
             let system = crate::llm_prompts::artist_backfill_cosplayer_system();
             let user = format!("标题：{title}");
-            let response = state
-                .redis
-                .config
-                .json_chat::<CosplayerBackfillResponse>(&system, &user, 0.2, 200)
-                .await?;
+            let response = crate::repair::json_chat_checked(
+                &state.redis.config,
+                &backfill_spec(),
+                &system,
+                &user,
+                0.2,
+                200,
+                |r: &CosplayerBackfillResponse| {
+                    check_name(title, "cosplayer", r.cosplayer.as_ref())
+                },
+            )
+            .await?
+            .value;
             Ok(response
                 .cosplayer
                 .map(|s| clean_llm_name(&s))
@@ -191,11 +220,20 @@ async fn resolve_tags_for_known_kind(
         BackfillTarget::ArtistOrCircle => {
             let system = crate::llm_prompts::artist_backfill_artist_or_circle_system();
             let user = format!("标题：{title}");
-            let response = state
-                .redis
-                .config
-                .json_chat::<ArtistBackfillResponse>(&system, &user, 0.2, 200)
-                .await?;
+            let response = crate::repair::json_chat_checked(
+                &state.redis.config,
+                &backfill_spec(),
+                &system,
+                &user,
+                0.2,
+                200,
+                |r: &ArtistBackfillResponse| {
+                    check_name(title, "artist", r.artist.as_ref())?;
+                    check_name(title, "circle", r.circle.as_ref())
+                },
+            )
+            .await?
+            .value;
             let mut tags = Vec::new();
             if let Some(artist) = response
                 .artist
@@ -230,11 +268,30 @@ async fn resolve_tags_by_classifying(
         Some(name) => format!("标题：{title}\n用户自定义分类名称（参考线索，不一定准确）：{name}"),
         None => format!("标题：{title}"),
     };
-    let response = state
-        .redis
-        .config
-        .json_chat::<ClassifyAndBackfillResponse>(&system, &user, 0.2, 250)
-        .await?;
+    let response = crate::repair::json_chat_checked(
+        &state.redis.config,
+        &backfill_spec(),
+        &system,
+        &user,
+        0.2,
+        250,
+        |r: &ClassifyAndBackfillResponse| {
+            if !matches!(
+                r.kind.as_str(),
+                "cosplay" | "doujinshi" | "manga" | "anthology" | "unknown"
+            ) {
+                return Err(format!(
+                    "kind「{}」不是 cosplay/doujinshi/manga/anthology/unknown 之一",
+                    r.kind
+                ));
+            }
+            check_name(title, "cosplayer", r.cosplayer.as_ref())?;
+            check_name(title, "artist", r.artist.as_ref())?;
+            check_name(title, "circle", r.circle.as_ref())
+        },
+    )
+    .await?
+    .value;
 
     let mut tags = Vec::new();
     match response.kind.as_str() {
@@ -450,6 +507,11 @@ pub async fn spawn_full_backfill_job(state: &AppState, reason: &str) -> String {
     job_id
 }
 
+/// Every backfill call is attributed to the same feature.
+fn backfill_spec() -> lanrurugi_llm::CallSpec {
+    lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::ARTIST_BACKFILL)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +529,15 @@ mod tests {
     fn clean_llm_name_strips_surrounding_brackets() {
         assert_eq!(clean_llm_name("[someartist]"), "someartist");
         assert_eq!(clean_llm_name("【someartist】"), "someartist");
+    }
+
+    #[test]
+    fn a_backfilled_name_must_be_taken_from_the_title() {
+        let title = "[Some Artist] A Story";
+        assert!(check_name(title, "artist", Some(&"some artist".to_string())).is_ok());
+        assert!(check_name(title, "artist", None).is_ok());
+        assert!(check_name(title, "artist", Some(&"Invented".to_string())).is_err());
+        assert!(check_name("[a, b] x", "artist", Some(&"a, b".to_string())).is_err());
     }
 
     #[test]
