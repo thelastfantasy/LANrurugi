@@ -85,7 +85,7 @@ fn provider_message(text: &str) -> String {
 /// treated as "balance checking not supported", not as a hard failure).
 async fn check_balance(key: &str) -> Result<(), LlmError> {
     let base_url = deepseek_base_url();
-    let client = reqwest::Client::new();
+    let client = lanrurugi_core::http_client::default_client();
     let resp = client
         .get(format!("{base_url}/user/balance"))
         .header("Authorization", format!("Bearer {key}"))
@@ -281,7 +281,7 @@ async fn send_chat_completion(
     body: &serde_json::Value,
     stream: bool,
 ) -> Result<reqwest::Response, LlmError> {
-    let resp = reqwest::Client::new()
+    let resp = lanrurugi_core::http_client::default_client()
         .post(format!("{}/chat/completions", deepseek_base_url()))
         .header("Authorization", format!("Bearer {key}"))
         .json(body)

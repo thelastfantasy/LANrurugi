@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lanrurugi-storage = { workspace = true }
+lanrurugi-core = { workspace = true }
 lanrurugi-scanner = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }

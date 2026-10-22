@@ -339,7 +339,7 @@ async fn download_one_inner(
     let resume_paths = resume_key.map(|key| ResumePaths::new(staging_dir, key));
     let resume_state = inspect_resume_state(staging_dir, resume_key).await;
 
-    let client = reqwest::Client::new();
+    let client = lanrurugi_core::http_client::default_client();
     let mut request = client.request(method, parsed_url.clone());
     for (name, value) in &req.headers {
         request = request.header(name, value);

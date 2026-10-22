@@ -29,9 +29,11 @@ description: 不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上�
 | 压缩包解码库 | 系统自带 | 系统自带 | 系统自带 | `brew install xz lz4 zstd` | `pkg install lz4 zstd` |
 | PDF 阅读 | 安装包自带 | 安装包自带 | 安装包自带 | 安装包自带 | `pkg install pdfium` |
 | OCR、翻译、推荐 | 安装包自带 | 安装包自带 | 安装包自带 | 安装包自带 | `pkg install onnxruntime` |
+| CA 证书（HTTPS） | `apt install ca-certificates` ³ | 系统自带 | 系统自带 | 系统自带 | `pkg install ca_root_nss` |
 
 ¹ Debian 12 自带的是 Redis 7.0，用于新书库没有问题；要沿用 Docker 部署留下的数据，需要 7.4 及以上（可使用 redis.io 的软件源）。
 ² 较新的 Fedora 实际安装的是兼容 Redis 的 Valkey，用于新书库没有问题，但它读不了 Redis 7.4 写出的数据文件。
+³ 精简系统（最小化容器、虚拟机）可能没有装。不装也能运行：程序找不到系统证书时，HTTPS 会改用内置的 Mozilla 根证书，启动日志里的 `tls_roots=bundled` 表示这种情况。装上系统证书则跟随系统更新，也能识别你自己添加的证书。
 
 ## 2. 解压并启动
 

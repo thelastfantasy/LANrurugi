@@ -95,12 +95,13 @@ pub struct HostHttp {
 impl HostHttp {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
-                .build()
-                .expect("a plain rustls reqwest client builds"),
+            client: lanrurugi_core::http_client::build(
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(REQUEST_TIMEOUT),
+            )
+            .unwrap_or_else(|_| lanrurugi_core::http_client::default_client()),
             redirecting_clients: Mutex::new(HashMap::new()),
             store: Mutex::new(HashMap::new()),
             inflight: Singleflight::new(MAX_INFLIGHT_REQUESTS),
@@ -270,7 +271,7 @@ impl HostHttp {
         clients
             .entry((limit, allow_list.clone()))
             .or_insert_with(|| {
-                reqwest::Client::builder()
+                lanrurugi_core::http_client::with_roots(reqwest::Client::builder())
                     .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                         // The declared-host check has to happen *per hop*: validating only the URL
                         // the plugin asked for let any 3xx carry the request to a host the plugin

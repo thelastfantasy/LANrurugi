@@ -146,7 +146,7 @@ async fn acquire_one(
     }
 
     let url = resolved_url(artifact);
-    let client = reqwest::Client::new();
+    let client = lanrurugi_core::http_client::default_client();
 
     // 2. HEAD request — check whether the remote file changed since the cached ETag.
     let remote_etag = match client.head(&url).send().await {
@@ -224,7 +224,7 @@ async fn download_to(
     expected_etag: Option<&str>,
 ) -> Result<PathBuf, ModelDownloadError> {
     let tmp_path = models_dir.join(format!("{}.tmp", artifact.file_name));
-    let client = reqwest::Client::new();
+    let client = lanrurugi_core::http_client::default_client();
     tracing::info!(artifact = artifact.name, url, "downloading");
     let resp = client
         .get(url)

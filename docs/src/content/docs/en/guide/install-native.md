@@ -32,11 +32,16 @@ and are not in the package:
 | Archive codecs | built in | built in | built in | `brew install xz lz4 zstd` | `pkg install lz4 zstd` |
 | PDF books | bundled | bundled | bundled | bundled | `pkg install pdfium` |
 | OCR, translation, recommendations | bundled | bundled | bundled | bundled | `pkg install onnxruntime` |
+| CA certificates (HTTPS) | `apt install ca-certificates` ³ | built in | built in | built in | `pkg install ca_root_nss` |
 
 ¹ Debian 12 ships Redis 7.0, which is fine for a new library; reusing data from a Docker deployment
 needs 7.4 or newer (use the redis.io repository).
 ² Recent Fedora installs Valkey, a Redis-compatible server. It is fine for a new library but cannot
 open data files written by Redis 7.4.
+³ Minimal systems (slim containers, VMs) may lack them. It still runs without: when no system
+certificates are found, HTTPS falls back to the Mozilla roots built into the binary, which the startup
+log reports as `tls_roots=bundled`. System certificates follow your OS's updates and also trust any
+certificate you add yourself.
 
 ## 2. Unpack and start
 

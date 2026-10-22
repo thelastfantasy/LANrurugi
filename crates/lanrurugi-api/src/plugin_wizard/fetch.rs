@@ -357,13 +357,14 @@ pub(super) async fn fetch_with_policy(
             .await
             .map_err(|r| refused(r, trail.clone()))?;
 
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(FETCH_TIMEOUT)
-            .user_agent(BROWSER_USER_AGENT)
-            .resolve_to_addrs(&host, &addrs)
-            .build()
-            .map_err(|e| FetchError::Request(format!("构建 HTTP 客户端失败: {e}")))?;
+        let client = lanrurugi_core::http_client::build(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(FETCH_TIMEOUT)
+                .user_agent(BROWSER_USER_AGENT)
+                .resolve_to_addrs(&host, &addrs),
+        )
+        .map_err(|e| FetchError::Request(format!("构建 HTTP 客户端失败: {e}")))?;
 
         let mut request = client.get(current.clone());
         for (name, value) in raw_headers {

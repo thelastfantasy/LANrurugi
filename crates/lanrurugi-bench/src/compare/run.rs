@@ -176,7 +176,7 @@ async fn measure_legacy_rescan(
 }
 
 pub async fn run_full_comparison(config: &CompareConfig) -> anyhow::Result<BenchmarkReport> {
-    let client = Client::new();
+    let client = lanrurugi_core::http_client::default_client();
 
     tracing::info!("Measuring legacy full_library_scan_ingestion (shinobu/rescan, pass 1)...");
     let legacy_full_scan = measure_legacy_rescan(&client, &config.legacy, config).await?;

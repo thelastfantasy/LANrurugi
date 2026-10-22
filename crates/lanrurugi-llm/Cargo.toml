@@ -9,6 +9,7 @@ chrono.workspace = true
 deadpool-redis.workspace = true
 futures-util.workspace = true
 lanrurugi-storage.workspace = true
+lanrurugi-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

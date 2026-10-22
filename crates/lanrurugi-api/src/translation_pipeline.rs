@@ -207,10 +207,9 @@ async fn translate_via_provider(
     // request (connect + send + receive body), not just the connect phase — a provider that accepts
     // the connection but then never responds (or streams so slowly it may as well not have) is
     // exactly the failure mode this project actually hit, and `.timeout()` covers both.
-    let client = reqwest::Client::builder()
-        .timeout(LLM_REQUEST_TIMEOUT)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client =
+        lanrurugi_core::http_client::build(reqwest::Client::builder().timeout(LLM_REQUEST_TIMEOUT))
+            .unwrap_or_else(|_| lanrurugi_core::http_client::default_client());
     let model = ctx.settings.model.clone().unwrap_or_default();
     let endpoint = ctx.settings.endpoint.clone();
 

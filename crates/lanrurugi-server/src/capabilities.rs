@@ -86,6 +86,8 @@ pub fn log_summary(deno_bin: &str) {
         ocr_model = %show(&ocr_model),
         inpaint_model = %show(&inpaint_model),
         bubble_model = %show(&bubble_model),
+        // "bundled": no system CA certificates; HTTPS trusts the Mozilla roots in the binary.
+        tls_roots = lanrurugi_core::http_client::root_source().as_str(),
         "optional components"
     );
 

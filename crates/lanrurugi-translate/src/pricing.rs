@@ -269,10 +269,10 @@ async fn fetch_and_derive(pool: &Pool, provider_id: &str) -> Result<ProviderPric
 
     lanrurugi_llm::ensure_available(pool).await?;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = lanrurugi_core::http_client::build(
+        reqwest::Client::builder().timeout(Duration::from_secs(15)),
+    )
+    .map_err(|e| e.to_string())?;
     let html = client
         .get(url)
         .header(

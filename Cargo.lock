@@ -2875,6 +2875,7 @@ dependencies = [
  "clap",
  "criterion",
  "image",
+ "lanrurugi-core",
  "lanrurugi-scanner",
  "lanrurugi-storage",
  "rand 0.10.2",
@@ -2931,6 +2932,7 @@ dependencies = [
  "bcrypt",
  "hmac",
  "rayon",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -2938,6 +2940,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "webpki-root-certs",
 ]
 
 [[package]]
@@ -3049,6 +3052,7 @@ dependencies = [
  "chrono",
  "deadpool-redis",
  "futures-util",
+ "lanrurugi-core",
  "lanrurugi-storage",
  "reqwest",
  "serde",

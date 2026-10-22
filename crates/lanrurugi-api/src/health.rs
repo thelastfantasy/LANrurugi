@@ -81,9 +81,9 @@ async fn health(State(state): State<AppState>) -> Response {
         .filter(|s| !s.is_empty());
     let frontend_ok = match frontend_url.as_deref() {
         Some(url) => {
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(2))
-                .build();
+            let client = lanrurugi_core::http_client::build(
+                reqwest::Client::builder().timeout(Duration::from_secs(2)),
+            );
             Some(match client {
                 Ok(client) => client
                     .get(url)

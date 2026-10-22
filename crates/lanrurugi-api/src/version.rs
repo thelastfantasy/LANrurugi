@@ -76,13 +76,14 @@ static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn http_client() -> &'static reqwest::Client {
     HTTP.get_or_init(|| {
-        reqwest::Client::builder()
-            // `reqwest`'s default is no timeout at all, which would let an unresponsive GitHub hold
-            // a page load open indefinitely.
-            .connect_timeout(Duration::from_secs(4))
-            .timeout(Duration::from_secs(8))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+        lanrurugi_core::http_client::build(
+            reqwest::Client::builder()
+                // `reqwest`'s default is no timeout at all, which would let an unresponsive GitHub
+                // hold a page load open indefinitely.
+                .connect_timeout(Duration::from_secs(4))
+                .timeout(Duration::from_secs(8)),
+        )
+        .unwrap_or_else(|_| lanrurugi_core::http_client::default_client())
     })
 }
 
