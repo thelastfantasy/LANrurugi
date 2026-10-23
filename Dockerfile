@@ -180,7 +180,7 @@ RUN deno doc --html --name="LANrurugi Plugin SDK" --output=./docs/dist-sdk \
         sdk-src/plugin-sdk.ts sdk-src/dispatcher.ts sdk-src/legacy-globals.d.ts \
  && deno doc --json sdk-src/plugin-sdk.ts sdk-src/dispatcher.ts sdk-src/legacy-globals.d.ts \
       | node scripts/normalize-sdk-doc-json.mjs . > ./docs/dist-sdk/plugin-sdk.json \
- && node docs/scripts/theme-sdk.mjs ./docs/dist-sdk \
+ && SDK_DOCS_URL=/docs/ node docs/scripts/theme-sdk.mjs ./docs/dist-sdk \
  && pnpm --filter lanrurugi-docs run build:swagger \
  && DOCS_BASE=/docs/ DOCS_SDK_URL=/docs/sdk/ pnpm --filter lanrurugi-docs run build \
  && mkdir -p /build/docs \

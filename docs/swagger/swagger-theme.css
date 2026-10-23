@@ -223,6 +223,52 @@ html.dark-mode .swagger-ui section.models {
   font-weight: 900;
 }
 
+/* GitHub icon (added by swagger-init.js): a ring the height of the locale link beside it. */
+.swagger-ui .topbar .lr-github {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: 12px;
+  box-sizing: border-box;
+  border: 2px solid var(--lr-bar-text);
+  border-radius: 999px;
+  color: var(--lr-bar-text);
+  background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition:
+    background-size 300ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+}
+
+.swagger-ui .topbar .lr-github:hover {
+  background-size: 100% 100%;
+  border-color: var(--lr-hi);
+  color: var(--lr-hi-text);
+}
+
+.swagger-ui .topbar .lr-github svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.swagger-ui .topbar .lr-github:hover svg {
+  transform: rotate(-14deg) scale(1.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swagger-ui .topbar .lr-github,
+  .swagger-ui .topbar .lr-github svg {
+    transition: none;
+  }
+}
+
 /* E-H / EX palette switch (replaces Swagger UI's light-bulb toggle; see swagger-init.js). */
 .swagger-ui .topbar .lr-theme-switch {
   display: inline-flex;

@@ -456,6 +456,11 @@ a hand-maintained document does. The site is built inside this repository and sh
 at the instance's own `/docs` for offline reading (`mise run docs-api` / `docs-sdk` / `docs-build` /
 `docs-dev`).
 
+Online: [documentation](https://docs.lrrg.dev/en/), [Swagger UI](https://api.lrrg.dev/en/) and the
+[plugin SDK reference](https://sdk.lrrg.dev/). For AI tools, start from
+[`lrrg.dev/llms.txt`](https://lrrg.dev/llms.txt); the docs site also publishes its pages as Markdown,
+split by language and topic (see "llms.txt for AI tools" there).
+
 - [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) — Phase 1 addendum (additive,
   implemented): the generator and docs site above, including testing the API against your own
   instance from the browser and a `deno doc`-generated plugin SDK reference.

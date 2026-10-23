@@ -271,12 +271,15 @@ jobs:
       #
       # `DOCS_SITE_URL` is what puts canonical URLs and `sitemap-index.xml` in the docs build; without
       # it Astro skips the sitemap and only logs a warning (the build still succeeds, which is why
-      # this is easy to miss). `DOCS_SDK_URL` points the docs sidebar's SDK entry at the SDK project.
-      # Set both as repository variables once the projects' own domains exist.
+      # this is easy to miss); `site` is also what turns on llms.txt. `DOCS_SDK_URL` and
+      # `DOCS_SWAGGER_URL` point the SDK entry and the llms.txt links at those two projects.
+      # The defaults are the lrrg.dev subdomains bound to each Pages project; repository variables
+      # override them.
       - name: Build — docs site
         env:
-          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://lanrurugi-docs.pages.dev' }}
-          DOCS_SDK_URL: ${{ vars.DOCS_SDK_URL || 'https://lanrurugi-sdk.pages.dev/' }}
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://docs.lrrg.dev' }}
+          DOCS_SDK_URL: ${{ vars.DOCS_SDK_URL || 'https://sdk.lrrg.dev/' }}
+          DOCS_SWAGGER_URL: ${{ vars.DOCS_SWAGGER_URL || 'https://api.lrrg.dev/' }}
         run: mise run docs-build
 
       - name: Build — Swagger UI

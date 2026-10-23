@@ -523,6 +523,10 @@ mise run test-frontend-e2e    # Playwright——真实后端 + Redis，Chromium 
 的门禁，所以这份参考不会像手写文档那样慢慢落后于代码。文档站在同一仓库内构建，并随镜像发布到实例自己的
 `/docs` 下供离线阅读（`mise run docs-api` / `docs-sdk` / `docs-build` / `docs-dev`）。
 
+在线版本：[文档](https://docs.lrrg.dev/)、[Swagger UI](https://api.lrrg.dev/)、
+[插件 SDK 参考](https://sdk.lrrg.dev/)。给 AI 工具读的入口是 [`lrrg.dev/llms.txt`](https://lrrg.dev/llms.txt)，
+文档站另有按语言和内容拆分的 Markdown 全文（见文档站「给 AI 工具用的 llms.txt」）。
+
 - [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) —— Phase 1 附加功能（增量添加，已实现）：
   上述生成器与文档站，含在浏览器里对自己实例测试 API 的能力，以及由 `deno doc` 生成的插件 SDK 参考。
 - [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) —— Phase 1 的

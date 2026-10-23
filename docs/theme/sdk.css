@@ -1,9 +1,9 @@
 /*
  * `deno doc --html` output on the shared LANrurugi palette (tokens.css). deno doc has no theming
- * hook and its CSS is compiled Tailwind with literal colours, so these rules override the handful of
- * surfaces that carry the look; symbol-kind colours (Function, Interface…) and syntax colours stay.
+ * hook and its CSS is compiled Tailwind with literal colours, so these rules override the surfaces
+ * that carry the look and re-lay the page as a centred column; symbol-kind and syntax colours stay.
  * Each rule is doubled under `html.dark` to match the specificity of deno doc's `:is(.dark *)` rules.
- * Injected into every page by scripts/theme-sdk.mjs.
+ * Injected into every page by scripts/theme-sdk.mjs, which also writes the `.lr-home` index.
  */
 
 html body,
@@ -12,65 +12,337 @@ html.dark body {
   color: var(--lr-text);
 }
 
+/* One background for the whole page; deno doc paints `.ddoc` white over the body. Its padding rule
+   is `.ddoc:not(:has(#categoryPanel))`, whose id outranks a plain class selector. */
+html .ddoc,
+html.dark .ddoc,
+html .ddoc:not(:has(#categoryPanel)) {
+  display: block;
+  padding: 0;
+  background: var(--lr-paper);
+}
+
+.ddoc > div {
+  width: 100%;
+}
+
 html .ddoc .text-black,
 html.dark .ddoc .text-black {
   color: var(--lr-text-strong);
 }
 
-/* Top bar: the homepage's ink band. */
+/* ── Top bar: the homepage's — paper band, ink rule, framed icon + wordmark, pill controls ── */
+
 #topnav,
 html.dark #topnav {
-  background: var(--lr-bar);
-  color: var(--lr-bar-text);
+  height: auto;
+  margin: 0 !important;
+  padding: 12px 22px !important;
+  box-sizing: border-box;
+  background: var(--lr-paper);
+  color: var(--lr-text);
   border-bottom: var(--lr-border);
   backdrop-filter: none;
+  font-family:
+    'Segoe UI', 'Helvetica Neue', Arial, 'Noto Sans CJK SC', 'Noto Sans CJK JP', 'PingFang SC',
+    'Hiragino Kaku Gothic ProN', 'Microsoft YaHei', sans-serif;
 }
 
-#topnav a,
-#topnav .breadcrumbs li,
-html.dark #topnav a {
-  color: var(--lr-bar-text);
+/* Edge to edge like the homepage's bar: brand at the left, controls at the right. */
+#topnav > div {
+  height: auto;
+  align-items: center;
+  gap: 24px;
 }
 
+/* The breadcrumb trail takes what the brand and the controls leave, and is clipped beyond that. */
+#topnav .lr-trail {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: -14px;
+  overflow: hidden;
+}
+
+#topnav > div > div:last-child {
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+#topnav .breadcrumbs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The trail after the brand: plain ink links, chevrons muted. */
+#topnav .breadcrumbs > a,
+#topnav .breadcrumbs > span,
+html.dark #topnav .breadcrumbs > a,
+html.dark #topnav .breadcrumbs > span {
+  color: var(--lr-text);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+#topnav .breadcrumbs > a,
+html.dark #topnav .breadcrumbs > a {
+  text-decoration: none;
+}
+
+#topnav .breadcrumbs > a:hover,
+html.dark #topnav .breadcrumbs > a:hover {
+  color: var(--lr-link);
+  text-decoration: underline;
+}
+
+html #topnav .breadcrumbs .text-black,
+html.dark #topnav .breadcrumbs .text-black {
+  display: inline-flex;
+  color: var(--lr-text-muted);
+}
+
+#topnav .lr-brand,
+html.dark #topnav .lr-brand {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 12px;
+  color: var(--lr-text);
+  text-decoration: none;
+}
+
+#topnav .lr-brand img {
+  display: block;
+  border: var(--lr-border);
+  border-radius: 9px;
+}
+
+#topnav .lr-brand__name {
+  font-size: 1.6rem;
+  font-weight: 900;
+  line-height: 30px;
+  letter-spacing: -0.03em;
+}
+
+#topnav .lr-brand__tag {
+  padding: 0 10px;
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  background: var(--lr-hi);
+  color: var(--lr-hi-text);
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1.5;
+}
+
+/* Search: a pill like the homepage's switches. */
 #topnav #searchbar,
 html.dark #topnav #searchbar {
-  border: 2px solid var(--lr-bar-text);
+  min-width: 220px;
+  height: 40px;
+  margin: 0;
+  padding: 0 16px;
+  box-sizing: border-box;
+  border: var(--lr-border);
   border-radius: 999px;
-  background: transparent;
-  color: var(--lr-bar-text);
+  background: var(--lr-card);
+  color: var(--lr-text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
-#theme-toggle,
-html.dark #theme-toggle {
-  color: var(--lr-bar-text);
+#topnav #searchbar::placeholder {
+  color: var(--lr-text-muted);
+  opacity: 1;
 }
 
-/* Hover fill sweeps in from the left, as on the homepage. */
-#theme-toggle,
-html.dark #theme-toggle {
+#topnav #searchbar:focus {
+  outline: 3px solid var(--lr-hi);
+  outline-offset: 1px;
+}
+
+/* deno doc's moon toggle stays in the page (its script looks it up) but the switch replaces it. */
+#theme-toggle {
+  display: none !important;
+}
+
+/* GitHub: the homepage's ring, the height of the switch beside it. */
+.lr-github {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 45px;
+  height: 45px;
+  box-sizing: border-box;
+  border: var(--lr-border);
+  border-radius: 999px;
+  background-color: var(--lr-card);
   background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
   background-repeat: no-repeat;
   background-position: left center;
   background-size: 0% 100%;
+  color: var(--lr-text);
   transition:
     background-size 300ms ease,
     color 200ms ease;
 }
 
-#theme-toggle:hover,
-html.dark #theme-toggle:hover {
-  background-color: transparent;
+.lr-github:hover {
   background-size: 100% 100%;
   color: var(--lr-hi-text);
 }
 
+.lr-github svg {
+  width: 21px;
+  height: 21px;
+  transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.lr-github:hover svg {
+  transform: rotate(-14deg) scale(1.12);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  #theme-toggle {
+  .lr-github,
+  .lr-github svg {
     transition: none;
   }
 }
 
-/* Headings, links and secondary text. */
+/* E-H / EX switch: the homepage's sliding pill (see homepage/src/style.css `.theme-switch`). */
+.lr-theme-switch {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 2px;
+  padding: 4px;
+  border: var(--lr-border);
+  border-radius: 999px;
+  background: var(--lr-card);
+}
+
+.lr-theme-switch::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  box-sizing: border-box;
+  width: calc(50% - 5px);
+  border: var(--lr-border);
+  border-radius: 999px;
+  background: var(--lr-btn-bg);
+}
+
+.lr-theme-switch.ready::before {
+  transition: transform 320ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.lr-theme-switch:has([data-theme='ex'][aria-pressed='true'])::before {
+  transform: translateX(calc(100% + 2px));
+}
+
+.lr-theme-switch button {
+  position: relative;
+  padding: 3px 10px;
+  white-space: nowrap;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lr-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.lr-theme-switch button[aria-pressed='false']:hover {
+  background-color: color-mix(in srgb, var(--lr-text) 12%, transparent);
+}
+
+.lr-theme-switch button[aria-pressed='true'] {
+  color: var(--lr-btn-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lr-theme-switch.ready::before,
+  .lr-theme-switch button {
+    transition: none;
+  }
+}
+
+/* Search results drop under the bar inside the same column. */
+#searchResults {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+/* ── Page column: main text plus a sticky outline on the right ── */
+
+/* The column is a flex item centred by auto margins, which turns off stretching; without an explicit
+   width an unbreakable line inside would size it past a phone's viewport. */
+#content {
+  width: 100%;
+  min-width: 0;
+  max-width: 1200px;
+  margin: 32px auto 0;
+  padding: 0 24px;
+  box-sizing: border-box;
+  gap: 48px;
+}
+
+@media (width >= 1024px) {
+  #content {
+    gap: 56px;
+  }
+}
+
+/* deno doc caps every block at 75ch, which left the column half empty next to the outline. */
+html .ddoc .section,
+html .ddoc .namespaceSection,
+html .ddoc .section > div:first-child > div,
+html.dark .ddoc .section,
+html.dark .ddoc .namespaceSection,
+html.dark .ddoc .section > div:first-child > div {
+  max-width: none;
+}
+
+html .ddoc .markdown,
+html.dark .ddoc .markdown {
+  max-width: 78ch;
+  line-height: 1.65;
+}
+
+/* A long unbreakable run (a path, a URL) wraps instead of widening a phone-width page. */
+html .ddoc .markdown,
+html .ddoc .markdown_summary,
+html.dark .ddoc .markdown,
+html.dark .ddoc .markdown_summary {
+  overflow-wrap: break-word;
+}
+
+.toc {
+  width: 260px;
+  min-width: 260px;
+  margin-top: 0;
+  padding-top: 0;
+  top: 98px;
+  max-height: calc(100vh - 114px);
+}
+
+/* ── Headings, links and secondary text ── */
+
 html .ddoc h1,
 html .ddoc h2,
 html .ddoc h3,
@@ -80,6 +352,19 @@ html.dark .ddoc h3 {
   color: var(--lr-text-strong);
 }
 
+html .ddoc .symbolTitle,
+html.dark .ddoc .symbolTitle {
+  padding-bottom: 12px;
+  border-bottom: var(--lr-border-thin);
+  font-size: 1.75rem;
+  line-height: 1.25;
+}
+
+html .ddoc .section > div:first-child > h2,
+html.dark .ddoc .section > div:first-child > h2 {
+  font-size: 1.3rem;
+}
+
 html .ddoc .markdown a,
 html .ddoc .link,
 html .ddoc .contextLink,
@@ -87,6 +372,16 @@ html.dark .ddoc .markdown a,
 html.dark .ddoc .link,
 html.dark .ddoc .contextLink {
   color: var(--lr-link);
+  text-decoration-color: color-mix(in srgb, var(--lr-link) 45%, transparent);
+}
+
+html .ddoc .markdown a:hover,
+html .ddoc .link:hover,
+html .ddoc .contextLink:hover,
+html.dark .ddoc .markdown a:hover,
+html.dark .ddoc .link:hover,
+html.dark .ddoc .contextLink:hover {
+  color: var(--lr-link-hover);
 }
 
 html .ddoc [class*='text-stone-'],
@@ -105,17 +400,49 @@ html.dark .ddoc [class*='border-stone-'] {
   border-color: var(--lr-rule);
 }
 
-/* Code: ink-framed cards with a hard shadow. */
+/* ── Members: one ruled row per property/method, signature in plain monospace ── */
+
+html .ddoc .docEntry,
+html.dark .ddoc .docEntry {
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--lr-rule);
+}
+
+html .ddoc .docEntryHeader code,
+html.dark .ddoc .docEntryHeader code {
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+  background: none;
+}
+
+/* ── Code ── */
+
 html .ddoc pre,
 html.dark .ddoc pre {
+  overflow-x: auto;
   background: var(--lr-code-bg);
   border: var(--lr-border-thin);
   border-radius: 12px;
   box-shadow: var(--lr-shadow-sm);
 }
 
-html .ddoc :not(pre) > code,
-html.dark .ddoc :not(pre) > code {
+/* The outline scrolls, which would clip the hard shadow; a plain frame fits there. */
+html .ddoc .toc pre,
+html.dark .ddoc .toc pre {
+  border-width: 1.5px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+/* Inline code in prose only — signatures are already monospace and read as one line. Long paths
+   (`lanrurugi_plugin::protocol::PluginInfo`) may break anywhere rather than overflow a phone. */
+html .ddoc .markdown :not(pre) > code,
+html .ddoc .markdown_summary :not(pre) > code,
+html.dark .ddoc .markdown :not(pre) > code,
+html.dark .ddoc .markdown_summary :not(pre) > code {
+  overflow-wrap: anywhere;
+  padding: 0.05em 0.35em;
   background: var(--lr-sand);
   border-radius: 5px;
 }
@@ -127,18 +454,268 @@ html.dark .ddoc {
   --ddoc-selection-selected-border-color: var(--lr-ink);
 }
 
-/* Namespace and symbol sections: card frames. */
+/* ── Symbol lists (all symbols, module pages) ── */
+
 html .ddoc .namespaceSection,
 html.dark .ddoc .namespaceSection {
-  padding: 4px 8px;
+  padding: 4px 0;
 }
 
 html .ddoc .namespaceItem,
 html.dark .ddoc .namespaceItem {
-  border-radius: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--lr-rule);
+}
+
+html .ddoc .namespaceSection .namespaceItem .namespaceItemContent > a,
+html.dark .ddoc .namespaceSection .namespaceItem .namespaceItemContent > a {
+  color: var(--lr-text-strong);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+html .ddoc .namespaceSection .namespaceItem .namespaceItemContent > a:hover,
+html.dark .ddoc .namespaceSection .namespaceItem .namespaceItemContent > a:hover {
+  color: var(--lr-link);
+  text-decoration: underline;
 }
 
 html .ddoc .toc,
 html.dark .ddoc .toc {
   border-color: var(--lr-rule);
+}
+
+/* ── Index page (written by theme-sdk.mjs) ── */
+
+.lr-home {
+  max-width: 100%;
+}
+
+body:has(.lr-home) .toc {
+  display: none;
+}
+
+.lr-home .lr-hero {
+  padding-bottom: 24px;
+  border-bottom: var(--lr-border-thin);
+}
+
+.lr-home .lr-hero h1 {
+  margin: 0 0 12px;
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.lr-home .lr-hero p {
+  max-width: 68ch;
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.lr-home .lr-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.lr-home .lr-links a {
+  padding: 7px 16px;
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  color: var(--lr-text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition:
+    background-size 300ms ease,
+    color 200ms ease;
+}
+
+.lr-home .lr-links a:hover {
+  background-size: 100% 100%;
+  color: var(--lr-hi-text);
+}
+
+.lr-home .lr-links a.lr-primary {
+  background-color: var(--lr-btn-bg);
+  color: var(--lr-btn-text);
+}
+
+.lr-home .lr-links a.lr-primary:hover {
+  color: var(--lr-hi-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lr-home .lr-links a {
+    transition: none;
+  }
+}
+
+.lr-home .lr-group {
+  margin-top: 32px;
+  padding: 20px 24px 8px;
+  background: var(--lr-card);
+  border: var(--lr-border-thin);
+  border-radius: var(--lr-radius);
+  box-shadow: var(--lr-shadow-sm);
+}
+
+.lr-home .lr-group > h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.lr-home .lr-group > h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.lr-home .lr-group > h2 a:hover {
+  color: var(--lr-link);
+  text-decoration: underline;
+}
+
+.lr-home .lr-group > p {
+  margin: 6px 0 0;
+  color: var(--lr-text-muted);
+}
+
+.lr-home .lr-group h3 {
+  margin: 20px 0 8px;
+  color: var(--lr-text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lr-home .lr-symbols {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0 32px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lr-home .lr-symbols li {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--lr-rule);
+}
+
+.lr-home .lr-symbols .docNodeKindIcon {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.lr-home .lr-symbols li > div:last-child {
+  min-width: 0;
+}
+
+.lr-home .lr-symbols a {
+  color: var(--lr-text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.lr-home .lr-symbols a:hover {
+  color: var(--lr-link);
+  text-decoration: underline;
+}
+
+.lr-home .lr-symbols p {
+  margin: 2px 0 0;
+  color: var(--lr-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.lr-home .lr-symbols code {
+  font-size: 0.85em;
+}
+
+/* ── Narrow screens ── */
+
+@media (width < 640px) {
+  #topnav,
+  html.dark #topnav {
+    padding: 10px 16px !important;
+  }
+
+  #topnav > div,
+  #topnav > div > div:last-child {
+    gap: 8px;
+  }
+
+  #topnav #searchbar,
+  html.dark #topnav #searchbar {
+    padding: 0 12px;
+  }
+
+  #content {
+    margin-top: 24px;
+    padding: 0 16px;
+  }
+
+  #searchResults {
+    padding: 0 16px;
+  }
+
+  .lr-home .lr-group {
+    padding: 16px 16px 4px;
+  }
+
+  .lr-home .lr-symbols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The homepage hides its wordmark at this width too; the icon and the SDK tag stay. */
+@media (width < 420px) {
+  #topnav .lr-brand__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+/* Below this the trail cannot fit beside the brand and the controls; the search box then takes
+   whatever they leave. */
+@media (width < 800px) {
+  #topnav .lr-trail {
+    display: none;
+  }
+
+  #topnav > div > div:last-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  #topnav #searchbar,
+  html.dark #topnav #searchbar {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: 235px;
+  }
+}
+
+/* Too narrow for the GitHub ring beside a usable search box. */
+@media (width < 390px) {
+  .lr-github {
+    display: none;
+  }
 }

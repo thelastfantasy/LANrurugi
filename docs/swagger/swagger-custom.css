@@ -93,3 +93,51 @@
   color: #fff;
   border-color: #fff;
 }
+
+/* Swagger UI stacks its top bar into a column on narrow screens, which took four rows once the
+   theme switch, locale link and GitHub icon were in it. One row, like the other sites' bars. */
+.swagger-ui .topbar .topbar-wrapper {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+/* Neither the logo nor the switch gives up width; the switch's auto left margin takes the slack. */
+.swagger-ui .topbar .topbar-wrapper > a.link,
+.swagger-ui .topbar .lr-theme-switch {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  .swagger-ui .topbar .wrapper {
+    padding: 0 16px;
+  }
+
+  .swagger-ui .topbar .lr-logo {
+    padding: 0;
+  }
+
+  /* `.topbar-wrapper` in the selector: swagger-theme.css loads later and sets these margins too. */
+  .swagger-ui .topbar .topbar-wrapper .locale-switcher,
+  .swagger-ui .topbar .topbar-wrapper .lr-github {
+    margin-left: 8px;
+  }
+}
+
+/* The homepage drops its wordmark at this width too; the icon and the API tag stay. */
+@media (max-width: 480px) {
+  .swagger-ui .topbar .lr-logo__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+/* Below this there is no room for the GitHub icon beside the switch and the locale link. */
+@media (max-width: 374px) {
+  .swagger-ui .topbar .topbar-wrapper .lr-github {
+    display: none;
+  }
+}

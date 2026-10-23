@@ -328,6 +328,28 @@ h1#_top,
   line-height: 24px;
 }
 
+/* Starlight sizes and centres the heading anchor icon in em of the heading's wrapper, which keeps
+   Starlight's own (larger) heading sizes; matching the wrapper to the scale above keeps the icon
+   in proportion and centred on the line. */
+.sl-markdown-content .sl-heading-wrapper {
+  --sl-anchor-icon-size: 0.7em;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h1 {
+  --sl-line-height-headings: 1.25;
+  font-size: 36px;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  --sl-line-height-headings: 1.375;
+  font-size: 24px;
+}
+
+.sl-markdown-content .sl-heading-wrapper:is(.level-h3, .level-h4) {
+  --sl-line-height-headings: 1.5;
+  font-size: 16px;
+}
+
 /* Sidebar geometry, from the reference's computed styles: a 288px column whose rows are 36px tall
    with 6px/12px padding. Starlight's defaults measured 300px and 28px. */
 :root {

@@ -161,6 +161,19 @@ site-search button[data-open-modal] {
   border-color: var(--lr-rule);
 }
 
+/* Starlight drops the outer cells' side padding, which suits a borderless table; this one is framed. */
+.sl-markdown-content :is(th, td):first-child {
+  padding-inline-start: 1rem;
+}
+
+.sl-markdown-content :is(th, td):last-child {
+  padding-inline-end: 1rem;
+}
+
+.sl-markdown-content tr:last-child > td {
+  border-bottom: 0;
+}
+
 /* Buttons: the homepage's pill with a hard offset shadow. */
 .sdk-launch,
 .api-try__send {

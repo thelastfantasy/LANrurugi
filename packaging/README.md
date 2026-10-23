@@ -4,7 +4,7 @@ This directory is a complete LANrurugi installation for one platform. Unpack it 
 example `/opt/lanrurugi` or `~/Applications/lanrurugi`); the program finds its web interface,
 plugins, documentation, bundled libraries and models relative to its own location.
 
-Full guide: <https://lanrurugi-docs.pages.dev/guide/install-native/>
+Full guide: <https://docs.lrrg.dev/guide/install-native/>
 
 ## 1. Install the prerequisites
 

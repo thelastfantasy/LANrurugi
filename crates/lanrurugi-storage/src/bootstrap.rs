@@ -69,6 +69,10 @@ async fn initialize_fresh_config(redis: &RedisDbs) -> Result<(), BootstrapError>
 mod tests {
     use super::*;
 
+    /// Tests that reach `initialize_fresh_config` share the one `LRR_CONFIG` key, so they must not
+    /// interleave: a parallel `bootstrap` reseeds the config another test just deleted.
+    static CONFIG_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn rejects_missing_archive_dir() {
         let Ok(base_url) = std::env::var("LANRURUGI_TEST_REDIS_URL") else {
@@ -88,6 +92,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
+        let _guard = CONFIG_LOCK.lock().await;
         let redis = RedisDbs::connect(&base_url).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         bootstrap(&redis, tmp.path()).await.unwrap();
@@ -100,6 +105,7 @@ mod tests {
             return;
         };
         use deadpool_redis::redis::AsyncCommands;
+        let _guard = CONFIG_LOCK.lock().await;
         let redis = RedisDbs::connect(&base_url).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let mut conn = redis.config.get().await.unwrap();

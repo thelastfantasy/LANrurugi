@@ -1739,6 +1739,12 @@ main {
 /* Narrow phones: icon, both switches and the bar's padding already fill the width, so the
    wordmark is hidden visually (screen readers still get the link's name). */
 @media (max-width: 420px) {
+  /* Room for the GitHub ring without shrinking any control below the others' height. */
+  .langs a,
+  .theme-switch button {
+    padding: 2px 5px;
+  }
+
   .brand span {
     position: absolute;
     width: 1px;
@@ -2023,6 +2029,7 @@ main {
 .doc-links a,
 .copy-btn,
 .topnav a,
+.gh-link,
 .btn {
   background-image: linear-gradient(var(--fill, var(--hi)), var(--fill, var(--hi)));
   background-repeat: no-repeat;
@@ -2048,6 +2055,7 @@ main {
 .copy-btn:hover,
 .copy-btn.done,
 .topnav a:hover,
+.gh-link:hover,
 .btn:hover {
   background-size: 100% 100%;
 }
@@ -2062,12 +2070,37 @@ main {
   --fill: color-mix(in srgb, var(--hi) 62%, #fff);
 }
 
-.btn.ghost svg {
+.btn.ghost svg,
+.gh-link svg {
   transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
-.btn.ghost:hover svg {
+.btn.ghost:hover svg,
+.gh-link:hover svg {
   transform: rotate(-14deg) scale(1.12);
+}
+
+/* GitHub in the top bar: an icon in a ring the height of the switches beside it. */
+.gh-link {
+  --fill: var(--hi);
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 47px;
+  height: 47px;
+  border: var(--line-thin);
+  border-radius: 999px;
+  background-color: var(--card);
+  color: var(--ink);
+}
+
+.gh-link:hover {
+  color: var(--hi-text);
+}
+
+.gh-link svg {
+  width: 22px;
+  height: 22px;
 }
 
 /* ---- segmented switches (theme, language) ------------------------------------------------------
@@ -2151,3 +2184,10 @@ main {
   color: var(--ex-text);
 }
 
+/* Below the smallest common phone width the top bar keeps only the switches; the hero has its own
+   GitHub button. */
+@media (max-width: 359px) {
+  .gh-link {
+    display: none;
+  }
+}

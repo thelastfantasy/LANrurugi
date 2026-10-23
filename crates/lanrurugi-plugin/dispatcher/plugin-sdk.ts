@@ -14,14 +14,14 @@
  *
  * Every plugin file must export exactly two things:
  *
- * 1. `pluginInfo(): {@linkcode PluginInfoResult}` — synchronous, no side effects. Called by
+ * 1. `pluginInfo()`, returning {@linkcode PluginInfoResult} — synchronous, no side effects. Called by
  *    itself in a disposable zero-permission subprocess just to read a plugin's own metadata
  *    (`lanrurugi_plugin::pool::PluginPool::plugin_info`) — must not assume `fetch`/file access
  *    are available even if `declared_permissions` asks for them.
  * 2. One `kind`-dependent entry point, matching {@linkcode PluginInfoResult.type}:
- *    - `"metadata"` → `execMetadata(hostArgs): Promise<{@linkcode MetadataResult}>`
- *    - `"login"` → `execLogin(hostArgs): Promise<{@linkcode LoginResult}>`
- *    - `"download"` → `execDownload(hostArgs): Promise<{@linkcode DownloadResult}>`
+ *    - `"metadata"` → `execMetadata(hostArgs)`, resolving to {@linkcode MetadataResult}
+ *    - `"login"` → `execLogin(hostArgs)`, resolving to {@linkcode LoginResult}
+ *    - `"download"` → `execDownload(hostArgs)`, resolving to {@linkcode DownloadResult}
  *    - `"script"` → `runScript(hostArgs): Promise<unknown>` — legacy's own three Scripts plugins
  *      (FolderToCat/SourceFinder/nHentaiSourceConverter) are reimplemented as native Rust
  *      endpoints instead (`lanrurugi-api::scripts`) rather than shipped as real `.ts` files under
@@ -29,8 +29,8 @@
  *      third-party script plugin uploaded via `POST /plugins/upload` would still be dispatched
  *      through this same generic path, though.
  *
- * A `"download"`-type plugin MAY additionally export `pluginOptions(): {@linkcode
- * PluginOptionsResult}` — synchronous, no side effects, same zero-permission-subprocess call
+ * A `"download"`-type plugin MAY additionally export `pluginOptions()`, returning
+ * {@linkcode PluginOptionsResult} — synchronous, no side effects, same zero-permission-subprocess call
  * pattern as `pluginInfo()`. Omit it entirely if the plugin has no configurable
  * concurrency/rate-limit/bundling defaults to declare.
  *

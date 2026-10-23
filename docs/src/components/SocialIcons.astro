@@ -1,18 +1,8 @@
 ---
-// Top-bar navigation, replacing Starlight's icon-only social links with text links.
-//
-// Why: the reference documentation site this project's site is modelled on puts *named* links in the
-// top bar (Github / Demo / Docker Hub / Discord Server), and a reader looking for "where do I file
-// this" reads words faster than it identifies a glyph. Three of those four do not exist for this
-// project — there is no published Docker image (`README.md` says `docker build -t lanrurugi .`), no
-// project Discord, and no public demo (a deliberate decision: the API-testing page has readers point
-// the request panel at *their own* instance). Inventing URLs to fill the row would ship four links
-// where three 404, so this renders only the links that resolve.
-//
-// Two upstream LANraragi links (its docs site and its repository) were here briefly, on the argument
-// that LANrurugi is API-compatible with it so its docs answer questions ours does not restate.
-// Removed on request: this is LANrurugi's documentation, and sending readers to a different project's
-// site from its own top bar is a decision the maintainer makes, not one to justify in a comment.
+// Top-bar links: the GitHub icon (the same one the homepage, Swagger UI and SDK bars carry) and the
+// documentation version picker. Only links that resolve are listed — there is no public demo,
+// Discord or upstream-project link on purpose.
+import { Icon } from '@astrojs/starlight/components'
 import config from 'virtual:starlight/user-config'
 
 type Locale = 'zh' | 'en'
@@ -51,8 +41,14 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
 <nav class="nav-links" aria-label={locale === 'zh' ? '外部链接' : 'External links'}>
   {
     LINKS[locale].map((link) => (
-      <a href={link.href} class="nav-links__item" rel={link.external ? 'noreferrer' : undefined}>
-        {link.label}
+      <a
+        href={link.href}
+        class="nav-links__item"
+        rel={link.external ? 'noreferrer' : undefined}
+        title={link.label}
+        aria-label={link.label}
+      >
+        <Icon name="github" size="1.35rem" />
       </a>
     ))
   }
@@ -75,13 +71,27 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
   }
 
   .nav-links__item {
+    display: inline-flex;
+    padding: 0.25rem;
     color: var(--sl-color-gray-2);
-    text-decoration: none;
-    white-space: nowrap;
   }
 
   .nav-links__item:hover {
     color: var(--sl-color-white);
+  }
+
+  .nav-links__item :global(svg) {
+    transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
+  }
+
+  .nav-links__item:hover :global(svg) {
+    transform: rotate(-14deg) scale(1.12);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-links__item :global(svg) {
+      transition: none;
+    }
   }
 
   /* The reference site puts its version picker above the sidebar; Starlight keeps its global

@@ -20,7 +20,7 @@ fi
 
 pnpm install --frozen-lockfile
 pnpm --filter lanrurugi-frontend run build
-mise run docs-sdk
+SDK_DOCS_URL=/docs/ mise run docs-sdk
 pnpm --filter lanrurugi-docs run build:swagger
 DOCS_BASE=/docs/ DOCS_SDK_URL=/docs/sdk/ pnpm --filter lanrurugi-docs run build
 

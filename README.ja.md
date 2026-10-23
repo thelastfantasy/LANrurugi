@@ -458,6 +458,11 @@ mise run test-frontend-e2e    # Playwright — 実際のバックエンド + Red
 自身の `/docs` からオフラインでも読めます（`mise run docs-api` / `docs-sdk` / `docs-build` /
 `docs-dev`）。
 
+オンライン版：[ドキュメント](https://docs.lrrg.dev/en/)（英語・中国語）、[Swagger UI](https://api.lrrg.dev/en/)、
+[プラグイン SDK リファレンス](https://sdk.lrrg.dev/)。AI ツール向けの入口は
+[`lrrg.dev/llms.txt`](https://lrrg.dev/llms.txt) で、ドキュメントサイトは言語と内容ごとに分けた Markdown
+全文も公開しています（同サイトの「llms.txt for AI tools」を参照）。
+
 - [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) — Phase 1 追加分（増分追加、実装済み）：
   上記の生成器とドキュメントサイト。ブラウザから自分のインスタンスに対して API を試す機能と、
   `deno doc` が生成するプラグイン SDK リファレンスを含みます。

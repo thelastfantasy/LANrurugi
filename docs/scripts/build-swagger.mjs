@@ -91,6 +91,8 @@ copyFileSync(join(docsRoot, 'theme', 'tokens.css'), join(outDir, 'lanrurugi-toke
 copyFileSync(join(SWAGGER_DIR, 'swagger-theme.css'), join(outDir, 'swagger-theme.css'))
 // The project icon, for the tab and for the top-bar logo swagger-init.js puts in Swagger's place.
 copyFileSync(join(repoRoot, 'apps', 'frontend', 'public', 'favicon.svg'), join(outDir, 'lanrurugi.svg'))
+// Same Cloudflare Pages headers as the docs site (noindex on the *.pages.dev hosts).
+copyFileSync(join(docsRoot, 'public', '_headers'), join(outDir, '_headers'))
 
 // ── The Chinese copy of the document ────────────────────────────────────────────────────────────
 //

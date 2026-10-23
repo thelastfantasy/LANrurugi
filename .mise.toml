@@ -268,6 +268,8 @@ cat > "$out/404.html" <<'HTMLEOF'
 HTMLEOF
 # deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every page.
 node docs/scripts/theme-sdk.mjs "$out"
+# Same Cloudflare Pages headers as the docs site (noindex on the *.pages.dev hosts).
+cp docs/public/_headers "$out/_headers"
 echo "wrote $out/index.html, $out/plugin-sdk.json and $out/404.html"
 """
 
