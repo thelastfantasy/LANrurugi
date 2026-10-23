@@ -176,9 +176,10 @@ async fn s2_a_stalled_provider_times_out_by_the_bound_for_every_feature() {
             "{}",
             feature.as_str()
         );
-        assert_eq!(
-            stub.hits(&scenario),
-            1,
+        // At most one request: on a slow runner the deadline can expire before the first one
+        // even reaches the stub, so 0 is fine; 2 would be a retried timeout.
+        assert!(
+            stub.hits(&scenario) <= 1,
             "{} retried a timeout",
             feature.as_str()
         );
