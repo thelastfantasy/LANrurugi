@@ -322,6 +322,34 @@ main {
   display: block;
 }
 
+/* Japanese: two fixed phrases of about 8.5 characters each, wider than the Chinese ones at the
+   same size, so the shared size wrapped them and orphaned a kana. Sized to the card's own width
+   instead (11cqi keeps each phrase, plus the highlight's padding, inside it), never larger than
+   the shared size, and kept unbroken. */
+.hero-copy {
+  container-type: inline-size;
+}
+
+:lang(ja) .hero-title {
+  font-size: min(3.9rem, 11cqi);
+}
+
+:lang(ja) .hero-title span,
+:lang(ja) .hero-title em {
+  white-space: nowrap;
+}
+
+/* English: the first line is long and wraps naturally, but the highlighted phrase must stay whole
+   (a broken highlight reads as two bars). It is about 7.9 em plus the highlight's padding, so
+   11.5cqi keeps it inside the card down to phone widths. */
+:lang(en) .hero-title {
+  font-size: min(3.9rem, 11.5cqi);
+}
+
+:lang(en) .hero-title em {
+  white-space: nowrap;
+}
+
 /* A highlighter stroke behind the second line, the way a manga title card is set. */
 .hero-title em {
   justify-self: start;
@@ -1708,6 +1736,19 @@ main {
   }
 }
 
+/* Narrow phones: icon, both switches and the bar's padding already fill the width, so the
+   wordmark is hidden visually (screen readers still get the link's name). */
+@media (max-width: 420px) {
+  .brand span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -1754,6 +1795,8 @@ main {
 /* the E-H / EX theme switch */
 .theme-switch {
   position: relative;
+  /* Never squeezed by a narrow top bar: that broke "E-H" at its hyphen. */
+  flex-shrink: 0;
   display: inline-grid;
   grid-template-columns: 1fr 1fr;
   column-gap: 2px;
@@ -1793,6 +1836,7 @@ main {
 .theme-switch button {
   position: relative;
   padding: 3px 10px;
+  white-space: nowrap;
   border: 3px solid transparent;
   border-radius: 999px;
   background: transparent;
