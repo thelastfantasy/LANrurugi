@@ -115,32 +115,59 @@ pub(crate) fn auth_cookies(
     } else {
         ""
     };
-    let domain = domain_attr(cfg.cookie_domain.as_deref());
-    let mut cookies = vec![
-        format!(
-            "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
-            cfg.cookie_names.session, access_token, cfg.access_token_lifetime_secs, secure, domain,
-        ),
-        format!(
-            "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}{}",
-            cfg.cookie_names.refresh,
-            refresh_cookie_value,
-            REFRESH_COOKIE_PATH,
-            refresh_max_age_secs,
-            secure,
-            domain,
-        ),
-    ];
+    // Expiries for the retired wider-Domain cookies come first: if that Domain equals this host
+    // exactly, the fresh host-only cookies below must be the ones that survive.
+    let mut cookies = retired_domain_cleared_cookies(
+        Some(&cfg.cookie_names),
+        secure,
+        cfg.retired_cookie_domain.as_deref(),
+    );
+    cookies.push(format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{}",
+        cfg.cookie_names.session, access_token, cfg.access_token_lifetime_secs, secure,
+    ));
+    cookies.push(format!(
+        "{}={}; Path={}; Max-Age={}; HttpOnly; SameSite=Lax{}",
+        cfg.cookie_names.refresh,
+        refresh_cookie_value,
+        REFRESH_COOKIE_PATH,
+        refresh_max_age_secs,
+        secure,
+    ));
     // The pre-tag cookies are replaced by the ones above; drop them so they stop being sent.
+    cookies.extend(legacy_cleared_cookies(secure, ""));
+    cookies
+}
+
+/// Expires this instance's and the bare auth cookies set with `Domain={retired_domain}`.
+fn retired_domain_cleared_cookies(
+    names: Option<&session::CookieNames>,
+    secure: &str,
+    retired_domain: Option<&str>,
+) -> Vec<String> {
+    let Some(domain) = retired_domain.filter(|d| !d.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let domain = format!("; Domain={}", domain.trim());
+    let mut cookies = Vec::new();
+    if let Some(names) = names {
+        cookies.extend(named_cleared_cookies(names, secure, &domain));
+    }
     cookies.extend(legacy_cleared_cookies(secure, &domain));
     cookies
 }
 
-fn domain_attr(cookie_domain: Option<&str>) -> String {
-    cookie_domain
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("; Domain={value}"))
-        .unwrap_or_default()
+fn named_cleared_cookies(names: &session::CookieNames, secure: &str, domain: &str) -> [String; 2] {
+    [
+        format!(
+            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            names.session,
+        ),
+        format!(
+            "{}=; Path={REFRESH_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
+            names.refresh,
+        ),
+    ]
 }
 
 /// Expires the bare pre-tag auth cookies (`session::COOKIE_NAME` / `REFRESH_COOKIE_NAME`).
@@ -198,22 +225,19 @@ pub(crate) fn request_is_https(headers: &HeaderMap) -> bool {
 pub(crate) fn cleared_auth_cookies(
     names: Option<&session::CookieNames>,
     force_secure: bool,
-    cookie_domain: Option<&str>,
+    retired_cookie_domain: Option<&str>,
 ) -> Vec<String> {
     let secure = if force_secure { "; Secure" } else { "" };
-    let domain = domain_attr(cookie_domain);
     let mut cookies = Vec::new();
     if let Some(names) = names {
-        cookies.push(format!(
-            "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
-            names.session,
-        ));
-        cookies.push(format!(
-            "{}=; Path={REFRESH_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Lax{secure}{domain}",
-            names.refresh,
-        ));
+        cookies.extend(named_cleared_cookies(names, secure, ""));
     }
-    cookies.extend(legacy_cleared_cookies(secure, &domain));
+    cookies.extend(legacy_cleared_cookies(secure, ""));
+    cookies.extend(retired_domain_cleared_cookies(
+        names,
+        secure,
+        retired_cookie_domain,
+    ));
     cookies
 }
 
@@ -530,7 +554,7 @@ async fn refresh(
             let cookies = cleared_auth_cookies(
                 Some(&auth.cookie_names),
                 auth.force_secure_cookies,
-                auth.cookie_domain.as_deref(),
+                auth.retired_cookie_domain.as_deref(),
             );
             (
                 StatusCode::UNAUTHORIZED,
@@ -764,7 +788,7 @@ async fn logout(
     //-degraded, rare edge case where failing to clear the cookie (leaving the user unable to log
     // out at all) would be worse than a `Secure`-attribute mismatch.
     let force_secure_cookies = auth.as_ref().is_some_and(|a| a.force_secure_cookies);
-    let cookie_domain = auth.as_ref().and_then(|a| a.cookie_domain.clone());
+    let retired_cookie_domain = auth.as_ref().and_then(|a| a.retired_cookie_domain.clone());
     let cookie_names = auth.as_ref().map(|a| a.cookie_names.clone());
     if let (Some(auth), Some(cookie_header)) = (
         auth,
@@ -815,7 +839,7 @@ async fn logout(
     let cookies = cleared_auth_cookies(
         cookie_names.as_ref(),
         force_secure_cookies,
-        cookie_domain.as_deref(),
+        retired_cookie_domain.as_deref(),
     );
     (
         StatusCode::OK,
@@ -839,7 +863,7 @@ mod tests {
             refresh_token_lifetime_secs: 604_800,
             refresh_token_idle_lifetime_secs: 1_209_600,
             max_login_devices: 5,
-            cookie_domain: None,
+            retired_cookie_domain: None,
             force_secure_cookies: false,
         }
     }
@@ -887,6 +911,31 @@ mod tests {
             "this instance's and the bare cookies are both cleared"
         );
         assert_eq!(cleared_auth_cookies(None, false, None).len(), 2);
+    }
+
+    /// Cookies once set with the removed `cookie_domain` setting are expired, before the new
+    /// host-only ones so an exact-host Domain cannot delete them again.
+    #[test]
+    fn cookies_from_the_retired_domain_setting_are_expired() {
+        let mut cfg = test_cfg();
+        cfg.retired_cookie_domain = Some(".example.com".to_string());
+        let cookies = auth_cookies(&cfg, "access-token", "refresh-token", 123);
+        let set = cookies
+            .iter()
+            .position(|c| c.starts_with(&format!("{}=access-token", cfg.cookie_names.session)))
+            .unwrap();
+        assert_eq!(
+            set, 4,
+            "four Domain expiries precede the fresh cookies: {cookies:?}"
+        );
+        assert!(cookies[..4]
+            .iter()
+            .all(|c| c.contains("Max-Age=0") && c.ends_with("; Domain=.example.com")));
+        assert!(cookies[4..].iter().all(|c| !c.contains("Domain=")));
+
+        let cleared = cleared_auth_cookies(Some(&cfg.cookie_names), false, Some(".example.com"));
+        assert_eq!(cleared.len(), 8);
+        assert_eq!(cleared.iter().filter(|c| c.contains("Domain=")).count(), 4);
     }
 
     #[test]

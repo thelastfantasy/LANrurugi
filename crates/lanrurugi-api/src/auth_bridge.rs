@@ -232,7 +232,10 @@ fn query_flag(value: Option<&str>) -> bool {
 /// just caused, then strips so a later refresh can try again.
 fn no_session_fallback(target_origin: &str, return_to: &str, guest_ok: bool) -> String {
     if !guest_ok {
-        return format!("{target_origin}/login?next={}", urlencoding(return_to));
+        return format!(
+            "{target_origin}/login?next={}&sso_none=1",
+            urlencoding(return_to)
+        );
     }
     match Url::parse(&format!("{target_origin}{return_to}")) {
         Ok(mut url) => {
@@ -723,7 +726,7 @@ mod tests {
                 refresh_token_lifetime_secs: 0,
                 refresh_token_idle_lifetime_secs: 0,
                 max_login_devices: 0,
-                cookie_domain: None,
+                retired_cookie_domain: None,
                 force_secure_cookies: false,
             },
             trusted: trusted.iter().map(|origin| (*origin).to_string()).collect(),
@@ -823,7 +826,7 @@ mod tests {
     fn no_session_fallback_sends_admin_logins_to_login_but_guests_to_their_page() {
         assert_eq!(
             no_session_fallback("http://localhost:3000", "/config/plugins", false),
-            "http://localhost:3000/login?next=%2Fconfig%2Fplugins"
+            "http://localhost:3000/login?next=%2Fconfig%2Fplugins&sso_none=1"
         );
         assert_eq!(
             no_session_fallback("http://localhost:3000", "/", true),

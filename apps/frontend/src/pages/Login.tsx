@@ -2,7 +2,8 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
-import { useLogin } from "@/api/hooks"
+import { useAuthConfig, useLogin } from "@/api/hooks"
+import { startBridge } from "@/AuthBridgeGate"
 import { Footer } from "@/components/Layout"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -25,6 +26,9 @@ export function Login() {
   const [searchParams] = useSearchParams()
   const login = useLogin()
   const [password, setPassword] = useState("")
+  const bridge = useAuthConfig().data
+  const [bridgePending, setBridgePending] = useState(false)
+  const [bridgeFailed, setBridgeFailed] = useState(false)
   useApplyTheme({ preferAdminTheme: true })
   useDocumentTitle(t("app.adminLogin") ?? undefined)
 
@@ -45,6 +49,23 @@ export function Login() {
   }
 
   const ssoError = searchParams.get("sso_error")
+  const ssoNoSession = searchParams.get("sso_none") === "1"
+  const next = searchParams.get("next")
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : null
+  // Offered whenever another trusted origin could hold the login — the only way in when automatic
+  // handoff is off. Hidden after a handoff already found none, and while this origin is itself
+  // being asked for a login by a peer (`next` is that peer's bridge URL).
+  const offerBridge =
+    !!bridge?.sso_enabled && !ssoNoSession && !safeNext?.startsWith("/api/auth/bridge")
+
+  function handleBridge() {
+    setBridgePending(true)
+    setBridgeFailed(false)
+    startBridge(safeNext ?? routes.library()).catch(() => {
+      setBridgePending(false)
+      setBridgeFailed(true)
+    })
+  }
 
   return (
     <>
@@ -68,11 +89,12 @@ export function Login() {
             name="password"
           />
 
-          {(login.isError || ssoError) && (
+          {(login.isError || ssoError || bridgeFailed) && (
             <p className="login-error">
               {login.isError ? t("login.wrongPassword") : t("login.ssoError")}
             </p>
           )}
+          {ssoNoSession && !login.isError && <p className="login-hint">{t("login.ssoNoSession")}</p>}
 
           <input
             type="submit"
@@ -80,6 +102,12 @@ export function Login() {
             disabled={login.isPending}
             value={t("library.login") ?? undefined}
           />
+
+          {offerBridge && (
+            <button type="button" className="login-back" disabled={bridgePending} onClick={handleBridge}>
+              {t("login.useTrustedOriginLogin")}
+            </button>
+          )}
 
           <button type="button" className="login-back" onClick={() => navigate(routes.library())}>
             {t("common.returnToLibrary")}

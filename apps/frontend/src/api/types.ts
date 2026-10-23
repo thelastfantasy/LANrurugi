@@ -114,8 +114,6 @@ export interface Settings {
   /** Newline/comma-separated exact peer origins trusted for one-time login handoff, e.g.
    *  `https://a.com` and `https://b.com`. Loopback aliases are built in and need not be listed. */
   trusted_origins: string
-  /** Optional cookie Domain for same-registrable-parent subdomains (e.g. `.example.com`). */
-  cookie_domain: string
   /** Automatically start the SSO bridge when a trusted peer has no local session. */
   sso_auto_redirect: boolean
   pagesize: number

@@ -332,10 +332,9 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     ("guest_theme", "ex.css"),
     // Cross-origin login handoff (single-backend mini-SSO). `trusted_origins` is the symmetric
     // equivalence group: any listed origin can be the login source for any other; loopback
-    // aliases are recognized automatically. `cookie_domain` is only for same-registrable-parent
-    // subdomains.
+    // aliases are recognized automatically. Auth cookies are always host-only; the former
+    // `cookie_domain` field is only read to expire cookies it once widened (`auth::load`).
     ("trusted_origins", ""),
-    ("cookie_domain", ""),
     // An ordered preference list, comma-separated (`"zh,ja,en"`), not a single choice: the interface
     // takes the first language it has translations for, and a work's title takes the first its source
     // supplied. `"auto"` keeps deferring to the browser. Stored in the existing field rather than a
@@ -551,16 +550,6 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
         }
     }
-    if key == "cookie_domain" {
-        let trimmed = value.as_str().unwrap_or("").trim();
-        if !trimmed.is_empty()
-            && (trimmed.contains('/') || trimmed.contains(':') || trimmed.contains("://"))
-        {
-            return Err(
-                "Field \"cookie_domain\" must be a bare DNS domain like .example.com.".to_string(),
-            );
-        }
-    }
     if key == "trusted_origins" {
         let raw = value.as_str().unwrap_or("");
         for entry in raw
@@ -748,7 +737,6 @@ const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
     "refresh_token_idle_lifetime_secs",
     "max_login_devices",
     "trusted_origins",
-    "cookie_domain",
     "sso_auto_redirect",
 ];
 

@@ -72,10 +72,10 @@ pub struct LiveAuthConfig {
     /// Maximum number of simultaneously active login families (devices). `0` means unlimited.
     /// Falls back to `lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES`.
     pub max_login_devices: u64,
-    /// Optional `Domain` attribute for the auth cookies, for sharing across same-registrable-parent
-    /// subdomains (e.g. `.example.com`). Empty means host-only cookies (the default). This is not
-    /// used for different registrable domains, which need the SSO handoff instead.
-    pub cookie_domain: Option<String>,
+    /// `Domain` the auth cookies were set with under the removed `cookie_domain` setting. Auth
+    /// cookies are now always host-only (the login handoff covers subdomains); this is only read so
+    /// browsers still holding those wider cookies get them expired.
+    pub retired_cookie_domain: Option<String>,
     pub force_secure_cookies: bool,
 }
 
@@ -111,7 +111,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         .get("max_login_devices")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES);
-    let cookie_domain = fields
+    let retired_cookie_domain = fields
         .get("cookie_domain")
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
@@ -137,7 +137,7 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
         refresh_token_lifetime_secs,
         refresh_token_idle_lifetime_secs,
         max_login_devices,
-        cookie_domain,
+        retired_cookie_domain,
         force_secure_cookies: state.auth.force_secure_cookies,
     })
 }

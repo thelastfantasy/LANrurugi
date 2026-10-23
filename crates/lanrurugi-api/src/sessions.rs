@@ -221,7 +221,7 @@ async fn revoke_session(
                 let cookies = crate::login::cleared_auth_cookies(
                     Some(&cfg.cookie_names),
                     cfg.force_secure_cookies,
-                    cfg.cookie_domain.as_deref(),
+                    cfg.retired_cookie_domain.as_deref(),
                 );
                 (
                     StatusCode::OK,

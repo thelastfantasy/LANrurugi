@@ -29,8 +29,6 @@ export function SecuritySection({
   setMaxLoginDevices,
   trustedOrigins,
   setTrustedOrigins,
-  cookieDomain,
-  setCookieDomain,
   ssoAutoRedirect,
   setSsoAutoRedirect,
   enablecors,
@@ -50,8 +48,6 @@ export function SecuritySection({
   setMaxLoginDevices: (v: number) => void
   trustedOrigins: string
   setTrustedOrigins: (v: string) => void
-  cookieDomain: string
-  setCookieDomain: (v: string) => void
   ssoAutoRedirect: boolean
   setSsoAutoRedirect: (v: boolean) => void
   enablecors: boolean
@@ -138,16 +134,6 @@ export function SecuritySection({
             />
             <br />
             {t("settings.trustedOriginsHint")}
-          </Row>
-          <Row label={t("settings.cookieDomain")}>
-            <Input
-              style={{ width: "100%" }}
-              value={cookieDomain}
-              onValueChange={(value) => setCookieDomain(value)}
-              placeholder=".example.com"
-            />
-            <br />
-            {t("settings.cookieDomainHint")}
           </Row>
           <CheckboxRow
             id="ssoAutoRedirect"

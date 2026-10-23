@@ -322,7 +322,28 @@ impl Typesetter {
             } else {
                 Weight::NORMAL
             });
-        buffer.set_text(&mut self.fonts, text, &attrs, Shaping::Advanced);
+        // Emoji get the colour font by name: per-glyph fallback tries DejaVu Sans, FreeSans and
+        // Noto Sans Symbols2 first, which draw many of them in black and white.
+        match self.families.emoji {
+            Some(emoji) if !text.is_ascii() => {
+                let emoji_attrs = attrs
+                    .clone()
+                    .family(Family::Name(emoji))
+                    .weight(Weight::NORMAL);
+                let spans = emoji_spans(text).into_iter().map(|(span, is_emoji)| {
+                    (
+                        span,
+                        if is_emoji {
+                            emoji_attrs.clone()
+                        } else {
+                            attrs.clone()
+                        },
+                    )
+                });
+                buffer.set_rich_text(&mut self.fonts, spans, &attrs, Shaping::Advanced, None);
+            }
+            _ => buffer.set_text(&mut self.fonts, text, &attrs, Shaping::Advanced),
+        }
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
     }
@@ -399,11 +420,22 @@ const KO: [&[&str]; 2] = [
     ],
 ];
 
+/// Colour emoji families, by platform.
+const EMOJI: &[&str] = &[
+    "Noto Color Emoji",
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Twemoji",
+    "JoyPixels",
+    "EmojiOne Color",
+];
+
 /// The family used for each language and role, chosen once from what is installed.
 struct Families {
     zh: [&'static str; 2],
     ja: [&'static str; 2],
     ko: [&'static str; 2],
+    emoji: Option<&'static str>,
 }
 
 impl Families {
@@ -413,6 +445,7 @@ impl Families {
             zh: pick(ZH),
             ja: pick(JA),
             ko: pick(KO),
+            emoji: EMOJI.iter().copied().find(|name| installed.contains(*name)),
         }
     }
 
@@ -424,6 +457,49 @@ impl Families {
         };
         set[usize::from(heading)]
     }
+}
+
+/// Splits `text` into runs of emoji and non-emoji graphemes, in order.
+fn emoji_spans(text: &str) -> Vec<(&str, bool)> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut spans: Vec<(&str, bool)> = Vec::new();
+    let mut run = (0, false);
+    for (offset, grapheme) in text.grapheme_indices(true) {
+        let is_emoji = is_emoji_grapheme(grapheme);
+        if offset > 0 && is_emoji != run.1 {
+            spans.push((&text[run.0..offset], run.1));
+            run.0 = offset;
+        }
+        run.1 = is_emoji;
+    }
+    if run.0 < text.len() {
+        spans.push((&text[run.0..], run.1));
+    }
+    spans
+}
+
+/// Whether a grapheme should be drawn as a colour emoji: an explicit emoji presentation selector,
+/// a keycap or flag sequence, or a character whose default presentation is emoji. Characters that
+/// default to text (❤, ©, ☺) stay with the body font unless followed by U+FE0F.
+fn is_emoji_grapheme(grapheme: &str) -> bool {
+    if grapheme.contains('\u{FE0E}') {
+        return false;
+    }
+    if grapheme.contains('\u{FE0F}') || grapheme.contains('\u{20E3}') {
+        return true;
+    }
+    grapheme.chars().next().is_some_and(|c| {
+        matches!(c as u32,
+            0x231A..=0x231B | 0x23E9..=0x23EC | 0x23F0 | 0x23F3 | 0x25FD..=0x25FE | 0x2614..=0x2615
+            | 0x2648..=0x2653 | 0x267F | 0x2693 | 0x26A1 | 0x26AA..=0x26AB | 0x26BD..=0x26BE
+            | 0x26C4..=0x26C5 | 0x26CE | 0x26D4 | 0x26EA | 0x26F2..=0x26F3 | 0x26F5 | 0x26FA
+            | 0x26FD | 0x2705 | 0x270A..=0x270B | 0x2728 | 0x274C | 0x274E | 0x2753..=0x2755
+            | 0x2757 | 0x2795..=0x2797 | 0x27B0 | 0x27BF | 0x2B1B..=0x2B1C | 0x2B50 | 0x2B55
+            | 0x1F004 | 0x1F0CF | 0x1F18E | 0x1F191..=0x1F19A | 0x1F1E6..=0x1F1FF | 0x1F201
+            | 0x1F21A | 0x1F22F | 0x1F232..=0x1F236 | 0x1F238..=0x1F23A | 0x1F250..=0x1F251
+            | 0x1F300..=0x1F64F | 0x1F680..=0x1F6FF | 0x1F7E0..=0x1F7F0 | 0x1F90C..=0x1F9FF
+            | 0x1FA70..=0x1FAFF)
+    })
 }
 
 /// The first candidate that is installed, else the first one (cosmic-text then falls back per
@@ -572,6 +648,20 @@ mod tests {
     }
 
     #[test]
+    fn emoji_runs_are_split_from_text_runs() {
+        let text = "他说❤\u{FE0F}好👨\u{200D}👩\u{200D}👧🇯🇵 ok ❤ ©";
+        let spans = emoji_spans(text);
+        assert_eq!(spans.iter().map(|(s, _)| *s).collect::<String>(), text);
+        let emoji: Vec<&str> = spans.iter().filter(|(_, e)| *e).map(|(s, _)| *s).collect();
+        assert_eq!(
+            emoji,
+            ["❤\u{FE0F}", "👨\u{200D}👩\u{200D}👧🇯🇵"],
+            "bare ❤ and © keep text presentation"
+        );
+        assert!(emoji_spans("").is_empty());
+    }
+
+    #[test]
     fn colour_emoji_are_drawn_in_colour() {
         let mut ts = Typesetter::new().expect("fonts installed");
         let has_emoji_font = ts
@@ -583,16 +673,34 @@ mod tests {
             eprintln!("skipping: no colour emoji font installed");
             return;
         }
+        let text = "😀❤\u{FE0F}👨\u{200D}👩\u{200D}👧🇯🇵";
         let mut book = FlowBook::default();
-        book.push(Block::Para {
-            text: "😀❤\u{FE0F}👨\u{200D}👩\u{200D}👧🇯🇵".into(),
-        });
+        book.push(Block::Para { text: text.into() });
         let layout = ts.paginate(&book, |_| None);
         let page = ts.render(&book, &layout, 0, |_| None).unwrap();
         let coloured = page
             .pixels()
             .filter(|p| p.0.iter().max().unwrap() - p.0.iter().min().unwrap() > 80)
             .count();
-        assert!(coloured > 500, "only {coloured} coloured pixels");
+        // On failure, name the face each glyph came from: a black-and-white face winning the
+        // fallback is the usual cause.
+        let block = &book.blocks[0];
+        let buffer = ts.shape(text, style(block).0, block, Lang::Zh, 1000.0);
+        let faces: Vec<String> = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .map(|glyph| {
+                let face = ts.fonts.db().face(glyph.font_id);
+                format!(
+                    "{:?}->{}",
+                    &text[glyph.start..glyph.end],
+                    face.map_or("?".into(), |f| f.families[0].0.clone())
+                )
+            })
+            .collect();
+        assert!(
+            coloured > 500,
+            "only {coloured} coloured pixels; faces: {faces:?}"
+        );
     }
 }

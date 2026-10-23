@@ -15,6 +15,22 @@ export function isGuestAccessiblePath(pathname: string): boolean {
 }
 
 /**
+ * Asks this origin for a one-time `state` cookie and the first peer's start URL, then navigates
+ * there. The handoff returns to `returnTo` signed in, or to `/login?sso_none=1` (or the page itself
+ * with `guestOk`) when no trusted peer has a session.
+ */
+export async function startBridge(returnTo: string, guestOk = false): Promise<void> {
+  const prepareUrl = `/api/auth/bridge/prepare?return_to=${encodeURIComponent(returnTo)}${
+    guestOk ? "&guest_ok=1" : ""
+  }`
+  const response = await fetch(prepareUrl, { credentials: "include" })
+  if (!response.ok) throw new Error(`prepare failed: ${response.status}`)
+  const body = (await response.json()) as { start_url?: string }
+  if (!body.start_url) throw new Error("prepare returned no start_url")
+  window.location.replace(body.start_url)
+}
+
+/**
  * Cross-origin login bridge bootstrap. When the backend says this origin is a trusted SSO peer
  * (and not the auth origin) and the user has no local session, ask our own origin for a one-time
  * `state` cookie + start URL, then navigate to another trusted origin. The callback ultimately
@@ -69,21 +85,10 @@ export function AuthBridgeGate() {
     inFlight.current = true
 
     const returnTo = `${location.pathname}${location.search}${location.hash}`
-    const prepareUrl = `/api/auth/bridge/prepare?return_to=${encodeURIComponent(returnTo)}${
-      guestPage ? "&guest_ok=1" : ""
-    }`
-    void fetch(prepareUrl, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`prepare failed: ${response.status}`)
-        const body = (await response.json()) as { start_url?: string }
-        if (!body.start_url) throw new Error("prepare returned no start_url")
-        window.location.replace(body.start_url)
-      })
-      .catch(() => {
-        // Keep the current origin usable if the auth origin is unreachable; the user can still use
-        // this origin's own login form.
-        inFlight.current = false
-      })
+    startBridge(returnTo, guestPage).catch(() => {
+      // Keep the current origin usable if no peer is reachable; its own login form still works.
+      inFlight.current = false
+    })
   }, [config.data, location.hash, location.pathname, location.search, loginStatus, isGuestModeEnabled])
 
   return null
