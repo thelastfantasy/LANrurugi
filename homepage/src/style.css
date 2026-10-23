@@ -122,13 +122,40 @@ h3 {
 }
 
 .brand {
+  /* The icon's height, and the wordmark's capital height: a little under the icon's, since a
+     rounded square reads smaller than heavy flat-topped capitals of the same measured height. */
+  --brand-size: 30px;
+  --brand-cap: 26px;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-weight: 900;
   font-size: 1.05rem;
   letter-spacing: -0.02em;
   text-decoration: none;
+}
+
+/* Capitals at `--brand-cap` (the body fonts' cap height is about 0.7 em). The line box stays the
+   icon's height so the bar doesn't grow; where `text-box` is supported the text is trimmed to its
+   capitals for exact centring, elsewhere a 2px nudge corrects the em box's low baseline. */
+.brand span {
+  font-size: calc(var(--brand-cap) / 0.7);
+  line-height: var(--brand-size);
+  letter-spacing: -0.03em;
+}
+
+@supports (text-box: trim-both cap alphabetic) {
+  .brand span {
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
+}
+
+@supports not (text-box: trim-both cap alphabetic) {
+  .brand span {
+    position: relative;
+    top: -2px;
+  }
 }
 
 .brand img {
@@ -218,13 +245,13 @@ main {
 }
 
 .btn.primary {
-  background: var(--btn-bg);
+  background-color: var(--btn-bg);
   color: var(--btn-text);
   box-shadow: 5px 5px 0 var(--btn-shadow);
 }
 
 .btn.ghost {
-  background: var(--hi);
+  background-color: var(--hi);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1582,6 +1609,15 @@ main {
 }
 
 @media (max-width: 640px) {
+  /* No room for the large wordmark beside both switches: the previous size. */
+  .brand span {
+    top: 0;
+    font-size: 1.05rem;
+    line-height: inherit;
+    letter-spacing: -0.02em;
+    text-box: none;
+  }
+
   .ds-note {
     flex-direction: column;
     align-items: flex-start;
@@ -1717,14 +1753,45 @@ main {
 
 /* the E-H / EX theme switch */
 .theme-switch {
-  display: inline-flex;
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 2px;
   padding: 4px;
   border: var(--line-thin);
   border-radius: 999px;
   background: var(--card);
 }
 
+/* The active pill is one layer that slides between the two (equal-width) options instead of
+   jumping. `ready` is added by script.js after the first sync, so loading on EX doesn't animate. */
+.theme-switch::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  /* One column: half of the padding box minus the 4px padding and half the 2px gap. Border-box,
+     since the global `* { box-sizing }` rule doesn't reach pseudo-elements. */
+  box-sizing: border-box;
+  width: calc(50% - 5px);
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: var(--btn-bg);
+}
+
+.theme-switch.ready::before {
+  transition:
+    transform 320ms cubic-bezier(0.34, 1.4, 0.64, 1),
+    background-color 200ms ease;
+}
+
+.theme-switch:has([data-theme-choice="ex"][aria-pressed="true"])::before {
+  transform: translateX(calc(100% + 2px));
+}
+
 .theme-switch button {
+  position: relative;
   padding: 3px 10px;
   border: 3px solid transparent;
   border-radius: 999px;
@@ -1738,8 +1805,6 @@ main {
 }
 
 .theme-switch button[aria-pressed="true"] {
-  background: var(--btn-bg);
-  border-color: var(--ink);
   color: var(--btn-text);
 }
 
@@ -1913,7 +1978,8 @@ main {
 
 .doc-links a,
 .copy-btn,
-.topnav a {
+.topnav a,
+.btn {
   background-image: linear-gradient(var(--fill, var(--hi)), var(--fill, var(--hi)));
   background-repeat: no-repeat;
   background-position: left center;
@@ -1937,6 +2003,107 @@ main {
 .doc-links a:hover,
 .copy-btn:hover,
 .copy-btn.done,
-.topnav a:hover {
+.topnav a:hover,
+.btn:hover {
   background-size: 100% 100%;
 }
+
+/* The hero buttons fill with a shade of their own colour, warmed towards their shadow (primary)
+   or lightened (the amber GitHub one). */
+.btn.primary {
+  --fill: color-mix(in srgb, var(--btn-bg) 78%, var(--btn-shadow));
+}
+
+.btn.ghost {
+  --fill: color-mix(in srgb, var(--hi) 62%, #fff);
+}
+
+.btn.ghost svg {
+  transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.btn.ghost:hover svg {
+  transform: rotate(-14deg) scale(1.12);
+}
+
+/* ---- segmented switches (theme, language) ------------------------------------------------------
+   The common segmented-control treatment (macOS, Vercel and GitHub tabs): unselected options sit a
+   little muted and, on hover, come to full strength over a faint fill; nothing moves but the
+   selected pill. */
+
+.langs a:not([aria-current="page"]) {
+  opacity: 0.7;
+  transition:
+    opacity 150ms ease,
+    background-color 150ms ease;
+}
+
+.langs a:not([aria-current="page"]):hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+/* The theme switch previews the theme under the pointer: that theme's card colour wipes across
+   the box from a corner — E-H from the top-left, EX from the top-right — and the unselected label
+   takes that theme's text colour to stay readable. Each theme is its own layer, clipped to a
+   triangle that grows from its corner along the box's own diagonal, so the edge runs corner to
+   corner whatever the box's proportions. The hovered layer is always on top: otherwise a wipe
+   could play underneath the other one still retracting (the pointer usually crosses E-H on its
+   way to EX). The palettes are literal on purpose: the switch shows the other theme. */
+.theme-switch {
+  --eh-card: #edebdf;
+  --eh-text: #5c0d11;
+  --ex-card: #43464e;
+  --ex-text: #f1f1f1;
+}
+
+.ts-fill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: clip-path 380ms ease;
+}
+
+.ts-eh {
+  background: var(--eh-card);
+  clip-path: polygon(0 0, 0 0, 0 0);
+}
+
+.ts-ex {
+  background: var(--ex-card);
+  clip-path: polygon(100% 0, 100% 0, 100% 0);
+}
+
+.theme-switch:has([data-theme-choice="eh"]:hover) .ts-eh {
+  z-index: 1;
+  clip-path: polygon(0 0, 200% 0, 0 200%);
+}
+
+.theme-switch:has([data-theme-choice="ex"]:hover) .ts-ex {
+  z-index: 1;
+  clip-path: polygon(100% 0, -100% 0, 100% 200%);
+}
+
+/* Above both fills: the sliding pill, then the labels. */
+.theme-switch::before {
+  z-index: 2;
+}
+
+.theme-switch button {
+  z-index: 3;
+}
+
+.theme-switch button[aria-pressed="false"] {
+  transition: color 320ms ease;
+}
+
+.theme-switch:has([data-theme-choice="eh"]:hover) button[aria-pressed="false"] {
+  color: var(--eh-text);
+}
+
+.theme-switch:has([data-theme-choice="ex"]:hover) button[aria-pressed="false"] {
+  color: var(--ex-text);
+}
+

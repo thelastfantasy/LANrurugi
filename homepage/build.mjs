@@ -5,7 +5,8 @@
  * No dependencies — `node homepage/build.mjs`, then serve homepage/dist.
  *
  * SITE_URL sets the absolute origin used by canonical/hreflang/og:url/sitemap
- * (env HOMEPAGE_SITE_URL, default the Cloudflare Pages project URL).
+ * (env HOMEPAGE_SITE_URL, default the production domain; the Pages project URL serves the same
+ * files and these canonical links point search engines at the domain).
  */
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,7 +17,7 @@ import { COPY } from "./src/copy.mjs";
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const SRC = join(ROOT, "src");
 const DIST = join(ROOT, "dist");
-const SITE_URL = (process.env.HOMEPAGE_SITE_URL || "https://lanrurugi-home.pages.dev").replace(/\/$/, "");
+const SITE_URL = (process.env.HOMEPAGE_SITE_URL || "https://lrrg.dev").replace(/\/$/, "");
 const REPO_URL = "https://github.com/thelastfantasy/LANrurugi";
 
 const LANGS = [
@@ -83,7 +84,7 @@ function jsonLd(lang, copy) {
         inLanguage: lang.hreflang,
         applicationCategory: "MultimediaApplication",
         applicationSubCategory: "Manga reader",
-        operatingSystem: "Linux, Docker",
+        operatingSystem: "Linux, macOS, FreeBSD, Docker",
         image: ogImageUrl(lang),
         license: "https://opensource.org/licenses/MIT",
         isAccessibleForFree: true,
@@ -243,7 +244,9 @@ for (const lang of LANGS) {
 writeFileSync(join(DIST, "404.html"), notFoundPage());
 writeFileSync(join(DIST, "sitemap.xml"), sitemap());
 // Cloudflare Pages response headers: images never change in place, so cache them for a week;
-// HTML/CSS/JS keep Pages' default revalidation so a deploy shows up immediately.
+// HTML/CSS/JS keep Pages' default revalidation so a deploy shows up immediately. The *.pages.dev
+// hosts (the project URL and every preview deployment) are for checking a deploy only, so they are
+// kept out of search indexes; the production domain is unaffected.
 writeFileSync(
   join(DIST, "_headers"),
   `/*
@@ -253,6 +256,10 @@ writeFileSync(
   Cache-Control: public, max-age=604800
 /favicon.svg
   Cache-Control: public, max-age=604800
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
 `,
 );
 writeFileSync(join(DIST, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n`);

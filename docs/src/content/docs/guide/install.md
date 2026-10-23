@@ -9,7 +9,7 @@ AI 推理在按需启动的子进程里运行。它有自己的数据库，不�
 :::tip[从 LANraragi 迁移]
 1. 在 LANraragi 的设置 →「Database Backup/Restore」→「Backup Database」下载备份 JSON，LANraragi 可以继续运行。
 2. 启动 LANrurugi：书库挂载和 LANraragi 相同的漫画目录；缩略图和数据库也要挂载，但必须用新的目录，不要和
-   LANraragi 的相同。[主页](https://lanrurugi-home.pages.dev/#start)上的转换器能根据 LANraragi 的部署命令或
+   LANraragi 的相同。[主页](https://lrrg.dev/#start)上的转换器能根据 LANraragi 的部署命令或
    compose 文件生成。
 3. 用默认密码 `kamimamita` 登录，首次运行向导会提示你修改。
 4. 在向导的「从 LANraragi 备份导入」一步上传 JSON（之后也能在设置 →「数据库备份/恢复」里导入）。标签、分类、

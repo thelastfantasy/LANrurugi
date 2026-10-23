@@ -73,6 +73,10 @@ for (const button of document.querySelectorAll("[data-theme-choice]")) {
 
 darkQuery.addEventListener("change", syncThemeButtons);
 syncThemeButtons();
+// Animate the switch's pill only from now on: the first sync above must not slide it into place.
+requestAnimationFrame(() => {
+  for (const group of document.querySelectorAll(".theme-switch")) group.classList.add("ready");
+});
 
 // Only animate while the demo is on screen.
 if (reader && auto) {

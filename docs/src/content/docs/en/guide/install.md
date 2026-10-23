@@ -12,7 +12,7 @@ demand. It has its own database and neither reads nor changes LANraragi's, so th
    can keep running.
 2. Start LANrurugi with the same manga directory as its library. Thumbnails and the database need mounts
    too, but in new directories, not LANraragi's. The converter on the
-   [homepage](https://lanrurugi-home.pages.dev/en/#start) generates this from LANraragi's deployment
+   [homepage](https://lrrg.dev/en/#start) generates this from LANraragi's deployment
    command or compose file.
 3. Sign in with the default password `kamimamita`; the first-run wizard asks you to change it.
 4. Upload the JSON in the wizard's "Import from a LANraragi backup" step (or later under Settings →
