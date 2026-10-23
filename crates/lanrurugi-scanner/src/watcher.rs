@@ -1,0 +1,217 @@
+//! `notify`-based file watcher (Shinobu replacement, research.md §6).
+//!
+//! **Verified against source** (`~/LANraragi/lib/Shinobu.pm`): legacy's watcher polls
+//! `new_events()` once per second (not an explicit multi-second debounce timer as one might
+//! assume from the name "Shinobu debounce") and filters on the extension list below, excluding
+//! the `thumb` directory. The actual "wait for a still-being-written file" behavior (FR-006)
+//! lives in `wait_until_stable` below, matching legacy's `add_to_filemap` exactly: retry opening
+//! the file (unbounded — bounded in practice by the per-file ingestion timeout, T037), then wait
+//! for the file to reach 512000 bytes (the hash sample size) or give up after 5 one-second
+//! attempts, whichever comes first.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use thiserror::Error;
+use tokio::sync::mpsc;
+
+use crate::patch;
+
+pub fn is_watched_archive_path(path: &Path) -> bool {
+    if path.components().any(|c| c.as_os_str() == "thumb") {
+        return false;
+    }
+    // A page patch (`crates/lanrurugi-scanner/src/patch.rs`) is itself a `.zip` file, sharing its
+    // "real" archive's extension — without this check it would get catalogued as its own,
+    // separate (and un-openable-as-manga) archive. Checked here rather than only in `full_scan`'s
+    // own filter, since this same function also gates the live filesystem watcher (`watch`
+    // below) — a patch dropped in later, not just one present at first scan, must be excluded
+    // too.
+    if patch::is_patch_path(path) {
+        return false;
+    }
+    let Some(ext) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+    else {
+        return false;
+    };
+    if !crate::archive_format::is_supported_extension(&ext) {
+        return false;
+    }
+    // A short `.txt` next to the archives is a readme or a note, not a book.
+    ext != "txt" || std::fs::metadata(path).is_ok_and(|m| m.len() >= lanrurugi_book::TXT_MIN_BYTES)
+}
+
+#[derive(Debug, Error)]
+pub enum WatcherError {
+    #[error("failed to start filesystem watcher: {0}")]
+    Notify(#[from] notify::Error),
+}
+
+/// Something the watcher itself reports, beyond archive paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatcherSignal {
+    /// The watch is no longer reliable (a backend error, or the watched root itself was removed or
+    /// unmounted) and must be recreated.
+    Failed(String),
+    /// Events were dropped (e.g. the kernel queue overflowed); the watch still works, but files
+    /// that arrived meanwhile need a catch-up scan.
+    Rescan,
+}
+
+/// Starts watching `library_path` for archive create/modify events, forwarding matching paths on
+/// the returned channel, and anything that makes the watch unreliable on the second one. The
+/// `RecommendedWatcher` must be kept alive for as long as watching should continue (dropping it
+/// stops the watch).
+pub fn watch(
+    library_path: &Path,
+) -> Result<
+    (
+        RecommendedWatcher,
+        mpsc::UnboundedReceiver<PathBuf>,
+        mpsc::UnboundedReceiver<WatcherSignal>,
+    ),
+    WatcherError,
+> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (signal_tx, signal_rx) = mpsc::unbounded_channel();
+    let root = library_path.to_path_buf();
+
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        use notify::EventKind;
+        let event = match res {
+            Ok(event) => event,
+            Err(e) => {
+                let _ = signal_tx.send(WatcherSignal::Failed(e.to_string()));
+                return;
+            }
+        };
+        if event.need_rescan() {
+            let _ = signal_tx.send(WatcherSignal::Rescan);
+        }
+        if matches!(event.kind, EventKind::Remove(_)) && event.paths.iter().any(|p| p == &root) {
+            let _ = signal_tx.send(WatcherSignal::Failed(
+                "the content directory was removed or unmounted".to_string(),
+            ));
+            return;
+        }
+        if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+            return;
+        }
+        for path in event.paths {
+            if is_watched_archive_path(&path) {
+                let _ = tx.send(path);
+            }
+        }
+    })?;
+
+    watcher.watch(library_path, RecursiveMode::Recursive)?;
+    Ok((watcher, rx, signal_rx))
+}
+
+/// Legacy's sample size — a file must reach this many bytes before it's considered stable enough
+/// to hash (verified: `Shinobu.pm::add_to_filemap`).
+const STABILITY_SIZE_THRESHOLD: u64 = 512_000;
+const STABILITY_MAX_ATTEMPTS: u32 = 5;
+const STABILITY_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Error)]
+pub enum StabilityError {
+    #[error("file disappeared while waiting for it to stabilize")]
+    Disappeared,
+}
+
+/// Waits for `path` to be openable and to reach the hashing sample size (or 5 one-second
+/// attempts), matching legacy's partial-write handling (FR-006) exactly.
+pub async fn wait_until_stable(path: &Path) -> Result<(), StabilityError> {
+    loop {
+        if !path.exists() {
+            return Err(StabilityError::Disappeared);
+        }
+        if std::fs::File::open(path).is_ok() {
+            break;
+        }
+        tokio::time::sleep(STABILITY_POLL_INTERVAL).await;
+    }
+
+    for attempt in 0..STABILITY_MAX_ATTEMPTS {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if size >= STABILITY_SIZE_THRESHOLD || attempt == STABILITY_MAX_ATTEMPTS - 1 {
+            break;
+        }
+        tokio::time::sleep(STABILITY_POLL_INTERVAL).await;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watched_extensions_match_legacy_and_exclude_thumb_dir() {
+        assert!(is_watched_archive_path(Path::new("/library/foo.zip")));
+        assert!(is_watched_archive_path(Path::new("/library/foo.CBZ")));
+        assert!(!is_watched_archive_path(Path::new("/library/foo.txt")));
+        assert!(is_watched_archive_path(Path::new("/library/foo.azw3")));
+        assert!(is_watched_archive_path(Path::new("/library/foo.DJVU")));
+        assert!(!is_watched_archive_path(Path::new(
+            "/library/thumb/foo.zip"
+        )));
+    }
+
+    #[tokio::test]
+    async fn wait_until_stable_returns_quickly_for_a_small_complete_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        write!(f, "small file, well under the sample threshold").unwrap();
+
+        let start = std::time::Instant::now();
+        wait_until_stable(f.path()).await.unwrap();
+        // Still has to run through the up-to-5 size-check attempts since the file never reaches
+        // 512000 bytes, but each attempt is 1s and it should bail after the 5th, not hang forever.
+        assert!(start.elapsed() < Duration::from_secs(6));
+    }
+
+    #[tokio::test]
+    async fn wait_until_stable_errors_if_file_disappears() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gone.zip");
+        let err = wait_until_stable(&path).await.unwrap_err();
+        assert!(matches!(err, StabilityError::Disappeared));
+    }
+
+    #[test]
+    fn watches_exactly_what_can_be_read() {
+        for name in [
+            "a.cbz",
+            "a.CBR",
+            "a.cbt",
+            "a.lzh",
+            "a.tar.bz2",
+            "a.lzma",
+            "a.pdf",
+            "a.azw3",
+        ] {
+            assert!(is_watched_archive_path(Path::new(name)), "{name}");
+        }
+        // zstd is not compiled into the bundled libarchive; images are pages, not archives.
+        for name in ["a.tar.zst", "a.jpg", "a.json", "noext"] {
+            assert!(!is_watched_archive_path(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn short_text_files_are_not_books() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("readme.txt");
+        std::fs::write(&note, "see the archives").unwrap();
+        assert!(!is_watched_archive_path(&note));
+        let novel = dir.path().join("novel.txt");
+        std::fs::write(&novel, "第一章 春天\n".repeat(1000)).unwrap();
+        assert!(is_watched_archive_path(&novel));
+    }
+}

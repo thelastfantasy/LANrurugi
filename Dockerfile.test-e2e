@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Throwaway extension of Dockerfile.build for implementing/running 003-ui-test-automation in a
+# sandboxed environment without host root access. NOT checked into CI or referenced by any mise
+# task — this is a one-off local dev aid for generating fixtures and running the Vitest/Playwright
+# suites end-to-end during implementation. Real CI wiring (tasks.md T024/T025) targets GitHub
+# Actions' own runner image directly, not this Dockerfile.
+FROM lanrurugi-dev
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        p7zip-full \
+        lhasa \
+        redis-server \
+        curl \
+        ca-certificates \
+        unzip \
+        xz-utils \
+        bzip2 \
+        psmisc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node/pnpm via mise-managed versions would need mise itself inside the container; simpler to
+# install Node directly matching .mise.toml's pin (node = "24.18.0") via nodesource-less tarball.
+ARG NODE_VERSION=24.18.0
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    | tar -xJ -C /usr/local --strip-components=1
+
+ARG PNPM_VERSION=11.10.0
+RUN npm install -g "pnpm@${PNPM_VERSION}"
+
+WORKDIR /workspace

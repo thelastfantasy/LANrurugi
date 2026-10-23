@@ -1,0 +1,157 @@
+import type { MouseEvent } from "react"
+import { useState } from "react"
+import { useTranslation } from "react-i18next"
+
+import type { ArchiveMetadata } from "@/api/types"
+import { FormatBadge, StatusIcon } from "@/components/Display"
+import { routes } from "@/lib/routes"
+import { isBookExtension } from "@/lib/utils/bookFormats"
+import { highlightText } from "@/lib/utils/highlightText"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+
+import { TagLine } from "./TagLine"
+
+const gap = { marginLeft: 2 }
+
+/** File format (e-books only) and status badges — new and read are mutually exclusive (a
+ * Tankoubon can show both plus its own mark); read threshold is >85%. */
+function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
+  const { t } = useTranslation()
+  const isTank = isTankoubonId(archive.arcid)
+  const isRead = archive.pagecount > 0 && archive.progress / archive.pagecount > 0.85
+  const showNew = archive.isnew
+  const showCrown = isRead && (isTank || !showNew)
+  // No legacy equivalent, so no mutual-exclusion with the other badges.
+  const showPatch = archive.has_patch === true
+
+  const isBook = isBookExtension(archive.extension)
+  if (!showNew && !showCrown && !isTank && !showPatch && !isBook) return null
+  return (
+    // Inline flow rather than flex: the row aligns this box by its first baseline, and the marks
+    // centre on the text's middle like any inline icon.
+    <div className="status-icons" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+      {isBook && <FormatBadge extension={archive.extension} style={gap} />}
+      {showNew && <StatusIcon kind="new" title={t("library.new") ?? undefined} style={gap} />}
+      {showCrown && <StatusIcon kind="read" title={t("common.read") ?? undefined} style={gap} />}
+      {isTank && <StatusIcon kind="tankoubon" title={t("library.tankoubon") ?? undefined} style={gap} />}
+      {showPatch && <StatusIcon kind="patch" title={t("library.hasAPagePatch") ?? undefined} style={gap} />}
+    </div>
+  )
+}
+
+/** A Tankoubon shows the 3-part `progress/pagecount/archive_count` form; a plain archive shows
+ * the 2-part form. */
+function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
+  const { t } = useTranslation()
+  if (archive.pagecount <= 0) return null
+  const isTank = isTankoubonId(archive.arcid) && archive.archive_count != null
+  return (
+    <div className="isnew">
+      <sup title={(isTank ? t("library.tankoubonPageCount") : t("library.pageCount")) ?? undefined}>
+        {isTank
+          ? `${archive.progress}/${archive.pagecount}/${archive.archive_count}`
+          : `${archive.progress}/${archive.pagecount}`}
+      </sup>
+    </div>
+  )
+}
+
+/** Thumbnail URLs that have loaded at least once this session. A remounted card (the carousel
+ * collapsed and reopened, a page revisited) starts from these instead of flashing the "wait warmly"
+ * placeholder over an image the browser already has. */
+const loadedThumbs = new Set<string>()
+
+/** Mirrors legacy's thumbnail card markup so the copied theme CSS styles it identically.
+ * Right-click opens `ArchiveContextMenu`; multi-select mode overlays a checkbox instead. */
+export function ArchiveCard({
+  archive,
+  multiSelect,
+  selected,
+  cropThumbs,
+  onToggleSelect,
+  onContextMenu,
+  onOpen,
+  onSearchTag,
+  highlightQuery,
+}: {
+  archive: ArchiveMetadata
+  multiSelect: boolean
+  selected: boolean
+  cropThumbs: boolean
+  onToggleSelect: (id: string) => void
+  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onOpen: (id: string) => void
+  onSearchTag: (namespacedTag: string) => void
+  /** Space-separated keywords to `<mark>` inside the title, e.g. from a search box. */
+  highlightQuery?: string
+}) {
+  const id = archive.arcid
+  const isTank = isTankoubonId(id)
+  const thumbSrc = isTank
+    ? `/api/tankoubons/${id}/thumbnail?no_fallback=true`
+    : `/api/archives/${id}/thumbnail?no_fallback=true`
+  const [thumbLoaded, setThumbLoaded] = useState(() => loadedThumbs.has(thumbSrc))
+  const [thumbFailed, setThumbFailed] = useState(false)
+
+  function handleOpen(e: MouseEvent) {
+    e.preventDefault()
+    if (multiSelect) {
+      onToggleSelect(id)
+    } else {
+      onOpen(id)
+    }
+  }
+
+
+  return (
+    <div
+      className={`id1${selected ? " msm-selected" : ""}`}
+      id={id}
+      onContextMenu={(e) => onContextMenu(e, archive)}
+    >
+      <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
+        <a
+          href={routes.reader(id)}
+          title={archive.title}
+          onClick={handleOpen}
+          style={{ flex: "0 1 auto", minWidth: 0 }}
+        >
+          {highlightText(archive.title, highlightQuery)}
+        </a>
+        <StatusIcons archive={archive} />
+      </div>
+      <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
+        {multiSelect && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(id)}
+            style={{ position: "absolute", top: 6, left: 6, zIndex: 1, width: 20, height: 20 }}
+          />
+        )}
+        <a href={routes.reader(id)} title={archive.title} onClick={handleOpen}>
+          {!thumbLoaded && !thumbFailed && (
+            <>
+              <img style={{ position: "relative" }} src="/legacy/img/wait_warmly.jpg" alt="" />
+              <i className="fa fa-4x fa-cog fa-spin ttspinner" aria-hidden="true"></i>
+            </>
+          )}
+          <img
+            src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
+            alt={archive.title}
+            style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
+            onLoad={() => {
+              loadedThumbs.add(thumbSrc)
+              setThumbLoaded(true)
+            }}
+            onError={() => setThumbFailed(true)}
+          />
+        </a>
+      </div>
+      <div className="id4">
+        <PageCountBadge archive={archive} />
+        <TagLine tags={archive.tags} onSearchTag={onSearchTag} />
+      </div>
+    </div>
+  )
+}

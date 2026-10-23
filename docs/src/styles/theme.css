@@ -1,0 +1,371 @@
+/*
+ * Starlight's colour tokens mapped onto the shared LANrurugi palette (../../theme/tokens.css), plus
+ * the homepage's comic-panel touches — ink borders, hard shadows, an amber "current" marker — on a
+ * handful of components. Layout is Starlight's own and is left alone.
+ */
+
+/* ── Colour tokens ─────────────────────────────────────────────────────────────────────────── */
+
+:root,
+::backdrop {
+  /* dark = ExHentai */
+  --sl-color-white: #f1f1f1;
+  --sl-color-gray-1: #e6e6e6;
+  --sl-color-gray-2: #dddddd;
+  --sl-color-gray-3: #a9abb0;
+  --sl-color-gray-4: #767a82;
+  --sl-color-gray-5: #4f535b;
+  --sl-color-gray-6: #43464e;
+  --sl-color-black: #34353b;
+  --sl-color-accent-low: #4d3c10;
+  --sl-color-accent: #f0a500;
+  --sl-color-accent-high: #ffcf66;
+  --sl-color-bg-nav: #2c2d32;
+  --sl-color-bg-sidebar: #2f3035;
+}
+
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+  /* light = E-Hentai */
+  --sl-color-white: #3d070a;
+  --sl-color-gray-1: #4a0b0e;
+  --sl-color-gray-2: #5c0d11;
+  --sl-color-gray-3: #8b5a3c;
+  --sl-color-gray-4: #a8907a;
+  --sl-color-gray-5: #c9c2ac;
+  --sl-color-gray-6: #d9d5c3;
+  --sl-color-gray-7: #edebdf;
+  --sl-color-black: #e3e0d1;
+  --sl-color-accent-low: #f6dfa4;
+  --sl-color-accent: #8a1a24;
+  --sl-color-accent-high: #5c0d11;
+  --sl-color-bg-nav: #edebdf;
+  --sl-color-bg-sidebar: #e3e0d1;
+  --sl-color-bg-inline-code: #d9d5c3;
+}
+
+/* ── Header and sidebar ────────────────────────────────────────────────────────────────────── */
+
+/* `header.header` only: Starlight's Header component root is also `div.header`, and matching both
+   drew a second line inside the bar. */
+header.header {
+  border-bottom: var(--lr-border);
+}
+
+.site-title img {
+  border: var(--lr-border-thin);
+  border-radius: 9px;
+}
+
+.site-title {
+  color: var(--lr-text-strong);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* E-H / EX palette switch (components/ThemeSelect.astro). */
+.lr-theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  background: var(--lr-card);
+}
+
+.lr-theme-switch button {
+  padding: 1px 10px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lr-text-strong);
+  font: inherit;
+  font-size: var(--sl-text-xs);
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.lr-theme-switch button[aria-pressed='true'] {
+  background: var(--lr-hi);
+  border-color: var(--lr-ink);
+  color: var(--lr-hi-text);
+}
+
+#starlight__sidebar {
+  border-inline-end: var(--lr-border-thin);
+}
+
+/* Current page: the homepage's amber highlight instead of Starlight's accent fill. */
+#starlight__sidebar a[aria-current='page'],
+#starlight__sidebar a[aria-current='page']:hover,
+#starlight__sidebar a[aria-current='page']:focus {
+  background: var(--lr-hi);
+  color: var(--lr-hi-text);
+  border: var(--lr-border-thin);
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+site-search button[data-open-modal] {
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  background: var(--lr-card);
+}
+
+/* ── Content components ────────────────────────────────────────────────────────────────────── */
+
+.sl-markdown-content a:not(.sdk-launch) {
+  color: var(--lr-link);
+}
+
+.sl-markdown-content a:not(.sdk-launch):hover {
+  color: var(--lr-link-hover);
+}
+
+.sl-markdown-content :not(pre) > code {
+  border-radius: 6px;
+}
+
+.sl-markdown-content .expressive-code .frame {
+  border: var(--lr-border);
+  border-radius: var(--lr-radius);
+  box-shadow: var(--lr-shadow);
+  overflow: hidden;
+}
+
+.sl-markdown-content .expressive-code .frame pre {
+  border: 0;
+}
+
+.starlight-aside {
+  border: var(--lr-border);
+  border-radius: var(--lr-radius);
+  box-shadow: var(--lr-shadow-sm);
+}
+
+.sl-markdown-content table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: var(--lr-border-thin);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sl-markdown-content th {
+  background: var(--lr-sand);
+}
+
+.sl-markdown-content :is(th, td) {
+  border-color: var(--lr-rule);
+}
+
+/* Starlight drops the outer cells' side padding, which suits a borderless table; this one is framed. */
+.sl-markdown-content :is(th, td):first-child {
+  padding-inline-start: 1rem;
+}
+
+.sl-markdown-content :is(th, td):last-child {
+  padding-inline-end: 1rem;
+}
+
+.sl-markdown-content tr:last-child > td {
+  border-bottom: 0;
+}
+
+/* Buttons: the homepage's pill with a hard offset shadow. */
+.sdk-launch,
+.api-try__send {
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  background: var(--lr-btn-bg);
+  color: var(--lr-btn-text);
+  box-shadow: 3px 3px 0 var(--lr-hi);
+  font-weight: 700;
+}
+
+.sdk-launch:hover,
+.api-try__send:hover {
+  filter: none;
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--lr-hi);
+}
+
+.api-try__copy {
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+}
+
+/* Request panel and response cards: ink frames. */
+.api-try {
+  border: var(--lr-border);
+  border-radius: var(--lr-radius);
+  box-shadow: var(--lr-shadow);
+}
+
+.api-response {
+  border: var(--lr-border-thin);
+}
+
+.api-method {
+  border-width: 2px;
+  border-radius: 999px;
+  padding: 0 8px;
+}
+
+/* Hero and card blocks on the landing page. */
+.hero .action.primary {
+  border: var(--lr-border-thin);
+  background: var(--lr-btn-bg);
+  color: var(--lr-btn-text);
+  box-shadow: 3px 3px 0 var(--lr-hi);
+}
+
+.card {
+  border: var(--lr-border) !important;
+  border-radius: var(--lr-radius);
+  box-shadow: var(--lr-shadow);
+}
+
+/* ── Search dialog (components/Search.astro) ───────────────────────────────────────────────── */
+
+site-search dialog {
+  background: var(--lr-paper);
+  border: var(--lr-border);
+  box-shadow: 6px 6px 0 var(--lr-ink);
+}
+
+@media (min-width: 50rem) {
+  site-search dialog {
+    border-radius: var(--lr-radius);
+    /* Starlight's 40rem leaves three page cards too narrow for their longest title. */
+    max-width: 46rem;
+  }
+}
+
+#starlight__search {
+  --pagefind-ui-border: var(--lr-ink);
+  --pagefind-ui-border-width: 2px;
+  --pagefind-ui-background: var(--lr-card);
+}
+
+#starlight__search .pagefind-ui__search-input {
+  border-radius: 999px;
+}
+
+#starlight__search .pagefind-ui__search-input:focus {
+  outline: 3px solid var(--lr-hi);
+  outline-offset: 1px;
+}
+
+#starlight__search .pagefind-ui__result {
+  border-color: var(--lr-rule);
+}
+
+.lr-search-empty {
+  padding: 0.25rem 0.25rem 0;
+}
+
+.lr-search-empty[hidden] {
+  display: none;
+}
+
+.lr-search-empty__title {
+  margin: 0.75rem 0 0.5rem;
+  color: var(--lr-text-muted);
+  font-size: var(--sl-text-xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lr-search-empty__queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lr-search-empty__queries button {
+  padding: 0.15rem 0.85rem;
+  border: var(--lr-border-thin);
+  border-radius: 999px;
+  background: var(--lr-card);
+  color: var(--lr-text-strong);
+  font: inherit;
+  font-size: var(--sl-text-sm);
+  font-weight: 700;
+  box-shadow: 2px 2px 0 var(--lr-ink);
+  cursor: pointer;
+}
+
+.lr-search-empty__queries button:hover {
+  color: var(--lr-hi-text);
+}
+
+.lr-search-empty__pages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lr-search-empty__pages li {
+  display: flex;
+}
+
+/* Cards fill their grid cell, so a title that wraps on a narrow screen never leaves the row
+   ragged; the arrow stays pinned right and centred. */
+.lr-search-empty__pages a {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: var(--lr-border-thin);
+  border-radius: 10px;
+  background: var(--lr-card);
+  color: var(--lr-text-strong);
+  font-size: var(--sl-text-sm);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.lr-search-empty__pages a::after {
+  content: '→';
+  flex: none;
+}
+
+.lr-search-empty__pages a:hover {
+  color: var(--lr-hi-text);
+}
+
+/* ── Hover fill ──────────────────────────────────────────────────────────────────────────────
+   As on the homepage: the amber sweeps in from the left instead of switching instantly — a
+   gradient layer over the element's own background colour, grown via background-size. */
+
+.lr-search-empty__queries button,
+.lr-search-empty__pages a {
+  background-image: linear-gradient(var(--lr-hi), var(--lr-hi));
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition:
+    background-size 300ms ease,
+    color 200ms ease;
+}
+
+.lr-search-empty__queries button:hover,
+.lr-search-empty__pages a:hover {
+  background-size: 100% 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lr-search-empty__queries button,
+  .lr-search-empty__pages a {
+    transition: none;
+  }
+}

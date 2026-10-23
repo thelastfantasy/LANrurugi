@@ -1,0 +1,62 @@
+---
+/*
+ * The homepage's E-H / EX palette switch in place of Starlight's dark/light/auto dropdown. It stores
+ * the choice under Starlight's own `starlight-theme` key, so Starlight's inline ThemeProvider keeps
+ * applying it before first paint; with nothing stored, the page follows the OS.
+ */
+const label = Astro.locals.t('themeSelect.accessibleLabel')
+---
+
+<lr-theme-switch class="lr-theme-switch" role="group" aria-label={label}>
+  <button type="button" data-theme-choice="light" title="E-Hentai" aria-pressed="false">E-H</button>
+  <button type="button" data-theme-choice="dark" title="ExHentai" aria-pressed="false">EX</button>
+</lr-theme-switch>
+
+<script>
+  const STORAGE_KEY = 'starlight-theme'
+  const systemLight = matchMedia('(prefers-color-scheme: light)')
+
+  const stored = () => {
+    try {
+      const value = localStorage.getItem(STORAGE_KEY)
+      return value === 'light' || value === 'dark' ? value : null
+    } catch {
+      return null
+    }
+  }
+
+  // A click made this page, kept here too so it holds even when storage is unavailable.
+  let chosen: string | null = null
+
+  const current = () => chosen ?? stored() ?? (systemLight.matches ? 'light' : 'dark')
+
+  function sync() {
+    const theme = current()
+    document.documentElement.dataset.theme = theme
+    document.querySelectorAll('lr-theme-switch button').forEach((button) => {
+      button.setAttribute('aria-pressed', String((button as HTMLElement).dataset.themeChoice === theme))
+    })
+  }
+
+  systemLight.addEventListener('change', () => {
+    if (!chosen && !stored()) sync()
+  })
+
+  class LrThemeSwitch extends HTMLElement {
+    connectedCallback() {
+      sync()
+      this.querySelectorAll('button').forEach((button) => {
+        button.addEventListener('click', () => {
+          chosen = button.dataset.themeChoice ?? null
+          try {
+            localStorage.setItem(STORAGE_KEY, chosen ?? '')
+          } catch {
+            // Storage unavailable (private mode): `chosen` keeps it for this page.
+          }
+          sync()
+        })
+      })
+    }
+  }
+  customElements.define('lr-theme-switch', LrThemeSwitch)
+</script>

@@ -1,0 +1,108 @@
+---
+// Top-bar links: the GitHub icon (the same one the homepage, Swagger UI and SDK bars carry) and the
+// documentation version picker. Only links that resolve are listed — there is no public demo,
+// Discord or upstream-project link on purpose.
+import { Icon } from '@astrojs/starlight/components'
+import config from 'virtual:starlight/user-config'
+
+type Locale = 'zh' | 'en'
+const locale: Locale = Astro.currentLocale === 'en' ? 'en' : 'zh'
+
+const LINKS: Record<Locale, { label: string; href: string; external: boolean }[]> = {
+  zh: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
+  en: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
+}
+
+// Versions offered by the picker. There is exactly one today: the repository has no release tags
+// (`git tag` is empty), so "which version of the docs am I reading" currently has a single honest
+// answer. Kept as a list so the day a release is tagged this is a one-line change — and so the
+// selector is the reference site's *shape* rather than a fabricated second option.
+const VERSIONS: Record<Locale, { value: string; label: string }[]> = {
+  zh: [{ value: 'current', label: '当前版本' }],
+  en: [{ value: 'current', label: 'Current Release' }],
+}
+
+// Fail loudly at build time if a configured `social` entry is not represented here, so adding one in
+// `astro.config.mjs` and forgetting this component cannot silently drop it.
+const configured = (config.social ?? []).map((entry) => entry.href)
+const rendered = new Set(LINKS[locale].map((link) => link.href))
+const dropped = configured.filter((href) => !rendered.has(href))
+if (dropped.length > 0) {
+  throw new Error(
+    `SocialIcons override: astro.config.mjs declares ${dropped.join(', ')} but this component does ` +
+      `not render it. Either add it to LINKS or drop it from the config — a configured link that ` +
+      `never appears is worse than no config entry at all.`,
+  )
+}
+
+const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
+---
+
+<nav class="nav-links" aria-label={locale === 'zh' ? '外部链接' : 'External links'}>
+  {
+    LINKS[locale].map((link) => (
+      <a
+        href={link.href}
+        class="nav-links__item"
+        rel={link.external ? 'noreferrer' : undefined}
+        title={link.label}
+        aria-label={link.label}
+      >
+        <Icon name="github" size="1.35rem" />
+      </a>
+    ))
+  }
+  <label class="nav-links__version">
+    <span class="sr-only">{versionLabel}</span>
+    <select>
+      {VERSIONS[locale].map((version) => (
+        <option value={version.value}>{version.label}</option>
+      ))}
+    </select>
+  </label>
+</nav>
+
+<style>
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  .nav-links__item {
+    display: inline-flex;
+    padding: 0.25rem;
+    color: var(--sl-color-gray-2);
+  }
+
+  .nav-links__item:hover {
+    color: var(--sl-color-white);
+  }
+
+  .nav-links__item :global(svg) {
+    transition: transform 300ms cubic-bezier(0.34, 1.4, 0.64, 1);
+  }
+
+  .nav-links__item:hover :global(svg) {
+    transform: rotate(-14deg) scale(1.12);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-links__item :global(svg) {
+      transition: none;
+    }
+  }
+
+  /* The reference site puts its version picker above the sidebar; Starlight keeps its global
+     pickers (theme, language) in this bar, so a third one belongs beside them rather than in a
+     second, separately-positioned control. */
+  .nav-links__version select {
+    font-size: var(--sl-text-sm);
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 6px;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-white);
+  }
+</style>

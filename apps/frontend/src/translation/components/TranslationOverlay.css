@@ -1,0 +1,116 @@
+/* Reader translation overlay (FR-005/FR-012/FR-019).
+ *
+ * The composited image covers the original page exactly, so the translated result appears in place
+ * rather than beside it. While pending or failed, no image is rendered at all and the original page
+ * stays fully visible underneath — that visibility is the requirement, not a side effect.
+ *
+ * A real stylesheet rather than inline `style` because of the media query below (constitution
+ * Principle VII). */
+
+.translation-overlay__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* `contain`, matching how the reader sizes the page underneath, so the overlay can't stretch to a
+   * different aspect ratio than the page it's covering. */
+  object-fit: contain;
+  /* Clicks fall through to the reader's own page-turn handler underneath. */
+  pointer-events: none;
+  /* Must clear legacy `.reader-image`'s `z-index: 19` (lrr.css) — this overlay sits in the same
+   * stacking context as the page it covers, so anything lower gets hidden behind the original. */
+  z-index: 20;
+}
+
+.translation-failed {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 20;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+
+  max-width: min(22rem, 60vw);
+  padding: 0.35rem 0.65rem;
+  border-radius: 0.4rem;
+
+  font-size: 0.8rem;
+  line-height: 1.25;
+
+  color: #fff;
+  background: rgba(120, 20, 20, 0.78);
+  backdrop-filter: blur(2px);
+
+  pointer-events: none;
+}
+
+.translation-failed__detail {
+  opacity: 0.85;
+  font-size: 0.75rem;
+}
+
+/* On a phone the reader fills the viewport; keep the notice from crowding the page. */
+@media (max-width: 640px) {
+  .translation-failed {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    max-width: 70vw;
+  }
+
+  .translation-failed__detail {
+    display: none;
+  }
+}
+
+/* Guided Private-Network-Access fallback for a locally-hosted backend (FR-018).
+ * Kept here alongside the other reader overlay failure states so the reader's own layout never
+ * has to know which kind of failure is being shown. */
+.translation-local-guidance {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 20;
+
+  max-width: min(34rem, calc(100vw - 1.5rem));
+  margin: 0 auto;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+
+  color: #fff;
+  background: rgba(30, 30, 30, 0.9);
+  backdrop-filter: blur(2px);
+
+  pointer-events: none;
+}
+
+.translation-local-guidance h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.translation-local-guidance p {
+  margin: 0.25rem 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.translation-local-guidance .helptext {
+  opacity: 0.85;
+}
+
+.translation-local-guidance a,
+.translation-local-guidance button {
+  pointer-events: auto;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .translation-local-guidance {
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+  }
+}

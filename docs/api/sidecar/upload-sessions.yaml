@@ -1,0 +1,231 @@
+# Resumable upload sessions — additive and LANrurugi-only (legacy's own one-shot
+# `PUT /api/archives/upload`, documented in the vendored upstream document, is unchanged and still
+# served).
+#
+# Why this exists: the one-shot route is a single multipart request, so a dropped connection costs
+# the whole transfer and the half-received bytes are deleted. These routes mirror what the download
+# side already does (`download_manager::stream`'s `.part` + `{path}.meta.json` + range handling):
+# the bytes accumulate on disk in `temp_dir`, the client appends chunks by offset, and the existing
+# ingest runs at `complete` — the same ingest the one-shot route calls, so an upload is catalogued
+# identically however it arrived.
+"/api/archives/upload/session":
+  post:
+    summary: Start or re-attach to a resumable upload
+    description: |
+      Creates a session (an empty staged file plus a sidecar describing it) and returns the id. If
+      `client_key` matches a session that is still alive, that session is returned instead, with the
+      offset its bytes are already at — which is what makes a page refresh resumable rather than
+      restarting the transfer.
+
+      The returned `offset` is always read from the staged file's real length, never from the
+      sidecar, so a truncated or edited sidecar cannot make the server believe it holds bytes it
+      does not.
+
+      Sessions that have not been touched for 24 hours are swept by the operations here; the staged
+      bytes also live in `temp_dir`, so `DELETE /api/tempfolder` reclaims them too.
+    tags: [archives]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/UploadSessionRequest" }
+    responses:
+      "200":
+        description: A session to upload into.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadSession" }
+
+"/api/archives/upload/session/{id}":
+  get:
+    summary: Upload session status
+    description: >-
+      The handshake a resuming client starts from: how many bytes the server actually holds for this
+      session. `404` means unknown, expired, or already completed — in every case the client's
+      correct move is to start a new session.
+    tags: [archives]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: The session, with its current offset.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadSession" }
+      "404":
+        description: Unknown or expired session.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  put:
+    summary: Append one chunk
+    description: |
+      Appends the request body to the staged file, but only at the position the client claims.
+      `Upload-Offset` is required and must equal the staged file's real length; the response always
+      reports the authoritative offset, including on failure:
+
+      - `204` — the chunk was appended; `Upload-Offset` is the new length.
+      - `409` — the client's offset disagrees with the disk (a lost response, a retried chunk, two
+        tabs); `Upload-Offset` says where to resume from.
+      - `400` — missing or malformed `Upload-Offset`.
+
+      A connection that dies mid-chunk keeps whatever bytes reached the disk and reports the offset,
+      so a partial chunk is just fewer bytes rather than a corrupt one. The body is bounded at 64
+      MiB (the one-shot route is deliberately unbounded; a chunk is supposed to be small).
+    tags: [archives]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: Upload-Offset
+        in: header
+        required: true
+        schema: { type: integer, format: int64 }
+        description: Byte position this chunk starts at; must equal the server's own length.
+    requestBody:
+      required: true
+      content:
+        application/octet-stream:
+          schema: { type: string, format: binary }
+    responses:
+      "204":
+        description: Chunk appended.
+        headers:
+          Upload-Offset:
+            schema: { type: integer, format: int64 }
+            description: The staged file's new length.
+      "409":
+        description: Offset mismatch; resync from the returned `Upload-Offset`.
+        headers:
+          Upload-Offset:
+            schema: { type: integer, format: int64 }
+      "404":
+        description: Unknown or expired session.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  delete:
+    summary: Abandon a session
+    description: Drops the staged bytes and the sidecar. Safe to call on an unknown id.
+    tags: [archives]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: The session's bytes are gone (whether or not it existed).
+
+"/api/archives/upload/session/{id}/complete":
+  post:
+    summary: Finish a session and ingest it
+    description: |
+      Verifies what landed, hashes it, and hands it to the same ingest the one-shot route uses —
+      including the persistent download-queue row, so a completed upload shows up (and can be
+      removed) exactly like any other queue item.
+
+      Verification: a `file_size` announced at session creation must equal the staged length
+      (`417` otherwise, and the staged bytes are dropped), and an optional `file_checksum` is
+      compared against the SHA-1 of the finished file (`417` on mismatch). That SHA-1 is computed by
+      reading the staged file once at this point rather than persisting incremental hasher state:
+      a resumed upload's early chunks were hashed by processes that are long gone, and state that
+      can silently desync from the bytes on disk is a worse trade than one sequential read of an
+      already-local file.
+
+      After this call the session no longer exists.
+    tags: [archives]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/UploadSessionComplete" }
+    responses:
+      "200":
+        description: Ingested; the same body the one-shot upload returns.
+      "400":
+        description: The session holds no bytes.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: Unknown or expired session.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "417":
+        description: The announced size or the supplied checksum did not match what arrived.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+components:
+  schemas:
+    UploadSessionRequest:
+      type: object
+      required: [file_name]
+      properties:
+        file_name:
+          type: string
+          description: >-
+            The client's filename. Only its base name and extension are used — the extension ends up
+            on the staged path because the scanner reads the archive format from it, exactly as the
+            one-shot route's own staging path does.
+        file_size:
+          type: integer
+          format: int64
+          description: >-
+            Total size the client intends to send, when it knows. Checked at `complete`; a mismatch
+            means client and server disagree about what was uploaded.
+        client_key:
+          type: string
+          description: >-
+            The client's stable key for this file (name + size + last-modified). Sending the same key
+            again re-attaches to the live session instead of starting a second one.
+    UploadSession:
+      type: object
+      required: [upload_id, offset, file_name]
+      properties:
+        operation: { type: string, example: upload }
+        success: { type: integer, example: 1 }
+        upload_id: { type: string }
+        offset:
+          type: integer
+          format: int64
+          description: Bytes the server actually holds; resume by appending from here.
+        file_name: { type: string }
+        file_size:
+          type: integer
+          format: int64
+          nullable: true
+          description: The size announced at creation, if any.
+        resumed:
+          type: boolean
+          description: >-
+            Present on creation responses: whether an existing session was re-attached rather than a
+            new one created.
+        created_at: { type: integer, format: int64 }
+        updated_at: { type: integer, format: int64 }
+    UploadSessionComplete:
+      type: object
+      description: >-
+        Optional. The same user-supplied metadata the one-shot route takes as multipart fields, plus
+        an optional checksum.
+      properties:
+        file_checksum:
+          type: string
+          pattern: ^[a-fA-F0-9]{40}$
+          description: SHA-1 of the whole archive, validated before ingest.
+        catid: { type: string, description: Category to file the archive into. }
+        title: { type: string }
+        summary: { type: string }
+        tags: { type: string }

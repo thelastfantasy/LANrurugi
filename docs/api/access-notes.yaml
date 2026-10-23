@@ -1,0 +1,56 @@
+# Behaviour that changes with the caller's role.
+#
+# OpenAPI has no construct for this: a path and method identify one operation, and there is no
+# per-role condition on parameters or responses. These notes are emitted as
+# `x-lanrurugi-access-notes` on the operation, so they reach the JSON, the documentation site (as a
+# callout) and the Swagger page (under Extensions) alike.
+#
+# Written in English, like the rest of the document. `docs/api/i18n/zh.json` carries the Chinese
+# under the same operation ids — the document stays one language and the site localises it.
+#
+# Keyed by `METHOD /api/path`. A key naming a route the server does not register fails the build,
+# the same as a stale sidecar fragment.
+
+"GET /api/activity":
+  - >-
+    Which entries you receive depends on who you are. A browser session sees every entry. An
+    administrator token sees the entries it produced itself, plus every entry produced by a guest
+    token. A guest token sees only the entries it produced itself. A token holder is therefore
+    looking at a subset of the log, not at the log — an empty result does not mean nothing happened.
+
+"GET /api/search":
+  - >-
+    A guest visitor (an unauthenticated visitor while guest access is enabled) sees only archives
+    belonging to categories marked guest-visible. Everyone else sees the whole library.
+"GET /api/search/ids":
+  - >-
+    Scoped the same way as `/api/search`: a guest visitor receives ids only for guest-visible
+    archives.
+"GET /api/search/random":
+  - >-
+    Scoped the same way as `/api/search`: a guest visitor draws only from guest-visible archives.
+"GET /api/search/suggest":
+  - >-
+    Scoped the same way as `/api/search`, so a guest visitor cannot see the title of an archive that
+    `/api/search` would refuse to return.
+
+"GET /api/archives/{id}/metadata":
+  - &guest404 >-
+    For a guest visitor whose scope excludes this archive, this answers **404**, not 403 —
+    deliberately indistinguishable from an archive that does not exist, so the response cannot be
+    used to probe for archives outside the guest's scope.
+"GET /api/archives/{id}/files": *guest404
+"GET /api/archives/{id}/page": *guest404
+"GET /api/archives/{id}/page-dimensions": *guest404
+"GET /api/archives/{id}/thumbnail": *guest404
+"GET /api/archives/{id}/thumbnails": *guest404
+"GET /api/archives/{id}/stamps": *guest404
+"GET /api/archives/{id}/stamps/{index}": *guest404
+"GET /api/archives/{id}/bookmarks": *guest404
+
+"GET /api/archives":
+  - >-
+    Not reachable by a guest visitor, or anonymously, at all. This is the unscoped listing — it
+    returns every archive in the library and applies no category scoping — so granting it to guests
+    would defeat the guest-visible restriction that `/api/search` enforces. Guests browse through
+    `/api/search` instead.

@@ -1,0 +1,491 @@
+# The `/stats` page's dashboard aggregates — additive and LANrurugi-only. Legacy's own stats page
+# (four counters plus a tag cloud, served by `/database/stats` above) is unchanged, and the
+# vendored upstream document has no `/stats` path at all, so there is no compatibility surface
+# here to preserve.
+#
+# Everything is derived at request time from the archive records, the operator activity log, and
+# two additive reading counters written by `PUT /api/archives/{id}/progress/{page}` — see each
+# field's own description for which. The whole library is scanned per request, in the same shape
+# `/database/stats` already pays for the tag cloud; this is an operator-facing page, not a hot
+# path.
+"/api/stats/overview":
+  get:
+    summary: Aggregated library statistics
+    description: |
+      One snapshot covering: headline totals, archive size distribution, container format/MIME
+      breakdown, ingestion history (by month, by ingestion path, and the newest arrivals), reading
+      history (per-day, progress distribution, ratings, and the most recently/most often read
+      works), and a weighted reading-preference analysis over tags, authors and categories.
+
+      Requesting this as a guest yields counts and breakdowns restricted to what that guest may
+      actually see, matching `/database/stats`'s own scoping.
+
+      Weighted preference values are relative rankings, not probabilities or percentages: they are
+      only ever meaningful against each other within one response.
+    tags: [stats]
+    responses:
+      "200":
+        description: The aggregated snapshot.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatsOverview" }
+
+"/api/stats/timeline":
+  get:
+    summary: One metric's daily time series
+    description: |
+      The page's time-series source, kept separate from `/stats/overview` because it is driven
+      interactively: the overview is one expensive snapshot (its preference analysis runs a search
+      per dynamic category), while this endpoint is refetched per range change and re-bucketed
+      entirely client-side.
+
+      The series is **always daily**, whatever granularity the reader is looking at, so that
+      changing granularity — or zooming and panning — needs no request at all once the range has
+      been fetched once. A request wider than the server's own cap is clamped to the *newest* days
+      of it, and `available_from` still reports where the data really begins.
+
+      Requesting this as a guest is scoped to what that guest may see, matching `/stats/overview`.
+    tags: [stats]
+    parameters:
+      - name: metric
+        in: query
+        required: true
+        schema: { type: string, enum: [ingest, reading] }
+        description: >-
+          `ingest` counts archives added per day (from each archive's own `date_added` tag);
+          `reading` reports page turns and archives-last-read per day.
+      - name: from
+        in: query
+        required: false
+        schema: { type: integer, format: int64 }
+        description: >-
+          Unix seconds. Defaults to the whole available range — which is what the page asks for, so
+          every later zoom is local. Clamped to the library's own data.
+      - name: to
+        in: query
+        required: false
+        schema: { type: integer, format: int64 }
+        description: Unix seconds; defaults to now, and is never later than it.
+    responses:
+      "200":
+        description: The daily series, oldest first.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatsTimeline" }
+      "400":
+        description: "`metric` was missing or was neither `ingest` nor `reading`."
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/stats/bucket":
+  get:
+    summary: The archives behind one bar of one chart
+    description: |
+      A drill-down: given one bucket of one `/stats` chart, the archives in it, for the list the page
+      shows under the chart. Fetched per click rather than folded into `/stats/overview`, which is a
+      whole-library snapshot that would have to carry every bucket's archive list to support this.
+
+      Deliberately not expressed as a search query, even though some of these buckets have one:
+      "last read on day X" has no search operator at all, and the progress ladder's `unread` rung
+      means "never *opened*" (its own `is_read`) while the search's `read:`/`is:unread` filters key
+      on the `progress` field alone — so they disagree about an archive that was opened without a
+      page turn. Deriving the list from the same classification the chart used is what keeps the
+      list and the bar consistent by construction.
+
+      Requesting this as a guest is scoped to what that guest may see, matching `/stats/overview`.
+    tags: [stats]
+    parameters:
+      - name: metric
+        in: query
+        required: true
+        schema: { type: string, enum: [ingest, read, size, rating, progress] }
+        description: >-
+          `ingest`/`read` are time buckets and need `from`+`to`; `size`/`rating`/`progress` are
+          keyed buckets and need `key`.
+      - name: from
+        in: query
+        required: false
+        schema: { type: string }
+        description: >-
+          `ingest`/`read` only. First day of the bucket, `YYYY-MM-DD`, inclusive. The client sends
+          the span it actually drew rather than a unit+key pair, so no bucket-key-to-span arithmetic
+          has to exist in two languages.
+      - name: to
+        in: query
+        required: false
+        schema: { type: string }
+        description: "`ingest`/`read` only. Last day of the bucket, `YYYY-MM-DD`, inclusive."
+      - name: key
+        in: query
+        required: false
+        schema: { type: string }
+        description: >-
+          `size` bucket key (`lt_1mb` … `gte_500mb`), a `rating` of `0`-`5` (where `0` is the
+          unrated-or-zero slot, exactly as the chart's own distribution counts it), or a `progress`
+          ladder key (`unread`, `1_20`, `21_40`, `41_60`, `61_80`, `81_99`, `finished`).
+    responses:
+      "200":
+        description: The bucket's archives, newest/largest/most-progressed first per metric.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatsBucketArchives" }
+      "400":
+        description: Unknown metric, or a missing/invalid `from`/`to`/`key` for that metric.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+components:
+  schemas:
+    StatsBucketArchives:
+      type: object
+      required: [metric, total, truncated, archives]
+      properties:
+        metric: { type: string, enum: [ingest, read, size, rating, progress] }
+        total:
+          type: integer
+          description: >-
+            Every archive in the bucket, not just the returned ones — a capped list must not
+            misrepresent how many matched.
+        truncated: { type: boolean, description: "Whether `archives` is shorter than `total`." }
+        archives:
+          type: array
+          description: At most 100 entries, ordered by whatever defines the bucket.
+          items: { $ref: "#/components/schemas/StatsArchiveCard" }
+
+    StatsTimeline:
+      type: object
+      required: [metric, from, to, available_from, available_to, points]
+      properties:
+        metric: { type: string, enum: [ingest, reading] }
+        from: { type: string, description: "First day returned, `YYYY-MM-DD` (UTC)." }
+        to: { type: string, description: "Last day returned, `YYYY-MM-DD` (UTC)." }
+        available_from:
+          type: string
+          description: >-
+            Where this metric's data really starts. Earlier than `from` when the request was clamped
+            to the server's own span cap — the page's cue that it is showing a truncated view.
+        available_to: { type: string, description: "Now, as a calendar day." }
+        pages_since:
+          type: string
+          description: >-
+            `reading` only: the day the per-day page counter started recording. Absent for `ingest`,
+            and for `reading` only until the counter has ever been written.
+        points:
+          type: array
+          description: >-
+            One entry per day over `[from, to]`, dense and zero-filled. Only the fields the metric
+            has are present, so an `ingest` point carries `archives` and a `reading` point carries
+            `pages` and `last_read`.
+          items: { $ref: "#/components/schemas/StatsTimelinePoint" }
+
+    StatsTimelinePoint:
+      type: object
+      required: [date]
+      properties:
+        date: { type: string, description: "`YYYY-MM-DD` (UTC)." }
+        archives: { type: integer, description: "`ingest` only: archives added that day." }
+        pages:
+          type: integer
+          format: int64
+          description: >-
+            `reading` only: page turns recorded that day. Zero before the per-day counter existed —
+            that counter is additive and only reaches back as far as its own keys survive.
+        last_read:
+          type: integer
+          description: >-
+            `reading` only: archives whose most recent read fell on that day. Available for the whole
+            library, unlike `pages`, because it comes from the archive records themselves.
+
+    StatsOverview:
+      type: object
+      description: One complete `/stats` dashboard snapshot.
+      required: [generated_at, totals, size_buckets, formats, ingest, reading, preferences]
+      properties:
+        generated_at:
+          type: integer
+          format: int64
+          description: Unix seconds this snapshot was computed at.
+        totals: { $ref: "#/components/schemas/StatsTotals" }
+        size_buckets:
+          type: array
+          description: One entry per size band, smallest first, including bands with no archives.
+          items: { $ref: "#/components/schemas/StatsSizeBucket" }
+        formats:
+          type: array
+          description: Container formats, most archives first.
+          items: { $ref: "#/components/schemas/StatsFormat" }
+        ingest: { $ref: "#/components/schemas/StatsIngest" }
+        reading: { $ref: "#/components/schemas/StatsReading" }
+        preferences: { $ref: "#/components/schemas/StatsPreferences" }
+        note:
+          type: string
+          enum: [no_server_side_reading]
+          description: >-
+            Present only when the server holds no reading data at all (a brand-new library, or
+            reader progress kept in the browser by the `localprogress` setting, which never calls
+            the progress endpoint). Absent otherwise.
+
+    StatsTotals:
+      type: object
+      description: Headline counts across the (guest-scoped, when applicable) library.
+      required:
+        [archives, tankoubons, categories, storage_bytes, average_bytes, largest_bytes, pages,
+         average_pages, pages_read, unread, reading, finished, new, rated, bookmarks]
+      properties:
+        archives: { type: integer, description: Real archives in the library. }
+        tankoubons: { type: integer, description: Tankoubon groupings. }
+        categories: { type: integer, description: Static and dynamic categories. }
+        storage_bytes: { type: integer, format: int64, description: Summed archive file sizes. }
+        average_bytes: { type: integer, format: int64 }
+        largest_bytes: { type: integer, format: int64 }
+        pages: { type: integer, format: int64, description: Summed page counts. }
+        average_pages: { type: integer }
+        pages_read:
+          type: integer
+          format: int64
+          description: >-
+            Legacy's own cumulative `LRR_TOTALPAGESTAT` counter — incremented on every progress
+            update, so it counts page turns rather than distinct pages.
+        unread: { type: integer, description: Archives with no reading signal at all. }
+        reading: { type: integer, description: Opened but not finished. }
+        finished: { type: integer, description: Last-read page at or past the page count. }
+        new: { type: integer, description: Archives still carrying the "new" flag. }
+        rated: { type: integer, description: Archives carrying a `rating:` tag. }
+        bookmarks: { type: integer, format: int64, description: Bookmarks across every archive. }
+
+    StatsSizeBucket:
+      type: object
+      description: One size band. `key` is stable and localized by the client; the bounds are exact.
+      required: [key, min_bytes, archives, bytes]
+      properties:
+        key:
+          type: string
+          enum: [lt_1mb, lt_5mb, lt_10mb, lt_25mb, lt_50mb, lt_100mb, lt_250mb, lt_500mb, gte_500mb]
+        min_bytes: { type: integer, format: int64, description: Inclusive lower bound. }
+        max_bytes:
+          type: integer
+          format: int64
+          description: Exclusive upper bound; absent on the open-ended final band.
+        archives: { type: integer }
+        bytes: { type: integer, format: int64 }
+
+    StatsFormat:
+      type: object
+      description: >-
+        One container format, keyed by on-disk file extension. The format of the *pages inside* an
+        archive is deliberately not counted here — that would mean opening every archive.
+      required: [extension, mime, archives, bytes, pages]
+      properties:
+        extension:
+          type: string
+          description: Lowercase extension without the dot; empty for a file with no extension.
+        mime: { type: string, description: The MIME type that extension denotes. }
+        archives: { type: integer }
+        bytes: { type: integer, format: int64 }
+        pages: { type: integer, format: int64 }
+
+    StatsIngest:
+      type: object
+      required: [sources, sources_sampled, sources_sampled_only, recent]
+      properties:
+        sources:
+          type: array
+          description: >-
+            Ingestion outcomes from the activity log's unified `archive.ingest` records, which is the
+            only place the ingestion paths are distinguished. Counts records, not archives.
+
+            The list is a *closed* taxonomy, zero-filled: `download`, `scanner`,
+            `upload_browser` and `upload_token` always appear in that order, so a path that has
+            never been used reads as `0` rather than silently vanishing. Uploads appear twice
+            because they are the one path a script and a browser reach identically — the split is by
+            the activity entry's own actor kind (a browser session vs an API token). Any further key
+            is appended rather than dropped: `upload` for an upload whose actor was neither (a
+            `System`/`Anonymous` record), and `unknown` for a source this build does not recognize.
+          items:
+            type: object
+            required: [source, archives]
+            properties:
+              source:
+                type: string
+                enum: [download, scanner, upload_browser, upload_token, upload, unknown]
+              archives: { type: integer }
+        sources_sampled:
+          type: integer
+          description: How many `archive.ingest` records the breakdown actually looked at.
+        sources_sampled_only:
+          type: boolean
+          description: >-
+            True when the activity log held more ingestion records than were sampled, i.e. `sources`
+            covers the newest sample only.
+        recent:
+          type: array
+          description: The most recently ingested archives, newest first.
+          items: { $ref: "#/components/schemas/StatsArchiveCard" }
+
+    StatsArchiveCard:
+      type: object
+      required: [id, title, timestamp, bytes, pages, extension]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        timestamp: { type: integer, format: int64, description: Unix seconds from `date_added`. }
+        bytes: { type: integer, format: int64 }
+        pages: { type: integer }
+        extension: { type: string }
+
+    StatsReading:
+      type: object
+      required: [progress, ratings, recent, most_reread]
+      properties:
+        progress:
+          type: array
+          description: Archives per reading-progress band.
+          items: { $ref: "#/components/schemas/StatsProgressBucket" }
+        ratings:
+          type: array
+          description: 'Archives per rating, including `stars: 0` for "no rating tag".'
+          items: { $ref: "#/components/schemas/StatsRating" }
+        recent:
+          type: array
+          description: Most recently read archives, newest first.
+          items: { $ref: "#/components/schemas/StatsRecentRead" }
+        most_reread:
+          type: array
+          description: >-
+            Archives by number of recorded page turns — the only signal for "which works get
+            returned to", since the stored progress is just the current page.
+          items: { $ref: "#/components/schemas/StatsRereadArchive" }
+
+    StatsProgressBucket:
+      type: object
+      description: >-
+        One reading-progress band. The bands are even 20-point steps plus the two states that are
+        not a percentage at all (never opened, finished) — real libraries concentrate at the bottom,
+        so equal 25-point bands spent their resolution where almost nothing was. Each band is
+        inclusive of its own upper bound, matching the `1-20%`-style labels.
+      required: [key, archives]
+      properties:
+        key:
+          type: string
+          enum: [unread, "1_20", "21_40", "41_60", "61_80", "81_99", finished]
+        archives: { type: integer }
+
+    StatsRating:
+      type: object
+      required: [stars, archives]
+      properties:
+        stars: { type: integer, minimum: 0, maximum: 5, description: "`0` means no rating tag." }
+        archives: { type: integer }
+
+    StatsRecentRead:
+      type: object
+      required: [id, title, last_read, page, pages, extension]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        last_read: { type: integer, format: int64, description: Unix seconds. }
+        page: { type: integer, description: Last-read page. }
+        pages: { type: integer, description: "`0` when the page count is unknown." }
+        extension: { type: string, description: Lowercase file extension of the archive. }
+
+    StatsRereadArchive:
+      type: object
+      required: [id, title, reads, page, pages, extension]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        reads: { type: integer, format: int64, description: Recorded page turns for this archive. }
+        page: { type: integer }
+        pages: { type: integer }
+        extension: { type: string, description: Lowercase file extension of the archive. }
+
+    StatsPreferences:
+      type: object
+      required:
+        [read_archives, namespaces, highlights, by_namespace, ratings, categories,
+         categories_truncated]
+      properties:
+        read_archives:
+          type: integer
+          description: Archives carrying any reading signal — the denominator for this section.
+        namespaces:
+          type: array
+          description: Content tag namespaces across those archives, weighted, highest first.
+          items: { $ref: "#/components/schemas/StatsNamespace" }
+        highlights:
+          type: array
+          description: >-
+            The promoted axes — `language`, `artist`, `circle` and `cosplayer`, in that order, whichever of
+            them the library actually has. Always present, however low they rank among all
+            namespaces, and deliberately excluded from `by_namespace` so nothing is listed twice.
+          items: { $ref: "#/components/schemas/StatsNamespaceTags" }
+        by_namespace:
+          type: array
+          description: >-
+            Top tags within each of the highest-weighted of the *remaining* namespaces (everything
+            except `highlights`).
+          items: { $ref: "#/components/schemas/StatsNamespaceTags" }
+        ratings:
+          type: array
+          description: >-
+            How the read archives split across the reader's own 1–5 ratings, `stars: 0` meaning
+            unrated. Counted rather than weighted: the rating is already a factor in every weight
+            in this section, so re-weighting by it would count the same signal twice.
+          items: { $ref: "#/components/schemas/StatsRatingTier" }
+        categories:
+          type: array
+          description: Categories ranked by the share of their members that have been read.
+          items: { $ref: "#/components/schemas/StatsCategory" }
+        categories_truncated:
+          type: boolean
+          description: >-
+            True when some dynamic categories (those defined by a search predicate) were left
+            unresolved rather than each costing a search of their own.
+
+    StatsRatingTier:
+      type: object
+      required: [stars, archives]
+      properties:
+        stars: { type: integer, minimum: 0, maximum: 5, description: "`0` means no rating tag." }
+        archives: { type: integer, description: Read archives carrying this rating. }
+
+    StatsNamespace:
+      type: object
+      required: [namespace, weight, archives]
+      properties:
+        namespace: { type: string }
+        weight:
+          type: number
+          format: double
+          description: Summed preference weight; relative, not a percentage.
+        archives: { type: integer, description: Read archives carrying at least one such tag. }
+
+    StatsNamespaceTags:
+      type: object
+      required: [namespace, weight, tags]
+      properties:
+        namespace: { type: string }
+        weight: { type: number, format: double }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/StatsTag" }
+
+    StatsTag:
+      type: object
+      required: [text, weight, archives]
+      properties:
+        text: { type: string, description: Tag value without its namespace prefix. }
+        weight: { type: number, format: double }
+        archives: { type: integer }
+
+    StatsCategory:
+      type: object
+      required: [id, name, total, read, weight]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        total: { type: integer, description: Member archives visible in this response's scope. }
+        read: { type: integer, description: Members carrying a reading signal. }
+        weight: { type: number, format: double, description: Summed preference weight of members. }

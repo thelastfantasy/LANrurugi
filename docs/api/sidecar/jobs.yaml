@@ -1,0 +1,90 @@
+# The native background-job console (`specs/002-job-console/`).
+#
+# Deliberately separate from the legacy-mimicking `/minion/*` endpoints, which stay as they are
+# (constitution Principle II) and are documented by the vendored upstream layer.
+"/api/jobs":
+  get:
+    summary: List tracked background jobs
+    description: |
+      Every job this instance is tracking, most recently created first.
+
+      Progress and byte counts are best-effort: a job that cannot report granular progress jumps
+      straight from 0 to 1 rather than reporting a fabricated intermediate value, and the byte
+      fields are genuinely absent (not `0`) for jobs that have no transfer to report.
+    tags: [jobs]
+    responses:
+      "200":
+        description: The current job list.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobs]
+              properties:
+                jobs:
+                  type: array
+                  items: { $ref: "#/components/schemas/JobStatus" }
+  delete:
+    summary: Clear every finished job
+    description: |
+      Removes jobs that have reached a terminal state — `finished` **or** `failed`. Jobs still in
+      flight (`queued`, `active`) are left tracked; use the single-job endpoint once they settle.
+
+      Only `state=finished` is accepted. The name means "any terminal-state job", which is why
+      `failed` jobs are swept up too.
+    tags: [jobs]
+    parameters:
+      - name: state
+        in: query
+        required: true
+        schema: { type: string, enum: [finished] }
+        description: Only `finished` is accepted; a missing or different value is a 400.
+    responses:
+      "200":
+        description: How many jobs were cleared.
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/OperationResponse" }
+                - type: object
+                  properties:
+                    cleared:
+                      type: integer
+                      description: Number of terminal-state jobs removed.
+      "400":
+        description: "`state` was missing, or was something other than `finished`."
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/jobs/{id}":
+  delete:
+    summary: Clear one job
+    description: |
+      Clears a single job by ID, and only once it has reached a terminal state.
+
+      A job that is still `queued` or `active` is a 409 rather than being silently killed — a job
+      that reports success while its work is still running would be worse than an error.
+    tags: [jobs]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Cleared.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No job with that ID is tracked.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "409":
+        description: The job is still queued or active; wait for it to finish or fail first.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }

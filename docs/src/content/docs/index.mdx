@@ -1,0 +1,34 @@
+---
+title: LANrurugi 文档
+description: 安装、使用、插件开发与 HTTP API 参考。
+template: splash
+hero:
+  tagline: 以漫画为主、也能读 PDF / EPUB 等电子书的自托管书库，以 LANraragi 为起点、用 Rust + React 大幅改造与强化——现有 LANraragi 部署的数据与 API 直接可用。
+  actions:
+    - text: 安装
+      link: guide/install/
+      variant: primary
+    - text: HTTP API 参考
+      link: api/
+---
+
+## 这个站点里有什么
+
+- **[安装（Docker / NAS）](guide/install/)**——把 LANrurugi 跑起来，并让它读到你已有的库。
+- **[原生安装](guide/install-native/)**——不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上运行。
+- **[快速开始](guide/quickstart/)**——首次登录、扫描库、导入旧数据。
+- **[支持的格式](guide/formats/)**——能放进书库的压缩包和电子书（PDF、EPUB、MOBI/AZW3、DjVu、FB2、TXT），以及各自怎么显示。
+- **[用文档站测试 API](guide/api-testing/)**——在浏览器里直接对**你自己的实例**发请求，以及它不生效时的处理方式。
+- **[插件开发入门](plugin/getting-started/)**——写一个元数据/登录/下载插件。
+- **[API 参考](api/)**——完整的 HTTP API：每个端点、参数、响应，以及可直接复制的命令行。
+
+## 关于 API 参考
+
+API 参考**不是手写的**。它由 `crates/lanrurugi-api-docgen` 从服务端自己的路由注册里生成，因此：
+
+- 服务端提供的每个端点都在里面，**不会**出现"代码里有、文档里没有"；
+- 它**不会**列出服务端其实不提供的端点；
+- 与 LANraragi 共有的端点，直接沿用 LANraragi 官方 OpenAPI 文档的字段级描述（路径前缀与鉴权部分除外）；
+- 尚未写清请求/响应结构的端点会被明确标出，而不是被编造出一份看起来很像真的 schema。
+
+CI 会在生成结果与代码不一致时直接失败，所以这份参考不会像手写文档那样慢慢过期。

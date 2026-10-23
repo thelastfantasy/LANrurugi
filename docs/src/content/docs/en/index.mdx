@@ -1,0 +1,38 @@
+---
+title: LANrurugi documentation
+description: Installation, usage, plugin authoring, and the HTTP API reference.
+template: splash
+hero:
+  tagline: A self-hosted library for manga first, and for e-books such as PDF and EPUB too, built on LANraragi and extensively reworked and extended in Rust + React — data- and API-compatible with an existing LANraragi deployment.
+  actions:
+    - text: Install
+      link: guide/install/
+      variant: primary
+    - text: HTTP API reference
+      link: api/
+---
+
+## What is in here
+
+- **[Install (Docker / NAS)](guide/install/)** — get LANrurugi running and pointed at the library you already have.
+- **[Native install](guide/install-native/)** — run it directly on Linux, an Apple Silicon Mac or FreeBSD, without containers.
+- **[Quickstart](guide/quickstart/)** — first login, scanning the library, importing existing data.
+- **[Supported formats](guide/formats/)** — the archives and e-books (PDF, EPUB, MOBI/AZW3, DjVu, FB2, TXT) the library accepts, and how each is shown.
+- **[Testing the API from these docs](guide/api-testing/)** — send requests from your browser straight to **your own instance**, and what to do when it does not work.
+- **[Plugin authoring](plugin/getting-started/)** — write a metadata, login, or download plugin.
+- **[API reference](api/)** — the complete HTTP API: every endpoint, its parameters and responses, and a command line you can copy.
+
+## About the API reference
+
+The API reference is **not hand-written**. `crates/lanrurugi-api-docgen` generates it from the server's
+own route registrations, which means:
+
+- Every endpoint the server serves is in it — "in the code but not in the docs" **cannot** happen;
+- It does **not** list endpoints the server does not actually serve;
+- For endpoints shared with LANraragi, it carries that project's field-level descriptions verbatim
+  (apart from the path prefix and the authentication section);
+- Endpoints whose request/response shapes have not been written down yet are **marked as such**,
+  rather than being given an invented schema that merely looks plausible.
+
+CI fails outright when the generated result disagrees with the code, so this reference cannot rot the
+way a hand-maintained document does.

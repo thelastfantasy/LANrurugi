@@ -1,0 +1,238 @@
+---
+// The in-page request panel: the reader's own instance address and token, a Send button, the real
+// response, and a copy-as-cURL escape hatch.
+//
+// Sending goes from the reader's browser straight to the address they typed. Nothing here talks to
+// this project, and no proxy is involved — see `guide/api-testing.md` for the preconditions a
+// browser imposes (cross-origin access on the instance; HTTPS pages cannot call plain-HTTP LAN
+// addresses).
+import {
+  credentialRequirement,
+  editableParams,
+  exampleRequest,
+  findOperation,
+  tokenRole,
+} from '../lib/openapi.mjs'
+import { labels } from '../lib/labels.mjs'
+import { inlineMarkdown } from '../lib/openapi.mjs'
+
+interface Props {
+  op: string
+}
+const { op: operationId } = Astro.props
+const { method, path, op } = findOperation(operationId)
+const params = editableParams(op)
+const t = labels(Astro.currentLocale)
+// Read from the document, which derives it from the server's own route policy. Offering a token
+// field on an endpoint that refuses tokens is how this panel used to mislead: the reader types a
+// valid token, presses send, and gets a 403 that looks like their mistake.
+const requirement = credentialRequirement(op)
+const tokenAccepted = requirement === 'token' || requirement === 'either'
+const role = tokenRole(op)
+
+// The cURL a reader falls back to when the browser will not make the request itself. Prefilled with
+// the document's own examples so it is runnable as-is.
+const example = exampleRequest({ method, path, parameters: op.parameters, requirement })
+---
+
+{/* `not-content` opts this subtree out of Starlight's flow-spacing rule, which adds
+    `margin-top` to every block-level sibling after the first — that pushed the second field and
+    the second button down by 16px, breaking both rows' alignment. */}
+<div
+  class="api-try not-content"
+  data-api-try
+  data-method={method.toUpperCase()}
+  data-path={path}
+  data-requirement={requirement}
+  data-token-role={role}
+  data-curl={example.curl}
+  data-base-url={example.url}
+  data-label-sending={t.sending}
+  data-label-send={t.send}
+  data-label-copied={t.copied}
+  data-label-copy={t.copyCurl}
+  data-label-failed={t.failed}
+>
+  <div class="api-try__fields">
+    <label class="api-try__field">
+      <span class="api-try__label">{t.server}</span>
+      <input type="text" data-api-server placeholder="http://localhost:3000" spellcheck="false" />
+    </label>
+    {
+      tokenAccepted && (
+        <label class="api-try__field">
+          <span class="api-try__label">{t.token}</span>
+          <input type="password" data-api-token placeholder="lru_…" spellcheck="false" autocomplete="off" />
+        </label>
+      )
+    }
+  </div>
+
+  {
+    params.length > 0 && (
+      <div class="api-try__params">
+        {params.map((p) => (
+          <label class="api-try__field api-try__field--param">
+            <span class="api-try__label">
+              {p.name}
+              <span class="api-try__in">{p.in}</span>
+            </span>
+            <input
+              type="text"
+              data-api-param={p.name}
+              data-api-param-in={p.in}
+              placeholder={String(p.example ?? p.schema?.example ?? p.schema?.enum?.[0] ?? '')}
+              spellcheck="false"
+            />
+          </label>
+        ))}
+      </div>
+    )
+  }
+
+  {
+    requirement === 'session' && (
+      <p class="api-try__note api-try__note--session" set:html={inlineMarkdown(t.sessionOnly)} />
+    )
+  }
+  {requirement === 'none' && <p class="api-try__note">{t.noCredentials}</p>}
+  {requirement === 'token' && <p class="api-try__note">{t.tokenOnly}</p>}
+  {tokenAccepted && role === 'admin' && (
+    <p class="api-try__note api-try__note--role" set:html={inlineMarkdown(t.adminTokenOnly)} />
+  )}
+
+  <div class="api-try__actions">
+    <button type="button" class="api-try__send" data-api-send>{t.send}</button>
+    <button type="button" class="api-try__copy" data-api-copy>{t.copyCurl}</button>
+  </div>
+
+  <p class="api-try__error" data-api-error hidden>
+    <strong>{t.failed}</strong> — {t.failedHint}
+  </p>
+  <div class="api-try__result" data-api-result hidden>
+    <div class="api-try__status" data-api-status></div>
+    <pre class="api-try__body" data-api-body></pre>
+  </div>
+  <p class="api-try__hint">{t.serverHint}</p>
+</div>
+
+{/* Hoisted and bundled once by Astro however many panels a page has; `module` scope means this
+    body runs a single time, and it wires every panel it finds. */}
+<script>
+  const STORE = { server: 'lanrurugi-docs:server', token: 'lanrurugi-docs:token' }
+
+  const panels = () => Array.from(document.querySelectorAll('[data-api-try]'))
+
+  function init() {
+    for (const panel of panels()) {
+      if (panel.dataset.apiReady) continue
+      panel.dataset.apiReady = '1'
+
+      const serverInput = panel.querySelector('[data-api-server]')
+      // Absent on the 36 endpoints that refuse API tokens — see `credentialRequirement`.
+      const tokenInput = panel.querySelector('[data-api-token]')
+      const tokenAccepted = ['token', 'either'].includes(panel.dataset.requirement)
+      const sendButton = panel.querySelector('[data-api-send]')
+      const copyButton = panel.querySelector('[data-api-copy]')
+      const errorBox = panel.querySelector('[data-api-error]')
+      const resultBox = panel.querySelector('[data-api-result]')
+      const statusBox = panel.querySelector('[data-api-status]')
+      const bodyBox = panel.querySelector('[data-api-body]')
+
+      // Shared across every panel on the page (and remembered between visits), because a reader
+      // trying three endpoints in a row should type their address once.
+      serverInput.value = localStorage.getItem(STORE.server) || 'http://localhost:3000'
+      if (tokenInput) {
+        tokenInput.value = localStorage.getItem(STORE.token) || ''
+      }
+      for (const input of [serverInput, tokenInput]) {
+        if (!input) continue
+        input.addEventListener('change', () => {
+          localStorage.setItem(input === serverInput ? STORE.server : STORE.token, input.value.trim())
+        })
+      }
+
+      const buildUrl = () => {
+        const base = serverInput.value.trim().replace(/\/+$/, '')
+        let path = panel.dataset.path
+        const query = []
+        for (const input of panel.querySelectorAll('[data-api-param]')) {
+          const value = input.value.trim()
+          if (!value) continue
+          const name = input.dataset.apiParam
+          if (input.dataset.apiParamIn === 'path') {
+            path = path.replace(`{${name}}`, encodeURIComponent(value))
+          } else {
+            query.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+          }
+        }
+        return `${base}${path}${query.length ? `?${query.join('&')}` : ''}`
+      }
+
+      const headers = () => {
+        const token = tokenInput ? tokenInput.value.trim() : ''
+        return token ? { Authorization: `Bearer ${token}` } : {}
+      }
+
+      sendButton.addEventListener('click', async () => {
+        errorBox.hidden = true
+        resultBox.hidden = true
+        sendButton.disabled = true
+        sendButton.textContent = panel.dataset.labelSending
+        try {
+          const response = await fetch(buildUrl(), { method: panel.dataset.method, headers: headers() })
+          const text = await response.text()
+          let shown = text
+          try {
+            shown = JSON.stringify(JSON.parse(text), null, 2)
+          } catch {
+            // Not JSON — show it as it came, which is what the instance actually returned.
+          }
+          statusBox.textContent = `${response.status} ${response.statusText}`
+          statusBox.dataset.ok = response.ok ? '1' : '0'
+          bodyBox.textContent = shown || '(empty body)'
+          resultBox.hidden = false
+        } catch (error) {
+          // A blocked cross-origin request surfaces as an opaque network error, so the guidance in
+          // `data-label-failed`/the hint paragraph is what the reader actually needs here.
+          errorBox.hidden = false
+          errorBox.dataset.detail = String(error)
+        } finally {
+          sendButton.disabled = false
+          sendButton.textContent = panel.dataset.labelSend
+        }
+      })
+
+      copyButton.addEventListener('click', async () => {
+        const url = buildUrl()
+        const lines = [`curl '${url}'`]
+        // Only where a token is accepted: pasting a command that carries a header the server refuses
+        // is worse than one that omits it, because the resulting 403 looks like the reader's error.
+        if (tokenAccepted) {
+          const token = (tokenInput?.value.trim() || 'YOUR_SECRET_TOKEN')
+          lines.push(`  --header 'Authorization: Bearer ${token}'`)
+        }
+        if (panel.dataset.method !== 'GET' && panel.dataset.method !== 'HEAD') {
+          lines.push(`  --request ${panel.dataset.method}`)
+        }
+        try {
+          await navigator.clipboard.writeText(lines.join(' \\\n'))
+          copyButton.textContent = panel.dataset.labelCopied
+        } catch {
+          // Clipboard access can be refused (permissions, insecure context). Showing the command is
+          // a better outcome than silently doing nothing, so put it where the response would go.
+          statusBox.textContent = ''
+          statusBox.dataset.ok = '1'
+          bodyBox.textContent = lines.join(' \\\n')
+          resultBox.hidden = false
+        }
+        setTimeout(() => {
+          copyButton.textContent = panel.dataset.labelCopy
+        }, 1500)
+      })
+    }
+  }
+
+  init()
+  document.addEventListener('astro:page-load', init)
+</script>
