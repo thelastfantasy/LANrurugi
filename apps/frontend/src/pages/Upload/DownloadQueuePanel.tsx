@@ -236,7 +236,8 @@ export function DownloadQueuePanel({
           style={TOOLBAR_BUTTON_STYLE}
           disabled={effectiveSelected.size === 0 || startSelected.isPending}
           onClick={async () => {
-            const selectedIds = [...effectiveSelected]
+            // Display order, not click order: the server starts them in the order given.
+            const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
             await startSelected.mutateAsync(selectedIds)
             setSelected(new Set())
           }}

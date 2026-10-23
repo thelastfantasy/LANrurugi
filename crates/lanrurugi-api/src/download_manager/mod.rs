@@ -50,6 +50,32 @@ pub struct DownloadManager {
     /// the transfer) needs one. Per-`DownloadManager` rather than per-key: there is already one
     /// manager per plugin, which is the granularity the capacity is derived at.
     job_semaphore: Mutex<Option<SizedSemaphore>>,
+    /// Tail of the [`JobTurn`] chain: resolves once the most recently started job has its permit.
+    last_job_turn: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+/// A job's place in line for [`DownloadManager::acquire_job`], taken synchronously when the job is
+/// started. Each job's pre-permit work (plugin options, customargs) takes a variable amount of
+/// time, so without this the semaphore is reached — and the queue served — in random order.
+pub struct JobTurn {
+    prev: Option<tokio::sync::oneshot::Receiver<()>>,
+    done: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Drop for JobTurn {
+    /// A job that ends before its own turn came (cancelled, or an early return) still passes the
+    /// turn on only after its predecessor's, so it cannot let a later job jump ahead.
+    fn drop(&mut self) {
+        let (Some(prev), Some(done)) = (self.prev.take(), self.done.take()) else {
+            return;
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = prev.await;
+                drop(done);
+            });
+        }
+    }
 }
 
 /// A concurrency permit plus the initial resolved rate limit (kept for caller convenience — the
@@ -69,6 +95,20 @@ pub struct DownloadPermit {
 impl DownloadManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Takes the next place in line for [`Self::acquire_job`]; call it in start order.
+    pub fn take_job_turn(&self) -> JobTurn {
+        let (done, next) = tokio::sync::oneshot::channel();
+        let prev = self
+            .last_job_turn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(next);
+        JobTurn {
+            prev,
+            done: Some(done),
+        }
     }
 
     /// Resolves `hostname` against `rules`, acquires a concurrency permit for however many
@@ -124,9 +164,31 @@ impl DownloadManager {
     /// lives — a download's whole network phase. `None` capacity means the plugin declares no
     /// concurrency limit at all, and the returned permit then holds nothing.
     ///
-    /// Cancel-safe in the same way [`Self::acquire`] is: a Stop while queued takes effect
-    /// immediately rather than after some other job finishes.
+    /// Jobs are served in the order their `turn`s were taken. Cancel-safe in the same way
+    /// [`Self::acquire`] is: a Stop while queued takes effect immediately rather than after some
+    /// other job finishes.
     pub async fn acquire_job(
+        &self,
+        capacity: Option<u32>,
+        mut turn: JobTurn,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<DownloadPermit, crate::download_manager::stream::DownloadError> {
+        if let Some(prev) = turn.prev.as_mut() {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return Err(crate::download_manager::stream::DownloadError::Cancelled);
+                }
+                _ = prev => {}
+            }
+            turn.prev = None;
+        }
+        let permit = self.acquire_job_permit(capacity, cancel).await;
+        drop(turn);
+        permit
+    }
+
+    async fn acquire_job_permit(
         &self,
         capacity: Option<u32>,
         cancel: &tokio_util::sync::CancellationToken,
@@ -274,7 +336,10 @@ mod tests {
         // Declared, but nothing holds it yet — including before the pool is even built.
         assert!(!mgr.is_job_saturated(Some(1)).await);
 
-        let held = mgr.acquire_job(Some(1), &no_cancel()).await.unwrap();
+        let held = mgr
+            .acquire_job(Some(1), mgr.take_job_turn(), &no_cancel())
+            .await
+            .unwrap();
         assert!(mgr.is_job_saturated(Some(1)).await);
         drop(held);
         assert!(
@@ -289,9 +354,52 @@ mod tests {
         let mgr = DownloadManager::new();
         let mut permits = Vec::new();
         for _ in 0..4 {
-            permits.push(mgr.acquire_job(None, &no_cancel()).await.unwrap());
+            permits.push(
+                mgr.acquire_job(None, mgr.take_job_turn(), &no_cancel())
+                    .await
+                    .unwrap(),
+            );
         }
         assert_eq!(permits.len(), 4);
+    }
+
+    /// Jobs get the slot in the order they were started, however late each one reaches the gate;
+    /// one cancelled while waiting does not let a later job past an earlier one.
+    #[tokio::test]
+    async fn jobs_are_served_in_the_order_they_were_started() {
+        let mgr = Arc::new(DownloadManager::new());
+        let held = mgr
+            .acquire_job(Some(1), mgr.take_job_turn(), &no_cancel())
+            .await
+            .unwrap();
+        let turns: Vec<_> = (0..4).map(|_| mgr.take_job_turn()).collect();
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let mut tasks = Vec::new();
+        // Reverse spawn order with staggered starts: the last-started job reaches the gate first.
+        for (i, turn) in turns.into_iter().enumerate().rev() {
+            let (mgr, order) = (mgr.clone(), order.clone());
+            let cancel = if i == 1 {
+                cancelled.clone()
+            } else {
+                no_cancel()
+            };
+            tasks.push(tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(10 * (4 - i as u64))).await;
+                if let Ok(permit) = mgr.acquire_job(Some(1), turn, &cancel).await {
+                    order.lock().unwrap().push(i);
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    drop(permit);
+                }
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        cancelled.cancel();
+        drop(held);
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(*order.lock().unwrap(), vec![0, 2, 3]);
     }
 
     #[tokio::test]

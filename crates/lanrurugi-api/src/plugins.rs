@@ -2255,6 +2255,11 @@ pub(crate) async fn start_download(
             .insert(item_id.clone(), cancel.clone());
     }
     let cancel_for_task = cancel.clone();
+    // Taken before the spawn so jobs reach this plugin's concurrency limit in the order they were
+    // started, not in whatever order their pre-permit work happens to finish.
+    let job_turn = download_manager_for(&state, &plugin_namespace)
+        .await
+        .take_job_turn();
     let queue_link_for_cleanup = queue_link.clone();
     // A separate clone (not derived from `queue_link_for_cleanup` inside the inner task body)
     // specifically because that one is captured by the inner `async move` block below and must
@@ -2415,7 +2420,7 @@ pub(crate) async fn start_download(
                 // `Err(_) if cancel_for_task.is_cancelled()` branch below) is what writes the item's
                 // terminal state, and a bare `return` here would leave the row stuck in `Starting`.
                 let _job_permit = negotiation_manager
-                    .acquire_job(job_capacity, &cancel_for_task)
+                    .acquire_job(job_capacity, job_turn, &cancel_for_task)
                     .await
                     .ok();
                 if negotiation_waits {

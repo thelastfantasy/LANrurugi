@@ -48,5 +48,17 @@ export async function execDownload(
   // (shift) discarded positional arg — legacy Perl-OOP invocant/first @_ slot
   let lrr_info = hostArgs as unknown as ExecDownloadInfo;
   let url = lrr_info["url"];
-  return { downloads: [{ url: url + "/download" }] };
+  // Rebuilt from the archive id rather than appended to the pasted link: a trailing slash, a
+  // query or a fragment would otherwise end up inside the download path (`//download` is a 404).
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Not a valid URL: ${url}`);
+  }
+  const archiveId = /^\/archive\/(\d+)(?:\/|$)/.exec(parsed.pathname)?.[1];
+  if (!archiveId) {
+    throw new Error(`Not a chaika.moe archive link (expected /archive/<id>/): ${url}`);
+  }
+  return { downloads: [{ url: new URL(`/archive/${archiveId}/download/`, parsed.origin).href }] };
 }
