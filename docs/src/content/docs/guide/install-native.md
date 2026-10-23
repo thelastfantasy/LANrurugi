@@ -18,7 +18,7 @@ description: 不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上�
 
 ## 1. 安装依赖
 
-数据库、插件运行环境、DjVu 工具和中日韩字体由系统的包管理器安装，安装包里不附带：
+数据库、插件运行环境、DjVu 工具和字体由系统的包管理器安装，安装包里不附带：
 
 | | Debian / Ubuntu | Fedora | Arch | macOS（Homebrew） | FreeBSD |
 | --- | --- | --- | --- | --- | --- |
@@ -26,6 +26,7 @@ description: 不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上�
 | Deno（插件） | [官方安装脚本](https://deno.com) | [官方安装脚本](https://deno.com) | `pacman -S deno` | `brew install deno` | `pkg install deno` |
 | DjVu 阅读 | `apt install djvulibre-bin` | `dnf install djvulibre` | `pacman -S djvulibre` | `brew install djvulibre` | `pkg install djvulibre` |
 | 中日韩字体（文字书） | `apt install fonts-noto-cjk` | `dnf install google-noto-serif-cjk-fonts google-noto-sans-cjk-fonts` | `pacman -S noto-fonts-cjk` | 系统自带，无需安装 | `pkg install noto-serif-sc noto-sans-sc noto-serif-jp noto-sans-jp` |
+| 彩色 emoji 字体（文字书） | `apt install fonts-noto-color-emoji` | `dnf install google-noto-color-emoji-fonts` | `pacman -S noto-fonts-emoji` | 系统自带，无需安装 | `pkg install noto-emoji` |
 | 压缩包解码库 | 系统自带 | 系统自带 | 系统自带 | `brew install xz lz4 zstd` | `pkg install lz4 zstd` |
 | PDF 阅读 | 安装包自带 | 安装包自带 | 安装包自带 | 安装包自带 | `pkg install pdfium` |
 | OCR、翻译、推荐 | 安装包自带 | 安装包自带 | 安装包自带 | 安装包自带 | `pkg install onnxruntime` |

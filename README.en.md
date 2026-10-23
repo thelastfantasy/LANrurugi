@@ -322,7 +322,9 @@ Everything below is optional and degrades gracefully without a configured DeepSe
   Pictures stored in a book (scanned PDF pages, fixed-layout EPUB pages, comic MOBI pages, FB2
   illustrations) are served as their stored bytes, never re-encoded; text PDF pages and DjVu pages
   are rendered to WebP; text books are typeset and paginated server-side with a Simplified
-  Chinese/Japanese/Korean CJK font chosen by the book's language. The book's own table of contents
+  Chinese/Japanese/Korean CJK font chosen by the book's language, with colour emoji; hard-wrapped TXT
+  lines are rejoined grapheme by grapheme, so combined emoji are never split and no space is inserted
+  beside CJK punctuation. The book's own table of contents
   (PDF bookmarks, EPUB nav/NCX resolved to the linked anchor, the MOBI guide ToC, DjVu bookmarks,
   FB2 sections, detected TXT chapters) becomes the archive's chapter list on first import without
   overwriting user edits, and a missing or token one is completed from the text's headings and

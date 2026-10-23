@@ -20,7 +20,7 @@ Desktop.
 
 ## 1. Install the prerequisites
 
-The database server, plugin runtime, DjVu tools and CJK fonts come from your system's package manager
+The database server, plugin runtime, DjVu tools and fonts come from your system's package manager
 and are not in the package:
 
 | | Debian / Ubuntu | Fedora | Arch | macOS (Homebrew) | FreeBSD |
@@ -29,6 +29,7 @@ and are not in the package:
 | Deno (plugins) | [install script](https://deno.com) | [install script](https://deno.com) | `pacman -S deno` | `brew install deno` | `pkg install deno` |
 | DjVu books | `apt install djvulibre-bin` | `dnf install djvulibre` | `pacman -S djvulibre` | `brew install djvulibre` | `pkg install djvulibre` |
 | CJK fonts (text books) | `apt install fonts-noto-cjk` | `dnf install google-noto-serif-cjk-fonts google-noto-sans-cjk-fonts` | `pacman -S noto-fonts-cjk` | built in | `pkg install noto-serif-sc noto-sans-sc noto-serif-jp noto-sans-jp` |
+| Colour emoji font (text books) | `apt install fonts-noto-color-emoji` | `dnf install google-noto-color-emoji-fonts` | `pacman -S noto-fonts-emoji` | built in | `pkg install noto-emoji` |
 | Archive codecs | built in | built in | built in | `brew install xz lz4 zstd` | `pkg install lz4 zstd` |
 | PDF books | bundled | bundled | bundled | bundled | `pkg install pdfium` |
 | OCR, translation, recommendations | bundled | bundled | bundled | bundled | `pkg install onnxruntime` |

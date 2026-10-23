@@ -116,6 +116,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         fonts-noto-cjk \
+        fonts-noto-color-emoji \
         djvulibre-bin \
         libstdc++6 \
         zlib1g \

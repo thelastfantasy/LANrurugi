@@ -2920,6 +2920,8 @@ dependencies = [
  "regex",
  "serde_json",
  "tempfile",
+ "unicode-segmentation",
+ "unicode-width",
  "webpx",
  "zip",
 ]

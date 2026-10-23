@@ -61,7 +61,7 @@ jobs:
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
             nasm libopenjp2-7-dev \
             redis-server perl cpanminus \
-            djvulibre-bin fonts-noto-cjk
+            djvulibre-bin fonts-noto-cjk fonts-noto-color-emoji
           sudo cpanm --notest PPI JSON::PP
 
       # The e-book worker's end-to-end tests load PDFium (pinned in scripts/fetch-pdfium.sh) and run

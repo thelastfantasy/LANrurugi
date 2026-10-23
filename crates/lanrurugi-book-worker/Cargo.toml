@@ -24,6 +24,8 @@ cosmic-text.workspace = true
 chardetng.workspace = true
 encoding_rs.workspace = true
 regex.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

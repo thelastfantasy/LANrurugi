@@ -2,7 +2,7 @@
 #
 # Multi-stage build per constitution Technology Stack Constraints: Debian bookworm-slim runtime
 # (glibc, required by the official Deno distribution — Principle IV), a pinned-version Deno binary
-# copied in (never `curl | sh`), fonts-noto-cjk bundled for correct CJK text rasterization, and a
+# copied in (never `curl | sh`), fonts-noto-cjk and fonts-noto-color-emoji bundled for correct CJK and emoji text rasterization, and a
 # release build of the single `lanrurugi-server` binary serving the built frontend as static assets
 # (Principle III — one deployable).
 
@@ -207,6 +207,7 @@ ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         fonts-noto-cjk \
+        fonts-noto-color-emoji \
         djvulibre-bin \
         libstdc++6 \
         zlib1g \

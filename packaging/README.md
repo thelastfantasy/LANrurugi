@@ -14,6 +14,7 @@ Full guide: <https://docs.lrrg.dev/guide/install-native/>
 | Deno (plugins) | [deno.com](https://deno.com) install script | [deno.com](https://deno.com) install script | `pacman -S deno` | `brew install deno` | `pkg install deno` |
 | DjVu books | `apt install djvulibre-bin` | `dnf install djvulibre` | `pacman -S djvulibre` | `brew install djvulibre` | `pkg install djvulibre` |
 | CJK fonts | `apt install fonts-noto-cjk` | `dnf install google-noto-serif-cjk-fonts google-noto-sans-cjk-fonts` | `pacman -S noto-fonts-cjk` | built in | `pkg install noto-serif-sc noto-sans-sc noto-serif-jp noto-sans-jp noto-serif-kr noto-sans-kr` |
+| Colour emoji font | `apt install fonts-noto-color-emoji` | `dnf install google-noto-color-emoji-fonts` | `pacman -S noto-fonts-emoji` | built in | `pkg install noto-emoji` |
 | Archive codecs | built in | built in | built in | `brew install xz lz4` | `pkg install lz4` |
 | PDF books | bundled | bundled | bundled | bundled | `pkg install pdfium` |
 | OCR / translation / recommendations | bundled | bundled | bundled | bundled | `pkg install onnxruntime` |

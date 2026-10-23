@@ -32,7 +32,7 @@ const REUSE_WITHIN: Duration = Duration::from_secs(240);
 const REAP_EVERY: Duration = Duration::from_secs(60);
 /// Part of every cache key. Bump it whenever the worker would answer differently for the same
 /// file (parsing, outline or typesetting changes), so stale pages and outlines are never served.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 /// In-memory inspection results kept per process before the map is dropped and refilled.
 const MEMORY_CACHE_ENTRIES: usize = 512;
 

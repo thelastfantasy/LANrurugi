@@ -347,7 +347,8 @@ impl State<'_, '_> {
         }
         if newline {
             self.text.push(SOFT_BREAK);
-        } else if !(self.text.chars().last().is_some_and(is_cjk) && next.is_some_and(is_cjk)) {
+        } else if !next.is_some_and(|c| joins_without_space(&self.text, c.encode_utf8(&mut [0; 4])))
+        {
             self.text.push(' ');
         }
     }
@@ -373,11 +374,7 @@ impl State<'_, '_> {
                     self.emit(None, segment.to_owned());
                     continue;
                 }
-                if joined
-                    .chars()
-                    .last()
-                    .is_some_and(|prev| !(is_cjk(prev) && segment.starts_with(is_cjk)))
-                {
+                if !joined.is_empty() && !joins_without_space(&joined, segment) {
                     joined.push(' ');
                 }
                 joined.push_str(segment);
@@ -427,10 +424,36 @@ fn font_heading_level(size: &str) -> Option<u8> {
     }
 }
 
-pub fn is_cjk(c: char) -> bool {
+/// Scripts written without spaces between words: Han (every extension block), kana, CJK
+/// punctuation and full-width forms. Not Hangul — Korean separates words with spaces.
+fn is_cjk(c: char) -> bool {
     matches!(c as u32,
-        0x3000..=0x303F | 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF |
-        0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+        0x3000..=0x303F | 0x3040..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF |
+        0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x323AF)
+}
+
+/// Whether text broken across a source line rejoins with no space between `before` and `after`.
+/// Never inside one grapheme (a wrapper that cut an emoji's ZWJ sequence, or a character from its
+/// variation selector or skin tone); otherwise when the nearest letters on either side are CJK,
+/// so punctuation (……, ——, “”) and emoji right at the break do not decide it.
+pub fn joins_without_space(before: &str, after: &str) -> bool {
+    use unicode_segmentation::UnicodeSegmentation;
+    let (Some(tail), Some(head)) = (
+        before.graphemes(true).next_back(),
+        after.graphemes(true).next(),
+    ) else {
+        return true;
+    };
+    if [tail, head].concat().graphemes(true).nth(1).is_none() {
+        return true;
+    }
+    let letter_before = before.chars().rev().find(|c| c.is_alphanumeric());
+    let letter_after = after.chars().find(|c| c.is_alphanumeric());
+    match (letter_before, letter_after) {
+        (Some(a), Some(b)) => is_cjk(a) && is_cjk(b),
+        (Some(c), None) | (None, Some(c)) => is_cjk(c),
+        (None, None) => false,
+    }
 }
 
 /// Decodes character references and the named entities common in e-books.
@@ -659,5 +682,26 @@ mod tests {
             decode_entities("&#x6F22;&#23383;&hellip;&bogus;"),
             "漢字…&bogus;"
         );
+    }
+
+    #[test]
+    fn line_joins_respect_graphemes_and_cjk_letters() {
+        // A break inside one grapheme never gets a space, whatever the script around it.
+        assert!(joins_without_space(
+            "family 👨\u{200D}",
+            "👩\u{200D}👧 photo"
+        ));
+        assert!(joins_without_space("I ❤", "\u{FE0F} it"));
+        assert!(joins_without_space("ok 👍", "\u{1F3FD} sure"));
+        assert!(joins_without_space("flag 🇯", "🇵 here"));
+        // CJK letters on both sides, with punctuation or an emoji right at the break.
+        assert!(joins_without_space("他沉默了……", "然后说"));
+        assert!(joins_without_space("他说：", "“走吧。”"));
+        assert!(joins_without_space("今天很开心😀", "明天见"));
+        assert!(joins_without_space("这是𠀀", "字"));
+        // Latin and Korean words are separated by spaces.
+        assert!(!joins_without_space("end of the", "line"));
+        assert!(!joins_without_space("I love it 😀", "and then"));
+        assert!(!joins_without_space("한국어", "문장입니다"));
     }
 }

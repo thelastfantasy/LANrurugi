@@ -159,6 +159,7 @@ cosmic-text = "0.14"
 # combined/ZWJ-sequence emoji (a single visually-one-glyph family emoji is 7 Unicode scalar values,
 # would cost 7x its real "one character" toward the limit under a plain `chars()` count).
 unicode-segmentation = "1.13"
+unicode-width = "0.2"
 unicode-normalization = "0.1"
 wana_kana = "5.0"
 ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-conversion", "japanese-conversion"] }

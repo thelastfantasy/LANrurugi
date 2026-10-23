@@ -542,4 +542,57 @@ mod tests {
         assert_eq!(layout.page_of_block(1), 1);
         assert_eq!(layout.page_of_block(3), 2);
     }
+
+    #[test]
+    fn line_breaks_never_split_a_grapheme() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let mut ts = Typesetter::new().expect("fonts installed");
+        let text =
+            "家族👨\u{200D}👩\u{200D}👧と国旗🇯🇵、❤\u{FE0F}、👍\u{1F3FD}を並べた行。".repeat(40);
+        let block = Block::Para { text: text.clone() };
+        let (metrics, _) = style(&block);
+        let buffer = ts.shape(&text, metrics, &block, Lang::Ja, content_width());
+        let boundaries: HashSet<usize> = text
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        let mut lines = 0;
+        for run in buffer.layout_runs() {
+            let (first, last) = (run.glyphs.first().unwrap(), run.glyphs.last().unwrap());
+            for edge in [first.start, last.end] {
+                assert!(
+                    boundaries.contains(&edge),
+                    "line {lines} breaks inside a grapheme at {edge}"
+                );
+            }
+            lines += 1;
+        }
+        assert!(lines > 5, "{lines}");
+    }
+
+    #[test]
+    fn colour_emoji_are_drawn_in_colour() {
+        let mut ts = Typesetter::new().expect("fonts installed");
+        let has_emoji_font = ts
+            .fonts
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name.contains("Emoji")));
+        if !has_emoji_font {
+            eprintln!("skipping: no colour emoji font installed");
+            return;
+        }
+        let mut book = FlowBook::default();
+        book.push(Block::Para {
+            text: "😀❤\u{FE0F}👨\u{200D}👩\u{200D}👧🇯🇵".into(),
+        });
+        let layout = ts.paginate(&book, |_| None);
+        let page = ts.render(&book, &layout, 0, |_| None).unwrap();
+        let coloured = page
+            .pixels()
+            .filter(|p| p.0.iter().max().unwrap() - p.0.iter().min().unwrap() > 80)
+            .count();
+        assert!(coloured > 500, "only {coloured} coloured pixels");
+    }
 }
