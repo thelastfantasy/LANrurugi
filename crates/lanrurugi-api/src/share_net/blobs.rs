@@ -107,7 +107,10 @@ fn fingerprint_file(data_path: &Path, outboards: &Path) -> std::io::Result<(blak
     let outboard = PreOrderOutboard::<Vec<u8>>::create(file, BLOCK_SIZE)?;
     std::fs::create_dir_all(outboards)?;
     let target = outboards.join(format!("{}.obao", outboard.root.to_hex()));
-    let tmp = target.with_extension("obao.part");
+    // A per-writer temp name: the background prepare worker and an importer's `Prepare` can hash
+    // the same archive at once, and a shared `.part` let one writer truncate the other's outboard
+    // (which then got renamed into place and served forever, since the source file never changed).
+    let tmp = target.with_extension(format!("{}.part", uuid::Uuid::new_v4().simple()));
     std::fs::write(&tmp, &outboard.data)?;
     std::fs::rename(&tmp, &target)?;
     Ok((outboard.root, outboard.tree.size()))
@@ -119,7 +122,7 @@ fn write_merged(source: &Path, target: &Path) -> std::io::Result<bool> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = target.with_extension("zip.tmp");
+    let tmp = target.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     let file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
     match lanrurugi_scanner::patch::write_merged_zip(source, file) {
         Ok(true) => std::fs::rename(&tmp, target).map(|()| true),

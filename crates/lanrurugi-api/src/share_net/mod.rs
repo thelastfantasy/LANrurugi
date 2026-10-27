@@ -388,7 +388,18 @@ pub async fn call(
 }
 
 /// Reads a response body announced as `len` bytes.
-pub async fn read_body(recv: &mut RecvStream, len: u64) -> Result<Vec<u8>, ShareNetError> {
+pub async fn read_body(
+    recv: &mut RecvStream,
+    len: u64,
+    max: u64,
+) -> Result<Vec<u8>, ShareNetError> {
+    // `len` is the peer's own claim: refuse one that no answer could legitimately carry, before
+    // reserving anything for it.
+    if len > max {
+        return Err(ShareNetError::Protocol(format!(
+            "body of {len} bytes exceeds the {max}-byte limit"
+        )));
+    }
     let mut body = Vec::with_capacity(len.min(64 * 1024 * 1024) as usize);
     recv.take(len)
         .read_to_end(&mut body)

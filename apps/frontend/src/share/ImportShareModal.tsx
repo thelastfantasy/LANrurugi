@@ -14,16 +14,7 @@ import { toast } from "@/toast"
 
 import { formatShareCode, parseShareRef, type ShareRef, toTextForm } from "./code"
 import { detectQr } from "./qr"
-import type { ArchiveEntry, ShareManifest, SharePermissions } from "./types"
-
-interface ImportPreview {
-  preview_id: string
-  manifest: ShareManifest
-  permissions: SharePermissions
-  archive_count: number
-  total_size: number
-  already_present: string[]
-}
+import type { ArchiveEntry, ImportPreview } from "./types"
 
 /** Live scanning needs a secure context; plain-HTTP home instances fall back to a photo. */
 export function liveScanAvailable(): boolean {
@@ -391,12 +382,14 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
               </CheckboxField>
               <span className="share-form-hint">{t("share.import.inheritCategoriesHint")}</span>
             </div>
-            <div className="share-form">
-              <CheckboxField checked={helpDeliver} onCheckedChange={setHelpDeliver}>
-                {t("share.import.helpDeliver")}
-              </CheckboxField>
-              <span className="share-form-hint">{t("share.import.helpDeliverHint")}</span>
-            </div>
+            {preview.allow_helpers === true && (
+              <div className="share-form">
+                <CheckboxField checked={helpDeliver} onCheckedChange={setHelpDeliver}>
+                  {t("share.import.helpDeliver")}
+                </CheckboxField>
+                <span className="share-form-hint">{t("share.import.helpDeliverHint")}</span>
+              </div>
+            )}
             {confirm.isError && <p className="share-notice share-status-exhausted">{refusalText(t, confirm.error)}</p>}
             <div style={{ textAlign: "right", marginTop: 8, display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button type="button" className="stdbtn" onClick={() => resolve.reset()}>
@@ -411,7 +404,8 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
                     code: toTextForm(parsed),
                     preview_id: preview.preview_id,
                     category: category || undefined,
-                    help_deliver: helpDeliver,
+                    // Only ever asked for when the sharer allows helpers (the box is hidden otherwise).
+                    help_deliver: preview.allow_helpers === true && helpDeliver,
                     inherit_categories: inheritCategories,
                     // Omitted when everything is chosen, so the whole share is imported as before.
                     archives: chosen.length === items.length ? undefined : chosen.map((a) => a.archive_id),

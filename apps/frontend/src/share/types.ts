@@ -110,6 +110,18 @@ export interface RecipientView {
   status: ShareStatus
 }
 
+/** `POST /api/shares/imports/resolve`: what the importer is shown before claiming (FR-018). */
+export interface ImportPreview {
+  preview_id: string
+  manifest: ShareManifest
+  permissions: SharePermissions
+  archive_count: number
+  total_size: number
+  already_present: string[]
+  /** Whether the sharer lets other instances help deliver; absent means no (older instances). */
+  allow_helpers?: boolean
+}
+
 /** `GET /api/shares/settings`: every `share_*` field, typed, plus read-only status. */
 export type ShareSettings = Record<string, unknown>
 

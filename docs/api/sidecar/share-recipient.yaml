@@ -2,7 +2,9 @@
 # in a browser. No library session is read or created here. `open` exchanges the code for a
 # recipient token; every other path takes that token in the `X-Share-Token` header or the `rt`
 # query parameter (image URLs use the latter). Anything outside the share, a wrong code and a
-# revoked or expired share all answer the same 404. Failed attempts are rate limited.
+# revoked or expired share all answer the same 404. A share whose download limit is used up is
+# **not** closed: browsing and reading continue and only a download claim is refused (409), which
+# is what its `status: exhausted` says. Failed attempts are rate limited.
 "/api/share/r/open":
   post:
     summary: Open a share with its code
@@ -26,7 +28,9 @@
     summary: An embedded card's content
     description: |
       What an embedded share card shows. 404 unless the share allows embedding. A share with IP
-      rules answers only `restricted`; a revoked or expired one only its state. Otherwise the title,
+      rules answers only `restricted`; a revoked or expired one only its state. A used-up share
+      still carries its content, with `status: exhausted` (its card shows no download action).
+      Otherwise the title,
       item count, up to eight cover archive ids with their items' titles (`cover_titles`, same
       order; the card lays out one row of four, or two rows when the share holds eight items or
       more), every item (`items`: `title`, `cover` archive id or null, `volumes` for a tankoubon; at
@@ -44,7 +48,7 @@
     tags: [share_recipient]
     responses:
       "200": { description: "`{ manifest, permissions, status }`." }
-      "404": { description: No valid token, or the share is no longer usable. }
+      "404": { description: No valid token, or the share was revoked or has expired. }
 "/api/share/r/archives/{id}/thumbnail":
   get:
     summary: An archive's cover

@@ -14,14 +14,21 @@ import { ShareReader } from "./ShareReader"
 import { HttpTransport, ShareRequestError } from "./transport"
 import type { ArchiveEntry, RecipientView } from "./types"
 
-/** Keeps the page's address — which holds the code — out of every outgoing request (FR-013b). */
+/** Keeps the page's address — which holds the code — out of every outgoing request (FR-013b), and
+ * out of search engines: the address is a credential. */
 function useNoReferrerMeta() {
   useEffect(() => {
-    const meta = document.createElement("meta")
-    meta.name = "referrer"
-    meta.content = "no-referrer"
-    document.head.appendChild(meta)
-    return () => meta.remove()
+    const referrer = document.createElement("meta")
+    referrer.name = "referrer"
+    referrer.content = "no-referrer"
+    const robots = document.createElement("meta")
+    robots.name = "robots"
+    robots.content = "noindex"
+    document.head.append(referrer, robots)
+    return () => {
+      referrer.remove()
+      robots.remove()
+    }
   }, [])
 }
 
@@ -78,14 +85,21 @@ export function SharePage() {
   // A download can use up the share's last claim; refresh the state shortly after one starts.
   const refresh = () => {
     window.setTimeout(() => {
-      transport.manifest().then(setView).catch(() => {})
+      transport
+        .manifest()
+        .then(setView)
+        .catch((e: unknown) => {
+          // A real refusal closes the page; any other failure keeps the last state showing.
+          if (e instanceof ShareRequestError) setFailure({ status: e.status, code: e.code })
+        })
     }, 1500)
   }
 
   if (failure) {
     // A closed share says why (the server tells a right code's recipient); anything else is the
-    // generic "not available", which also covers a wrong code.
-    const closed = ["expired", "revoked", "exhausted"].includes(failure.code) ? failure.code : null
+    // generic "not available", which also covers a wrong code. A used-up share is not closed: it
+    // keeps browsing and reading, and only refuses downloads (see the notice below).
+    const closed = ["expired", "revoked"].includes(failure.code) ? failure.code : null
     return (
       <div className="ido share-closed">
         <p className="share-closed-status">{failure.status}</p>
@@ -126,6 +140,7 @@ export function SharePage() {
   }
 
   const { manifest, permissions, status } = view
+  // Browsing and reading stay; a used-up share only stops offering downloads.
   const canDownload = status === "active"
   return (
     <div className="ido">
@@ -133,6 +148,9 @@ export function SharePage() {
         <h1 className="ih">{manifest.title}</h1>
         <span>{t("share.page.items", { count: manifest.items.length })}</span>
       </div>
+      {status === "exhausted" && (
+        <p className="share-notice share-status-exhausted">{t("share.page.exhaustedNotice")}</p>
+      )}
       <div id="thumbs_container" className="library-thumb-grid">
         {manifest.items.map((item, i) => {
           if ("Archive" in item) {

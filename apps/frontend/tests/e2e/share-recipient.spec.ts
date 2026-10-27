@@ -5,7 +5,8 @@ import { expect, test } from "./fixtures"
 
 // 017 US1's browser journey: an administrator shares an archive with a download limit of 2; people
 // with only the link browse, read and download it without an account, the third downloader finds
-// the downloads used up, and removing the read permission hides Read.
+// the downloads used up — the share stays readable, only its download goes away — and removing the
+// read permission takes reading away too.
 test.describe("share recipient", { tag: "@share" }, () => {
   test("browse, read and download a share with only its link", async ({ page, browser, baseURL }) => {
     await page.request.post("/api/login", { form: { password: "kamimamita" } })
@@ -35,25 +36,31 @@ test.describe("share recipient", { tag: "@share" }, () => {
       await visitor.goto(link)
       await expect(visitor.getByRole("heading", { name: "Share journey" })).toBeVisible()
       if (i === 0) {
-        await visitor.getByRole("button", { name: "Read" }).click()
+        // Reading has no button of its own: the card's title (or cover) opens the reader.
+        await visitor.locator(".share-item-card").getByRole("link", { name: "Share journey" }).first().click()
         await expect(visitor.locator("img.share-reader-page")).toBeVisible()
         await visitor.getByRole("button", { name: "Close" }).click()
       }
       const download = visitor.waitForEvent("download")
-      await visitor.getByRole("link", { name: "Download" }).click()
+      await visitor.getByRole("button", { name: "Download" }).click()
       expect((await download).suggestedFilename()).toContain("share-journey-sample")
       await context.close()
     }
 
-    // The third finds the downloads used up, but can still browse.
+    // The third finds the downloads used up: the share is not closed, it just cannot download.
     const third = await browser.newContext()
     const late = await third.newPage()
     await late.goto(link)
+    await expect(late.getByRole("heading", { name: "Share journey" })).toBeVisible()
     await expect(late.locator(".share-notice.share-status-exhausted")).toBeVisible()
-    await expect(late.getByRole("link", { name: "Download" })).toHaveCount(0)
+    await expect(late.locator(".share-closed")).toHaveCount(0)
+    await expect(late.getByRole("button", { name: "Download" })).toHaveCount(0)
+    // Browsing and reading still work while the downloads are used up.
+    await late.locator(".share-item-card").getByRole("link", { name: "Share journey" }).first().click()
+    await expect(late.locator("img.share-reader-page")).toBeVisible()
     await third.close()
 
-    // Without the read permission, Read is not offered.
+    // Without the read permission, the title and cover are no longer links into the reader.
     const patched = await page.request.patch(`/api/shares/${share.id}`, {
       data: { permissions: { import: true, read: false, download: true } },
     })
@@ -62,7 +69,7 @@ test.describe("share recipient", { tag: "@share" }, () => {
     const noRead = await fourth.newPage()
     await noRead.goto(link)
     await expect(noRead.getByRole("heading", { name: "Share journey" })).toBeVisible()
-    await expect(noRead.getByRole("button", { name: "Read" })).toHaveCount(0)
+    await expect(noRead.locator(".share-item-card").getByRole("link", { name: "Share journey" })).toHaveCount(0)
     await fourth.close()
   })
 })

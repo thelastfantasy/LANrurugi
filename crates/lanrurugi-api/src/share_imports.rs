@@ -163,6 +163,7 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
     }
     let manifest = opened.manifest.clone();
     let public_url = opened.public_url.clone();
+    let allow_helpers = opened.allow_helpers;
     let preview_id = store_preview(body.code, opened);
     Json(json!({
         "preview_id": preview_id,
@@ -172,6 +173,7 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
         "total_size": total_size,
         "already_present": already_present,
         "public_url": public_url,
+        "allow_helpers": allow_helpers,
     }))
     .into_response()
 }

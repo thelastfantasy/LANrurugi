@@ -50,8 +50,15 @@ describe("share card", () => {
     expect(root.querySelector("img")).toBeNull()
   })
 
+  it("shows a used-up share's content with its download gone", () => {
+    draw({ ...base, status: "exhausted", permissions: { import: true, read: true, download: true } })
+    expect(text()).toContain("A share")
+    expect(root.querySelector(".share-status-exhausted")).not.toBeNull()
+    expect(links()).toEqual([t.read])
+  })
+
   it("shows a closed share's state and its actions disabled, and nothing of its content", () => {
-    for (const status of ["revoked", "expired", "exhausted"] as const) {
+    for (const status of ["revoked", "expired"] as const) {
       draw({ status, restricted: false, permissions: { import: true, read: true, download: true } })
       expect(text()).toContain(t.closed[status].title)
       expect(text()).not.toContain("A share")

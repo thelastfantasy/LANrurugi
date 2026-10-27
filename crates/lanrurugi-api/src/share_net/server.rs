@@ -32,7 +32,8 @@ use crate::AppState;
 
 /// Largest single `Range` answer, so one request never buffers more than this.
 const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
-const CHUNK_BYTES: u64 = 1024;
+/// Spans one `Range` may name. An importer asks for one piece at a time; this is only a bound.
+const MAX_RANGE_SPANS: usize = 64;
 /// Caps on what one helper registration may carry.
 const MAX_HELPER_ADDRS: usize = 8;
 const MAX_HELPER_ARCHIVES: usize = 10_000;
@@ -339,6 +340,7 @@ impl ShareProtocol {
                 session: token,
                 manifest: browse_manifest(&self.state, &share).await,
                 public_url: settings.public_url(),
+                allow_helpers: share.allow_helpers,
             },
             None,
         ))
@@ -866,23 +868,37 @@ fn bytes(body: Vec<u8>) -> (Response, Option<Vec<u8>>) {
     )
 }
 
+/// The chunk ranges a request asks for: each span clamped to the blob, the total capped, and the
+/// span count bounded. `None` means the request is over budget.
+///
+/// The arithmetic is saturating on purpose — a span pair is just two `u64`s from the peer, and a
+/// range that wrapped past the cap is what made a whole archive get encoded into memory.
+fn requested_ranges(spans: &[ChunkSpan], size: u64) -> Option<ChunkRanges> {
+    if spans.len() > MAX_RANGE_SPANS {
+        return None;
+    }
+    let chunk_bytes = blobs::BLOCK_SIZE.bytes() as u64;
+    let total_chunks = size.div_ceil(chunk_bytes);
+    let mut ranges = ChunkRanges::empty();
+    let mut requested = 0u64;
+    for span in spans {
+        let start = span.start.min(total_chunks);
+        let end = span.end.min(total_chunks);
+        if end <= start {
+            continue;
+        }
+        requested = requested.saturating_add((end - start).saturating_mul(chunk_bytes));
+        ranges |= ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
+    }
+    (requested <= MAX_RANGE_BYTES).then_some(ranges)
+}
+
 /// The verified bao encoding of `spans` of a prepared blob.
 async fn encode_range(
     info: blobs::BlobInfo,
     spans: &[ChunkSpan],
 ) -> Result<Vec<u8>, RefusalReason> {
-    let mut ranges = ChunkRanges::empty();
-    let mut requested = 0u64;
-    for span in spans {
-        if span.end <= span.start {
-            continue;
-        }
-        requested += (span.end - span.start) * CHUNK_BYTES;
-        ranges |= ChunkRanges::from(ChunkNum(span.start)..ChunkNum(span.end));
-    }
-    if requested > MAX_RANGE_BYTES {
-        return Err(RefusalReason::Internal);
-    }
+    let ranges = requested_ranges(spans, info.size).ok_or(RefusalReason::Internal)?;
     tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
         let data = std::fs::File::open(&info.data_path)?;
         let outboard = PreOrderOutboard {
@@ -897,4 +913,73 @@ async fn encode_range(
     .await
     .map_err(|_| RefusalReason::Internal)?
     .map_err(|_| RefusalReason::NotFound)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_span_that_would_wrap_the_cap_is_refused() {
+        // `(end - start) * chunk_bytes` for this pair is 2^64, i.e. 0 in a wrapping u64.
+        let spans = [ChunkSpan {
+            start: 0,
+            end: 1 << 54,
+        }];
+        assert!(requested_ranges(&spans, 1 << 30).is_none());
+    }
+
+    #[test]
+    fn spans_are_clamped_to_the_blob_before_being_counted() {
+        let size = 1024 * 1024; // 64 chunks
+        let ranges = requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: u64::MAX,
+            }],
+            size,
+        )
+        .expect("a whole small blob fits the cap");
+        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(64)));
+    }
+
+    #[test]
+    fn too_many_spans_are_refused() {
+        let spans: Vec<ChunkSpan> = (0..=MAX_RANGE_SPANS as u64)
+            .map(|i| ChunkSpan {
+                start: i,
+                end: i + 1,
+            })
+            .collect();
+        assert!(requested_ranges(&spans, 1 << 30).is_none());
+    }
+
+    #[test]
+    fn a_normal_piece_is_accepted() {
+        let ranges = requested_ranges(&[ChunkSpan { start: 0, end: 64 }], 8 * 1024 * 1024).unwrap();
+        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(64)));
+    }
+
+    #[test]
+    fn a_cap_sized_request_is_accepted_and_one_chunk_more_is_not() {
+        let chunk_bytes = blobs::BLOCK_SIZE.bytes() as u64;
+        let size = 16 * 1024 * 1024;
+        let cap_chunks = MAX_RANGE_BYTES / chunk_bytes;
+        assert!(requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: cap_chunks
+            }],
+            size
+        )
+        .is_some());
+        assert!(requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: cap_chunks + 1
+            }],
+            size
+        )
+        .is_none());
+    }
 }

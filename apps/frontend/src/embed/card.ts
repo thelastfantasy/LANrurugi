@@ -78,9 +78,12 @@ export function renderCard(
     button.append(label)
     return button
   }
-  // Revoked, expired or used up: why, and the actions the share had, all disabled; nothing of its
-  // content (the server sends none).
-  if (data.status === "revoked" || data.status === "expired" || data.status === "exhausted") {
+  // A used-up share is not closed: its content is still there to read and to import, only the
+  // download is gone (a notice under the title says so).
+  const exhausted = data.status === "exhausted"
+  // Revoked or expired: why, and the actions the share had, all disabled; nothing of its content
+  // (the server sends none).
+  if (data.status === "revoked" || data.status === "expired") {
     const closed = t.closed[data.status]
     const { permissions } = data
     const state = h("div", { class: "lrrg-card-closed" })
@@ -171,12 +174,13 @@ export function renderCard(
     single && covers[0] && data.items?.[0]?.volumes == null
       ? `/api/share/r/archives/${encodeURIComponent(covers[0])}/download?rt=${encodeURIComponent(data.token ?? "")}`
       : pageUrl
+  const canDownload = !exhausted
   const mainActions = () =>
     h(
       "div",
       { class: "lrrg-card-actions lrrg-card-main-actions" },
       permissions.read && link(t.read, ACTION_ICONS.read),
-      permissions.download && link(t.download, ACTION_ICONS.download, downloadHref),
+      canDownload && permissions.download && link(t.download, ACTION_ICONS.download, downloadHref),
     )
 
   if (single) {
@@ -225,6 +229,9 @@ export function renderCard(
 
   if (!single) {
     card.append(h("p", { class: "lrrg-card-title" }, data.title ?? ""), h("p", { class: "lrrg-card-meta" }, t.items(data.item_count ?? 0)))
+  }
+  if (exhausted) {
+    card.append(h("p", { class: "lrrg-card-meta share-status-exhausted" }, t.closed.exhausted.body))
   }
 
   const importBlock = () => {

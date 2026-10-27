@@ -38,9 +38,20 @@ use tokio_util::sync::CancellationToken;
 use super::{blobs, call, connect, publish, read_body, ShareNet, ShareNetError};
 use crate::AppState;
 
-/// One piece: 1024 BLAKE3 chunks of 1 KiB.
-const PIECE_CHUNKS: u64 = 1024;
+/// Bytes per bao chunk — `blobs::BLOCK_SIZE`, the same tree the outboard and `Range` answers use.
+const CHUNK_BYTES: u64 = blobs::BLOCK_SIZE.bytes() as u64;
+/// One piece: the 1 MiB the protocol's contract names, in those chunks.
+const PIECE_CHUNKS: u64 = (1024 * 1024) / CHUNK_BYTES;
 const MAX_PIECE_ATTEMPTS: u32 = 3;
+/// One piece plus its bao path, generously bounded — the peer's announced length is not trusted.
+const MAX_PIECE_BODY_BYTES: u64 = 4 * 1024 * 1024;
+/// A card thumbnail is a few hundred KiB at worst.
+const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
+/// Per-archive cap on what a sharer may announce. Well past any real archive; a hostile manifest
+/// otherwise asks for a sparse file (and an outboard) of whatever size it likes.
+const MAX_ANNOUNCED_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+/// Free filenames tried when a same-named different archive already exists.
+const MAX_RENAME_ATTEMPTS: u32 = 32;
 const RECONNECT_CAP: Duration = Duration::from_secs(5 * 60);
 /// Pieces in flight per source (FR-034).
 const IN_FLIGHT_PER_SOURCE: usize = 4;
@@ -65,6 +76,7 @@ pub struct Opened {
     pub session: String,
     pub manifest: ShareManifest,
     pub public_url: Option<String>,
+    pub allow_helpers: bool,
 }
 
 /// Resolves a code, dials the sharer and opens a session.
@@ -84,11 +96,13 @@ pub async fn open(state: &AppState, net: &ShareNet, code: &str) -> Result<Opened
             session,
             manifest,
             public_url,
+            allow_helpers,
         } => Ok(Opened {
             conn,
             session,
             manifest,
             public_url,
+            allow_helpers,
         }),
         _ => Err(ShareNetError::Protocol("unexpected answer to Open".into())),
     }
@@ -108,9 +122,10 @@ pub async fn thumbnail(
     )
     .await?;
     match response {
-        Response::Bytes { content_type, len } => {
-            Ok((content_type, read_body(&mut recv, len).await?))
-        }
+        Response::Bytes { content_type, len } => Ok((
+            content_type,
+            read_body(&mut recv, len, MAX_THUMBNAIL_BYTES).await?,
+        )),
         _ => Err(ShareNetError::Protocol(
             "unexpected answer to Thumbnail".into(),
         )),
@@ -203,6 +218,8 @@ struct Run {
     record: tokio::sync::Mutex<ShareImport>,
     job_id: String,
     queue_item_id: String,
+    /// Bytes this import may still write into `<temp>/share` before `tempmaxsize` is reached.
+    budget: u64,
     /// When progress was last pushed to the Upload page, and the states it showed.
     pushed: std::sync::Mutex<(Option<std::time::Instant>, PushedStates)>,
     dir: PathBuf,
@@ -256,6 +273,19 @@ impl Run {
             "id": self.queue_item_id,
             "import": crate::share_imports::detail(record, false),
         }));
+    }
+
+    /// Whether this import has written past its share of `tempmaxsize`.
+    async fn over_budget(&self) -> bool {
+        let written: u64 = self
+            .record
+            .lock()
+            .await
+            .archives
+            .iter()
+            .map(|a| a.bytes_done)
+            .sum();
+        written > self.budget
     }
 
     async fn update(&self, sharer_archive_id: &str, f: impl FnOnce(&mut ImportArchive)) {
@@ -370,7 +400,7 @@ impl Run {
         )
         .await?;
         match response {
-            Response::Bytes { len, .. } => read_body(&mut recv, len).await,
+            Response::Bytes { len, .. } => read_body(&mut recv, len, MAX_PIECE_BODY_BYTES).await,
             _ => Err(ShareNetError::Protocol("unexpected answer to Range".into())),
         }
     }
@@ -490,6 +520,58 @@ fn hash_file(path: &Path) -> std::io::Result<blake3::Hash> {
     Ok(hasher.finalize())
 }
 
+/// Bytes under `<temp>/share` now: partial imports, merged patch copies and outboards. All three
+/// live in the temp tree, so all three count against `tempmaxsize`.
+async fn share_temp_bytes(state: &AppState) -> u64 {
+    fn walk(dir: &Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => walk(&entry.path()),
+                Ok(_) => entry.metadata().map(|m| m.len()).unwrap_or(0),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    let dir = state.library.temp_dir.join("share");
+    tokio::task::spawn_blocking(move || walk(&dir))
+        .await
+        .unwrap_or(0)
+}
+
+/// `tempmaxsize` in bytes (the setting is in MB): the ceiling for the whole temp tree.
+async fn temp_quota_bytes(state: &AppState) -> Option<u64> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let megabytes: Option<String> = deadpool_redis::redis::AsyncCommands::hget(
+        &mut conn,
+        lanrurugi_storage::keys::CONFIG_KEY,
+        "tempmaxsize",
+    )
+    .await
+    .ok()?;
+    let megabytes = megabytes
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::download_manager::ingest::DEFAULT_TEMP_MAX_SIZE_MB)
+        .max(0) as u64;
+    Some(megabytes * 1024 * 1024)
+}
+
+/// `book.zip`, `book (2).zip`, … for the n-th free-name attempt.
+fn numbered_name(name: &str, n: u32) -> String {
+    let path = std::path::Path::new(name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive");
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!("{stem} ({n}).{ext}"),
+        None => format!("{stem} ({n})"),
+    }
+}
+
 enum ArchiveOutcome {
     Done(String),
     Reused(String),
@@ -520,6 +602,11 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
             Err(e) => return ArchiveOutcome::Failed(e.to_string()),
         },
     };
+    if size > MAX_ANNOUNCED_BYTES {
+        return ArchiveOutcome::Failed(format!(
+            "the sharer announced {size} bytes for this archive, over the {MAX_ANNOUNCED_BYTES}-byte cap"
+        ));
+    }
     run.update(&id, |a| {
         a.blake3 = Some(hex(&root));
         a.size = size;
@@ -541,7 +628,12 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
     };
     let total_chunks = outboard.tree.chunks().0;
     let pieces = missing_pieces(total_chunks, &valid);
-    let already = size.saturating_sub(pieces.iter().map(|p| (p.end - p.start) * 1024).sum::<u64>());
+    let already = size.saturating_sub(
+        pieces
+            .iter()
+            .map(|p| (p.end - p.start) * CHUNK_BYTES)
+            .sum::<u64>(),
+    );
     run.update(&id, |a| a.bytes_done = already.min(size)).await;
 
     let shared = Arc::new(std::sync::Mutex::new((data, outboard)));
@@ -665,11 +757,16 @@ async fn fetch_pieces(
         };
         match (verified, &source) {
             (Ok(()), _) => {
-                let piece_bytes = ((piece.end - piece.start) * 1024).min(size);
+                let piece_bytes = ((piece.end - piece.start) * CHUNK_BYTES).min(size);
                 run.update(id, |a| {
                     a.bytes_done = (a.bytes_done + piece_bytes).min(size)
                 })
                 .await;
+                if run.over_budget().await {
+                    return Some(ArchiveOutcome::Failed(
+                        "temp space ran out: the import reached tempmaxsize".into(),
+                    ));
+                }
             }
             (Err(_), _) if run.cancel.is_cancelled() => return Some(ArchiveOutcome::Interrupted),
             // A helper that fails once is not asked again; the piece goes to another source.
@@ -714,26 +811,44 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
         return ArchiveOutcome::Failed(e.to_string());
     }
     let _ = tokio::fs::remove_file(run.dir.join(format!("{}.obao", hex(&root)))).await;
-    let ingested = crate::download_manager::ingest::catalogue_staged_file(
-        &run.state,
-        &staging,
-        &filename,
-        None,
-        lanrurugi_scanner::pipeline::DuplicatePolicy::Reject,
-    )
-    .await;
-    let local_id = match ingested {
-        Ok(done) => done.archive_id,
-        Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
-            existing_id,
-            ..
-        }) => {
-            let _ = tokio::fs::remove_file(&staging).await;
-            return ArchiveOutcome::Reused(existing_id);
-        }
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&staging).await;
-            return ArchiveOutcome::Failed(e.to_string());
+    // A matching content hash really is the same archive, so reusing it is right. A *filename*
+    // collision is not: two libraries both holding `001.zip` is ordinary, and treating that as
+    // "already present" would point this import at a different, unrelated archive — so it gets a
+    // free name and is catalogued like any other import.
+    let mut attempt = 0;
+    let local_id = loop {
+        let name = if attempt == 0 {
+            filename.clone()
+        } else {
+            numbered_name(&filename, attempt)
+        };
+        match crate::download_manager::ingest::catalogue_staged_file(
+            &run.state,
+            &staging,
+            &name,
+            None,
+            lanrurugi_scanner::pipeline::DuplicatePolicy::Reject,
+        )
+        .await
+        {
+            Ok(done) => break done.archive_id,
+            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
+                existing_id,
+                reason: lanrurugi_scanner::pipeline::DuplicateReason::ContentHash,
+            }) => {
+                let _ = tokio::fs::remove_file(&staging).await;
+                return ArchiveOutcome::Reused(existing_id);
+            }
+            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
+                reason: lanrurugi_scanner::pipeline::DuplicateReason::Filename,
+                ..
+            }) if attempt < MAX_RENAME_ATTEMPTS => {
+                attempt += 1;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&staging).await;
+                return ArchiveOutcome::Failed(e.to_string());
+            }
         }
     };
     apply_shared_metadata(
@@ -1103,6 +1218,21 @@ async fn run_import(
         .join("import")
         .join(import_id.as_str());
     let concurrency = record.concurrency.max(1) as usize;
+    // Partial files, merged patch copies and outboards all live under `<temp>/share`, so the import
+    // is bounded by `tempmaxsize` like every other temp consumer — announced sizes first (so a
+    // share that obviously cannot fit is refused before it touches the disk), then the bytes
+    // actually written, below.
+    let used = share_temp_bytes(state).await;
+    let announced = record.archives.iter().map(|a| a.size).sum::<u64>();
+    let budget = match temp_quota_bytes(state).await {
+        Some(quota) if used.saturating_add(announced) > quota => {
+            return Err(format!(
+                "not enough temp space: {used} bytes in use, {announced} more announced, tempmaxsize {quota}"
+            ))
+        }
+        Some(quota) => quota.saturating_sub(used),
+        None => u64::MAX,
+    };
     let net = super::handle()
         .await
         .ok_or("sharing is not running on this instance")?;
@@ -1121,6 +1251,7 @@ async fn run_import(
         record: tokio::sync::Mutex::new(record),
         job_id: job_id.to_string(),
         queue_item_id: queue_item_id.to_string(),
+        budget,
         pushed: std::sync::Mutex::new((None, (ImportState::Transferring, None, Vec::new()))),
         dir,
     });

@@ -3,7 +3,8 @@
 
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -137,29 +138,65 @@ pub(crate) async fn share_code(state: &AppState, share: &Share) -> Option<ShareC
     ShareCode::parse(std::str::from_utf8(&plain).ok()?).ok()
 }
 
-/// The address a share's IP rules are checked against. Behind a local reverse proxy or tunnel
-/// (peer on loopback or a private network), the nearest `X-Forwarded-For` hop is used, since that
-/// is the one the proxy itself appended; a public peer's own address is never overridden by a
-/// header it could have written itself.
-pub(crate) fn recipient_address(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
-    let peer_ip = lanrurugi_storage::shares::canonical_ip(peer.ip());
-    let is_local_proxy = match peer_ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-    };
-    if is_local_proxy {
-        let nearest = headers
-            .get_all("X-Forwarded-For")
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .flat_map(|v| v.split(','))
-            .filter_map(|hop| hop.trim().parse::<IpAddr>().ok())
-            .next_back();
-        if let Some(ip) = nearest {
-            return lanrurugi_storage::shares::canonical_ip(ip);
+/// Parsed `share_trusted_proxies`, cached because every recipient request asks for the address.
+static TRUSTED_PROXIES: Mutex<Option<(Instant, Vec<ipnet::IpNet>)>> = Mutex::new(None);
+const TRUSTED_PROXIES_TTL: Duration = Duration::from_secs(60);
+
+fn parse_trusted_proxies(text: &str) -> Vec<ipnet::IpNet> {
+    text.split(',')
+        .filter_map(|rule| rule.trim().parse().ok())
+        .collect()
+}
+
+/// The peers whose `X-Forwarded-For` is believed, from `share_trusted_proxies` (loopback by
+/// default). Never a private range by implication: any LAN client can write that header.
+pub(crate) async fn trusted_proxies(state: &AppState) -> Vec<ipnet::IpNet> {
+    if let Some((at, list)) = TRUSTED_PROXIES
+        .lock()
+        .expect("trusted proxies lock")
+        .as_ref()
+    {
+        if at.elapsed() < TRUSTED_PROXIES_TTL {
+            return list.clone();
         }
     }
-    peer_ip
+    let settings = crate::share_settings::load(state).await;
+    let list = parse_trusted_proxies(settings.text("share_trusted_proxies"));
+    *TRUSTED_PROXIES.lock().expect("trusted proxies lock") = Some((Instant::now(), list.clone()));
+    list
+}
+
+/// Drops the cache after the setting changes, so the next request reads the new list.
+pub(crate) fn forget_trusted_proxies() {
+    *TRUSTED_PROXIES.lock().expect("trusted proxies lock") = None;
+}
+
+/// The address a share's IP rules are checked against. A request that arrives from one of the
+/// trusted proxies uses the nearest `X-Forwarded-For` hop — the one that proxy appended; every
+/// other peer's own address stands, whatever header it carries.
+pub(crate) async fn recipient_address(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) -> IpAddr {
+    forwarded_address(headers, peer.ip(), &trusted_proxies(state).await)
+}
+
+/// The pure half of `recipient_address`, so the trust rule is unit-testable.
+fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]) -> IpAddr {
+    let peer_ip = lanrurugi_storage::shares::canonical_ip(peer);
+    if !trusted.iter().any(|net| net.contains(&peer_ip)) {
+        return peer_ip;
+    }
+    headers
+        .get_all("X-Forwarded-For")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .filter_map(|hop| hop.trim().parse::<IpAddr>().ok())
+        .next_back()
+        .map(lanrurugi_storage::shares::canonical_ip)
+        .unwrap_or(peer_ip)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1046,6 +1083,9 @@ async fn put_share_settings(
     const OP: &str = "put_share_settings";
     match share_settings::save(&state, &body).await {
         Ok(settings) => {
+            if body.contains_key("share_trusted_proxies") {
+                forget_trusted_proxies();
+            }
             let changed: Vec<&String> = body.keys().collect();
             // Connectivity changes rebuild the endpoint, then republish every record with the
             // new relays.
@@ -1179,21 +1219,40 @@ mod tests {
     }
 
     #[test]
-    fn the_recipient_address_ignores_forwarded_headers_from_public_peers() {
+    fn forwarded_headers_are_only_believed_from_listed_proxies() {
         let mut headers = HeaderMap::new();
         headers.insert("X-Forwarded-For", "1.1.1.1, 203.0.113.9".parse().unwrap());
-        let public: SocketAddr = "198.51.100.4:5000".parse().unwrap();
-        let proxy: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let loopback_only = parse_trusted_proxies("127.0.0.1/32, ::1/128");
+        let public: IpAddr = "198.51.100.4".parse().unwrap();
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        let private: IpAddr = "172.17.0.1".parse().unwrap();
+
         assert_eq!(
-            recipient_address(&headers, public).to_string(),
+            forwarded_address(&headers, public, &loopback_only).to_string(),
             "198.51.100.4"
         );
         assert_eq!(
-            recipient_address(&headers, proxy).to_string(),
+            forwarded_address(&headers, loopback, &loopback_only).to_string(),
             "203.0.113.9"
         );
         assert_eq!(
-            recipient_address(&HeaderMap::new(), proxy).to_string(),
+            forwarded_address(&HeaderMap::new(), loopback, &loopback_only).to_string(),
+            "127.0.0.1"
+        );
+        // A private-range peer is not a proxy merely by being private: anyone on the LAN can
+        // write that header, so its own address stands unless the operator lists it.
+        assert_eq!(
+            forwarded_address(&headers, private, &loopback_only).to_string(),
+            "172.17.0.1"
+        );
+        let listed = parse_trusted_proxies("127.0.0.1/32, 172.17.0.0/16");
+        assert_eq!(
+            forwarded_address(&headers, private, &listed).to_string(),
+            "203.0.113.9"
+        );
+        // An emptied setting trusts nobody.
+        assert_eq!(
+            forwarded_address(&headers, loopback, &[]).to_string(),
             "127.0.0.1"
         );
     }

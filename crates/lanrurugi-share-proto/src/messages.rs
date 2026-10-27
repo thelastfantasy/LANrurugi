@@ -8,7 +8,7 @@ use crate::ticket::SignedTicket;
 /// The protocol version carried by every request. ALPN is `h3`, so this is the only place the
 /// application protocol is identified (FR-045).
 /// 2: archive entries carry their table of contents (`ArchiveEntry::toc`).
-pub const PROTO_VERSION: u16 = 2;
+pub const PROTO_VERSION: u16 = 3;
 
 pub type Blake3Hash = [u8; 32];
 /// An instance's ed25519 public key, i.e. its iroh `EndpointId`.
@@ -265,6 +265,9 @@ pub enum Response {
         session: String,
         manifest: ShareManifest,
         public_url: Option<String>,
+        /// Whether this sharer lets other instances help deliver; the import dialog only offers
+        /// "help deliver" when it does.
+        allow_helpers: bool,
     },
     Bytes {
         content_type: Option<String>,

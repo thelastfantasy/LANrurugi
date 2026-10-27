@@ -220,7 +220,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
     let mut start = 0;
     let mut tampered_once = false;
     while start < total_chunks {
-        let end = (start + 1024).min(total_chunks);
+        let end = (start + 64).min(total_chunks);
         let (Response::Bytes { len, .. }, mut recv) = call(
             &conn,
             Request::Range {
@@ -233,7 +233,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
         .unwrap() else {
             panic!("range should answer with bytes");
         };
-        let mut body = read_body(&mut recv, len).await.unwrap();
+        let mut body = read_body(&mut recv, len, 8 * 1024 * 1024).await.unwrap();
         let ranges = ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
         if !tampered_once {
             // A flipped byte must be rejected before anything is written.
@@ -571,7 +571,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
     let total_chunks = tree.chunks().0;
     let mut start = 0;
     while start < total_chunks {
-        let end = (start + 1024).min(total_chunks);
+        let end = (start + 64).min(total_chunks);
         let (Response::Bytes { len, .. }, mut recv) = call(
             &to_helper,
             Request::Range {
@@ -584,7 +584,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         .unwrap() else {
             panic!("the helper should answer with bytes");
         };
-        let body = read_body(&mut recv, len).await.unwrap();
+        let body = read_body(&mut recv, len, 8 * 1024 * 1024).await.unwrap();
         let ranges = ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
         bao_tree::io::sync::decode_ranges(
             std::io::Cursor::new(body),

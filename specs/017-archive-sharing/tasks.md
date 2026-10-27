@@ -605,10 +605,33 @@ wasm is bundled rather than fetched from a CDN).
   page framing a dozen cards started a dozen copies of the app (226 requests, ~25 MB each in dev)
   and hung the browser. The card follows the sharer's theme or `?theme=` / `theme="…"`, enlarges a
   hovered cover, and lists every item behind a "+N" tile (`items` in `GET /api/share/r/card`).
-- A used-up share now closes to browsers as a revoked or expired one does (an import already under
-  way keeps its claim). Opening a closed share with its right code answers why (`expired`/`revoked`
-  404, `exhausted` 403) so the share page can say so; a wrong code stays a bare 404. The embed card
-  shows a closed share's state with its actions disabled and nothing of its content.
-- Archive entries carry their chapters (`ArchiveEntry.toc`, protocol version 2): the recipient's
+- A used-up share only stops downloading: it stays browsable and readable (`status: exhausted`),
+  a download claim answers 409, and the embed card keeps its content without a Download action.
+  Revoked and expired shares still answer a 404 with the reason, so the share page can say why; a
+  wrong code stays a bare 404.
+- Archive entries carry their chapters (`ArchiveEntry.toc`, protocol version 3): the recipient's
   reader jumps by chapter, and an import fills an empty table of contents with the sharer's.
   Bookmarks and stamps stay the sharer's own.
+
+### Review fixes
+
+- Import destinations keep only the file's last path component
+  (`download_manager::unique_dest_path`), so a manifest filename can no longer write outside the
+  library directory.
+- `revoked_at` is written only by `revoke()`; saving a whole record (an edit loaded before the
+  revoke) can no longer clear it.
+- `Range` answers clamp their spans to the blob and cap them in real 16 KiB chunks: a span pair
+  could previously overflow the byte cap and make the sharer encode a whole archive into memory.
+- `X-Forwarded-For` is believed only from `share_trusted_proxies` (loopback by default), not from
+  every private-range peer, which any LAN client could imitate.
+- A filename collision on import (`DuplicateReason::Filename`) catalogues under a free name; only a
+  matching content hash reuses an existing archive.
+- A piece is 1 MiB (64 × 16 KiB) as the contract says, and progress counts real bytes instead of
+  assuming 1 KiB chunks.
+- Imports are bounded by `tempmaxsize` (announced sizes first, then bytes actually written), each
+  announced archive size is capped, and a frame body length above what an answer can be is refused
+  before anything is allocated.
+- Prepare's temp files are uniquely named, so two prepares of the same archive cannot truncate each
+  other's outboard.
+- Protocol version 3 adds `Opened.allow_helpers`, so the import dialog offers "help deliver" only
+  when the sharer allows it.

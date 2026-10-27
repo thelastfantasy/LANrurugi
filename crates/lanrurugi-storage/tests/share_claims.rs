@@ -169,3 +169,36 @@ async fn claims_count_once_and_respect_limits() {
 
     lock.release().await;
 }
+
+#[tokio::test]
+async fn a_stale_save_cannot_revive_a_revoked_share() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
+        return;
+    };
+    let _lock = RedisTestLock::acquire(&pool, "share_revive").await;
+    let repo = ShareRepository::new(pool.clone());
+    let now = 1_000;
+
+    let share = share(now);
+    repo.create(&share).await.unwrap();
+    // An edit that loaded this share before the revoke; it saves a snapshot whose `revoked_at` is
+    // still `None`. That save must not clear the revoke that happened in between.
+    let stale = repo.get(&share.id).await.unwrap().unwrap();
+    repo.revoke(&share.id, now + 1).await.unwrap();
+    let mut edited = stale;
+    edited.title = Some("edited".into());
+    repo.save(&edited, &edited.items.clone()).await.unwrap();
+
+    let after = repo.get(&share.id).await.unwrap().unwrap();
+    assert_eq!(
+        after.revoked_at,
+        Some(now + 1),
+        "the save resurrected a revoked share"
+    );
+    assert_eq!(
+        after.title.as_deref(),
+        Some("edited"),
+        "the edit itself must still apply"
+    );
+}

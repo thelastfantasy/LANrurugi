@@ -99,14 +99,14 @@ fn token_from(headers: &HeaderMap, query: &HashMap<String, String>) -> Option<St
         .or_else(|| query.get("rt").cloned())
 }
 
-/// Why a share can no longer be browsed: revoked, expired, or its download limit reached. A
-/// browser sees nothing of it then; an instance already importing keeps its claim (FR-015).
+/// Why a share can no longer be browsed: revoked or expired. A used-up share is **not** closed —
+/// only downloads are limited, so browsing and reading continue (FR-015, US1-AS6); the response's
+/// `status` field says `exhausted` and a download claim is refused instead.
 fn closed_reason(share: &Share) -> Option<(StatusCode, &'static str)> {
     match share.status(now_secs()) {
         ShareStatus::Revoked => Some((StatusCode::NOT_FOUND, "revoked")),
         ShareStatus::Expired => Some((StatusCode::NOT_FOUND, "expired")),
-        ShareStatus::Exhausted => Some((StatusCode::FORBIDDEN, "exhausted")),
-        ShareStatus::Active => None,
+        ShareStatus::Exhausted | ShareStatus::Active => None,
     }
 }
 
@@ -143,7 +143,7 @@ async fn authorize(
         .ok()
         .flatten()
         .ok_or_else(not_found)?;
-    let address = recipient_address(headers, peer);
+    let address = recipient_address(state, headers, peer).await;
     if !share_usable(state, &share, address).await {
         return Err(not_found());
     }
@@ -177,7 +177,7 @@ async fn open(
     headers: HeaderMap,
     Json(body): Json<OpenBody>,
 ) -> Response {
-    let address = recipient_address(&headers, peer);
+    let address = recipient_address(&state, &headers, peer).await;
     let source = address.to_string();
     let limiter = share_attempts::shared();
     if !limiter.allowed(&source, Instant::now()) {
@@ -231,7 +231,7 @@ async fn card(
     headers: HeaderMap,
     Query(query): Query<CardQuery>,
 ) -> Response {
-    let address = recipient_address(&headers, peer);
+    let address = recipient_address(&state, &headers, peer).await;
     let source = address.to_string();
     let limiter = share_attempts::shared();
     if !limiter.allowed(&source, Instant::now()) {
@@ -255,8 +255,12 @@ async fn card(
     };
     let status = share.status(now_secs());
     let base = json!({ "status": status, "permissions": share.permissions });
-    // A closed share's card shows its state and nothing of its content.
-    if closed_reason(&share).is_some() {
+    // A revoked or expired share's card shows its state and nothing of its content; a used-up one
+    // keeps its content, since recipients can still read and import (FR-015).
+    if matches!(
+        share.status(now_secs()),
+        ShareStatus::Revoked | ShareStatus::Expired
+    ) {
         return Json(merge(base, json!({ "restricted": false }))).into_response();
     }
     if share.has_ip_restriction() {

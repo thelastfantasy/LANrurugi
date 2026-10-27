@@ -592,7 +592,7 @@ async fn find_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> Vec<
 
 /// Default `tempmaxsize` (MB) — matches `NUMBER_FIELDS`' default in `settings.rs`, used when the
 /// field is missing from Redis entirely.
-const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
+pub(crate) const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
 
 /// Enforces the `tempmaxsize` setting (MB, Redis `LRR_CONFIG` hash field) against the unbounded,
 /// self-regenerating content under `temp_dir` (a cache miss just regenerates it; nothing is lost):
@@ -622,7 +622,9 @@ pub async fn sweep_resize_cache_size(state: &AppState) {
         * 1024;
 
     let mut entries = Vec::new();
-    for dir in ["resize_page", "book"] {
+    // Merged patch copies and bao outboards are regenerable, so they join the reclaimable set;
+    // `<temp>/share/import` is deliberately absent — those are resumable partial transfers.
+    for dir in ["resize_page", "book", "share/merged", "share/outboards"] {
         if let Some(found) = list_resize_cache_entries(&state.library.temp_dir.join(dir)).await {
             entries.extend(found);
         }
@@ -762,6 +764,14 @@ async fn hex_crc32_of_file(path: &Path) -> std::io::Result<String> {
 /// entirely independent of, and unaffected by, the `find_by_filename` *archive-record* collision
 /// check `catalogue_staged_file` already resolved before ever reaching this point.
 async fn unique_dest_path(archive_dir: &Path, filename: &str) -> std::path::PathBuf {
+    // The name can come from outside this process (a share manifest's `filename`, a
+    // `Content-Disposition`), and `join` replaces the whole path on an absolute name while keeping
+    // `..` on a relative one — so only the last component of it is ever used.
+    let filename = Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("download");
     let candidate = archive_dir.join(filename);
     if tokio::fs::metadata(&candidate).await.is_err() {
         return candidate;
@@ -854,6 +864,24 @@ mod tests {
     /// dependency), just with a per-test-unique filename so concurrent test runs don't collide.
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("lrr-ingest-test-{}-{name}", uuid::Uuid::new_v4()))
+    }
+
+    #[tokio::test]
+    async fn a_destination_never_escapes_the_archive_dir() {
+        let dir = scratch_path("dest");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        for name in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "..",
+            ".",
+            "sub/dir/book.zip",
+            "",
+        ] {
+            let path = unique_dest_path(&dir, name).await;
+            assert_eq!(path.parent(), Some(dir.as_path()), "{name:?} -> {path:?}");
+        }
+        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 
     #[tokio::test]

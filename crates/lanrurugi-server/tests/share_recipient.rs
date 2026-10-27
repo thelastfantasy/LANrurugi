@@ -280,7 +280,8 @@ async fn recipients_browse_read_and_download_only_within_the_share() {
     )
     .await;
     assert_eq!(ok.status(), 200);
-    // A used-up share closes to browsers: opening it says why, and earlier tokens browse nothing.
+    // A used-up share stays browsable (FR-015, US1-AS6): a fresh open succeeds and says
+    // `exhausted`, earlier tokens still list the manifest, and only downloads are refused.
     let reopened = send(
         &app,
         "POST",
@@ -289,8 +290,10 @@ async fn recipients_browse_read_and_download_only_within_the_share() {
         Some(json!({ "code": code })),
     )
     .await;
-    assert_eq!(reopened.status(), 403);
-    assert_eq!(json_body(reopened).await["error"], "exhausted");
+    assert_eq!(reopened.status(), 200);
+    let reopened = json_body(reopened).await;
+    assert_eq!(reopened["status"], "exhausted");
+    let third = reopened["token"].as_str().unwrap().to_string();
     let browse = send(
         &app,
         "GET",
@@ -299,7 +302,17 @@ async fn recipients_browse_read_and_download_only_within_the_share() {
         None,
     )
     .await;
-    assert_eq!(browse.status(), 404);
+    assert_eq!(browse.status(), 200);
+    let refused = send(
+        &app,
+        "GET",
+        &format!("/api/share/r/archives/{}/download?rt={third}", lib.a),
+        "198.51.100.12",
+        None,
+    )
+    .await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(json_body(refused).await["error"], "exhausted");
 
     // A wrong code is the same 404 as anything else.
     assert!(open(&app, "AAAAA-AAAAA", from).await.is_none());

@@ -183,7 +183,8 @@ impl Share {
             "helpers_disabled_at",
             self.helpers_disabled_at.map(|v| v.to_string()),
         );
-        optional("revoked_at", self.revoked_at.map(|v| v.to_string()));
+        // `revoked_at` is deliberately absent: only `revoke()` writes it, one-way. Saving a whole
+        // record (an edit loaded before a revoke, saved after it) must not be able to clear it.
         (set, unset)
     }
 

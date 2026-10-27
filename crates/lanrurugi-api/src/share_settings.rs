@@ -46,6 +46,10 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_external_addrs", Kind::Text, ""),
     ("share_udp_port", Kind::Port, "11204"),
     ("share_public_url", Kind::Text, ""),
+    // Peers whose `X-Forwarded-For` is believed. Loopback only by default: a private-range peer is
+    // just as able to write that header itself, so a LAN client could otherwise pose as any address
+    // the share's `ip_allow` / first-N rule admits.
+    ("share_trusted_proxies", Kind::Text, "127.0.0.1/32, ::1/128"),
     (
         "share_default_permissions",
         Kind::Text,

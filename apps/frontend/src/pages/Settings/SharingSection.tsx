@@ -188,6 +188,12 @@ const CONNECTIVITY_FIELDS: SettingField[] = [
   },
   { key: "share_relay_urls", kind: "lines", label: "share.settings.relayUrls" },
   {
+    key: "share_trusted_proxies",
+    kind: "lines",
+    label: "share.settings.trustedProxies",
+    hint: true,
+  },
+  {
     key: "share_pkarr_relays",
     kind: "lines",
     label: "share.settings.pkarrRelays",

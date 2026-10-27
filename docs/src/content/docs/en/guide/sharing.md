@@ -44,8 +44,9 @@ An import-only share shows just the code and QR on its page and card, with no br
 ### Limits
 
 - **Download limit**: every import and every browser download counts once. Resuming or retrying the
-  same import never counts again. A used-up share closes: its page and embedded card only say the
-  limit is reached, and it can no longer be browsed, downloaded or imported; an import already
+  same import never counts again. When it is used up, only downloading stops: the share page and the
+  embedded card still show their content and reading online still works, the Download action is
+  simply gone, and new downloads and imports are refused (an import gets 409). An import already
   under way carries on.
 - **IP rules**: only the listed addresses or ranges, or "only the first N distinct addresses". A share
   with IP rules needs the recipient to be reachable directly; a relayed connection cannot prove its
@@ -118,7 +119,9 @@ snippets; use either:
 
 Both show the same card: covers, title, count, and Read / Download / Import actions as the
 permissions allow. It is fluid from 260 px wide.
-A revoked, expired or used-up share shows only its state, with its actions greyed out; an IP-restricted one only says it is restricted. None of them shows its content.
+A revoked or expired share shows only its state, with its actions greyed out; a used-up one still
+shows its content, without a Download action and with a line saying the downloads are gone. An
+IP-restricted share only says it is restricted.
 
 With more than four items, a "+N" tile after the covers opens the full list, and hovering a cover
 enlarges it. The card uses your instance's current theme; to pick another, add `?theme=…` to the
@@ -145,6 +148,12 @@ A system proxy needs no setup: imports and exports follow the proxy environment 
 (`HTTPS_PROXY`, `ALL_PROXY` and so on) or the macOS system proxy on their own, and a TUN-mode proxy
 is transparent anyway. The proxy carries only relayed connections; direct connections between
 instances bypass it.
+
+When your reverse proxy runs in **another container**, a share's IP rules and the failed-attempt
+limits see the proxy's address. Add its range under **Settings → Sharing → Connection → Trusted
+proxies** (loopback only by default); requests from those addresses may then set the client address
+with `X-Forwarded-For`. Private ranges are not trusted by default: anyone on the same network can
+write that header.
 
 To avoid public services, list your own or a friend's nodes under **Settings → Sharing → LANrurugi
 nodes**; they then handle lookup and relaying. When this instance relays for others, you can cap

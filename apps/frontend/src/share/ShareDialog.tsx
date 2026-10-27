@@ -11,6 +11,7 @@ import { CheckboxField, RadioGroup, RadioItem } from "@/components/common-ui/For
 import { toast } from "@/toast"
 
 import { useAddShareItems, useCreateShare, useShare, useShares, useShareSettings } from "./api"
+import { parseSharePermissions } from "./permissions"
 import {
   daysUntil,
   expiryInDays,
@@ -21,15 +22,11 @@ import {
   type ShareFormState,
 } from "./ShareFieldsForm"
 import { ShareResult } from "./ShareResult"
-import type { ShareCodeInfo, ShareDetail, ShareItemRef, SharePermissions, ShareSettings } from "./types"
+import type { ShareCodeInfo, ShareDetail, ShareItemRef, ShareSettings } from "./types"
 
 function defaultsFrom(settings: ShareSettings | undefined): ShareFormState {
-  const perms = String(settings?.share_default_permissions ?? "import,read,download").split(",")
-  const permissions: SharePermissions = {
-    import: perms.includes("import"),
-    read: perms.includes("read"),
-    download: perms.includes("download"),
-  }
+  // A setting written as "import, read, download" still ticks all three (spaces are ignored).
+  const permissions = parseSharePermissions(settings?.share_default_permissions, "import,read,download")
   const num = (v: unknown) => (typeof v === "number" ? v : "")
   return {
     title: "",
