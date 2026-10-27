@@ -310,6 +310,9 @@ ENV LANRURUGI_HEALTHCHECK_FRONTEND_URL=http://127.0.0.1:3000
 # container's actual public-facing port, proxying `/api/*` through to the backend).
 WORKDIR /workspace
 EXPOSE 3000
+# Sharing (017): iroh QUIC between instances; `share_udp_port`. Publishing it as host 443/udp is
+# recommended so the traffic sits on the HTTP/3 port.
+EXPOSE 11204/udp
 HEALTHCHECK --interval=15s --timeout=30s --start-period=30s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3001/health || exit 1
 ENTRYPOINT ["docker-entrypoint.dev.sh"]

@@ -30,8 +30,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/preferences", get(get_preferences).put(put_preferences))
 }
 
-const DEFAULT_SORTBY: &str = "title";
-const DEFAULT_SORTDIR: &str = "asc";
+/// Newest first. Legacy defaulted to title order; a fresh library is easier to use this way.
+const DEFAULT_SORTBY: &str = "date_added";
+const DEFAULT_SORTDIR: &str = "desc";
 
 /// The only authenticated principals this app currently has share the single admin account.
 /// Shared with `search_history`, which scopes its list the same way.
@@ -218,14 +219,14 @@ mod tests {
         let mut fields = HashMap::new();
         assert_eq!(
             preferences_from_fields(&fields),
-            json!({ "library_sortby": "title", "library_sortdir": "asc" })
+            json!({ "library_sortby": "date_added", "library_sortdir": "desc" })
         );
 
-        fields.insert("library_sortby".to_string(), "date_added".to_string());
-        fields.insert("library_sortdir".to_string(), "desc".to_string());
+        fields.insert("library_sortby".to_string(), "title".to_string());
+        fields.insert("library_sortdir".to_string(), "asc".to_string());
         assert_eq!(
             preferences_from_fields(&fields),
-            json!({ "library_sortby": "date_added", "library_sortdir": "desc" })
+            json!({ "library_sortby": "title", "library_sortdir": "asc" })
         );
     }
 }

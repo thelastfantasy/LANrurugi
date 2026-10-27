@@ -8,6 +8,8 @@ export * from "./SecuritySection"
 
 export * from "./SettingsPage"
 
+export * from "./SharingSection"
+
 export * from "./shared"
 
 export * from "./TagsThumbnailsSection"

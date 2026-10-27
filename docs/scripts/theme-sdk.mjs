@@ -133,6 +133,26 @@ const brand = (prefix) =>
 
 const PATH_LABEL = /(>|<title>|- )((?:[\w.-]+(?:&#x2F;|\/))+)([\w.-]+\.ts)(?=<| -)/g
 
+/** deno doc links page to page as `Foo.html`, while Cloudflare Pages 308-redirects `/Foo.html` to
+ * `/Foo` (and serves the file there). Every internal click therefore cost a redirect hop, and
+ * Search Console reported the discovered `.html` URLs as "Page with redirect". The files stay —
+ * where a site links to `Foo.html` by hand, Pages still redirects it once — but nothing here links
+ * to them any more. A canonical tag names the extensionless form for anything that does. */
+const sdkSiteUrl = (process.env.SDK_SITE_URL || 'https://sdk.lrrg.dev/').replace(/\/?$/, '/')
+
+function extensionlessLinks(html) {
+  // deno doc escapes the slashes inside href values (`&#x2F;`), so decode those first — otherwise
+  // the pattern below never sees the path it has to shorten.
+  const decoded = html.replace(/href="([^"]*)"/g, (_, value) => `href="${value.replace(/&#x2F;|&#47;/g, '/')}"`)
+  // Relative and root-relative hrefs only: an absolute URL contains `:`, a protocol-relative one
+  // starts with `//`, and both are left alone.
+  return decoded.replace(/href="((?!\/\/)\.{0,2}\/?[^":]*?)\.html(#[^"]*)?"/g, (match, path, hash = '') => {
+    const asDirectory = path.replace(/index$/, '')
+    if (asDirectory !== path) return `href="${asDirectory || './'}${hash}"`
+    return `href="${path}${hash}"`
+  })
+}
+
 let themed = 0
 for (const entry of walk(outDir)) {
   const file = entry.path
@@ -141,7 +161,12 @@ for (const entry of walk(outDir)) {
   if (html.includes(MARKER)) continue
   const depth = relative(outDir, dirname(file)).split(sep).filter(Boolean).length
   const prefix = '../'.repeat(depth)
+  const relativePath = relative(outDir, file).split(sep).join('/')
+  // The page's public address: `index.html` is its directory, and Pages strips the `.html`.
+  const pagePath = relativePath === '404.html' ? null : relativePath.replace(/(^|\/)index\.html$/, '$1').replace(/\.html$/, '')
+  const canonical = pagePath === null ? '' : `<link rel="canonical" href="${sdkSiteUrl}${pagePath}">`
   const links =
+    canonical +
     `<link rel="icon" href="${prefix}lanrurugi.svg" type="image/svg+xml">` +
     `<link rel="stylesheet" href="${prefix}lanrurugi-tokens.css">` +
     `<link rel="stylesheet" href="${prefix}${MARKER}">` +
@@ -173,7 +198,8 @@ for (const entry of walk(outDir)) {
     if (!/<main>\s*<\/main>/.test(html)) throw new Error('theme-sdk: index.html main is no longer empty')
     html = html.replace(/<main>\s*<\/main>/, indexMain())
   }
-  writeFileSync(file, html)
+  // Last, so the index page's own generated links and the rewritten ones are covered too.
+  writeFileSync(file, extensionlessLinks(html))
   themed++
 }
 

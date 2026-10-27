@@ -666,7 +666,7 @@ async fn start_queue_item(
 
 /// Pushes one item's current state over the queue SSE stream, so an open Upload page reflects a
 /// change made outside the normal in-flight update path without waiting for a refetch.
-fn broadcast_item_update(
+pub(crate) fn broadcast_item_update(
     state: &AppState,
     item: &lanrurugi_storage::download_queue::DownloadQueueItem,
 ) {
@@ -1118,6 +1118,31 @@ async fn start_one(
         .map_err(|e| StartError::Storage(e.to_string()))?;
     if has_running_duplicate(&item, &all_items) {
         return Err(StartError::DuplicateInFlight);
+    }
+
+    // 017: a share import runs its own transfer task, not a plugin; stopping and retrying go
+    // through the same queue states and cancellation map as a download.
+    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::ShareImport {
+        let import_id = item
+            .share_import_id
+            .clone()
+            .ok_or_else(|| StartError::Storage("share import id missing".to_string()))?;
+        item.state = DownloadQueueState::Starting;
+        item.started_at = Some(now_ms());
+        item.finished_at = None;
+        item.error = None;
+        state
+            .download_queue
+            .update(&item)
+            .await
+            .map_err(|e| StartError::Storage(e.to_string()))?;
+        let job_id = crate::share_net::import::start(
+            state,
+            &item.id,
+            lanrurugi_core::ids::ShareImportId(import_id),
+        )
+        .await;
+        return Ok(job_id);
     }
 
     let info = state
@@ -2964,7 +2989,7 @@ async fn resolve_conflict(
     // own initial call already avoids for uploads (see that call site's docs).
     let source_url = match item.origin {
         QueueItemOrigin::Download => Some(item.url.as_str()),
-        QueueItemOrigin::LocalUpload => None,
+        QueueItemOrigin::LocalUpload | QueueItemOrigin::ShareImport => None,
     };
     let result = match &action {
         ResolveAction::Overwrite => {
@@ -3233,6 +3258,7 @@ mod tests {
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {
             subscription_id: None,
+            share_import_id: None,
             id: id.to_string(),
             origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
             url: url.to_string(),

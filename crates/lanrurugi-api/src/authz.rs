@@ -432,6 +432,69 @@ mod tests {
         assert!(!check_route(&e, Some(&guest), "/api/tokens", "GET"));
     }
 
+    /// 017 FR-007/FR-013a: management is admin-only; recipient routes are open to any caller.
+    #[tokio::test]
+    async fn share_routes_are_gated() {
+        let e = route_enforcer().await;
+        let guest_token = token_auth(TokenRole::Guest);
+        let admin_token = token_auth(TokenRole::Admin);
+        for path in ["/api/shares", "/api/shares/abc", "/api/shares/imports"] {
+            assert!(check_route(&e, Some(&session_auth()), path, "GET"));
+            assert!(check_route(&e, Some(&admin_token), path, "GET"));
+            assert!(!check_route(&e, Some(&guest_token), path, "GET"));
+            assert!(!check_route(&e, Some(&guest_visitor_auth()), path, "GET"));
+            assert!(!check_route(&e, Some(&anonymous_auth()), path, "GET"));
+        }
+        assert!(check_route(
+            &e,
+            Some(&session_auth()),
+            "/api/shares/settings",
+            "PUT"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&admin_token),
+            "/api/shares/settings",
+            "PUT"
+        ));
+        for (path, method) in [
+            ("/api/share/r/open", "POST"),
+            ("/api/share/r/manifest", "GET"),
+            ("/api/share/r/archives/abc/page", "GET"),
+        ] {
+            assert!(check_route(&e, Some(&anonymous_auth()), path, method));
+            assert!(check_route(&e, Some(&guest_visitor_auth()), path, method));
+            // A read-only token keeps its read-only rule: it may browse, never open (a write).
+            assert_eq!(
+                check_route(&e, Some(&guest_token), path, method),
+                method == "GET"
+            );
+            assert!(check_route(&e, Some(&session_auth()), path, method));
+        }
+    }
+
+    /// 017 FR-040: only administrators download a whole tankoubon.
+    #[tokio::test]
+    async fn tankoubon_download_is_admin_only() {
+        let e = route_enforcer().await;
+        let path = "/api/tankoubons/TANK_1/download";
+        assert!(check_route(&e, Some(&session_auth()), path, "GET"));
+        assert!(check_route(
+            &e,
+            Some(&token_auth(TokenRole::Admin)),
+            path,
+            "GET"
+        ));
+        assert!(!check_route(
+            &e,
+            Some(&token_auth(TokenRole::Guest)),
+            path,
+            "GET"
+        ));
+        assert!(!check_route(&e, Some(&guest_visitor_auth()), path, "GET"));
+        assert!(!check_route(&e, Some(&anonymous_auth()), path, "GET"));
+    }
+
     /// 014: the generation record is session-only like its sibling wizard routes, and AI usage is
     /// hidden from read-only tokens and guest visitors.
     #[tokio::test]

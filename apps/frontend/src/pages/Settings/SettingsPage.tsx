@@ -22,6 +22,7 @@ import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { LlmUsageSection } from "./LlmUsageSection"
 import { SecuritySection } from "./SecuritySection"
+import { SharingSection } from "./SharingSection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
 import { TagsThumbnailsSection } from "./TagsThumbnailsSection"
 import { TranslationSection } from "./TranslationSection"
@@ -510,6 +511,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           />
 
           <ApiTokensSection />
+          <SharingSection />
           <SubscriptionsSection />
 
           <ArchiveFilesSection

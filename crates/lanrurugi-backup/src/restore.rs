@@ -249,6 +249,7 @@ mod tests {
             terminology_glossaries: vec![],
             volume_font_patterns: vec![],
             text_regions: vec![],
+            share_node_secret: None,
         };
 
         let summary = restore(
@@ -301,6 +302,7 @@ mod tests {
             terminology_glossaries: vec![],
             volume_font_patterns: vec![],
             text_regions: vec![],
+            share_node_secret: None,
         };
 
         let summary = restore(

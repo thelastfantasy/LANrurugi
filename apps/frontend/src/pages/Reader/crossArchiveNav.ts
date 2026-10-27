@@ -1,6 +1,8 @@
 // Mirrors legacy's setupArchiveNavigation/readPreviousArchive/readNextArchive; key names match
 // legacy exactly since this is pure per-browser scratch state, not synced with any server value.
 
+import { DEFAULT_INDEX_ORDER, DEFAULT_INDEX_SORT } from "@/lib/storageKeys"
+
 const SEARCH_IDS_KEY = "currArchiveIds"
 const PREV_IDS_KEY = "previousArchiveIds"
 const NEXT_IDS_KEY = "nextArchiveIds"
@@ -46,8 +48,8 @@ function readIndexSearchState(): IndexSearchState {
   return {
     filter: localStorage.getItem(CURRENT_SEARCH_KEY) ?? "",
     category: localStorage.getItem(SELECTED_CATEGORY_KEY) ?? "",
-    sortby: localStorage.getItem(INDEX_SORT_KEY) ?? "title",
-    order: localStorage.getItem(INDEX_ORDER_KEY) === "desc" ? "desc" : "asc",
+    sortby: localStorage.getItem(INDEX_SORT_KEY) ?? DEFAULT_INDEX_SORT,
+    order: (localStorage.getItem(INDEX_ORDER_KEY) ?? DEFAULT_INDEX_ORDER) === "desc" ? "desc" : "asc",
     pageSize: Number(localStorage.getItem(DT_PAGE_SIZE_KEY)) || 100,
     groupbyTanks: localStorage.getItem(GROUP_TANKS_KEY) !== "false",
     hidecompleted: localStorage.getItem(HIDE_COMPLETED_KEY) === "true",

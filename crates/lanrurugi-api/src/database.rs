@@ -176,6 +176,7 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
     })?;
 
     add_translation_state(state, &mut doc).await;
+    add_share_identity(state, &mut doc).await;
     Ok(doc)
 }
 
@@ -183,6 +184,39 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
 ///
 /// Shared by both the synchronous and queued backup paths so the two can't drift on what a backup
 /// actually contains — the near-duplicate-logic case the constitution's shared-helper rule names.
+/// Carries the sharing identity in the backup (017 T048): a restored instance keeps the endpoint
+/// its shares' knock records name. Read only if sharing ever created one.
+async fn add_share_identity(state: &AppState, doc: &mut BackupDocument) {
+    use deadpool_redis::redis::AsyncCommands;
+    if let Ok(mut conn) = state.redis.config.get().await {
+        doc.share_node_secret = conn
+            .get(lanrurugi_storage::keys::SHARE_NODE_SECRET_KEY)
+            .await
+            .ok()
+            .flatten();
+    }
+}
+
+/// Restores the sharing identity and restarts the endpoint under it.
+async fn restore_share_identity(state: &AppState, doc: &BackupDocument) {
+    use deadpool_redis::redis::AsyncCommands;
+    let Some(secret) = doc.share_node_secret.as_deref() else {
+        return;
+    };
+    let valid = secret.len() == 64 && secret.bytes().all(|b| b.is_ascii_hexdigit());
+    if !valid {
+        return;
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn
+            .set(lanrurugi_storage::keys::SHARE_NODE_SECRET_KEY, secret)
+            .await;
+        if let Err(e) = crate::share_net::start(state).await {
+            tracing::warn!(error = %e, "sharing endpoint could not restart after restore");
+        }
+    }
+}
+
 async fn add_translation_state(state: &AppState, doc: &mut BackupDocument) {
     lanrurugi_backup::build::collect_translation_state(
         doc,
@@ -221,6 +255,7 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
         {
             Ok(mut doc) => {
                 add_translation_state(&state_for_task, &mut doc).await;
+                add_share_identity(&state_for_task, &mut doc).await;
                 let value = serde_json::to_value(doc).unwrap_or(serde_json::Value::Null);
                 jobs.finish(&job_id_for_task, value).await;
             }
@@ -317,6 +352,7 @@ async fn queue_restore(
         match result {
             Ok(summary) => {
                 let _ = lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await;
+                restore_share_identity(&state_for_task, &doc).await;
 
                 // Phase 2 translation state (FR-022). A backup taken before this feature existed
                 // simply carries none, restoring zero of each rather than failing.

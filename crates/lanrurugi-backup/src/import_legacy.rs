@@ -378,6 +378,7 @@ pub async fn import_from_legacy(
         terminology_glossaries: Vec::new(),
         volume_font_patterns: Vec::new(),
         text_regions: Vec::new(),
+        share_node_secret: None,
     };
 
     match import_from_legacy_inner(

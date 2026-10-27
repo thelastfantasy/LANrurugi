@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import type { MouseEvent } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { FaFileArchive, FaPlus } from "react-icons/fa"
+import { FaFileArchive, FaPlus, FaShareAlt } from "react-icons/fa"
 import { useNavigate } from "react-router-dom"
 
 import {
@@ -191,6 +191,7 @@ export function ArchiveOverviewOverlay({
   tankPages,
   hasTankSplitCandidates,
   onOpenTankSplit,
+  onShare,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -212,6 +213,8 @@ export function ArchiveOverviewOverlay({
   hasTankSplitCandidates?: boolean
   /** Opens the Tankoubon batch split modal. */
   onOpenTankSplit?: () => void
+  /** Opens the share dialog for this archive or tankoubon (017). */
+  onShare?: () => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -873,11 +876,25 @@ export function ArchiveOverviewOverlay({
                 </div>
 
                 <h2>{t("reader.rating")}</h2>
-                <RatingWidget
-                  archiveId={archive.arcid}
-                  tags={archive.tags}
-                  onChange={isTank ? (nextTags) => updateTankoubon.mutate({ metadata: { tags: nextTags } }) : undefined}
-                />
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                  <RatingWidget
+                    archiveId={archive.arcid}
+                    tags={archive.tags}
+                    onChange={isTank ? (nextTags) => updateTankoubon.mutate({ metadata: { tags: nextTags } }) : undefined}
+                  />
+                  {onShare && (
+                    <Tooltip label={t("share.action.share")}>
+                      <IconButton
+                        variant="favtag-btn"
+                        icon={<FaShareAlt />}
+                        size={25}
+                        style={{ margin: 0 }}
+                        onClick={onShare}
+                        aria-label={t("share.action.share")}
+                      />
+                    </Tooltip>
+                  )}
+                </div>
               </div>
             )}
           </div>

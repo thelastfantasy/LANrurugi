@@ -87,6 +87,7 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_tankoubon),
         )
         .route("/tankoubons/{id}/full", get(get_tankoubon_full))
+        .route("/tankoubons/{id}/download", get(download_tankoubon))
         .route(
             "/tankoubons/{id}/thumbnail",
             get(get_tankoubon_thumbnail).put(update_tankoubon_thumbnail),
@@ -107,6 +108,122 @@ pub fn router() -> Router<AppState> {
             "/tankoubons/{id}/ai/rename-chapter",
             axum::routing::post(ai_rename_chapter),
         )
+}
+
+/// Creates a new tankoubon with its members in order and indexes it for search, the same way the
+/// create-then-set-members flow of the UI ends up. Used by share imports (017 FR-020), which
+/// always create a new tankoubon rather than merging into a same-named one.
+pub(crate) async fn create_tankoubon_with(
+    state: &AppState,
+    name: &str,
+    summary: &str,
+    tags: &str,
+    archives: Vec<ArchiveId>,
+) -> Result<TankId, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut attempt = now;
+    let mut tankid = TankId(format!("TANK_{attempt}"));
+    while matches!(state.repos.groupings.get(&tankid).await, Ok(Some(_))) {
+        attempt += 1;
+        tankid = TankId(format!("TANK_{attempt}"));
+    }
+    let grouping = Grouping {
+        tankid: tankid.clone(),
+        name: name.to_string(),
+        summary: summary.to_string(),
+        tags: tags.to_string(),
+        progress: 0,
+        archives,
+        thumbnail_manual: false,
+        thumbnail_source_archive: None,
+        thumbnail_source_page: None,
+        chapter_names: Default::default(),
+        created_at: Some(now),
+        updated_at: Some(now),
+    };
+    state
+        .repos
+        .groupings
+        .save(&grouping)
+        .await
+        .map_err(|e| e.to_string())?;
+    let search = &state.redis.search;
+    let members: Vec<String> = grouping.archives.iter().map(|a| a.0.clone()).collect();
+    let indexed = async {
+        lanrurugi_search::indexer::add_tank_to_index(search, tankid.as_str()).await?;
+        lanrurugi_search::indexer::update_title_index(
+            search,
+            &state.equivalence,
+            tankid.as_str(),
+            "",
+            name,
+        )
+        .await?;
+        lanrurugi_search::indexer::update_tag_indexes(
+            search,
+            &state.equivalence,
+            tankid.as_str(),
+            "",
+            tags,
+        )
+        .await?;
+        lanrurugi_search::indexer::sync_tank_membership(search, &members, &[]).await
+    };
+    if let Err(e) = indexed.await {
+        tracing::warn!(%tankid, error = %e, "failed to index an imported tankoubon");
+    }
+    sync_tankoubon_thumbnail_with_first_archive(state, &grouping, None).await;
+    Ok(tankid)
+}
+
+/// `GET /tankoubons/{id}/download` — every member archive in one streamed zip (017 US3).
+async fn download_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
+    match tankoubon_zip_response(&state, &id).await {
+        Some(response) => response,
+        None => not_found("download_tankoubon", format!("{id} does not exist.")),
+    }
+}
+
+/// The streamed zip for one tankoubon, or `None` when it does not exist. Shared with the share
+/// recipient route, which applies its own permission and claim checks first.
+pub(crate) async fn tankoubon_zip_response(state: &AppState, id: &TankId) -> Option<Response> {
+    let tank = state.repos.groupings.get(id).await.ok().flatten()?;
+    let records = join_all(tank.archives.iter().map(|a| state.repos.archives.get(a))).await;
+    let members = tank
+        .archives
+        .iter()
+        .zip(records)
+        .map(|(archive_id, record)| match record {
+            Ok(Some(a)) => crate::tankoubon_zip::MemberSource::File {
+                title: if a.title.trim().is_empty() {
+                    a.name
+                } else {
+                    a.title
+                },
+                path: a.file.into(),
+            },
+            _ => crate::tankoubon_zip::MemberSource::Missing {
+                title: archive_id.to_string(),
+            },
+        })
+        .collect();
+    let disposition = format!(
+        "attachment; {}",
+        crate::archives::disposition_filename(&format!("{}.zip", tank.name))
+    );
+    Some(
+        (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (header::CONTENT_DISPOSITION, disposition),
+            ],
+            axum::body::Body::from_stream(crate::tankoubon_zip::stream_tankoubon_zip(members)),
+        )
+            .into_response(),
+    )
 }
 
 #[derive(Debug, Deserialize)]

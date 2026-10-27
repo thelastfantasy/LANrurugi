@@ -343,6 +343,28 @@ Everything below is optional and degrades gracefully without a configured DeepSe
   come from the system package manager; when an optional component is missing the server still
   starts and its start-up log lists the unavailable features.
 
+### Sharing and cross-instance import
+
+- **Share archives and tankoubons, import them into another LANrurugi** (`specs/017-archive-sharing/`).
+  An administrator shares any mix of archives and tankoubons; the recipient reads or downloads them in
+  a browser, or imports them straight into their own instance with tags, summaries and tankoubon
+  volume order rebuilt. A share travels as a short code or QR code (decoded in the browser, never
+  uploaded), with a download limit, an IP allow-list or first-N-addresses rule, and an expiry, and
+  revoking it takes effect within half a minute. The code resolves to whatever route works now rather
+  than a fixed URL, so instances with no domain and no public IP import from each other too (direct,
+  hole punching, relay fallback, LAN discovery — or your own or a friend's LANrurugi node instead of
+  any third-party service). The code's text form also carries the sharer's current routes, sealed so
+  no address shows in it; whenever one of them works, an import involves no public service at all.
+  A relay offered to others can be rate-limited per connection or limited to listed instances.
+  Transfers are verified piece by piece and resume where they stopped; the result is byte-identical
+  to the original, and imported archives land as the newest in the library in the sharer's original
+  order. Importers can opt in to help deliver, spreading uploads
+  across instances while every piece is still checked against the sharer's fingerprint. Upload caps
+  with a BitTorrent-style alternative schedule, and embeddable share cards (iframe or Web Component),
+  come with it.
+- **Download a whole tankoubon as one zip.** Members are stored in volume order as their original
+  files (not re-compressed) and streamed as the zip is produced, with nothing prepared server-side first.
+
 ### Job console
 
 - Surfaces the job registry already used internally for backup/restore, thumbnail regeneration,

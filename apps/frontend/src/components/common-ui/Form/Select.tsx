@@ -23,6 +23,7 @@ export function Select<Value extends string>({
   showItemIndicator = true,
   style,
   size,
+  align,
   popupZIndex = Z_OVERLAY_CONTENT,
   ...rootProps
 }: {
@@ -40,6 +41,10 @@ export function Select<Value extends string>({
   /** Size preset for the trigger *and* popup item text — the popup is a portal-mounted sibling
    * that doesn't inherit the trigger's own `style`. Omit for the default inherited size. */
   size?: keyof typeof SELECT_SIZES
+  /** Which edge of the trigger the popup lines up with. Base UI centres it by default, which
+   * pushes a wide menu out past both sides of a narrow trigger; `"start"` lines the left edges
+   * up, the usual look for a labelled form dropdown. */
+  align?: "start" | "center" | "end"
   /** The popup is portalled to `body`, so a Select inside a dialog needs a z-index above that
    * dialog's own (`Z_OVERLAY_ABOVE_LEGACY_MODAL`) or its menu opens behind it. */
   popupZIndex?: number
@@ -61,6 +66,7 @@ export function Select<Value extends string>({
       <BaseSelect.Portal>
         <BaseSelect.Positioner
           sideOffset={4}
+          align={align}
           alignItemWithTrigger={false}
           className="outline-none"
           style={{ zIndex: popupZIndex }}

@@ -9,6 +9,7 @@ name = "lanrurugi-server"
 path = "src/main.rs"
 
 [dependencies]
+socket2.workspace = true
 lanrurugi-book.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-storage.workspace = true
@@ -39,3 +40,10 @@ reqwest.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 deadpool-redis.workspace = true
+lanrurugi-share-proto.workspace = true
+iroh.workspace = true
+bao-tree.workspace = true
+blake3.workspace = true
+rand.workspace = true
+pkarr.workspace = true
+bytes.workspace = true

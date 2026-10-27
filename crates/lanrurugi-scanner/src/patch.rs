@@ -232,9 +232,19 @@ pub fn read_page(archive_path: &Path, page: &EffectivePage) -> Result<Vec<u8>> {
 /// natural sort order matches the effective order even though the two source archives' own
 /// internal naming schemes may differ.
 pub fn build_merged_zip(archive_path: &Path) -> Result<Option<Vec<u8>>> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    Ok(write_merged_zip(archive_path, &mut buf)?.then(|| buf.into_inner()))
+}
+
+/// [`build_merged_zip`] written to `out` a page at a time, so memory stays at one page whatever
+/// the archive's size. `false` (nothing written) when there is nothing to merge.
+pub fn write_merged_zip<W: std::io::Write + std::io::Seek>(
+    archive_path: &Path,
+    out: W,
+) -> Result<bool> {
     let patch_path = patch_path_for(archive_path);
     if !patch_path.exists() {
-        return Ok(None);
+        return Ok(false);
     }
     let original_pages = archive_format::list_pages(archive_path)?;
     let effective = effective_pages(archive_path, &original_pages);
@@ -246,11 +256,10 @@ pub fn build_merged_zip(archive_path: &Path) -> Result<Option<Vec<u8>>> {
             .iter()
             .all(|p| matches!(p, EffectivePage::Original(_)))
     {
-        return Ok(None);
+        return Ok(false);
     }
 
-    let mut buf = std::io::Cursor::new(Vec::new());
-    let mut writer = zip::ZipWriter::new(&mut buf);
+    let mut writer = zip::ZipWriter::new(out);
     let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
     for (i, page) in effective.iter().enumerate() {
         let bytes = read_page(archive_path, page)?;
@@ -263,10 +272,12 @@ pub fn build_merged_zip(archive_path: &Path) -> Result<Option<Vec<u8>>> {
             .map_err(|e| PatchError::Io(std::io::Error::other(e.to_string())))?;
         std::io::Write::write_all(&mut writer, &bytes)?;
     }
-    writer
+    let mut out = writer
         .finish()
         .map_err(|e| PatchError::Io(std::io::Error::other(e.to_string())))?;
-    Ok(Some(buf.into_inner()))
+    // A buffered `out` would otherwise flush on drop and swallow a full disk.
+    out.flush()?;
+    Ok(true)
 }
 
 /// Builds a brand-new `.patch.zip`'s raw bytes from a target archive's crc32 plus the actual page

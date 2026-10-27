@@ -100,6 +100,8 @@ p, guest_visitor, /api/reader/recommendations/:id, GET, allow
 # in `lanrurugi-server/tests/auth_flow.rs`, a real end-to-end HTTP test — the pure in-memory
 # `authz::tests` unit tests never exercise axum's own routing layer, so they couldn't have caught
 # this on their own).
+# 017: sharing's network settings (proxy credentials, relay roles) need a real login session.
+p, token_admin, /api/shares/settings, PUT, deny
 p, token_admin, /api/activity, DELETE, deny
 p, token_admin, /api/activity/:id, DELETE, deny
 p, token_admin, /api/activity/retention, PUT, deny
@@ -153,6 +155,20 @@ p, token_guest, /api/llm/usage, GET, deny
 p, token_guest, /api/tankoubons/ai-group-suggestions/labels, GET, deny
 p, token_guest, /api/plugin-wizard/trial-run, POST, deny
 p, token_guest, /api/plugin-wizard/save, POST, deny
+# 017 FR-040: a whole tankoubon is an administrator download; read-only tokens are refused. Guest
+# visitors never reach it (absent from their whitelist).
+p, token_guest, /api/tankoubons/:id/download, GET, deny
+# 017 FR-007: share management is administrators only.
+p, token_guest, /api/shares, GET, deny
+p, token_guest, /api/shares/*, GET, deny
+
+# 017 FR-013a: share recipients authenticate by share credential alone, never by a library session,
+# so the recipient routes are open to every caller; the handlers check the credential themselves.
+p, anonymous, /api/share/r/*, *, allow
+p, guest_visitor, /api/share/r/*, *, allow
+p, token_guest, /api/share/r/*, *, allow
+# The one recipient write: a read-only token never opens a share; recipients need no token at all.
+p, token_guest, /api/share/r/open, POST, deny
 
 # No `guest_visitor` deny rules below `token_guest`'s own — the whitelist above (this file's own
 # earlier `guest_visitor` block) is the only `allow` this role gets at all, on any method; a

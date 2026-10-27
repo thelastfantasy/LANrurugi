@@ -20,6 +20,10 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: lrr-try
+    # Host networking also exposes sharing's UDP port (`share_udp_port`, default 11204) directly;
+    # open it in the host firewall, or set it to 443 if nothing else on the host serves HTTP/3.
+    # The optional relay role (`share_node_relay_port`, TCP, plus 7842/udp for address discovery)
+    # is reached the same way.
     network_mode: host
     volumes:
       # Host-side dirs keep their existing, project-native names (data/manga, data/thumb,

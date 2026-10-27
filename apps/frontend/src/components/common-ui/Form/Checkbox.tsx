@@ -29,12 +29,12 @@ export function Checkbox({
   );
 }
 
-/** Per-`size` vertical nudge on the control so its visual center lines up with the label text's
- * — a browser renders a native-styled control's own box slightly off from a same-line text
- * baseline, and by how much depends on the text's line-height (which depends on font-size), not
- * something `align-items: center`/`align-middle` alone corrects for. Measured live via
+/** Per-`size` vertical nudge on the checkbox so its visual center lines up with the label text's
+ * — the control's own box sits slightly off from a same-line text baseline, and by how much
+ * depends on the text's line-height (which depends on font-size). Measured live via
  * `getBoundingClientRect` against each of this project's own `FONT_SIZE_*` constants (not
- * calculated/assumed) — see the `CheckboxField`/`RadioField` doc comment for how to add a size. */
+ * calculated/assumed); `RadioItem` used to share this table and now centres itself instead,
+ * because a fixed offset is only right for the font it was measured at. */
 export const FIELD_CONTROL_OFFSET = {
   xs: 0,
   sm: 1,
@@ -44,15 +44,10 @@ export const FIELD_CONTROL_OFFSET = {
 
 export type FieldSize = keyof typeof FIELD_CONTROL_OFFSET;
 
-/** `Checkbox` pre-wrapped with a label, using the same `<label>` + `inline-flex items-start` +
- * per-control `marginTop` pattern `RadioField` (`Radio.tsx`) already uses — the two exist
- * together so a checkbox row and a radio row in the same menu/list use one shared alignment
- * mechanism instead of each call site improvising its own (`align-items: center` alone doesn't
- * correct for a native control's own rendered offset from the label text's baseline, which is
- * what caused this pair to exist — see git history/PR discussion around 2026-08-31 if this
- * comment ever goes stale). `size` picks a `marginTop` calibrated for that font-size; pass
- * `"inherit"` (default) when the surrounding text isn't at one of this project's own
- * `FONT_SIZE_*` sizes.
+/** `Checkbox` pre-wrapped with a label: `<label>` + `inline-flex items-start` + a per-control
+ * `marginTop`, so a checkbox row keeps its box aligned with the first line of text even when the
+ * label wraps. `size` picks a `marginTop` calibrated for that font-size; pass `"inherit"`
+ * (default) when the surrounding text isn't at one of this project's own `FONT_SIZE_*` sizes.
  *
  * `checked`/`onCheckedChange` is already the shape a form library's controlled-input adapter
  * expects (e.g. react-hook-form's `Controller`: `render={({ field }) => <CheckboxField

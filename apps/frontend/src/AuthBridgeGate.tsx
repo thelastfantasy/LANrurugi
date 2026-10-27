@@ -19,6 +19,11 @@ export function isGuestAccessiblePath(pathname: string): boolean {
  * there. The handoff returns to `returnTo` signed in, or to `/login?sso_none=1` (or the page itself
  * with `guestOk`) when no trusted peer has a session.
  */
+/** 017 share and embed pages: reached with a share code, never through a library login. */
+export function isSharePath(pathname: string): boolean {
+  return pathname.startsWith("/s/") || pathname.startsWith("/embed/")
+}
+
 export async function startBridge(returnTo: string, guestOk = false): Promise<void> {
   const prepareUrl = `/api/auth/bridge/prepare?return_to=${encodeURIComponent(returnTo)}${
     guestOk ? "&guest_ok=1" : ""
@@ -27,7 +32,27 @@ export async function startBridge(returnTo: string, guestOk = false): Promise<vo
   if (!response.ok) throw new Error(`prepare failed: ${response.status}`)
   const body = (await response.json()) as { start_url?: string }
   if (!body.start_url) throw new Error("prepare returned no start_url")
+  const peer = new URL(body.start_url, window.location.href).origin
+  if (!(await peerReachable(peer))) throw new Error(`peer ${peer} unreachable`)
   window.location.replace(body.start_url)
+}
+
+/** Whether `origin` answers at all. Navigating to a dead peer would strand the user on the
+ * browser's error page (e.g. `localhost` resolving to `::1` behind an IPv4-only port mapping), so
+ * the bridge is skipped instead. An opaque `no-cors` response is enough: only network errors throw. */
+export async function peerReachable(origin: string, timeoutMs = 3000): Promise<boolean> {
+  if (origin === window.location.origin) return true
+  try {
+    await fetch(`${origin}/api/info`, {
+      mode: "no-cors",
+      cache: "no-store",
+      credentials: "omit",
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -57,6 +82,8 @@ export function AuthBridgeGate() {
     // `/login` is the bridge's own fallback destination when no trusted peer has a session, so
     // auto-redirecting away from it would loop forever between peers. Let the local form render.
     if (location.pathname === "/login") return
+    // A share page is opened by people with no account here; its code is their only credential.
+    if (isSharePath(location.pathname)) return
     if (loginStatus?.logged_in !== false) return
 
     // Guest mode makes `/` and `/reader/:archiveId` valid for an unauthenticated caller, but that

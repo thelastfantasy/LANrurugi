@@ -56,10 +56,10 @@ export function formatDuration(ms: number): string {
  * It has to be *fixed*: sizing the label to its own text moved the track's right edge every time the
  * reading changed shape (`999.9 MB` → `1.0 GB`, `(9.9%)` → `(13.1%)`, a speed that gains a digit),
  * which reads as the progress bar itself growing and shrinking while a download runs (reported
- * live). 224px fits the widest reading any of these branches produces at `FONT_SIZE_SM`, measured
- * in the browser rather than estimated: `1000.0 MB / 1023.9 MB (99.9%) · 999.9 KB/s` = 218px.
+ * live). In `em` so it follows the theme's font: a fixed 224px, measured against one theme, clipped
+ * the speed under a wider one. 24em leaves room for `1023.9 MB / 1023.9 MB (100.0%) · 1023.9 MB/s`.
  */
-const LABEL_WIDTH = 224
+const LABEL_WIDTH = "24em"
 
 
 /** Last-seen `(bytes, timestamp, speed)` per job ID. Module-level `Map`, not a `useRef`, since the

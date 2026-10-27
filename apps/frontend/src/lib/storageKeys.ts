@@ -49,6 +49,11 @@ export const INDEX_SORT_KEY = "indexSort"
 
 export const INDEX_ORDER_KEY = "indexOrder"
 
+/** Library sort before anything is saved: newest first. Matches `preferences.rs`'s defaults. */
+export const DEFAULT_INDEX_SORT = "date_added"
+
+export const DEFAULT_INDEX_ORDER = "desc"
+
 /** Last-applied legacy theme filename — also hardcoded in `index.html`'s inline script (can't
  * `import` this constant); keep both in sync by hand if this key name ever changes. */
 export const THEME_STORAGE_KEY = "lrrTheme"

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -90,6 +90,9 @@ import {
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
+
+// Loaded only when someone shares, keeping the share dialog out of the reader chunk.
+const ShareDialog = lazy(() => import("@/share/ShareDialog").then((m) => ({ default: m.ShareDialog })));
 
 // Port of legacy's reader page (`reader.html.tt2` + `reader.js`) — real DOM structure
 // (`#i1`-`#i7`) and CSS classnames from `/legacy/lrr.css`, not Tailwind.
@@ -298,6 +301,8 @@ export function Reader() {
   }, []);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [widespreads, setWidespreads] = useState<Record<number, boolean>>({});
+  // 017: what the share dialog was opened for — the archive on screen, or the whole tankoubon.
+  const [shareItem, setShareItem] = useState<{ kind: "archive" | "tankoubon"; id: string } | null>(null);
   const [pageDimensions, setPageDimensions] = useState<
     Record<number, { width: number; height: number }>
   >({});
@@ -1956,6 +1961,8 @@ export function Reader() {
   // nothing in it can be scrolled away. Infrequently-used controls (reading direction, auto-advance,
   // reader options) collapse into a `moreMenu` overflow menu per the user's own triage of what
   // deserves to stay one tap away vs. what doesn't.
+  // In tankoubon reading the route id is the tank; "this archive" is the member being shown.
+  const downloadArchiveId = isTank ? markerTarget?.arcId : archiveId;
   const moreMenuTrigger = (
     <IconButton
       variant="ghost-btn"
@@ -1976,6 +1983,30 @@ export function Reader() {
         {t("reader.autoNextPage")}
         {autoNextActive ? ` (${autoNextCountdown})` : ""}
       </MenuItem>
+      {loggedIn && downloadArchiveId && (
+        <MenuItem onClick={() => window.location.assign(`/api/archives/${downloadArchiveId}/download`)}>
+          <i className="fas fa-download" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+          {t("reader.downloadThisArchive")}
+        </MenuItem>
+      )}
+      {loggedIn && downloadArchiveId && (
+        <MenuItem onClick={() => setShareItem({ kind: "archive", id: downloadArchiveId })}>
+          <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+          {isTank ? t("reader.shareThisArchive") : t("share.action.share")}
+        </MenuItem>
+      )}
+      {loggedIn && isTank && archiveId && (
+        <MenuItem onClick={() => setShareItem({ kind: "tankoubon", id: archiveId })}>
+          <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+          {t("reader.shareWholeTankoubon")}
+        </MenuItem>
+      )}
+      {loggedIn && isTank && archiveId && (
+        <MenuItem onClick={() => window.location.assign(`/api/tankoubons/${archiveId}/download`)}>
+          <i className="fas fa-file-zipper" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
+          {t("reader.downloadWholeTankoubon")}
+        </MenuItem>
+      )}
       <MenuSeparator />
       <MenuItem onClick={() => setOverlay((prev) => (prev === "settings" ? null : "settings"))}>
         <i className="fas fa-cog" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
@@ -2442,6 +2473,11 @@ export function Reader() {
           )}
         </div>
 
+        {shareItem && (
+          <Suspense fallback={null}>
+            <ShareDialog items={[shareItem]} onClose={() => setShareItem(null)} />
+          </Suspense>
+        )}
         {showTankSplit && archiveId && isTank && (
           <TankoubonSplitModal
             tankId={archiveId}
@@ -2462,6 +2498,15 @@ export function Reader() {
             tankPages={isTank ? pages.data.pages : undefined}
             hasTankSplitCandidates={tankSplitCandidates.length > 0}
             onOpenTankSplit={() => setShowTankSplit(true)}
+            onShare={
+              archiveId
+                ? () => {
+                    // Closed first so the share dialog is not opened underneath the overlay.
+                    setOverlay(null);
+                    setShareItem({ kind: isTank ? "tankoubon" : "archive", id: archiveId });
+                  }
+                : undefined
+            }
           />
         )}
 

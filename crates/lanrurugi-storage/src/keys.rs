@@ -145,3 +145,88 @@ pub const READ_FREQ_STAT_KEY: &str = "LANRURUGI_READ_FREQ";
 pub fn archive_version_history_key(archive_id: &str) -> String {
     format!("LANRURUGI_ARCHIVE_VERSION_HISTORY_{archive_id}")
 }
+
+// Sharing (specs/017-archive-sharing data-model.md). Additive, LANrurugi-only.
+
+/// One share's hash.
+pub fn share_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE:{id}")
+}
+
+/// Zset of every share id, scored by creation time.
+pub const SHARES_INDEX_KEY: &str = "LANRURUGI_SHARES";
+
+/// `access_hash` (hex) → share id, for O(1) code lookup.
+pub fn share_by_code_key(code_hash: &str) -> String {
+    format!("LANRURUGI_SHARE_BY_CODE:{code_hash}")
+}
+
+/// Set of share ids that reference one archive or tankoubon.
+pub fn share_item_refs_key(item_id: &str) -> String {
+    format!("LANRURUGI_SHARE_ITEM_REFS:{item_id}")
+}
+
+/// Set of distinct addresses seen by a share with `ip_first_n`.
+pub fn share_ips_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE_IPS:{id}")
+}
+
+/// One recipient claim's hash (24 h sliding TTL).
+pub fn share_claim_key(id: &lanrurugi_core::ids::ClaimId) -> String {
+    format!("LANRURUGI_SHARE_CLAIM:{id}")
+}
+
+/// A share's claim history zset; members are JSON and outlive the claim hashes.
+pub fn share_claims_index_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE_CLAIMS:{id}")
+}
+
+pub const SHARE_CLAIM_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// A browser recipient's token, keyed by the SHA-256 of the token (12 h sliding TTL).
+pub fn share_rtoken_key(token_sha256_hex: &str) -> String {
+    format!("LANRURUGI_SHARE_RTOKEN:{token_sha256_hex}")
+}
+
+pub const SHARE_RTOKEN_TTL_SECS: i64 = 12 * 60 * 60;
+
+/// Helper endpoint ids of one share, scored by last heartbeat.
+pub fn share_helpers_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE_HELPERS:{id}")
+}
+
+/// Where each helper of one share can be dialled and which archives it holds (JSON per endpoint).
+pub fn share_helper_info_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE_HELPER_INFO:{id}")
+}
+
+/// Endpoint ids that made an import claim on one share; only they may register as helpers.
+pub fn share_importers_key(id: &lanrurugi_core::ids::ShareId) -> String {
+    format!("LANRURUGI_SHARE_IMPORTERS:{id}")
+}
+
+/// An archive's BLAKE3 fingerprint record.
+pub fn share_blob_key(archive_id: &str) -> String {
+    format!("LANRURUGI_SHARE_BLOB:{archive_id}")
+}
+
+/// Zset of archive ids awaiting fingerprinting, scored by enqueue time.
+pub const SHARE_PREPARE_KEY: &str = "LANRURUGI_SHARE_PREPARE";
+
+/// This instance's iroh secret key.
+pub const SHARE_NODE_SECRET_KEY: &str = "LANRURUGI_SHARE_NODE_SECRET";
+
+/// One import of another instance's share (receiving side).
+pub fn share_import_key(id: &lanrurugi_core::ids::ShareImportId) -> String {
+    format!("LANRURUGI_SHARE_IMPORT:{id}")
+}
+
+/// Zset of import ids, scored by creation time.
+pub const SHARE_IMPORTS_INDEX_KEY: &str = "LANRURUGI_SHARE_IMPORTS";
+
+/// A knock packet stored by this instance's rendezvous role (2 h TTL).
+pub fn share_rdv_key(lookup_pubkey_hex: &str) -> String {
+    format!("LANRURUGI_SHARE_RDV:{lookup_pubkey_hex}")
+}
+
+pub const SHARE_RDV_TTL_SECS: i64 = 2 * 60 * 60;

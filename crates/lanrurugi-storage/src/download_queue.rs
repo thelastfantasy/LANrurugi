@@ -84,6 +84,8 @@ pub enum QueueItemOrigin {
     #[default]
     Download,
     LocalUpload,
+    /// 017: one import of another instance's share; `share_import_id` names it.
+    ShareImport,
 }
 
 /// Set on a `DownloadQueueItem` when its most recent ingest attempt was blocked by a `Filename`
@@ -139,6 +141,9 @@ pub struct DownloadQueueItem {
     /// backward-compatibility reason as `origin` — records written before this existed have no such key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscription_id: Option<String>,
+    /// 017: the share import this item runs, for `origin == ShareImport`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_import_id: Option<String>,
     /// For a download: the source URL. For a local upload: the uploaded file's own filename —
     /// there is no real URL, but every other piece of this state machine (the completed-item
     /// title fallback, the filename-conflict `source:` tag, `resolve_conflict`'s dedup) already
@@ -320,6 +325,7 @@ impl DownloadQueueRepository {
             id: uuid::Uuid::new_v4().to_string(),
             origin: new_item.origin,
             subscription_id: new_item.subscription_id,
+            share_import_id: None,
             url: new_item.url,
             plugin_namespace: new_item.plugin_namespace,
             file_size: new_item.file_size,
@@ -485,6 +491,7 @@ mod tests {
             created_at,
             origin: QueueItemOrigin::Download,
             subscription_id: Some("sub".to_string()),
+            share_import_id: None,
             url: "https://example.com/x".to_string(),
             plugin_namespace: "download/x".to_string(),
             file_size: None,

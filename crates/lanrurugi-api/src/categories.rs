@@ -86,18 +86,15 @@ pub struct CreateCategoryParams {
     visible_to_guest: bool,
 }
 
-async fn create_category(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-    axum::Form(params): axum::Form<CreateCategoryParams>,
-) -> Response {
+/// A new `SET_<unix seconds>` id. Legacy bumps the timestamp by 1s on collision until a free key
+/// is found; mirrored here.
+async fn free_category_id(state: &AppState) -> CategoryId {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut catid = CategoryId(format!("SET_{now}"));
-    // Legacy bumps the timestamp by 1s on collision until a free key is found; mirrored here.
     let mut attempt = now;
+    let mut catid = CategoryId(format!("SET_{now}"));
     while state
         .repos
         .categories
@@ -110,6 +107,52 @@ async fn create_category(
         attempt += 1;
         catid = CategoryId(format!("SET_{attempt}"));
     }
+    catid
+}
+
+/// The static category called `name`, created when there is none (017: a share import keeping
+/// the sharer's categories). Serialized, so archives imported side by side never create the same
+/// category twice.
+pub(crate) async fn static_category_named(
+    state: &AppState,
+    name: &str,
+) -> Result<CategoryId, String> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = LOCK.lock().await;
+    let existing = state
+        .repos
+        .categories
+        .list_all()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|c| !c.is_dynamic() && c.name == name);
+    if let Some(category) = existing {
+        return Ok(category.catid);
+    }
+    let category = Category {
+        catid: free_category_id(state).await,
+        name: name.to_string(),
+        search: None,
+        archives: Vec::new(),
+        pinned: false,
+        visible_to_guest: false,
+    };
+    state
+        .repos
+        .categories
+        .save(&category)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(category.catid)
+}
+
+async fn create_category(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    axum::Form(params): axum::Form<CreateCategoryParams>,
+) -> Response {
+    let catid = free_category_id(&state).await;
 
     let category = Category {
         catid: catid.clone(),

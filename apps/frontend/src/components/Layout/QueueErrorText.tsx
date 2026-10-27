@@ -73,6 +73,9 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t("components.layout.anInternalErrorOccurred")}</span>
     case "stale_after_restart":
       return <span>{t("components.layout.downloadWasInterruptedByA")}</span>
+    case "share_import":
+      // A sharer's refusal has a translated message; anything else is shown as reported.
+      return <span>{t(`share.refusal.${error.reason}`, { defaultValue: error.reason })}</span>
     case "superseded_by_newer_revision":
       return (
         <span>

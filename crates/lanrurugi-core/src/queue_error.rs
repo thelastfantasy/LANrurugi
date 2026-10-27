@@ -143,6 +143,12 @@ pub enum QueueError {
     SupersededByNewerRevision {
         archive_id: String,
     },
+    /// 017: a share import ended early. `reason` is a refusal code from the sharer (`revoked`,
+    /// `expired`, `permission_denied`, `address_unverifiable`, …) or a short description of a
+    /// local failure.
+    ShareImport {
+        reason: String,
+    },
 }
 
 impl QueueError {
@@ -167,6 +173,7 @@ impl QueueError {
             QueueError::AlreadyPatched { .. } => 1006,
             QueueError::StaleAfterRestart => 1005,
             QueueError::SupersededByNewerRevision { .. } => 1007,
+            QueueError::ShareImport { .. } => 1008,
         }
     }
 }

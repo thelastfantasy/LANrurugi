@@ -315,5 +315,8 @@ ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 ENV LANRURUGI_TEMP_DIR=/temp
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 EXPOSE 3000
+# Sharing (017): iroh QUIC between instances; `share_udp_port`. Publishing it as host 443/udp is
+# recommended so the traffic sits on the HTTP/3 port.
+EXPOSE 11204/udp
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["serve", "--bind", "0.0.0.0:3000"]
+CMD ["serve", "--bind", "[::]:3000"]

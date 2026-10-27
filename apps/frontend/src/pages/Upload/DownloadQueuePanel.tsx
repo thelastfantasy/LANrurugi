@@ -16,6 +16,10 @@ import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
 
 import { QueueItemRow } from "./QueueItemRow"
+import { ShareImportRow } from "./ShareImportRow"
+
+/** 017: every share import is one row under its own group. */
+const SHARE_IMPORT_NAMESPACE = "share_import"
 import {
   findPluginByDomain,
   LOCAL_UPLOAD_NAMESPACE,
@@ -282,7 +286,12 @@ export function DownloadQueuePanel({
           .map(([namespace, groupItems]) => {
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
-            const groupTitle = isLocalUpload ? t("upload.fromYourComputer") : (plugin?.name ?? namespace)
+            const isShareImport = namespace === SHARE_IMPORT_NAMESPACE
+            const groupTitle = isLocalUpload
+              ? t("upload.fromYourComputer")
+              : isShareImport
+                ? t("share.importRow.group")
+                : (plugin?.name ?? namespace)
             const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
             const tab: QueueTab = tabByGroup[namespace] ?? "manual"
             const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
@@ -295,7 +304,7 @@ export function DownloadQueuePanel({
             return (
               <CollapsibleSection
                 key={namespace}
-                icon={isLocalUpload ? "fa-upload" : "fa-cloud-download-alt"}
+                icon={isLocalUpload ? "fa-upload" : isShareImport ? "fa-share-nodes" : "fa-cloud-download-alt"}
                 title={
                   <span className="queue-group-title">
                     {`${groupTitle} (${groupItems.length})`}
@@ -345,7 +354,10 @@ export function DownloadQueuePanel({
                 caretStyle="right-down"
                 defaultOpen
               >
-                {shown.map((item) => (
+                {shown.map((item) =>
+                  item.origin === "share_import" ? (
+                    <ShareImportRow key={item.id} item={item} job={item.job_id ? jobById.get(item.job_id) : undefined} />
+                  ) : (
                   <QueueItemRow
                     key={item.id}
                     item={item}
@@ -363,7 +375,8 @@ export function DownloadQueuePanel({
                     }}
                     metadataPlugin={findPluginByDomain(metadataPlugins, item.url)}
                   />
-                ))}
+                  ),
+                )}
               </CollapsibleSection>
             )
           })}

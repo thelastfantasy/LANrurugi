@@ -43,6 +43,8 @@ import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
   DEFAULT_COLUMN_COUNT,
+  DEFAULT_INDEX_ORDER,
+  DEFAULT_INDEX_SORT,
   GROUP_TANKS_KEY,
   HIDE_COMPLETED_KEY,
   INDEX_ORDER_KEY,
@@ -65,6 +67,7 @@ import { toast } from "@/toast";
 import { useDocumentTitle } from "./useDocumentTitle";
 
 let defaultPasswordToastShownThisPageLoad = false;
+let storageWarningToastShownThisPageLoad = false;
 
 export function useLibrary() {
   const { t } = useTranslation();
@@ -74,7 +77,12 @@ export function useLibrary() {
   const categories = useCategories();
   const tankoubons = useTankoubons();
   const createTankoubon = useCreateTankoubon();
-  const { isAuthenticated: loggedIn, usingDefaultPassword, firstRunWizardPending } = useSession();
+  const {
+    isAuthenticated: loggedIn,
+    usingDefaultPassword,
+    storageWarnings,
+    firstRunWizardPending,
+  } = useSession();
   const preferences = usePreferences({ enabled: loggedIn });
   const updatePreferences = useUpdatePreferences();
   const settings = useSettings();
@@ -107,8 +115,8 @@ export function useLibrary() {
     const nextCategory = overrides.selectedCategory ?? selectedCategory;
     const params = new URLSearchParams();
     if (nextPage !== 0) params.set("p", String(nextPage + 1));
-    if (nextSortby !== "title") params.set("sort", nextSortby);
-    if (nextOrder !== "asc") params.set("sortdir", nextOrder);
+    if (nextSortby !== DEFAULT_INDEX_SORT) params.set("sort", nextSortby);
+    if (nextOrder !== DEFAULT_INDEX_ORDER) params.set("sortdir", nextOrder);
     if (nextFilter) params.set("q", nextFilter);
     if (nextCategory) params.set("c", nextCategory);
     return params.toString();
@@ -121,7 +129,7 @@ export function useLibrary() {
     urlParams.get("sort") ??
     preferences.data?.library_sortby ??
     localStorage.getItem(INDEX_SORT_KEY) ??
-    "title";
+    DEFAULT_INDEX_SORT;
   const order: "asc" | "desc" = (() => {
     const fromUrl = urlParams.get("sortdir");
     if (fromUrl === "asc" || fromUrl === "desc") return fromUrl;
@@ -130,7 +138,7 @@ export function useLibrary() {
       return fromPreferences;
     }
     return (
-      (localStorage.getItem(INDEX_ORDER_KEY) as "asc" | "desc" | null) ?? "asc"
+      (localStorage.getItem(INDEX_ORDER_KEY) as "asc" | "desc" | null) ?? DEFAULT_INDEX_ORDER
     );
   })();
   // Every field being changed must go through a single call, since `buildSearch()` reads
@@ -283,6 +291,19 @@ export function useLibrary() {
       });
     }
   }, [usingDefaultPassword, firstRunWizardPending, t]);
+
+  useEffect(() => {
+    if (storageWarnings.length === 0 || storageWarningToastShownThisPageLoad) return;
+    storageWarningToastShownThisPageLoad = true;
+    toast({
+      heading: t("hooks.storageWarningHeading") ?? undefined,
+      text: storageWarnings.map((warning) => t(`hooks.storageWarning.${warning}`)).join(" "),
+      icon: "warning",
+      hideAfter: 25000,
+      closeOnClick: false,
+      draggable: false,
+    });
+  }, [storageWarnings, t]);
 
   useEffect(() => {
     const seenKey = "seenContextMenuTutorial";

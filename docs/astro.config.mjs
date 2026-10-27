@@ -62,6 +62,11 @@ const llmsTxt = site && starlightLlmsTxt({
 export default defineConfig({
   ...(site ? { site } : {}),
   base,
+  // Pages and Starlight both serve directory URLs (`/guide/sharing/`, `/en/`), and Cloudflare
+  // Pages 308-redirects the slash-less form to it. Declaring that here is what makes generated
+  // links match: without it the language switcher emitted `href="/en"`, which Search Console then
+  // reported as "Page with redirect".
+  trailingSlash: 'always',
   // `DOCS_SDK_URL` has no `PUBLIC_` prefix, so it is not in `import.meta.env` by default; injecting
   // it here is what lets the content pages read it (see `plugin/sdk.mdx`).
   vite: {
@@ -101,6 +106,7 @@ export default defineConfig({
             { label: '反向代理', translations: { en: 'Reverse proxy' }, slug: 'guide/reverse-proxy' },
             { label: '快速开始', translations: { en: 'Quickstart' }, slug: 'guide/quickstart' },
             { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
+            { label: '分享与导入', translations: { en: 'Sharing and importing' }, slug: 'guide/sharing' },
             { label: '用文档站测试 API', translations: { en: 'Testing the API from these docs' }, slug: 'guide/api-testing' },
             { label: '给 AI 工具用的 llms.txt', translations: { en: 'llms.txt for AI tools' }, slug: 'guide/llms-txt' },
           ],

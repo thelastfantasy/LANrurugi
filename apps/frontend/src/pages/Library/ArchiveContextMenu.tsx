@@ -33,6 +33,7 @@ export function ArchiveContextMenu({
   onToggleSelection,
   isSelected,
   onSetProgress,
+  onShare,
 }: {
   state: ContextMenuState;
   categories:
@@ -60,6 +61,8 @@ export function ArchiveContextMenu({
   /** Mutation lives in the parent, not here — `onClose()` unmounts this menu immediately, which
    * would tear down a locally-owned mutation before its callback ever fires. */
   onSetProgress: (archiveId: string, page: number) => void;
+  /** 017: opens the share dialog for this item (the parent widens it to the whole selection). */
+  onShare: (archiveId: string) => void;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -172,15 +175,30 @@ export function ArchiveContextMenu({
               : t("library.markAsRead")}
           </PopupMenuItem>
         )}
-        {loggedIn && !isTank && (
+        {loggedIn && (
           <PopupMenuItem
             onClick={() => {
               onClose();
-              window.location.assign(`/api/archives/${archive.arcid}/download`);
+              window.location.assign(
+                isTank
+                  ? `/api/tankoubons/${archive.arcid}/download`
+                  : `/api/archives/${archive.arcid}/download`,
+              );
             }}
           >
             <i className="fa fa-download" style={{ width: 18 }}></i>{" "}
             {t("library.download")}
+          </PopupMenuItem>
+        )}
+        {loggedIn && (
+          <PopupMenuItem
+            onClick={() => {
+              onClose();
+              onShare(archive.arcid);
+            }}
+          >
+            <i className="fa fa-share-nodes" style={{ width: 18 }}></i>{" "}
+            {t("share.action.share")}
           </PopupMenuItem>
         )}
         <PopupMenuItem

@@ -67,8 +67,9 @@ function rustHtmlMiddleware(): Plugin {
         // navigation signal (Chrome/Edge/Firefox/Safari all send it); the `Accept` check stays
         // only as a fallback for clients that don't.
         const fetchDest = String(req.headers['sec-fetch-dest'] ?? '')
+        // `iframe` too: the share embed card is framed, and a framed page announces itself so.
         const isDocumentNavigation = fetchDest
-          ? fetchDest === 'document'
+          ? fetchDest === 'document' || fetchDest === 'iframe'
           : accept.includes('text/html')
         if (!isDocumentNavigation) return next()
 
@@ -136,8 +137,20 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   plugins: [react(), tailwindcss(), rustHtmlMiddleware()],
+  // The share card framed by other sites is its own page (`embed.html`), so it never loads the app.
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        embed: path.resolve(__dirname, 'embed.html'),
+      },
+    },
+  },
   server: {
     port: 3000,
+    // A local pnpm store in this folder holds tens of thousands of files; watching each one
+    // exhausts the host's inotify watches (ENOSPC) as soon as a second dev server starts.
+    watch: { ignored: ['**/.pnpm-store/**'] },
     fs: {
       // Explicit monorepo-root allow — Vite's own default allow-list only ever widens to a
       // detected workspace root via its own project-root/`package.json`-workspaces heuristics,

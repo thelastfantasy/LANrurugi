@@ -249,7 +249,7 @@ pub async fn ingest_downloaded_file(
 /// the original download-ingest path and both filename-conflict resolution paths
 /// (`resolve_overwrite`/`resolve_rename` in `download_queue.rs`), which only differ in what
 /// `intended_filename`/`duplicate_policy` they pass in.
-async fn catalogue_staged_file(
+pub(crate) async fn catalogue_staged_file(
     state: &AppState,
     staging_path: &Path,
     filename: &str,

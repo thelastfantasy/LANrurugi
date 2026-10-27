@@ -1,0 +1,111 @@
+# Sharing, recipient side (`specs/017-archive-sharing/`): what someone holding a share code can do
+# in a browser. No library session is read or created here. `open` exchanges the code for a
+# recipient token; every other path takes that token in the `X-Share-Token` header or the `rt`
+# query parameter (image URLs use the latter). Anything outside the share, a wrong code and a
+# revoked or expired share all answer the same 404. Failed attempts are rate limited.
+"/api/share/r/open":
+  post:
+    summary: Open a share with its code
+    description: Checks the code, the share's status and its IP rules, then returns a recipient token with the manifest and permissions. Opening counts no download.
+    tags: [share_recipient]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: { type: string }
+    responses:
+      "200": { description: "`{ token, manifest, permissions, status }`." }
+      "404": { description: Unknown code, or a share this address may not open. }
+      "429": { description: Too many failed attempts from this address. }
+"/api/share/r/card":
+  get:
+    summary: An embedded card's content
+    description: |
+      What an embedded share card shows. 404 unless the share allows embedding. A share with IP
+      rules answers only `restricted`; a revoked or expired one only its state. Otherwise the title,
+      item count, up to eight cover archive ids with their items' titles (`cover_titles`, same
+      order; the card lays out one row of four, or two rows when the share holds eight items or
+      more), every item (`items`: `title`, `cover` archive id or null, `volumes` for a tankoubon; at
+      most 500) and a recipient token for the covers.
+    tags: [share_recipient]
+    parameters:
+      - { name: code, in: query, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The card. }
+      "404": { description: Unknown code, or embedding is off. }
+      "429": { description: Too many failed attempts from this address. }
+"/api/share/r/manifest":
+  get:
+    summary: The share's contents
+    tags: [share_recipient]
+    responses:
+      "200": { description: "`{ manifest, permissions, status }`." }
+      "404": { description: No valid token, or the share is no longer usable. }
+"/api/share/r/archives/{id}/thumbnail":
+  get:
+    summary: An archive's cover
+    tags: [share_recipient]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The image. }
+      "404": { description: No valid token, or the archive is not in the share. }
+"/api/share/r/archives/{id}/pages":
+  get:
+    summary: An archive's page list
+    description: Needs the `read` permission.
+    tags: [share_recipient]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The page list. }
+      "403": { description: The share does not allow reading. }
+      "404": { description: No valid token, or the archive is not in the share. }
+"/api/share/r/archives/{id}/page":
+  get:
+    summary: One page image
+    description: Needs the `read` permission. Takes the same page parameters as the library's own page endpoint.
+    tags: [share_recipient]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The page. }
+      "403": { description: The share does not allow reading. }
+      "404": { description: No valid token, or the archive is not in the share. }
+"/api/share/r/archives/{id}/download":
+  get:
+    summary: Download an archive
+    description: |
+      Needs the `download` permission. The token's first download claims one of the share's
+      downloads; later downloads with the same token reuse that claim. Subject to the sharer's
+      upload limits.
+    tags: [share_recipient]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The archive file. }
+      "403": { description: The share does not allow downloading. }
+      "404": { description: No valid token, or the archive is not in the share. }
+      "409": { description: The share's downloads are used up. }
+      "503": { description: The sharer has paused uploads; `Retry-After` says when to come back. }
+"/api/share/r/tankoubons/{id}/download":
+  get:
+    summary: Download a tankoubon as one zip
+    description: Needs the `download` permission. The same zip as the administrator's tankoubon download, counted like an archive download.
+    tags: [share_recipient]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200":
+        description: The zip stream.
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+      "403": { description: The share does not allow downloading. }
+      "404": { description: No valid token, or the tankoubon is not in the share. }
+      "409": { description: The share's downloads are used up. }
+      "503": { description: The sharer has paused uploads; `Retry-After` says when to come back. }

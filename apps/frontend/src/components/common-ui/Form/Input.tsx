@@ -105,7 +105,8 @@ function AutoGrowTextarea({
     const el = ref.current
     if (!el) return
     el.style.height = "auto"
-    el.style.height = `${el.scrollHeight}px`
+    // Hidden (e.g. inside a collapsed section) it measures 0; keep the `rows` height instead.
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`
   }, [value])
 
   return (

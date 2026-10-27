@@ -1838,6 +1838,8 @@ type DownloadQueueDelta =
       downloaded_bytes: number
       total_bytes: number | null
     }
+  /** A share import's figures and archive list; merged into its `["share-import", id]` query. */
+  | { kind: "share_import"; id: string; import: { id: string } & Record<string, unknown> }
 
 /** SSE byte progress, keyed by job ID. Must stay OUTSIDE the `["jobs"]` query cache: writing
  * progress into it bumps `dataUpdatedAt` and starves the real `/jobs` poll for the whole download. */
@@ -1890,6 +1892,13 @@ export function useDownloadQueue() {
       if (data.type !== "delta") return
       if (data.kind === "progress") {
         setJobProgressOverride(data.job_id, data.downloaded_bytes, data.total_bytes ?? undefined)
+        return
+      }
+      if (data.kind === "share_import") {
+        // Merged, not replaced: the stream never carries the share code the detail query holds.
+        queryClient.setQueryData(["share-import", data.import.id], (old: object | undefined) =>
+          old ? { ...old, ...data.import } : old,
+        )
         return
       }
       queryClient.setQueryData(["download-queue"], (old: DownloadQueueListResponse | undefined) => {

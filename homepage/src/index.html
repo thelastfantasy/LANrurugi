@@ -55,6 +55,7 @@
         <a href="#ai" data-i18n="nav.ai">AI 功能</a>
         <a href="#reader" data-i18n="nav.reader">阅读体验</a>
         <a href="#download" data-i18n="nav.download">下载与整理</a>
+        <a href="#share" data-i18n="nav.share">分享</a>
         <a href="#library" data-i18n="nav.library">书库</a>
         <a href="#start" data-i18n="nav.start">开始使用</a>
       </nav>
@@ -371,10 +372,53 @@
         </ul>
       </section>
 
+      <!-- ============================== SHARE ============================== -->
+      <section id="share" class="chapter">
+        <header class="chapter-head">
+          <p class="chapter-no">第4話</p>
+          <h2 data-i18n="share.title">分享与跨实例导入</h2>
+          <p class="chapter-lead" data-i18n="share.lead">
+            把档案和单行本分享给别人：对方可以在浏览器里阅读、下载，也可以直接导入到自己的 LANrurugi。
+          </p>
+        </header>
+        <ul class="feature-grid">
+          <li>
+            <span class="fi" aria-hidden="true">⇄</span>
+            <h3 data-i18n="share.f1.title">分享码与二维码</h3>
+            <p data-i18n="share.f1.body">任选档案和单行本生成一个分享码或二维码，可设下载次数、IP 限制和有效期，随时撤销。二维码在浏览器里识别，图片不会上传。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">⤓</span>
+            <h3 data-i18n="share.f2.title">导入到自己的书库</h3>
+            <p data-i18n="share.f2.body">粘贴分享码或二维码截图即可导入，标签、简介和单行本卷序一并重建。已有的档案不会重复下载，新导入的按分享方原来的先后排在书库最新的位置。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">⌁</span>
+            <h3 data-i18n="share.f3.title">没有公网 IP 也能传</h3>
+            <p data-i18n="share.f3.body">实例之间直连或打洞，打不通时经中继转发，局域网内自动发现。分享码加密附带连接路线，能直连时不经过任何公共服务；也可以改用自己或朋友的节点。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">✓</span>
+            <h3 data-i18n="share.f4.title">逐块校验，断点续传</h3>
+            <p data-i18n="share.f4.body">每一块数据都按分享方的指纹校验，断网或重启后从中断处继续，成品与原文件逐字节一致。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">⇶</span>
+            <h3 data-i18n="share.f5.title">多个实例协助分发</h3>
+            <p data-i18n="share.f5.body">导入完成的实例可以帮忙分发，分担分享方的上传；协助方无法篡改内容。上传速度可以限制，还能像 BT 客户端一样按时间表切换备用限速。</p>
+          </li>
+          <li>
+            <span class="fi" aria-hidden="true">▣</span>
+            <h3 data-i18n="share.f6.title">嵌入网页</h3>
+            <p data-i18n="share.f6.body">分享可以生成一张卡片，用 iframe 或 Web Component 嵌入博客和论坛，按权限显示阅读、下载或导入入口。</p>
+          </li>
+        </ul>
+      </section>
+
       <!-- ============================== LIBRARY ============================== -->
       <section id="library" class="chapter">
         <header class="chapter-head">
-          <p class="chapter-no">第4話</p>
+          <p class="chapter-no">第5話</p>
           <h2 data-i18n="lib.title">兼容 LANraragi 书库</h2>
           <p class="chapter-lead" data-i18n="lib.lead">
             沿用 LANraragi 的书库目录结构与 HTTP API，第三方阅读器照常连接。标签、分类等元数据从 LANraragi 的备份导入，两边的数据库互不影响。

@@ -37,6 +37,7 @@ const PluginWizard = lazy(() =>
   import("./pages/PluginWizard").then((m) => ({ default: m.PluginWizard })),
 )
 const Reader = lazy(() => import("./pages/Reader/Reader").then((m) => ({ default: m.Reader })))
+const SharePage = lazy(() => import("./share/SharePage").then((m) => ({ default: m.SharePage })))
 const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })))
 const Backup = lazy(() => import("./pages/Settings/Backup").then((m) => ({ default: m.Backup })))
 const Stats = lazy(() => import("./pages/Stats").then((m) => ({ default: m.Stats })))
@@ -70,6 +71,12 @@ export function App() {
             </RequireGuest>
           }
         />
+        {/* 017: a share's recipient has no account here; the code is the only credential. */}
+        <Route path="/s/:code" element={<SharePage />} />
+        {/* Each shared archive and tankoubon volume has its own reader address, so a reload or a
+            link lands on the same page. */}
+        <Route path="/s/:code/a/:archiveId" element={<SharePage />} />
+        <Route path="/s/:code/t/:tankId/:volume?" element={<SharePage />} />
         <Route
           path="/reader/:archiveId"
           element={

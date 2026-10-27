@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { useRef, useState } from "react"
+import { lazy, Suspense, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
@@ -22,6 +22,11 @@ import { ReservationGroup } from "./ReservationGroup"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 import { SubscriptionStatus } from "./SubscriptionStatus"
 
+// Loaded only when opened: it carries the QR decoder.
+const ImportShareModal = lazy(() =>
+  import("@/share/ImportShareModal").then((m) => ({ default: m.ImportShareModal })),
+)
+
 /** Both "Add from URL" and manual file upload stage into the same persistent server-side queue
  * (`useDownloadQueue`); `DownloadQueuePanel` renders both kinds from one poll. */
 export function Upload() {
@@ -35,6 +40,7 @@ export function Upload() {
   const downloadQueue = useDownloadQueue()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [category, setCategory] = useState("")
+  const [importOpen, setImportOpen] = useState(false)
   const [urls, setUrls] = useState("")
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
@@ -171,6 +177,14 @@ export function Upload() {
 
       {t("upload.addFilesToYourLanrurugi")}
       <br />
+      <button type="button" className="stdbtn" style={{ margin: "8px 0" }} onClick={() => setImportOpen(true)}>
+        <i className="fa fa-share-nodes" aria-hidden="true"></i> {t("share.import.button")}
+      </button>
+      {importOpen && (
+        <Suspense fallback={null}>
+          <ImportShareModal onClose={() => setImportOpen(false)} />
+        </Suspense>
+      )}
       <br />
 
       <div style={{ marginLeft: "auto", marginRight: "auto" }}>

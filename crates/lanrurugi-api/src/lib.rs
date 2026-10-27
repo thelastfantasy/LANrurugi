@@ -44,13 +44,21 @@ pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
+pub mod share_attempts;
+pub mod share_imports;
+pub mod share_net;
+pub mod share_recipient;
+pub mod share_settings;
+pub mod shares;
 pub mod shinobu;
 pub mod stamps;
 pub mod state;
 pub mod stats;
+pub mod storage_warnings;
 pub mod subscriptions;
 pub mod tag_rules;
 pub mod tankoubon_grouping;
+pub mod tankoubon_zip;
 pub mod tankoubons;
 pub mod terminology_glossary;
 pub mod translation;
@@ -80,6 +88,9 @@ pub fn router() -> Router<AppState> {
         .merge(bookmarks::router())
         .merge(categories::router())
         .merge(tankoubons::router())
+        .merge(shares::router())
+        .merge(share_recipient::router())
+        .merge(share_imports::router())
         .merge(tankoubon_grouping::router())
         .merge(stamps::router())
         .merge(misc::router())

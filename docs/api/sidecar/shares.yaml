@@ -1,0 +1,318 @@
+# Sharing, administrator side (`specs/017-archive-sharing/`): creating and managing shares, the
+# sharing settings, and importing other instances' shares. Administrators only; read-only tokens
+# and guest visitors are refused every path here, and `PUT /api/shares/settings` additionally
+# needs a logged-in session rather than an API token.
+"/api/shares":
+  get:
+    summary: List shares
+    description: Every share this instance has created, newest first, with its status (`active`, `exhausted`, `expired`, `revoked`) and download counts.
+    tags: [shares]
+    parameters:
+      - name: status
+        in: query
+        schema: { type: string, enum: [all, active] }
+        description: "`active` lists only shares that can still be used."
+    responses:
+      "200": { description: The shares. }
+  post:
+    summary: Create a share
+    description: |
+      Shares one or more archives and tankoubons, in any mix. Fields left out take the instance
+      defaults from the sharing settings. The response is the new share's detail plus `code` — the
+      only response that carries the code besides `GET /api/shares/{id}/code`.
+    tags: [shares]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [kind, id]
+                  properties:
+                    kind: { type: string, enum: [archive, tankoubon] }
+                    id: { type: string }
+              short_code: { type: boolean, description: "An 8-character code; needs `expires_at` within 7 days." }
+              title: { type: [string, "null"] }
+              permissions:
+                type: object
+                properties:
+                  import: { type: boolean }
+                  read: { type: boolean }
+                  download: { type: boolean }
+              download_limit: { type: [integer, "null"], minimum: 1 }
+              ip_allow: { type: array, items: { type: string }, description: Addresses or CIDR ranges. }
+              ip_first_n: { type: [integer, "null"], minimum: 1 }
+              expires_at: { type: [integer, "null"], description: Unix seconds. }
+              embed: { type: boolean }
+              allow_helpers: { type: boolean }
+    responses:
+      "201": { description: The created share, with its code. }
+      "400": { description: An invalid field, no items, or no permission chosen. }
+"/api/shares/settings":
+  get:
+    summary: Read the sharing settings
+    description: |
+      Every `share_*` setting, typed, plus read-only status: whether sharing is running, the
+      endpoint's relays and direct addresses, the operating-system proxy being followed (without
+      credentials), the upload mode in force, this instance's node string when it offers a node
+      role, and the reachability of each outside service in use.
+    tags: [shares]
+    responses:
+      "200": { description: The settings and status. }
+  put:
+    summary: Change sharing settings
+    description: |
+      Changes the given `share_*` fields only. Each is validated; any invalid field rejects the
+      whole request. Relay and pkarr addresses are stored in one form (`https://` added when
+      missing, host lowercased, trailing dot dropped), and node strings may be given without their
+      `lrrg-node:` prefix. Changes to connectivity fields, including the relay role's
+      `share_node_relay_rate` and `share_node_relay_allow`, restart the sharing endpoint. Session
+      only: API tokens are refused.
+    tags: [shares]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: true }
+    responses:
+      "200": { description: The settings after the change. }
+      "400": { description: A field is unknown or invalid; the message names it. }
+"/api/shares/by-item/{item_id}":
+  get:
+    summary: Shares containing an item
+    description: The shares that list this archive or tankoubon, for the "add to an existing share" choice.
+    tags: [shares]
+    parameters:
+      - { name: item_id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The shares. }
+"/api/shares/{id}":
+  get:
+    summary: One share
+    description: The share with its items (each marked available or not), claim history, IP rules and the helpers delivering it.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The share. }
+      "404": { description: No share with this id. }
+  patch:
+    summary: Edit a share
+    description: Changes any of the fields accepted on creation except `items` and `short_code`. `null` clears an optional field. Turning `allow_helpers` off ends helping at once.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { type: object }
+    responses:
+      "200": { description: The share after the edit. }
+      "400": { description: An invalid field. }
+      "404": { description: No share with this id. }
+"/api/shares/{id}/items":
+  post:
+    summary: Add items to a share
+    description: Adds archives or tankoubons to an existing share; `update` may reset its limits in the same request.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items: { type: array, items: { type: object } }
+              update: { type: object, description: Share fields to change at the same time. }
+    responses:
+      "200": { description: The share after the change. }
+      "404": { description: No share with this id. }
+  delete:
+    summary: Remove items from a share
+    description: A share keeps at least one item. Helpers stop serving removed archives.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items: { type: array, items: { type: object } }
+    responses:
+      "200": { description: The share after the change. }
+      "400": { description: Removing these items would leave the share empty. }
+  put:
+    summary: Reorder a share's items
+    description: >-
+      Replaces the order of the share's items; recipients see that order, and so does an import's
+      archive list. The share code, its claims and its limits are unchanged — no code is reissued.
+      The body must list exactly the share's current items, so a stale client can reorder but never
+      drop one by accident.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items: { type: array, items: { type: object } }
+    responses:
+      "200": { description: The share, in its new order. }
+      "400": { description: The list is not exactly the share's current item set. }
+      "409": { description: A revoked share cannot be changed. }
+"/api/shares/{id}/revoke":
+  post:
+    summary: Revoke a share
+    description: Immediate and final. Running imports stop within the ticket lifetime (about 30 s); links and cards show the share as revoked.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The revoked share. }
+      "404": { description: No share with this id. }
+"/api/shares/{id}/code":
+  get:
+    summary: Show a share's code
+    description: The code, its `lrrg:` text form (which carries this instance's routes sealed under the code, `?r=…`), the browser link and embed snippets when a public address is set, and whether importers need a direct route to this instance.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The code. }
+      "404": { description: No share with this id. }
+"/api/shares/imports":
+  get:
+    summary: List imports
+    description: Imports of other instances' shares, newest first, with progress and the helping state.
+    tags: [shares]
+    parameters:
+      - name: helping
+        in: query
+        schema: { type: string, enum: ["1"] }
+        description: "`1` lists only imports that help (or helped) deliver their share and are not hidden."
+    responses:
+      "200": { description: The imports. }
+  post:
+    summary: Import a share
+    description: |
+      Claims the share (one download is counted) and queues the import as one download-queue item.
+      Pass the `preview_id` from `resolve` to reuse its connection. A refusal is answered before
+      anything is queued.
+    tags: [shares]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: { type: string, description: A code, its `lrrg:` text form, or a share link. }
+              preview_id: { type: string }
+              category: { type: string }
+              help_deliver: { type: boolean, description: Offer this instance's verified copy to other importers afterwards. }
+              inherit_categories:
+                type: boolean
+                description: Put each new archive into categories named like the sharer's, creating missing ones.
+              archives:
+                type: array
+                items: { type: string }
+                description: The sharer archive ids to import. Omitted means the whole share.
+    responses:
+      "201": { description: "`{ import_id, queue_item_id }`." }
+      "400": { description: "Not a share code, or `nothing_selected`: `archives` names none of the share's archives." }
+      "409": { description: "`own_share`: the code is one of this instance's own shares." }
+      "422": { description: "Refused by the sharer: `not_found`, `revoked`, `expired`, `exhausted`, `permission_denied`, `address_unverifiable`, `rate_limited`." }
+      "502": { description: The sharer could not be reached. }
+"/api/shares/imports/resolve":
+  post:
+    summary: Preview a share
+    description: Resolves a code and returns the share's title, items, sizes, permissions and which archives this library already has, without counting a download.
+    tags: [shares]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: { type: string }
+    responses:
+      "200": { description: The preview, with a `preview_id` for the import. }
+      "400": { description: Not a share code. }
+      "409": { description: "`own_share`: the code is one of this instance's own shares." }
+      "422": { description: Refused by the sharer. }
+      "502": { description: The sharer could not be reached. }
+"/api/shares/imports/preview/{preview_id}/thumbnail/{archive_id}":
+  get:
+    summary: A cover in a preview
+    description: The sharer's thumbnail of one archive in a preview, fetched over the preview's connection.
+    tags: [shares]
+    parameters:
+      - { name: preview_id, in: path, required: true, schema: { type: string } }
+      - { name: archive_id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The image. }
+      "404": { description: Unknown or expired preview, or an archive outside it. }
+"/api/shares/imports/{id}":
+  get:
+    summary: One import
+    description: |
+      The import with its per-archive progress (each finished archive carries its
+      `local_archive_id`) and the share code it came from. Progress is also pushed live as
+      `share_import` and `progress` events on `GET /api/download_queue/stream`, without the code.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The import. }
+      "404": { description: No import with this id. }
+  patch:
+    summary: Change helping for an import
+    description: "`help_deliver` turns helping on or off (off stops serving at once); `help_hidden: true` removes an ended row from the helping list."
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              help_deliver: { type: boolean }
+              help_hidden: { type: boolean }
+    responses:
+      "200": { description: The import after the change. }
+      "404": { description: No import with this id. }
+"/api/shares/imports/{id}/archives/{sharer_archive_id}/retry":
+  post:
+    summary: Retry one archive of an import
+    description: Resets a failed archive and restarts the import if it had stopped. Verified pieces are kept.
+    tags: [shares]
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      - { name: sharer_archive_id, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The import. }
+      "404": { description: No such import or archive. }
+      "409": { description: The import has finished and can no longer reconnect. }

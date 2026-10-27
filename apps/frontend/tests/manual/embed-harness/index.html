@@ -1,0 +1,253 @@
+<!doctype html>
+<!--
+  Manual harness for the share embed card (iframe and <lrrg-share>), not part of CI: it imitates a
+  third-party blog so the card can be seen and measured the way a real site would show it.
+  Serve it and open it from a phone on the same network:
+
+    python3 -m http.server 4324 --bind 0.0.0.0 --directory apps/frontend/tests/manual/embed-harness
+
+  Every address below points at the dev instance (vite on :3000); change the host if it moves.
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>嵌入测试 · 某个博客</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fafaf7; --fg: #222; --muted: #666; --line: #ddd; --code: #f0f0ea; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17181a; --fg: #e6e6e6; --muted: #999; --line: #333; --code: #222428; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.7 system-ui, sans-serif; }
+  header { border-bottom: 1px solid var(--line); padding: 14px 16px; }
+  header b { font-size: 18px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  h2 { font-size: 20px; margin-top: 36px; }
+  pre { background: var(--code); padding: 10px 12px; overflow-x: auto; font-size: 12px; border-radius: 6px; }
+  .side-by-side { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .narrow { width: 280px; border: 1px dashed var(--line); padding: 8px; }
+  .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; width: min(1180px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
+  .theme-grid figure { margin: 0; }
+  .case h3 { font-size: 16px; margin: 24px 0 8px; }
+  .pair { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; width: min(1000px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
+  .pair > iframe, .pair > lrrg-share, .pair > div { flex: 1 1 360px; max-width: 480px; }
+  .pair > div > p { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+  .theme-grid figcaption { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+
+  /* A sweep of real iframes at their exact sizes: flex-wrap (not a grid) so a 1200px frame simply
+     takes its own row, and no `max-width` — clamping it there would render every "big" case at the
+     cell's width instead of the size being tested. */
+  .size-sweep { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; width: min(1280px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); overflow-x: auto; }
+  .size-sweep figure { margin: 0; flex: 0 0 auto; }
+  .size-sweep figcaption { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .size-sweep iframe { border: 1px dashed var(--line); display: block; }
+
+  .fill-grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; width: min(1280px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
+  .fill-grid figure { margin: 0; }
+  .fill-grid figcaption { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .fill-box { border: 1px dashed var(--line); width: 600px; max-width: 100%; }
+  .fill-box iframe { border: 0; display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<header><b>某个博客</b> · 首页 · 归档 · 关于</header>
+<main>
+  <h1>最近在读的几本书</h1>
+  <div class="meta">2026-10-26 · 随笔</div>
+  <p>这是一篇模拟的博客文章，用来查看 LANrurugi 分享卡片嵌入到第三方网页里的效果。下面分别用两种方式嵌入同一个分享。</p>
+
+  <h2>测试分享：五种情况</h2>
+  <p>每种情况给出分享页链接，下面左边是 iframe，右边是 Web Component。</p>
+  <div class="case">
+    <h3>1. 分享 1 个项目（一个单行本） · <a href="http://192.168.3.105:3000/s/8T2V7-KS5W7" target="_blank" rel="noreferrer">分享页 /s/8T2V7-KS5W7</a></h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/8T2V7-KS5W7" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="8T2V7-KS5W7" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>2. 分享 2 个项目 · <a href="http://192.168.3.105:3000/s/QT89Y-WCBHA" target="_blank" rel="noreferrer">分享页 /s/QT89Y-WCBHA</a></h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/QT89Y-WCBHA" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="QT89Y-WCBHA" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>3. 分享 3 个项目 · <a href="http://192.168.3.105:3000/s/XR956-SA7G9" target="_blank" rel="noreferrer">分享页 /s/XR956-SA7G9</a></h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/XR956-SA7G9" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="XR956-SA7G9" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>4. 已过期 · <a href="http://192.168.3.105:3000/s/2AKZ8-X3C9H" target="_blank" rel="noreferrer">分享页 /s/2AKZ8-X3C9H</a></h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/2AKZ8-X3C9H" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="2AKZ8-X3C9H" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>5. 下载次数已用完 · <a href="http://192.168.3.105:3000/s/9BKPS-662CG" target="_blank" rel="noreferrer">分享页 /s/9BKPS-662CG</a></h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/9BKPS-662CG" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="9BKPS-662CG" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+
+  <h2>显示语言</h2>
+  <p>Web Component 跟随所在位置的 <code>lang</code>（元素自身、祖先元素或 <code>&lt;html lang&gt;</code>）；iframe 拿不到外层网页的语言，默认用访客浏览器的语言，可用 <code>?lang=</code> 指定。</p>
+  <div class="pair">
+    <div lang="en"><p><code>&lt;div lang="en"&gt;</code> 里的 Web Component</p><lrrg-share code="XR956-SA7G9" src="http://192.168.3.105:3000"></lrrg-share></div>
+    <div lang="ja"><p><code>&lt;div lang="ja"&gt;</code> 里的 Web Component</p><lrrg-share code="XR956-SA7G9" src="http://192.168.3.105:3000"></lrrg-share></div>
+  </div>
+  <div class="pair">
+    <div><p>iframe <code>?lang=en</code></p><iframe src="http://192.168.3.105:3000/embed/s/XR956-SA7G9?lang=en" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></div>
+    <div><p>iframe <code>?lang=ja</code></p><iframe src="http://192.168.3.105:3000/embed/s/XR956-SA7G9?lang=ja" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></div>
+  </div>
+  <div class="pair">
+    <div lang="en"><p>英文，已过期</p><lrrg-share code="2AKZ8-X3C9H" src="http://192.168.3.105:3000"></lrrg-share></div>
+    <div lang="ja"><p>日文，下载次数已用完</p><lrrg-share code="9BKPS-662CG" src="http://192.168.3.105:3000"></lrrg-share></div>
+  </div>
+
+  <h2>方式一：iframe</h2>
+  <p>直接贴分享设置里给出的 iframe 代码：</p>
+  <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+
+  <h2>方式二：Web Component</h2>
+  <p>引入脚本后使用 <code>&lt;lrrg-share&gt;</code> 标签：</p>
+  <script src="http://192.168.3.105:3000/embed/share.js" defer></script>
+  <lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share>
+
+  <h2>窄栏里（侧边栏宽度 280px）</h2>
+  <div class="side-by-side">
+    <div class="narrow">
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <div class="narrow">
+      <lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+
+  <h2>自定义主题</h2>
+  <p>不指定时跟随分享方实例当前的主题。iframe 在地址后加 <code>?theme=…</code>，Web Component 加 <code>theme="…"</code> 属性即可指定：</p>
+  <div class="theme-grid">
+    <figure><figcaption><code>?theme=g</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=g" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=ex</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=ex" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=modern</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=modern" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=modern_red</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=modern_red" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=modern_clear</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=modern_clear" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=light</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=light" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=dark</code></figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=dark" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+    <figure><figcaption><code>?theme=system</code>（跟随访客系统深浅色）</figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=system" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+  </div>
+  <p>Web Component 用 <code>theme</code> 属性（这里是 <code>theme="ex"</code>）：</p>
+  <lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000" theme="ex"></lrrg-share>
+
+  <h2>自定义颜色（JS 对象）</h2>
+  <p>给元素的 <code>theme</code> 属性赋一个对象，<code>base</code> 是基础预设，其余是要覆盖的颜色：</p>
+  <pre>document.getElementById("custom").theme = {
+  base: "dark", bg: "#101820", fg: "#f5f5f5", muted: "#9aa5b1",
+  border: "#2b3a4a", accent: "#f2aa4c", tile: "#1c2a38",
+}</pre>
+  <lrrg-share id="custom" code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share>
+  <script>
+    document.getElementById("custom").theme = {
+      base: "dark", bg: "#101820", fg: "#f5f5f5", muted: "#9aa5b1",
+      border: "#2b3a4a", accent: "#f2aa4c", tile: "#1c2a38",
+    }
+  </script>
+  <p>也可以直接写在 HTML 属性里（JSON），或给 iframe 地址加 URL 编码后的 JSON：</p>
+  <pre>&lt;lrrg-share … theme='{"base":"light","accent":"#e91e63","border":"#f8bbd0"}'&gt;&lt;/lrrg-share&gt;
+&lt;iframe src="…/embed/s/ME8T5-1ECE3?theme=%7B%22accent%22%3A%22%2300897b%22%7D" …&gt;&lt;/iframe&gt;</pre>
+  <div class="theme-grid">
+    <figure><figcaption>HTML 属性：<code>{"base":"light","accent":"#e91e63","border":"#f8bbd0"}</code></figcaption>
+      <lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000" theme='{"base":"light","accent":"#e91e63","border":"#f8bbd0"}'></lrrg-share></figure>
+    <figure><figcaption>iframe：<code>?theme={"accent":"#00897b"}</code>（在分享方主题上只改强调色）</figcaption>
+      <iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=%7B%22accent%22%3A%22%2300897b%22%7D" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe></figure>
+  </div>
+
+  
+  <h2>尺寸扫描：固定高 420，换宽度</h2>
+  <p>从配置器允许的最小宽度 260 一直到它允许的最大值 1200。卡片本身是流式的；这里看的是每个宽度下它怎么排。设置框里能保存的范围是 260–1200。</p>
+  <div class="size-sweep">
+      <figure><figcaption>260 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="260" height="420" loading="lazy" referrerpolicy="no-referrer" title="260x420"></iframe></figure>
+      <figure><figcaption>280 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="280" height="420" loading="lazy" referrerpolicy="no-referrer" title="280x420"></iframe></figure>
+      <figure><figcaption>320 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="320" height="420" loading="lazy" referrerpolicy="no-referrer" title="320x420"></iframe></figure>
+      <figure><figcaption>360 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="420" loading="lazy" referrerpolicy="no-referrer" title="360x420"></iframe></figure>
+      <figure><figcaption>420 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="420" height="420" loading="lazy" referrerpolicy="no-referrer" title="420x420"></iframe></figure>
+      <figure><figcaption>480 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="480" height="420" loading="lazy" referrerpolicy="no-referrer" title="480x420"></iframe></figure>
+      <figure><figcaption>560 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="560" height="420" loading="lazy" referrerpolicy="no-referrer" title="560x420"></iframe></figure>
+      <figure><figcaption>640 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="640" height="420" loading="lazy" referrerpolicy="no-referrer" title="640x420"></iframe></figure>
+      <figure><figcaption>800 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="800" height="420" loading="lazy" referrerpolicy="no-referrer" title="800x420"></iframe></figure>
+      <figure><figcaption>1024 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="1024" height="420" loading="lazy" referrerpolicy="no-referrer" title="1024x420"></iframe></figure>
+      <figure><figcaption>1200 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="1200" height="420" loading="lazy" referrerpolicy="no-referrer" title="1200x420"></iframe></figure>
+  </div>
+
+
+  <h2>尺寸扫描：固定宽 360，换高度</h2>
+  <p>高度方向设置框允许 200–1200。</p>
+  <div class="size-sweep">
+      <figure><figcaption>360 × 200</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="200" loading="lazy" referrerpolicy="no-referrer" title="360x200"></iframe></figure>
+      <figure><figcaption>360 × 240</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="240" loading="lazy" referrerpolicy="no-referrer" title="360x240"></iframe></figure>
+      <figure><figcaption>360 × 280</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="280" loading="lazy" referrerpolicy="no-referrer" title="360x280"></iframe></figure>
+      <figure><figcaption>360 × 320</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="320" loading="lazy" referrerpolicy="no-referrer" title="360x320"></iframe></figure>
+      <figure><figcaption>360 × 420</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="420" loading="lazy" referrerpolicy="no-referrer" title="360x420"></iframe></figure>
+      <figure><figcaption>360 × 520</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="520" loading="lazy" referrerpolicy="no-referrer" title="360x520"></iframe></figure>
+      <figure><figcaption>360 × 640</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="640" loading="lazy" referrerpolicy="no-referrer" title="360x640"></iframe></figure>
+      <figure><figcaption>360 × 800</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="800" loading="lazy" referrerpolicy="no-referrer" title="360x800"></iframe></figure>
+      <figure><figcaption>360 × 1000</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="1000" loading="lazy" referrerpolicy="no-referrer" title="360x1000"></iframe></figure>
+      <figure><figcaption>360 × 1200</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="1200" loading="lazy" referrerpolicy="no-referrer" title="360x1200"></iframe></figure>
+  </div>
+
+
+  <h2>极值</h2>
+  <p>配置器两端：260 × 200 与 1200 × 1200。超过 1200 的尺寸设置框不接受，但手写一个更大的 iframe 在页面上仍然能渲染——卡片没有硬上限，只是不提供。</p>
+  <div class="size-sweep">
+      <figure><figcaption>260 × 200（下限）</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="260" height="200" loading="lazy" referrerpolicy="no-referrer" title="260x200"></iframe></figure>
+      <figure><figcaption>1200 × 1200（上限）</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="1200" height="1200" loading="lazy" referrerpolicy="no-referrer" title="1200x1200"></iframe></figure>
+      <figure><figcaption>1200 × 420（超宽）</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="1200" height="420" loading="lazy" referrerpolicy="no-referrer" title="1200x420"></iframe></figure>
+      <figure><figcaption>260 × 1200（超高）</figcaption><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="260" height="1200" loading="lazy" referrerpolicy="no-referrer" title="260x1200"></iframe></figure>
+  </div>
+
+
+  <h2>Web Component 自己的尺寸</h2>
+  <p><code>&lt;lrrg-share&gt;</code> 不用写尺寸：它把宽度交给容器（<code>min-width: 260px</code>、<code>max-width: 480px</code>），高度由卡片通过 <code>postMessage</code> 报告后在 120–1200 之间自动设置。下面分别放在 260、360、480、800 宽的容器里。</p>
+  <div class="size-sweep">
+      <figure><figcaption>容器 260px</figcaption><div style="width:260px;max-width:100%"><lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share></div></figure>
+      <figure><figcaption>容器 360px</figcaption><div style="width:360px;max-width:100%"><lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share></div></figure>
+      <figure><figcaption>容器 480px</figcaption><div style="width:480px;max-width:100%"><lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share></div></figure>
+      <figure><figcaption>容器 800px</figcaption><div style="width:800px;max-width:100%"><lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"></lrrg-share></div></figure>
+  </div>
+
+
+  <h2>跟随容器（100% × 100%）</h2>
+  <p>宽高都写 100% 时 iframe 撑满外层容器，但<b>容器必须有确定高度</b>；容器高度是 auto 时 iframe 会掉回默认的 150px（下面第三个）。卡片页背景是透明的，所以多出来的地方显示的是这一页的背景色。</p>
+  <div class="fill-grid">
+    <figure><figcaption>容器 600 × 520</figcaption>
+      <div class="fill-box" style="height: 520px"><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" loading="lazy" referrerpolicy="no-referrer" title="fill 600x520"></iframe></div></figure>
+    <figure><figcaption>容器 360 × 420</figcaption>
+      <div class="fill-box" style="width: 360px; height: 420px"><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" loading="lazy" referrerpolicy="no-referrer" title="fill 360x420"></iframe></div></figure>
+    <figure><figcaption>容器 600 宽、高度 auto（回退到 150px）</figcaption>
+      <div class="fill-box"><iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" loading="lazy" referrerpolicy="no-referrer" title="fill auto height"></iframe></div></figure>
+  </div>
+
+<h2>嵌入代码</h2>
+  <pre>&lt;iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"&gt;&lt;/iframe&gt;</pre>
+  <pre>&lt;script src="http://192.168.3.105:3000/embed/share.js" defer&gt;&lt;/script&gt;
+&lt;lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000"&gt;&lt;/lrrg-share&gt;</pre>
+  <p>指定主题：</p>
+  <pre>&lt;iframe src="http://192.168.3.105:3000/embed/s/ME8T5-1ECE3?theme=ex" …&gt;&lt;/iframe&gt;
+&lt;lrrg-share code="ME8T5-1ECE3" src="http://192.168.3.105:3000" theme="ex"&gt;&lt;/lrrg-share&gt;</pre>
+  <p>可选值：<code>g</code>、<code>ex</code>、<code>modern</code>、<code>modern_red</code>、<code>modern_clear</code>、<code>light</code>、<code>dark</code>、<code>system</code>。</p>
+  <p>文章到这里结束。</p>
+</main>
+</body>
+</html>

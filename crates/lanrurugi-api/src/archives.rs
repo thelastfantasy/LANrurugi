@@ -888,13 +888,18 @@ async fn download_archive(
     {
         return inline_pdf(&archive).await;
     }
+    serve_archive_download(&archive).await
+}
+
+/// The bytes `/archives/{id}/download` serves, shared with the share recipient route (017).
+pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
     // drop them. `build_merged_zip` returns `None` (repackage cost skipped entirely) whenever
     // there's no patch, or a patch exists but failed to load/apply, in which case this falls
     // through to the same plain-file-read behavior as before patches existed.
     let archive_file = archive.file.clone();
-    let disposition = content_disposition_for(&archive);
+    let disposition = content_disposition_for(archive);
     let merged = lanrurugi_core::concurrency::run_blocking(move || {
         lanrurugi_scanner::patch::build_merged_zip(std::path::Path::new(&archive_file))
     })
@@ -971,7 +976,7 @@ async fn inline_pdf(archive: &Archive) -> Response {
 /// name still round-trips correctly instead of being discarded down to the ASCII fallback.
 /// The `filename`/`filename*` pair both of this module's `Content-Disposition` builders need —
 /// ASCII fallback first, then the RFC 5987 extended form carrying the real name.
-fn disposition_filename(name: &str) -> String {
+pub(crate) fn disposition_filename(name: &str) -> String {
     use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
     // RFC 5987's own `attr-char` grammar excludes everything not explicitly listed as safe —
@@ -1574,7 +1579,7 @@ pub struct GetThumbnailParams {
     format: Option<String>,
 }
 
-async fn get_archive_thumbnail(
+pub(crate) async fn get_archive_thumbnail(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
@@ -3618,7 +3623,7 @@ pub(crate) fn image_content_type(raw: &[u8]) -> &'static str {
 /// other consumer of page URLs (OPDS, `pagecount`, the scan health-check) still calls
 /// `archive_format::list_pages` directly and never sees patched pages at all (confirmed design —
 /// patches are a reader-facing-only concept, not part of the archive's own catalogued state).
-async fn get_files(
+pub(crate) async fn get_files(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,

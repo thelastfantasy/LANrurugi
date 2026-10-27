@@ -146,6 +146,12 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
     )
     .await
     .ok()?;
+    tokio::fs::write(
+        dir.path().join("embed.html"),
+        r#"<html><head><script id="theme-init" data-theme="">card</script></head></html>"#,
+    )
+    .await
+    .ok()?;
 
     let app = lanrurugi_server::app::build_app(state, Some(dir.path().to_path_buf()), None);
     Some((app, redis, dir))
@@ -195,6 +201,48 @@ async fn serve_index_substitutes_the_real_theme_from_redis() {
     assert!(
         body.contains(r#"data-theme="ex.css""#),
         "expected the real theme substituted into the attribute, got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_embed_card_gets_its_own_page_not_the_library_app() {
+    let _guard = theme_field_lock().lock().await;
+    let Some((app, redis, _dir)) = test_app_with_static_dir().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let mut conn = redis.config.get().await.unwrap();
+    let _: () = conn.hset(CONFIG_KEY, "theme", "ex.css").await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/embed/s/K7QM9-XRT2H")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, library) = get_body(&app, "/s/K7QM9-XRT2H").await;
+    let _: () = conn.hdel(CONFIG_KEY, "theme").await.unwrap();
+
+    let frame_policy = response
+        .headers()
+        .get(axum::http::header::CONTENT_SECURITY_POLICY)
+        .cloned();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(body.contains(">card<"), "expected embed.html, got: {body}");
+    assert!(
+        body.contains(r#"data-theme="ex.css""#),
+        "theme not injected: {body}"
+    );
+    assert_eq!(frame_policy.unwrap(), "frame-ancestors *");
+    assert!(
+        !library.contains(">card<"),
+        "a share page must stay the library app"
     );
 }
 

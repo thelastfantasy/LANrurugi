@@ -50,12 +50,12 @@ export function SettingsMenu({
         </PopupMenuItem>
         <RadioGroup value={viewMode} onValueChange={setViewMode}>
           <PopupMenuItem onClick={() => setViewMode("thumbnail")}>
-            <RadioItem value="thumbnail" size="inherit">
+            <RadioItem value="thumbnail">
               {t("library.thumbnail")}
             </RadioItem>
           </PopupMenuItem>
           <PopupMenuItem onClick={() => setViewMode("compact")}>
-            <RadioItem value="compact" size="inherit">
+            <RadioItem value="compact">
               {t("library.compact")}
             </RadioItem>
           </PopupMenuItem>

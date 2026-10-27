@@ -3,7 +3,7 @@ title: 反向代理
 description: 用 Nginx、Caddy、Traefik、Apache 或 Nginx Proxy Manager 为 LANrurugi 配置域名与 HTTPS。
 ---
 
-LANrurugi 本身只提供 HTTP（默认 `0.0.0.0:3000`）。要通过域名和 HTTPS 访问，在它前面放一个反向代理。
+LANrurugi 本身只提供 HTTP（默认端口 3000，同时监听 IPv4 和 IPv6）。要通过域名和 HTTPS 访问，在它前面放一个反向代理。
 无论用哪一种代理，都要满足下面几条。
 
 ## 代理需要满足的条件

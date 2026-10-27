@@ -66,6 +66,12 @@ pub mod action_types {
     pub const TOKEN_CREATE: &str = "token.create";
     pub const TOKEN_REVOKE: &str = "token.revoke";
     pub const TOKEN_RENAME: &str = "token.rename";
+    /// 017 sharing: a share was created, edited, had items added or removed, or was revoked.
+    pub const SHARE_CREATE: &str = "share.create";
+    pub const SHARE_UPDATE: &str = "share.update";
+    pub const SHARE_ITEMS: &str = "share.items";
+    pub const SHARE_REVOKE: &str = "share.revoke";
+    pub const SHARE_SETTINGS_UPDATE: &str = "share.settings_update";
     pub const DOWNLOAD_QUEUE_ADD: &str = "download_queue.add";
     pub const DOWNLOAD_QUEUE_START: &str = "download_queue.start";
     /// One archive genuinely entering the library — the single, unified "入库" action every

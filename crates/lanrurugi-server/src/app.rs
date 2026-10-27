@@ -204,7 +204,14 @@ async fn serve_index(
     headers: axum::http::HeaderMap,
     request_path: String,
 ) -> Response {
-    let path = dir.join("index.html");
+    // The embed card is its own page (`embed.html`), not the library app: a site framing many
+    // cards must not start the whole app once per card.
+    let page = if request_path.starts_with("/embed/") {
+        "embed.html"
+    } else {
+        "index.html"
+    };
+    let path = dir.join(page);
     let html = match tokio::fs::read_to_string(&path).await {
         Ok(html) => html,
         Err(_) => return not_found(),
@@ -234,12 +241,27 @@ async fn serve_index(
         ),
         None => html,
     };
-    (
+    let mut response = (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         html,
     )
-        .into_response()
+        .into_response();
+    // 017 FR-013b: a share page's address carries its code, so it is never sent as a referrer.
+    if request_path.starts_with("/s/") || request_path.starts_with("/embed/") {
+        response.headers_mut().insert(
+            header::REFERRER_POLICY,
+            header::HeaderValue::from_static("no-referrer"),
+        );
+    }
+    // FR-030: the embed card is the one page meant to be framed by other sites.
+    if request_path.starts_with("/embed/s/") {
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static("frame-ancestors *"),
+        );
+    }
+    response
 }
 
 fn not_found() -> Response {

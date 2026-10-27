@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Sixteen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+Seventeen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
 block is regenerated, because it has gone stale before.
 
@@ -32,6 +32,14 @@ block is regenerated, because it has gone stale before.
 - **Code implemented, user verification outstanding**: `016-tankoubon-grouping-harness` (30/30 —
   single-crate gates run; the full `mise run test` and the modal's visual sign-off are the user's).
   See its addendum below.
+- **Code implemented, decisions and user verification outstanding**: `017-archive-sharing`
+  (100/103; issue #119 — shares with import/read/download permissions, iroh + pkarr transport,
+  LANrurugi nodes, helpers, tankoubon zip download). Open: T038 (Playwright spec not run), T084
+  (iroh's QAD probe shows ALPN `/iroh-qad/0` to on-path DPI while a relay is in use — fork, keep, or
+  drop QAD is the user's call), T102 (workspace `check`/`clippy`). Its `tasks.md` Implementation
+  Record lists the network matrix (15 environments, all importing), the defects it found and fixed,
+  and every departure from plan.md. `scripts/share-network-matrix.sh` / `share-traffic-check.sh`
+  rerun them.
 - **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at

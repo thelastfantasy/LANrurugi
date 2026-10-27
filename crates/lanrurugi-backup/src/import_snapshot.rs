@@ -218,6 +218,7 @@ mod tests {
             terminology_glossaries: Vec::new(),
             volume_font_patterns: Vec::new(),
             text_regions: Vec::new(),
+            share_node_secret: None,
         }
     }
 

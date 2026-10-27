@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { createContext, type ReactNode, useContext, useMemo } from "react"
 
 import { fetchLoginStatusWithRefresh } from "@/api/client"
-import type { LoginStatus } from "@/api/types"
+import type { LoginStatus, StorageWarning } from "@/api/types"
 
 import { SESSION_QUERY_KEY } from "./queryKey"
 
@@ -27,6 +27,8 @@ export interface SessionContextValue {
   isGuest: boolean
   /** Drives the default-password warning toast. */
   usingDefaultPassword: boolean
+  /** Drives the storage warning toast; always empty unless signed in. */
+  storageWarnings: StorageWarning[]
   /** Whether this deployment still offers the first-run wizard at all (a deploy-time switch) —
    *  gates the Settings page's re-run button. Always `false` unless a real admin session is
    *  present. */
@@ -37,6 +39,8 @@ export interface SessionContextValue {
   /** Force a fresh login-status check (and therefore a silent token refresh attempt). */
   refresh: () => Promise<unknown>
 }
+
+const NO_WARNINGS: StorageWarning[] = []
 
 const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
@@ -72,6 +76,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       isGuestModeEnabled,
       isGuest: !isAuthenticated && isGuestModeEnabled,
       usingDefaultPassword: status?.using_default_password === true,
+      storageWarnings: isAuthenticated ? (status?.storage_warnings ?? NO_WARNINGS) : NO_WARNINGS,
       // Both ANDed with `isAuthenticated` rather than trusted as-is: the server already gates these
       // fields on `logged_in`, but a stale cached payload must never be enough on its own to route
       // a now-logged-out tab into the admin-only wizard.

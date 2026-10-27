@@ -737,6 +737,7 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
         "guest_mode_enabled": auth.guest_mode_enabled,
         "first_run_wizard_available": wizard_available,
         "first_run_wizard_pending": wizard_pending,
+        "storage_warnings": if logged_in { crate::storage_warnings::current() } else { Vec::new() },
     }))
     .into_response()
 }

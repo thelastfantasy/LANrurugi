@@ -23,6 +23,13 @@ export default [
     },
   },
   {
+    // Plain scripts served as-is to other sites' pages (the share embed element).
+    files: ['public/embed/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsParser,

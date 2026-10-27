@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use deadpool_redis::redis::AsyncCommands;
+use lanrurugi_api::storage_warnings::{self, StorageWarning};
 use lanrurugi_api::{AppState, AuthConfig, LibraryPaths, Repositories};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
@@ -48,6 +49,8 @@ enum Command {
     /// Measure the tankoubon-grouping pipeline against the recorded grouping labels (precision
     /// and recall), optionally comparing a candidate settings file.
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
+    /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
+    ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
 }
 
 #[derive(clap::Args)]
@@ -83,8 +86,8 @@ struct ServeArgs {
     #[arg(long, env = "LANRURUGI_DENO_BIN", default_value = "deno")]
     deno_bin: String,
 
-    /// Address to bind the HTTP server to.
-    #[arg(long, env = "LANRURUGI_BIND", default_value = "0.0.0.0:3000")]
+    /// Address to bind the HTTP server to. `[::]` listens on IPv4 and IPv6 alike (see `listen`).
+    #[arg(long, env = "LANRURUGI_BIND", default_value = "[::]:3000")]
     bind: String,
 
     /// Suppresses the frontend's GitHub-releases update check (007-guest-restricted-access —
@@ -231,6 +234,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
         }
         Command::RebuildIndex(args) => rebuild_index(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
+        Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
         }
@@ -288,6 +292,31 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let redis = RedisDbs::connect(&args.redis_url)?;
     bootstrap(&redis, &args.library_path).await?;
+    if lanrurugi_server::mounts::in_container() {
+        let redis_dir = bundled_redis_dir(&redis, &args.redis_url).await;
+        let mut kept = vec![
+            (
+                args.library_path.as_path(),
+                "the library starts empty and files added to it are lost when the container is recreated",
+                StorageWarning::LibraryUnmounted,
+            ),
+            (
+                args.thumb_dir.as_path(),
+                "thumbnails are regenerated after every container recreate",
+                StorageWarning::ThumbnailsUnmounted,
+            ),
+        ];
+        if let Some(dir) = &redis_dir {
+            kept.push((
+                dir.as_path(),
+                "the database (settings, tags, categories, reading progress) is lost when the container is recreated",
+                StorageWarning::DatabaseUnmounted,
+            ));
+        }
+        for warning in lanrurugi_server::mounts::warn_unmounted(&kept) {
+            storage_warnings::report(warning);
+        }
+    }
 
     // Auto-persist DEEPSEEK_API_KEY to Redis: if the env var is set but the config hash's
     // `llm_api_key` is empty/absent, write it now so the Settings page always shows the
@@ -770,6 +799,23 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Sharing (017): the instance's iroh endpoint, the helper heartbeats and the hourly knock-record
+    // republisher. A bind
+    // failure (the UDP port taken, say) leaves sharing off and logged; the rest of the server runs.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            match lanrurugi_api::share_net::start(&state).await {
+                Ok(_) => {
+                    lanrurugi_api::share_net::blobs::spawn_prepare_worker(state.clone());
+                    lanrurugi_api::share_net::helper::spawn(state.clone());
+                    lanrurugi_api::share_net::publish::spawn_republisher(state);
+                }
+                Err(e) => tracing::warn!(error = %e, "sharing endpoint could not start"),
+            }
+        });
+    }
+
     // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
     // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
     // sweep's own schedule happens to line up against when it was staged.
@@ -906,8 +952,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     let app = app::build_app(state, args.static_dir, args.docs_dir);
-    let listener = tokio::net::TcpListener::bind(&args.bind).await?;
-    tracing::info!(bind = %args.bind, "lanrurugi serve listening");
+    let listener = match args.bind.parse::<std::net::SocketAddr>() {
+        Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,
+        // A host name such as `localhost:3000`.
+        Err(_) => tokio::net::TcpListener::bind(&args.bind).await?,
+    };
+    tracing::info!(bind = %listener.local_addr()?, "lanrurugi serve listening");
     // `with_connect_info` — needed so `middleware::auth`'s API-token last-used-IP extraction can
     // fall back to the raw peer address when `X-Forwarded-For` is absent (a direct connection,
     // not behind a reverse proxy). See that extraction helper's own docs on why this is
@@ -1054,6 +1104,24 @@ async fn resolve_pending_renames(state: &AppState) {
     }
 }
 
+/// The data directory of a Redis running in this same container (a loopback URL), if it says.
+async fn bundled_redis_dir(redis: &RedisDbs, url: &str) -> Option<PathBuf> {
+    if !["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .any(|host| url.contains(host))
+    {
+        return None;
+    }
+    let mut conn = redis.config.get().await.ok()?;
+    let reply: Vec<String> = deadpool_redis::redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("dir")
+        .query_async(&mut conn)
+        .await
+        .ok()?;
+    reply.into_iter().nth(1).map(PathBuf::from)
+}
+
 /// Startup zombie-archive repair: converges every record whose `file` is empty (born under
 /// `defer_file_path` and the fixup never ran — crash window), points into `temp_dir` (old-style
 /// zombie), or simply doesn't exist on disk anymore. Repair first (an archive-dir file matching
@@ -1070,15 +1138,25 @@ async fn repair_zombie_archives(state: &AppState) {
         }
     };
     let temp_dir = state.library.temp_dir.to_string_lossy().to_string();
-    for mut archive in archives {
+    let in_temp = |file: &str| file.starts_with(&temp_dir) || file.starts_with("./temp");
+    let mut checked = Vec::with_capacity(archives.len());
+    for archive in archives {
         let file_exists = !archive.file.is_empty()
             && tokio::fs::try_exists(std::path::Path::new(&archive.file))
                 .await
                 .unwrap_or(false);
-        let stale = archive.file.is_empty()
-            || archive.file.starts_with(&temp_dir)
-            || archive.file.starts_with("./temp")
-            || !file_exists;
+        checked.push((archive, file_exists));
+    }
+    // Every library file missing at once is an unmounted or moved library, not a set of zombies:
+    // the records (tags, categories, progress) are kept for when the files come back.
+    let mut library_files = checked
+        .iter()
+        .filter(|(archive, _)| !archive.file.is_empty() && !in_temp(&archive.file));
+    let library_missing =
+        library_files.clone().next().is_some() && library_files.all(|(_, exists)| !exists);
+    let mut kept = 0usize;
+    for (mut archive, file_exists) in checked {
+        let stale = archive.file.is_empty() || in_temp(&archive.file) || !file_exists;
         if !stale {
             continue;
         }
@@ -1112,6 +1190,11 @@ async fn repair_zombie_archives(state: &AppState) {
             continue;
         }
 
+        if library_missing && !archive.file.is_empty() && !in_temp(&archive.file) {
+            kept += 1;
+            continue;
+        }
+
         // Not repairable — drop the record and its search index. The bytes (if any survive
         // under a name we can't derive) will be re-catalogued by the watcher/startup scan.
         tracing::info!(
@@ -1141,6 +1224,15 @@ async fn repair_zombie_archives(state: &AppState) {
                 let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
             }
         }
+    }
+    if kept > 0 {
+        storage_warnings::report(StorageWarning::LibraryMissing);
+        tracing::warn!(
+            records = kept,
+            library = %state.library.archive_dir.display(),
+            "none of the library's archive files exist — is the library volume mounted? \
+             Keeping the archive records instead of deleting them"
+        );
     }
 }
 

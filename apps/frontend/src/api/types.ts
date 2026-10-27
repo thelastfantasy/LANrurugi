@@ -884,6 +884,7 @@ export type QueueError =
   | { kind: "stale_after_restart" }
   | { kind: "already_patched"; existing_id: string; filename: string }
   | { kind: "superseded_by_newer_revision"; archive_id: string }
+  | { kind: "share_import"; reason: string }
 
 /** Set on a queue item whose download was blocked by a filename collision (content is new, only
  * the filename collides) and staged pending the user's overwrite/rename choice. */
@@ -1010,13 +1011,15 @@ export interface ExportPatchInsertion {
 }
 
 /** Absent on records written before this field existed, which always means `'download'`. */
-export type QueueItemOrigin = "download" | "local_upload"
+export type QueueItemOrigin = "download" | "local_upload" | "share_import"
 
 export interface DownloadQueueItem {
   id: string
   origin?: QueueItemOrigin
   /** Which subscription queued this item, when one did — absent for a manual add or an upload. */
   subscription_id?: string | null
+  /** 017: the share import this row runs, for `origin === "share_import"`. */
+  share_import_id?: string | null
   /** Source URL for a download, or the uploaded filename for a local upload. */
   url: string
   /** Resolved once at add-to-queue time. `'local_upload'` placeholder for a local upload. */
@@ -1104,6 +1107,12 @@ export interface SearchResponse {
   recordsFiltered: number
 }
 
+export type StorageWarning =
+  | "library_unmounted"
+  | "thumbnails_unmounted"
+  | "database_unmounted"
+  | "library_missing"
+
 /** `GET /login/status` — deliberately not a field on `ServerInfo`, which mirrors legacy's
  * third-party OpenAPI schema and has no place for "am I logged in right now". */
 export interface LoginStatus {
@@ -1111,6 +1120,9 @@ export interface LoginStatus {
   logged_in: boolean
   /** Drives the homepage's "you're using the default password" warning toast. */
   using_default_password: boolean
+  /** Start-up storage problems (unmounted volumes, a library whose files are all gone); empty for
+   *  anyone but a logged-in admin. Optional so a cached payload from an older server still reads. */
+  storage_warnings?: StorageWarning[]
   /** Whether guest mode is on; doesn't alone guarantee a guest sees anything (needs a
    *  `visible_to_guest` category too). */
   guest_mode_enabled: boolean

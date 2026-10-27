@@ -3,7 +3,7 @@ title: Reverse proxy
 description: Serve LANrurugi on a domain over HTTPS with Nginx, Caddy, Traefik, Apache or Nginx Proxy Manager.
 ---
 
-LANrurugi itself only speaks HTTP (by default on `0.0.0.0:3000`). To serve it on a domain over
+LANrurugi itself only speaks HTTP (by default on port 3000, IPv4 and IPv6). To serve it on a domain over
 HTTPS, put a reverse proxy in front of it. Whichever proxy you use, it has to meet the conditions
 below.
 

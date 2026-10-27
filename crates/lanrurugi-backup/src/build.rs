@@ -137,6 +137,10 @@ pub struct BackupDocument {
     pub volume_font_patterns: Vec<BackupVolumeFontPattern>,
     #[serde(default)]
     pub text_regions: Vec<BackupTextRegions>,
+    /// 017: this instance's sharing identity, so a restored instance keeps the endpoint its
+    /// shares' knock records name. Absent from backups taken before sharing existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_node_secret: Option<String>,
 }
 
 pub async fn build(
@@ -183,6 +187,7 @@ pub async fn build(
         terminology_glossaries: Vec::new(),
         volume_font_patterns: Vec::new(),
         text_regions: Vec::new(),
+        share_node_secret: None,
     })
 }
 

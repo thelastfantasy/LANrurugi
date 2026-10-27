@@ -1439,3 +1439,20 @@ textarea {
 .watcher-recovering {
     color: #B97300;
 }
+
+/* 017 sharing: share state badges and notices. Active reuses this theme's .tankoubon-member-row
+   accent, exhausted its .stdbtn-danger hue, and the two ended states a neutral grey, per the
+   project's custom-color rule. */
+.share-status-active {
+    background-color: rgba(237, 37, 83, 0.15);
+}
+.share-status-exhausted {
+    background-color: rgba(192, 57, 43, 0.18);
+}
+.share-status-expired,
+.share-status-revoked {
+    background-color: rgba(128, 128, 128, 0.2);
+}
+.share-status-revoked {
+    text-decoration: line-through;
+}

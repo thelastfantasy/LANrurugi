@@ -37,7 +37,7 @@ export function HoverGridOrderSettingsMenu() {
         <RadioGroup value={order} onValueChange={setOrder}>
           {OPTIONS.map((option) => (
             <PopupMenuItem key={option} onClick={() => setOrder(option)}>
-              <RadioItem value={option} size="inherit">
+              <RadioItem value={option}>
                 {t(`bookmarks.hoverGridOrderOption.${option}`)}
               </RadioItem>
             </PopupMenuItem>

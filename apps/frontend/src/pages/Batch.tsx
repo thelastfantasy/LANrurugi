@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
@@ -12,6 +12,7 @@ import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
+import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
@@ -21,7 +22,9 @@ async function fetchArchive(id: string): Promise<ArchiveMetadata> {
   return (await response.json()) as ArchiveMetadata
 }
 
-type Operation = "plugin" | "clearnew" | "tagrules" | "addcat" | "delete"
+const ShareDialog = lazy(() => import("@/share/ShareDialog").then((m) => ({ default: m.ShareDialog })))
+
+type Operation = "plugin" | "clearnew" | "tagrules" | "addcat" | "share" | "delete"
 
 /** Legacy's own progress line uses a DOM-id template, not `{{}}` interpolation — substituted the
  * same way rather than adding a second, differently-shaped key across all 14 locales. */
@@ -65,6 +68,7 @@ export function Batch() {
   const [pluginTimeout, setPluginTimeout] = useState(0)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [sharing, setSharing] = useState(false)
   useApplyTheme()
   useDocumentTitle(t("batch.batchOperations") ?? undefined)
 
@@ -215,6 +219,7 @@ export function Batch() {
     if (operation === "clearnew") return clearNewFlag()
     if (operation === "tagrules") return applyTag()
     if (operation === "addcat") return applyCategory()
+    if (operation === "share") return setSharing(true)
     return deleteSelected()
   }
 
@@ -234,6 +239,7 @@ export function Batch() {
                     <option value="clearnew">🆕 {t("batch.removeNewFlag")}</option>
                     <option value="tagrules">📏 {t("batch.applyTagRules")}</option>
                     <option value="addcat">📚 {t("batch.addToCategory")}</option>
+                    <option value="share">🔗 {t("batch.share")}</option>
                     <option value="delete">🗑️ {t("common.deleteArchive")}</option>
                   </select>
                 </td>
@@ -297,6 +303,11 @@ export function Batch() {
                 </select>
               </div>
             )}
+            {operation === "share" && (
+              <div className="operation share-operation" style={{ textAlign: "center" }}>
+                {t("batch.shareDescription")}
+              </div>
+            )}
             {operation === "delete" && (
               <div className="operation delete-operation" style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 36 }}>💣👀💦💦</div>
@@ -335,6 +346,15 @@ export function Batch() {
           </div>
         </div>
       </div>
+
+      {sharing && (
+        <Suspense fallback={null}>
+          <ShareDialog
+            items={[...selected].map((id) => ({ kind: isTankoubonId(id) ? ("tankoubon" as const) : ("archive" as const), id }))}
+            onClose={() => setSharing(false)}
+          />
+        </Suspense>
+      )}
 
       <input type="button" id="plugin-config" className="stdbtn" value={t("common.pluginConfiguration") ?? undefined} onClick={() => navigate(routes.pluginSettings())} />
       <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.settings())} />

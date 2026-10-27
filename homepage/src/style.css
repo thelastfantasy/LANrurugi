@@ -175,6 +175,7 @@ h3 {
 }
 
 .topnav a {
+  white-space: nowrap;
   padding: 6px 12px;
   border: 3px solid transparent;
   border-radius: 999px;
@@ -1600,6 +1601,28 @@ main {
 }
 
 /* ---- responsive ------------------------------------------------------------------------- */
+
+/* The six section links beside both switches need about 1200px in Chinese and English and 1270px
+   in Japanese; below that they are hidden, as on phones, rather than squeezed into a column. */
+@media (max-width: 1219px) {
+  .topnav {
+    display: none;
+  }
+
+  .theme-switch {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 1279px) {
+  html:lang(ja) .topnav {
+    display: none;
+  }
+
+  html:lang(ja) .theme-switch {
+    margin-left: auto;
+  }
+}
 
 @media (max-width: 980px) {
   .hero {

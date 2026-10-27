@@ -16,6 +16,7 @@ export function TagTable({
   tags,
   onSearchTag,
   links = true,
+  loadSettings = true,
 }: {
   tags: string
   onSearchTag?: (namespace: string, value: string) => void
@@ -23,8 +24,11 @@ export function TagTable({
    *  preview's tag tooltip), where a list of searchable namespaces is not what the reader wants —
    *  they are checking what the work's metadata says, not navigating away from a modal. */
   links?: boolean
+  /** Off where the viewer may not read instance settings (a share page's anonymous recipient):
+   *  timestamps then show in the browser's own zone. */
+  loadSettings?: boolean
 }) {
-  const settings = useSettings()
+  const settings = useSettings({ enabled: loadSettings })
   const timezone = settings.data?.timezone ?? ""
   const byNamespace = splitTagsByNamespace(tags)
   const namespaces = Object.keys(byNamespace).sort()

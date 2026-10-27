@@ -197,5 +197,15 @@
     "en": "AI Usage",
     "description_zh": "各项 AI 功能的请求次数、token 用量、耗时与失败统计。",
     "description_en": "Per-feature AI request counts, token usage, time and failures."
+  },
+  {
+    "key": "shares",
+    "zh": "分享",
+    "en": "Sharing"
+  },
+  {
+    "key": "share_recipient",
+    "zh": "分享接收方",
+    "en": "Share Recipients"
   }
 ]

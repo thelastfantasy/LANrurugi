@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { useLibrary } from "@/hooks/useLibrary";
 import { routes } from "@/lib/routes";
+import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 
 import { AiSmartTankoubonDrawer } from "./AiSmartTankoubonDrawer";
 import { ArchiveCard } from "./ArchiveCard";
@@ -15,6 +16,9 @@ import { ResultInfoAndPager } from "./ResultInfoAndPager";
 import { SearchBar } from "./SearchBar";
 import { SettingsMenu } from "./SettingsMenu";
 import { SortBySelector } from "./SortBySelector";
+
+// Loaded only when someone shares, keeping the share dialog and QR code out of the entry chunk.
+const ShareDialog = lazy(() => import("@/share/ShareDialog").then((m) => ({ default: m.ShareDialog })));
 
 /** The archive's `source:` tag, read from the already-loaded list rather than fetched again. Absent
  *  for a hand-uploaded file, which is how the delete dialog knows not to offer the subscription
@@ -36,6 +40,7 @@ export function Library() {
   const lib = useLibrary();
   const deleteTarget = lib.deleteTarget;
   const [aiTankoubonDrawerOpen, setAiTankoubonDrawerOpen] = useState(false);
+  const [shareIds, setShareIds] = useState<string[] | null>(null);
   // The bottom pager scrolls back up to this bar, so a new page is read from its top.
   const optionsRef = useRef<HTMLDivElement>(null);
 
@@ -331,6 +336,11 @@ export function Library() {
             lib.toggleSelected(id);
           }}
           isSelected={lib.selectedIds.includes(lib.contextMenu.archive.arcid)}
+          onShare={(id) =>
+            setShareIds(
+              lib.multiSelect && lib.selectedIds.includes(id) ? lib.selectedIds : [id],
+            )
+          }
           onSetProgress={lib.handleSetProgress}
         />
       )}
@@ -352,6 +362,17 @@ export function Library() {
       )}
 
       <AiSmartTankoubonDrawer open={aiTankoubonDrawerOpen} onClose={() => setAiTankoubonDrawerOpen(false)} />
+
+      {shareIds && (
+        <Suspense fallback={null}>
+          <ShareDialog
+            items={shareIds.map((id) =>
+              isTankoubonId(id) ? { kind: "tankoubon", id } : { kind: "archive", id },
+            )}
+            onClose={() => setShareIds(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
