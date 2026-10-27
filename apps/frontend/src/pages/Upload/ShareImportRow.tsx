@@ -19,9 +19,11 @@ interface ImportArchive {
   sharer_archive_id: string
   title: string
   size: number
-  state: "pending" | "transferring" | "ingesting" | "done" | "reused" | "failed"
+  state: "pending" | "transferring" | "ingesting" | "done" | "reused" | "skipped" | "failed"
   bytes_done: number
   error: string | null
+  /** Non-fatal: today, that a filename collision landed this archive under another name. */
+  note?: string | null
   local_archive_id?: string | null
 }
 
@@ -35,6 +37,7 @@ interface ImportDetail {
   bytes_total: number
   /** Unix seconds the sharer said to come back, or 0 for an open-ended pause. */
   paused_until?: number | null
+  warnings?: string[]
   archives?: ImportArchive[]
   /** The share code this import came from; only `GET /shares/imports/{id}` carries it. */
   code?: string | null
@@ -56,6 +59,17 @@ function OpenButton({ archiveId }: { archiveId: string }) {
       onClick={() => window.open(routes.reader(archiveId), "_blank", "noreferrer")}
     />
   )
+}
+
+/// Per-archive failures arrive as `code: detail` for local write problems (disk full, read-only,
+/// quota) and as plain text otherwise. The code is localized; the original stays in the tooltip.
+function archiveErrorText(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  error: string | null | undefined,
+): string {
+  if (!error) return ""
+  const [code, detail] = error.split(/:\s*/, 2)
+  return t(`share.importRow.failure.${code}`, { defaultValue: error, detail })
 }
 
 function ArchiveProgress({ archive }: { archive: ImportArchive }) {
@@ -192,6 +206,15 @@ export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: Jo
           </button>
         </div>
       )}
+      {expanded && d?.warnings && d.warnings.length > 0 && (
+        <ul className="share-import-warnings">
+          {d.warnings.map((w) => (
+            <li key={w} className="share-import-archive-note">
+              {w}
+            </li>
+          ))}
+        </ul>
+      )}
       {expanded && d?.archives && (
         <ul className="share-import-archives">
           {d.archives.map((a) => (
@@ -206,10 +229,15 @@ export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: Jo
                   : t(`share.importRow.state.${a.state}`)}
               </span>
               {a.local_archive_id && <OpenButton archiveId={a.local_archive_id} />}
+              {a.note && (
+                <span className="share-import-archive-note" title={a.note}>
+                  {a.note}
+                </span>
+              )}
               {a.state === "failed" && (
                 <>
                   <span className="share-import-archive-error" title={a.error ?? ""}>
-                    {a.error}
+                    {archiveErrorText(t, a.error)}
                   </span>
                   <button
                     type="button"

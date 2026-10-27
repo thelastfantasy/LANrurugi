@@ -550,6 +550,20 @@ ul.lrrg-card-list-thumbs {
 .lrrg-card-state {
   color: var(--card-muted);
 }
+/* A card that could not be fetched: the message plus a way to try again. */
+.lrrg-card-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 8px;
+  text-align: center;
+}
+.lrrg-card-retry {
+  color: var(--card-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 /* Narrow (a sidebar): the published iframe snippet is a fixed 420px tall, so the card keeps one row
    of covers and the QR code beside the code, shrunk, rather than stacking past that height. */
 .lrrg-card-hint-short {

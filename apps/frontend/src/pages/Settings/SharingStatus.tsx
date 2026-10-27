@@ -12,6 +12,7 @@ export function SharingEndpointStatus() {
   const { t } = useTranslation()
   const settings = useShareSettings()
   const endpoint = settings.data?.endpoint as ShareEndpointStatus | undefined
+  const engine = settings.data?.share_engine
   const services = (settings.data?.services as ShareServiceStatus[] | undefined) ?? []
   if (!endpoint) return null
   const list = (values: string[] | undefined) =>
@@ -38,6 +39,14 @@ export function SharingEndpointStatus() {
           {list(endpoint.direct_addresses)}
           <span>{t("share.panel.proxy")}</span>
           <span>{endpoint.proxy ? t("share.status.followingProxy", { proxy: endpoint.proxy }) : t("share.status.noProxy")}</span>
+          {engine && (
+            <>
+              <span>{t("share.status.engine")}</span>
+              <span>
+                <code>v{engine.protocol}</code> {engine.transport}
+              </span>
+            </>
+          )}
         </>
       ) : (
         <span className="share-status-wide">{t("share.status.notRunning")}</span>

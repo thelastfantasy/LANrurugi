@@ -1456,3 +1456,8 @@ textarea {
 .share-status-revoked {
     text-decoration: line-through;
 }
+
+/* Share permissions: R its navy, I its pink accent, D a neutral grey. */
+.share-perm-read { background-color: rgba(52, 73, 94, 0.18); border-color: rgba(52, 73, 94, 0.45); color: #34495E; }
+.share-perm-import { background-color: rgba(237, 37, 83, 0.15); border-color: rgba(237, 37, 83, 0.4); color: #ED2553; }
+.share-perm-download { background-color: rgba(128, 128, 128, 0.2); border-color: rgba(128, 128, 128, 0.45); color: inherit; }

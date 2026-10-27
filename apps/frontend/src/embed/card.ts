@@ -3,6 +3,7 @@
  * library locale files, so a page that frames many cards stays light. Its actions follow the
  * share's permissions; an import-only share leads with its code.
  */
+import { formatBytes } from "../lib/formatBytes"
 import { formatShareCode } from "../share/code"
 import { copyText } from "../share/copyText"
 import { renderQr } from "../share/qr"
@@ -17,6 +18,8 @@ interface CardItem {
 export interface CardData {
   status: "active" | "exhausted" | "revoked" | "expired"
   restricted: boolean
+  /** Bytes a download of the whole share would transfer (the sum of its archives). */
+  total_size?: number
   title?: string
   item_count?: number
   covers?: string[]
@@ -53,7 +56,7 @@ export function renderCard(
   code: string,
   data: CardData | null,
   t: CardText,
-  { coverRows = 2 }: { coverRows?: 1 | 2 } = {},
+  { coverRows = 2, failure = "unavailable" }: { coverRows?: 1 | 2; failure?: "unavailable" | "retry" } = {},
 ) {
   const pageUrl = `${window.location.origin}/s/${formatShareCode(code)}`
   const textForm = `lrrg:${formatShareCode(code)}`
@@ -61,6 +64,17 @@ export function renderCard(
   root.replaceChildren(card)
 
   if (!data) {
+    // Two different things reach this branch: a share that is gone (wrong code, embedding off,
+    // revoked, expired — all 404) and a request that failed for reasons that may pass (network,
+    // 5xx, rate limited). Only the second one is worth a retry.
+    if (failure === "retry") {
+      const state = h("div", { class: "lrrg-card-error" })
+      const retry = h("a", { class: "lrrg-card-retry", href: window.location.href })
+      retry.append(t.retry)
+      state.append(h("p", { class: "lrrg-card-state" }, t.loadFailed), retry)
+      card.append(state)
+      return
+    }
     card.append(h("p", { class: "lrrg-card-state" }, t.unavailable))
     return
   }
@@ -175,6 +189,7 @@ export function renderCard(
       ? `/api/share/r/archives/${encodeURIComponent(covers[0])}/download?rt=${encodeURIComponent(data.token ?? "")}`
       : pageUrl
   const canDownload = !exhausted
+  const size = data.total_size && data.total_size > 0 ? formatBytes(data.total_size) : null
   const mainActions = () =>
     h(
       "div",
@@ -195,7 +210,12 @@ export function renderCard(
           "div",
           { class: "lrrg-card-media-body" },
           h("p", { class: "lrrg-card-title" }, data.title ?? ""),
-          volumes != null && h("p", { class: "lrrg-card-meta" }, t.volumes(volumes)),
+          (volumes != null || size) &&
+            h(
+              "p",
+              { class: "lrrg-card-meta" },
+              [volumes != null ? t.volumes(volumes) : null, size].filter(Boolean).join(" · "),
+            ),
           mainActions(),
         ),
       ),
@@ -228,7 +248,8 @@ export function renderCard(
   }
 
   if (!single) {
-    card.append(h("p", { class: "lrrg-card-title" }, data.title ?? ""), h("p", { class: "lrrg-card-meta" }, t.items(data.item_count ?? 0)))
+    const meta = [t.items(data.item_count ?? 0), size].filter(Boolean).join(" · ")
+    card.append(h("p", { class: "lrrg-card-title" }, data.title ?? ""), h("p", { class: "lrrg-card-meta" }, meta))
   }
   if (exhausted) {
     card.append(h("p", { class: "lrrg-card-meta share-status-exhausted" }, t.closed.exhausted.body))

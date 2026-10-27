@@ -16,7 +16,7 @@ use deadpool_redis::Pool;
 use iroh::endpoint::{presets, Connection};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
-use lanrurugi_share_proto::messages::{Envelope, RefusalReason, Request, Response, PROTO_VERSION};
+use lanrurugi_share_proto::messages::{RefusalReason, Request, Response, ShareEngine};
 use lanrurugi_storage::keys;
 
 use super::{endpoint_hex, parse_endpoint_hex, read_frame, write_frame, ALPN};
@@ -451,17 +451,15 @@ impl ProtocolHandler for NodeProtocol {
             let this = self.clone();
             let source = source.clone();
             tokio::spawn(async move {
-                let Ok(envelope) = read_frame::<Envelope>(&mut recv).await else {
+                let Ok((engine, request)) = read_frame::<Request>(&mut recv).await else {
                     return;
                 };
-                let answer = if envelope.proto != PROTO_VERSION {
+                let answer = if !engine.is_compatible_with(&ShareEngine::current()) {
                     Response::Refused(RefusalReason::UnsupportedVersion {
-                        supported: vec![PROTO_VERSION],
+                        engine: ShareEngine::current(),
                     })
                 } else {
-                    match answer_rendezvous(&this.store, &this.limiter, &source, &envelope.request)
-                        .await
-                    {
+                    match answer_rendezvous(&this.store, &this.limiter, &source, &request).await {
                         Some(Ok(r)) => r,
                         Some(Err(reason)) => Response::Refused(reason),
                         None => Response::Refused(RefusalReason::NotFound),

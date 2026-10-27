@@ -29,6 +29,7 @@
   .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; width: min(1180px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
   .theme-grid figure { margin: 0; }
   .case h3 { font-size: 16px; margin: 24px 0 8px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
   .pair { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; width: min(1000px, calc(100vw - 32px)); position: relative; left: 50%; transform: translateX(-50%); }
   .pair > iframe, .pair > lrrg-share, .pair > div { flex: 1 1 360px; max-width: 480px; }
   .pair > div > p { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
@@ -92,6 +93,48 @@
       <iframe src="http://192.168.3.105:3000/embed/s/9BKPS-662CG" width="360" height="420" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
       <lrrg-share code="9BKPS-662CG" src="http://192.168.3.105:3000"></lrrg-share>
     </div>
+  </div>
+
+  <h2>错误与边界</h2>
+  <p>
+    卡片把「分享本身没了」和「这次没取到」分开显示:前者只有一行「该分享已不可用。」,后者是「暂时无法加载这个分享。」加一个重试链接。
+    分享码错误、格式非法、未开启嵌入、已撤销、已过期都走前者(服务端都是 404);网络失败、5xx、429 限流走后者。
+  </p>
+  <div class="case">
+    <h3>6. 分享码不存在(格式合法) → 「该分享已不可用。」</h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/ZZZZZ-ZZZZZ" width="360" height="240" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="ZZZZZ-ZZZZZ" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>7. 分享码格式非法 → 连请求都不发,直接「该分享已不可用。」</h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/not-a-code" width="360" height="240" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="not a code" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>8. 未开启「允许嵌入」的分享 → 与 6 相同(服务端同样 404)</h3>
+    <p class="hint">把任意分享设置里的「允许嵌入」关掉,用它的码替换下面的 <code>8T2V7-KS5W7</code> 即可看到。</p>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3000/embed/s/8T2V7-KS5W7" width="360" height="240" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      <lrrg-share code="8T2V7-KS5W7" src="http://192.168.3.105:3000"></lrrg-share>
+    </div>
+  </div>
+  <div class="case">
+    <h3>9. 服务器整个不可达(指向没有监听的端口) → 浏览器自己的连接错误页,卡片代码无法接管</h3>
+    <div class="pair">
+      <iframe src="http://192.168.3.105:3999/embed/s/XR956-SA7G9" width="360" height="240" style="border:0;max-width:100%" loading="lazy" referrerpolicy="no-referrer"></iframe>
+    </div>
+  </div>
+  <div class="case">
+    <h3>10. 429 限流 → 「暂时无法加载这个分享。」+ 重试</h3>
+    <p class="hint">
+      同一个来源在 60 秒内查询失败 10 次就会被限流(锁 60 秒,再失败翻倍)。把 6 号卡片连续刷新十几次,
+      然后刷新这一整页:所有卡片都会变成「暂时无法加载」,大约一分钟后恢复。5xx 走的是同一条分支
+      (无法从这个页面制造,单测里覆盖了)。
+    </p>
   </div>
 
   <h2>显示语言</h2>

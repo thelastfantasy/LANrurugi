@@ -26,7 +26,7 @@ use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
 use lanrurugi_core::ids::{ArchiveId, ShareId};
 use lanrurugi_share_proto::framing;
-use lanrurugi_share_proto::messages::{Envelope, RefusalReason, Request, Response};
+use lanrurugi_share_proto::messages::{RefusalReason, Request, Response, ShareEngine};
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
@@ -342,20 +342,32 @@ pub async fn wait_for_direct_address(conn: &Connection, limit: Duration) -> Opti
     }
 }
 
-/// Reads one length-prefixed frame.
+/// Reads one frame: the sender's engine and the message. The engine is read before the payload is
+/// allocated, so a version check never depends on decoding a message this build may not know.
 pub async fn read_frame<T: serde::de::DeserializeOwned>(
     recv: &mut RecvStream,
-) -> Result<T, ShareNetError> {
+) -> Result<(ShareEngine, T), ShareNetError> {
+    fn protocol_err(e: impl std::fmt::Display) -> ShareNetError {
+        ShareNetError::Protocol(e.to_string())
+    }
     let mut prefix = [0u8; 4];
-    recv.read_exact(&mut prefix)
-        .await
-        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    let len = framing::body_len(prefix).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    let mut body = vec![0u8; len];
-    recv.read_exact(&mut body)
-        .await
-        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    framing::decode(&body).map_err(|e| ShareNetError::Protocol(e.to_string()))
+    recv.read_exact(&mut prefix).await.map_err(protocol_err)?;
+    let total = framing::body_len(prefix).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+    let mut head = [0u8; framing::ENGINE_LEN_BYTES];
+    recv.read_exact(&mut head).await.map_err(protocol_err)?;
+    let engine_len = u16::from_be_bytes(head) as usize;
+    if framing::ENGINE_LEN_BYTES + engine_len > total {
+        return Err(ShareNetError::Protocol("malformed frame".into()));
+    }
+    let mut engine = vec![0u8; engine_len];
+    recv.read_exact(&mut engine).await.map_err(protocol_err)?;
+    let engine =
+        framing::decode_engine(&engine).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+    let mut body = vec![0u8; total - framing::ENGINE_LEN_BYTES - engine_len];
+    recv.read_exact(&mut body).await.map_err(protocol_err)?;
+    let message =
+        framing::decode_payload(&body).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+    Ok((engine, message))
 }
 
 pub async fn write_frame<T: serde::Serialize>(
@@ -378,10 +390,18 @@ pub async fn call(
         .open_bi()
         .await
         .map_err(|e| ShareNetError::Unreachable(e.to_string()))?;
-    write_frame(&mut send, &Envelope::new(request)).await?;
+    write_frame(&mut send, &request).await?;
     send.finish()
         .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    match read_frame::<Response>(&mut recv).await? {
+    let (engine, response) = read_frame::<Response>(&mut recv).await?;
+    // The responder's own version, checked on every answer: a peer that answers at all still has to
+    // be speaking this engine, or the message it just sent is not one this build understands.
+    if !engine.is_compatible_with(&ShareEngine::current()) {
+        return Err(ShareNetError::Refused(RefusalReason::UnsupportedVersion {
+            engine,
+        }));
+    }
+    match response {
         Response::Refused(reason) => Err(ShareNetError::Refused(reason)),
         response => Ok((response, recv)),
     }

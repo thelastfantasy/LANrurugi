@@ -15,10 +15,23 @@ Helpers supply only `Range` data.
   or image bytes).
 - **ALPN**: `h3`, so the Initial packet reads like HTTP/3 (FR-045). It does not name the
   application.
-- **Versioning**: every stream's first request carries `proto: 2`. A peer answers an unsupported
-  version with `Refused { reason: unsupported_version, supported: [..] }`. Version 2 added
-  `ArchiveEntry.toc` (each archive's chapters, `{ page (1-based), name }`), which postcard cannot
-  skip, so version 1 peers are refused rather than misread.
+- **Versioning**: the first frame on every stream carries this build's `ShareEngine` — the
+  `protocol` epoch and the `transport` generation (`iroh 1.4.1`) — in its own length-prefixed part of
+  the frame, before the message. Both fields must match; a mismatch is answered with
+  `Refused { reason: unsupported_version, engine } ` and the importer turns that into an HTTP 422
+  whose `detail` names both engines. Because the engine is read before the payload is decoded, a
+  peer whose message shapes are unknown still gets a clear refusal rather than a broken stream. A peer answers an unsupported
+  version with `Refused { reason: unsupported_version, supported: [..] }`, and the importer turns
+  that into an HTTP 422 whose `detail` names both sides' versions — a mismatch has to be actionable,
+  not a generic failure. Version 2 added `ArchiveEntry.toc` (each archive's chapters,
+  `{ page (1-based), name }`) and version 3 added `Opened.allow_helpers`; postcard cannot skip
+  either, so older peers are refused rather than misread.
+- **Compatibility policy**: exactly one engine version is served at a time, and any additive change to
+  a postcard message bumps `protocol`. An iroh upgrade that changes the wire bumps `transport` (and
+  `protocol` with it); `crates/lanrurugi-share-proto/tests/version.rs` fails if the constant drifts
+  from the pinned `iroh`. Browsing, covers and reading do **not** use this protocol (they are
+  plain HTTP JSON, which tolerates new fields in both directions), so a version gap only ever
+  affects importing and helping to deliver — and it is reported as such.
 
 ## Code derivation
 

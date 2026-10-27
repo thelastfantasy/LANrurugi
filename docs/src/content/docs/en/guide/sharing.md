@@ -91,6 +91,38 @@ download queue, where it can be paused, resumed and expanded per archive.
   your own tags on archives you already have are kept and merged, and an archive that already has
   chapters keeps yours. Bookmarks and stamps are the sharer's own and are not imported.
 
+### Files and name collisions on import
+
+Writing an import to disk is all Rust: verified pieces are written at their offsets into a `.part`
+file, renamed to `.staged` when complete, and then moved into the library by the catalogue step —
+no external unzip or copy command is involved.
+
+The preview is a table — cover, title and size per archive — whose headers sort by title or size.
+That ordering is for reading only; the import follows the sharer's manifest order.
+
+What happens to a colliding name is chosen once in the import dialog (**When a local archive has
+the same filename**): rename automatically (the default), skip that archive, or replace the local
+archive. The preview says how many archives collide. The three behaviours:
+
+- **the file already exists in the library directory**: it gets ` (2)`, ` (3)`… — not an error;
+- **same name, different content** (a different archive): it is catalogued under a free name too, and
+  the import row says "renamed to …";
+- **identical content hash**: marked as already present and linked to the existing archive, using no
+  extra space.
+
+A local write failure — disk full, a read-only directory, a quota, missing permission — fails
+that archive **immediately** instead of retrying against the same disk, and the row shows a
+localized reason (the raw OS error stays in the tooltip). Exceeding `tempmaxsize` for the import's
+temp space behaves the same way.
+
+A `.patch.zip` archive needs one note: the sharer serves the **merged** bytes, so what lands locally
+is the merged single file under the sharer's filename, with no patch sidecar. If a base archive with
+that name already exists, the rules above rename it.
+
+A tankoubon imports its members one by one under those rules, then recreates the tankoubon locally
+under its original name and member order; an existing tankoubon with the same name and exactly the
+same members is left alone and the import row says so.
+
 ### Helping deliver
 
 Tick **Help deliver this share to others** when importing. If the sharer allows helpers, your
@@ -158,6 +190,31 @@ write that header.
 To avoid public services, list your own or a friend's nodes under **Settings → Sharing → LANrurugi
 nodes**; they then handle lookup and relaying. When this instance relays for others, you can cap
 each connection's speed or admit only listed instances.
+
+## Version compatibility
+
+Importing and helping to deliver run on a **sharing engine version** of their own — an object, not a
+single number:
+
+| Field | Meaning |
+|---|---|
+| `protocol` | Wire-protocol epoch: the shape of every message, and the handshake itself |
+| `transport` | Transport generation (currently `iroh 1.4.1`). iroh's QUIC/relay protocol has no version negotiation, so it moves together with `protocol` |
+
+Both fields must match before two instances can import from or help deliver to each other. The check
+happens in the first frame: the engine travels in its own part of the frame, encoded separately from
+the message, so a peer whose messages this build cannot decode can still be told its engine is
+unsupported — an incompatibility is never reported as a corrupt file or a silent hang-up.
+
+A mismatch names both sides ("Invalid versions: the other side's sharing engine is v2 (iroh 1.4.0);
+this instance is v3 (iroh 1.4.1)"); the fix is to upgrade the older side so both run the same
+version. An import already under way is unaffected and resumes afterwards. When the **transport**
+itself is incompatible the connection never completes, which surfaces as "the sharer is unreachable"
+— that message also points at comparing both engines.
+
+The share page, the embedded card, covers and reading online all use the ordinary HTTP API, where new
+fields never conflict, so reading an older share never needs an upgrade. Your instance's engine is
+shown under **Settings → Sharing → Status**.
 
 ## Upload speed
 

@@ -823,13 +823,32 @@ pub enum ImportArchiveState {
     Ingesting,
     Done,
     Reused,
+    /// Not imported: its filename was taken locally and the import chose to skip such archives.
+    Skipped,
     Failed,
 }
 
 impl ImportArchiveState {
     pub fn is_settled(self) -> bool {
-        matches!(self, Self::Done | Self::Reused | Self::Failed)
+        matches!(
+            self,
+            Self::Done | Self::Reused | Self::Skipped | Self::Failed
+        )
     }
+}
+
+/// What an import does when an archive's filename is already owned by a different local archive
+/// (the content is new; only the name collides). Chosen once per import, in the import dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilenamePolicy {
+    /// Land it under a free name (` (2)`, ` (3)`…): never blocks, never deletes.
+    #[default]
+    Rename,
+    /// Leave the colliding archive out of the import.
+    Skip,
+    /// Delete the local archive that owns the name and import under it.
+    Overwrite,
 }
 
 /// One archive of an import, keyed by the sharer's archive id.
@@ -845,6 +864,10 @@ pub struct ImportArchive {
     pub bytes_done: u64,
     #[serde(default)]
     pub error: Option<String>,
+    /// Something the recipient should know about a *successful* archive: today, that a filename
+    /// collision in the local library made it land under a different name.
+    #[serde(default)]
+    pub note: Option<String>,
     #[serde(default)]
     pub local_archive_id: Option<String>,
 }
@@ -916,6 +939,11 @@ pub struct ShareImport {
     pub state: ImportState,
     #[serde(default)]
     pub error: Option<String>,
+    /// Non-fatal notes about the import as a whole (a tankoubon that already existed, say).
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub filename_policy: FilenamePolicy,
     /// Set while the sharer has paused uploads: unix seconds it said to come back, or 0 when it
     /// gave no time (FR-044).
     #[serde(default)]

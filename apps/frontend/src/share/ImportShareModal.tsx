@@ -14,7 +14,7 @@ import { toast } from "@/toast"
 
 import { formatShareCode, parseShareRef, type ShareRef, toTextForm } from "./code"
 import { detectQr } from "./qr"
-import type { ArchiveEntry, ImportPreview } from "./types"
+import type { ArchiveEntry, FilenamePolicy, ImportPreview } from "./types"
 
 /** Live scanning needs a secure context; plain-HTTP home instances fall back to a photo. */
 export function liveScanAvailable(): boolean {
@@ -40,8 +40,10 @@ export function shareRefsFromPayloads(payloads: string[]): ShareRef[] {
 }
 
 function refusalText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
-  const code = e instanceof ApiError ? e.message : "internal"
-  return t(`share.refusal.${code}`, { defaultValue: t("share.import.failed") })
+  // A refusal is its stable code; some carry a technical detail after a colon (a version mismatch
+  // names the other side's protocol versions), which the localized text shows as `{{detail}}`.
+  const [code, detail] = (e instanceof ApiError ? e.message : "internal").split(/:\s*/, 2)
+  return t(`share.refusal.${code}`, { defaultValue: t("share.import.failed"), detail })
 }
 
 /** Live camera scan; the stream is released on a hit, on close and on unmount (FR-017). */
@@ -108,7 +110,7 @@ function CameraScanner({ onFound, onClose }: { onFound: (refs: ShareRef[]) => vo
   )
 }
 
-function PreviewItem({
+function PreviewRow({
   entry,
   previewId,
   present,
@@ -124,25 +126,28 @@ function PreviewItem({
   const { t } = useTranslation()
   const [failed, setFailed] = useState(false)
   return (
-    <li className="share-preview-item" onClick={() => onToggle(!selected)}>
-      <span onClick={(e) => e.stopPropagation()}>
+    <tr className="share-preview-row" onClick={() => onToggle(!selected)}>
+      <td className="share-preview-check" onClick={(e) => e.stopPropagation()}>
         <Checkbox checked={selected} onCheckedChange={onToggle} aria-label={entry.title} />
-      </span>
-      <img
-        src={
-          failed
-            ? "/legacy/img/noThumb.png"
-            : `/api/shares/imports/preview/${encodeURIComponent(previewId)}/thumbnail/${encodeURIComponent(entry.archive_id)}`
-        }
-        alt=""
-        loading="lazy"
-        onError={() => setFailed(true)}
-      />
-      <span className="share-preview-title" title={entry.title}>
+      </td>
+      <td className="share-preview-cover">
+        <img
+          src={
+            failed
+              ? "/legacy/img/noThumb.png"
+              : `/api/shares/imports/preview/${encodeURIComponent(previewId)}/thumbnail/${encodeURIComponent(entry.archive_id)}`
+          }
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      </td>
+      <td className="share-preview-title" title={entry.title}>
         {entry.title}
-      </span>
-      {present && <span className="share-badge share-status-active">{t("share.import.alreadyInLibrary")}</span>}
-    </li>
+        {present && <span className="share-badge share-status-active">{t("share.import.alreadyInLibrary")}</span>}
+      </td>
+      <td className="share-preview-size">{formatBytes(entry.size)}</td>
+    </tr>
   )
 }
 
@@ -158,6 +163,10 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
   const [category, setCategory] = useState("")
   const [helpDeliver, setHelpDeliver] = useState(false)
   const [inheritCategories, setInheritCategories] = useState(false)
+  // Only meaningful when the preview reports name conflicts; rename is the never-blocking default.
+  const [filenamePolicy, setFilenamePolicy] = useState<FilenamePolicy>("rename")
+  /** A view-only ordering; the import itself follows the sharer's manifest order. */
+  const [sort, setSort] = useState<{ key: "title" | "size"; desc: boolean } | null>(null)
   /** Archives left out of the import; empty means the whole share, the default. */
   const [deselected, setDeselected] = useState<Set<string>>(() => new Set())
   const photoInput = useRef<HTMLInputElement>(null)
@@ -175,6 +184,7 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
       category?: string
       help_deliver?: boolean
       inherit_categories?: boolean
+      filename_policy?: FilenamePolicy
       archives?: string[]
     }) =>
       sendJson<{ import_id: string }>("POST", "/shares/imports", body),
@@ -219,8 +229,20 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
   const preview = resolve.data
   const items = preview ? [...new Map(preview.manifest.items.flatMap((item) =>
     "Archive" in item ? [item.Archive] : "Tankoubon" in item ? item.Tankoubon.members : []).map((a) => [a.archive_id, a])).values()] : []
+  // The submitted list is `items` order (the sharer's manifest order), never the view's sort order.
   const chosen = items.filter((a) => !deselected.has(a.archive_id))
   const chosenSize = chosen.reduce((sum, a) => sum + a.size, 0)
+  // A copy sorted for display only: `chosen` above stays in manifest order, and that is what the
+  // create request sends.
+  const shown = sort
+    ? [...items].sort((a, b) =>
+        sort.key === "title"
+          ? a.title.localeCompare(b.title) * (sort.desc ? -1 : 1)
+          : (a.size - b.size) * (sort.desc ? -1 : 1),
+      )
+    : items
+  const toggleSort = (key: "title" | "size") =>
+    setSort((s) => (s?.key === key ? (s.desc ? null : { key, desc: true }) : { key, desc: key === "size" }))
   const toggle = (id: string, on: boolean) =>
     setDeselected((s) => {
       const next = new Set(s)
@@ -352,18 +374,53 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
                 </CheckboxField>
               )}
             </div>
-            <ul className="share-preview-list">
-              {items.map((entry) => (
-                <PreviewItem
-                  key={entry.archive_id}
-                  entry={entry}
-                  previewId={preview.preview_id}
-                  present={preview.already_present.includes(entry.archive_id)}
-                  selected={!deselected.has(entry.archive_id)}
-                  onToggle={(on) => toggle(entry.archive_id, on)}
-                />
-              ))}
-            </ul>
+            <div className="share-preview-scroll">
+              <table className="share-preview-table">
+                <thead>
+                  <tr>
+                    <th className="share-preview-check" aria-hidden="true" />
+                    <th aria-hidden="true" />
+                    <th aria-sort={sort?.key === "title" ? (sort.desc ? "descending" : "ascending") : "none"}>
+                      <button
+                        type="button"
+                        className="share-sort"
+                        onClick={() => toggleSort("title")}
+                        title={t("share.import.sortByTitle")}
+                      >
+                        {t("share.import.columnTitle")}
+                        {sort?.key === "title" && <i className={`fa ${sort.desc ? "fa-sort-down" : "fa-sort-up"}`} />}
+                      </button>
+                    </th>
+                    <th
+                      className="share-preview-size"
+                      aria-sort={sort?.key === "size" ? (sort.desc ? "descending" : "ascending") : "none"}
+                    >
+                      <button
+                        type="button"
+                        className="share-sort"
+                        onClick={() => toggleSort("size")}
+                        title={t("share.import.sortBySize")}
+                      >
+                        {t("share.import.columnSize")}
+                        {sort?.key === "size" && <i className={`fa ${sort.desc ? "fa-sort-down" : "fa-sort-up"}`} />}
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((entry) => (
+                    <PreviewRow
+                      key={entry.archive_id}
+                      entry={entry}
+                      previewId={preview.preview_id}
+                      present={preview.already_present.includes(entry.archive_id)}
+                      selected={!deselected.has(entry.archive_id)}
+                      onToggle={(on) => toggle(entry.archive_id, on)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div className="share-form">
               <span>{t("upload.addUploadedFilesToCategory")}</span>
               <Select
@@ -381,6 +438,24 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
                 {t("share.import.inheritCategories")}
               </CheckboxField>
               <span className="share-form-hint">{t("share.import.inheritCategoriesHint")}</span>
+            </div>
+            <div className="share-form">
+              <span>{t("share.import.filenamePolicy")}</span>
+              <Select
+                value={filenamePolicy}
+                onValueChange={(v) => setFilenamePolicy(v as FilenamePolicy)}
+                align="start"
+                items={[
+                  { value: "rename", label: t("share.import.filenamePolicyRename") },
+                  { value: "skip", label: t("share.import.filenamePolicySkip") },
+                  { value: "overwrite", label: t("share.import.filenamePolicyOverwrite") },
+                ]}
+              />
+              <span className="share-form-hint">
+                {preview.filename_conflicts && preview.filename_conflicts.length > 0
+                  ? t("share.import.filenameConflictCount", { count: preview.filename_conflicts.length })
+                  : t(`share.import.filenamePolicyHint.${filenamePolicy}`)}
+              </span>
             </div>
             {preview.allow_helpers === true && (
               <div className="share-form">
@@ -407,6 +482,8 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
                     // Only ever asked for when the sharer allows helpers (the box is hidden otherwise).
                     help_deliver: preview.allow_helpers === true && helpDeliver,
                     inherit_categories: inheritCategories,
+                    // What to do when a local archive already owns an imported filename.
+                    filename_policy: filenamePolicy,
                     // Omitted when everything is chosen, so the whole share is imported as before.
                     archives: chosen.length === items.length ? undefined : chosen.map((a) => a.archive_id),
                   })

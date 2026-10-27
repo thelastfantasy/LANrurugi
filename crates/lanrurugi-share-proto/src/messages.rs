@@ -8,7 +8,51 @@ use crate::ticket::SignedTicket;
 /// The protocol version carried by every request. ALPN is `h3`, so this is the only place the
 /// application protocol is identified (FR-045).
 /// 2: archive entries carry their table of contents (`ArchiveEntry::toc`).
-pub const PROTO_VERSION: u16 = 3;
+/// The sharing engine's version: the wire protocol this build speaks, carried in every handshake.
+/// Two instances must run the same one to import from, or help deliver to, each other; browsing a
+/// share (page, card, covers, reading) is plain HTTP and never checks it.
+pub const SHARE_ENGINE_VERSION: u16 = 3;
+
+/// The transport generation this engine version speaks: iroh's QUIC/relay wire protocol is not
+/// negotiated separately, so a bump that breaks it means a new `SHARE_ENGINE_VERSION` as well. The
+/// settings page shows this string so two administrators can compare. A mismatch here cannot even
+/// reach the version handshake — the connection itself fails — which is why the unreachable message
+/// points at both values.
+pub const SHARE_TRANSPORT: &str = "iroh 1.4.1";
+
+/// Everything two instances must agree on before one imports from the other: a value with one field
+/// per independent compatibility axis, not a single integer. The protocol epoch covers the message
+/// schemas; the transport covers the QUIC/relay generation underneath them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareEngine {
+    /// Wire protocol epoch: every message's shape, and this handshake.
+    pub protocol: u16,
+    /// Transport generation, e.g. `iroh 1.4.1`.
+    pub transport: String,
+}
+
+impl ShareEngine {
+    /// What this build speaks.
+    pub fn current() -> Self {
+        Self {
+            protocol: SHARE_ENGINE_VERSION,
+            transport: SHARE_TRANSPORT.to_string(),
+        }
+    }
+
+    /// Every axis has to match. The transport cannot be negotiated — iroh has no version handshake —
+    /// and the policy is that a wire-incompatible iroh bump moves the protocol epoch with it, so a
+    /// differing transport means two builds that were never meant to talk.
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
+        self.protocol == other.protocol && self.transport == other.transport
+    }
+}
+
+impl std::fmt::Display for ShareEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "v{} ({})", self.protocol, self.transport)
+    }
+}
 
 pub type Blake3Hash = [u8; 32];
 /// An instance's ed25519 public key, i.e. its iroh `EndpointId`.
@@ -163,7 +207,7 @@ pub enum RefusalReason {
     #[error("sharer paused uploads")]
     Paused { until: Option<u64> },
     #[error("unsupported protocol version")]
-    UnsupportedVersion { supported: Vec<u16> },
+    UnsupportedVersion { engine: ShareEngine },
     #[error("internal error")]
     Internal,
 }
@@ -187,21 +231,6 @@ impl RefusalReason {
 }
 
 /// The first and only message a client writes on a stream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Envelope {
-    pub proto: u16,
-    pub request: Request,
-}
-
-impl Envelope {
-    pub fn new(request: Request) -> Self {
-        Self {
-            proto: PROTO_VERSION,
-            request,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
     ResolveLocal {
@@ -341,12 +370,24 @@ mod tests {
     }
 
     #[test]
-    fn envelopes_round_trip_through_postcard() {
-        let envelope = Envelope::new(Request::Open {
-            access_hash: [7; 32],
-        });
-        let bytes = postcard::to_allocvec(&envelope).unwrap();
-        assert_eq!(postcard::from_bytes::<Envelope>(&bytes).unwrap(), envelope);
+    fn a_share_engine_reports_every_axis() {
+        let current = ShareEngine::current();
+        assert_eq!(current.protocol, SHARE_ENGINE_VERSION);
+        assert_eq!(current.transport, SHARE_TRANSPORT);
+        assert!(current.is_compatible_with(&ShareEngine::current()));
+        assert!(!current.is_compatible_with(&ShareEngine {
+            protocol: SHARE_ENGINE_VERSION + 1,
+            transport: SHARE_TRANSPORT.to_string(),
+        }));
+        // Same protocol, different transport: two builds that were never meant to talk.
+        assert!(!current.is_compatible_with(&ShareEngine {
+            protocol: SHARE_ENGINE_VERSION,
+            transport: "iroh 9.9.9".to_string(),
+        }));
+        assert_eq!(
+            current.to_string(),
+            format!("v{SHARE_ENGINE_VERSION} ({SHARE_TRANSPORT})")
+        );
     }
 
     #[test]

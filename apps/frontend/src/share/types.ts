@@ -24,6 +24,8 @@ export interface ShareSummary {
   allow_helpers: boolean
   short_code: boolean
   restricted: boolean
+  /** The share's code, so the list can show and copy it without a request per row. */
+  share_code?: string
 }
 
 export interface ResolvedShareItem {
@@ -120,10 +122,22 @@ export interface ImportPreview {
   already_present: string[]
   /** Whether the sharer lets other instances help deliver; absent means no (older instances). */
   allow_helpers?: boolean
+  /** Archive ids whose filename a local archive already owns (content is new, name is not). */
+  filename_conflicts?: string[]
+}
+
+/** What an import does with an archive whose filename another local archive owns. */
+export type FilenamePolicy = "rename" | "skip" | "overwrite"
+
+/// This instance's sharing engine: the protocol epoch and the transport generation underneath it.
+/// Two instances must match on every field before an import between them can work.
+export interface ShareEngine {
+  protocol: number
+  transport: string
 }
 
 /** `GET /api/shares/settings`: every `share_*` field, typed, plus read-only status. */
-export type ShareSettings = Record<string, unknown>
+export type ShareSettings = Record<string, unknown> & { share_engine?: ShareEngine }
 
 export interface ShareEndpointStatus {
   running: boolean

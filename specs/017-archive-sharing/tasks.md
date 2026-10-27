@@ -635,3 +635,16 @@ wasm is bundled rather than fetched from a CDN).
   other's outboard.
 - Protocol version 3 adds `Opened.allow_helpers`, so the import dialog offers "help deliver" only
   when the sharer allows it.
+
+### Sharing engine version
+
+- The compatibility unit is a structured `ShareEngine { protocol, transport }`, not one number:
+  `protocol` is the message-schema epoch, `transport` the iroh generation under it (iroh negotiates
+  no version of its own). Both fields must match; a wire-incompatible iroh bump moves both.
+- The engine travels in its own length-prefixed part of every frame, before the message, so a peer
+  whose message shapes this build cannot decode still gets a clean `unsupported_version` refusal
+  instead of a broken stream. The importer checks the responder's engine on every answer as well.
+- The refusal's `detail` names both engines ("the other side's sharing engine is v2 (iroh 1.4.0);
+  this instance is v3 (iroh 1.4.1)"); the settings page shows this instance's engine, and
+  `crates/lanrurugi-share-proto/tests/version.rs` fails if the transport string drifts from the
+  pinned iroh.

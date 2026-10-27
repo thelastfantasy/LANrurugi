@@ -12,9 +12,11 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use lanrurugi_core::ids::{ArchiveId, ShareImportId};
 use lanrurugi_share_proto::code::ShareRef;
+use lanrurugi_share_proto::messages::{RefusalReason, ShareEngine};
 use lanrurugi_storage::download_queue::{DownloadQueueState, NewQueueItem, QueueItemOrigin};
 use lanrurugi_storage::shares::{
-    HelpState, ImportArchiveState, ImportState, ShareImport, HELP_OFFLINE_AFTER_SECS,
+    FilenamePolicy, HelpState, ImportArchiveState, ImportState, ShareImport,
+    HELP_OFFLINE_AFTER_SECS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -76,6 +78,15 @@ pub fn router() -> Router<AppState> {
         )
 }
 
+/// Which protocol versions the other side speaks, for a caller to read: a plain English sentence,
+/// shown next to the localized "incompatible versions" text.
+fn version_detail(engine: &ShareEngine) -> String {
+    format!(
+        "the other side's sharing engine is {engine}; this instance is {}",
+        ShareEngine::current()
+    )
+}
+
 /// Refusals keep their stable code; an unreachable sharer is a 502, not a 404 (FR-029).
 fn net_error(e: ShareNetError) -> Response {
     let status = match &e {
@@ -92,6 +103,20 @@ fn net_error(e: ShareNetError) -> Response {
         ShareNetError::Protocol(_) => StatusCode::BAD_GATEWAY,
     };
     tracing::info!(error = %e, "share import request failed");
+    // A version mismatch is the one refusal the caller cannot act on from the message alone: it
+    // needs to know which side is older, which only the peer's supported list says.
+    if let ShareNetError::Refused(RefusalReason::UnsupportedVersion { engine }) = &e {
+        return (
+            status,
+            Json(json!({
+                "operation": "share_import",
+                "error": e.code(),
+                "detail": version_detail(engine),
+                "success": 0,
+            })),
+        )
+            .into_response();
+    }
     error(status, "share_import", e.code())
 }
 
@@ -142,8 +167,25 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
         Ok(o) => o,
         Err(e) => return net_error(e),
     };
+    // One snapshot of the local library answers both questions for every archive: whether it is
+    // already here by id, and whether its filename is already owned by a *different* archive.
+    let local: std::collections::HashSet<String> = state
+        .repos
+        .archives
+        .list_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|a| {
+            std::path::Path::new(&a.file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+        })
+        .collect();
     let mut total_size = 0u64;
     let mut already_present = Vec::new();
+    let mut filename_conflicts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in opened.manifest.archives() {
         if !seen.insert(entry.archive_id.clone()) {
@@ -160,6 +202,13 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
         ) {
             already_present.push(entry.archive_id.clone());
         }
+        let name = std::path::Path::new(&entry.filename)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if !name.is_empty() && local.contains(name) {
+            filename_conflicts.push(entry.archive_id.clone());
+        }
     }
     let manifest = opened.manifest.clone();
     let public_url = opened.public_url.clone();
@@ -172,6 +221,7 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
         "archive_count": seen.len(),
         "total_size": total_size,
         "already_present": already_present,
+        "filename_conflicts": filename_conflicts,
         "public_url": public_url,
         "allow_helpers": allow_helpers,
     }))
@@ -212,6 +262,9 @@ struct CreateBody {
     /// The sharer archive ids to import; absent means every archive in the share.
     #[serde(default)]
     archives: Option<Vec<String>>,
+    /// What to do when an archive's filename is already owned by a different local archive.
+    #[serde(default)]
+    filename_policy: FilenamePolicy,
 }
 
 /// `POST /shares/imports`: claims the share, then queues the import as one item (FR-019, FR-021).
@@ -306,6 +359,7 @@ async fn create_import(
         queue_item_id: item.id.clone(),
         concurrency: settings.number("share_import_concurrency").unwrap_or(3) as u32,
         help_deliver: body.help_deliver,
+        filename_policy: body.filename_policy,
         help_hidden: false,
         help_state: Default::default(),
         help_reason: None,
@@ -316,6 +370,7 @@ async fn create_import(
         inherit_categories: body.inherit_categories,
         state: ImportState::Transferring,
         error: None,
+        warnings: Vec::new(),
         paused_until: None,
         created_at: crate::shares::now_secs(),
     };
@@ -357,9 +412,10 @@ fn summary(import: &ShareImport) -> Value {
         .archives
         .iter()
         .filter(|a| {
+            // A skipped archive is settled, not outstanding: it must not leave "3 / 4" forever.
             matches!(
                 a.state,
-                ImportArchiveState::Done | ImportArchiveState::Reused
+                ImportArchiveState::Done | ImportArchiveState::Reused | ImportArchiveState::Skipped
             )
         })
         .count();
@@ -382,7 +438,9 @@ fn summary(import: &ShareImport) -> Value {
             .archives
             .iter()
             .map(|a| match a.state {
-                ImportArchiveState::Done | ImportArchiveState::Reused => a.size,
+                ImportArchiveState::Done | ImportArchiveState::Reused | ImportArchiveState::Skipped => {
+                    a.size
+                }
                 _ => a.bytes_done,
             })
             .sum::<u64>(),
@@ -396,6 +454,9 @@ fn summary(import: &ShareImport) -> Value {
         "help_removed_archives": import.help_removed_archives.len(),
         "help_bytes_served": import.help_bytes_served,
         "sharer_endpoint_id": import.sharer_endpoint_id,
+        // Non-fatal notes the expanded row shows: a tankoubon already present, say.
+        "warnings": import.warnings,
+        "filename_policy": import.filename_policy,
         "paused_until": import.paused_until,
         "created_at": import.created_at,
     })
@@ -542,4 +603,23 @@ async fn retry_archive(
         }
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanrurugi_share_proto::messages::SHARE_ENGINE_VERSION;
+
+    #[test]
+    fn a_version_refusal_names_both_engines() {
+        let detail = version_detail(&ShareEngine {
+            protocol: 2,
+            transport: "iroh 1.4.0".into(),
+        });
+        assert!(detail.contains("v2 (iroh 1.4.0)"), "{detail}");
+        assert!(
+            detail.contains(&format!("v{SHARE_ENGINE_VERSION}")),
+            "{detail}"
+        );
+    }
 }

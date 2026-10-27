@@ -285,6 +285,7 @@ mod tests {
             state: ImportArchiveState::Done,
             bytes_done: 1,
             error: None,
+            note: None,
             local_archive_id: Some(format!("local-{id}")),
         };
         ShareImport {
@@ -310,6 +311,8 @@ mod tests {
             inherit_categories: false,
             state: ImportState::Done,
             error: None,
+            warnings: Vec::new(),
+            filename_policy: Default::default(),
             paused_until: None,
             created_at: 0,
         }

@@ -134,7 +134,12 @@ async fn code_key(state: &AppState) -> Result<[u8; 32], String> {
 /// The share's code, re-derived from `code_enc` (FR-006).
 pub(crate) async fn share_code(state: &AppState, share: &Share) -> Option<ShareCode> {
     let key = code_key(state).await.ok()?;
-    let plain = open_bytes(&key, &unhex(&share.code_enc)?, CODE_ENC_AAD)?;
+    share_code_with(&key, share)
+}
+
+/// `share_code` for a caller that already fetched the key (a list decrypting several shares).
+fn share_code_with(key: &[u8; 32], share: &Share) -> Option<ShareCode> {
+    let plain = open_bytes(key, &unhex(&share.code_enc)?, CODE_ENC_AAD)?;
     ShareCode::parse(std::str::from_utf8(&plain).ok()?).ok()
 }
 
@@ -349,6 +354,10 @@ pub(crate) struct ShareSummary {
     allow_helpers: bool,
     short_code: bool,
     restricted: bool,
+    /// The share's code, so the list can show and copy it without one request per row. Named
+    /// `share_code` because `ShareDetail`'s own `code` is the richer `ShareCodeInfo` object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_code: Option<String>,
 }
 
 fn summary(share: &Share, now: i64) -> ShareSummary {
@@ -366,6 +375,7 @@ fn summary(share: &Share, now: i64) -> ShareSummary {
         allow_helpers: share.allow_helpers,
         short_code: share.short_code,
         restricted: share.has_ip_restriction(),
+        share_code: None,
     }
 }
 
@@ -631,11 +641,22 @@ async fn list_shares(State(state): State<AppState>, Query(q): Query<ListQuery>) 
     match repo(&state).list().await {
         Ok(shares) => {
             let only_active = q.status.as_deref() == Some("active");
-            let list: Vec<ShareSummary> = shares
+            let key = code_key(&state).await.ok();
+            let mut list: Vec<ShareSummary> = shares
                 .iter()
                 .filter(|s| !only_active || s.status(now) == ShareStatus::Active)
                 .map(|s| summary(s, now))
                 .collect();
+            // One key fetch for the whole page; each code is a small decrypt.
+            for item in &mut list {
+                let Some(share) = shares.iter().find(|s| s.id.as_str() == item.id) else {
+                    continue;
+                };
+                item.share_code = key
+                    .as_ref()
+                    .and_then(|k| share_code_with(k, share))
+                    .map(|c| c.display());
+            }
             Json(list).into_response()
         }
         Err(e) => internal("list_shares", e),
@@ -1070,6 +1091,9 @@ async fn settings_with_status(state: &AppState) -> Value {
             "endpoint": endpoint,
             "services": services,
             "helpers_supported": true,
+            // What an admin compares between two instances before an import works: the engine
+            // object (protocol epoch + transport), not a single number.
+            "share_engine": lanrurugi_share_proto::messages::ShareEngine::current(),
         }),
     );
     value
@@ -1255,6 +1279,28 @@ mod tests {
             forwarded_address(&headers, loopback, &[]).to_string(),
             "127.0.0.1"
         );
+    }
+
+    #[test]
+    fn the_list_summary_carries_the_share_code() {
+        let summary = ShareSummary {
+            id: "s".into(),
+            title: String::new(),
+            status: ShareStatus::Active,
+            permissions: lanrurugi_share_proto::messages::Permissions::ALL,
+            downloads_used: 0,
+            download_limit: None,
+            item_count: 1,
+            created_at: 0,
+            expires_at: None,
+            embed: false,
+            allow_helpers: false,
+            short_code: false,
+            restricted: false,
+            share_code: Some("K7QM9-XRT2H".into()),
+        };
+        let value = serde_json::to_value(&summary).unwrap();
+        assert_eq!(value["share_code"], "K7QM9-XRT2H");
     }
 
     #[test]

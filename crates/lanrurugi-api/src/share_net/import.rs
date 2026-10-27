@@ -30,7 +30,8 @@ use lanrurugi_share_proto::messages::{
 use lanrurugi_share_proto::ticket::{SignedTicket, RENEW_INTERVAL_SECS};
 use lanrurugi_storage::download_queue::DownloadQueueState;
 use lanrurugi_storage::shares::{
-    ImportArchive, ImportArchiveState, ImportState, ShareImport, ShareImportRepository,
+    FilenamePolicy, ImportArchive, ImportArchiveState, ImportState, ShareImport,
+    ShareImportRepository,
 };
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -40,6 +41,21 @@ use crate::AppState;
 
 /// Bytes per bao chunk — `blobs::BLOCK_SIZE`, the same tree the outboard and `Range` answers use.
 const CHUNK_BYTES: u64 = blobs::BLOCK_SIZE.bytes() as u64;
+/// A failure writing on *this* instance's disk — as opposed to anything the peer did. The leading
+/// code is what the queue row localizes; the OS text after it stays for support.
+fn storage_error(e: &std::io::Error) -> String {
+    let code = match e.raw_os_error() {
+        Some(28) => "disk_full",       // ENOSPC
+        Some(30) => "read_only",       // EROFS
+        Some(122) => "quota_exceeded", // EDQUOT
+        _ => match e.kind() {
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "storage_error",
+        },
+    };
+    format!("{code}: {e}")
+}
+
 /// One piece: the 1 MiB the protocol's contract names, in those chunks.
 const PIECE_CHUNKS: u64 = (1024 * 1024) / CHUNK_BYTES;
 const MAX_PIECE_ATTEMPTS: u32 = 3;
@@ -170,6 +186,7 @@ pub fn archives_from(manifest: &ShareManifest) -> Vec<ImportArchive> {
             state: ImportArchiveState::Pending,
             bytes_done: 0,
             error: None,
+            note: None,
             local_archive_id: None,
         })
         .collect()
@@ -220,6 +237,8 @@ struct Run {
     queue_item_id: String,
     /// Bytes this import may still write into `<temp>/share` before `tempmaxsize` is reached.
     budget: u64,
+    /// What to do when an archive's filename belongs to a different local archive.
+    filename_policy: FilenamePolicy,
     /// When progress was last pushed to the Upload page, and the states it showed.
     pushed: std::sync::Mutex<(Option<std::time::Instant>, PushedStates)>,
     dir: PathBuf,
@@ -575,6 +594,8 @@ fn numbered_name(name: &str, n: u32) -> String {
 enum ArchiveOutcome {
     Done(String),
     Reused(String),
+    /// The name was taken locally and the import's policy is to skip such archives.
+    Skipped,
     Failed(String),
     /// The import was stopped or refused; the archive keeps its verified pieces.
     Interrupted,
@@ -623,8 +644,8 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
     .await;
     let (data, outboard, valid) = match opened {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return ArchiveOutcome::Failed(e.to_string()),
-        Err(e) => return ArchiveOutcome::Failed(e.to_string()),
+        Ok(Err(e)) => return ArchiveOutcome::Failed(storage_error(&e)),
+        Err(e) => return ArchiveOutcome::Failed(format!("storage_error: {e}")),
     };
     let total_chunks = outboard.tree.chunks().0;
     let pieces = missing_pieces(total_chunks, &valid);
@@ -729,22 +750,29 @@ async fn fetch_pieces(
         let verified = match fetched {
             Ok(body) => {
                 let shared = shared.clone();
-                tokio::task::spawn_blocking(move || {
+                // Verified against the manifest's root before anything reaches the file; a failure
+                // is split into "our disk refused the write" (final) and "the bytes did not verify"
+                // (retry, or another source).
+                let decoded = tokio::task::spawn_blocking(move || {
                     let mut guard = shared.lock().expect("partial lock");
                     let (data, outboard) = &mut *guard;
                     let ranges = ChunkRanges::from(ChunkNum(piece.start)..ChunkNum(piece.end));
-                    // Verified against the manifest's root before anything reaches the file.
                     bao_tree::io::sync::decode_ranges(
                         std::io::Cursor::new(body),
                         &ranges,
                         &mut *data,
                         &mut *outboard,
                     )
-                    .map_err(|e| e.to_string())
                 })
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r)
+                .await;
+                match decoded {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(bao_tree::io::DecodeError::Io(e))) => {
+                        return Some(ArchiveOutcome::Failed(storage_error(&e)))
+                    }
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => return Some(ArchiveOutcome::Failed(format!("storage_error: {e}"))),
+                }
             }
             Err(ShareNetError::Refused(RefusalReason::Paused { until }))
                 if matches!(source, Source::Sharer) =>
@@ -808,7 +836,7 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
     };
     let staging = run.dir.join(format!("{}.staged", hex(&root)));
     if let Err(e) = tokio::fs::rename(part, &staging).await {
-        return ArchiveOutcome::Failed(e.to_string());
+        return ArchiveOutcome::Failed(storage_error(&e));
     }
     let _ = tokio::fs::remove_file(run.dir.join(format!("{}.obao", hex(&root)))).await;
     // A matching content hash really is the same archive, so reusing it is right. A *filename*
@@ -822,12 +850,15 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
         } else {
             numbered_name(&filename, attempt)
         };
+        // `Overwrite` applies to the first attempt only: it deletes whichever local archive owns
+        // the name, which a retry under a different name must never repeat.
+        let policy = if attempt == 0 && run.filename_policy == FilenamePolicy::Overwrite {
+            lanrurugi_scanner::pipeline::DuplicatePolicy::Overwrite
+        } else {
+            lanrurugi_scanner::pipeline::DuplicatePolicy::Reject
+        };
         match crate::download_manager::ingest::catalogue_staged_file(
-            &run.state,
-            &staging,
-            &name,
-            None,
-            lanrurugi_scanner::pipeline::DuplicatePolicy::Reject,
+            &run.state, &staging, &name, None, policy,
         )
         .await
         {
@@ -842,8 +873,20 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
                 reason: lanrurugi_scanner::pipeline::DuplicateReason::Filename,
                 ..
+            }) if run.filename_policy == FilenamePolicy::Skip => {
+                let _ = tokio::fs::remove_file(&staging).await;
+                return ArchiveOutcome::Skipped;
+            }
+            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
+                reason: lanrurugi_scanner::pipeline::DuplicateReason::Filename,
+                ..
             }) if attempt < MAX_RENAME_ATTEMPTS => {
                 attempt += 1;
+                let renamed = numbered_name(&filename, attempt);
+                run.update(sharer_archive_id, |a| {
+                    a.note = Some(format!("renamed to {renamed}"))
+                })
+                .await;
             }
             Err(e) => {
                 let _ = tokio::fs::remove_file(&staging).await;
@@ -1063,6 +1106,22 @@ async fn rebuild_tankoubons(run: &Run) {
         if local.is_empty() {
             continue;
         }
+        let existing = run
+            .state
+            .repos
+            .groupings
+            .list_all()
+            .await
+            .unwrap_or_default();
+        if existing
+            .iter()
+            .any(|g| g.name == *name && g.archives == local)
+        {
+            run.record.lock().await.warnings.push(format!(
+                "tankoubon \"{name}\" already exists with the same members; left as it was"
+            ));
+            continue;
+        }
         if let Err(e) =
             crate::tankoubons::create_tankoubon_with(&run.state, name, summary, tags, local).await
         {
@@ -1236,6 +1295,7 @@ async fn run_import(
     let net = super::handle()
         .await
         .ok_or("sharing is not running on this instance")?;
+    let filename_policy = record.filename_policy;
     let run = Arc::new(Run {
         state: state.clone(),
         import_id: import_id.clone(),
@@ -1252,6 +1312,7 @@ async fn run_import(
         job_id: job_id.to_string(),
         queue_item_id: queue_item_id.to_string(),
         budget,
+        filename_policy,
         pushed: std::sync::Mutex::new((None, (ImportState::Transferring, None, Vec::new()))),
         dir,
     });
@@ -1290,6 +1351,10 @@ async fn run_import(
                     // Counted as complete, so "4 / 4 archives" never shows short bytes.
                     a.bytes_done = a.size;
                     a.error = None;
+                }
+                ArchiveOutcome::Skipped => {
+                    a.state = ImportArchiveState::Skipped;
+                    a.note = Some("skipped: the filename is already in use locally".into());
                 }
                 ArchiveOutcome::Failed(e) => {
                     a.state = ImportArchiveState::Failed;
@@ -1351,6 +1416,21 @@ async fn run_import(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn local_write_failures_carry_a_stable_code() {
+        // The queue row localizes the code; the OS text after it is for support.
+        assert!(storage_error(&Error::from_raw_os_error(28)).starts_with("disk_full: "));
+        assert!(storage_error(&Error::from_raw_os_error(30)).starts_with("read_only: "));
+        assert!(storage_error(&Error::from_raw_os_error(122)).starts_with("quota_exceeded: "));
+        assert!(
+            storage_error(&Error::new(ErrorKind::PermissionDenied, "denied"))
+                .starts_with("permission_denied: ")
+        );
+        assert!(storage_error(&Error::from_raw_os_error(5)).starts_with("storage_error: "));
+    }
 
     #[test]
     fn shared_tags_keep_everything_but_the_sharers_date_added() {

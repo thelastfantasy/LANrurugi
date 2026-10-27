@@ -41,9 +41,17 @@ async function main() {
     report()
     return
   }
-  const data = await fetch(`/api/share/r/card?code=${encodeURIComponent(formatShareCode(code))}`, { credentials: "omit" })
-    .then((r) => (r.ok ? (r.json() as Promise<CardData>) : null))
-    .catch(() => null)
+  // 404 covers a wrong code, a revoked/expired share and embedding being off — none of them worth
+  // a retry, and all one message. Anything that may pass (network, 5xx, rate limited) says so.
+  let data: CardData | null = null
+  let failure: "unavailable" | "retry" = "unavailable"
+  try {
+    const response = await fetch(`/api/share/r/card?code=${encodeURIComponent(formatShareCode(code))}`, { credentials: "omit" })
+    if (response.ok) data = (await response.json()) as CardData
+    else if (response.status === 429 || response.status >= 500) failure = "retry"
+  } catch {
+    failure = "retry"
+  }
 
   /** Draws the card, and for a share of eight items or more decides between one row of covers and
    * two by measuring: a fixed-height frame that would end up scrolling gets one row. `fit` frames
@@ -51,9 +59,9 @@ async function main() {
    * layout synchronously (the covers' aspect ratios reserve their space before any image loads), so
    * the taller two-row layout is never painted and then replaced. */
   const draw = () => {
-    renderCard(root, code, data, t)
+    renderCard(root, code, data, t, { failure })
     if (!fit && data && (data.item_count ?? 0) >= 8 && document.documentElement.scrollHeight > window.innerHeight + 1) {
-      renderCard(root, code, data, t, { coverRows: 1 })
+      renderCard(root, code, data, t, { coverRows: 1, failure })
     }
     report()
   }

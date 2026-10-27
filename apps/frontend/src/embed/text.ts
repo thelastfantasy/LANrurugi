@@ -4,6 +4,9 @@
  */
 export interface CardText {
   unavailable: string
+  /** A card that could not be fetched (network, 5xx, rate limited) — as opposed to one that is gone. */
+  loadFailed: string
+  retry: string
   restricted: string
   restrictedBody: string
   open: string
@@ -27,6 +30,8 @@ export interface CardText {
 const TEXT: Record<"zh" | "en" | "ja", CardText> = {
   zh: {
     unavailable: "该分享已不可用。",
+    loadFailed: "暂时无法加载这个分享。",
+    retry: "重试",
     restricted: "受限分享",
     restrictedBody: "该分享仅限特定地址访问。",
     open: "打开",
@@ -51,6 +56,8 @@ const TEXT: Record<"zh" | "en" | "ja", CardText> = {
   },
   en: {
     unavailable: "This share is no longer available.",
+    loadFailed: "This share could not be loaded right now.",
+    retry: "Retry",
     restricted: "Restricted share",
     restrictedBody: "This share is limited to certain addresses.",
     open: "Open",
@@ -75,6 +82,8 @@ const TEXT: Record<"zh" | "en" | "ja", CardText> = {
   },
   ja: {
     unavailable: "この共有は利用できなくなりました。",
+    loadFailed: "この共有をいま読み込めませんでした。",
+    retry: "再試行",
     restricted: "制限付きの共有",
     restrictedBody: "この共有は特定のアドレスに限定されています。",
     open: "開く",

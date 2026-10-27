@@ -296,6 +296,20 @@ async fn card(
             ManifestItem::Unavailable { title, .. } => json!({ "title": title, "cover": null }),
         })
         .collect();
+    // Bytes a download of the whole share would transfer: the catalogued archive sizes. A patched
+    // archive's served form is its merged copy, so its number here is the base size — the import
+    // and download paths report exact bytes as they go, and this is the card's estimate.
+    let total_size: u64 = manifest
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ManifestItem::Archive(a) => Some(a.size),
+            ManifestItem::Tankoubon { members, .. } => {
+                Some(members.iter().map(|m| m.size).sum::<u64>())
+            }
+            ManifestItem::Unavailable { .. } => None,
+        })
+        .sum();
     // The card loads its covers through the recipient routes, like the share page does.
     let token = RecipientTokenRepository::new(state.redis.config.clone())
         .issue(&share.id, address)
@@ -307,6 +321,7 @@ async fn card(
             "restricted": false,
             "title": manifest.title,
             "item_count": manifest.items.len(),
+            "total_size": total_size,
             "covers": covers,
             "cover_titles": cover_titles,
             "items": items,

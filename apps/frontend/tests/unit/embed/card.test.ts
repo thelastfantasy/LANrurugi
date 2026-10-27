@@ -18,7 +18,8 @@ const base: CardData = {
 }
 
 let root: HTMLElement
-const draw = (data: CardData | null, options?: { coverRows?: 1 | 2 }) => renderCard(root, "K7QM9XRT2H", data, t, options)
+const draw = (data: CardData | null, options?: { coverRows?: 1 | 2; failure?: "unavailable" | "retry" }) =>
+  renderCard(root, "K7QM9XRT2H", data, t, options)
 const links = () => [...root.querySelectorAll("a")].map((a) => a.textContent)
 const text = () => root.textContent ?? ""
 
@@ -70,9 +71,27 @@ describe("share card", () => {
     }
   })
 
+  it("shows the size beside the item count", () => {
+    draw({ ...base, total_size: 1_234_567 })
+    expect(text()).toContain(t.items(2))
+    expect(text()).toContain("1.18 MB")
+  })
+
+  it("shows the size in the single-item layout too", () => {
+    draw({ ...base, item_count: 1, covers: ["a"], cover_titles: ["A"], total_size: 2_000_000 })
+    expect(text()).toContain("1.91 MB")
+  })
+
   it("says only that a share it cannot find is unavailable", () => {
     draw(null)
     expect(text()).toBe(t.unavailable)
+    expect(links()).toEqual([])
+  })
+
+  it("offers a retry when the card could not be loaded", () => {
+    draw(null, { failure: "retry" })
+    expect(text()).toContain(t.loadFailed)
+    expect(links()).toEqual([t.retry])
   })
 
   it("closes the cover row with a +N tile that lists every item", () => {

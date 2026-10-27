@@ -45,3 +45,29 @@ fn derivation_matches_the_independent_vectors() {
         assert_eq!(hex(&keys.lookup_hash()), v.lookup_hash, "{}", v.code);
     }
 }
+
+#[test]
+fn engines_are_compatible_only_when_every_axis_matches() {
+    use lanrurugi_share_proto::messages::{ShareEngine, SHARE_ENGINE_VERSION, SHARE_TRANSPORT};
+
+    let current = ShareEngine::current();
+    assert_eq!(current.protocol, SHARE_ENGINE_VERSION);
+    assert_eq!(current.transport, SHARE_TRANSPORT);
+    assert!(current.is_compatible_with(&ShareEngine::current()));
+    for other in [
+        ShareEngine {
+            protocol: SHARE_ENGINE_VERSION - 1,
+            transport: SHARE_TRANSPORT.into(),
+        },
+        ShareEngine {
+            protocol: SHARE_ENGINE_VERSION + 1,
+            transport: SHARE_TRANSPORT.into(),
+        },
+        ShareEngine {
+            protocol: SHARE_ENGINE_VERSION,
+            transport: "iroh 9.9.9".into(),
+        },
+    ] {
+        assert!(!current.is_compatible_with(&other), "{other}");
+    }
+}

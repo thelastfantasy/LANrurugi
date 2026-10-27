@@ -14,8 +14,8 @@ use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::EndpointId;
 use lanrurugi_core::ids::{ArchiveId, ClaimId, ShareId};
 use lanrurugi_share_proto::messages::{
-    ChunkSpan, Envelope, HelpReason, HelpState, HelperAddr, HelperStatus, ManifestItem,
-    RefusalReason, Request, Response, ShareManifest, PROTO_VERSION,
+    ChunkSpan, HelpReason, HelpState, HelperAddr, HelperStatus, ManifestItem, RefusalReason,
+    Request, Response, ShareEngine, ShareManifest,
 };
 use lanrurugi_share_proto::ticket::{SignedTicket, Ticket, TicketError, TICKET_TTL_SECS};
 use lanrurugi_storage::shares::{
@@ -122,15 +122,15 @@ fn held(reason: super::limits::Held) -> RefusalReason {
 
 impl ShareProtocol {
     async fn serve_stream(self, conn: Connection, mut send: SendStream, mut recv: RecvStream) {
-        let envelope: Envelope = match read_frame(&mut recv).await {
-            Ok(e) => e,
+        let (engine, request) = match read_frame(&mut recv).await {
+            Ok(read) => read,
             Err(_) => return,
         };
-        if envelope.proto != PROTO_VERSION {
+        if !engine.is_compatible_with(&ShareEngine::current()) {
             let _ = write_frame(
                 &mut send,
                 &Response::Refused(RefusalReason::UnsupportedVersion {
-                    supported: vec![PROTO_VERSION],
+                    engine: ShareEngine::current(),
                 }),
             )
             .await;
@@ -138,7 +138,7 @@ impl ShareProtocol {
             return;
         }
         let remote = conn.remote_id();
-        let outcome = self.handle(&conn, remote, envelope.request).await;
+        let outcome = self.handle(&conn, remote, request).await;
         let (header, body) = match outcome {
             Ok(answer) => answer,
             Err(reason) => (Response::Refused(reason), None),

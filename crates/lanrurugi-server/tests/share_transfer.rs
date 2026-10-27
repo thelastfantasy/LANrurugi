@@ -507,6 +507,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
             state: ImportArchiveState::Done,
             bytes_done: data.len() as u64,
             error: None,
+            note: None,
             local_archive_id: Some(local.clone()),
         }],
         concurrency: 1,
@@ -521,6 +522,8 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         inherit_categories: false,
         state: ImportState::Done,
         error: None,
+        warnings: Vec::new(),
+        filename_policy: Default::default(),
         paused_until: None,
         created_at: 1,
     };
