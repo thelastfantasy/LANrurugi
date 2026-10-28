@@ -104,10 +104,17 @@
 
 .diag-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* `auto-fit` + `minmax` gives every button the same width and fills the row; a fixed 3-column
+     grid left the fourth (提交为反馈) stranded alone on a second row. */
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 8px;
-  max-width: 560px;
   margin: 12px 0 4px;
+}
+
+@media (max-width: 640px) {
+  .diag-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .diag-actions > * {
@@ -152,10 +159,7 @@
 /* ---- issues ---- */
 
 .diag-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  display: block;
   margin-bottom: 10px;
 }
 
@@ -476,4 +480,38 @@
   font-family: inherit;
   line-height: 1.5;
   margin-bottom: 8px;
+}
+
+/* Filters as two rows: levels/state/sort on top, search below. One wrapping row put the sort
+   select alone on its own line at this dialog width. */
+.diag-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.diag-search {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.diag-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+/* The two selects keep a readable width; the search box takes what is left. */
+/* Side by side, half the row each, with the search box taking the full row under them. */
+.diag-select-state,
+.diag-select-sort {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: none;
+  width: auto;
 }

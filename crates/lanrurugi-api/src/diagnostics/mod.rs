@@ -290,29 +290,47 @@ pub fn router() -> Router<AppState> {
 
 // ---------------------------------------------------------------- issues
 
-#[derive(Debug, Deserialize)]
+/// The issues list's query string. Repeated keys (`level=error&level=warning`) need
+/// `form_urlencoded`, not `serde_urlencoded`: the latter cannot deserialise a `Vec` from them.
+#[derive(Debug, Default)]
 struct IssueQuery {
-    #[serde(default)]
     level: Vec<String>,
-    #[serde(default)]
     source: Vec<String>,
-    #[serde(default)]
     release: Option<String>,
-    #[serde(default)]
     state: Option<String>,
-    #[serde(default)]
     from: Option<i64>,
-    #[serde(default)]
     to: Option<i64>,
-    #[serde(default)]
     q: Option<String>,
-    #[serde(default)]
     sort: Option<String>,
-    #[serde(default)]
     limit: Option<usize>,
 }
 
-async fn list_issues(State(state): State<AppState>, Query(query): Query<IssueQuery>) -> Response {
+impl IssueQuery {
+    fn parse(raw: &str) -> Self {
+        let mut query = Self::default();
+        for (key, value) in url::form_urlencoded::parse(raw.as_bytes()) {
+            match key.as_ref() {
+                "level" => query.level.push(value.into_owned()),
+                "source" => query.source.push(value.into_owned()),
+                "release" => query.release = Some(value.into_owned()),
+                "state" => query.state = Some(value.into_owned()),
+                "from" => query.from = value.parse().ok(),
+                "to" => query.to = value.parse().ok(),
+                "q" => query.q = Some(value.into_owned()),
+                "sort" => query.sort = Some(value.into_owned()),
+                "limit" => query.limit = value.parse().ok(),
+                _ => {}
+            }
+        }
+        query
+    }
+}
+
+async fn list_issues(
+    State(state): State<AppState>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> Response {
+    let query = IssueQuery::parse(raw.as_deref().unwrap_or_default());
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let issues = match state.repos.diagnostics.issues(1_000).await {
         Ok(issues) => issues,

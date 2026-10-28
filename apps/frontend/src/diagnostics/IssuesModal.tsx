@@ -85,45 +85,45 @@ export function IssuesView() {
         </p>
       )}
       <div className="diag-filters">
-        <div className="diag-chips">
+        <div className="diag-filter-row">
           {LEVELS.map((level) => (
             <button
               key={level}
               type="button"
-              className={`diag-chip diag-chip-${level}${
-                levels.includes(level) ? " is-on" : ""
-              }`}
+              className={`diag-chip diag-chip-${level}${levels.includes(level) ? " is-on" : ""}`}
               onClick={() => toggleLevel(level)}
             >
               {t(`diagnostics.level.${level}`)}
             </button>
           ))}
         </div>
-        <input
-          className="stdinput diag-search"
-          type="search"
-          placeholder={t("diagnostics.issues.search")}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <select
-          className="stdinput diag-select-state"
-          value={state}
-          onChange={(event) => setState(event.target.value as typeof state)}
-        >
-          <option value="open">{t("diagnostics.issues.stateOpen")}</option>
-          <option value="resolved">{t("diagnostics.issues.stateResolved")}</option>
-          <option value="ignored">{t("diagnostics.issues.stateIgnored")}</option>
-          <option value="all">{t("diagnostics.issues.stateAll")}</option>
-        </select>
-        <select
-          className="stdinput diag-select-sort"
-          value={sort}
-          onChange={(event) => setSort(event.target.value as typeof sort)}
-        >
-          <option value="recent">{t("diagnostics.issues.sortRecent")}</option>
-          <option value="frequent">{t("diagnostics.issues.sortFrequent")}</option>
-        </select>
+        <div className="diag-filter-row">
+          <select
+            className="stdinput diag-select-state"
+            value={state}
+            onChange={(event) => setState(event.target.value as typeof state)}
+          >
+            <option value="open">{t("diagnostics.issues.stateOpen")}</option>
+            <option value="resolved">{t("diagnostics.issues.stateResolved")}</option>
+            <option value="ignored">{t("diagnostics.issues.stateIgnored")}</option>
+            <option value="all">{t("diagnostics.issues.stateAll")}</option>
+          </select>
+          <select
+            className="stdinput diag-select-sort"
+            value={sort}
+            onChange={(event) => setSort(event.target.value as typeof sort)}
+          >
+            <option value="recent">{t("diagnostics.issues.sortRecent")}</option>
+            <option value="frequent">{t("diagnostics.issues.sortFrequent")}</option>
+          </select>
+          <input
+            className="stdinput diag-search"
+            type="search"
+            placeholder={t("diagnostics.issues.search")}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
       </div>
 
       <div className="diag-selection-bar">
