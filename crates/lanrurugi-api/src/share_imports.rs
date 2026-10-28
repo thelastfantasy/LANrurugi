@@ -384,7 +384,17 @@ async fn create_import(
     item.share_import_id = Some(record.id.to_string());
     item.title = Some(title);
     let _ = state.download_queue.update(&item).await;
-    if let Err(e) = crate::download_queue::start_item_from_subscription(&state, &item.id).await {
+    // Tell an already-open Upload page about the new row, exactly like a manual download's own
+    // enqueue does; without it the queue only showed the import after a page refresh. Sent here,
+    // once the record exists and the item carries its `share_import_id`, so the row can load its
+    // detail immediately instead of polling into a 404.
+    let queue_item_id = item.id.clone();
+    if let Some(tx) = &state.download_queue_tx {
+        let _ = tx.send(json!({ "kind": "add", "item": item }));
+    }
+    if let Err(e) =
+        crate::download_queue::start_item_from_subscription(&state, &queue_item_id).await
+    {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "share_import", e);
     }
     (
