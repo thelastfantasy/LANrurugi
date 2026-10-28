@@ -307,6 +307,7 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
             )}
             {!canScan && <p className="share-result-note">{t("share.import.noLiveScan")}</p>}
             <p className="share-result-note">{t("share.import.pasteHint")}</p>
+            <p className="share-disclaimer">{t("share.disclaimer.import")}</p>
             <input
               ref={fileInput}
               type="file"

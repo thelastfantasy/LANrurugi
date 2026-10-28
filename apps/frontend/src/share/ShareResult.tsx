@@ -74,6 +74,7 @@ export function ShareResult({ shareId, info }: { shareId: string; info?: ShareCo
       )}
       {code.needs_direct_route && <p className="share-result-note">{t("share.result.needsDirectRoute")}</p>}
       {code.embed && code.link && <EmbedConfigurator origin={code.link.replace(/\/s\/[^/]*$/, "")} code={code.code} />}
+      <p className="share-disclaimer">{t("share.disclaimer.share")}</p>
     </div>
   )
 }
