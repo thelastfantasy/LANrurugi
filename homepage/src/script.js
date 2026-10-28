@@ -110,6 +110,65 @@ for (const button of document.querySelectorAll(".copy-btn")) {
   });
 }
 
+/* ---- host port: the compose block edits it, step 3's URL follows ------------------------- */
+
+const portEditor = document.querySelector(".port-edit");
+const portEcho = document.getElementById("start-port-url");
+const DEFAULT_PORT = 3000;
+const MAX_PORT = 65535;
+let port = DEFAULT_PORT;
+
+const portDigits = () => portEditor.textContent.replace(/\D/g, "").slice(0, 5);
+
+/** The field's digits as a usable 1–65535 port, or null while it is empty or out of range. */
+function livePort() {
+  const digits = portDigits();
+  const value = Number(digits);
+  return digits && value >= 1 && value <= MAX_PORT ? value : null;
+}
+
+function showPort(value = port) {
+  if (portEcho) portEcho.textContent = String(value);
+}
+
+/** The URL follows every usable keystroke; blur commits it, and an unusable field snaps back. */
+function commitPort() {
+  const value = livePort();
+  if (value) port = value;
+  if (portEditor.textContent !== String(port)) portEditor.textContent = String(port);
+  showPort();
+}
+
+if (portEditor) {
+  showPort();
+  // Keep the field digits-only without rewriting it while the user is typing (that would move the
+  // caret): block non-digit insertions up front, and clean up anything else on blur.
+  portEditor.addEventListener("beforeinput", (event) => {
+    if (event.inputType === "insertText" && !/^\d+$/.test(event.data ?? "")) event.preventDefault();
+  });
+  portEditor.addEventListener("input", () => {
+    // An unusable draft (empty, 0, past 65535) leaves the URL on the committed port.
+    showPort(livePort() ?? port);
+  });
+  portEditor.addEventListener("blur", commitPort);
+  portEditor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      portEditor.blur();
+    } else if (event.key === "Escape") {
+      portEditor.textContent = String(port);
+      portEditor.blur();
+    }
+  });
+  portEditor.addEventListener("paste", (event) => {
+    event.preventDefault();
+    const digits = (event.clipboardData?.getData("text") ?? "").replace(/\D/g, "").slice(0, 5);
+    if (!digits) return;
+    // execCommand keeps the caret and fires `input`; assigning textContent is the fallback.
+    if (!document.execCommand("insertText", false, digits)) portEditor.textContent = digits;
+  });
+}
+
 /* ---- LANraragi deployment → LANrurugi compose (runs in the browser only) ------------------- */
 
 // Only the library is carried over: thumbnails and the database stay LANrurugi's own.
@@ -206,7 +265,7 @@ function convertDeployment(text, template) {
   }
   // The next port up, so LANrurugi can run next to LANraragi while the move is checked.
   const newPort = port?.replace(/\d+$/, (n) => String(Number(n) < 65535 ? Number(n) + 1 : Number(n) - 1));
-  if (newPort) out = out.replace(/^(\s*- )"3000:3000"$/m, `$1"${newPort}:3000"`);
+  if (newPort) out = out.replace(/^(\s*- )"\d+:3000"$/m, `$1"${newPort}:3000"`);
   const named = LEGACY_DIRS.map((dir) => mounts[dir]).filter((host) => host && isNamedVolume(host));
   if (named.length) {
     out += `\nvolumes:\n${named.map((name) => `  ${name}:\n    external: true`).join("\n")}\n`;

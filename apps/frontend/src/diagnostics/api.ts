@@ -11,7 +11,7 @@ export interface DiagnosticsSettings {
   diagnostics_plugins: boolean
   diagnostics_breadcrumbs: boolean
   diagnostics_request_bodies: boolean
-  diagnostics_include_archive_names: boolean
+  diagnostics_include_private_data: boolean
   diagnostics_retention_days: number
   diagnostics_max_events: number
   diagnostics_max_bytes: number
@@ -20,6 +20,8 @@ export interface DiagnosticsSettings {
   tracker_configured: boolean
   tracker_built_in: boolean
   tracker_host: string | null
+  tracker_routes: Record<string, string>
+  tracker_official: boolean
 }
 
 export interface DiagnosticsUsage {
@@ -226,4 +228,21 @@ export function useCloseWindow() {
     mutationFn: () => sendJson<ForwardWindow>("DELETE", "/diagnostics/window"),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["diagnostics"] }),
   })
+}
+
+/** Submits the generated report as a user report (Sentry "feedback") to the configured tracker. */
+export async function submitFeedback(input: {
+  message: string
+  eventId?: string
+}): Promise<{ sent: boolean; remaining_today: number }> {
+  const response = await fetch("/api/diagnostics/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: input.message, event_id: input.eventId }),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(body.error ?? `HTTP ${response.status}`)
+  }
+  return body as { sent: boolean; remaining_today: number }
 }

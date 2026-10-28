@@ -4332,6 +4332,7 @@ dependencies = [
  "pkarr",
  "rand 0.10.3",
  "reqwest",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "socket2",

@@ -1,9 +1,9 @@
 import { Select as BaseSelect } from "@base-ui/react/select"
-import type { ComponentProps, ReactNode } from "react"
+import { type ComponentProps, type ReactNode,useLayoutEffect, useRef, useState } from "react"
 import { FaCaretDown, FaCheck } from "react-icons/fa6"
 
 import { useMenuPalette } from "@/hooks/useMenuPalette"
-import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_MD, FONT_SIZE_SM, Z_OVERLAY_CONTENT } from "@/theme"
+import { FLOATING_POPUP_SHADOW, FLOATING_POPUP_TRANSITION_CLASSES, FONT_SIZE_MD, FONT_SIZE_SM, Z_OVERLAY_ABOVE_LEGACY_MODAL, Z_OVERLAY_CONTENT } from "@/theme"
 
 /** Chakra-UI-style size presets; fixed `height` avoids reflow based on font size alone. */
 const SELECT_SIZES = {
@@ -24,7 +24,7 @@ export function Select<Value extends string>({
   style,
   size,
   align,
-  popupZIndex = Z_OVERLAY_CONTENT,
+  popupZIndex,
   ...rootProps
 }: {
   value: Value
@@ -51,9 +51,23 @@ export function Select<Value extends string>({
 } & Omit<ComponentProps<typeof BaseSelect.Root>, "value" | "onValueChange" | "items" | "children">) {
   const palette = useMenuPalette()
   const sizeStyle = size ? SELECT_SIZES[size] : undefined
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const [autoZIndex, setAutoZIndex] = useState<number | undefined>(undefined)
+
+  // A dropdown portalled from inside a dialog renders *behind* the dialog unless its z-index clears
+  // the dialog's own — one caller at a time remembering to pass `popupZIndex` was a bug that kept
+  // recurring (sharing, then diagnostics). Detect the overlay here instead: any ancestor marked
+  // `data-overlay` (see `Modal`) lifts the popup above it. An explicit `popupZIndex` still wins.
+  useLayoutEffect(() => {
+    if (popupZIndex !== undefined) return
+    const overlay = triggerRef.current?.closest<HTMLElement>("[data-overlay]")
+    setAutoZIndex(overlay ? Z_OVERLAY_ABOVE_LEGACY_MODAL : undefined)
+  }, [popupZIndex])
+
   return (
     <BaseSelect.Root items={items} value={value} onValueChange={(v) => onValueChange(v as Value)} {...rootProps}>
       <BaseSelect.Trigger
+        ref={triggerRef}
         className={variant}
         aria-label={ariaLabel}
         style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 4, ...sizeStyle, ...style }}
@@ -69,7 +83,7 @@ export function Select<Value extends string>({
           align={align}
           alignItemWithTrigger={false}
           className="outline-none"
-          style={{ zIndex: popupZIndex }}
+          style={{ zIndex: popupZIndex ?? autoZIndex ?? Z_OVERLAY_CONTENT }}
         >
           <BaseSelect.Popup
             // text-left resets legacy's body { text-align: center }, which inherits into the portal.

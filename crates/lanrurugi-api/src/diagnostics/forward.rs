@@ -50,6 +50,8 @@ fn now_ms() -> i64 {
 pub struct TrackerDsn {
     pub envelope_url: String,
     pub key: String,
+    /// The numeric project id, for the endpoints that are not the envelope one (crons).
+    pub project: String,
     /// Scheme + host + port only: what the settings page may show without leaking the key.
     pub host: String,
 }
@@ -57,6 +59,11 @@ pub struct TrackerDsn {
 impl TrackerDsn {
     /// Accepts a Sentry DSN (`https://<key>@<host>/<project>`) or a bare project URL. The project id
     /// is the last path segment; the key is the URL's username, which is exactly the DSN shape.
+    /// The check-in endpoint for one monitor slug.
+    pub fn cron_url(&self, slug: &str) -> String {
+        format!("{}/api/{}/cron/{}", self.host, self.project, slug)
+    }
+
     pub fn parse(raw: &str) -> Option<Self> {
         let url = Url::parse(raw.trim()).ok()?;
         if !matches!(url.scheme(), "http" | "https") {
@@ -83,6 +90,7 @@ impl TrackerDsn {
         Some(Self {
             envelope_url,
             key,
+            project,
             host,
         })
     }
@@ -165,8 +173,9 @@ async fn bump(state: &AppState, field: &str, error: Option<&str>) {
     }
 }
 
-/// Forwards one stored event if a window is open. Called from the writer, never from a request.
-pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
+/// Forwards one envelope unchanged (sessions, transactions). Same rules as events: only while a
+/// window is open, and only to a configured tracker.
+pub async fn forward_envelope(state: &AppState, body: &[u8]) {
     let deadline = read_deadline(state).await;
     if deadline <= now_ms() {
         return;
@@ -176,6 +185,140 @@ pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
         return;
     };
     let Some(dsn) = TrackerDsn::parse(raw) else {
+        return;
+    };
+    let auth = format!(
+        "Sentry sentry_version=7, sentry_key={}, sentry_client=lanrurugi/{}",
+        dsn.key,
+        crate::version::current_version()
+    );
+    let _ = reqwest::Client::new()
+        .post(&dsn.envelope_url)
+        .header("X-Sentry-Auth", auth)
+        .header("Content-Type", "application/x-sentry-envelope")
+        .body(body.to_vec())
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+}
+
+/// Submits a user report (Sentry's "feedback") to the tracker: a note the administrator wrote,
+/// optionally tied to one event. Sent with this instance's own DSN, never from a browser.
+pub async fn submit_user_report(
+    state: &AppState,
+    message: &str,
+    email: Option<&str>,
+    event_id: Option<&str>,
+    user_id: Option<&str>,
+) -> Result<(), String> {
+    let settings = crate::diagnostics_settings::load(state).await;
+    let Some(raw) = settings.tracker_dsn() else {
+        return Err("configure a tracker first.".to_string());
+    };
+    let Some(dsn) = TrackerDsn::parse(raw) else {
+        return Err("the configured tracker address is not a valid DSN.".to_string());
+    };
+    let mut report = serde_json::json!({ "comments": message });
+    if let Some(user_id) = user_id {
+        // `user.id` is what the tracker counts distinct reporters by; it is an opaque hash, never
+        // the account's own identity.
+        report["user"] = serde_json::json!({ "id": user_id });
+    }
+    if let Some(email) = email.filter(|value| !value.trim().is_empty()) {
+        report["email"] = serde_json::json!(email.trim());
+    }
+    if let Some(event_id) = event_id.filter(|value| !value.trim().is_empty()) {
+        report["event_id"] = serde_json::json!(event_id.trim());
+    }
+    let envelope = format!(
+        "{{\"event_id\":\"{}\",\"sent_at\":\"{}\"}}\n{{\"type\":\"user_report\"}}\n{}\n",
+        event_id.unwrap_or("00000000000000000000000000000000"),
+        humantime_secs(now_ms()),
+        report
+    );
+    let auth = format!(
+        "Sentry sentry_version=7, sentry_key={}, sentry_client=lanrurugi/{}",
+        dsn.key,
+        crate::version::current_version()
+    );
+    let response = reqwest::Client::new()
+        .post(&dsn.envelope_url)
+        .header("X-Sentry-Auth", auth)
+        .header("Content-Type", "application/x-sentry-envelope")
+        .body(envelope)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("tracker answered {}", response.status()))
+    }
+}
+
+/// RFC3339 in UTC, seconds precision — what an envelope header expects for `sent_at`.
+fn humantime_secs(millis: i64) -> String {
+    crate::diagnostics::text::format_instant(millis)
+        .replace(" UTC", "Z")
+        .replace(' ', "T")
+}
+
+/// Sends one cron check-in to the tracker, if one is configured. Deliberately not gated on the
+/// forwarding window: a monitor is about the task, not about the administrator watching errors.
+pub fn cron(state: &AppState, slug: &str, status: &str, duration_ms: Option<i64>) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let state = state.clone();
+    let slug = slug.to_string();
+    let status = status.to_string();
+    handle.spawn(async move {
+        let settings = crate::diagnostics_settings::load(&state).await;
+        let Some(raw) = settings.tracker_dsn() else {
+            return;
+        };
+        let Some(dsn) = TrackerDsn::parse(raw) else {
+            return;
+        };
+        let mut url = format!("{}?status={status}", dsn.cron_url(&slug));
+        if let Some(duration) = duration_ms {
+            url.push_str(&format!("&duration={}", duration as f64 / 1000.0));
+        }
+        let _ = reqwest::Client::new()
+            .post(url)
+            .header(
+                "X-Sentry-Auth",
+                format!("Sentry sentry_version=7, sentry_key={}", dsn.key),
+            )
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+    });
+}
+
+/// A cron check-in failed: also record the reason as one event, so the monitor's history has
+/// something to read beyond "error".
+pub fn cron_error(slug: &str, reason: &str) {
+    crate::diagnostics::report::reporter().error(
+        reason,
+        crate::diagnostics::report::Attrs::new().tag("cron", slug),
+    );
+}
+
+/// Forwards one stored event if a window is open. Called from the writer, never from a request.
+pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
+    let deadline = read_deadline(state).await;
+    if deadline <= now_ms() {
+        return;
+    }
+    let settings = crate::diagnostics_settings::load(state).await;
+    // A per-source override wins: this is the seam that lets one deployment send web and server
+    // events to different projects without a code change.
+    let Some(raw) = settings.tracker_dsn_for(event.source.as_str()) else {
+        return;
+    };
+    let Some(dsn) = TrackerDsn::parse(&raw) else {
         bump(state, "failed", Some("invalid DSN")).await;
         return;
     };

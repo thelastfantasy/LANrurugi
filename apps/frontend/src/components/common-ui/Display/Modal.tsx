@@ -58,13 +58,21 @@ export function Modal({
         onClick={onClose}
       />
       <div
+        // Marks the layer for anything portalled out of a dialog's contents but needing to sit above
+        // it — `Select` reads this to lift its own popup (see its own docs).
+        data-overlay="modal"
         style={{
           position: "fixed",
           inset: 0,
           zIndex: 9001,
           display: "flex",
-          alignItems: "center",
+          // `flex-start` + the dialog's own `margin: auto` instead of `align-items: center`: a dialog
+          // taller than the viewport (the diagnostics panel on a phone) lost its top and bottom to
+          // centring, with nothing to scroll — the content was simply unreachable.
+          alignItems: "flex-start",
           justifyContent: "center",
+          overflowY: "auto",
+          padding: "24px 12px",
           pointerEvents: "none",
         }}
       >
@@ -74,6 +82,7 @@ export function Modal({
           style={{
             position: "relative",
             maxWidth: MAX_WIDTH,
+            margin: "auto",
             pointerEvents: "auto",
             animation: "modal-pop-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2)",
           }}

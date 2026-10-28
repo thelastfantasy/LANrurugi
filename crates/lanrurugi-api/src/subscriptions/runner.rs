@@ -955,9 +955,13 @@ pub async fn scheduler_loop(state: AppState) {
     let mut last_sweep: Option<std::time::Instant> = None;
     loop {
         ticker.tick().await;
+        // The hourly queue sweep is a scheduled job in its own right: a monitor catches the case
+        // where it stops running entirely, which is what a self-hosted instance never notices.
         if last_sweep.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(3600)) {
             last_sweep = Some(std::time::Instant::now());
+            let run = crate::diagnostics::report::reporter().cron("subscription-sweep");
             sweep_finished_queue(&state).await;
+            run.ok();
         }
         let Ok(subscriptions) = state.subscriptions.list_all().await else {
             continue;

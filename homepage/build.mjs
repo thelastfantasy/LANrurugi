@@ -62,6 +62,23 @@ const highlightYaml = (yaml) =>
     })
     .join("\n");
 
+/**
+ * The compose block's host port edits in place, so it is the one part of the YAML that is real
+ * inline markup rather than text; script.js keeps step 3's URL in step with it. Everything else
+ * still goes through `highlightYaml`.
+ */
+function composeBody(yaml, label) {
+  const attr = escapeHtml(label);
+  const html = highlightYaml(yaml);
+  if (!/- &quot;\d+:\d+&quot;/.test(html)) throw new Error("start.compose has no ports line to edit");
+  return html.replace(
+    /- &quot;(\d+):(\d+)&quot;/,
+    (_, host, container) =>
+      `- &quot;<span class="port-edit" contenteditable="true" role="textbox" aria-multiline="false" ` +
+      `inputmode="numeric" spellcheck="false" aria-label="${attr}" title="${attr}">${host}</span>:${container}&quot;`,
+  );
+}
+
 function text(copy, key, where) {
   const value = copy[key];
   if (value === undefined) throw new Error(`missing copy key "${key}" (${where})`);
@@ -127,7 +144,10 @@ function render(template, lang) {
     /(<([a-z0-9]+)\b[^>]*\bdata-i18n="([^"]+)"[^>]*>)([\s\S]*?)(<\/\2>)/g,
     (_, open, _tag, key, _old, close) => {
       const value = text(copy, key, "data-i18n");
-      const body = key === "start.compose" ? highlightYaml(value) : escapeHtml(value);
+      const body =
+        key === "start.compose"
+          ? composeBody(value, text(copy, "start.portEdit", "data-i18n"))
+          : escapeHtml(value);
       return open.replace(/\s*\bdata-i18n="[^"]+"/, "") + body + close;
     },
   );

@@ -53,9 +53,12 @@ fn nonce() -> String {
 }
 
 fn event_from(id: &str, message: &str) -> DiagnosticEvent {
-    let mut event = ingest::decode(&envelope(id, message))
-        .expect("a decodable envelope")
-        .expect("an event item");
+    let mut event = ingest::decode(
+        &envelope(id, message),
+        lanrurugi_api::diagnostics::scrub::Profile::WithPrivateData,
+    )
+    .expect("a decodable envelope")
+    .expect("an event item");
     event.fingerprint = issue::fingerprint(&event);
     event
 }

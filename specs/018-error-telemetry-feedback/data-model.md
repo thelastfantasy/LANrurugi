@@ -93,7 +93,7 @@ Fields added to the existing settings hash (`LRR_CONFIG`), all administrator-onl
 | `diagnostics_web` / `_server` / `_plugins` | on | per-source capture |
 | `diagnostics_breadcrumbs` | on | off drops breadcrumbs only |
 | `diagnostics_request_bodies` | on | error response bodies, scrubbed |
-| `diagnostics_include_archive_names` | off | opt-in; the only path that ever stores titles |
+| `diagnostics_include_private_data` | on | keeps archive names and paths; credentials are removed either way |
 | `diagnostics_retention_days` | 7 | |
 | `diagnostics_max_events` | 50000 | |
 | `diagnostics_max_bytes` | 536870912 | 512 MB |

@@ -56,8 +56,9 @@ the steps shows no connection to a tracker).
    release, the range, the request id and the bundle name.
 6. Grep the bundle for leaks: `unzip -p /tmp/bundle.zip | grep -E 'lrrg:|rt=|X-Share-Token|/home/|/temp/'`
    → no matches.
-7. With `include_archive_names` off, confirm no archive title or filename appears in the bundle; turn it
-   on and regenerate → titles appear only where the opt-in allows.
+7. With `include_private_data` off, confirm no archive title, filename or absolute path appears in the
+   bundle; turn it on and regenerate → names and paths appear, while share codes and tokens are still
+   replaced by placeholders in both cases.
 
 **Expected**: a zip that the administrator can attach to a GitHub issue as-is.
 

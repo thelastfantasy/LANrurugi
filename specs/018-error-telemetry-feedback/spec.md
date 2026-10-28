@@ -237,9 +237,10 @@ tracker and confirm the issues appear with the original timestamps and releases.
 
 - **FR-008**: Events MUST be scrubbed before storage and before any export or forwarding: share codes
   (both the readable form and the sealed route suffix), recipient and API tokens, cookies,
-  authorization headers, API keys and absolute filesystem paths MUST be removed; archive titles and
-  filenames MUST be excluded by default behind an explicit opt-in, with only an identifier prefix kept
-  otherwise.
+  authorization headers and API keys MUST always be removed. Archive titles, filenames and absolute
+  filesystem paths MUST be kept by default behind an administrator switch ("include private data",
+  on by default — a report naming the failing file is far easier to act on) and replaced with
+  placeholders when it is turned off.
 - **FR-009**: The system MUST provide a global on/off switch for capture and per-category switches for
   frontend events, server events, breadcrumbs and request bodies, each effective immediately.
 - **FR-010**: An instance with no configured telemetry endpoint, or with the sending window closed,

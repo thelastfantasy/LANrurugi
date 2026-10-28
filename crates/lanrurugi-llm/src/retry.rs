@@ -85,6 +85,16 @@ where
     Fut: Future<Output = (Result<T, LlmError>, TokenUsage)>,
 {
     let started = Instant::now();
+    // One observer per call, at the level where attempts/elapsed/usage all exist.
+    let observed = crate::telemetry::tracer().map(|tracer| {
+        (
+            tracer,
+            tracer.begin(&crate::telemetry::CallStarted {
+                feature: spec.feature.as_str(),
+                model: crate::DEEPSEEK_MODEL,
+            }),
+        )
+    });
     let mut attempts = 0u32;
     let mut usage_total = TokenUsage::default();
 
@@ -136,6 +146,20 @@ where
         usage: usage_total,
     };
     usage::record(redis_config, &report).await;
+    if let Some((tracer, state)) = observed {
+        tracer.end(
+            state,
+            &crate::telemetry::CallFinished {
+                feature: spec.feature.as_str(),
+                model: crate::DEEPSEEK_MODEL,
+                elapsed: report.elapsed,
+                attempts: report.attempts,
+                input_tokens: report.usage.prompt.unwrap_or(0),
+                output_tokens: report.usage.completion.unwrap_or(0),
+                error: report.outcome.map(|class| format!("{class:?}")),
+            },
+        );
+    }
     result
 }
 

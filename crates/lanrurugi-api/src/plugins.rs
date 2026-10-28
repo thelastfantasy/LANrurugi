@@ -1945,6 +1945,10 @@ async fn use_plugin_sync(
                 None,
             )
             .await;
+            // A failed manual run is a defect the administrator wants to report, so it also becomes
+            // a diagnostics event (specs/018). Plugin failures log at `warn`, below the bridge's
+            // error level, hence the explicit capture here.
+            crate::diagnostics::capture_plugin_error(&plugin, &e.to_string());
             axum::Json(json!({
                 "operation": "use_plugin",
                 "success": 0,

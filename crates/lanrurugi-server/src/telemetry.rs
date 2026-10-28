@@ -43,7 +43,14 @@ pub fn init(log_dir: Option<&Path>) {
         .with_writer(std::io::stderr)
         .with_filter(env_filter());
 
-    let registry = tracing_subscriber::registry().with(stderr_layer);
+    // Error-level log events also become diagnostics events (specs/018): plugin failures and
+    // background-job errors are logged, not raised, so this is the only way they reach the store.
+    let capture_layer =
+        sentry_tracing::layer().with_filter(tracing_subscriber::filter::LevelFilter::ERROR);
+
+    let registry = tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(capture_layer);
 
     match log_dir {
         Some(dir) => {

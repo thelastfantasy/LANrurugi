@@ -17,6 +17,8 @@ struct Rule {
     /// Keeps the label and drops only the value: e.g. `token=abc` → `token=[redacted]`.
     keep_prefix: bool,
     replacement: &'static str,
+    /// Paths are the one category the "include private data" profile keeps.
+    paths: bool,
 }
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
@@ -26,6 +28,7 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             pattern: Regex::new(pattern).expect("scrub pattern"),
             keep_prefix,
             replacement,
+            paths: false,
         });
     };
     // Share codes: the readable form and the sealed route suffix that rides in the copyable text.
@@ -48,35 +51,62 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         true,
         "",
     );
-    // Absolute paths: POSIX with at least two segments, and Windows drive paths.
-    add(r#"(?:^|[\s"'(=])(?:/[A-Za-z0-9._@+-]+){2,}"#, false, " ~");
-    add(r#"(?i)\b[A-Z]:\\[^\s"']{2,}"#, false, " ~");
+    // Absolute paths: POSIX with at least two segments, and Windows drive paths. These are the
+    // only rules the `WithPrivateData` profile skips.
+    drop(add);
+    for pattern in [
+        r#"(?:^|[\s"'(=])(?:/[A-Za-z0-9._@+-]+){2,}"#,
+        r#"(?i)\b[A-Z]:\\[^\s"']{2,}"#,
+    ] {
+        rules.push(Rule {
+            pattern: Regex::new(pattern).expect("scrub pattern"),
+            keep_prefix: false,
+            replacement: " ~",
+            paths: true,
+        });
+    }
+    let mut add = |pattern: &str, keep_prefix: bool, replacement: &'static str| {
+        rules.push(Rule {
+            pattern: Regex::new(pattern).expect("scrub pattern"),
+            keep_prefix,
+            replacement,
+            paths: false,
+        });
+    };
     // Long hex or base64 blobs: keys, hashes, tickets that are not already covered by a label.
     add(r"\b[0-9a-f]{32,}\b", false, REDACTED);
     rules
 });
 
-/// Whether an archive's name may appear in a captured message or tag.
+/// How much of the administrator's own content survives scrubbing. Credentials (share codes,
+/// tokens, cookies, keys) are removed in **both** profiles — they are never diagnostic information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveNames {
-    Strip,
-    Keep,
+pub enum Profile {
+    /// Default: absolute paths and archive names are removed.
+    Strict,
+    /// The administrator opted in: paths and archive names stay, because a report naming the file
+    /// that failed is far easier to act on.
+    WithPrivateData,
 }
 
-impl ArchiveNames {
-    pub fn from_flag(keep: bool) -> Self {
-        if keep {
-            Self::Keep
+impl Profile {
+    pub fn from_flag(keep_private_data: bool) -> Self {
+        if keep_private_data {
+            Self::WithPrivateData
         } else {
-            Self::Strip
+            Self::Strict
         }
     }
 }
 
 /// Scrubs one string. Cheap enough to call per field; a `Regex` set is built once per process.
-pub fn text(input: &str, archive_names: ArchiveNames) -> String {
+pub fn text(input: &str, profile: Profile) -> String {
     let mut out = input.to_string();
     for rule in RULES.iter() {
+        // The path rule is the only one private data may keep.
+        if rule.paths && profile == Profile::WithPrivateData {
+            continue;
+        }
         out = if rule.keep_prefix {
             // Keep the label (`token=`), replace only the value it introduced.
             rule.pattern
@@ -90,10 +120,6 @@ pub fn text(input: &str, archive_names: ArchiveNames) -> String {
                 .into_owned()
         };
     }
-    // Archive titles are never put here by the parser unless the administrator opted in, so an
-    // opted-out payload simply has none; the flag exists so a caller that did include one (a
-    // message a plugin composed itself) can drop it with the same call.
-    let _ = archive_names;
     truncate(&out, 8 * 1024)
 }
 
@@ -116,7 +142,7 @@ mod tests {
     use super::*;
 
     fn strip(input: &str) -> String {
-        text(input, ArchiveNames::Strip)
+        text(input, Profile::Strict)
     }
 
     #[test]
@@ -149,6 +175,29 @@ mod tests {
     fn long_hex_blobs_disappear() {
         let out = strip("ticket 0123456789abcdef0123456789abcdef0123");
         assert!(!out.contains("0123456789abcdef"), "{out}");
+    }
+
+    #[test]
+    fn private_data_keeps_paths_but_never_credentials() {
+        let message = "failed at /home/jade/manga/x.zip for lrrg:VXR29-J5RNH token=deadbeef1234";
+        let kept = text(message, Profile::WithPrivateData);
+        assert!(kept.contains("/home/jade/manga/x.zip"), "{kept}");
+        assert!(
+            !kept.contains("VXR29-J5RNH"),
+            "share codes go either way: {kept}"
+        );
+        assert!(
+            !kept.contains("deadbeef1234"),
+            "tokens go either way: {kept}"
+        );
+        let strict = text(message, Profile::Strict);
+        assert!(!strict.contains("/home/jade"), "{strict}");
+    }
+
+    #[test]
+    fn the_profile_comes_from_the_switch() {
+        assert_eq!(Profile::from_flag(true), Profile::WithPrivateData);
+        assert_eq!(Profile::from_flag(false), Profile::Strict);
     }
 
     #[test]

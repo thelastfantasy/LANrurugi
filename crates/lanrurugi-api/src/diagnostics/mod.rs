@@ -11,11 +11,148 @@ pub mod bundle;
 pub mod forward;
 pub mod issue;
 pub mod logs;
+pub mod report;
 pub mod scrub;
 pub mod symbolicate;
 pub mod text;
 
 use std::sync::OnceLock;
+
+/// The running state, installed once at startup so the SDK transport (which has no arguments) can
+/// hand an envelope to the same store the HTTP ingest uses.
+static CAPTURE_STATE: OnceLock<AppState> = OnceLock::new();
+
+/// Installed by `main` right after the state exists; before that, captured events are dropped.
+pub fn attach_capture_state(state: AppState) {
+    let _ = CAPTURE_STATE.set(state);
+}
+
+/// The server's own SDK transport: it never leaves the process. It serialises the envelope and
+/// feeds it through the same decode → scrub → store path the browser's events take.
+struct LocalTransport;
+
+/// The SDK wants a factory, not a transport instance; this one hands back the stateless
+/// [`LocalTransport`].
+impl sentry::TransportFactory for LocalTransport {
+    fn create_transport_with_options(
+        &self,
+        _options: sentry::TransportOptions,
+    ) -> std::sync::Arc<dyn sentry::Transport> {
+        std::sync::Arc::new(LocalTransport)
+    }
+}
+
+impl sentry::Transport for LocalTransport {
+    fn send_envelope(&self, envelope: sentry::Envelope) {
+        let mut body = Vec::new();
+        if envelope.to_writer(&mut body).is_err() || body.is_empty() {
+            return;
+        }
+        let Some(state) = CAPTURE_STATE.get().cloned() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let profile = crate::diagnostics_settings::load(&state)
+                .await
+                .scrub_profile();
+            let Ok(Some(mut event)) = ingest::decode(&body, profile) else {
+                return;
+            };
+            event.fingerprint = issue::fingerprint(&event);
+            store(&state, event).await;
+        });
+    }
+}
+
+static CAPTURE_GUARD: OnceLock<sentry::ClientInitGuard> = OnceLock::new();
+
+/// The installed [`report::Reporter`]; `report::Silent` until `init_server_capture` runs.
+pub(crate) static REPORTER: OnceLock<&'static dyn report::Reporter> = OnceLock::new();
+
+/// Initialises the server-side capture: panics, error-level `tracing` events and (via the
+/// middleware in [`capture_5xx`]) 5xx responses all become local events. The DSN is a dummy — the
+/// transport above is the only sink, so nothing is ever sent anywhere by the SDK itself.
+pub fn init_server_capture() {
+    let release = std::env::var("LANRURUGI_GIT_SHA")
+        .ok()
+        .or_else(|| option_env!("LANRURUGI_GIT_SHA").map(str::to_string));
+    let environment = std::env::var("LANRURUGI_ENVIRONMENT").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "production"
+        }
+        .to_string()
+    });
+    let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
+    // `ClientOptions` is `#[non_exhaustive]`: start from the defaults and set what matters.
+    let mut options = sentry::ClientOptions::default();
+    options.dsn = "http://lanrurugi@127.0.0.1/1".parse().ok();
+    options.release = release.clone().map(Into::into);
+    options.environment = Some(environment.clone().into());
+    options.transport = Some(std::sync::Arc::new(LocalTransport));
+    options.attach_stacktrace = true;
+    // Performance: 1% by default. Enough for a p95 on a self-hosted instance, nowhere near enough
+    // to become the bulk of what is stored.
+    let trace_rate = std::env::var("LANRURUGI_TRACES_SAMPLE_RATE")
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .map(|rate| rate.clamp(0.0, 1.0))
+        .unwrap_or(0.01);
+    options = options.traces_sample_rate(trace_rate);
+    let _ = CAPTURE_GUARD.set(sentry::init(options));
+    report::install(&report::SentryReporter);
+    // Deployment identity, so several installs forwarding to one project stay distinguishable.
+    sentry::configure_scope(|scope| {
+        scope.set_tag("deployment", hostname);
+        scope.set_tag("environment", &environment);
+        if let Some(release) = &release {
+            scope.set_tag("release", release);
+        }
+    });
+}
+
+/// Records a 5xx response as one event. Handlers answer with a `Response` (not `Result`), so a
+/// tower error layer never sees them; this checks the status instead.
+pub async fn capture_5xx(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let response = next.run(request).await;
+    if response.status().is_server_error() {
+        let settings = crate::diagnostics_settings::load(&state).await;
+        if settings.capture_source("server") {
+            let status = response.status().as_u16();
+            let mut attrs = report::Attrs::new()
+                .tag("source", "server")
+                .tag("http_method", method.to_string())
+                .tag("http_status", status.to_string())
+                .tag("http_path", &path);
+            // The request id ties this event to the log lines of the same request, which is what
+            // makes an issue's "related logs" excerpt work.
+            if let Some(id) = request_id.as_deref() {
+                attrs = attrs.tag("request_id", id);
+            }
+            report::reporter().error(&format!("{method} {path} answered {status}"), attrs);
+        }
+    }
+    response
+}
+
+/// Records a plugin run that failed (Deno-side error, timeout, crash). Plugin failures are logged
+/// at `warn`, so the error-level tracing bridge would miss them; a manual run failing is a real
+/// defect from the administrator's point of view, so it is captured explicitly as a plugin event.
+pub fn capture_plugin_error(plugin: &str, message: &str) {
+    report::reporter().error(message, report::Attrs::new().plugin(plugin));
+}
 
 /// The one background writer: envelopes are accepted on the request path and written off it.
 static WRITER: OnceLock<
@@ -126,6 +263,12 @@ pub fn router() -> Router<AppState> {
             "/diagnostics/envelope",
             post(envelope).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
         )
+        // The Sentry SDK derives its ingest URL from the DSN as `<dsn>/api/<project>/envelope/`,
+        // trailing slash included, so both spellings have to reach the handler.
+        .route(
+            "/diagnostics/envelope/",
+            post(envelope).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+        )
         .route("/diagnostics/issues", get(list_issues))
         .route("/diagnostics/issues/{fingerprint}", get(issue_detail))
         .route(
@@ -136,6 +279,7 @@ pub fn router() -> Router<AppState> {
         .route("/diagnostics/bundles/preview", post(bundle_preview))
         .route("/diagnostics/bundles/text", post(bundle_text))
         .route("/diagnostics/bundles", post(bundle_download))
+        .route("/diagnostics/feedback", post(feedback))
         .route("/diagnostics/window", get(get_window).post(post_window))
         .route("/diagnostics/window", delete(delete_window))
         .route(
@@ -564,6 +708,172 @@ fn timestamp_for_name(millis: i64) -> String {
     format!("{}-{}", date.replace('-', ""), time)
 }
 
+// ---------------------------------------------------------------- user feedback
+
+/// Bounds on a submitted note. Generous enough for a real description, small enough that nobody can
+/// use the instance as a message pump.
+const FEEDBACK_MAX_CHARS: usize = 2_000;
+/// Five notes per ten minutes, and the same text is not accepted twice within five minutes.
+const FEEDBACK_PER_WINDOW: u32 = 5;
+const FEEDBACK_WINDOW_SECS: i64 = 600;
+const FEEDBACK_DEDUPE_SECS: i64 = 300;
+
+struct FeedbackBudget {
+    started: i64,
+    used: u32,
+    last_hash: u64,
+    last_at: i64,
+}
+
+static FEEDBACK_BUDGET: OnceLock<std::sync::Mutex<FeedbackBudget>> = OnceLock::new();
+
+/// Where a note came from, for the per-identity daily quota. `session` is the administrator's own
+/// login; a token is identified by its id so one leaked token cannot exhaust the day's allowance
+/// for the logged-in administrator.
+fn identity_key(auth: Option<&crate::auth_context::AuthContext>) -> String {
+    use crate::auth_context::AuthMethod;
+    match auth.map(|auth| &auth.method) {
+        Some(AuthMethod::Token { id, .. }) => format!("token:{id}"),
+        Some(AuthMethod::Session) => "session".to_string(),
+        _ => "guest".to_string(),
+    }
+}
+
+/// A stable, opaque id for a report's `user.id` — the tracker groups by it, and nothing about the
+/// account itself is sent.
+fn feedback_user_id(identity: &str) -> String {
+    // blake3, already a dependency here, and truncated: enough to be unique per identity, short
+    // enough to read in the tracker's UI.
+    let digest = blake3::hash(identity.as_bytes());
+    format!("lrrg-{}", &digest.to_hex()[..16])
+}
+
+/// `Ok(())` when a note may be sent; `Err(reason)` when it is spam, oversized or too frequent.
+fn admit_feedback(message: &str) -> Result<(), String> {
+    let budget = FEEDBACK_BUDGET.get_or_init(|| {
+        std::sync::Mutex::new(FeedbackBudget {
+            started: now_ms() / 1000,
+            used: 0,
+            last_hash: 0,
+            last_at: 0,
+        })
+    });
+    let Ok(mut budget) = budget.lock() else {
+        return Ok(());
+    };
+    admit(&mut budget, now_ms() / 1000, message)
+}
+
+/// The decision itself, over explicit state — unit-testable without touching the process global.
+fn admit(budget: &mut FeedbackBudget, now: i64, message: &str) -> Result<(), String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return Err("the message is empty.".to_string());
+    }
+    if trimmed.chars().count() > FEEDBACK_MAX_CHARS {
+        return Err(format!(
+            "the message is longer than {FEEDBACK_MAX_CHARS} characters."
+        ));
+    }
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        trimmed.hash(&mut hasher);
+        hasher.finish()
+    };
+    if now - budget.started >= FEEDBACK_WINDOW_SECS {
+        budget.started = now;
+        budget.used = 0;
+    }
+    if budget.used >= FEEDBACK_PER_WINDOW {
+        return Err("too many notes in a short time; try again later.".to_string());
+    }
+    if hash == budget.last_hash && now - budget.last_at < FEEDBACK_DEDUPE_SECS {
+        return Err("that note was already submitted.".to_string());
+    }
+    budget.used += 1;
+    budget.last_hash = hash;
+    budget.last_at = now;
+    Ok(())
+}
+
+/// How many notes this identity may still send today. `None` means the quota is spent. The counter
+/// lives in Redis with an expiry just past midnight UTC, so restarts cannot reset it.
+async fn daily_feedback_budget(state: &AppState, identity: &str) -> Option<u32> {
+    const DAILY_LIMIT: u32 = 20;
+    let key = format!(
+        "LANRURUGI_FEEDBACK_DAILY:{identity}:{}",
+        now_ms() / 86_400_000
+    );
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return Some(DAILY_LIMIT);
+    };
+    let used: u32 = deadpool_redis::redis::cmd("INCR")
+        .arg(&key)
+        .query_async::<u32>(&mut conn)
+        .await
+        .unwrap_or(0);
+    if used == 1 {
+        let _: Result<(), _> = deadpool_redis::redis::cmd("EXPIRE")
+            .arg(&key)
+            .arg(90_000)
+            .query_async(&mut conn)
+            .await;
+    }
+    (used <= DAILY_LIMIT).then(|| DAILY_LIMIT - used)
+}
+
+async fn feedback(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(message) = body.get("message").and_then(|value| value.as_str()) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "diagnostics_feedback",
+            "expected a message.",
+        );
+    };
+    if let Err(reason) = admit_feedback(message) {
+        // 429 rather than 400: the content may be fine, the pace is the problem.
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "diagnostics_feedback",
+            reason,
+        );
+    }
+    // Control characters (including NUL and stray CRs) are stripped; the note is stored as text.
+    let clean: String = message
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect();
+    // Per-identity daily quota: the identity is the authenticated caller, which the server already
+    // knows, so a client cannot reset it by clearing storage or forging an id.
+    let identity = identity_key(auth.as_ref().map(|extension| &extension.0));
+    let Some(remaining) = daily_feedback_budget(&state, &identity).await else {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "diagnostics_feedback",
+            "the daily feedback limit for this account is used up.",
+        );
+    };
+    let user_id = feedback_user_id(&identity);
+    match forward::submit_user_report(
+        &state,
+        &clean,
+        body.get("email").and_then(|value| value.as_str()),
+        body.get("event_id").and_then(|value| value.as_str()),
+        Some(&user_id),
+    )
+    .await
+    {
+        Ok(()) => Json(json!({ "sent": true, "remaining_today": remaining })).into_response(),
+        Err(reason) => error(StatusCode::CONFLICT, "diagnostics_feedback", reason),
+    }
+}
+
 // ---------------------------------------------------------------- window
 
 async fn get_window(State(state): State<AppState>) -> Response {
@@ -646,6 +956,54 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+
+    fn fresh() -> FeedbackBudget {
+        FeedbackBudget {
+            started: 0,
+            used: 0,
+            last_hash: 0,
+            last_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_empty_note_is_refused() {
+        assert!(admit(&mut fresh(), 1_000, "   ").is_err());
+    }
+
+    #[test]
+    fn an_oversized_note_is_refused() {
+        let note = "x".repeat(FEEDBACK_MAX_CHARS + 1);
+        let error = admit(&mut fresh(), 1_000, &note).unwrap_err();
+        assert!(error.contains("longer than"), "{error}");
+    }
+
+    #[test]
+    fn the_same_note_twice_is_deduplicated() {
+        let mut budget = fresh();
+        assert!(admit(&mut budget, 1_000, "same note").is_ok());
+        let error = admit(&mut budget, 1_010, "same note").unwrap_err();
+        assert!(error.contains("already submitted"), "{error}");
+        // After the dedupe window a deliberate re-send is allowed again.
+        assert!(admit(&mut budget, 1_000 + FEEDBACK_DEDUPE_SECS + 1, "same note").is_ok());
+    }
+
+    #[test]
+    fn the_rate_limit_trips_and_recovers_next_window() {
+        let mut budget = fresh();
+        for index in 0..FEEDBACK_PER_WINDOW {
+            assert!(admit(&mut budget, 1_000, &format!("note {index}")).is_ok());
+        }
+        let error = admit(&mut budget, 1_010, "one too many").unwrap_err();
+        assert!(error.contains("too many notes"), "{error}");
+        // A new window resets the allowance.
+        assert!(admit(&mut budget, 1_000 + FEEDBACK_WINDOW_SECS, "next window").is_ok());
+    }
+}
+
 /// Kept out of the route module so the decode can be unit-tested without an `AppState`.
 pub mod ingest {
     use lanrurugi_storage::diagnostics::{
@@ -653,7 +1011,10 @@ pub mod ingest {
     };
     use serde_json::Value;
 
-    pub fn decode(body: &[u8]) -> Result<Option<DiagnosticEvent>, String> {
+    pub fn decode(
+        body: &[u8],
+        profile: crate::diagnostics::scrub::Profile,
+    ) -> Result<Option<DiagnosticEvent>, String> {
         let text = String::from_utf8_lossy(body);
         let mut lines = text.split('\n');
         let header = lines.next().ok_or("empty envelope")?;
@@ -685,10 +1046,15 @@ pub mod ingest {
             Some(event) => event,
             None => return Ok(None),
         };
-        Ok(Some(project(&header, &event, body)))
+        Ok(Some(project(&header, &event, body, profile)))
     }
 
-    fn project(header: &Value, event: &Value, raw: &[u8]) -> DiagnosticEvent {
+    fn project(
+        header: &Value,
+        event: &Value,
+        raw: &[u8],
+        profile: crate::diagnostics::scrub::Profile,
+    ) -> DiagnosticEvent {
         let at = event
             .get("timestamp")
             .and_then(|v| v.as_f64())
@@ -728,7 +1094,14 @@ pub mod ingest {
             .get("release")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let source = Source::from_wire(platform.as_deref().unwrap_or("rust"));
+        let explicit_source = event
+            .get("tags")
+            .and_then(|tags| tags.get("source"))
+            .and_then(|value| value.as_str());
+        let source = match explicit_source {
+            Some(source) => Source::from_wire(source),
+            None => Source::from_wire(platform.as_deref().unwrap_or("rust")),
+        };
         let client_at = event.get("time_spent").and_then(|v| v.as_i64()).map(|_| at);
         let tags = event
             .get("tags")
@@ -764,7 +1137,7 @@ pub mod ingest {
                             .to_string(),
                         message: crate::diagnostics::scrub::text(
                             value.get("message").and_then(|v| v.as_str()).unwrap_or(""),
-                            crate::diagnostics::scrub::ArchiveNames::Strip,
+                            profile,
                         ),
                     })
                     .collect::<Vec<_>>()
@@ -785,8 +1158,8 @@ pub mod ingest {
             client_at,
             level: Level::from_wire(level),
             source,
-            message: crate::diagnostics::scrub::text(&message, scrub_names()),
-            stack: stack.map(|stack| crate::diagnostics::scrub::text(&stack, scrub_names())),
+            message: crate::diagnostics::scrub::text(&message, profile),
+            stack: stack.map(|stack| crate::diagnostics::scrub::text(&stack, profile)),
             release,
             platform,
             request_id: event
@@ -799,10 +1172,6 @@ pub mod ingest {
             envelope: raw.to_vec(),
             bytes: raw.len() as u64,
         }
-    }
-
-    fn scrub_names() -> crate::diagnostics::scrub::ArchiveNames {
-        crate::diagnostics::scrub::ArchiveNames::Strip
     }
 
     fn render_stack(stack: &Value) -> String {
@@ -897,7 +1266,7 @@ pub async fn envelope(State(state): State<AppState>, body: axum::body::Bytes) ->
         state.repos.diagnostics.bump_drop("rate_limit").await;
         return axum::http::StatusCode::NO_CONTENT.into_response();
     }
-    match ingest::decode(&body) {
+    match ingest::decode(&body, settings.scrub_profile()) {
         Ok(Some(mut event)) => {
             event.fingerprint = issue::fingerprint(&event);
             if !settings.capture_source(event.source.as_str()) {
@@ -911,7 +1280,13 @@ pub async fn envelope(State(state): State<AppState>, body: axum::body::Bytes) ->
             store(&state, event).await;
             Json(json!({ "id": id })).into_response()
         }
-        Ok(None) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => {
+            // Not an error event: a session (release health) or a transaction. The SDK sends these
+            // in their own envelopes, so they are forwarded as-is rather than stored — the store is
+            // for issues, the tracker is for session/transaction statistics.
+            forward::forward_envelope(&state, &body).await;
+            axum::http::StatusCode::NO_CONTENT.into_response()
+        }
         Err(message) => error(
             axum::http::StatusCode::BAD_REQUEST,
             "diagnostics_envelope",

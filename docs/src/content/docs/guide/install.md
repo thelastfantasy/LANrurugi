@@ -36,7 +36,7 @@ services:
       - ./data/thumb:/home/koyomi/lanrurugi/thumb
       # Redis 数据，LANrurugi 专用；LANraragi 的元数据通过备份 JSON 导入
       - ./data/database:/home/koyomi/lanrurugi/database
-      # 推荐功能的嵌入模型，首次用到时自动下载
+      # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
       - ./data/models:/home/koyomi/lanrurugi/models
     environment:
       # 经 HTTPS 反向代理访问时改为 true
@@ -48,7 +48,7 @@ services:
 docker compose up -d      # 或 podman compose up -d
 ```
 
-NAS 上（群晖 Container Manager、Portainer 等）新建一个 compose 项目，粘贴同一段文本即可。
+在群晖 Container Manager、Portainer 等面板里新建一个 compose 项目，粘贴同一段文本即可。
 
 启动后在浏览器打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器。四个挂载目录：
 
@@ -57,7 +57,7 @@ NAS 上（群晖 Container Manager、Portainer 等）新建一个 compose 项目
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | 你的档案库 |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | 缩略图缓存 |
 | `./data/database` | `/home/koyomi/lanrurugi/database` | Redis 数据（LANrurugi 专用） |
-| `./data/models` | `/home/koyomi/lanrurugi/models` | 推荐功能的嵌入模型缓存 |
+| `./data/models` | `/home/koyomi/lanrurugi/models` | 推荐和单行本整理用的本地模型缓存 |
 
 要通过域名和 HTTPS 访问，见[反向代理](../reverse-proxy/)。
 

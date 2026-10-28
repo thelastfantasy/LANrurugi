@@ -33,6 +33,9 @@ if [ -d /dev/dri ]; then
   device_flags+=(--device /dev/dri)
 fi
 
+# `LANRURUGI_TRACKER_DSN` is passed through from the shell: exporting it before `dev-up` points
+# this instance's diagnostics forwarding at a tracker without touching the settings page
+# (specs/018).
 podman run -d --replace \
   --name lrr-dev \
   --network host \
@@ -54,6 +57,7 @@ podman run -d --replace \
   -e LANRURUGI_INPAINT_MODEL_DIR=/home/koyomi/lanrurugi/models/inpaint \
   -e LANRURUGI_BUBBLE_SEG_MODEL_DIR=/home/koyomi/lanrurugi/models/bubble-seg \
   -e LANRURUGI_GEOIP_ACCOUNT_ID="${LANRURUGI_GEOIP_ACCOUNT_ID:-}" \
+  -e LANRURUGI_TRACKER_DSN="${LANRURUGI_TRACKER_DSN:-}" \
   -e LANRURUGI_GEOIP_LICENSE_KEY="${LANRURUGI_GEOIP_LICENSE_KEY:-}" \
   --health-cmd "curl -fsS http://127.0.0.1:3001/health" \
   --health-interval 15s \

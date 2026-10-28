@@ -1494,6 +1494,12 @@ main {
   font-size: 0.9rem;
 }
 
+/* The port in step 3 mirrors the editable one in the compose block, so it carries the same hue. */
+.port-echo {
+  color: var(--accent-text);
+  font-weight: 900;
+}
+
 .code {
   margin: 0;
   padding: 50px 26px 24px;
@@ -1514,6 +1520,24 @@ main {
 
 .c-dim {
   color: #9a9284;
+}
+
+/* The compose's host port is editable in place; a dashed underline marks it without shifting the
+   line, and the focus fill doubles as the focus indicator. The code block is always dark, so these
+   are fixed colors rather than theme variables. */
+.port-edit {
+  text-decoration: underline dashed #f0a500;
+  text-underline-offset: 3px;
+  cursor: text;
+  outline: none;
+}
+
+.port-edit:hover,
+.port-edit:focus {
+  border-radius: 3px;
+  background: #f0a500;
+  color: #1d1e22;
+  text-decoration: none;
 }
 
 

@@ -18,7 +18,7 @@ function formatStamp(millis: number): string {
   )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-export function IssuesModal() {
+export function IssuesView() {
   const { t } = useTranslation()
   const [levels, setLevels] = useState<string[]>([...LEVELS])
   const [state, setState] = useState<"open" | "resolved" | "ignored" | "all">("open")
@@ -60,14 +60,14 @@ export function IssuesModal() {
   }
 
   return (
-    <div className="diagnostics-issues">
-      <div className="diagnostics-filters">
-        <div className="diagnostics-level-chips">
+    <div className="diag-issues">
+      <div className="diag-filters">
+        <div className="diag-chips">
           {LEVELS.map((level) => (
             <button
               key={level}
               type="button"
-              className={`diagnostics-chip diagnostics-chip-${level}${
+              className={`diag-chip diag-chip-${level}${
                 levels.includes(level) ? " is-on" : ""
               }`}
               onClick={() => toggleLevel(level)}
@@ -77,14 +77,14 @@ export function IssuesModal() {
           ))}
         </div>
         <input
-          className="stdinput"
+          className="stdinput diag-search"
           type="search"
           placeholder={t("diagnostics.issues.search")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
         <select
-          className="stdinput"
+          className="stdinput diag-select-state"
           value={state}
           onChange={(event) => setState(event.target.value as typeof state)}
         >
@@ -94,7 +94,7 @@ export function IssuesModal() {
           <option value="all">{t("diagnostics.issues.stateAll")}</option>
         </select>
         <select
-          className="stdinput"
+          className="stdinput diag-select-sort"
           value={sort}
           onChange={(event) => setSort(event.target.value as typeof sort)}
         >
@@ -103,25 +103,27 @@ export function IssuesModal() {
         </select>
       </div>
 
-      <div className="diagnostics-selection-bar">
-        <span>
+      <div className="diag-selection-bar">
+        <span className="diag-selection-count">
           {t("diagnostics.issues.selected", {
             count: selected.size,
             total: rows.length,
           })}
         </span>
+        <div className="diag-selection-actions">
         <button type="button" className="stdbtn" onClick={() => setSelected(new Set(rows.map((row) => row.fingerprint)))}>
           {t("diagnostics.issues.selectAll")}
         </button>
         <button type="button" className="stdbtn" onClick={() => setSelected(new Set())}>
           {t("diagnostics.issues.selectNone")}
         </button>
-        <button type="button" className="stdbtn" onClick={onlyErrors}>
-          {t("diagnostics.issues.onlyErrors")}
-        </button>
+          <button type="button" className="stdbtn" onClick={onlyErrors}>
+            {t("diagnostics.issues.onlyErrors")}
+          </button>
+        </div>
       </div>
 
-      <div className="diagnostics-issue-list">
+      <div className="diag-issue-list">
         {rows.map((row) => (
           <IssueLine
             key={row.fingerprint}
@@ -162,41 +164,41 @@ function IssueLine({
   const detail = useIssueDetail(expanded ? row.fingerprint : null)
 
   return (
-    <div className={`diagnostics-issue diagnostics-issue-${row.level}`}>
-      <div className="diagnostics-issue-row">
+    <div className={`diagnostics-issue diag-issue-${row.level}`}>
+      <div className="diag-issue-row">
         <CheckboxField checked={checked} onCheckedChange={onToggle}>
-          <span className="diagnostics-issue-title">{row.title}</span>
+          <span className="diag-issue-title">{row.title}</span>
         </CheckboxField>
-        <span className={`diagnostics-level diagnostics-level-${row.level}`}>
+        <span className={`diag-level diag-level-${row.level}`}>
           {t(`diagnostics.level.${row.level}`)}
         </span>
-        <span className="diagnostics-issue-count">×{row.count}</span>
-        <span className="diagnostics-issue-time">{formatStamp(row.last_seen)}</span>
-        <button type="button" className="diagnostics-issue-open stdbtn" onClick={onOpen}>
+        <span className="diag-issue-count">×{row.count}</span>
+        <span className="diag-issue-time">{formatStamp(row.last_seen)}</span>
+        <button type="button" className="diag-issue-open stdbtn" onClick={onOpen}>
           {expanded ? t("diagnostics.issues.hide") : t("diagnostics.issues.show")}
         </button>
       </div>
       {expanded && (
-        <div className="diagnostics-issue-detail">
+        <div className="diag-issue-detail">
           {detail.data?.events.map((event) => (
-            <div key={event.id} className="diagnostics-event">
-              <div className="diagnostics-event-head">
-                <span className="diagnostics-event-time">{formatStamp(event.at)}</span>
-                <span className="diagnostics-event-source">{event.source}</span>
+            <div key={event.id} className="diag-event">
+              <div className="diag-event-head">
+                <span className="diag-event-time">{formatStamp(event.at)}</span>
+                <span className="diag-event-source">{event.source}</span>
                 {event.release && (
-                  <span className="diagnostics-event-release">{event.release}</span>
+                  <span className="diag-event-release">{event.release}</span>
                 )}
                 {event.request_id && (
-                  <code className="diagnostics-event-request">req={event.request_id}</code>
+                  <code className="diag-event-request">req={event.request_id}</code>
                 )}
               </div>
-              <pre className="diagnostics-event-stack">{event.stack ?? event.message}</pre>
+              <pre className="diag-event-stack">{event.stack ?? event.message}</pre>
               {event.breadcrumbs.length > 0 && (
-                <ul className="diagnostics-breadcrumbs">
+                <ul className="diag-breadcrumbs">
                   {event.breadcrumbs.map((crumb, index) => (
                     <li key={`${crumb.at}-${index}`}>
-                      <span className="diagnostics-breadcrumb-at">{formatStamp(crumb.at)}</span>
-                      <span className="diagnostics-breadcrumb-cat">{crumb.category}</span>
+                      <span className="diag-breadcrumb-at">{formatStamp(crumb.at)}</span>
+                      <span className="diag-breadcrumb-cat">{crumb.category}</span>
                       {crumb.message}
                     </li>
                   ))}
@@ -205,17 +207,17 @@ function IssueLine({
             </div>
           ))}
           {detail.data?.log_excerpt && (
-            <details className="diagnostics-log-excerpt">
+            <details className="diag-log-excerpt">
               <summary>{t("diagnostics.issues.relatedLogs")}</summary>
               {Object.entries(detail.data.log_excerpt).map(([category, lines]) => (
                 <div key={category}>
-                  <div className="diagnostics-log-category">{category}</div>
+                  <div className="diag-log-category">{category}</div>
                   <pre>{lines.map((line) => line.text).join("\n")}</pre>
                 </div>
               ))}
             </details>
           )}
-          <div className="diagnostics-issue-actions">
+          <div className="diag-issue-actions">
             <button type="button" className="stdbtn" onClick={() => onResolve("resolved")}>
               {t("diagnostics.issues.resolve")}
             </button>

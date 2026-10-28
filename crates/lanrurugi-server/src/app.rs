@@ -70,6 +70,12 @@ pub fn build_app(
             state.clone(),
             require_api_key,
         ))
+        // Outermost-but-one: records a 5xx as a diagnostics event (specs/018). Placed after auth so
+        // a refused request is never reported as a server fault.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            lanrurugi_api::diagnostics::capture_5xx,
+        ))
         .with_state(state.clone())
         // Outermost `/api/*` layer, before `require_api_key` — a preflight `OPTIONS` request must
         // never reach the auth check (see `cors::apply_cors`'s own docs).

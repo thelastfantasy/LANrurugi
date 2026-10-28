@@ -9,6 +9,7 @@ import { toast } from "@/toast"
 import {
   type BundleSelection,
   type BundleText,
+  submitFeedback,
   useBundleText,
   useDownloadBundle,
   usePreviewBundle,
@@ -34,7 +35,7 @@ function toLocalInput(millis: number): string {
   )}:${pad(date.getMinutes())}`
 }
 
-export function BundleModal() {
+export function BundleView() {
   const { t } = useTranslation()
   // Defaults are computed once, at mount: reading the clock during render is not pure.
   const [from, setFrom] = useState(() => toLocalInput(Date.now() - 3_600_000))
@@ -50,6 +51,8 @@ export function BundleModal() {
   const [language, setLanguage] = useState<"zh" | "en">("zh")
   const [title, setTitle] = useState<string | null>(null)
   const [rendered, setRendered] = useState<BundleText | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitNote, setSubmitNote] = useState<string | null>(null)
 
   const preview = usePreviewBundle()
   const text = useBundleText()
@@ -79,6 +82,28 @@ export function BundleModal() {
       current.includes(level) ? current.filter((value) => value !== level) : [...current, level],
     )
 
+  /// Sends the report to the configured tracker as a user report, so it appears on its feedback
+  /// page and on the matching issue. The server enforces the per-account daily allowance.
+  const submitReport = async () => {
+    setSubmitting(true)
+    setSubmitNote(null)
+    try {
+      const report = rendered ?? (await text.mutateAsync(selection))
+      const chosen = report[language] ?? report.zh
+      const result = await submitFeedback({
+        message: `${chosen.title}\n\n${chosen.body}`,
+      })
+      setSubmitNote(
+        t("diagnostics.bundle.submitted", { remaining: result.remaining_today }),
+      )
+    } catch (error) {
+      onError(error as Error)
+      setSubmitNote(String(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const generateText = () =>
     text.mutate(selection, {
       onSuccess: (value) => {
@@ -98,9 +123,9 @@ export function BundleModal() {
   }
 
   return (
-    <div className="diagnostics-bundle">
-      <div className="diagnostics-row">
-        <label className="diagnostics-field">
+    <div className="diag-bundle">
+      <div className="diag-inline">
+        <label className="diag-field">
           <span>{t("diagnostics.bundle.from")}</span>
           <input
             className="stdinput"
@@ -109,7 +134,7 @@ export function BundleModal() {
             onChange={(event) => setFrom(event.target.value)}
           />
         </label>
-        <label className="diagnostics-field">
+        <label className="diag-field">
           <span>{t("diagnostics.bundle.to")}</span>
           <input
             className="stdinput"
@@ -120,12 +145,12 @@ export function BundleModal() {
         </label>
       </div>
 
-      <div className="diagnostics-level-chips">
+      <div className="diag-chips">
         {(["error", "warning", "info"] as const).map((level) => (
           <button
             key={level}
             type="button"
-            className={`diagnostics-chip diagnostics-chip-${level}${
+            className={`diag-chip diag-chip-${level}${
               levels.includes(level) ? " is-on" : ""
             }`}
             onClick={() => toggleLevel(level)}
@@ -135,7 +160,7 @@ export function BundleModal() {
         ))}
       </div>
 
-      <div className="diagnostics-row diagnostics-categories">
+      <div className="diag-inline diag-categories">
         <CheckboxField
           checked={categories.server_logs}
           onCheckedChange={(checked) =>
@@ -173,7 +198,7 @@ export function BundleModal() {
         </CheckboxField>
       </div>
 
-      <div className="diagnostics-actions">
+      <div className="diag-actions">
         <button
           type="button"
           className="stdbtn"
@@ -210,25 +235,34 @@ export function BundleModal() {
         >
           {t("diagnostics.bundle.generateText")}
         </button>
+        <button
+          type="button"
+          className="stdbtn"
+          disabled={submitting || text.isPending}
+          onClick={submitReport}
+        >
+          {t("diagnostics.bundle.submit")}
+        </button>
       </div>
+      {submitNote && <p className="diag-note">{submitNote}</p>}
 
       {preview.data && (
-        <div className="diagnostics-preview">
-          <div className="diagnostics-preview-head">
+        <div className="diag-preview">
+          <div className="diag-preview-head">
             {t("diagnostics.bundle.previewHead", {
               size: formatBytes(preview.data.total_bytes),
               events: preview.data.events,
               lines: preview.data.log_lines,
             })}
             {preview.data.over_cap && (
-              <span className="diagnostics-over-cap">
+              <span className="diag-over-cap">
                 {t("diagnostics.bundle.overCap", {
                   cap: formatBytes(preview.data.cap_bytes),
                 })}
               </span>
             )}
           </div>
-          <ul className="diagnostics-preview-files">
+          <ul className="diag-preview-files">
             {preview.data.files.map((file) => (
               <li key={file.path}>
                 <code>{file.path}</code>
@@ -237,7 +271,7 @@ export function BundleModal() {
             ))}
           </ul>
           {preview.data.truncations.length > 0 && (
-            <ul className="diagnostics-preview-truncations">
+            <ul className="diag-preview-truncations">
               {preview.data.truncations.map((line) => (
                 <li key={line}>{line}</li>
               ))}
@@ -247,8 +281,8 @@ export function BundleModal() {
       )}
 
       {rendered && (
-        <div className="diagnostics-text">
-          <div className="diagnostics-row">
+        <div className="diag-text">
+          <div className="diag-inline">
             {(["zh", "en"] as const).map((lang) => (
               <button
                 key={lang}
@@ -271,7 +305,7 @@ export function BundleModal() {
             value={title ?? rendered[language].title}
             onChange={(event) => setTitle(event.target.value)}
           />
-          <textarea className="stdinput diagnostics-text-body" readOnly value={rendered[language].body} />
+          <textarea className="stdinput diag-text-body" readOnly value={rendered[language].body} />
         </div>
       )}
     </div>

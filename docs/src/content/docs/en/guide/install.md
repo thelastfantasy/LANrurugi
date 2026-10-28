@@ -42,7 +42,7 @@ services:
       - ./data/thumb:/home/koyomi/lanrurugi/thumb
       # Redis data, LANrurugi only; LANraragi's metadata is imported from its backup JSON
       - ./data/database:/home/koyomi/lanrurugi/database
-      # Embedding model for recommendations, downloaded on first use
+      # Local model for recommendations and tankoubon grouping, downloaded on first use; optional
       - ./data/models:/home/koyomi/lanrurugi/models
     environment:
       # Set to true when served over HTTPS through a reverse proxy
@@ -54,7 +54,7 @@ services:
 docker compose up -d      # or: podman compose up -d
 ```
 
-On a NAS (Synology Container Manager, Portainer and the like), create a compose project and paste
+With a panel such as Synology Container Manager or Portainer, create a compose project and paste
 the same text.
 
 Then open `http://<server>:3000` in a browser. Redis is bundled in the image; no separate database
@@ -65,7 +65,7 @@ container is needed. The four mounted directories:
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | Your library |
 | `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | Thumbnail cache |
 | `./data/database` | `/home/koyomi/lanrurugi/database` | Redis data (LANrurugi only) |
-| `./data/models` | `/home/koyomi/lanrurugi/models` | Embedding model cache for recommendations |
+| `./data/models` | `/home/koyomi/lanrurugi/models` | Local model cache for recommendations and tankoubon grouping |
 
 To serve it on a domain over HTTPS, see [Reverse proxy](../reverse-proxy/).
 

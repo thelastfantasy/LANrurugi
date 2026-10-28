@@ -9,7 +9,7 @@ import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Button } from "@/components/common-ui/Form/Button"
 import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
-import { DiagnosticsSection } from "@/diagnostics/DiagnosticsSection"
+import { DiagnosticsButton } from "@/diagnostics/DiagnosticsButton"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
@@ -355,6 +355,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         </Button>{" "}
         {/* Renders nothing when the deployment switched the wizard off — see its own docs. */}
         <WizardRerunButton />
+        <DiagnosticsButton />
         <br />
         <br />
         <Button id="return" onClick={() => navigate(routes.library())}>
@@ -513,7 +514,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <ApiTokensSection />
           <SharingSection />
-          <DiagnosticsSection />
           <SubscriptionsSection />
 
           <ArchiveFilesSection

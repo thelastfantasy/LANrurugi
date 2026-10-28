@@ -220,7 +220,11 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
     lanrurugi_scanner::image_decode::register_image_decoders();
     let cli = Cli::parse();
     match &cli.command {
-        Command::Serve(args) => telemetry::init(Some(&args.log_dir)),
+        Command::Serve(args) => {
+            // Before the subscriber: the tracing bridge only captures once a client exists.
+            lanrurugi_api::diagnostics::init_server_capture();
+            telemetry::init(Some(&args.log_dir));
+        }
         _ => telemetry::init(None),
     }
     for (variable, path) in &from_install_prefix {
@@ -516,6 +520,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Error telemetry: one background writer, so an envelope never costs a request a Redis round
     // trip (specs/018, research.md §1/§5).
     lanrurugi_api::diagnostics::start_writer(state.clone());
+    lanrurugi_api::diagnostics::attach_capture_state(state.clone());
+    // AI-agent monitoring is opt-in by deployment: no key, no tracer, no spans.
+    let tracer_state = state.clone();
+    tokio::spawn(async move {
+        lanrurugi_api::diagnostics::report::install_llm_tracer(&tracer_state).await;
+    });
 
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of
     // ever completing on its own — `JobRegistry` (the in-process progress tracker its `job_id`

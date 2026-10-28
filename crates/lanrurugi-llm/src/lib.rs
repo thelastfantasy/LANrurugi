@@ -26,6 +26,8 @@ pub use prefix::{Conversation, PrefixBreak};
 pub use retry::{CallSpec, DEFAULT_DEADLINE};
 pub use usage::{FeatureId, TokenUsage};
 
+pub mod telemetry;
+
 /// The one model name every `lanrurugi-llm` call site uses. `-pro`'s reasoning could exhaust the
 /// whole `max_tokens` budget on `reasoning_content` and never emit `content` — switched to
 /// `-flash` for all callers 2026-08-25 per explicit user direction.

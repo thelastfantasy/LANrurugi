@@ -56,6 +56,18 @@
       "204": { description: Accepted but not stored (see description). }
       "400": { description: The body was not a parseable envelope. }
 
+# The SDK appends a trailing slash (`<dsn>/api/<project>/envelope/`); both spellings reach the
+# same handler, so both are documented.
+"/api/diagnostics/envelope/":
+  post:
+    summary: Ingest one error envelope (SDK spelling)
+    description: Identical to `/api/diagnostics/envelope`; present because the Sentry SDK derives its ingest URL with a trailing slash.
+    tags: [diagnostics]
+    responses:
+      "200": { description: Stored; the body is the event id. }
+      "204": { description: Accepted but not stored. }
+      "400": { description: The body was not a parseable envelope. }
+
 "/api/diagnostics/issues":
   get:
     summary: List issues
