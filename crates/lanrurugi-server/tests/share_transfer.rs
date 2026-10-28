@@ -220,7 +220,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
     let mut start = 0;
     let mut tampered_once = false;
     while start < total_chunks {
-        let end = (start + 64).min(total_chunks);
+        let end = (start + 1024).min(total_chunks);
         let (Response::Bytes { len, .. }, mut recv) = call(
             &conn,
             Request::Range {
@@ -574,7 +574,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
     let total_chunks = tree.chunks().0;
     let mut start = 0;
     while start < total_chunks {
-        let end = (start + 64).min(total_chunks);
+        let end = (start + 1024).min(total_chunks);
         let (Response::Bytes { len, .. }, mut recv) = call(
             &to_helper,
             Request::Range {

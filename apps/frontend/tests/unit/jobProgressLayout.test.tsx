@@ -57,9 +57,10 @@ describe("JobProgressBar layout", () => {
     const { row, track, label } = trackAndLabel(false)
 
     expect(getComputedStyle(row).flexDirection).toBe("row")
-    // The exact number matters less than the fact that it is a constant: `formatBytes` output
-    // varies in length from reading to reading, and only a fixed box keeps the track still.
-    expect(label.style.width).toBe("224px")
+    // The exact value matters less than the fact that it is a constant: `formatBytes` output
+    // varies in length from reading to reading, and only a fixed box keeps the track still. It is
+    // in `em` on purpose — a fixed pixel width clipped the speed under a theme with a larger font.
+    expect(label.style.width).toBe("24em")
     expect(label.style.flex).toBe("0 0 auto")
     expect(label.style.whiteSpace).toBe("nowrap")
     // The track grows along the row here, so it is the flex item that takes the leftover width

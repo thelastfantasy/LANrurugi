@@ -465,6 +465,7 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
                 <span className="share-form-hint">{t("share.import.helpDeliverHint")}</span>
               </div>
             )}
+            <p className="share-disclaimer">{t("share.disclaimer.import")}</p>
             {confirm.isError && <p className="share-notice share-status-exhausted">{refusalText(t, confirm.error)}</p>}
             <div style={{ textAlign: "right", marginTop: 8, display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button type="button" className="stdbtn" onClick={() => resolve.reset()}>

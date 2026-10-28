@@ -32,6 +32,9 @@ use crate::AppState;
 
 /// Largest single `Range` answer, so one request never buffers more than this.
 const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
+/// One bao chunk: the unit `ChunkNum`/`ChunkRanges` count in (bao-tree's fixed 1 KiB, independent of
+/// `blobs::BLOCK_SIZE`, which only groups chunks for hashing).
+const CHUNK_BYTES: u64 = 1024;
 /// Spans one `Range` may name. An importer asks for one piece at a time; this is only a bound.
 const MAX_RANGE_SPANS: usize = 64;
 /// Caps on what one helper registration may carry.
@@ -871,13 +874,16 @@ fn bytes(body: Vec<u8>) -> (Response, Option<Vec<u8>>) {
 /// The chunk ranges a request asks for: each span clamped to the blob, the total capped, and the
 /// span count bounded. `None` means the request is over budget.
 ///
+/// `ChunkNum` counts bao-tree's fixed 1 KiB chunks — `blobs::BLOCK_SIZE` only groups them for
+/// hashing — so the clamp and the byte estimate both use that unit, not the block size.
+///
 /// The arithmetic is saturating on purpose — a span pair is just two `u64`s from the peer, and a
 /// range that wrapped past the cap is what made a whole archive get encoded into memory.
 fn requested_ranges(spans: &[ChunkSpan], size: u64) -> Option<ChunkRanges> {
     if spans.len() > MAX_RANGE_SPANS {
         return None;
     }
-    let chunk_bytes = blobs::BLOCK_SIZE.bytes() as u64;
+    let chunk_bytes = CHUNK_BYTES;
     let total_chunks = size.div_ceil(chunk_bytes);
     let mut ranges = ChunkRanges::empty();
     let mut requested = 0u64;
@@ -931,7 +937,8 @@ mod tests {
 
     #[test]
     fn spans_are_clamped_to_the_blob_before_being_counted() {
-        let size = 1024 * 1024; // 64 chunks
+        // Spans are in 1 KiB chunks: a 1 MiB blob is 1024 of them.
+        let size = 1024 * 1024;
         let ranges = requested_ranges(
             &[ChunkSpan {
                 start: 0,
@@ -940,7 +947,7 @@ mod tests {
             size,
         )
         .expect("a whole small blob fits the cap");
-        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(64)));
+        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)));
     }
 
     #[test]
@@ -962,9 +969,8 @@ mod tests {
 
     #[test]
     fn a_cap_sized_request_is_accepted_and_one_chunk_more_is_not() {
-        let chunk_bytes = blobs::BLOCK_SIZE.bytes() as u64;
         let size = 16 * 1024 * 1024;
-        let cap_chunks = MAX_RANGE_BYTES / chunk_bytes;
+        let cap_chunks = MAX_RANGE_BYTES / CHUNK_BYTES;
         assert!(requested_ranges(
             &[ChunkSpan {
                 start: 0,

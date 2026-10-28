@@ -60,4 +60,12 @@ exceptions = [
     # per-crate rather than globally, for the same reason as `smartstring` above. Re-check when
     # bumping `avif-decode`.
     { allow = ["MPL-2.0"], crate = "avif-parse" },
+    # `attohttpc` 0.30.1 declares plain `MPL-2.0` and is NOT replaceable: it is a hard transitive
+    # dependency of `iroh` -> `portmapper` -> `igd-next`, i.e. the NAT-PMP/UPnP port mapping that
+    # lets a share be reachable without a domain. Neither `portmapper` nor `igd-next` offers a
+    # different HTTP backend, and the `portmapper` feature is what every deployment relies on.
+    # Accepted per-crate for the same reason as the two entries above (MPL-2.0 is file-level
+    # copyleft and imposes nothing on this project's own MIT/Apache-2.0 code). Re-check when
+    # bumping `iroh`/`portmapper`.
+    { allow = ["MPL-2.0"], crate = "attohttpc" },
 ]

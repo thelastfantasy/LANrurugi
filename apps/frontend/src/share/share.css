@@ -915,6 +915,13 @@ div.ido.share-closed p:last-child {
 .share-open-page:hover {
   opacity: 1;
 }
+/* The one-line disclaimer at the bottom of the share and import modals. */
+.share-disclaimer {
+  margin: 10px 0 0;
+  font-size: 0.85em;
+  line-height: 1.5;
+  opacity: 0.7;
+}
 /* R / I / D chips: the colours themselves live in each theme file. */
 .share-perms {
   display: inline-flex;

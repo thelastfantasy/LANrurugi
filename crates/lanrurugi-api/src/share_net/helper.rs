@@ -227,6 +227,11 @@ pub async fn apply_status(state: &AppState, id: &ShareImportId, status: &HelperS
         WireState::Ended => HelpState::Ended,
     };
     record.help_reason = status.reason.map(|r| reason_code(r).to_string());
+    // An ended relationship has nothing left to reconnect with: keep the code only while this
+    // instance could still resume a transfer, so a revoked share's code does not linger here.
+    if record.help_state == HelpState::Ended {
+        record.code = None;
+    }
     record.help_state_at = Some(status.at as i64);
     record.help_last_contact_at = Some(crate::shares::now_secs());
     record.help_removed_archives = status.removed_archives.clone();

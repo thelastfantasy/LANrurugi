@@ -2283,6 +2283,8 @@
   "share.reader.volume": "第 {{current}} / {{total}} 巻",
   "share.reader.prevVolume": "前の巻",
   "share.reader.nextVolume": "次の巻",
+  "share.disclaimer.share": "共有する内容と公開範囲はご自身の責任です。共有コードはアクセス資格情報と同じなので、信頼できる相手にだけ渡し、共有一覧からいつでも取り消せます。",
+  "share.disclaimer.import": "アーカイブは相手の LANrurugi から取得するもので、こちらでは内容を確認していません。共有コードは資格情報なので公開しないでください。インポートはその提供元を信頼することを意味します。",
   "share.status.active": "有効",
   "share.status.exhausted": "ダウンロード上限に到達",
   "share.status.expired": "期限切れ",

@@ -39,8 +39,10 @@ use tokio_util::sync::CancellationToken;
 use super::{blobs, call, connect, publish, read_body, ShareNet, ShareNetError};
 use crate::AppState;
 
-/// Bytes per bao chunk — `blobs::BLOCK_SIZE`, the same tree the outboard and `Range` answers use.
-const CHUNK_BYTES: u64 = blobs::BLOCK_SIZE.bytes() as u64;
+/// One bao chunk: 1 KiB, the unit `ChunkNum`, `ChunkRanges` and therefore `BaoTree::chunks()` count
+/// in. `blobs::BLOCK_SIZE` (16 KiB) only groups chunks for hashing — using it here made every piece
+/// and every progress figure off by 16×.
+const CHUNK_BYTES: u64 = 1024;
 /// A failure writing on *this* instance's disk — as opposed to anything the peer did. The leading
 /// code is what the queue row localizes; the OS text after it stays for support.
 fn storage_error(e: &std::io::Error) -> String {

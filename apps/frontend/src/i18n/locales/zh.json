@@ -2283,6 +2283,8 @@
   "share.reader.volume": "第 {{current}} / {{total}} 卷",
   "share.reader.prevVolume": "上一卷",
   "share.reader.nextVolume": "下一卷",
+  "share.disclaimer.share": "分享的内容与访问范围由你负责;分享码等同于访问凭据,请只发给可信的人,并可在分享列表中随时撤销。",
+  "share.disclaimer.import": "档案来自对方的 LANrurugi 实例,本站未审核其内容;分享码等同于访问凭据,请勿公开。导入即表示你信任该来源。",
   "share.status.active": "有效",
   "share.status.exhausted": "下载次数已用完",
   "share.status.expired": "已过期",

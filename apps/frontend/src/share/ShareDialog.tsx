@@ -172,6 +172,7 @@ function NewShareTab({
         </CheckboxField>
         {!shortCodeAllowed && <div className="share-result-note">{t("share.dialog.shortCodeHint")}</div>}
       </div>
+      <p className="share-disclaimer">{t("share.disclaimer.share")}</p>
       <div style={{ textAlign: "right", marginTop: 8 }}>
         <button type="button" className="stdbtn" disabled={create.isPending || !permissionsChosen(form)} onClick={submit}>
           {t("share.dialog.create")}
@@ -261,6 +262,7 @@ function ExistingShareForm({
         </CheckboxField>
         {alsoUpdate && <ShareFieldsForm value={form} onChange={setForm} embedAvailable={embedAvailable} />}
       </div>
+      <p className="share-disclaimer">{t("share.disclaimer.share")}</p>
       <div style={{ textAlign: "right", marginTop: 8 }}>
         <button type="button" className="stdbtn" disabled={add.isPending} onClick={submit}>
           {t("share.dialog.add")}
