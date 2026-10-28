@@ -171,6 +171,14 @@ export function DiagnosticsSection() {
 
       <h4 className="ih">{t("diagnostics.forward.title")}</h4>
       <p className="settings-hint">{t("diagnostics.forward.hint")}</p>
+      {settings?.tracker_configured && (
+        <p className="settings-hint diagnostics-forward-target">
+          {t("diagnostics.forward.where", { host: settings.tracker_host ?? "?" })}
+          {settings.tracker_built_in ? t("diagnostics.forward.builtIn") : ""}
+          {" "}
+          {t("diagnostics.forward.trusted")}
+        </p>
+      )}
       <div className="diagnostics-row">
         <input
           className="stdinput diagnostics-dsn"
@@ -189,7 +197,7 @@ export function DiagnosticsSection() {
         </button>
         <span className="settings-hint">
           {settings?.tracker_configured
-            ? t("diagnostics.forward.configured")
+            ? t("diagnostics.forward.configuredAt", { host: settings.tracker_host ?? "?" })
             : t("diagnostics.forward.notConfigured")}
         </span>
       </div>

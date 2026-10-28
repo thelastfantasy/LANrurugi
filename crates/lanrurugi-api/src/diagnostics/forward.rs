@@ -50,6 +50,8 @@ fn now_ms() -> i64 {
 pub struct TrackerDsn {
     pub envelope_url: String,
     pub key: String,
+    /// Scheme + host + port only: what the settings page may show without leaking the key.
+    pub host: String,
 }
 
 impl TrackerDsn {
@@ -76,11 +78,13 @@ impl TrackerDsn {
         base.set_path("");
         base.set_query(None);
         base.set_fragment(None);
-        let envelope_url = format!(
-            "{}/api/{project}/envelope/",
-            base.as_str().trim_end_matches('/')
-        );
-        Some(Self { envelope_url, key })
+        let host = base.as_str().trim_end_matches('/').to_string();
+        let envelope_url = format!("{host}/api/{project}/envelope/");
+        Some(Self {
+            envelope_url,
+            key,
+            host,
+        })
     }
 }
 

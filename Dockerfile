@@ -28,6 +28,10 @@ ARG LANRURUGI_RUNTIME_BASE=runtime-base-cpu
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
 ARG LANRURUGI_GIT_SHA=unknown
+# The maintainer's own tracker DSN for diagnostics forwarding (specs/018). Empty by default: an
+# image built without it never forwards anything, and an instance that configures its own DSN in
+# the settings always wins over this. CI passes it from a repository secret.
+ARG LANRURUGI_TRACKER_DSN=
 WORKDIR /build
 # cmake + libclang-dev build `libarchive2-sys` (bundles libarchive's C source, built via CMake,
 # bindgen needs libclang — see `crates/lanrurugi-scanner/src/archive_format.rs`); the zlib1g-dev/
@@ -54,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
+ENV LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN}
 RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker
 # The API reference document, generated from the crate source already copied above. Built here
 # rather than in the docs stage because the generator is Rust: it parses the API crate's route

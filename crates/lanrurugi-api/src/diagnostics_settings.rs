@@ -101,9 +101,24 @@ impl DiagnosticsSettings {
         }
     }
 
+    /// The tracker to forward to. A DSN compiled into the binary is the fallback for images the
+    /// maintainer publishes; an instance that configured its own DSN always wins, and neither set
+    /// means "never forward".
     pub fn tracker_dsn(&self) -> Option<&str> {
         let dsn = self.text("diagnostics_tracker_dsn").trim();
-        (!dsn.is_empty()).then_some(dsn)
+        if !dsn.is_empty() {
+            return Some(dsn);
+        }
+        const BUILT_IN: &str = match option_env!("LANRURUGI_TRACKER_DSN") {
+            Some(dsn) => dsn,
+            None => "",
+        };
+        (!BUILT_IN.trim().is_empty()).then_some(BUILT_IN.trim())
+    }
+
+    /// Whether a tracker came from the build rather than from this instance's own settings.
+    pub fn tracker_is_built_in(&self) -> bool {
+        self.text("diagnostics_tracker_dsn").trim().is_empty() && self.tracker_dsn().is_some()
     }
 
     pub fn window_deadline(&self) -> i64 {
@@ -132,6 +147,20 @@ impl DiagnosticsSettings {
         object.insert(
             "tracker_configured".to_string(),
             Value::Bool(self.tracker_dsn().is_some()),
+        );
+        object.insert(
+            "tracker_built_in".to_string(),
+            Value::Bool(self.tracker_is_built_in()),
+        );
+        object.insert(
+            "tracker_host".to_string(),
+            match self
+                .tracker_dsn()
+                .and_then(crate::diagnostics::forward::TrackerDsn::parse)
+            {
+                Some(dsn) => Value::String(dsn.host),
+                None => Value::Null,
+            },
         );
         Value::Object(object)
     }

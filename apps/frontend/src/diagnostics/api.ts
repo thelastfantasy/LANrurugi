@@ -18,6 +18,8 @@ export interface DiagnosticsSettings {
   diagnostics_rate_per_minute: number
   diagnostics_rate_per_hour: number
   tracker_configured: boolean
+  tracker_built_in: boolean
+  tracker_host: string | null
 }
 
 export interface DiagnosticsUsage {

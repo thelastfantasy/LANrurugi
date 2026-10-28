@@ -46,6 +46,9 @@ jobs:
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
+            # Diagnostics forwarding target, baked into the image (specs/018). Empty for
+            # fork PRs, so nothing is sent from a build that never sees the secret.
+            LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}
           tags: |
             ghcr.io/thelastfantasy/lanrurugi:main-${{ steps.sha.outputs.short_sha }}-${{ matrix.arch }}
             ghcr.io/thelastfantasy/lanrurugi:main-${{ matrix.arch }}
