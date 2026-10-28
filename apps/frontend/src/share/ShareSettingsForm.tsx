@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { ApiError } from "@/api/client"
 import { Input, NullableNumberInput, Select, Switch } from "@/components/common-ui/Form"
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
 
 import { useSaveShareSettings, useShareSettings } from "./api"
@@ -84,6 +85,7 @@ function FieldRow({
     case "choice":
       control = (
         <Select
+          popupZIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
           value={String(value ?? "")}
           onValueChange={onChange}
           align="start"

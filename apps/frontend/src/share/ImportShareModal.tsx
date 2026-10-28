@@ -10,6 +10,7 @@ import { Modal } from "@/components/common-ui/Display"
 import { Checkbox, CheckboxField, Input, Select } from "@/components/common-ui/Form"
 import { formatBytes } from "@/components/Display/JobProgress"
 import { sortCategories } from "@/lib/utils/sortCategories"
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
 
 import { formatShareCode, parseShareRef, type ShareRef, toTextForm } from "./code"
@@ -425,6 +426,7 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
             <div className="share-form">
               <span>{t("upload.addUploadedFilesToCategory")}</span>
               <Select
+                popupZIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
                 value={category}
                 onValueChange={setCategory}
                 align="start"
@@ -443,6 +445,7 @@ export function ImportShareModal({ onClose }: { onClose: () => void }) {
             <div className="share-form">
               <span>{t("share.import.filenamePolicy")}</span>
               <Select
+                popupZIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
                 value={filenamePolicy}
                 onValueChange={(v) => setFilenamePolicy(v as FilenamePolicy)}
                 align="start"
