@@ -61,7 +61,6 @@ export function DiagnosticsPanel() {
   const save = useSaveDiagnosticsSettings()
   const openWindow = useOpenWindow()
   const closeWindow = useCloseWindow()
-  const [dsn, setDsn] = useState("")
   const [duration, setDuration] = useState("300")
 
   const settings = overview.data?.settings
@@ -191,27 +190,6 @@ export function DiagnosticsPanel() {
         <p className="diag-tagline">{t("diagnostics.forward.hint")}</p>
         <p className="diag-tagline">{t("diagnostics.forward.whatIsSent")}</p>
         <div className="diag-inline">
-          <input
-            className="stdinput diag-dsn"
-            type="url"
-            placeholder={
-              settings?.tracker_configured
-                ? t("diagnostics.forward.replaceHint")
-                : "https://key@tracker.example.com/1"
-            }
-            value={dsn}
-            onChange={(event) => setDsn(event.target.value)}
-          />
-          <button
-            type="button"
-            className="stdbtn"
-            disabled={save.isPending}
-            onClick={() => {
-              save.mutate({ tracker_dsn: dsn }, { onError: onErrorToast })
-            }}
-          >
-            {t("diagnostics.forward.save")}
-          </button>
           <span className="diag-usage">
             {settings?.tracker_configured
               ? settings.tracker_host
@@ -229,6 +207,7 @@ export function DiagnosticsPanel() {
             })}
           </p>
         )}
+        <p className="diag-note">{t("diagnostics.forward.whereToChange")}</p>
         {settings?.tracker_configured && officialHost(settings) && (
           <div className="diag-official">
             <span className="diag-official-badge">

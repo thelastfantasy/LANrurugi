@@ -22,6 +22,7 @@ export interface DiagnosticsSettings {
   tracker_host: string | null
   tracker_routes: Record<string, string>
   tracker_official: boolean
+  tracker_project: string | null
 }
 
 export interface DiagnosticsUsage {

@@ -207,5 +207,12 @@
     "key": "share_recipient",
     "zh": "分享接收方",
     "en": "Share Recipients"
+  },
+  {
+    "key": "diagnostics",
+    "zh": "诊断与反馈 API",
+    "en": "Diagnostics API",
+    "description_zh": "本机错误事件、问题分组、反馈包与临时上报窗口。",
+    "description_en": "Local error events, issue grouping, feedback bundles and the temporary forwarding window."
   }
 ]

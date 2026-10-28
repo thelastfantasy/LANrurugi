@@ -210,6 +210,16 @@ impl DiagnosticsSettings {
                     .unwrap_or(false),
             ),
         );
+        // The numeric project id, so the UI can link straight to that project's issue list — the
+        // ingest response only returns an event id, and reading issues back would need a second
+        // credential we deliberately do not keep.
+        object.insert(
+            "tracker_project".to_string(),
+            self.tracker_dsn()
+                .and_then(crate::diagnostics::forward::TrackerDsn::parse)
+                .map(|dsn| Value::String(dsn.project))
+                .unwrap_or(Value::Null),
+        );
         object.insert(
             "tracker_routes".to_string(),
             Value::Object(

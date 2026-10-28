@@ -7,12 +7,15 @@ import { Modal } from "@/components/common-ui/Display"
 
 import { BundleView } from "./BundleModal"
 import { DiagnosticsPanel } from "./DiagnosticsPanel"
+import { FeedbackView } from "./FeedbackView"
 import { IssuesView } from "./IssuesModal"
 
+// Short, parallel nouns rather than "直接反馈"-style descriptions: the tab bar reads as one set.
 const TABS = [
-  { id: "overview", labelKey: "diagnostics.title" },
-  { id: "issues", labelKey: "diagnostics.issues.title" },
-  { id: "bundle", labelKey: "diagnostics.bundle.title" },
+  { id: "overview", labelKey: "diagnostics.tab.overview" },
+  { id: "issues", labelKey: "diagnostics.tab.issues" },
+  { id: "feedback", labelKey: "diagnostics.tab.feedback" },
+  { id: "bundle", labelKey: "diagnostics.tab.bundle" },
 ] as const
 
 type Tab = (typeof TABS)[number]["id"]
@@ -41,6 +44,7 @@ export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
       <div className="diag-tab-body" role="tabpanel">
         {tab === "overview" && <DiagnosticsPanel />}
         {tab === "issues" && <IssuesView />}
+        {tab === "feedback" && <FeedbackView />}
         {tab === "bundle" && <BundleView />}
       </div>
     </Modal>

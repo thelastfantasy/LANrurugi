@@ -139,7 +139,8 @@ async fn a_bundle_carries_events_and_no_secrets() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
-    // A message containing a share code and an absolute path: both must be gone after storage.
+    // A message containing a share code and an absolute path: the code must always be gone, the
+    // path is kept by the default profile (see `diagnostics_include_private_data`).
     let event = event_from(
         "b1",
         &format!(
@@ -200,7 +201,10 @@ async fn a_bundle_carries_events_and_no_secrets() {
         .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
         .collect();
     assert!(!all.contains("VXR29-J5RNH"), "the share code leaked");
-    assert!(!all.contains("/home/jade"), "the path leaked");
+    assert!(
+        all.contains("/home/jade/manga/x.zip"),
+        "the default profile keeps the failing path, which is what makes a report actionable"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -5,7 +5,13 @@ import { useTranslation } from "react-i18next"
 
 import { CheckboxField } from "@/components/common-ui/Form"
 
-import { type IssueRow,useIssueDetail, useIssues, useSetIssueState } from "./api"
+import {
+  type IssueRow,
+  useDiagnosticsOverview,
+  useIssueDetail,
+  useIssues,
+  useSetIssueState,
+} from "./api"
 
 const LEVELS = ["error", "warning", "info"] as const
 
@@ -38,6 +44,10 @@ export function IssuesView() {
   }, [levels, state, query, sort])
 
   const issues = useIssues(params)
+  const overview = useDiagnosticsOverview()
+  const settings = (overview.data?.settings ?? null) as
+    | { tracker_configured?: boolean; tracker_host?: string | null; tracker_project?: string | null }
+    | null
   const setIssueState = useSetIssueState()
   const rows = issues.data?.issues ?? []
 
@@ -61,6 +71,19 @@ export function IssuesView() {
 
   return (
     <div className="diag-issues">
+      {settings?.tracker_configured && settings.tracker_host && settings.tracker_project && (
+        <p className="diag-tagline">
+          <a
+            className="diag-external"
+            href={`${settings.tracker_host}/projects/${settings.tracker_project}/issues`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("diagnostics.issues.inTracker")}
+          </a>{" "}
+          {t("diagnostics.issues.inTrackerHint")}
+        </p>
+      )}
       <div className="diag-filters">
         <div className="diag-chips">
           {LEVELS.map((level) => (
