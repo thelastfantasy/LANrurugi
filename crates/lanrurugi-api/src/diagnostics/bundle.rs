@@ -388,7 +388,7 @@ pub fn archive(
     if selection.categories.environment {
         entries.push(("diagnostics.json".into(), Vec::new()));
     }
-    let envelopes = envelopes_ndjson(&plan.events);
+    let envelopes = envelope_records(&plan.events);
     entries.push(("envelopes.ndjson.gz".into(), gzip(&envelopes)));
 
     for (path, bytes) in entries {
@@ -414,7 +414,8 @@ fn readme(plan: &Plan, facts: &Facts) -> String {
     out.push_str("  frontend/events.jsonl captured browser events in the range\n");
     out.push_str("  diagnostics.json     environment, versions, store usage\n");
     out.push_str("  envelopes.ndjson.gz  the captured events as standard envelopes\n");
-    out.push_str("                       (one JSON envelope per line, gzipped), so the\n");
+    out.push_str("                       (each record is a byte length followed by the raw\n");
+    out.push_str("                       envelope, gzipped), so the\n");
     out.push_str("                       same report can be imported into a tracker later\n\n");
     out.push_str("Privacy: share codes, tokens, cookies and absolute paths were removed before\n");
     out.push_str(
@@ -432,14 +433,17 @@ fn readme(plan: &Plan, facts: &Facts) -> String {
     out
 }
 
-fn envelopes_ndjson(events: &[DiagnosticEvent]) -> Vec<u8> {
+/// Each record is `<byte length>\n<raw envelope>`. A plain newline-separated file would be
+/// ambiguous: an envelope is itself multi-line (header, item headers, payloads), so splitting on
+/// newlines would turn one event into several.
+fn envelope_records(events: &[DiagnosticEvent]) -> Vec<u8> {
     let mut out = Vec::new();
     for event in events {
         if event.envelope.is_empty() {
             continue;
         }
+        out.extend_from_slice(format!("{}\n", event.envelope.len()).as_bytes());
         out.extend_from_slice(&event.envelope);
-        out.push(b'\n');
     }
     out
 }
@@ -512,11 +516,26 @@ pub fn envelopes_from_archive(body: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     for (path, bytes) in entries(body)? {
         if path.ends_with("envelopes.ndjson.gz") {
             let decoded = gunzip(&bytes)?;
-            return Ok(decoded
-                .split(|byte| *byte == b'\n')
-                .filter(|line| !line.is_empty())
-                .map(<[u8]>::to_vec)
-                .collect());
+            let mut out = Vec::new();
+            let mut cursor = 0;
+            while cursor < decoded.len() {
+                let Some(break_at) = decoded[cursor..].iter().position(|byte| *byte == b'\n')
+                else {
+                    break;
+                };
+                let length = std::str::from_utf8(&decoded[cursor..cursor + break_at])
+                    .ok()
+                    .and_then(|text| text.trim().parse::<usize>().ok())
+                    .ok_or_else(|| "malformed envelope record".to_string())?;
+                let start = cursor + break_at + 1;
+                let end = start + length;
+                if end > decoded.len() {
+                    return Err("truncated envelope record".to_string());
+                }
+                out.push(decoded[start..end].to_vec());
+                cursor = end;
+            }
+            return Ok(out);
         }
     }
     Err("no envelopes.ndjson.gz in the archive.".to_string())

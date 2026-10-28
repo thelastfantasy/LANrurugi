@@ -166,7 +166,9 @@ pub async fn save(
     let mut writes = Vec::with_capacity(body.len());
     for (key, value) in body {
         let stored = validate_field(key, value)?;
-        writes.push((key.clone(), stored));
+        // Stored under the canonical field name: `tracker_dsn` is accepted as an alias of
+        // `diagnostics_tracker_dsn`, and writing the alias would leave the loader reading "".
+        writes.push((field_name(key).to_string(), stored));
     }
     if !writes.is_empty() {
         let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;

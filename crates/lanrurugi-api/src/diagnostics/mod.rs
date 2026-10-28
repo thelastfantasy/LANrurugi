@@ -639,7 +639,7 @@ async fn replay(State(state): State<AppState>, body: Bytes) -> Response {
     Json(json!({ "sent": sent, "failed": errors.len(), "errors": errors })).into_response()
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -653,7 +653,7 @@ pub mod ingest {
     };
     use serde_json::Value;
 
-    pub(super) fn decode(body: &[u8]) -> Result<Option<DiagnosticEvent>, String> {
+    pub fn decode(body: &[u8]) -> Result<Option<DiagnosticEvent>, String> {
         let text = String::from_utf8_lossy(body);
         let mut lines = text.split('\n');
         let header = lines.next().ok_or("empty envelope")?;

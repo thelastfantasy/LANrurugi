@@ -10,12 +10,19 @@
 # stays this shell so `trap` keeps working, no `exec`).
 set -e
 
-redis-server /etc/lanrurugi/redis.conf &
+# Ports are overridable so a second instance can run beside this one on the same host network
+# (`lrr-fresh` on 3100/3101/16479) instead of needing a hand-rolled clone of this script. Defaults
+# are exactly the single-instance values this script has always used.
+FRONTEND_PORT="${LANRURUGI_DEV_FRONTEND_PORT:-3000}"
+BACKEND_PORT="${LANRURUGI_DEV_BACKEND_PORT:-3001}"
+REDIS_PORT="${LANRURUGI_DEV_REDIS_PORT:-16379}"
+
+redis-server /etc/lanrurugi/redis.conf --port "$REDIS_PORT" &
 REDIS_PID=$!
 
 redis_ready=false
 for i in $(seq 1 50); do
-  if [ "$(redis-cli -p 16379 PING 2>/dev/null)" = "PONG" ]; then
+  if [ "$(redis-cli -p "$REDIS_PORT" PING 2>/dev/null)" = "PONG" ]; then
     redis_ready=true
     break
   fi
@@ -64,7 +71,7 @@ fi
 # fetch the exact same `serve_index`-rendered HTML a production request would get
 # (`data-theme` substitution included), then re-run Vite's own HMR transform on top of it.
 # This keeps the authoritative theme-injection logic in Rust, shared by dev and production.
-lanrurugi-server serve --bind 0.0.0.0:3001 --static-dir /workspace/apps/frontend --log-dir /log &
+lanrurugi-server serve --bind "0.0.0.0:$BACKEND_PORT" --static-dir /workspace/apps/frontend --log-dir /log &
 APP_PID=$!
 
 # Direct `node_modules/.bin/vite` invocation, not `pnpm exec`/`pnpm --filter` — `pnpm exec` runs
@@ -75,7 +82,7 @@ APP_PID=$!
 # invoked, e.g. `./node_modules/.bin/tsc`/`eslint`). `LANRURUGI_DEV_BACKEND_PORT=3001` matches the
 # backend's own `--bind` above (see vite.config.ts's own doc comment for this env var).
 cd /workspace/apps/frontend
-LANRURUGI_DEV_BACKEND_PORT=3001 ./node_modules/.bin/vite --host 0.0.0.0 --port 3000 &
+LANRURUGI_DEV_BACKEND_PORT="$BACKEND_PORT" ./node_modules/.bin/vite --host 0.0.0.0 --port "$FRONTEND_PORT" &
 VITE_PID=$!
 
 shutdown() {

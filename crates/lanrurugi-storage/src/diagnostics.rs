@@ -332,6 +332,11 @@ impl DiagnosticsRepo {
             .arg(("source", event.source.as_str()))
             .arg(("bytes", size))
             .ignore()
+            .cmd("HSET")
+            .arg(&record_key)
+            .arg("env")
+            .arg(&event.envelope)
+            .ignore()
             .cmd("ZADD")
             .arg(key::EVENTS)
             .arg(event.at)
@@ -374,13 +379,30 @@ impl DiagnosticsRepo {
         Ok(issue)
     }
 
+    /// Attaches the stored envelope to a projected event (it is not part of the JSON body).
+    async fn hydrate(
+        conn: &mut deadpool_redis::Connection,
+        record_key: &str,
+        mut event: DiagnosticEvent,
+    ) -> Result<DiagnosticEvent> {
+        let envelope: Option<Vec<u8>> = conn.hget(record_key, "env").await.unwrap_or(None);
+        if let Some(envelope) = envelope {
+            event.bytes = event.bytes.max(envelope.len() as u64);
+            event.envelope = envelope;
+        }
+        Ok(event)
+    }
+
     pub async fn event(&self, id: &DiagnosticEventId) -> Result<Option<DiagnosticEvent>> {
         let mut conn = self.pool.get().await?;
-        let raw: Option<Vec<u8>> = conn.hget(format!("{}{}", key::EVENT, id), "json").await?;
+        let record_key = format!("{}{}", key::EVENT, id);
+        let raw: Option<Vec<u8>> = conn.hget(&record_key, "json").await?;
         match raw {
-            Some(raw) => Ok(Some(serde_json::from_slice(&raw).map_err(|e| {
-                DiagnosticsStorageError::Json(format!("{}{}", key::EVENT, id), e)
-            })?)),
+            Some(raw) => {
+                let event: DiagnosticEvent = serde_json::from_slice(&raw)
+                    .map_err(|e| DiagnosticsStorageError::Json(record_key.clone(), e))?;
+                Ok(Some(Self::hydrate(&mut conn, &record_key, event).await?))
+            }
             None => Ok(None),
         }
     }
@@ -400,9 +422,10 @@ impl DiagnosticsRepo {
         for id in ids {
             let raw: Option<Vec<u8>> = conn.hget(format!("{}{}", key::EVENT, id), "json").await?;
             if let Some(raw) = raw {
-                out.push(serde_json::from_slice(&raw).map_err(|e| {
-                    DiagnosticsStorageError::Json(format!("{}{}", key::EVENT, id), e)
-                })?);
+                let record_key = format!("{}{}", key::EVENT, id);
+                let event: DiagnosticEvent = serde_json::from_slice(&raw)
+                    .map_err(|e| DiagnosticsStorageError::Json(record_key.clone(), e))?;
+                out.push(Self::hydrate(&mut conn, &record_key, event).await?);
             }
         }
         Ok(out)
