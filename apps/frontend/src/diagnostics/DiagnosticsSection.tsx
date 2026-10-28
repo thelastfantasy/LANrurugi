@@ -72,7 +72,7 @@ export function DiagnosticsSection() {
 
       <div className="diagnostics-row">
         <CheckboxField
-          checked={settings?.enabled ?? false}
+          checked={settings?.diagnostics_enabled ?? false}
           onCheckedChange={(checked) => update({ diagnostics_enabled: checked })}
         >
           {t("diagnostics.enabled")}
@@ -81,31 +81,31 @@ export function DiagnosticsSection() {
 
       <div className="diagnostics-row diagnostics-sources">
         <CheckboxField
-          checked={settings?.sources.web ?? false}
+          checked={settings?.diagnostics_web ?? false}
           onCheckedChange={(checked) => update({ diagnostics_web: checked })}
         >
           {t("diagnostics.sourceWeb")}
         </CheckboxField>
         <CheckboxField
-          checked={settings?.sources.server ?? false}
+          checked={settings?.diagnostics_server ?? false}
           onCheckedChange={(checked) => update({ diagnostics_server: checked })}
         >
           {t("diagnostics.sourceServer")}
         </CheckboxField>
         <CheckboxField
-          checked={settings?.sources.plugins ?? false}
+          checked={settings?.diagnostics_plugins ?? false}
           onCheckedChange={(checked) => update({ diagnostics_plugins: checked })}
         >
           {t("diagnostics.sourcePlugins")}
         </CheckboxField>
         <CheckboxField
-          checked={settings?.breadcrumbs ?? false}
+          checked={settings?.diagnostics_breadcrumbs ?? false}
           onCheckedChange={(checked) => update({ diagnostics_breadcrumbs: checked })}
         >
           {t("diagnostics.breadcrumbs")}
         </CheckboxField>
         <CheckboxField
-          checked={settings?.include_archive_names ?? false}
+          checked={settings?.diagnostics_include_archive_names ?? false}
           onCheckedChange={(checked) => update({ diagnostics_include_archive_names: checked })}
         >
           {t("diagnostics.includeArchives")}
@@ -116,7 +116,7 @@ export function DiagnosticsSection() {
         <label className="diagnostics-field">
           <span>{t("diagnostics.retentionDays")}</span>
           <NumberInput
-            value={settings?.retention_days ?? 7}
+            value={settings?.diagnostics_retention_days ?? 7}
             min={1}
             onValueChange={(value) => update({ diagnostics_retention_days: value })}
           />
@@ -124,7 +124,7 @@ export function DiagnosticsSection() {
         <label className="diagnostics-field">
           <span>{t("diagnostics.maxEvents")}</span>
           <NumberInput
-            value={settings?.max_events ?? 50000}
+            value={settings?.diagnostics_max_events ?? 50000}
             min={100}
             onValueChange={(value) => update({ diagnostics_max_events: value })}
           />
@@ -132,7 +132,7 @@ export function DiagnosticsSection() {
         <label className="diagnostics-field">
           <span>{t("diagnostics.maxBytes")}</span>
           <NumberInput
-            value={settings?.max_bytes ?? 536870912}
+            value={settings?.diagnostics_max_bytes ?? 536870912}
             min={1048576}
             onValueChange={(value) => update({ diagnostics_max_bytes: value })}
           />

@@ -5,13 +5,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { fetchJson, sendJson, sendJsonForBlob } from "@/api/client"
 
 export interface DiagnosticsSettings {
-  enabled: boolean
-  retention_days: number
-  max_events: number
-  max_bytes: number
-  sources: { web: boolean; server: boolean; plugins: boolean }
-  breadcrumbs: boolean
-  include_archive_names: boolean
+  diagnostics_enabled: boolean
+  diagnostics_web: boolean
+  diagnostics_server: boolean
+  diagnostics_plugins: boolean
+  diagnostics_breadcrumbs: boolean
+  diagnostics_request_bodies: boolean
+  diagnostics_include_archive_names: boolean
+  diagnostics_retention_days: number
+  diagnostics_max_events: number
+  diagnostics_max_bytes: number
+  diagnostics_rate_per_minute: number
+  diagnostics_rate_per_hour: number
   tracker_configured: boolean
 }
 
