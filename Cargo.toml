@@ -132,7 +132,17 @@ harfrust = "0.13"
 # prior hand-written `wrap_text`'s `split_whitespace` couldn't do at all.
 icu_segmenter = "2.3"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+flate2 = "1.1"
 governor = "0.10"
+# Error telemetry (specs/018). The SDK is used for capture only: the browser's DSN points back at
+# this instance and the server's transport writes into the local store, so nothing leaves the
+# machine unless an administrator configures a tracker and opens a window.
+sentry = { version = "0.49.3", default-features = false, features = ["backtrace", "contexts", "panic", "transport", "reqwest", "rustls", "tracing"] }
+sentry-tower = { version = "0.49.3", features = ["http"] }
+sentry-tracing = "0.49.3"
+sentry-panic = "0.49.3"
+# Resolves a minified browser stack against a release's source maps, server-side.
+sourcemap = "9.3.2"
 futures-util = "0.3"
 casbin = { version = "2.20", default-features = false, features = ["runtime-tokio", "logging"] }
 url = "2.5"

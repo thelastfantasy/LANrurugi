@@ -138,7 +138,15 @@ export default defineConfig({
   },
   plugins: [react(), tailwindcss(), rustHtmlMiddleware()],
   // The share card framed by other sites is its own page (`embed.html`), so it never loads the app.
+  define: {
+    // The release identity for diagnostics reports (specs/018 FR-023). Displayed in the version
+    // dialog and carried on every captured event, so a stack can be resolved later.
+    __GIT_SHA__: JSON.stringify(process.env.LANRURUGI_GIT_SHA || 'dev'),
+  },
   build: {
+    // Hidden maps are kept out of the served bundle but written to disk, where the image build
+    // copies them next to the binary for server-side symbolication (never served, never sent).
+    sourcemap: 'hidden',
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),

@@ -513,6 +513,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         import_snapshots,
     };
 
+    // Error telemetry: one background writer, so an envelope never costs a request a Redis round
+    // trip (specs/018, research.md §1/§5).
+    lanrurugi_api::diagnostics::start_writer(state.clone());
+
     // A queue item left `Starting`/`Downloading` when the process last exited has no chance of
     // ever completing on its own — `JobRegistry` (the in-process progress tracker its `job_id`
     // pointed at) is purely in-memory and was just recreated empty above, so that job is gone for

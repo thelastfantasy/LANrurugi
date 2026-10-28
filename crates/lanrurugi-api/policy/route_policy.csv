@@ -102,6 +102,8 @@ p, guest_visitor, /api/reader/recommendations/:id, GET, allow
 # this on their own).
 # 017: sharing's network settings (proxy credentials, relay roles) need a real login session.
 p, token_admin, /api/shares/settings, PUT, deny
+# 018: diagnostics carries logs, breadcrumbs and the tracker credential — a real login session.
+p, token_admin, /api/diagnostics/*, *, deny
 p, token_admin, /api/activity, DELETE, deny
 p, token_admin, /api/activity/:id, DELETE, deny
 p, token_admin, /api/activity/retention, PUT, deny

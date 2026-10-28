@@ -9,6 +9,7 @@ import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Button } from "@/components/common-ui/Form/Button"
 import { CollapsibleSection } from "@/components/Display"
 import { LanguageSelector } from "@/components/Form"
+import { DiagnosticsSection } from "@/diagnostics/DiagnosticsSection"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useSectionDeepLink } from "@/hooks/useSectionDeepLink"
 import { routes } from "@/lib/routes"
@@ -512,6 +513,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <ApiTokensSection />
           <SharingSection />
+          <DiagnosticsSection />
           <SubscriptionsSection />
 
           <ArchiveFilesSection

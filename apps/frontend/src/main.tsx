@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client"
 import { queryClient } from "./api/queryClient"
 import { App } from "./App"
 import { ErrorBoundary } from "./components/common-ui/Display/ErrorBoundary"
+import { startDiagnostics } from "./diagnostics/sdk"
 import { installImageFormatSupportCookie } from "./lib/utils/imageFormatSupport"
 import { SessionProvider } from "./session/SessionProvider"
 
@@ -21,6 +22,7 @@ async function bootstrap() {
   } catch {
     // Fall through to `getImageFormatSupport()`'s own WebP default.
   }
+  void startDiagnostics()
   const root = document.getElementById("root")
   if (!root) throw new Error("missing #root element")
   createRoot(root).render(

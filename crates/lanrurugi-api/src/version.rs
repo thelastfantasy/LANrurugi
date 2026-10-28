@@ -157,7 +157,7 @@ fn github_web() -> String {
 }
 
 /// Current binary's package version. `CARGO_PKG_VERSION` is baked in at compile time.
-fn current_version() -> &'static str {
+pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 

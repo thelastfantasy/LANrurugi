@@ -276,6 +276,13 @@ COPY --from=inpaint-model /models/inpaint /app/models/inpaint
 # candidate path.
 COPY --from=bubble-seg-model /models/bubble-seg /app/models/bubble-seg
 COPY --from=frontend-builder /build/apps/frontend/dist /usr/local/share/lanrurugi/frontend
+# Source maps for diagnostics symbolication (specs/018, research.md §7). They are built (hidden, so
+# no `sourceMappingURL` is served) and deliberately moved out of the static tree: the static handler
+# must never serve them, and nothing ships them to a user — the server resolves a frame against its
+# own release's maps and puts only the resolved line in a bundle.
+RUN mkdir -p /usr/local/share/lanrurugi/sourcemaps/${LANRURUGI_GIT_SHA} \
+    && mv /usr/local/share/lanrurugi/frontend/assets/*.map \
+          /usr/local/share/lanrurugi/sourcemaps/${LANRURUGI_GIT_SHA}/ 2>/dev/null || true
 # Bakes in whatever converted `.ts` plugins live in the repo's `./plugins/` at build time.
 # `discover_namespaces` in `lanrurugi-api::plugins` recursively scans this directory (e.g.
 # `plugins/metadata/ehentai.ts` → namespace-path `metadata/ehentai`), so category subfolders and
@@ -301,6 +308,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
     && mkdir -p /var/lib/GeoIP
 
 ENV LANRURUGI_STATIC_DIR=/usr/local/share/lanrurugi/frontend
+# Where the per-release source maps live; read only by the diagnostics symboliser.
+ENV LANRURUGI_SOURCEMAPS_DIR=/usr/local/share/lanrurugi/sourcemaps
 ENV LANRURUGI_PLUGINS_DIR=/usr/local/share/lanrurugi/plugins
 ENV LANRURUGI_DOCS_DIR=/usr/local/share/lanrurugi/docs
 # Legacy-mirrored paths (`/home/koyomi/lanraragi/{content,thumb}` with the project name swapped —

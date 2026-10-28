@@ -14,6 +14,8 @@ pub mod common;
 pub mod cors;
 pub mod database;
 pub mod device_info;
+pub mod diagnostics;
+pub mod diagnostics_settings;
 pub mod download_manager;
 pub mod download_queue;
 pub mod duplicates;
@@ -89,6 +91,7 @@ pub fn router() -> Router<AppState> {
         .merge(categories::router())
         .merge(tankoubons::router())
         .merge(shares::router())
+        .merge(diagnostics::router())
         .merge(share_recipient::router())
         .merge(share_imports::router())
         .merge(tankoubon_grouping::router())

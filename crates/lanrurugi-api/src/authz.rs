@@ -367,6 +367,48 @@ mod tests {
         assert!(!check_route(&e, Some(&anon), "/api/activity", "GET"));
     }
 
+    /// 018: the diagnostics surface carries captured errors, breadcrumbs, server logs and the
+    /// tracker credential. It is a real session's alone — not a token's, not a guest's.
+    #[tokio::test]
+    async fn diagnostics_routes_are_session_only() {
+        let e = route_enforcer().await;
+        let paths = [
+            ("/api/diagnostics/config", "GET"),
+            ("/api/diagnostics/settings", "GET"),
+            ("/api/diagnostics/settings", "PUT"),
+            ("/api/diagnostics/envelope", "POST"),
+            ("/api/diagnostics/issues", "GET"),
+            ("/api/diagnostics/issues/abc", "GET"),
+            ("/api/diagnostics/issues/abc/state", "POST"),
+            ("/api/diagnostics/events", "GET"),
+            ("/api/diagnostics/bundles/preview", "POST"),
+            ("/api/diagnostics/bundles", "POST"),
+            ("/api/diagnostics/bundles/text", "POST"),
+            ("/api/diagnostics/window", "GET"),
+            ("/api/diagnostics/window", "POST"),
+            ("/api/diagnostics/window", "DELETE"),
+            ("/api/diagnostics/replay", "POST"),
+        ];
+        for (path, method) in paths {
+            assert!(
+                check_route(&e, Some(&session_auth()), path, method),
+                "a session must reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Admin)), path, method),
+                "an admin token must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&guest_visitor_auth()), path, method),
+                "a guest must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&anonymous_auth()), path, method),
+                "an anonymous caller must not reach {method} {path}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn admin_token_may_not_call_any_session_only_route() {
         let e = route_enforcer().await;

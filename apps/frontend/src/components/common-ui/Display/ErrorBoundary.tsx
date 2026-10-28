@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
+import { captureRenderError } from "@/diagnostics/sdk"
+
 /** Catch-all for a render crash (class-only API) — wraps `<App />` so an unhandled exception
  * renders this recovery UI instead of a blank page. Deliberately outside Layout/Router context. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
@@ -14,6 +16,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Unhandled render error", error, info)
+    captureRenderError(error)
   }
 
   render() {

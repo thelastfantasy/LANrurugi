@@ -56,14 +56,18 @@ pub struct LibraryPaths {
     pub log_dir: Option<PathBuf>,
 }
 
-/// Repository handles, all bound to the archive logical DB (constitution Principle I / verified
-/// legacy DB layout — see `lanrurugi_storage::redis` module docs).
+/// Repository handles. All but `diagnostics` are bound to the archive logical DB (constitution
+/// Principle I / verified legacy DB layout — see `lanrurugi_storage::redis` module docs);
+/// `diagnostics` lives on the `config` DB with the other non-legacy namespaces.
 #[derive(Clone)]
 pub struct Repositories {
     pub archives: Arc<ArchiveRepository>,
     pub categories: Arc<CategoryRepository>,
     pub groupings: Arc<GroupingRepository>,
     pub stamps: Arc<StampRepository>,
+    /// Error telemetry and feedback bundles (specs/018): the local store both the capture path and
+    /// the bundle builder read. Additive keys on the `config` DB, nothing legacy.
+    pub diagnostics: Arc<lanrurugi_storage::diagnostics::DiagnosticsRepo>,
 }
 
 impl Repositories {
@@ -73,6 +77,9 @@ impl Repositories {
             categories: Arc::new(CategoryRepository::new(redis.archive.clone())),
             groupings: Arc::new(GroupingRepository::new(redis.archive.clone())),
             stamps: Arc::new(StampRepository::new(redis.archive.clone())),
+            diagnostics: Arc::new(lanrurugi_storage::diagnostics::DiagnosticsRepo::new(
+                redis.config.clone(),
+            )),
         }
     }
 }
