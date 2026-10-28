@@ -32,7 +32,6 @@ export function Layout() {
         { to: "/config", label: t("app.settings") },
         { to: "/config/categories", label: t("app.modifyCategories") },
         { to: "/stats", label: t("app.statistics") },
-        { to: "/logs", label: t("app.logs") },
         { to: "/activity", label: t("app.activity") },
         { to: "/bookmarks", label: t("app.bookmarks") },
       ]

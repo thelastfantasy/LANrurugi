@@ -2337,6 +2337,7 @@
   "diagnostics.window.minutes5": "5 minutes",
   "diagnostics.window.hour1": "1 hour",
   "diagnostics.window.day1": "1 day",
+  "diagnostics.rawLogs": "Raw log output",
   "share.action.share": "Share…",
   "share.action.close": "Close",
   "share.action.download": "Download",

@@ -164,6 +164,9 @@ export function DiagnosticsSection() {
         <button type="button" className="stdbtn" onClick={() => setBundleOpen(true)}>
           {t("diagnostics.openBundle")}
         </button>
+        <a className="stdbtn" href="/logs">
+          {t("diagnostics.rawLogs")}
+        </a>
       </div>
 
       <h4 className="ih">{t("diagnostics.forward.title")}</h4>

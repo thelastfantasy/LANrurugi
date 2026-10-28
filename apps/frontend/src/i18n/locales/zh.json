@@ -2337,6 +2337,7 @@
   "diagnostics.window.minutes5": "5 分钟",
   "diagnostics.window.hour1": "1 小时",
   "diagnostics.window.day1": "1 天",
+  "diagnostics.rawLogs": "原始日志",
   "share.action.share": "分享…",
   "share.action.close": "关闭",
   "share.action.download": "下载",
